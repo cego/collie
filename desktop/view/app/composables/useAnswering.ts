@@ -72,20 +72,24 @@ export const useAnswering = () => {
           ? { shown: titleOf(question, does.action), machine, send: ++sends }
           : null;
       if (answer !== null) state.value = answerSent(state.value, key, answer);
-      void act(does.action, does.request, (done, failed) => {
+      const request = does.request;
+      // Try again calls this too, under the same request: each try starts and settles it.
+      void act(does.action, request, (done, failed) => {
         if (answer !== null) state.value = answerTried(state.value, key, answer, done);
-        if (done === null) return;
         apply(
           installation,
           question,
-          done
-            ? { kind: "replied", ok: true, fresh: true }
-            : {
-                kind: "replied",
-                ok: false,
-                refused: failed?.refused === true,
-                reason: failed?.reason ?? "",
-              },
+          done === null
+            ? { kind: "trying", request }
+            : done
+              ? { kind: "replied", request, ok: true, fresh: true }
+              : {
+                  kind: "replied",
+                  request,
+                  ok: false,
+                  refused: failed?.refused === true,
+                  reason: failed?.reason ?? "",
+                },
         );
       });
       return does;

@@ -94,6 +94,7 @@ const submitted = Effect.fn("test.submitted")(function* (
     return {
       state: stepped(sending, {
         kind: "replied",
+        request: does.request,
         ok: true,
         fresh: !Arr.some(log, (line) => line.ended === "repeat"),
       }).state,
@@ -104,6 +105,7 @@ const submitted = Effect.fn("test.submitted")(function* (
   return {
     state: stepped(sending, {
       kind: "replied",
+      request: does.request,
       ok: false,
       refused: failed.refused === true,
       reason: failed.reason,
@@ -137,6 +139,7 @@ test(
           // The reply was lost with the door: Desktop knows only that the connection renewed.
           const lost = stepped(stepped(picked, { kind: "submit", request: "answer-1" }).state, {
             kind: "replied",
+            request: "answer-1",
             ok: false,
             refused: false,
             reason: "mk-pc's connection was renewed before this finished",

@@ -296,7 +296,12 @@ test(
         });
         if (does?.kind !== "send") return;
         yield* act(reached, does.request, does.action).pipe(Effect.orDie);
-        const steered = stepped(sending, { kind: "replied", ok: true, fresh: true }).state;
+        const steered = stepped(sending, {
+          kind: "replied",
+          request: does.request,
+          ok: true,
+          fresh: true,
+        }).state;
         expect(questionnaireView(steered).status).toBe(
           `Sent to ${at.agent}; the question is set aside`,
         );

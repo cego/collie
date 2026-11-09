@@ -193,7 +193,7 @@ describe("submit", () => {
       events: [
         { kind: "pick", id: "pg" },
         { kind: "submit", request: "q-1" },
-        { kind: "replied", ok: false, refused: true, reason: "no" },
+        { kind: "replied", request: "q-1", ok: false, refused: true, reason: "no" },
       ],
       submit: true,
     },
@@ -203,7 +203,7 @@ describe("submit", () => {
       events: [
         { kind: "pick", id: "pg" },
         { kind: "submit", request: "q-1" },
-        { kind: "replied", ok: true, fresh: true },
+        { kind: "replied", request: "q-1", ok: true, fresh: true },
       ],
       submit: false,
     },
@@ -297,7 +297,13 @@ describe("the request an answer goes under", () => {
       events: [
         { kind: "pick", id: "pg" },
         { kind: "submit", request: "q-1" },
-        { kind: "replied", ok: false, refused: false, reason: "vm-mk's connection was renewed" },
+        {
+          kind: "replied",
+          request: "q-1",
+          ok: false,
+          refused: false,
+          reason: "vm-mk's connection was renewed",
+        },
         { kind: "submit", request: "q-2" },
       ],
       request: "q-1",
@@ -307,9 +313,9 @@ describe("the request an answer goes under", () => {
       events: [
         { kind: "pick", id: "pg" },
         { kind: "submit", request: "q-1" },
-        { kind: "replied", ok: false, refused: false, reason: "did not confirm" },
+        { kind: "replied", request: "q-1", ok: false, refused: false, reason: "did not confirm" },
         { kind: "submit", request: "q-2" },
-        { kind: "replied", ok: false, refused: false, reason: "did not confirm" },
+        { kind: "replied", request: "q-1", ok: false, refused: false, reason: "did not confirm" },
         { kind: "submit", request: "q-3" },
       ],
       request: "q-1",
@@ -319,7 +325,13 @@ describe("the request an answer goes under", () => {
       events: [
         { kind: "pick", id: "pg" },
         { kind: "submit", request: "q-1" },
-        { kind: "replied", ok: false, refused: true, reason: "no longer an option" },
+        {
+          kind: "replied",
+          request: "q-1",
+          ok: false,
+          refused: true,
+          reason: "no longer an option",
+        },
         { kind: "submit", request: "q-2" },
       ],
       request: "q-2",
@@ -329,7 +341,7 @@ describe("the request an answer goes under", () => {
       events: [
         { kind: "pick", id: "pg" },
         { kind: "submit", request: "q-1" },
-        { kind: "replied", ok: false, refused: false, reason: "renewed" },
+        { kind: "replied", request: "q-1", ok: false, refused: false, reason: "renewed" },
         { kind: "pick", id: "sqlite" },
         { kind: "submit", request: "q-2" },
       ],
@@ -592,7 +604,7 @@ describe("status", () => {
       events: [
         { kind: "pick", id: "pg" },
         { kind: "submit", request: "q-1" },
-        { kind: "replied", ok: true, fresh: true },
+        { kind: "replied", request: "q-1", ok: true, fresh: true },
       ],
       status: "Answered: Postgres",
     },
@@ -602,7 +614,7 @@ describe("status", () => {
       events: [
         { kind: "pick", id: "pg" },
         { kind: "submit", request: "q-1" },
-        { kind: "replied", ok: true, fresh: false },
+        { kind: "replied", request: "q-1", ok: true, fresh: false },
       ],
       status: "Answered: Postgres",
     },
@@ -614,6 +626,7 @@ describe("status", () => {
         { kind: "submit", request: "q-1" },
         {
           kind: "replied",
+          request: "q-1",
           ok: false,
           refused: true,
           reason: '"pick" was already answered "sqlite" by cli',
@@ -627,7 +640,7 @@ describe("status", () => {
       events: [
         { kind: "pick", id: HOLD },
         { kind: "submit", request: "q-1" },
-        { kind: "replied", ok: true, fresh: true },
+        { kind: "replied", request: "q-1", ok: true, fresh: true },
       ],
       status: "Run held · question still open",
     },
@@ -637,7 +650,7 @@ describe("status", () => {
       events: [
         { kind: "draft", text: "use a schema" },
         { kind: "steer", request: "s-1" },
-        { kind: "replied", ok: true, fresh: true },
+        { kind: "replied", request: "s-1", ok: true, fresh: true },
       ],
       status: "Sent to r-1-build-r1; the question is set aside",
     },
@@ -656,7 +669,7 @@ describe("status", () => {
       events: [
         { kind: "pick", id: "pg" },
         { kind: "submit", request: "q-1" },
-        { kind: "replied", ok: true, fresh: true },
+        { kind: "replied", request: "q-1", ok: true, fresh: true },
         { kind: "seen", question: null },
       ],
       status: "Answered: Postgres",
@@ -670,11 +683,158 @@ describe("status", () => {
     expect(viewAfter(question, events).status).toBe(status);
   });
 
+  test.each([
+    {
+      rule: "a reply to a request no longer pending changes nothing",
+      question: TWO,
+      events: [
+        { kind: "pick", id: "go" },
+        { kind: "submit", request: "q-1" },
+        { kind: "replied", request: "q-1", ok: false, refused: false, reason: "renewed" },
+        { kind: "pick", id: "stop" },
+        { kind: "submit", request: "q-2" },
+        { kind: "trying", request: "q-1" },
+        { kind: "replied", request: "q-1", ok: true, fresh: true },
+      ],
+      status: "Sending…",
+    },
+    {
+      rule: "the pending request's own refusal is still shown after a stale reply",
+      question: TWO,
+      events: [
+        { kind: "pick", id: "go" },
+        { kind: "submit", request: "q-1" },
+        { kind: "replied", request: "q-1", ok: false, refused: false, reason: "renewed" },
+        { kind: "pick", id: "stop" },
+        { kind: "submit", request: "q-2" },
+        { kind: "replied", request: "q-1", ok: true, fresh: true },
+        {
+          kind: "replied",
+          request: "q-2",
+          ok: false,
+          refused: true,
+          reason: '"pick" was already answered "go" by Desktop',
+        },
+      ],
+      status: '"pick" was already answered "go" by Desktop',
+    },
+    {
+      rule: "Try again under the kept request shows sending, and its reply settles it",
+      question: choice(),
+      events: [
+        { kind: "pick", id: "pg" },
+        { kind: "submit", request: "q-1" },
+        { kind: "replied", request: "q-1", ok: false, refused: false, reason: "renewed" },
+        { kind: "trying", request: "q-1" },
+      ],
+      status: "Sending…",
+    },
+    {
+      rule: "Try again's success reads answered",
+      question: choice(),
+      events: [
+        { kind: "pick", id: "pg" },
+        { kind: "submit", request: "q-1" },
+        { kind: "replied", request: "q-1", ok: false, refused: false, reason: "renewed" },
+        { kind: "trying", request: "q-1" },
+        { kind: "replied", request: "q-1", ok: true, fresh: false },
+      ],
+      status: "Answered: Postgres",
+    },
+    {
+      rule: "Try again of a hold reads held",
+      question: TWO,
+      events: [
+        { kind: "pick", id: HOLD },
+        { kind: "submit", request: "h-1" },
+        { kind: "replied", request: "h-1", ok: false, refused: false, reason: "renewed" },
+        { kind: "trying", request: "h-1" },
+        { kind: "replied", request: "h-1", ok: true, fresh: true },
+      ],
+      status: "Run held · question still open",
+    },
+    {
+      rule: "Try again of a steer reads steered",
+      question: choice(),
+      events: [
+        { kind: "draft", text: "use a schema" },
+        { kind: "steer", request: "s-1" },
+        { kind: "replied", request: "s-1", ok: false, refused: false, reason: "renewed" },
+        { kind: "trying", request: "s-1" },
+        { kind: "replied", request: "s-1", ok: true, fresh: true },
+      ],
+      status: "Sent to r-1-build-r1; the question is set aside",
+    },
+    {
+      rule: "the board dropping a question while its answer is in flight still hears the reply",
+      question: choice(),
+      events: [
+        { kind: "pick", id: "pg" },
+        { kind: "submit", request: "q-1" },
+        { kind: "seen", question: null },
+        { kind: "replied", request: "q-1", ok: true, fresh: true },
+      ],
+      status: "Answered: Postgres",
+    },
+    {
+      rule: "the board dropping a question while its answer is in flight shows the refusal",
+      question: choice(),
+      events: [
+        { kind: "pick", id: "pg" },
+        { kind: "submit", request: "q-1" },
+        { kind: "seen", question: null },
+        { kind: "replied", request: "q-1", ok: false, refused: true, reason: "superseded" },
+      ],
+      status: "superseded",
+    },
+    {
+      rule: "a steer in flight when the question leaves the board reads steered once confirmed",
+      question: choice(),
+      events: [
+        { kind: "draft", text: "use a schema" },
+        { kind: "steer", request: "s-1" },
+        { kind: "seen", question: null },
+        { kind: "replied", request: "s-1", ok: true, fresh: true },
+      ],
+      status: "Sent to r-1-build-r1; the question is set aside",
+    },
+    {
+      rule: "steered, then gone from the board: still steered",
+      question: choice(),
+      events: [
+        { kind: "draft", text: "use a schema" },
+        { kind: "steer", request: "s-1" },
+        { kind: "replied", request: "s-1", ok: true, fresh: true },
+        { kind: "seen", question: null },
+      ],
+      status: "Sent to r-1-build-r1; the question is set aside",
+    },
+  ] satisfies ReadonlyArray<{
+    rule: string;
+    question: Question;
+    events: Event[];
+    status: string | null;
+  }>)("$rule", ({ question, events, status }) => {
+    expect(viewAfter(question, events).status).toBe(status);
+  });
+
+  test("a question off the board takes nothing more once its send settles", () => {
+    const events: Event[] = [
+      { kind: "pick", id: "pg" },
+      { kind: "submit", request: "q-1" },
+      { kind: "seen", question: null },
+      { kind: "replied", request: "q-1", ok: false, refused: true, reason: "superseded" },
+      { kind: "draft", text: "anything" },
+    ];
+    expect(viewAfter(choice(), events).submit).toBe(false);
+    expect(viewAfter(choice(), events).steer.send).toBe(false);
+  });
+
   test("a refusal keeps the selection visible and sends nothing again", () => {
     const events: Event[] = [
       { kind: "pick", id: "pg" },
       { kind: "submit", request: "q-1" },
-      { kind: "replied", ok: false, refused: true, reason: "superseded" },
+      { kind: "replied", request: "q-1", ok: false, refused: true, reason: "superseded" },
     ];
     expect(checked(choice(), events)).toEqual(["pg"]);
     expect(run(choice(), events).does).toBeNull();
@@ -684,7 +844,7 @@ describe("status", () => {
     const events: Event[] = [
       { kind: "pick", id: HOLD },
       { kind: "submit", request: "q-1" },
-      { kind: "replied", ok: true, fresh: true },
+      { kind: "replied", request: "q-1", ok: true, fresh: true },
       { kind: "seen", question: HELD },
       { kind: "pick", id: "go" },
     ];

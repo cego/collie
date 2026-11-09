@@ -34,6 +34,8 @@ export interface Questionnaire {
     readonly answer: string | null;
   } | null;
   readonly status: Status;
+  /** Whether the board still asks it; a send in flight is still settled by its reply. */
+  readonly onBoard: boolean;
 }
 
 export type Event =
@@ -50,9 +52,17 @@ export type Event =
   | { readonly kind: "draft"; readonly text: string }
   | { readonly kind: "submit"; readonly request: string }
   | { readonly kind: "steer"; readonly request: string }
-  | { readonly kind: "replied"; readonly ok: true; readonly fresh: boolean }
+  /** A try of `request` starting, as Try again starts one. */
+  | { readonly kind: "trying"; readonly request: string }
   | {
       readonly kind: "replied";
+      readonly request: string;
+      readonly ok: true;
+      readonly fresh: boolean;
+    }
+  | {
+      readonly kind: "replied";
+      readonly request: string;
       readonly ok: false;
       /** The host said no, so the same request would be refused again. */
       readonly refused: boolean;
@@ -82,6 +92,7 @@ export const questionnaire = (question: Question): Questionnaire => ({
   draft: "",
   pending: null,
   status: { kind: "open" },
+  onBoard: true,
 });
 
 interface Row {
@@ -118,9 +129,8 @@ const rowsOf = (question: Question): ReadonlyArray<Row> => [
 
 const inFlight = (state: Questionnaire) => state.status.kind === "sending";
 const settled = (state: Questionnaire) =>
-  state.status.kind === "answered" || state.status.kind === "gone";
+  !state.onBoard || state.status.kind === "answered" || state.status.kind === "gone";
 
-/** What Submit would send now, as the value a request is kept for, or null for nothing. */
 const submission = (state: Questionnaire) => {
   if (inFlight(state) || settled(state)) return null;
   if (state.question.options.length === 0) {
@@ -138,7 +148,7 @@ const target = (state: Questionnaire) => {
 };
 const steerable = (state: Questionnaire) =>
   !inFlight(state) &&
-  state.status.kind !== "gone" &&
+  !settled(state) &&
   target(state).agent !== null &&
   Str.trim(state.draft) !== "";
 
@@ -165,7 +175,6 @@ const titleOf = (state: Questionnaire, value: string) =>
   Option.getOrUndefined(Arr.findFirst(state.question.options, (option) => option.id === value))
     ?.title ?? value;
 
-/** Checks the row `to` picks, counting from the checked row, else the focused one. */
 const moved = (state: Questionnaire, to: (rows: ReadonlyArray<Row>, from: number) => number) => {
   const rows = rowsOf(state.question);
   const enabled = Arr.filter(
@@ -238,7 +247,7 @@ const keyed = (state: Questionnaire, event: Extract<Event, { kind: "key" }>): St
 
 const replied = (state: Questionnaire, event: Extract<Event, { kind: "replied" }>) => {
   const pending = state.pending;
-  if (!inFlight(state) || pending === null) return state;
+  if (!inFlight(state) || pending?.request !== event.request) return state;
   if (!event.ok)
     return {
       ...state,
@@ -262,10 +271,13 @@ const replied = (state: Questionnaire, event: Extract<Event, { kind: "replied" }
   };
 };
 
-/** The board's question now: the same one refreshed, a new one afresh, or none. */
 const seen = (state: Questionnaire, question: Question | null): Questionnaire => {
-  if (question === null)
-    return state.status.kind === "answered" ? state : { ...state, status: { kind: "gone" } };
+  if (question === null) {
+    const kind = state.status.kind;
+    return kind === "sending" || kind === "answered" || kind === "steered"
+      ? { ...state, onBoard: false }
+      : { ...state, onBoard: false, status: { kind: "gone" } };
+  }
   if (question.run !== state.question.run || question.id !== state.question.id)
     return questionnaire(question);
   const rows = rowsOf(question);
@@ -273,6 +285,7 @@ const seen = (state: Questionnaire, question: Question | null): Questionnaire =>
   return {
     ...state,
     question,
+    onBoard: true,
     checked: kept ? state.checked : null,
     focus: Math.min(state.focus, Math.max(rows.length - 1, 0)),
   };
@@ -325,6 +338,14 @@ export const stepped = (state: Questionnaire, event: Event): Stepped => {
         },
       };
     }
+    case "trying":
+      return {
+        state:
+          state.pending?.request === event.request
+            ? { ...state, status: { kind: "sending" } }
+            : state,
+        does: null,
+      };
     case "replied":
       return { state: replied(state, event), does: null };
   }
@@ -371,6 +392,6 @@ export const questionnaireView = (state: Questionnaire) => {
     status: statusSaid(state),
     sending: inFlight(state),
     /** Answered, or gone from the board: nothing more to send. */
-    settled: settled(state),
+    settled: settled(state) && !inFlight(state),
   };
 };
