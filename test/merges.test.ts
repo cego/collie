@@ -965,7 +965,6 @@ test("a stop that did not take is asked again next round, before the forge is du
 
 const LANDED_HEAD = "head-1";
 /** A Release Run under the parked builder, and a sibling review of the same Task. */
-/** Given the merged merge request as its target. */
 const ON_65 = {
   settled: {
     inputs: { target: `mr:${GITLAB}!65` },
