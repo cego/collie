@@ -4,11 +4,26 @@
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { Effect, FileSystem, Option, Path, Schema } from "effect";
+import { Effect, FileSystem, Option, Path, PlatformError, Schema } from "effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import { decodeProposalLineOption } from "./proposals";
 import { decodeRegisterOption, encodeAgentEntry } from "./registry";
 import { decodeTaskOption } from "./task";
+
+/**
+ * Nothing there, or a file where a directory would be, is no records. Any other failure
+ * fails the migration, so the next host retries it.
+ */
+const orMissing =
+  <A>(none: A) =>
+  <R>(read: Effect.Effect<A, PlatformError.PlatformError, R>) =>
+    read.pipe(
+      Effect.catchTag("PlatformError", (error) =>
+        error.reason._tag === "NotFound" || error.reason._tag === "BadResource"
+          ? Effect.succeed(none)
+          : Effect.fail(error),
+      ),
+    );
 
 const isJson = (text: string) =>
   Option.isSome(Schema.decodeOption(Schema.fromJsonString(Schema.Unknown))(text));
@@ -29,11 +44,11 @@ export const importLedgers = Effect.fn("RecordsImport.ledgers")(function* (state
   const path = yield* Path.Path;
   const sql = yield* SqlClient.SqlClient;
   const root = path.join(stateDir, "agents");
-  for (const ledger of yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []))) {
+  for (const ledger of yield* fs.readDirectory(root).pipe(orMissing<ReadonlyArray<string>>([]))) {
     if (!/^[0-9a-f]+$/.test(ledger)) continue;
     const raw = yield* fs
       .readFileString(path.join(root, ledger, "deliveries.jsonl"))
-      .pipe(Effect.orElseSucceed(() => ""));
+      .pipe(orMissing(""));
     for (const line of journalLines(raw))
       yield* sql`INSERT INTO collie_deliveries (ledger, line) VALUES (${ledger}, ${line})`;
   }
@@ -45,10 +60,10 @@ export const importProposals = Effect.fn("RecordsImport.proposals")(function* (s
   const path = yield* Path.Path;
   const sql = yield* SqlClient.SqlClient;
   const root = path.join(stateDir, "herd");
-  for (const journal of yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []))) {
+  for (const journal of yield* fs.readDirectory(root).pipe(orMissing<ReadonlyArray<string>>([]))) {
     const raw = yield* fs
       .readFileString(path.join(root, journal, "proposals.jsonl"))
-      .pipe(Effect.orElseSucceed(() => ""));
+      .pipe(orMissing(""));
     for (const line of journalLines(raw))
       if (Option.isSome(decodeProposalLineOption(line)))
         yield* sql`INSERT INTO collie_proposals (journal, line) VALUES (${journal}, ${line})`;
@@ -61,11 +76,9 @@ export const importRegisters = Effect.fn("RecordsImport.registers")(function* (s
   const path = yield* Path.Path;
   const sql = yield* SqlClient.SqlClient;
   const root = path.join(stateDir, "agents");
-  for (const name of yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []))) {
+  for (const name of yield* fs.readDirectory(root).pipe(orMissing<ReadonlyArray<string>>([]))) {
     if (!Str.endsWith(".json")(name)) continue;
-    const raw = yield* fs
-      .readFileString(path.join(root, name))
-      .pipe(Effect.orElseSucceed(() => ""));
+    const raw = yield* fs.readFileString(path.join(root, name)).pipe(orMissing(""));
     const register = Str.slice(0, -".json".length)(name);
     for (const entry of Option.getOrElse(decodeRegisterOption(raw), () => []))
       yield* sql`
@@ -81,11 +94,9 @@ export const importTasks = Effect.fn("RecordsImport.tasks")(function* (stateDir:
   const path = yield* Path.Path;
   const sql = yield* SqlClient.SqlClient;
   const root = path.join(stateDir, "tasks");
-  for (const name of yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []))) {
+  for (const name of yield* fs.readDirectory(root).pipe(orMissing<ReadonlyArray<string>>([]))) {
     if (!Str.endsWith(".json")(name)) continue;
-    const raw = Str.trim(
-      yield* fs.readFileString(path.join(root, name)).pipe(Effect.orElseSucceed(() => "")),
-    );
+    const raw = Str.trim(yield* fs.readFileString(path.join(root, name)).pipe(orMissing("")));
     const task = Option.getOrUndefined(decodeTaskOption(raw));
     if (task !== undefined)
       yield* sql`INSERT OR REPLACE INTO collie_tasks (id, record) VALUES (${task.id}, ${raw})`;
