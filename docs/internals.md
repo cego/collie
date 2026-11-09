@@ -1173,7 +1173,8 @@ whose work is a merge request, and that began before it merged: the work landed,
 still building it is done. A Run's work is that merge request, by MR id and whatever Task it
 is in, when it opened it, was given it as its target, or is on its source branch in the
 owner's checkout. A Run waits on that work too when every child of it still going is that
-work, as a plan waits on its builder; a sibling working on another merge request, or on none
+work, as a plan waits on its builder, unless it is a fan-out, whose later waves may not have
+started; a sibling working on another merge request, or on none
 yet, is not stopped, however many of the Task's merge requests are recorded. It leaves running the Run that landed it, and every Run up that Run's
 parent chain, since a Release Run under an implement Run has more to do after the merge
 (tag, stage, production), and its parents wait on it. It decides this from the recorded

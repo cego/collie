@@ -735,7 +735,8 @@ the newest is the Task's. A merge also settles the work on that merge request: w
 still going on it — running, waiting, parked or asking — and began before the forge says it
 merged, is stopped by the host. That is the Run that opened it, any Run given it as its
 target, such as its review or Release Run, and any Follow-up Run on its branch, and a Run
-whose every child still going is among those, such as a plan waiting on its builder. A Run
+whose every child still going is among those, such as a plan waiting on its builder. A fan-out of Changes is not one of them, since a
+Change of a later wave may not have started yet. A Run
 working on another merge request, or on a Change that has none yet, keeps going.
 Each carries `<label> merged` as the reason in its trail, and the card reads `Merged as cego/collie#114.`, never "Stopped by
 you". A stop that did not take is asked again on the next round. A Run started after

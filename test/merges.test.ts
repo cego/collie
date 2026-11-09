@@ -1595,6 +1595,29 @@ test("a fan-out's Repo run's merge request is watched: its facts recorded, its m
     }),
   ));
 
+test("a merge of a fan-out's only admitted Change leaves the fan-out running, since a later wave may be still to start", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const { stateDir, env, runs } = yield* fannedOut([{ repo: "app", iid: "65" }]);
+      const stops: Array<string> = [];
+      yield* settleMerges({
+        stateDir,
+        cwd: "/project",
+        run: forge("gitlab", { mrs: [mr65({ state: "merged", mergedAt: MERGED_AT })] }),
+        views: yield* buildBoard({ env, runs, now: TEN, quietMs: Infinity }),
+        runs,
+        record: () => Effect.void,
+        stop: (run) => Effect.sync(() => void stops.push(run)),
+        now: TEN,
+        checked: new Map(),
+        states: new Map(),
+        panels: new Map(),
+        making: new Set(),
+      });
+      expect(stops).toEqual(["r-fan.app"]);
+    }),
+  ));
+
 const API3 = "https://gitlab.cego.dk/cego/api/-/merge_requests/3";
 const WEB8 = "https://gitlab.cego.dk/cego/web/-/merge_requests/8";
 const given = (target: string) => ({

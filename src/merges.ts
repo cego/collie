@@ -262,7 +262,10 @@ const workingOn = Effect.fn("Merges.workingOn")(function* <R>(
   return ids;
 });
 
-/** `ids`, and each Run all of whose going children are among them. */
+/**
+ * `ids`, and each Run all of whose going children are among them. A fan-out is never one:
+ * its Changes of a later wave are not admitted yet.
+ */
 function withWaitingParents(ids: ReadonlyArray<string>, runs: ReadonlyArray<RunFacts>) {
   const working = new Set(ids);
   const going = (run: RunFacts) => run.state === "running" || run.state === "waiting";
@@ -273,6 +276,7 @@ function withWaitingParents(ids: ReadonlyArray<string>, runs: ReadonlyArray<RunF
       if (working.has(run.id)) continue;
       const children = Arr.filter(runs, (child) => child.parent === run.id);
       if (
+        !Arr.some(children, (child) => child.repo !== null) &&
         Arr.some(children, (child) => working.has(child.id)) &&
         Arr.every(children, (child) => working.has(child.id) || !going(child))
       ) {
