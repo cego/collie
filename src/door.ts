@@ -113,6 +113,11 @@ export type FromDoor =
 const DoorRpcs = RpcGroup.make(IdentityRpc, RunDetailRpc);
 const MODELLED = new Set(["identity", "runDetail"]);
 const UNMODELLED = new Set(["identity"]);
+/**
+ * How many frames a client may have waiting to be written before it is ended: one that
+ * stopped reading a stream would otherwise hold the host's memory for as long as it lives.
+ */
+const OUTBOX_LIMIT = 4096;
 /** How many of the first Runs listed the door reads a record of at start, for its JIT. */
 const WARMING = 10;
 
@@ -570,12 +575,28 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
           const parser = RpcSerialization.ndjson.makeUnsafe();
           const writer = yield* client.writer;
           const held = new Set<string | number>();
+          // What this client is sent waits in its own outbox, written by a fiber of its own:
+          // a client that stops reading holds up only itself, and one whose socket has gone
+          // ends only itself. Written on a loop every client shares, the first held every
+          // other client's answers behind its full socket, and the second ended that loop.
+          const outbox = yield* Queue.unbounded<RpcMessage.FromServerEncoded>();
+          const ended = yield* Deferred.make<void>();
+          yield* Queue.take(outbox).pipe(
+            Effect.flatMap((frame) => {
+              const encoded = parser.encode(frame);
+              return encoded === undefined ? Effect.void : writer.write(encoded);
+            }),
+            Effect.forever,
+            Effect.catchCause(() => Deferred.done(ended, Exit.void)),
+            Effect.forkScoped,
+          );
           conns.set(conn, {
             local: held,
-            write: (frame) => {
-              const encoded = parser.encode(frame);
-              return encoded === undefined ? Effect.void : Effect.orDie(writer.write(encoded));
-            },
+            write: (frame) =>
+              Effect.sync(() => {
+                if (Queue.sizeUnsafe(outbox) >= OUTBOX_LIMIT) Deferred.doneUnsafe(ended, Exit.void);
+                else Queue.offerUnsafe(outbox, frame);
+              }),
           });
           yield* Effect.addFinalizer(() =>
             Effect.sync(() => {
@@ -584,16 +605,20 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
               port.post({ _tag: "Gone", conn });
             }),
           );
-          const { pull } = yield* client.reader;
-          for (;;) {
-            const chunks = yield* pull;
-            for (const chunk of chunks)
-              // SAFETY: what a client sends the host is its RPC client's encoded frames.
-              for (const frame of parser.decode(
-                chunk,
-              ) as ReadonlyArray<RpcMessage.FromClientEncoded>)
-                route(conn, held, frame);
-          }
+          const reading = Effect.gen(function* () {
+            const { pull } = yield* client.reader;
+            for (;;) {
+              const chunks = yield* pull;
+              for (const chunk of chunks)
+                // SAFETY: what a client sends the host is its RPC client's encoded frames.
+                for (const frame of parser.decode(
+                  chunk,
+                ) as ReadonlyArray<RpcMessage.FromClientEncoded>)
+                  route(conn, held, frame);
+            }
+          });
+          // A client whose socket could not be written, or that fell too far behind, is ended.
+          yield* Effect.raceFirst(reading, Deferred.await(ended));
         }).pipe(
           Effect.catchReason("SocketError", "SocketCloseError", () => Effect.void),
           Effect.orDie,

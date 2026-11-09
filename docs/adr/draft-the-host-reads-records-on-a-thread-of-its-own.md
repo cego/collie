@@ -41,6 +41,11 @@ has already sent `Eof` while one of its requests still runs — a CLI half-close
 by interrupting the effect that wrote it. Once that interruption ended the shared loop, so every
 later request from every client waited forever while `identity`, the door's own, still answered.
 
+What a client is sent waits in an outbox of its own, written by a fiber of its own. Written on
+one loop for every client, a client that stopped reading held every other client's answers
+behind its full socket, and a write to one whose socket had gone ended that loop. A client whose
+socket cannot be written, or that has 4096 frames waiting, is ended alone.
+
 **D2. The engine tells the door what only the engine knows.**
 
 - After each board listing, the engine sends each Run whose view moved. The message holds the

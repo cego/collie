@@ -4,6 +4,8 @@
 import { expect, test } from "bun:test";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { Deferred, Effect, Fiber, FileSystem, Layer, Option, Stream } from "effect";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcGroup from "effect/rpc/RpcGroup";
@@ -324,3 +326,72 @@ test(
     ),
   15_000,
 );
+
+/** A raw client of the door's socket: what it read, and its socket to stop reading or close. */
+const rawClient = (socket: string) =>
+  Effect.gen(function* () {
+    let text = "";
+    const opened = yield* Effect.promise(() =>
+      Bun.connect({
+        unix: socket,
+        socket: {
+          data: (_socket, data) => {
+            text += new TextDecoder().decode(data);
+          },
+        },
+      }),
+    );
+    return { socket: opened, read: () => text };
+  });
+
+const requestLine = (id: string, tag: string) =>
+  `${JSON.stringify({ _tag: "Request", id, tag, payload: null, headers: [] })}\n`;
+
+test("a client that stops reading, then goes, leaves every other client answered", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-door-" });
+      const socket = `${dir}/host.sock`;
+      const { heard, tell } = yield* silentEngine(dir, socket, []);
+      const passed = (id: string) =>
+        Arr.findFirst(
+          heard,
+          (one) => one._tag === "Request" && one.frame._tag === "Request" && one.frame.id === id,
+        );
+
+      // A asks the engine for a stream and never reads what it is sent.
+      const a = yield* rawClient(socket);
+      a.socket.pause();
+      a.socket.write(requestLine("a", "toasts"));
+      yield* until(() => Option.isSome(passed("a")));
+      const connA = Option.getOrThrow(passed("a"));
+      const b = yield* rawClient(socket);
+      b.socket.write(requestLine("b", "toasts"));
+      yield* until(() => Option.isSome(passed("b")));
+      const connB = Option.getOrThrow(passed("b"));
+      if (connA._tag !== "Request" || connB._tag !== "Request") return;
+
+      // The engine streams to A until its socket is full, then A goes away.
+      const big = pipe("x", Str.repeat(64 * 1024));
+      for (let i = 0; i < 256; i++)
+        tell({
+          _tag: "Response",
+          conn: connA.conn,
+          frame: { _tag: "Chunk", requestId: "a", values: [big] },
+        });
+      yield* Effect.sleep("200 millis");
+      a.socket.end();
+      a.socket.terminate();
+      yield* Effect.sleep("200 millis");
+
+      tell({
+        _tag: "Response",
+        conn: connB.conn,
+        frame: { _tag: "Exit", requestId: "b", exit: { _tag: "Success", value: null } },
+      });
+      yield* until(() => pipe(b.read(), Str.includes('"requestId":"b"')));
+      expect(pipe(b.read(), Str.includes('"_tag":"Exit"'))).toBe(true);
+      b.socket.end();
+    }).pipe(Effect.scoped),
+  ));
