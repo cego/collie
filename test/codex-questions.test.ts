@@ -336,3 +336,52 @@ test(
     ),
   120_000,
 );
+
+test(
+  "a Codex agent's short question whose repair cannot be sent is posted as asked",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const long = `${Str.repeat(9 * 1024)("Which colour? ")}Red or blue?`;
+        const standIn: StandIn = {
+          events: `${rig.root}/codex-server.events`,
+          threads: [
+            {
+              id: "thread-1",
+              cwd: rig.projectDir,
+              items: [
+                {
+                  ...stillShort,
+                  item: {
+                    ...stillShort.item,
+                    questions: [{ title: long, options: ["Red", "Blue"] }],
+                  },
+                },
+              ],
+            },
+          ],
+        };
+        yield* fs.writeFileString(config(), asJson(standIn)).pipe(Effect.orDie);
+        yield* rig.queueOutputs([null]);
+        yield* session(
+          Effect.gen(function* () {
+            yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+            const store = yield* Store;
+            yield* waitFor(Effect.map(store.asked("r1"), (asked) => asked.length > 0));
+            expect(
+              Arr.map(yield* store.asked("r1"), (one) => [one.decision, one.prompt, one.shortfall]),
+            ).toEqual([
+              [
+                "ask-review-1",
+                long,
+                "The agent gave 2 options and no recommendation; Collie asked for at least three options and exactly one recommended option.",
+              ],
+            ]);
+            expect(yield* typedCount("at least three options")).toBe(0);
+          }).pipe(Effect.timeout("60 seconds")),
+        );
+      }),
+    ),
+  120_000,
+);

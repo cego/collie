@@ -764,6 +764,31 @@ const DENIED_QUESTION = deniedWith(
   "Collie has put your question on your Run for a human to answer. End your turn now: the answer will be your next message.",
 );
 
+/** Marks the copy of a call whose repair could not be sent, recorded to be posted as asked. */
+export const UNREPAIRED = "#unrepaired";
+
+/**
+ * Records `call` again to be posted as asked, its repair having failed. Appended, so the
+ * questions already posted keep their numbers.
+ */
+export const postUnrepaired = Effect.fn("Compactors.postUnrepaired")(function* (
+  dir: string,
+  call: AskedCall,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const asked: AskedCall = {
+    at: call.at,
+    session: call.session,
+    id: `${call.id}${UNREPAIRED}`,
+    questions: call.questions,
+  };
+  yield* fs.writeFileString(path.join(dir, QUESTIONS), `${encodeAskedCall(asked)}\n`, {
+    flag: "a",
+  });
+  return asked;
+});
+
 /** The `AskUserQuestion` calls this agent made at or after `since`, oldest first. */
 export const questionsSince = Effect.fn("Compactors.questionsSince")(function* (
   dir: string,

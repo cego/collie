@@ -85,6 +85,9 @@ import {
   atLeast,
   installedVersion,
   questionsSince,
+  postUnrepaired,
+  UNREPAIRED,
+  type AskedCall,
   QUESTIONS,
   takeHarnessQuestions,
   ranOutSince,
@@ -2690,9 +2693,16 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             yield* questionsSince(dir, launched.at ?? 0),
             (call) => call.at < until,
           );
+          const ids = new Set(Arr.map(since, (call) => call.id));
+          const unrepaired: Array<AskedCall> = [];
           for (const call of since) {
             const key = `${launched.agent}\n${call.id}`;
-            if (call.repair !== "by-delivery" || closing !== null || answeredCalls.has(key))
+            if (
+              call.repair !== "by-delivery" ||
+              closing !== null ||
+              answeredCalls.has(key) ||
+              ids.has(`${call.id}${UNREPAIRED}`)
+            )
               continue;
             const sent = yield* deliver(launched, questionRepair(call.questions), {
               kind: "repair",
@@ -2700,15 +2710,16 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               herdr: yield* herdr,
             });
             answeredCalls.add(key);
-            if (!sent.sent)
-              yield* log(
-                launched.runId,
-                `${launched.agent}: was not sent its question's repair (${sent.why})`,
-              );
+            if (sent.sent) continue;
+            yield* log(
+              launched.runId,
+              `${launched.agent}: was not sent its question's repair (${sent.why}), so the question is posted as asked`,
+            );
+            unrepaired.push(yield* postUnrepaired(dir, call));
           }
           let n = 0;
           const calls = Arr.map(
-            Arr.filter(since, (call) => call.repair === undefined),
+            [...Arr.filter(since, (call) => call.repair === undefined), ...unrepaired],
             (call) => ({
               call,
               names: Arr.map(call.questions, () => agentQuestionName(stem, ++n)),
