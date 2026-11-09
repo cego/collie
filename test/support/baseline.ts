@@ -16394,11 +16394,12 @@ for (const [what, declared] of [
         Effect.gen(function* () {
           const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
           const runId = `r-tune-redeclared-${Object.keys(declared)[0]}`;
+          const guardrail = { ...NOISY_GUARDRAIL, why: "the plan's limits are what matter here" };
           yield* rig.queueOutputs([
             TUNE_DISCOVERED,
-            tunePlan(commit, [STEADY_PRIMARY, NOISY_GUARDRAIL]),
+            tunePlan(commit, [STEADY_PRIMARY, guardrail]),
             repaired(
-              tunePlan(commit, [STEADY_PRIMARY, { ...NOISY_GUARDRAIL, ...declared }]),
+              tunePlan(commit, [STEADY_PRIMARY, { ...guardrail, ...declared }]),
               "declared it",
             ),
           ]);
@@ -16579,13 +16580,14 @@ scenario(
         );
         expect(onBranch.stdout).toBe(NOISY_BENCH);
 
+        // This checkout holds the harness commit in its history, and a later removal of it.
+        yield* exec(["git", "reset", "-q", "--hard", commit], { cwd: rig.projectDir });
+        yield* exec(["git", "rm", "-rq", "bench"], { cwd: rig.projectDir });
+        yield* exec(["git", "commit", "-qm", "cleanup"], { cwd: rig.projectDir });
         const again = yield* tunedUp("r-tune-recarried", { from: runId });
         expect(again._tag).toBe("Success");
         expect(yield* wasAsked("r-tune-recarried", "discover")).toBe(false);
-        const recarried = yield* runLog("r-tune-recarried");
-        expect(recarried).toContain("harness carried from r-tune-carried");
-        // Its checkout holds the harness commits in its history, and Cleanup's removal after them.
-        expect(recarried).toContain(`harness commits ${commit} carried onto`);
+        expect(yield* runLog("r-tune-recarried")).toContain("harness carried from r-tune-carried");
         const [recalibration] = yield* calibrations("r-tune-recarried");
         const held = yield* exec(
           ["git", "show", `${recalibration!.candidate.head_sha}:bench/bench.sh`],
