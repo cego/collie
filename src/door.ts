@@ -4,7 +4,19 @@
 
 import * as Arr from "effect/Array";
 import { isMainThread } from "node:worker_threads";
-import { Clock, Context, Deferred, Effect, Layer, PubSub, Queue, Scope, Stream } from "effect";
+import {
+  Cause,
+  Clock,
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Layer,
+  PubSub,
+  Queue,
+  Scope,
+  Stream,
+} from "effect";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import type * as RpcMessage from "effect/rpc/RpcMessage";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
@@ -110,6 +122,30 @@ export interface Port<Out, In> {
   readonly listen: (receive: (message: In) => void) => void;
 }
 
+/**
+ * Hands every client's frames, one at a time and in the order they came, to an RPC server
+ * shared by all of them. The server ends the effect of a frame it refuses for its client
+ * alone — one that came after that client half-closed — with an interruption; that frame's
+ * outcome is its own, so the loop goes on for every other client.
+ */
+export const passFrames = <Frame>(
+  frames: Queue.Queue<{ readonly conn: number; readonly frame: Frame }>,
+  writeRequest: (conn: number, frame: Frame) => Effect.Effect<void>,
+) =>
+  Queue.take(frames).pipe(
+    Effect.flatMap(({ conn, frame }) =>
+      writeRequest(conn, frame).pipe(
+        Effect.exit,
+        Effect.flatMap((exit) =>
+          Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)
+            ? Effect.logWarning(`a frame from client ${conn} was not taken`, exit.cause)
+            : Effect.void,
+        ),
+      ),
+    ),
+    Effect.forever,
+  );
+
 // ---------------------------------------------------------------------------------------
 // The engine's end.
 
@@ -161,11 +197,7 @@ export const engineEnd = (port: Port<ToDoor, FromDoor>) =>
     });
     const protocol = RpcServer.Protocol.make((writeRequest) =>
       Effect.gen(function* () {
-        yield* Queue.take(requests).pipe(
-          Effect.flatMap(({ conn, frame }) => writeRequest(conn, frame)),
-          Effect.forever,
-          Effect.forkScoped,
-        );
+        yield* passFrames(requests, writeRequest).pipe(Effect.forkScoped);
         yield* Deferred.await(listening);
         return {
           disconnects,
@@ -484,11 +516,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
     }
     const localProtocol = RpcServer.Protocol.make((writeRequest) =>
       Effect.gen(function* () {
-        yield* Queue.take(local).pipe(
-          Effect.flatMap(({ conn, frame }) => writeRequest(conn, frame)),
-          Effect.forever,
-          Effect.forkScoped,
-        );
+        yield* passFrames(local, writeRequest).pipe(Effect.forkScoped);
         return {
           disconnects: localGone,
           send: (conn: number, frame: RpcMessage.FromServerEncoded) => {
