@@ -5,7 +5,7 @@ import { Effect, Fiber, FileSystem } from "effect";
 import { TestClock } from "effect/testing";
 import { CONNECTION_TIMEOUT_MS, readConnections, connectionsOnMachine } from "../src/connections";
 import { Rig } from "./support/recorder";
-import { runEffect } from "./support/effect";
+import { fastForward, runEffect } from "./support/effect";
 
 test("one broken or stalled Connection leaves the other readings intact, with its own fix", () =>
   Effect.runPromise(
@@ -87,4 +87,19 @@ test("Helle's registry entry keeps the token owner's account and the existing ab
       });
       expect(requests).toEqual(["/api/v1/me Bearer fixture-helle-token"]);
     }),
+  ));
+
+test("a fast-forwarded Connection read waits for a probe that takes real time", () =>
+  runEffect(
+    fastForward(
+      readConnections([
+        {
+          id: "gitlab",
+          fix: "glab auth login",
+          read: Effect.promise(() => Bun.sleep(1_000)).pipe(
+            Effect.as({ state: "ok" as const, account: "mk", detail: "gitlab.example as mk" }),
+          ),
+        },
+      ]),
+    ).pipe(Effect.map((found) => expect(found[0]?.reading).toMatchObject({ state: "ok" }))),
   ));
