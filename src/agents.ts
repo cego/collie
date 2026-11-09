@@ -1103,7 +1103,7 @@ export const agentWork = <
         // Recorded, so a restart's wait still parks on a stop since this repair was asked.
         const since = yield* Activity.make({
           name: `${work.operation}.repair${suffix}.since`,
-          success: Schema.Number,
+          success: Schema.Finite,
           execute: Clock.currentTimeMillis,
         });
         const asked = yield* Activity.make({

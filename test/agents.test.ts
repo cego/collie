@@ -2792,9 +2792,11 @@ test(
         const fs = yield* FileSystem.FileSystem;
         const over = { ...onPi, collectMs: 3_600_000, pollMs: 1_000 };
         yield* rig.queueOutputs([{ verdict: "maybe" }, null]);
-        yield* interrupted(
-          "r1",
-          stopsOnError(agentFor("r1"), EXPIRED, "not usable").pipe(Effect.as(true)),
+        yield* session(
+          Effect.gen(function* () {
+            yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+            yield* stopsOnError(agentFor("r1"), EXPIRED, "not usable");
+          }),
           over,
         );
         yield* fs.remove(controlPath(dir, PARKED, "r1"), { force: true });
