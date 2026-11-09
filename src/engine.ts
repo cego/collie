@@ -131,6 +131,7 @@ import { skillDirs, skillFile, type CheckoutKind, type InputStrategy } from "./d
 import { EXCLUSIVE_STRATEGIES } from "./strategies";
 import { appendMetric, noteVerification, metricsOf, readMetrics } from "./metrics";
 import { ForgeHttp, forgeHttpLayer } from "./forge/http";
+import { EngineTouches, engineTouchesLayer, touching } from "./engine-touches";
 import { ciJob } from "./ci-job";
 import { land, LandingSchema, readLanding, takeOver } from "./landing";
 import {
@@ -2893,7 +2894,8 @@ export function engineLayer(options: {
   | WorkflowEngine.WorkflowEngine
   | MessageStorage.MessageStorage
   | SqlClient.SqlClient
-  | Reactivity.Reactivity,
+  | Reactivity.Reactivity
+  | EngineTouches,
   ConfigError
 > {
   // One connection, two halves: the engine's own tables and the rows Collie keeps beside
@@ -2923,21 +2925,52 @@ export function engineLayer(options: {
   const engine = Layer.unwrap(
     Effect.promise(() =>
       Promise.all([
-        import("effect/cluster/SingleRunner"),
+        import("effect/cluster/Sharding"),
+        import("effect/cluster/Runners"),
+        import("effect/cluster/RunnerHealth"),
+        import("effect/cluster/ShardingConfig"),
+        import("effect/cluster/MessageStorage"),
+        import("effect/cluster/SqlMessageStorage"),
+        import("effect/cluster/SqlRunnerStorage"),
         import("effect/cluster/ClusterWorkflowEngine"),
       ]),
     ).pipe(
-      Effect.map(([SingleRunner, ClusterWorkflowEngine]) => {
-        const cluster = SingleRunner.layer({ shardingConfig: polled }).pipe(
-          Layer.provide([oneShard.pipe(Layer.provideMerge(sql)), Digest.layerWebCrypto]),
-        );
-        // The message storage too: forgetting a Run clears what the engine kept of it.
-        return ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(cluster));
-      }),
+      Effect.map(
+        ([
+          Sharding,
+          Runners,
+          RunnerHealth,
+          ShardingConfig,
+          MessageStorage,
+          SqlMessageStorage,
+          SqlRunnerStorage,
+          ClusterWorkflowEngine,
+        ]) => {
+          // Upstream's SingleRunner, with its storage telling `touches` of each write.
+          const storage = Layer.effect(MessageStorage.MessageStorage)(
+            Effect.gen(function* () {
+              const inner = yield* MessageStorage.MessageStorage;
+              return touching(inner, yield* SqlClient.SqlClient, yield* EngineTouches);
+            }),
+          ).pipe(Layer.provide(SqlMessageStorage.layer));
+          const cluster = Sharding.layer.pipe(
+            Layer.provideMerge(Runners.layerNoop),
+            Layer.provideMerge(storage),
+            Layer.provide([Layer.orDie(SqlRunnerStorage.layer), RunnerHealth.layerNoop]),
+            Layer.provide(ShardingConfig.layerFromEnv(polled)),
+            Layer.provide([oneShard.pipe(Layer.provideMerge(sql)), Digest.layerWebCrypto]),
+          );
+          // The message storage too: forgetting a Run clears what the engine kept of it.
+          return ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(cluster));
+        },
+      ),
     ),
   );
-  return engine.pipe(Layer.provideMerge(sql));
+  return engine.pipe(Layer.provideMerge(sql), Layer.provideMerge(engineTouchesLayer));
 }
+
+/** The one shard this engine holds, which every message is on. */
+const ONE_SHARD = "default:1";
 
 /**
  * Moves what an engine on upstream's 300 shards left onto the one shard this engine holds,
@@ -2951,8 +2984,8 @@ const oneShard = Layer.effectDiscard(
     }>`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('cluster_messages', 'cluster_locks')`;
     for (const { name } of tables)
       yield* name === "cluster_messages"
-        ? sql`UPDATE cluster_messages SET shard_id = 'default:1' WHERE shard_id <> 'default:1'`
-        : sql`DELETE FROM cluster_locks WHERE shard_id <> 'default:1'`;
+        ? sql`UPDATE cluster_messages SET shard_id = ${ONE_SHARD} WHERE shard_id <> ${ONE_SHARD}`
+        : sql`DELETE FROM cluster_locks WHERE shard_id <> ${ONE_SHARD}`;
   }).pipe(Effect.orDie),
 );
 
@@ -5894,6 +5927,8 @@ const encodeView = flow(Schema.encodeResult(Schema.fromJsonString(RunView)), Res
  * every client, so watching costs the same whether nobody or the whole board is looking.
  */
 const SWEEP_INTERVAL = "500 millis";
+/** Every this many sweeps, one reads even the suspended Runs the engine has not written for. */
+const WHOLE_SWEEP_EVERY = 60;
 
 /** How long a woken run is given to settle before a caller is told it was woken. */
 const WAKE_INTERVAL = "250 millis";
@@ -5910,6 +5945,8 @@ export interface KeptViews {
       readonly row: RunRow;
       readonly decided: number;
       readonly revision: number;
+      /** The engine's count of writes for the Run's execution, where the host counts them. */
+      readonly engine: number | undefined;
       readonly view: RunView;
     }
   >;
@@ -6292,6 +6329,7 @@ const makeRegistry: (
   const userDir = options?.userDir ?? dir;
   const catalogue = options?.catalogue;
   const engine = yield* WorkflowEngine.WorkflowEngine;
+  const touches = Option.getOrUndefined(yield* Effect.serviceOption(EngineTouches));
   const fs = yield* FileSystem.FileSystem;
   const hostFs = fs;
   const store = yield* Store;
@@ -7376,17 +7414,53 @@ const makeRegistry: (
     return status;
   });
 
-  /** When the engine's durable clock next wakes this execution, read from its own table. */
+  /**
+   * When the engine's durable clock next wakes this execution, read from its own table.
+   * By shard and processed, so upstream's one index serves it: by entity alone it scans
+   * every message ever sent, once per suspended Run on each sweep.
+   */
   const wakeOf = Effect.fn("Engine.wakeOf")(function* (execution: string) {
     const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
     if (Option.isNone(sql)) return null;
     const rows = yield* sql.value<{ readonly deliver_at: number | null }>`
       SELECT deliver_at FROM cluster_messages
-      WHERE entity_type = 'Workflow/-/DurableClock' AND entity_id = ${execution} AND processed = 0
+      WHERE shard_id = ${ONE_SHARD} AND processed = 0
+        AND entity_type = 'Workflow/-/DurableClock' AND entity_id = ${execution}
       ORDER BY deliver_at LIMIT 1
     `.pipe(Effect.orElseSucceed(() => []));
     const at = rows[0]?.deliver_at ?? null;
     return at === null ? null : DateTime.formatIso(DateTime.makeUnsafe(Number(at)));
+  });
+
+  /**
+   * A suspended execution's status and wake, as the engine said them when its count of
+   * writes was `at`: only a message to it or a reply for it moves it again.
+   */
+  const asleep = new Map<
+    string,
+    { readonly status: typeof RunStatus.Type; readonly wakes: string | null; readonly at: number }
+  >();
+  /** True while the engine has written nothing for a suspended execution since it was read. */
+  const stillAsleep = (execution: string) =>
+    touches !== undefined && asleep.get(execution)?.at === touches.of(execution);
+  const engineSays = Effect.fn("Engine.engineSays")(function* (
+    generation: Generation,
+    execution: string,
+  ) {
+    const done = finished.get(execution);
+    if (done !== undefined) return { status: done, wakes: null };
+    const kept = asleep.get(execution);
+    if (kept !== undefined && stillAsleep(execution)) return kept;
+    // Before the poll, so a write landing during it moves the count past what is kept.
+    const at = touches?.of(execution);
+    const status = yield* polled(generation, execution);
+    if (status.status !== "suspended") {
+      asleep.delete(execution);
+      return { status, wakes: null };
+    }
+    const read = { status, wakes: yield* wakeOf(execution), at: at ?? Number.NaN };
+    if (at !== undefined) asleep.set(execution, read);
+    return read;
   });
 
   const viewOf = Effect.fn("Engine.viewOf")(function* (row: RunRow, read?: FileSystem.FileSystem) {
@@ -7477,13 +7551,13 @@ const makeRegistry: (
           unavailable.get(row.generation) ?? `${row.generation} is not registered in this host`,
       };
     }
-    const status = finished.get(row.execution) ?? (yield* polled(generation, row.execution));
+    const { status, wakes } = yield* engineSays(generation, row.execution);
     // A failed Run keeps a claim it may have left shared work half-done under.
     const kept = status.status === "failed" ? yield* claimOf(row.run) : null;
     return {
       ...about,
       status,
-      wakes: status.status === "suspended" ? yield* wakeOf(row.execution) : null,
+      wakes,
       diagnostic:
         kept === null
           ? null
@@ -7594,6 +7668,7 @@ const makeRegistry: (
     return was !== undefined &&
       was.decided === decided(row.run) &&
       was.revision === kept.revision(row.run) &&
+      was.engine === touches?.of(row.execution) &&
       sameRow(was.row, row)
       ? was.view
       : undefined;
@@ -7607,11 +7682,17 @@ const makeRegistry: (
     read?: FileSystem.FileSystem,
   ) =>
     Effect.gen(function* () {
-      const before = { decided: decided(row.run), revision: kept.revision(row.run) };
+      const before = {
+        decided: decided(row.run),
+        revision: kept.revision(row.run),
+        engine: touches?.of(row.execution),
+      };
       yield* (yield* Foreground).boundary;
       const view = yield* viewOf(row, read);
-      // A settled execution's status is final; a going one's is polled each time.
-      if (finished.has(row.execution)) kept.views.set(row.run, { row, ...before, view });
+      // A settled execution's status is final, and a suspended one's stands until the
+      // engine writes for it; a going one's is polled each time.
+      if (finished.has(row.execution) || stillAsleep(row.execution))
+        kept.views.set(row.run, { row, ...before, view });
       else kept.views.delete(row.run);
       return view;
     });
@@ -7658,11 +7739,15 @@ const makeRegistry: (
   /** How many clients are listening. A host nobody is watching asks nothing at all. */
   let watchers = 0;
 
+  let sweeps = 0;
   const sweep = Effect.gen(function* () {
     if (watchers === 0) return;
     const { boundary } = yield* Foreground;
+    // Now and then every Run, for what a suspended Run's files say without the engine.
+    const whole = ++sweeps % WHOLE_SWEEP_EVERY === 0;
     let changed = false;
     for (const [runId, entry] of watched) {
+      if (!whole && entry.said !== "" && stillAsleep(entry.row.execution)) continue;
       yield* boundary;
       const view = yield* viewOf(entry.row);
       const said = encodeView(view);
