@@ -37,6 +37,8 @@ text: a file that does not decode is unusable however plausible it reads.
 its pane holding the work, and starting the work again would throw a whole round away over a
 write. The repair carries the schema's own issues. A collection after a repair ignores the
 text it was given before: the same file again is the agent not having rewritten it.
+One still unusable after the repair parks its Step rather than ending the Run
+([ADR-draft-a-fixable-failure-parks-its-step](draft-a-fixable-failure-parks-its-step.md) D2).
 
 **D7. The prompt is pure, and what went out is on disk.** `promptFor` builds the ask from
 the decoded input and the author's Markdown — no Activity, no host — so a test can read one

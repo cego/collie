@@ -16522,7 +16522,7 @@ scenario(
 );
 
 scenario(
-  "a tune-up plan with an empty harness is refused as Harness wrote it, and nothing is measured",
+  "a tune-up plan with an empty harness parks at Harness, saying what to correct, and nothing is measured",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -16532,10 +16532,10 @@ scenario(
           TUNE_DISCOVERED,
           { ...tunePlan(commit, [STEADY_PRIMARY]), harness: { commits: [], paths: [] } },
         ]);
-        const result = yield* tunedUp(runId);
-        expect(result._tag).toBe("Failure");
-        expect(reasonOf(result)).toContain("harness.json again: Missing key");
-        expect(reasonOf(result)).toContain(`at ["harness"]["commits"][0]`);
+        const why = yield* parkedOn({ entry: shipped("tune-up"), runId, input: {} });
+        expect(why).toContain("harness.json again: Missing key");
+        expect(why).toContain(`at ["harness"]["commits"][0]`);
+        expect(why).toContain(`Correct it, then resume ${runId}.`);
         expect(yield* runLog(runId)).not.toContain("benchmark plan 1");
         expect(yield* calibrations(runId)).toEqual([]);
       }),

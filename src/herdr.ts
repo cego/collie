@@ -781,7 +781,13 @@ export class Herdr {
     );
   }
 
-  /** An agent started as a core terminal of its own, which ends with nothing that started it. */
+  /**
+   * An agent started as a core terminal of its own, which ends with nothing that started it.
+   *
+   * It is given this host's PATH, under whatever `env` names: core finds the program on the
+   * PATH it is handed, and its own may be a bare system one — a core another Machine's SSH
+   * dial started has no login shell's PATH, and no harness installed under the home.
+   */
   agentLaunch(opts: {
     readonly name: string;
     readonly argv: ReadonlyArray<string>;
@@ -790,12 +796,15 @@ export class Herdr {
     readonly labels: Readonly<Record<string, string>>;
   }): HerdrEffect<string> {
     const raw = this.env.raw;
+    const env: Record<string, string> = {};
+    if (raw.PATH !== undefined) env.PATH = raw.PATH;
+    Object.assign(env, opts.env);
     return Effect.gen(function* () {
       const started = yield* coreCall(yield* coreSocket(raw), "terminal.run", {
         name: opts.name,
         argv: [...opts.argv],
         cwd: opts.cwd,
-        env: { ...opts.env },
+        env,
         labels: { ...opts.labels },
         no_parent: true,
       });

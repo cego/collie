@@ -24,6 +24,7 @@ import { exec } from "./command";
 import { runEffect, suiteEnv } from "./effect";
 import { writeFakeHerdrShim } from "./fake-herdr-core";
 import { fixtures, root, stopHost, until } from "./host";
+import { answering } from "./forwarding";
 import { marked } from "./sweep";
 import { testBunfig } from "./packages";
 
@@ -220,18 +221,18 @@ export const proves = <A, E>(
       // Before the directory goes, or a host left running can write it back.
       yield* Effect.addFinalizer(() =>
         stopHost(world.state).pipe(
-          // A herdr call can outlive the host that started it. Let this world's commands
-          // finish before removing their log directory; another world's processes are left alone.
+          // A herdr call can outlive the host that started it, and so can this process's
+          // answer to it. Let this world's commands and answers finish before removing their
+          // log directory, which an answer would write back; another world's are left alone.
           Effect.andThen(
-            marker === ""
-              ? Effect.void
-              : until(
-                  () =>
-                    Effect.sync(() =>
-                      marked(marker, { FAKE_HERDR_LOG: `${dir}/herdr-calls.jsonl` }),
-                    ),
-                  (children) => children.length === 0,
-                ),
+            until(
+              () =>
+                Effect.sync(() => {
+                  const log = { FAKE_HERDR_LOG: `${dir}/herdr-calls.jsonl` };
+                  return (marker === "" ? 0 : marked(marker, log).length) + answering(log);
+                }),
+              (left) => left === 0,
+            ),
           ),
           Effect.ignore,
         ),

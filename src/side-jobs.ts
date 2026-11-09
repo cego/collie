@@ -142,38 +142,80 @@ export const sweepEvery = <E, R>(
 export const BOARD_TERMINAL = "collie-board";
 
 /**
+ * How long after a round that left the board or chat unstarted the next may begin: a
+ * second, doubling with each round that fails again, up to five minutes.
+ */
+export const keepAgainAfter = (failures: number) =>
+  Math.min(1_000 * 2 ** Math.max(failures - 1, 0), 5 * 60_000);
+
+/** How often a round that is waiting to be tried again looks whether its wait is over. */
+const KEEP_RETRY_TICK = "1 second";
+
+/**
  * The board and chat, each a core terminal of its own on this Machine whatever runs its
  * agents: started when core is first followed, and again whenever either has ended.
+ *
+ * A start core refuses is tried again after `keepAgainAfter`, never on the next tick:
+ * core says a terminal it could not start was removed, so retrying on that tick starts
+ * again at once, forever, and the host does nothing else
+ * ([Agents on core](../docs/internals.md#agents-on-core)).
  */
 export const keepTerminals = (env: PluginEnv, herdr: Herdr) =>
-  Stream.runForEach(herdr.terminalsEnded(), () =>
-    Effect.gen(function* () {
-      const herdrSocket = env.socketPath ?? (yield* serverSocket(herdr));
-      const at = { ...env, socketPath: herdrSocket };
-      const key = yield* machineHerd(at);
-      const cwd = yield* herdDir(env.stateDir, key);
-      yield* (yield* FileSystem.FileSystem).makeDirectory(cwd, { recursive: true });
-      if (!(yield* herdr.coreTerminalLive(BOARD_TERMINAL)))
-        yield* herdr.agentLaunch({
-          name: BOARD_TERMINAL,
-          argv: [...selfCommand(), "board", "--draw"],
-          cwd,
-          env: {
-            HERDR_PLUGIN_ROOT: env.pluginRoot,
-            COLLIE_DIR: env.collieDir,
-            COLLIE_USER_DIR: env.userDir,
-            HERDR_PLUGIN_STATE_DIR: env.stateDir,
-            HERDR_SOCKET_PATH: herdrSocket ?? "",
-            HC_SOCKET: yield* coreSocket(env.raw),
-            COLLIE_CWD: cwd,
-          },
-          labels: {},
-        });
-      if (!(yield* herdr.coreTerminalLive(CHAT_TERMINAL)))
-        yield* startChat(herdr, at, key, (line) => Effect.logInfo(line));
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("could not keep the board and chat terminals", cause),
+  Effect.gen(function* () {
+    let failures = 0;
+    let notBefore = 0;
+    const ticks = Stream.merge(
+      Stream.map(herdr.terminalsEnded(), () => "ended" as const),
+      Stream.map(Stream.tick(KEEP_RETRY_TICK), () => "waited" as const),
+    );
+    yield* Stream.runForEach(ticks, (tick) =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        // Healthy, the timer asks nothing of core; after a failure, nothing does until the wait ends.
+        if (tick === "waited" && failures === 0) return;
+        if (now < notBefore) return;
+        if (yield* keepRound(env, herdr)) {
+          failures = 0;
+          notBefore = 0;
+          return;
+        }
+        failures += 1;
+        notBefore = now + keepAgainAfter(failures);
+      }),
+    );
+  });
+
+/** One look at the board and chat, starting whichever is not live: whether both now are. */
+const keepRound = (env: PluginEnv, herdr: Herdr) =>
+  Effect.gen(function* () {
+    const herdrSocket = env.socketPath ?? (yield* serverSocket(herdr));
+    const at = { ...env, socketPath: herdrSocket };
+    const key = yield* machineHerd(at);
+    const cwd = yield* herdDir(env.stateDir, key);
+    yield* (yield* FileSystem.FileSystem).makeDirectory(cwd, { recursive: true });
+    if (!(yield* herdr.coreTerminalLive(BOARD_TERMINAL)))
+      yield* herdr.agentLaunch({
+        name: BOARD_TERMINAL,
+        argv: [...selfCommand(), "board", "--draw"],
+        cwd,
+        env: {
+          HERDR_PLUGIN_ROOT: env.pluginRoot,
+          COLLIE_DIR: env.collieDir,
+          COLLIE_USER_DIR: env.userDir,
+          HERDR_PLUGIN_STATE_DIR: env.stateDir,
+          HERDR_SOCKET_PATH: herdrSocket ?? "",
+          HC_SOCKET: yield* coreSocket(env.raw),
+          COLLIE_CWD: cwd,
+        },
+        labels: {},
+      });
+    if (!(yield* herdr.coreTerminalLive(CHAT_TERMINAL)))
+      return (yield* startChat(herdr, at, key, (line) => Effect.logInfo(line))).kind === "launched";
+    return true;
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("could not keep the board and chat terminals", cause).pipe(
+        Effect.as(false),
       ),
     ),
   );
