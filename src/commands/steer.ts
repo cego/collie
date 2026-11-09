@@ -13,6 +13,7 @@ import { Effect, Option } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import { err } from "../operations";
 import {
+  asks,
   asksRun,
   confirmProposed,
   declineProposed,
@@ -20,7 +21,7 @@ import {
   reconcileProposed,
   steerAbout,
 } from "../lifecycle";
-import { journalOf, read as readProposals, type ProposalRecord } from "../proposals";
+import type { PluginEnv } from "../env";
 import { mutation } from "../envelope";
 import { answering, cliDoor, mutating, runIdArg, requestIdFlag } from "./shared";
 
@@ -72,17 +73,9 @@ const proposalIdArg = Argument.String("proposal-id").pipe(
 );
 
 /** The proposal's own hash, for a yes that names only its id: the host still checks one. */
-const hashOf = Effect.fn("Steer.hashOf")(function* (stateDir: string, id: string) {
-  const file = yield* journalOf(stateDir, id);
-  const found = file === null ? [] : yield* readProposals(file);
-  return (
-    Option.getOrUndefined(
-      Arr.findFirst(
-        found,
-        (line): line is ProposalRecord => line.kind === "proposal" && line.id === id,
-      ),
-    )?.content_hash ?? ""
-  );
+const hashOf = Effect.fn("Steer.hashOf")(function* (env: PluginEnv, id: string) {
+  const found = yield* asks({ ...env, machine: undefined }, (client) => client.proposal({ id }));
+  return (found.ok ? found.value?.content_hash : undefined) ?? "";
 });
 
 /**
@@ -100,7 +93,7 @@ export const confirm = Command.make(
         return yield* confirmProposed(env, {
           door: yield* cliDoor(env),
           proposal: proposalId,
-          hash: Option.isSome(hash) ? hash.value : yield* hashOf(env.stateDir, proposalId),
+          hash: Option.isSome(hash) ? hash.value : yield* hashOf(env, proposalId),
           request: id,
         });
       }),
@@ -116,7 +109,7 @@ export const decline = Command.make(
         return yield* declineProposed(env, {
           door: yield* cliDoor(env),
           proposal: proposalId,
-          hash: Option.isSome(hash) ? hash.value : yield* hashOf(env.stateDir, proposalId),
+          hash: Option.isSome(hash) ? hash.value : yield* hashOf(env, proposalId),
           request: id,
         });
       }),

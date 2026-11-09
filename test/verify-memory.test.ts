@@ -14,9 +14,8 @@ import { resetExecutors } from "../src/executors";
 import { runDir } from "../src/engine";
 import { Launched } from "../src/launches";
 import { holdsBudgetOf, memoryWaitOf, waitLine } from "../src/memory-wait";
-import { everyRegistered } from "../src/registry";
 import { readVerifications } from "../src/verify";
-import { deliveriesOf } from "../src/steering";
+import { deliveredTo, registeredAt } from "./support/records";
 import { evidenceDir } from "../src/engine";
 import { exec } from "./support/command";
 import { stopHost, until } from "./support/host";
@@ -101,7 +100,7 @@ test(
             ),
           );
           const pane = Option.getOrUndefined(
-            Arr.findFirst(yield* everyRegistered(world.state), (entry) => entry.runId === runId),
+            Arr.findFirst(yield* registeredAt(world.state), (entry) => entry.runId === runId),
           )!.paneId;
           const verify = (name: string, paneId: string) =>
             collie(
@@ -145,8 +144,8 @@ test(
             });
             expect(yield* ran()).toBe(before + 1);
             expect(
-              Arr.filter(yield* deliveriesOf(world.state, runId), (one) =>
-                pipe_(one.delivery.cause.ref, Str.startsWith("verify-")),
+              Arr.filter(yield* deliveredTo(world.state, runId), (one) =>
+                pipe_(one.cause.ref, Str.startsWith("verify-")),
               ),
             ).toHaveLength(1);
             expect(yield* waiting()).toBeNull();
@@ -154,7 +153,7 @@ test(
           }
 
           // The agent that was running when the Machine became short is still there.
-          expect(Arr.some(yield* everyRegistered(world.state), (one) => one.runId === runId)).toBe(
+          expect(Arr.some(yield* registeredAt(world.state), (one) => one.runId === runId)).toBe(
             true,
           );
 

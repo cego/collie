@@ -20,6 +20,7 @@ import { hostname } from "node:os";
 import type { PlatformError } from "effect/PlatformError";
 import { reason } from "./naming";
 import type { PlatformServices } from "./platform";
+import type { Records } from "./records";
 import { executorFor, registerExecutor, registeredKinds, type ExecutionResult } from "./executors";
 import type { PluginEnv } from "./env";
 import {
@@ -130,7 +131,9 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   const failed = (note: string): ExecutionResult => ({ state: "failed", note });
   const settled = (result: OpResult | Failure): ExecutionResult =>
     result.ok ? { state: "applied", note: result.human } : failed(result.error.message);
-  const carry = (what: Effect.Effect<OpResult | Failure, PlatformError, PlatformServices>) =>
+  const carry = (
+    what: Effect.Effect<OpResult | Failure, PlatformError, PlatformServices | Records>,
+  ) =>
     what.pipe(
       Effect.map(settled),
       Effect.catch((cause) => Effect.succeed(failed(reason(cause)))),
@@ -524,12 +527,9 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         const owned = new Set(Arr.map(listing.runs, (run) => run.task));
         const gone =
           listing.unreadable === null
-            ? Arr.filter(
-                yield* listTasks(env.stateDir),
-                (task) => !isOpen(task, open) && !owned.has(task.id),
-              )
+            ? Arr.filter(yield* listTasks, (task) => !isOpen(task, open) && !owned.has(task.id))
             : [];
-        for (const task of gone) yield* removeTask(env.stateDir, task.id);
+        for (const task of gone) yield* removeTask(task.id);
         return {
           state: "applied" as const,
           note: `forgot ${gone.length} Tasks whose workspace is gone`,
@@ -642,7 +642,7 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
   // and every action is refused as `executor_missing`, which would be a lie about this
   // build rather than a fact about it.
   yield* registerRunExecutors();
-  const file = yield* journalOf(env.stateDir, proposalId);
+  const file = yield* journalOf(proposalId);
   if (file === null)
     return yield* new ProposalRefused({
       refused: "not_found",

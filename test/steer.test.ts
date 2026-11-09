@@ -2,6 +2,8 @@
 // changes something. So: the journal has both turns, a proposal is recorded pending, and
 // nothing at all reached an agent — whatever authority the Run has granted.
 
+import { recordsAt } from "./support/records";
+import type { Records } from "../src/records";
 import * as Arr from "effect/Array";
 import { Effect, FileSystem, Path, Schema, type Scope, flow, Result } from "effect";
 import type { PlatformServices } from "../src/platform";
@@ -9,7 +11,7 @@ import { expect, setDefaultTimeout, test } from "bun:test";
 import { steer } from "../src/operations";
 import { DEFAULT_AUTHORITY, readIntent, type Authority } from "../src/intent";
 import { conversationPath, read as readConversation } from "../src/conversation";
-import { proposalsPath, read as readProposals } from "../src/proposals";
+import { read as readProposals } from "../src/proposals";
 import { budgetPath, herdOf, readBudget } from "../src/steering";
 import type { PluginEnv } from "../src/env";
 import type { PlatformError } from "effect/PlatformError";
@@ -88,7 +90,7 @@ let setReply: (text: string) => Effect.Effect<void, PlatformError, FileSystem.Fi
 let originalPath: string;
 
 /** One test, in a Herd of its own with a host in it, and a `claude` that says what it is told. */
-const inWorld = <A, E>(body: Effect.Effect<A, E, PlatformServices | Scope.Scope>) =>
+const inWorld = <A, E>(body: Effect.Effect<A, E, PlatformServices | Records | Scope.Scope>) =>
   hosted("hw-steer-", (herd) =>
     Effect.gen(function* () {
       world = herd.world;
@@ -99,6 +101,7 @@ const inWorld = <A, E>(body: Effect.Effect<A, E, PlatformServices | Scope.Scope>
       yield* setReply("{}");
       herdKey = yield* herdOf(env.socketPath);
       return yield* body.pipe(
+        Effect.provide(recordsAt(stateDir)),
         Effect.ensuring(
           Effect.sync(() => {
             Bun.env.PATH = originalPath;
@@ -145,7 +148,7 @@ test("a steer executes the requested change without a confirmation hop", () =>
       expect(Arr.map(turns, (turn) => turn.role)).toEqual(["human", "collie"]);
       expect(turns[1]?.proposal).toBeDefined();
 
-      const proposals = yield* readProposals(yield* proposalsPath(stateDir, herdKey));
+      const proposals = yield* readProposals(herdKey);
       const recorded = Arr.filter(proposals, (line) => line.kind === "proposal");
       expect(recorded).toHaveLength(1);
 
@@ -173,7 +176,7 @@ test("a steer retried under its request reports what it did, and asks nobody aga
       const again = yield* steer(env, deps(stateDir), asked);
 
       expect(again).toEqual(first);
-      const proposals = yield* readProposals(yield* proposalsPath(stateDir, herdKey));
+      const proposals = yield* readProposals(herdKey);
       expect(Arr.filter(proposals, (line) => line.kind === "proposal")).toHaveLength(1);
       const spent = yield* readBudget(yield* budgetPath(stateDir, herdKey));
       expect(Arr.filter(spent, (line) => line.kind === "reserve")).toHaveLength(1);
@@ -312,7 +315,7 @@ test("a dry run prints what it would propose and records nothing", () =>
       expect(result.ok).toBe(true);
       if (result.ok) expect(result.human).toContain("hold it while you look");
 
-      const proposals = yield* readProposals(yield* proposalsPath(stateDir, herdKey));
+      const proposals = yield* readProposals(herdKey);
       expect(Arr.filter(proposals, (line) => line.kind === "proposal")).toEqual([]);
     }),
   ));

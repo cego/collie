@@ -1,6 +1,7 @@
 // The host's Run model against changes made outside it: each reaches the board stream within
 // a second, and the board then equals one this process builds from disk, item by item.
 
+import { recordsAt } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
@@ -395,7 +396,7 @@ test(
           at = yield* Clock.currentTimeMillis;
           yield* within("copied in", at, yield* arrival(mark, changed));
           yield* equalsDisk;
-        }),
+        }).pipe(Effect.provide(recordsAt(world.state))),
       ["plain.workflow.ts", "targeted.workflow.ts", "agent.workflow.ts", "notes.md"],
     ),
   240_000,

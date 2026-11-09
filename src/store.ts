@@ -17,7 +17,9 @@ import {
   Context,
   Effect,
   Exit,
+  FileSystem,
   Layer,
+  Path,
   Option,
   Order,
   Schedule,
@@ -34,6 +36,8 @@ import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 import { AuditLine } from "./audit";
+import { importLedgers, importProposals, importRegisters, importTasks } from "./records-import";
+import { StoreWrites } from "./store-writes";
 import { RequestConflict } from "./board-model";
 import { nowIso } from "./time";
 
@@ -328,19 +332,34 @@ export interface StoreApi {
 
 export class Store extends Context.Service<Store, StoreApi>()("collie/Store") {}
 
-/** Told the Runs each write of this store's names. */
-export class StoreWrites extends Context.Service<
-  StoreWrites,
-  (runs: ReadonlyArray<string>) => void
->()("collie/StoreWrites") {}
-
-export const storeLayer: Layer.Layer<Store, never, SqlClient.SqlClient | Reactivity.Reactivity> =
-  Layer.effect(Store)(makeStore());
+/** Over `host.db`; given the state directory, the files its first migration imports too. */
+export const storeLayer = (
+  stateDir?: string,
+): Layer.Layer<
+  Store,
+  never,
+  SqlClient.SqlClient | Reactivity.Reactivity | FileSystem.FileSystem | Path.Path
+> => Layer.effect(Store)(makeStore(stateDir));
 
 /** What a committed write invalidates, and what a subscriber is listening for. */
 const RUNS = ["collie/runs"];
 
-const MIGRATIONS = {
+/** A field of a record kept as JSON, null where the line is not JSON. */
+const field = (name: string) =>
+  `CASE WHEN json_valid(line) THEN json_extract(line, '$.${name}') END`;
+
+type ImportError = Effect.Error<
+  ReturnType<
+    typeof importLedgers | typeof importTasks | typeof importRegisters | typeof importProposals
+  >
+>;
+
+const migrations = (imports: {
+  readonly ledgers: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
+  readonly tasks: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
+  readonly registers: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
+  readonly proposals: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
+}) => ({
   "1_runs": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`
@@ -420,23 +439,120 @@ const MIGRATIONS = {
       )
     `;
   }),
-};
+  "12_deliveries": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql.unsafe(`
+      CREATE TABLE collie_deliveries (
+        seq INTEGER PRIMARY KEY,
+        ledger TEXT NOT NULL,
+        line TEXT NOT NULL,
+        id TEXT AS (${field("id")}),
+        run TEXT AS (${field("run")}),
+        state TEXT AS (${field("state")}),
+        kind TEXT AS (${field("kind")}),
+        human INTEGER AS (${field("human")} IS NOT NULL),
+        causal_key TEXT AS (${field("causal_key")})
+      )
+    `);
+    yield* sql`CREATE INDEX collie_deliveries_ledger ON collie_deliveries (ledger, seq)`;
+    yield* sql`CREATE INDEX collie_deliveries_run ON collie_deliveries (run, ledger, id)`;
+    yield* sql`CREATE INDEX collie_deliveries_kind ON collie_deliveries (ledger, seq) WHERE kind IS NOT NULL`;
+    yield* sql`CREATE INDEX collie_deliveries_human ON collie_deliveries (id, seq) WHERE human = 1`;
+    yield* sql`CREATE INDEX collie_deliveries_causal ON collie_deliveries (ledger, causal_key, id)`;
+    yield* imports.ledgers;
+  }),
+  "13_tasks": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      CREATE TABLE collie_tasks (
+        id TEXT PRIMARY KEY,
+        record TEXT NOT NULL,
+        workspace TEXT AS (json_extract(record, '$.workspace')),
+        created_at TEXT AS (json_extract(record, '$.created_at'))
+      )
+    `;
+    yield* sql`CREATE INDEX collie_tasks_workspace ON collie_tasks (workspace)`;
+    yield* imports.tasks;
+  }),
+  "14_agents": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      CREATE TABLE collie_agents (
+        register TEXT NOT NULL,
+        agent TEXT NOT NULL,
+        record TEXT NOT NULL,
+        PRIMARY KEY (register, agent)
+      )
+    `;
+    yield* imports.registers;
+  }),
+  "15_proposals": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      CREATE TABLE collie_proposals (
+        seq INTEGER PRIMARY KEY,
+        journal TEXT NOT NULL,
+        line TEXT NOT NULL,
+        kind TEXT AS (json_extract(line, '$.kind')),
+        proposal TEXT AS (coalesce(json_extract(line, '$.proposal'), json_extract(line, '$.id')))
+      )
+    `;
+    yield* sql`CREATE INDEX collie_proposals_journal ON collie_proposals (journal)`;
+    yield* sql`CREATE INDEX collie_proposals_proposal ON collie_proposals (proposal)`;
+    // A proposal names its Runs in a JSON array, which no index reaches.
+    yield* sql`
+      CREATE TABLE collie_proposal_runs (
+        run TEXT NOT NULL,
+        proposal TEXT NOT NULL,
+        PRIMARY KEY (run, proposal)
+      )
+    `;
+    yield* sql`
+      CREATE TRIGGER collie_proposal_runs_of AFTER INSERT ON collie_proposals
+      WHEN NEW.kind = 'proposal'
+      BEGIN
+        INSERT OR IGNORE INTO collie_proposal_runs (run, proposal)
+        SELECT json_extract(value, '$.run'), NEW.proposal FROM json_each(NEW.line, '$.targets');
+      END
+    `;
+    yield* imports.proposals;
+  }),
+});
 
 /** How often a commit by another connection, another process's, is looked for. */
 const ELSEWHERE_EVERY = "250 millis";
 
-function makeStore(): Effect.Effect<
+function makeStore(
+  stateDir: string | undefined,
+): Effect.Effect<
   StoreApi,
   never,
-  SqlClient.SqlClient | Reactivity.Reactivity | Scope.Scope
+  SqlClient.SqlClient | Reactivity.Reactivity | Scope.Scope | FileSystem.FileSystem | Path.Path
 > {
   return Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const reactivity = yield* Reactivity.Reactivity;
+    const files = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
+    const imported = (
+      read: (
+        stateDir: string,
+      ) => Effect.Effect<
+        void,
+        ImportError,
+        SqlClient.SqlClient | FileSystem.FileSystem | Path.Path
+      >,
+    ) => (stateDir === undefined ? Effect.void : Effect.provideContext(read(stateDir), files));
     // Before anything reads a table: a database that will not migrate is a broken host,
     // not a request that failed.
     yield* SqliteMigrator.run({
-      loader: Migrator.fromRecord(MIGRATIONS),
+      loader: Migrator.fromRecord(
+        migrations({
+          ledgers: imported(importLedgers),
+          tasks: imported(importTasks),
+          registers: imported(importRegisters),
+          proposals: imported(importProposals),
+        }),
+      ),
       table: "collie_migrations",
     }).pipe(Effect.orDie);
     // SQLite moves `data_version` only for another connection's commits.

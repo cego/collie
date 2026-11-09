@@ -40,7 +40,8 @@ import {
   readElections,
   type JudgementDeps,
 } from "../src/drift";
-import { proposalsPath, read as readProposals } from "../src/proposals";
+import { read as readProposals } from "../src/proposals";
+import { recordsAt } from "../src/records";
 import { budgetPath, herdOf } from "../src/steering";
 import { serverSocket } from "../src/herdr";
 import { readVerifications } from "../src/verify";
@@ -921,7 +922,7 @@ test("a finishing Run runs what it was granted, and offers what is still blockin
         "src-only:open",
       ]);
       const key = yield* herdOf(herd.socketPath);
-      const proposed = yield* readProposals(yield* proposalsPath(dir, key!));
+      const proposed = yield* readProposals(key!).pipe(Effect.provide(recordsAt(dir)));
       expect(
         Arr.map(proposed, (one) => (one.kind === "proposal" ? one.interpretation : one.kind)),
       ).toEqual(["r1 finished with 1 blocking constraint(s) still open"]);
@@ -988,7 +989,7 @@ test("a host that finds its Herd while a Run finishes offers that Run's blocking
       ).pipe(Effect.provideService(Clock.Clock, clock));
 
       const key = yield* herdOf(socketPath);
-      const proposed = yield* readProposals(yield* proposalsPath(dir, key!));
+      const proposed = yield* readProposals(key!).pipe(Effect.provide(recordsAt(dir)));
       expect(
         Arr.map(proposed, (one) => (one.kind === "proposal" ? one.interpretation : one.kind)),
       ).toEqual(["r1 finished with 1 blocking constraint(s) still open"]);

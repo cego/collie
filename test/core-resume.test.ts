@@ -28,7 +28,7 @@ import {
 } from "../src/engine";
 import type { Store } from "../src/store";
 import { agentName } from "../src/naming";
-import { deliveriesOf } from "../src/steering";
+import { deliveredTo } from "./support/records";
 import { COMPACT_AT_TOKENS } from "../src/settings";
 import { COMPACTION_PORTS, codexPort } from "../src/compactors";
 import { isString } from "../src/schema";
@@ -315,14 +315,14 @@ test(
         expect(Arr.map(posted, (send) => send.terminal)).toEqual([named("opencode")]);
         expect(posted[0]?.text).toContain("Carry on with your step from where you were");
         expect(posted[0]?.text).toContain(`agents/${runId}/opencode.prompt.md`);
-        const ledger = yield* deliveriesOf(dir(), runId);
+        const ledger = yield* deliveredTo(dir(), runId);
         const carried = Arr.filter(
           ledger,
-          ({ delivery }) =>
+          (delivery) =>
             delivery.agent === named("opencode") &&
             (posted[0]?.text ?? "").includes(`collie-delivery:${delivery.id}`),
         );
-        expect(Arr.map(carried, ({ delivery }) => [delivery.cause.kind, delivery.state])).toEqual([
+        expect(Arr.map(carried, (delivery) => [delivery.cause.kind, delivery.state])).toEqual([
           ["step", "submitted"],
         ]);
       }),

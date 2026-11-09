@@ -28,6 +28,7 @@ import type { Channel } from "./dispatcher";
 import type { Herdr, HerdrError, Submission } from "./herdr";
 import type { CodexError } from "./codex";
 import type { OpenCodeError } from "./opencode";
+import type { Records } from "./records";
 import type { AgentQuestion, HarnessVersionError, Submitting } from "./compactors";
 import { LOCK_CLAIM_SPACING_MS, ensureLockDir, withLock } from "./lock";
 import { reason } from "./naming";
@@ -230,7 +231,7 @@ export interface CompactionPort {
   request(
     ctx: AgentContext,
     requestId: string,
-  ): Effect.Effect<Submission | null, PortError, PortServices>;
+  ): Effect.Effect<Submission | null, PortError, PortServices | Records>;
   /**
    * Whether the harness has shown, through these controls, that it can take a prompt.
    * Absent where its controls give no such sign before the first prompt. A failure is why
@@ -262,7 +263,7 @@ export interface CompactionPort {
   poll(
     ctx: AgentContext,
     requestId: string,
-  ): Effect.Effect<CompactionOutcome | null, PortError, PortServices>;
+  ): Effect.Effect<CompactionOutcome | null, PortError, PortServices | Records>;
 }
 
 export interface CompactionPorts {
@@ -901,7 +902,7 @@ export const atBoundary = Effect.fn("Compaction.atBoundary")(function* <Submissi
    */
   submitting: <A, E, R>(
     body: (channel: Channel) => Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, E | Unsubmitted | SubmissionError, R | PortServices>,
+  ) => Effect.Effect<A, E | Unsubmitted | SubmissionError, R | PortServices | Records>,
 ) {
   const limit = yield* enabled(deps.configured);
   if (!limit) return DISPATCH;

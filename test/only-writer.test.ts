@@ -12,7 +12,7 @@ import { readAudit } from "../src/audit";
 import { readDispositions } from "../src/disposition";
 import { runDir } from "../src/engine";
 import { connect } from "../src/host";
-import { proposalsPath, read as readProposals, record as recordProposal } from "../src/proposals";
+import { everyProposal, read as readProposals, record as recordProposal } from "../src/proposals";
 import { defaultsPath, readDefaults } from "../src/intent";
 import { scopeKey } from "../src/registry";
 import {
@@ -26,6 +26,7 @@ import {
 } from "../src/news";
 import { herdDir } from "../src/steering";
 import { stopHost, until } from "./support/host";
+import { hostRecords, recordsAt } from "./support/records";
 import { collie, proves } from "./support/world";
 
 const answers = (lines: ReadonlyArray<{ readonly kind: string }>) =>
@@ -38,7 +39,7 @@ test(
       "collie-writer-proposal-",
       (world) =>
         Effect.gen(function* () {
-          const file = yield* proposalsPath(world.state, "some-herd");
+          const file = "some-herd";
           const proposed = (why: string) =>
             recordProposal(file, {
               interpretation: why,
@@ -47,7 +48,7 @@ test(
               allowedNow: [],
               intentVersions: {},
               by: "evaluator:e-1",
-            });
+            }).pipe(Effect.provide(recordsAt(world.state)));
           const first = yield* proposed("nothing to do");
           const second = yield* proposed("still nothing");
           const client = yield* connect(world.state);
@@ -72,7 +73,7 @@ test(
           expect(conflict._tag).toBe("RequestConflict");
 
           yield* client.decline({ proposal: second.id, hash: second.content_hash, request: "r-2" });
-          expect(answers(yield* readProposals(file))).toMatchObject([
+          expect(answers(yield* hostRecords(world.state, readProposals(file)))).toMatchObject([
             { kind: "confirmed", id: first.id, by: "chat:r-1" },
             { kind: "declined", id: second.id, by: "chat:r-2" },
           ]);
@@ -101,7 +102,7 @@ test(
           yield* Effect.addFinalizer(() =>
             Effect.sync(() => delete Bun.env.FAKE_HERDR_HOLD_PANE_LIST),
           );
-          const file = yield* proposalsPath(world.state, "some-herd");
+          const file = "some-herd";
           const proposal = yield* recordProposal(file, {
             interpretation: "tidy the Home",
             targets: [],
@@ -109,14 +110,14 @@ test(
             allowedNow: [],
             intentVersions: {},
             by: "evaluator:e-1",
-          });
+          }).pipe(Effect.provide(recordsAt(world.state)));
           const yes = { proposal: proposal.id, hash: proposal.content_hash, request: "r-1" };
           // The first asker hangs up once its step has started.
           const first = yield* Effect.forkChild(
             Effect.scoped(Effect.flatMap(connect(world.state), (client) => client.confirm(yes))),
           );
           yield* until(
-            () => readProposals(file),
+            () => hostRecords(world.state, readProposals(file)),
             (lines) => Arr.some(lines, (line) => line.kind === "step" && line.state === "started"),
           );
           yield* Fiber.interrupt(first);
@@ -147,7 +148,7 @@ test(
       (world) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          const file = yield* proposalsPath(world.state, "some-herd");
+          const file = "some-herd";
           const client = yield* connect(world.state);
           yield* client.declare({ frontDoor: "chat" });
           const asked = {
@@ -160,7 +161,7 @@ test(
           const said = yield* client.propose(asked);
           expect(said.ok).toBe(true);
           expect(yield* client.propose(asked)).toEqual(said);
-          const lines = yield* readProposals(file);
+          const lines = yield* hostRecords(world.state, readProposals(file));
           expect(Arr.filter(lines, (line) => line.kind === "proposal")).toMatchObject([
             { by: "chat:q-1" },
           ]);
@@ -369,8 +370,7 @@ test(
           expect(first.ok).toBe(true);
           yield* fs.writeFileString(`${bin}/claude`, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
           expect(yield* client.steerAbout(again)).toEqual(first);
-          const herds = yield* fs.readDirectory(`${world.state}/herd`);
-          const journal = yield* readProposals(`${world.state}/herd/${herds[0]}/proposals.jsonl`);
+          const journal = yield* hostRecords(world.state, everyProposal);
           expect(answers(journal)).toMatchObject([{ kind: "confirmed" }, { kind: "confirmed" }]);
           // A steer from another herdr session is carried out in that session.
           const other = `${world.state}/other.sock`;

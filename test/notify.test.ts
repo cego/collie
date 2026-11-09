@@ -21,6 +21,7 @@ import { fakeSlack, signedInToSlack } from "./support/slack";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { Agents, agentsLayer } from "../src/agents";
 import { runEffect } from "./support/effect";
+import { recordsAt } from "./support/records";
 import { Children, Host } from "../src/sdk";
 import { foundationLayer, loadEntry } from "../src/engine";
 import { Store } from "../src/store";
@@ -208,7 +209,7 @@ test("a merge request recorded says it was opened, naming it", () =>
 test("a Run's toast names the Task it is part of by what it is called, never by its id", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* writeTask(dir, {
+      yield* writeTask({
         id: "task-7",
         workspace: "w7",
         label: "Collie | Offer banner fix",
@@ -241,7 +242,7 @@ test("a Run's toast names the Task it is part of by what it is called, never by 
       expect(toasts).toEqual([
         "done|host · Offer banner fix opened !42|https://gitlab.example/acme/app/-/merge_requests/42",
       ]);
-    }),
+    }).pipe(Effect.provide(recordsAt(dir))),
   ));
 
 test("a kind the operator turned off is not sent", () =>

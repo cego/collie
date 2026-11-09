@@ -62,7 +62,7 @@ import { mrLabel, mrTarget, type FlowLane, type MrForge } from "../../src/board-
 import { CONFLICTS } from "../../src/review-wait";
 import { laneFor } from "../../src/flow-read";
 import type { RunState } from "../../src/runs";
-import { runFacts } from "./records";
+import { registeredAt, runFacts } from "./records";
 import { readLaunches } from "../../src/launches";
 import { readReplies } from "../../src/replies";
 import { disputesIn } from "../../src/proactive";
@@ -119,9 +119,10 @@ import { findingsIn } from "../../src/output";
 import { FINGERPRINT_MAX_BYTES, collect, fingerprint, readVerifications } from "../../src/verify";
 import { inputsFor, offersFrom } from "../../src/offers";
 import { Store, storeLayer } from "../../src/store";
+import { recordsAt, type Records } from "../../src/records";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import * as Reactivity from "effect/reactivity/Reactivity";
-import { everyRegistered, registerAgent, registryPath, scopeFor } from "../../src/registry";
+import { registerAgent, scopeFor } from "../../src/registry";
 import { deliveriesOf, SENT_STATES } from "../../src/steering";
 import { fixtures, until } from "./host";
 
@@ -269,6 +270,7 @@ const session = <A, E>(
     | Children
     | Host
     | Store
+    | Records
     | SqlClient.SqlClient
     | FileSystem.FileSystem
     | Path.Path
@@ -352,7 +354,7 @@ const laneNow = (runId: string, state?: RunState) => session(laneIn(runId, state
 const laneRead = (runId: string) =>
   laneIn(runId).pipe(
     Effect.provide(
-      storeLayer.pipe(
+      storeLayer().pipe(
         Layer.provide(
           SqliteClient.layer({ filename: `${dir}/host.db` }).pipe(
             Layer.orDie,
@@ -872,10 +874,7 @@ scenario(
         yield* rig.queueOutputs([GRILLED, SPEC, TICKETS]);
         yield* parked({ entry: shipped("plan"), runId: "r-plan", input: GOAL, decision: "next-1" });
         const planner = Option.getOrUndefined(
-          Arr.findFirst(
-            yield* everyRegistered(hostOf().env.stateDir),
-            (one) => one.runId === "r-plan",
-          ),
+          Arr.findFirst(yield* registeredAt(dir), (one) => one.runId === "r-plan"),
         )!;
         const route = yield* session(
           Agents.pipe(Effect.flatMap((agents) => agents.askRoute("planner", ["r-impl", "r-plan"]))),
@@ -907,9 +906,8 @@ scenario(
         expect((yield* prompts()).at(-1)).toContain("From implementer of r-impl on laptop.");
         expect(
           Arr.some(
-            yield* deliveriesOf(hostOf().env.stateDir, "r-plan"),
-            (one) =>
-              one.delivery.cause.ref === "planner-question" && SENT_STATES.has(one.delivery.state),
+            yield* deliveriesOf("r-plan").pipe(Effect.provide(recordsAt(dir))),
+            (one) => one.cause.ref === "planner-question" && SENT_STATES.has(one.state),
           ),
         ).toBe(true);
       }),
@@ -2654,7 +2652,7 @@ scenario(
         // The implementer of the Run this review was started from, live and registered as it.
         yield* rig.addAgent("impl-live", "9-1");
         const env = hostOf().env;
-        yield* registerAgent(yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)), {
+        yield* registerAgent(scopeFor(env, rig.projectDir), {
           role: "implementer",
           agent: "impl-live",
           paneId: "9-1",
@@ -2663,7 +2661,7 @@ scenario(
           workflow: "implement",
           at: "2026-09-23T10:00:00Z",
           incarnation: { terminalId: "term-impl-live", agentSession: null },
-        }).pipe(Effect.orDie);
+        }).pipe(Effect.provide(recordsAt(dir)), Effect.orDie);
         const target = "branch:main...HEAD";
         yield* parked({
           entry: shipped("review"),
@@ -4423,7 +4421,7 @@ scenario(
         const planner = `planner-${idOf("plan")}`;
         yield* rig.addAgent(planner, "9-1");
         const env = hostOf().env;
-        yield* registerAgent(yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)), {
+        yield* registerAgent(scopeFor(env, rig.projectDir), {
           role: "planner",
           agent: planner,
           paneId: "9-1",
@@ -4432,7 +4430,7 @@ scenario(
           workflow: "plan",
           at: "2026-09-23T10:00:00Z",
           incarnation: { terminalId: `term-${planner}`, agentSession: null },
-        }).pipe(Effect.orDie);
+        }).pipe(Effect.provide(recordsAt(dir)), Effect.orDie);
         yield* approve("r-planned", ["unit"]);
         yield* rig.queueOutputs([null, BUILT, CLEAN_SYNTHESIS, OPENED]);
         const running = yield* Effect.forkChild(

@@ -15,13 +15,14 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { platformLayer } from "../src/platform";
-import { Clock, Effect, FileSystem, ManagedRuntime, Path } from "effect";
+import { Clock, Effect, FileSystem, Layer, ManagedRuntime, Path } from "effect";
 import { currentEnv } from "../src/env";
 import { Herdr } from "../src/herdr";
 import { externalSubmissions, installedVersion, submittedDelivery } from "../src/compactors";
 import { controlDir } from "../src/compaction";
 import { entryFromLive, transaction, INTERRUPT_WAIT_MS } from "../src/dispatcher";
 import { nowIso } from "../src/time";
+import { recordsAt } from "../src/records";
 
 const runtime = ManagedRuntime.make(platformLayer);
 const ackPath = (dir: string, id: string) => `${dir}/steering/acks/${id}.txt`;
@@ -69,6 +70,8 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
       fs.remove(scratch, { recursive: true, force: true }).pipe(Effect.ignore),
     );
   const runDir = path.join(scratch, "run");
+  // The probe's ledger is its own, never the ledgers of the host this herdr serves.
+  const records = yield* Layer.build(recordsAt(scratch));
   yield* fs.makeDirectory(path.join(runDir, "steering", "acks"), { recursive: true });
 
   const deps = {
@@ -113,6 +116,7 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
       Effect.orElseSucceed(() => ({
         ok: false as const,
       })),
+      Effect.provideContext(records),
     );
   });
 

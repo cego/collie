@@ -237,15 +237,13 @@ const keepWorkspace = (deps: EndDeps, paneId: string, panes: ReadonlyArray<PaneI
       cwd: pane.cwd ?? deps.cwd,
       workspace,
     });
-    const task = yield* taskOfWorkspace(deps.stateDir, workspace);
+    const task = yield* taskOfWorkspace(workspace);
     if (task === null) return;
     yield* withTaskLock(
-      deps.stateDir,
       task.id,
       Effect.gen(function* () {
-        const current = yield* readTask(deps.stateDir, task.id);
-        if (current !== null)
-          yield* writeTask(deps.stateDir, { ...current, root_pane: shell.paneId });
+        const current = yield* readTask(task.id);
+        if (current !== null) yield* writeTask({ ...current, root_pane: shell.paneId });
       }),
     );
   }).pipe(Effect.ignore);

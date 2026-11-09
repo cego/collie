@@ -20,7 +20,6 @@ import {
   Predicate,
   Result,
 } from "effect";
-import { ensureLockDir } from "./lock";
 import {
   HerdrError,
   herdrFailureReason,
@@ -36,17 +35,16 @@ import {
   causalKey,
   deferralsOf,
   isUnobserved,
-  ledgerPath,
   newestById,
+  deliveriesAbout,
   readLedger,
   readLedgerWhole,
   settleStaleReservations,
   textHash,
-  withLedgerLock,
   type Cause,
+  type Deliveries,
   type Delivery,
   type HumanDoor,
-  type LedgerBusy,
 } from "./steering";
 import { gate, interruptKeys } from "./steering-caps";
 import { nowIso, took, epochMs } from "./time";
@@ -221,7 +219,11 @@ export interface Channel {
   submit(
     text: string,
     draft: DeliveryDraft,
-  ): Effect.Effect<SubmitOutcome, never, FileSystem.FileSystem | Path.Path | PlatformServices>;
+  ): Effect.Effect<
+    SubmitOutcome,
+    never,
+    FileSystem.FileSystem | Path.Path | PlatformServices | Deliveries
+  >;
 }
 
 export interface DispatcherDeps {
@@ -255,8 +257,8 @@ class TransactionOpen extends Data.TaggedError("TransactionOpen")<{ agent: strin
   }
 }
 
-const isLedgerHeld = (cause: unknown): cause is TransactionOpen | LedgerBusy =>
-  Predicate.isTagged(cause, "TransactionOpen") || Predicate.isTagged(cause, "LedgerBusy");
+const isLedgerHeld = (cause: unknown): cause is TransactionOpen =>
+  Predicate.isTagged(cause, "TransactionOpen");
 
 const open = new Set<string>();
 
@@ -314,81 +316,75 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
   if (terminalId === undefined)
     return yield* new NotDeliverable({ agent: entry.agent, reason: "no_incarnation" });
   if (open.has(terminalId)) return yield* new TransactionOpen({ agent: entry.agent });
-
-  const file = yield* ledgerPath(deps.stateDir, terminalId);
-  yield* ensureLockDir(file);
   open.add(terminalId);
-  return yield* withLedgerLock(
-    file,
-    Effect.gen(function* () {
-      let listing = yield* agentsNow(deps, entry);
-      let listedAt = yield* Clock.currentTimeMillis;
+  return yield* Effect.gen(function* () {
+    let listing = yield* agentsNow(deps, entry);
+    let listedAt = yield* Clock.currentTimeMillis;
 
-      const identified = verifyIncarnation(entry, listing);
-      if (!identified.ok) {
-        yield* settlePending(file, identified.reason);
-        return yield* new NotDeliverable({ agent: entry.agent, reason: identified.reason });
-      }
+    const identified = verifyIncarnation(entry, listing);
+    if (!identified.ok) {
+      yield* settlePending(terminalId, identified.reason);
+      return yield* new NotDeliverable({ agent: entry.agent, reason: identified.reason });
+    }
 
-      let closed = false;
-      const channel: Channel = {
-        agent: entry.agent,
-        submit: (words, draft) =>
-          Effect.gen(function* () {
-            const text = deliveryText(words, draft.actor, yield* Clock.currentTimeMillis);
-            if (closed)
-              return yield* new DispatcherDefect({
-                why: `${entry.agent}'s channel was used after its transaction closed`,
-              });
-            if (Buffer.byteLength(text, "utf8") > MAX_DELIVERY_BYTES)
-              return refuse(null, "too_long", `over ${MAX_DELIVERY_BYTES} bytes`);
-            // Fail closed before anything is reserved: a mode this harness has not been
-            // shown to take would produce a delivery nobody can say the fate of.
-            const ungated = yield* gate(draft.harness ?? "", draft.mode).pipe(
-              Effect.as(null),
-              Effect.catch((cause) => Effect.succeed(cause)),
-            );
-            if (ungated) {
-              yield* recordUngated(file, entry, terminalId, text, draft, ungated.reason);
-              return refuse(null, "failed", ungated.reason);
-            }
-            if (
-              draft.idleOnly &&
-              !isSettled(
-                yield* (
-                  deps.herdr.agentStatus?.(entry.agent) ?? Effect.succeed("unknown" as const)
-                ).pipe(Effect.orElseSucceed(() => "unknown" as const)),
-              )
+    let closed = false;
+    const channel: Channel = {
+      agent: entry.agent,
+      submit: (words, draft) =>
+        Effect.gen(function* () {
+          const text = deliveryText(words, draft.actor, yield* Clock.currentTimeMillis);
+          if (closed)
+            return yield* new DispatcherDefect({
+              why: `${entry.agent}'s channel was used after its transaction closed`,
+            });
+          if (Buffer.byteLength(text, "utf8") > MAX_DELIVERY_BYTES)
+            return refuse(null, "too_long", `over ${MAX_DELIVERY_BYTES} bytes`);
+          // Fail closed before anything is reserved: a mode this harness has not been
+          // shown to take would produce a delivery nobody can say the fate of.
+          const ungated = yield* gate(draft.harness ?? "", draft.mode).pipe(
+            Effect.as(null),
+            Effect.catch((cause) => Effect.succeed(cause)),
+          );
+          if (ungated) {
+            yield* recordUngated(entry, terminalId, text, draft, ungated.reason);
+            return refuse(null, "failed", ungated.reason);
+          }
+          if (
+            draft.idleOnly &&
+            !isSettled(
+              yield* (
+                deps.herdr.agentStatus?.(entry.agent) ?? Effect.succeed("unknown" as const)
+              ).pipe(Effect.orElseSucceed(() => "unknown" as const)),
             )
-              return refuse(null, "deferred", "agent is not idle");
-            // The listing was read when the transaction opened, and a whole compaction
-            // can happen inside one. Anything older than a few seconds is re-read before
-            // it is trusted with a send.
-            if ((yield* Clock.currentTimeMillis) - listedAt > LISTING_MAX_AGE_MS) {
-              listing = yield* agentsNow(deps, entry);
-              listedAt = yield* Clock.currentTimeMillis;
-              const again = verifyIncarnation(entry, listing);
-              if (!again.ok) {
-                yield* settlePending(file, again.reason);
-                return refuse(null, "incarnation_changed", again.reason);
-              }
+          )
+            return refuse(null, "deferred", "agent is not idle");
+          // The listing was read when the transaction opened, and a whole compaction
+          // can happen inside one. Anything older than a few seconds is re-read before
+          // it is trusted with a send.
+          if ((yield* Clock.currentTimeMillis) - listedAt > LISTING_MAX_AGE_MS) {
+            listing = yield* agentsNow(deps, entry);
+            listedAt = yield* Clock.currentTimeMillis;
+            const again = verifyIncarnation(entry, listing);
+            if (!again.ok) {
+              yield* settlePending(terminalId, again.reason);
+              return refuse(null, "incarnation_changed", again.reason);
             }
-            return yield* send(deps, file, entry, terminalId, text, draft);
-          }).pipe(Effect.orDie),
-      };
+          }
+          return yield* send(deps, entry, terminalId, text, draft);
+        }).pipe(Effect.orDie),
+    };
 
-      // Closed however the body ends: the lock goes back at the same moment, so a channel
-      // a failed body kept hold of would be a sender with nothing serialising it.
-      const result = yield* body(channel).pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            closed = true;
-          }),
-        ),
-      );
-      return result;
-    }),
-  ).pipe(Effect.ensuring(Effect.sync(() => open.delete(terminalId))));
+    // Closed however the body ends: the transaction ends at the same moment, so a channel
+    // a failed body kept hold of would be a sender with nothing serialising it.
+    const result = yield* body(channel).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          closed = true;
+        }),
+      ),
+    );
+    return result;
+  }).pipe(Effect.ensuring(Effect.sync(() => open.delete(terminalId))));
 });
 
 /** Where an entry's incarnation runs: a record without a backend is Herdr 1's. */
@@ -452,31 +448,34 @@ function deliveryOf(
 
 const send = Effect.fn("Dispatcher.send")(function* (
   deps: DispatcherDeps,
-  file: string,
   entry: AgentEntry,
   terminalId: string,
   text: string,
   draft: DeliveryDraft,
 ) {
   const at = yield* nowIso;
-  const lines = yield* readLedger(file);
+  const lines = yield* readLedger(terminalId);
   const now = yield* Clock.currentTimeMillis;
   for (const stale of settleStaleReservations(lines, now, SUBMIT_TIMEOUT_MS, at))
-    yield* appendLine(file, stale);
+    yield* appendLine(stale);
 
   const key = causalKey(draft.run, draft.cause, draft.intentVersion);
-  const ledger = yield* readLedgerWhole(file);
+  const ledger = yield* readLedgerWhole(terminalId);
   // A line nobody can read is a delivery nobody can account for, which is what `unknown`
   // means and why it blocks: sending again could be the second copy of this work.
   if (ledger.corrupt > 0) {
     yield* deps.log(
       `not sent to ${entry.agent}: ${ledger.corrupt} unreadable line(s) in its ledger`,
     );
-    return refuse(null, "blocked", `${file} has ${ledger.corrupt} unreadable line(s)`);
+    return refuse(
+      null,
+      "blocked",
+      `${entry.agent}'s ledger has ${ledger.corrupt} unreadable line(s)`,
+    );
   }
   const line = deliveryOf(entry, terminalId, text, draft, at, "reserved");
   const id = line.id;
-  const inFlight = blocked(ledger.lines, key, id);
+  const inFlight = blocked(yield* deliveriesAbout(terminalId, key), key, id);
   if (inFlight) {
     yield* deps.log(
       `not sent to ${entry.agent}: ${inFlight.state} delivery ${inFlight.id} is already about this work`,
@@ -487,7 +486,7 @@ const send = Effect.fn("Dispatcher.send")(function* (
     };
   }
   const reserved: Delivery = draft.note === undefined ? line : { ...line, note: draft.note };
-  yield* appendLine(file, reserved);
+  yield* appendLine(reserved);
 
   const asking =
     draft.cause.kind === "step" || draft.cause.kind === "repair"
@@ -508,26 +507,25 @@ const send = Effect.fn("Dispatcher.send")(function* (
     // vouch for is kept as the note, never rounded up to a delivery it saw taken.
     const line = { ...reserved, at: settledAt, state: "submitted" as const };
     yield* appendLine(
-      file,
       sent.success === "observed"
         ? line
         : { ...line, note: sent.success === "pressed" ? ENTER_PRESSED : UNOBSERVED },
     );
     if (sent.success === "observed")
-      yield* appendLine(file, { ...line, state: "acknowledged", note: TURN_STARTED });
+      yield* appendLine({ ...line, state: "acknowledged", note: TURN_STARTED });
     return { ok: true as const, id, submission: sent.success };
   }
   // A refusal herdr answered with is a fact; a transport that never answered is not.
   const why = herdrFailureReason(sent.failure);
   if (sent.failure.answered !== true) {
     // Nobody can say whether it arrived, and Collie never retries out of that on its own.
-    yield* appendLine(file, { ...reserved, at: settledAt, state: "unknown", note: why });
+    yield* appendLine({ ...reserved, at: settledAt, state: "unknown", note: why });
     return refuse(id, "unknown", why);
   }
   const code = sent.failure.code;
   const coded = code === undefined ? reserved : { ...reserved, code };
   if (code === undefined || !TRANSIENT_REFUSALS.has(code) || draft.patienceMs === undefined) {
-    yield* appendLine(file, { ...coded, at: settledAt, state: "failed", note: why });
+    yield* appendLine({ ...coded, at: settledAt, state: "failed", note: why });
     return refuse(id, "failed", why);
   }
   // Measured from the ledger rather than this process, so a sender that comes back after
@@ -538,12 +536,12 @@ const send = Effect.fn("Dispatcher.send")(function* (
   if (held < draft.patienceMs) {
     if (attempts === 1)
       yield* deps.log(`${entry.agent} cannot take a prompt yet (${code}); retrying`);
-    yield* appendLine(file, { ...coded, at: settledAt, state: "deferred", note: why });
+    yield* appendLine({ ...coded, at: settledAt, state: "deferred", note: why });
     return refuse(id, "deferred", `${code}, attempt ${attempts}`);
   }
   const gaveUp = `${code} held for ${took(held)} over ${attempts} attempts`;
   yield* deps.log(`not sent to ${entry.agent}: ${gaveUp}; gave up`);
-  yield* appendLine(file, { ...coded, at: settledAt, state: "failed", note: gaveUp });
+  yield* appendLine({ ...coded, at: settledAt, state: "failed", note: gaveUp });
   return refuse(id, "exhausted", gaveUp);
 });
 
@@ -625,29 +623,25 @@ export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(functio
   const terminalId = entry.incarnation?.terminalId;
   if (terminalId === undefined) return null;
   const backend = backendOf(entry);
-  const file = yield* ledgerPath(deps.stateDir, terminalId);
-  const pending = Effect.map(readLedger(file), (lines) =>
+  const pending = Effect.map(readLedger(terminalId), (lines) =>
     Arr.filter(
       [...newestById(lines).values()],
       (one) => keys.includes(one.causal_key) && isUnobserved(one),
     ).at(-1),
   );
-  /** Re-read under the lock, so a settlement never lands on a delivery another writer moved. */
+  /** Re-read first, so a settlement never lands on a delivery the sender moved meanwhile. */
   const settle = (
     id: string,
     act: Effect.Effect<void, never, PlatformServices>,
     note: string,
     state?: "acknowledged",
   ) =>
-    withLedgerLock(
-      file,
-      Effect.gen(function* () {
-        const now = newestById(yield* readLedger(file)).get(id);
-        if (now === undefined || !isUnobserved(now)) return;
-        yield* act;
-        yield* appendLine(file, { ...now, at: yield* nowIso, state: state ?? now.state, note });
-      }),
-    );
+    Effect.gen(function* () {
+      const now = newestById(yield* readLedger(terminalId)).get(id);
+      if (now === undefined || !isUnobserved(now)) return;
+      yield* act;
+      yield* appendLine({ ...now, at: yield* nowIso, state: state ?? now.state, note });
+    });
   let sawSettled = false;
   let quietSince: number | null = null;
   let pressed = false;
@@ -710,11 +704,14 @@ export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(functio
  * longer the one addressed, settled `failed`. Nothing was sent for them and nothing ever
  * will be: the process they were reserved against is gone.
  */
-const settlePending = Effect.fn("Dispatcher.settlePending")(function* (file: string, why: string) {
+const settlePending = Effect.fn("Dispatcher.settlePending")(function* (
+  terminalId: string,
+  why: string,
+) {
   const at = yield* nowIso;
-  for (const delivery of newestById(yield* readLedger(file)).values()) {
+  for (const delivery of newestById(yield* readLedger(terminalId)).values()) {
     if (delivery.state !== "reserved" && delivery.state !== "deferred") continue;
-    yield* appendLine(file, { ...delivery, at, state: "failed", note: why });
+    yield* appendLine({ ...delivery, at, state: "failed", note: why });
   }
 });
 
@@ -796,7 +793,6 @@ export const entryFromLive = Effect.fn("Dispatcher.entryFromLive")(function* (
  * steer" has to find an answer somewhere, and the ledger is where they look.
  */
 const recordUngated = Effect.fn("Dispatcher.recordUngated")(function* (
-  file: string,
   entry: AgentEntry,
   terminalId: string,
   text: string,
@@ -804,7 +800,7 @@ const recordUngated = Effect.fn("Dispatcher.recordUngated")(function* (
   why: string,
 ) {
   const at = yield* nowIso;
-  yield* appendLine(file, {
+  yield* appendLine({
     ...deliveryOf(entry, terminalId, text, draft, at, "failed"),
     note: why,
   });

@@ -166,7 +166,6 @@ import { ownCodexReading } from "./usage";
 import {
   lineageAgent,
   registerAgent,
-  registryPath,
   scopeFor,
   verifyIncarnation,
   type AgentEntry,
@@ -203,7 +202,8 @@ import { isString, type JsonObject } from "./schema";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
 import { Collecting, collectingLayer, type CollectingApi } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
-import { causalKey, deliveriesOf, SENT_STATES, toldLine } from "./steering";
+import { causalKey, deliveriesAbout, deliveriesOf, SENT_STATES, toldLine } from "./steering";
+import type { Records } from "./records";
 import { readTask, withTaskLock, writeTask } from "./task";
 import { malformedIn, mentionedSkills, renderTemplate, skillMention, skillsIn } from "./template";
 import {
@@ -1467,7 +1467,7 @@ export interface AgentHost {
   readonly self?: ReadonlyArray<string>;
 }
 
-type AgentServices = FileSystem.FileSystem | Path.Path | PlatformServices | ForgeHttp;
+type AgentServices = FileSystem.FileSystem | Path.Path | PlatformServices | ForgeHttp | Records;
 
 const DEFAULT_POLL_MS = 2000;
 const READING_EVERY_MS = 60_000;
@@ -1829,12 +1829,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   const taskWorkspace = Effect.fn("Agents.taskWorkspace")(function* (ask: AgentAsk) {
     const id = ask.task;
     if (id === null) return null;
-    const stateDir = host.env.stateDir;
     return yield* withTaskLock(
-      stateDir,
       id,
       Effect.gen(function* () {
-        const task = yield* readTask(stateDir, id);
+        const task = yield* readTask(id);
         if (task === null) return null;
         const open = yield* host.herdr.workspaceList();
         if (Arr.some(open, (one) => one.workspaceId === task.workspace)) return task.workspace;
@@ -1849,7 +1847,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           cwd: ask.cwd,
           label: task.label,
         });
-        yield* writeTask(stateDir, {
+        yield* writeTask({
           ...task,
           workspace: reopened.workspaceId,
           root_pane: reopened.rootTab?.paneId ?? null,
@@ -1871,15 +1869,13 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   const rootPane = Effect.fn("Agents.rootPane")(function* (ask: AgentAsk) {
     const id = ask.task;
     if (id === null) return null;
-    const stateDir = host.env.stateDir;
     const taken = yield* withTaskLock(
-      stateDir,
       id,
       Effect.gen(function* () {
-        const task = yield* readTask(stateDir, id);
+        const task = yield* readTask(id);
         const pane = task?.root_pane ?? null;
         if (task === null || pane === null) return null;
-        yield* writeTask(stateDir, { ...task, root_pane: null });
+        yield* writeTask({ ...task, root_pane: null });
         return pane;
       }),
     );
@@ -2292,11 +2288,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           );
           const found = yield* entryFor(ask, agent, { paneId: terminal, workspaceId: null });
           if (found.entry === null) return undefined;
-          yield* registerAgent(
-            yield* registryPath(host.env.stateDir, scopeFor(host.env, ask.cwd)),
-            found.entry,
-            alive,
-          );
+          yield* registerAgent(scopeFor(host.env, ask.cwd), found.entry, alive);
           return found.entry.incarnation;
         }
         const workspace = ask.workspace ?? (yield* taskWorkspace(ask));
@@ -2345,11 +2337,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           workspaceId: workspace,
         });
         if (found.entry === null) return undefined;
-        yield* registerAgent(
-          yield* registryPath(host.env.stateDir, scopeFor(host.env, ask.cwd)),
-          found.entry,
-          alive,
-        );
+        yield* registerAgent(scopeFor(host.env, ask.cwd), found.entry, alive);
         return found.entry.incarnation;
       }),
     );
@@ -2624,12 +2612,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       const kind = unless === null ? "step" : "repair";
       const key = causalKey(launched.runId, { kind, ref: stemOf(launched) }, 0);
       // Only this agent's own ledger: another incarnation's is listed in no time order.
-      const last = Arr.filter(
-        yield* deliveriesOf(host.env.stateDir, launched.runId),
-        ({ delivery }) =>
-          delivery.causal_key === key &&
-          delivery.incarnation === found.entry?.incarnation?.terminalId,
-      ).at(-1)?.delivery;
+      const incarnation = found.entry.incarnation?.terminalId;
+      const last =
+        incarnation === undefined ? undefined : (yield* deliveriesAbout(incarnation, key)).at(-1);
       // Settled as not sent, or refused by herdr on the last resend: not delivered either way.
       const resend =
         Option.getOrUndefined(
@@ -3253,18 +3238,17 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       Effect.gen(function* () {
         const alive = yield* host.herdr.agentList();
         const others = Arr.filter(options.lineage, (runId) => runId !== options.runId);
-        const entry = yield* lineageAgent(host.env.stateDir, alive, options.role, others);
+        const entry = yield* lineageAgent(alive, options.role, others);
         // Without a proven incarnation the entry names a pane, not the agent now in it.
         if (entry === null) return null;
         if (!verifyIncarnation(entry, alive).ok) return null;
         const handed = { agent: entry.agent, delivered: true, detail: "" };
         const earlier = Arr.filter(
-          yield* deliveriesOf(host.env.stateDir, entry.runId),
-          ({ delivery }) =>
-            delivery.cause.kind === "handoff" && delivery.cause.ref === options.runId,
+          yield* deliveriesOf(entry.runId),
+          (delivery) => delivery.cause.kind === "handoff" && delivery.cause.ref === options.runId,
         );
         if (
-          Arr.some(earlier, ({ delivery }) =>
+          Arr.some(earlier, (delivery) =>
             Boolean(
               Option.getOrUndefined(
                 Option.map(Option.fromNullishOr(delivery.note), (present____) =>
@@ -3558,13 +3542,13 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             };
           const previous = Option.getOrUndefined(
             Arr.findFirst(
-              yield* deliveriesOf(host.env.stateDir, options.runId),
+              yield* deliveriesOf(options.runId),
               (one) =>
-                one.delivery.cause.kind === "steer" &&
-                one.delivery.cause.ref === options.request &&
-                !Arr.contains(["failed", "superseded"], one.delivery.state),
+                one.cause.kind === "steer" &&
+                one.cause.ref === options.request &&
+                !Arr.contains(["failed", "superseded"], one.state),
             ),
-          )?.delivery;
+          );
           if (previous !== undefined) {
             const result = SENT_STATES.has(previous.state)
               ? receipt(previous.agent, {
@@ -3641,7 +3625,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       under(
         Effect.gen(function* () {
           const alive = yield* host.herdr.agentList();
-          const entry = yield* lineageAgent(host.env.stateDir, alive, role, lineage);
+          const entry = yield* lineageAgent(alive, role, lineage);
           // A register entry with no incarnation names a pane, and whatever is in that
           // pane now is not the agent it was written about.
           return askRouteTo(entry !== null && verifyIncarnation(entry, alive).ok ? entry : null);

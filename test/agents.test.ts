@@ -35,7 +35,7 @@ import {
 import { TestClock } from "effect/testing";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr, type Call } from "./support/recorder";
-import { fastForward, runEffect as runLive } from "./support/effect";
+import { fastForward, memoryRecords, runEffect as runLive } from "./support/effect";
 import { onMachineWith } from "./support/live";
 import {
   Agents,
@@ -72,13 +72,14 @@ import { readDrift } from "../src/drift";
 import { FixOutputSchema, SynthesisSchema } from "../src/output";
 import { Triage } from "../workflows/retrospective";
 import { seedIntent, writeIntent } from "../src/intent";
-import { appendLine, deliveriesOf, herdOf, readLedger, reconcile } from "../src/steering";
+import { appendLine, herdOf, reconcile } from "../src/steering";
+import { deliveredTo, ledgerOf, recordsAt, registeredAt } from "./support/records";
 import { readLaunches } from "../src/launches";
 import { Store } from "../src/store";
 import type { AuditLine } from "../src/audit";
-import { readTask, withTaskLock, writeTask } from "../src/task";
+import { listTasks, readTask, taskKeptIn, withTaskLock, writeTask } from "../src/task";
 import { taskFor } from "../src/operations";
-import { lineageAgent, readRegistry, registerAgent, registryPath, scopeFor } from "../src/registry";
+import { everyRegistered, lineageAgent, registerAgent, scopeFor } from "../src/registry";
 import { Herdr, HerdrError } from "../src/herdr";
 import { retitleGenericTasks } from "../src/tasknames";
 import { runFacts } from "./support/records";
@@ -204,7 +205,7 @@ test(
         yield* rig.startSocket();
         yield* rig.queueOutputs([null]);
         yield* rig.addWorkspace("wT", "Project | Own task", rig.projectDir);
-        yield* writeTask(dir, {
+        yield* writeTask({
           id: "task-own",
           workspace: "wT",
           label: "Project | Own task",
@@ -247,7 +248,7 @@ test(
         );
         expect(tab?.argv).toEqual(expect.arrayContaining(["--workspace", "wT"]));
         expect(launched._tag).toBe("Success");
-      }).pipe(Effect.scoped),
+      }).pipe(Effect.provide(recordsAt(dir)), Effect.scoped),
     ),
   30_000,
 );
@@ -1218,8 +1219,7 @@ test(
                 Effect.provideService(Path.Path, yield* Path.Path),
                 Effect.map(
                   (found) =>
-                    found.length > 0 &&
-                    Arr.every(found, (one) => one.delivery.state === "acknowledged"),
+                    found.length > 0 && Arr.every(found, (one) => one.state === "acknowledged"),
                 ),
               ),
             );
@@ -1283,8 +1283,7 @@ test(
                 Effect.provideService(Path.Path, yield* Path.Path),
                 Effect.map(
                   (found) =>
-                    found.length > 0 &&
-                    Arr.every(found, (one) => one.delivery.state === "acknowledged"),
+                    found.length > 0 && Arr.every(found, (one) => one.state === "acknowledged"),
                 ),
               ),
             );
@@ -1381,8 +1380,7 @@ test(
                 Effect.provideService(Path.Path, yield* Path.Path),
                 Effect.map(
                   (found) =>
-                    found.length > 0 &&
-                    Arr.every(found, (one) => one.delivery.state === "acknowledged"),
+                    found.length > 0 && Arr.every(found, (one) => one.state === "acknowledged"),
                 ),
               ),
             );
@@ -2066,8 +2064,9 @@ const statusNow = (runId: string) =>
   );
 
 const steps = (runId: string) =>
-  deliveriesOf(hostOf().env.stateDir, runId).pipe(
-    Effect.map((found) => Arr.filter(found, (one) => one.delivery.cause.kind === "step")),
+  deliveredTo(dir, runId).pipe(
+    Effect.map((found) => Arr.filter(found, (one) => one.cause.kind === "step")),
+    Effect.orDie,
   );
 
 test("a pane that is busy when the step's prompt goes out is waited out, and the work is one prompt", () =>
@@ -2082,7 +2081,7 @@ test("a pane that is busy when the step's prompt goes out is waited out, and the
       expect(result._tag === "Success" && result.success.note).toBe("after the dialog");
       // Two refused and one taken, all of them one delivery.
       expect(sent(yield* rig.calls(), "Your task for this step")).toBe(3);
-      expect(Arr.map(yield* steps("r1"), (one) => one.delivery.state)).toEqual(["acknowledged"]);
+      expect(Arr.map(yield* steps("r1"), (one) => one.state)).toEqual(["acknowledged"]);
       expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
     }),
   ));
@@ -2105,13 +2104,13 @@ test(
         expect(why).toMatch(/agent_blocked held for \d+s over \d+ attempts/);
         expect(why).toContain(promptPath("r1"));
         expect(why).toContain("collie run resume r1");
-        expect(Arr.map(yield* steps("r1"), (one) => one.delivery.state)).toEqual(["failed"]);
+        expect(Arr.map(yield* steps("r1"), (one) => one.state)).toEqual(["failed"]);
 
         // The dialog has gone. The same agent is given the same prompt, and nothing new starts.
         const result = yield* releasedInto("r1");
         expect(result._tag === "Success" && result.success.note).toBe("resumed");
         expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
-        expect(Arr.map(yield* steps("r1"), (one) => one.delivery.state)).toEqual(["acknowledged"]);
+        expect(Arr.map(yield* steps("r1"), (one) => one.state)).toEqual(["acknowledged"]);
         expect(yield* fs.exists(controlPath(dir, PARKED, "r1"))).toBe(false);
       }),
     ),
@@ -3425,7 +3424,7 @@ test("a stop of a Run that launched no agent needs nothing from herdr", () =>
 const liveImplementer = Effect.gen(function* () {
   yield* rig.addAgent("impl-live", "9-1");
   const env = rig.pluginEnv();
-  yield* registerAgent(yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)), {
+  yield* registerAgent(scopeFor(env, rig.projectDir), {
     role: "implementer",
     agent: "impl-live",
     paneId: "9-1",
@@ -3434,7 +3433,7 @@ const liveImplementer = Effect.gen(function* () {
     workflow: "implement",
     at: "2026-09-23T10:00:00Z",
     incarnation: { terminalId: "term-impl-live", agentSession: null },
-  });
+  }).pipe(Effect.provide(recordsAt(dir)));
 });
 
 /** A herdr that takes a prompt and never answers, so nobody can say it arrived. */
@@ -3468,16 +3467,16 @@ test("a hand-off nobody can say arrived parks until a human says what became of 
       );
       expect(sent(yield* rig.calls(), "the review is ready")).toBe(0);
 
-      const [held] = yield* deliveriesOf(rig.pluginEnv().stateDir, "r-building");
+      const [held] = yield* deliveredTo(dir, "r-building");
       const settled = reconcile(
-        yield* readLedger(held!.file),
-        held!.delivery.id,
+        yield* ledgerOf(dir, held!.incarnation),
+        held!.id,
         "sent",
         "tester",
         "2026-09-23T10:01:00Z",
       );
       if ("error" in settled) throw new Error(settled.error);
-      yield* appendLine(held!.file, settled);
+      yield* appendLine(settled).pipe(Effect.provide(recordsAt(dir)));
       const after = yield* session(handedOff);
       expect(after._tag === "Success" && after.success).toMatchObject({
         agent: "impl-live",
@@ -3496,7 +3495,7 @@ const liveIn = Effect.fn("test.liveIn")(function* (
 ) {
   yield* rig.addAgent(agent, paneId);
   const env = rig.pluginEnv();
-  yield* registerAgent(yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)), {
+  yield* registerAgent(scopeFor(env, rig.projectDir), {
     role,
     agent,
     paneId,
@@ -3505,7 +3504,7 @@ const liveIn = Effect.fn("test.liveIn")(function* (
     workflow: "plan",
     at: "2026-09-30T10:00:00Z",
     incarnation: { terminalId: `term-${agent}`, agentSession: null },
-  });
+  }).pipe(Effect.provide(recordsAt(dir)));
 });
 
 test("a Run's authority is the branch it created and who started it; an older record and a roaming one authorise no branch", () =>
@@ -3628,10 +3627,7 @@ test("a question and a hand-off stay in the asking Run's lineage, whoever else r
       // Started later from the same place, in the same roles.
       yield* liveIn("r-other", "planner", "other-grill", "9-3");
       yield* liveIn("r-other.implement", "implementer", "other-build", "9-4");
-      const env = rig.pluginEnv();
-      const kept = yield* readRegistry(
-        yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)),
-      );
+      const kept = yield* registeredAt(dir);
       expect(Arr.map(kept, (entry) => entry.agent)).toEqual([
         "plan-grill",
         "plan-build",
@@ -3671,7 +3667,7 @@ test("seats launched together all stay registered, and a gone agent's entry leav
   runEffect(
     Effect.gen(function* () {
       const env = rig.pluginEnv();
-      const file = yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir));
+      const scope = scopeFor(env, rig.projectDir);
       const seat = (agent: string, runId: string, at: string) => ({
         role: "reviewer",
         agent,
@@ -3682,25 +3678,22 @@ test("seats launched together all stay registered, and a gone agent's entry leav
         at,
         incarnation: { terminalId: `term-${agent}`, agentSession: null },
       });
-      yield* registerAgent(file, seat("old-review", "r-done", "2026-09-30T09:00:00.000Z"));
+      yield* registerAgent(scope, seat("old-review", "r-done", "2026-09-30T09:00:00.000Z"));
       // Both seats listed herdr's agents before either had started, as a panel launched
       // at once does: neither list has the other seat, and neither has the gone agent.
       const listed = { agents: [], listedAt: "2026-09-30T10:00:00.000Z" };
-      yield* registerAgent(file, seat("seat-1", "r-panel", "2026-09-30T10:00:05.000Z"), listed);
-      yield* registerAgent(file, seat("seat-2", "r-panel", "2026-09-30T10:00:06.000Z"), listed);
-      expect(Arr.map(yield* readRegistry(file), (entry) => entry.agent)).toEqual([
-        "seat-1",
-        "seat-2",
-      ]);
-    }),
+      yield* registerAgent(scope, seat("seat-1", "r-panel", "2026-09-30T10:00:05.000Z"), listed);
+      yield* registerAgent(scope, seat("seat-2", "r-panel", "2026-09-30T10:00:06.000Z"), listed);
+      expect(Arr.map(yield* everyRegistered, (entry) => entry.agent)).toEqual(["seat-1", "seat-2"]);
+    }).pipe(Effect.provide(recordsAt(dir))),
   ));
 
 test("a lineage lookup leaves every register as it found it, and registrations at once all land", () =>
   runEffect(
     Effect.gen(function* () {
       const env = rig.pluginEnv();
-      const file = yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir));
-      const elsewhere = `${env.stateDir}/agents/other-herd-0123456789ab.json`;
+      const scope = scopeFor(env, rig.projectDir);
+      const elsewhere = { ...scope, session: `${rig.root}/other-herd.sock` };
       const seat = (agent: string) => ({
         role: "reviewer",
         agent,
@@ -3711,20 +3704,20 @@ test("a lineage lookup leaves every register as it found it, and registrations a
         at: "2026-09-30T10:00:00.000Z",
         incarnation: { terminalId: `term-${agent}`, agentSession: null },
       });
-      // Ten seats registering at the same moment, each reading and rewriting one file.
+      // Ten seats registering at the same moment, each reading and rewriting one register.
       const seats = Array.from({ length: 10 }, (_, at) => `seat-${at}`);
       yield* Effect.all(
-        Arr.map(seats, (agent) => registerAgent(file, seat(agent))),
+        Arr.map(seats, (agent) => registerAgent(scope, seat(agent))),
         { concurrency: "unbounded" },
       );
       yield* registerAgent(elsewhere, seat("another-herds"));
-      expect(Arr.map(yield* readRegistry(file), (entry) => entry.agent).sort()).toEqual(seats);
+      const agents = Effect.map(everyRegistered, (all) => Arr.map(all, (entry) => entry.agent));
+      expect((yield* agents).sort()).toEqual([...seats, "another-herds"].sort());
 
       // A list taken before any of them started, as an ask's is, knows none of them.
-      expect(yield* lineageAgent(env.stateDir, [], "reviewer", ["r-panel"])).toBeNull();
-      expect(yield* readRegistry(file)).toHaveLength(10);
-      expect(yield* readRegistry(elsewhere)).toHaveLength(1);
-    }),
+      expect(yield* lineageAgent([], "reviewer", ["r-panel"])).toBeNull();
+      expect(yield* agents).toHaveLength(11);
+    }).pipe(Effect.provide(recordsAt(dir))),
   ));
 
 /** The controls an operator sets, as the host keeps them beside the run. */
@@ -3854,12 +3847,9 @@ test("an unsupported busy delivery survives restart and reaches the idle agent o
       yield* session(tendIdle);
       yield* session(tendIdle);
       expect(Arr.filter(prompts(yield* rig.calls()), (one) => one === text)).toHaveLength(1);
-      const sent = Arr.filter(
-        yield* deliveriesOf(rig.pluginEnv().stateDir, "r1"),
-        (one) => one.delivery.cause.kind === "steer",
-      );
+      const sent = Arr.filter(yield* deliveredTo(dir, "r1"), (one) => one.cause.kind === "steer");
       expect(sent).toHaveLength(1);
-      expect(sent[0]?.delivery).toMatchObject({ mode: "boundary", state: "acknowledged" });
+      expect(sent[0]).toMatchObject({ mode: "boundary", state: "acknowledged" });
     }),
   ));
 
@@ -4570,10 +4560,10 @@ test("a steer nothing shows taken is reported sent and not observed, and a role 
       });
       expect(told.how).toBeUndefined();
       const [one] = Arr.filter(
-        yield* deliveriesOf(rig.pluginEnv().stateDir, "r1"),
-        ({ delivery }) => delivery.cause.kind === "steer",
+        yield* deliveredTo(dir, "r1"),
+        (delivery) => delivery.cause.kind === "steer",
       );
-      expect(one?.delivery).toMatchObject({ state: "submitted", note: "unobserved" });
+      expect(one).toMatchObject({ state: "submitted", note: "unobserved" });
     }),
   ));
 
@@ -4868,8 +4858,8 @@ test(
         expect(state.pollSent.length).toBeGreaterThan(1);
         expect(Arr.every(state.pollSent, (ok) => !ok)).toBe(true);
         const compactions = Arr.filter(
-          yield* deliveriesOf(rig.pluginEnv().stateDir, "r1"),
-          ({ delivery }) => delivery.cause.kind === "compaction",
+          yield* deliveredTo(dir, "r1"),
+          (delivery) => delivery.cause.kind === "compaction",
         );
         expect(compactions).toHaveLength(1);
         expect(sent(yield* rig.calls(), "from a poll")).toBe(0);
@@ -5143,7 +5133,7 @@ const sweeper = agentName("r1", "sweep", null, 1);
 const inTask = (runId: string) =>
   Effect.gen(function* () {
     yield* rig.addWorkspace("wT", "Project | Work", rig.projectDir);
-    yield* writeTask(hostOf().env.stateDir, {
+    yield* writeTask({
       id: "task-1",
       workspace: "wT",
       label: "Project | Work",
@@ -5239,7 +5229,7 @@ test(
         expect(Arr.filter(yield* rig.cmds(), closing)).toEqual([]);
         expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
         expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "workspace create")).toEqual([]);
-      }),
+      }).pipe(Effect.provide(recordsAt(dir))),
     ),
   120_000,
 );
@@ -5261,7 +5251,7 @@ test(
         // The first item was sent once, before the stop, and collected after it.
         expect(sent(yield* rig.calls(), "01-api.prompt.md")).toBe(1);
 
-        const task = yield* readTask(hostOf().env.stateDir, "task-1");
+        const task = yield* readTask("task-1");
         const reopened = task?.workspace ?? "";
         expect(reopened).not.toBe("wT");
         const create = Option.getOrUndefined(
@@ -5274,15 +5264,12 @@ test(
         expect(tabsIn(yield* rig.calls())).toEqual(["wT"]);
         const starts = Arr.filter(yield* rig.calls(), (call) => call.cmd === "agent start");
         expect(starts.at(-1)?.argv).toEqual(expect.arrayContaining(["--pane", `${reopened}-p1`]));
-        const env = hostOf().env;
-        const registered = yield* readRegistry(
-          yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)),
-        );
+        const registered = yield* everyRegistered;
         expect(
           Option.getOrUndefined(Arr.findFirst(registered, (entry) => entry.agent === sweeper))
             ?.workspaceId,
         ).toBe(reopened);
-      }),
+      }).pipe(Effect.provide(recordsAt(dir))),
     ),
   120_000,
 );
@@ -5322,7 +5309,7 @@ test(
           [],
         );
         expect(Arr.filter(cmds, (cmd) => cmd === "workspace create")).toEqual([]);
-      }),
+      }).pipe(Effect.provide(recordsAt(dir))),
     ),
   120_000,
 );
@@ -5440,7 +5427,7 @@ test("a Task Collie named for its workflow alone is renamed for its work, and on
       yield* rig.addWorkspace("wH", "Offer banner, by hand", rig.projectDir);
       yield* rig.addWorkspace("wN", "Collie | Passkey bridge race", rig.projectDir);
       const kept = (id: string, workspace: string, label: string) =>
-        writeTask(env.stateDir, {
+        writeTask({
           id,
           workspace,
           label,
@@ -5478,8 +5465,7 @@ test("a Task Collie named for its workflow alone is renamed for its work, and on
 
       yield* retitleGenericTasks(env, new Herdr(env), runs);
 
-      const label = (id: string) =>
-        readTask(env.stateDir, id).pipe(Effect.map((task) => task?.label));
+      const label = (id: string) => readTask(id).pipe(Effect.map((task) => task?.label));
       const live = new Map(
         Arr.map(yield* new Herdr(env).workspaceList(), (one) => [one.workspaceId, one.label]),
       );
@@ -5491,7 +5477,7 @@ test("a Task Collie named for its workflow alone is renamed for its work, and on
       expect(live.get("wH")).toBe("Offer banner, by hand");
       expect(yield* label("task-n")).toBe("Collie | Passkey bridge race");
       expect(live.get("wN")).toBe("Collie | Passkey bridge race");
-    }),
+    }).pipe(Effect.provide(recordsAt(dir))),
   ));
 
 test("a Task on a core Machine is renamed in its record alone, and core is asked nothing", () =>
@@ -5502,7 +5488,7 @@ test("a Task on a core Machine is renamed in its record alone, and core is asked
       yield* fs.makeDirectory(rig.userDir, { recursive: true });
       yield* fs.writeFileString(`${rig.userDir}/config.json`, '{ "terminal_backend": "core" }');
       const env = rig.pluginEnv({ HERDR_SOCKET_PATH: "" });
-      yield* writeTask(env.stateDir, {
+      yield* writeTask({
         id: "task-k",
         workspace: null,
         label: "Collie | Plan new work",
@@ -5515,7 +5501,7 @@ test("a Task on a core Machine is renamed in its record alone, and core is asked
         runFacts({ id: "r-k", workflow: "plan", task: "task-k", settled: { inputs: goal } }),
       ]);
 
-      expect(yield* readTask(env.stateDir, "task-k")).toEqual({
+      expect(yield* readTask("task-k")).toEqual({
         id: "task-k",
         workspace: null,
         label: "Collie | Design Tune-up performance workflow",
@@ -5523,7 +5509,7 @@ test("a Task on a core Machine is renamed in its record alone, and core is asked
         created_at: "2026-10-26T00:00:00.000Z",
       });
       expect(yield* rig.calls()).toEqual([]);
-    }),
+    }).pipe(Effect.provide(recordsAt(dir))),
   ));
 
 test("a Task's workspace is looked for in its own Herd, where a workspace of the same id is another's", () =>
@@ -5547,7 +5533,7 @@ test("a Task's workspace is looked for in its own Herd, where a workspace of the
         rig.socketPath,
       );
       yield* rig.addWorkspace("w1", "Offer banner, by hand", rig.projectDir, false, other);
-      yield* writeTask(env.stateDir, {
+      yield* writeTask({
         id: "task-o",
         workspace: "w1",
         label: "Collie | Plan new work",
@@ -5561,10 +5547,10 @@ test("a Task's workspace is looked for in its own Herd, where a workspace of the
         runFacts({ id: "r-o", workflow: "plan", task: "task-o", settled: { inputs: goal } }),
       ]);
 
-      expect((yield* readTask(env.stateDir, "task-o"))?.label).toBe("Collie | Plan new work");
+      expect((yield* readTask("task-o"))?.label).toBe("Collie | Plan new work");
       const main = yield* new Herdr(env).workspaceList();
       expect(Arr.map(main, (one) => one.label)).toEqual(["Collie | Plan new work"]);
-    }),
+    }).pipe(Effect.provide(recordsAt(dir))),
   ));
 
 test.each(["listing", "renaming"] as const)(
@@ -5582,7 +5568,7 @@ test.each(["listing", "renaming"] as const)(
         };
         const edited = { ...task, label: "Collie | Renamed by hand", root_pane: "human-pane" };
         yield* rig.addWorkspace(task.workspace, task.label, task.cwd);
-        yield* writeTask(env.stateDir, task);
+        yield* writeTask(task);
         class EditingHerdr extends FakeHerdr {
           override sessionList() {
             return Effect.succeed([]);
@@ -5593,7 +5579,7 @@ test.each(["listing", "renaming"] as const)(
               .pipe(
                 Effect.tap(() =>
                   during === "listing"
-                    ? writeTask(env.stateDir, edited).pipe(Effect.orDie)
+                    ? writeTask(edited).pipe(Effect.provide(recordsAt(dir)), Effect.orDie)
                     : Effect.void,
                 ),
               );
@@ -5604,7 +5590,7 @@ test.each(["listing", "renaming"] as const)(
               .pipe(
                 Effect.tap(() =>
                   during === "renaming"
-                    ? writeTask(env.stateDir, edited).pipe(Effect.orDie)
+                    ? writeTask(edited).pipe(Effect.provide(recordsAt(dir)), Effect.orDie)
                     : Effect.void,
                 ),
               );
@@ -5618,10 +5604,10 @@ test.each(["listing", "renaming"] as const)(
             settled: { inputs: { goal: "Design the banner" } },
           }),
         ]);
-        expect(yield* readTask(env.stateDir, task.id)).toEqual(edited);
+        expect(yield* readTask(task.id)).toEqual(edited);
         if (during === "listing")
           expect((yield* new FakeHerdr(env).workspaceList())[0]?.label).toBe(task.label);
-      }),
+      }).pipe(Effect.provide(recordsAt(dir))),
     ),
 );
 
@@ -5631,7 +5617,7 @@ test(
     runEffect(
       Effect.gen(function* () {
         const env = rig.pluginEnv();
-        yield* writeTask(env.stateDir, {
+        yield* writeTask({
           id: "task-p",
           workspace: "wGone",
           label: "Collie | Plan new work",
@@ -5646,19 +5632,19 @@ test(
             settled: { inputs: { goal: "Design Tune-up performance workflow" } },
           }),
         ];
-        const label = readTask(env.stateDir, "task-p").pipe(Effect.map((task) => task?.label));
+        const label = readTask("task-p").pipe(Effect.map((task) => task?.label));
 
-        yield* withTaskLock(env.stateDir, "task-p", retitleGenericTasks(env, new Herdr(env), runs));
+        yield* withTaskLock("task-p", retitleGenericTasks(env, new Herdr(env), runs));
         expect(yield* label).toBe("Collie | Plan new work");
 
         yield* retitleGenericTasks(env, new Herdr(env), runs);
         expect(yield* label).toBe("Collie | Design Tune-up performance workflow");
-      }),
+      }).pipe(Effect.provide(recordsAt(dir))),
     ),
   30_000,
 );
 
-test("a start kept here is the workspace it was started from: its Task, or a new one kept there", () =>
+test("a start kept here is the workspace it was started from: its Task, or a new one the host keeps there", () =>
   runEffect(
     Effect.gen(function* () {
       yield* rig.addWorkspace("wH", "Monorepo | Mine", rig.projectDir);
@@ -5666,22 +5652,25 @@ test("a start kept here is the workspace it was started from: its Task, or a new
       const about = { workflow: "implement", inputs: { plan: "FRO-343" } };
 
       const made = yield* taskFor(env, { mode: "here" }, about);
-      const task = made._tag === "Ok" ? made.task : null;
-      expect(task).toMatchObject({ workspace: "wH", label: "Monorepo | Mine", cwd: env.cwd });
+      const here = made._tag === "Ok" ? made.here : null;
+      expect(here).toMatchObject({ workspace: "wH", label: "Monorepo | Mine", cwd: env.cwd });
       // Nothing to open: the Run goes where whoever started it is.
       expect(made._tag === "Ok" ? made.label : "").toBeNull();
       expect(yield* rig.cmds()).not.toContain("workspace create");
+      // Only the host writes a Task.
+      expect(yield* listTasks).toEqual([]);
 
+      const task = yield* taskKeptIn(here!);
+      expect(task).toMatchObject({ workspace: "wH", label: "Monorepo | Mine", cwd: env.cwd });
       // Kept there, so a second start here is the same Task rather than another one.
-      const again = yield* taskFor(env, { mode: "here" }, about);
-      expect(again._tag === "Ok" && again.task?.id).toBe(task?.id);
-      expect(yield* readTask(env.stateDir, task!.id)).toEqual(task);
+      expect((yield* taskKeptIn(here!)).id).toBe(task.id);
+      expect(yield* readTask(task.id)).toEqual(task);
 
       const outside = yield* taskFor({ ...env, workspaceId: null }, { mode: "here" }, about);
       expect(
         outside._tag === "Rejected" && outside.result.ok === false && outside.result.error.code,
       ).toBe("workspace_required");
-    }),
+    }).pipe(Effect.provide(memoryRecords)),
   ));
 
 const encodeJson = flow(
@@ -5812,14 +5801,12 @@ test("a step pointer the harness took is recorded as Collie's, with its delivery
         ),
         (line) => decodeJson(line),
       );
-      expect(events).toMatchObject([
-        { kind: "submit", reason: "collie", delivery: step!.delivery.id },
-      ]);
+      expect(events).toMatchObject([{ kind: "submit", reason: "collie", delivery: step!.id }]);
       expect(
         Option.getOrUndefined(
           Option.map(Option.fromNullishOr(pointer), (present__) => Str.split(present__, "\n")),
         ),
-      ).toContain(`collie-delivery:${step!.delivery.id}`);
+      ).toContain(`collie-delivery:${step!.id}`);
     }),
   ));
 
@@ -5863,7 +5850,7 @@ test(
         });
         const why = yield* read(controlPath(dir, PARKED, "r1"));
         const [step] = yield* steps("r1");
-        expect(why).toContain(step!.delivery.id);
+        expect(why).toContain(step!.id);
         expect(why).toMatch(/pane 1-\d+/);
         const calls = yield* rig.calls();
         expect(sent(calls, "Your task for this step")).toBe(1);
@@ -5881,10 +5868,10 @@ const reconciled = (runId: string, as: "sent" | "not-sent") =>
   Effect.gen(function* () {
     const why = yield* read(controlPath(dir, PARKED, runId));
     const [step] = yield* steps(runId);
-    expect(why).toContain(`--reconcile ${step!.delivery.id} --as sent|not-sent`);
-    const settled = reconcile(yield* readLedger(step!.file), step!.delivery.id, as, "tester", "t");
+    expect(why).toContain(`--reconcile ${step!.id} --as sent|not-sent`);
+    const settled = reconcile(yield* ledgerOf(dir, step!.incarnation), step!.id, as, "tester", "t");
     if ("error" in settled) throw new Error(settled.error);
-    yield* appendLine(step!.file, settled);
+    yield* appendLine(settled).pipe(Effect.provide(recordsAt(dir)));
   });
 
 test(
@@ -5904,7 +5891,7 @@ test(
         const result = yield* releasedInto("r1", { collectMs: OUTLASTS_IO });
         expect(result._tag === "Success" && result.success.note).toBe("sent again");
         expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
-        expect(new Set(Arr.map(yield* steps("r1"), (one) => one.delivery.id)).size).toBe(2);
+        expect(new Set(Arr.map(yield* steps("r1"), (one) => one.id)).size).toBe(2);
       }),
     ),
   120_000,
@@ -5930,7 +5917,7 @@ test(
               yield* TestClock.withLive(Effect.sleep("10 millis"));
             }
             const [first] = yield* steps("r1");
-            expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(first!.delivery.id);
+            expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(first!.id);
             for (let tries = 0; !(yield* suspended("r1")); tries++) {
               if (tries === 100) throw new Error("parked collection never suspended");
               yield* TestClock.withLive(Effect.sleep("10 millis"));
@@ -5945,8 +5932,8 @@ test(
             expect(sent(calls, "Your task for this step")).toBe(2);
             expect(Arr.filter(calls, (call) => call.cmd === "agent start")).toHaveLength(1);
             const delivered = yield* steps("r1");
-            expect(Arr.map(delivered, (one) => one.delivery.attempt)).toEqual([1, 2]);
-            expect(new Set(Arr.map(delivered, (one) => one.delivery.id)).size).toBe(2);
+            expect(Arr.map(delivered, (one) => one.attempt)).toEqual([1, 2]);
+            expect(new Set(Arr.map(delivered, (one) => one.id)).size).toBe(2);
           }),
           { herdr: new FakeHerdr(env), confirmGraceMs: 300, collectMs: 300_000 },
         );

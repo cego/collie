@@ -53,6 +53,7 @@ import {
   isSettled,
   settleNewsFor,
   anyRuns,
+  asks,
   cleanupListing,
   scheduleListing,
   runProgress,
@@ -62,13 +63,16 @@ import {
   catalogueReadings,
   connectionReadings,
   type Door,
+  hostTaskOf,
+  hostRunProposals,
+  hostTasks,
 } from "./lifecycle";
 import { modelsLines } from "./catalogue-model";
 import { connectionsLines } from "./connection-model";
 import { peersOf } from "./peers";
 import { cleanupLines } from "./cleanup";
-import { isOpen, taskOfWorkspace } from "./task";
-import { pendingFor, proposalsPath, read as readProposals } from "./proposals";
+import { isOpen } from "./task";
+import { pendingFor } from "./proposals";
 import { statusLine } from "./disposition";
 import { Herdr } from "./herdr";
 import { ASKED_KINDS, Flow, type FLOCK_READS, type RunProgress } from "./board-model";
@@ -79,7 +83,7 @@ import { findRun, listRuns, type RunFacts } from "./runs";
 import { readyLines } from "./following";
 import { donePasses, markersOf, runningCheck } from "./checks";
 import { memoryWaitOf, waitLine } from "./memory-wait";
-import { deliveriesOf, machineHerd } from "./steering";
+import { machineHerd } from "./steering";
 import { loadDefinitions, layers } from "./definitions";
 import { chatHarnessOf, chatPath, heardVoice, pushable, readChat, whyUnavailable } from "./chat";
 import { doctor } from "./doctor";
@@ -88,7 +92,6 @@ import { standingDirectionContext } from "./standing-direction";
 import { defaultsPath, describeDefaults, EMPTY_DEFAULTS, readDefaults } from "./intent";
 import { scopeKey } from "./registry";
 import { readSelection, selectionPath } from "./selection";
-import { listTasks } from "./task";
 import { isString, type JsonObject } from "./schema";
 import { scheduleLines } from "./schedule-model";
 import { checkModule, readModule, type Checked as ModuleCheck, type Described } from "./authoring";
@@ -593,7 +596,7 @@ const holdsFor = Effect.fn("Tools.holdsFor")(function* (
   workspace: string,
   reason: string,
 ) {
-  const task = yield* taskOfWorkspace(env.stateDir, workspace);
+  const task = yield* hostTaskOf(env, workspace);
   if (task === null) return [];
   const runs = Arr.filter((yield* runViews(env, task.id)).runs, (view) => !isSettled(view));
   return Arr.map(runs, (view) => ({ kind: "hold" as const, run: view.runId, reason }));
@@ -616,10 +619,10 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) 
   // The Tasks too: a Task with no Run yet is in no Herd listing, so this is the only
   // place a conversation can find out the work a new Run could join.
   const open = new Set(Arr.map(all, (workspace) => workspace.workspaceId));
-  const tasks = Arr.filter(
-    yield* listTasks(env.stateDir).pipe(Effect.orElseSucceed(() => [])),
-    (task) => isOpen(task, open),
-  );
+  const asked = yield* Effect.result(hostTasks(env));
+  const tasks = Result.isSuccess(asked)
+    ? Arr.filter(asked.success, (task) => isOpen(task, open))
+    : [];
   const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
   return Arr.join(
     [
@@ -630,7 +633,11 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) 
         (task) =>
           `- task ${task.id} (${task.label})${task.workspace === null ? "" : ` in workspace ${task.workspace}`}`,
       ),
-      ...(tasks.length === 0 ? ["- (no Tasks with an open workspace)"] : []),
+      ...(Result.isFailure(asked)
+        ? [`- (the Tasks are unknown: ${asked.failure.message})`]
+        : tasks.length === 0
+          ? ["- (no Tasks with an open workspace)"]
+          : []),
       "",
       root === null
         ? "Projects root: none"
@@ -690,16 +697,13 @@ const newsFacts = Effect.fn("Tools.news")(function* (env: PluginEnv) {
 const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run: string) {
   const found = yield* findRun(env, run);
   if (found === null) return `No Run "${run}".`;
-  const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   const now = yield* Clock.currentTimeMillis;
-  const proposals =
-    key === null
-      ? []
-      : pendingFor(yield* readProposals(yield* proposalsPath(env.stateDir, key)), run, now);
-  const deliveries = yield* deliveriesOf(env.stateDir, run);
+  const proposals = pendingFor(yield* hostRunProposals(env, run), run, now);
+  const asked = yield* asks(env, (client) => client.deliveries({ runId: run }));
   // Every delivery is on the ledger now: the one sender writes there before it sends,
   // so there is no second place a steer can be sitting unrecorded.
-  const unread: string[] = [];
+  const deliveries = asked.ok ? (asked.value ?? []) : [];
+  const unread = asked.ok ? [] : [`- the ledger could not be read: ${asked.error.message}`];
   const waiting = [
     ...Arr.flatMap(found.asking, (asked) =>
       Arr.map(choiceLines(run, asked), (line, n) => (n === 0 ? `- ${line}` : `  ${line}`)),
@@ -721,7 +725,7 @@ const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run:
         ? ["- nothing"]
         : Arr.map(
             deliveries,
-            ({ delivery }) =>
+            (delivery) =>
               `- ${delivery.id}: ${delivery.state}${delivery.note ? ` (${delivery.note})` : ""}, for ${delivery.cause.kind}`,
           )),
       ...unread,

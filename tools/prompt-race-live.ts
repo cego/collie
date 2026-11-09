@@ -30,6 +30,7 @@ import { controlDir } from "../src/compaction";
 import { readEnv } from "../src/env";
 import { Herdr } from "../src/herdr";
 import { deliveriesOf } from "../src/steering";
+import { recordsAt } from "../src/records";
 
 // The controls a launch installs call back as `<bun> <this script> herdr compaction`, and
 // this script is not Collie's CLI.
@@ -67,6 +68,7 @@ const live = Effect.fn("live.promptRace")(function* (
   const cwd = process.cwd();
   const stateDir = `${cwd}/.scratch/prompt-race-${stamp}`;
   yield* fs.makeDirectory(stateDir, { recursive: true });
+  const records = yield* Layer.build(recordsAt(stateDir));
   const env = readEnv({ ...processEnv, HERDR_PLUGIN_STATE_DIR: stateDir });
   const herdr = new Herdr(env);
   const workspace = yield* herdr.workspaceCreate({ cwd, label: `prompt-race-${stamp}` });
@@ -140,9 +142,10 @@ const live = Effect.fn("live.promptRace")(function* (
         collectMs: 2 * 60_000,
       }),
     ),
+    Effect.provideContext(records),
   );
 
-  const deliveries = yield* deliveriesOf(stateDir, runId);
+  const deliveries = yield* deliveriesOf(runId).pipe(Effect.provideContext(records));
   const lines = [
     `| agent | took its first prompt (hook) | delivery | ledger | wrote its Output | pane |`,
   ];
@@ -152,9 +155,9 @@ const live = Effect.fn("live.promptRace")(function* (
     const step = Option.getOrUndefined(
       Arr.findFirst(
         deliveries,
-        (one) => one.delivery.cause.kind === "step" && one.delivery.cause.ref === row.operation,
+        (one) => one.cause.kind === "step" && one.cause.ref === row.operation,
       ),
-    )?.delivery;
+    );
     const agent = step?.agent ?? row.operation;
     const events = yield* fs
       .readFileString(`${yield* controlDir(stateDir, agent)}/events.jsonl`)
@@ -172,6 +175,6 @@ const live = Effect.fn("live.promptRace")(function* (
   return { report: Arr.join(lines, "\n"), passed: took === count };
 });
 
-const { report, passed } = await runtime.runPromise(live(process.env));
+const { report, passed } = await runtime.runPromise(live(process.env).pipe(Effect.scoped));
 await runtime.runPromise(Effect.log(report));
 process.exitCode = passed ? 0 : 1;

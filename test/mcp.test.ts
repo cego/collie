@@ -18,13 +18,13 @@ import manifest from "../herdr-plugin.toml";
 import type { JsonObject } from "../src/schema";
 import { rebuiltAnswer } from "../src/mcp";
 import { connect } from "../src/host";
-import { everyRegistered } from "../src/registry";
 import { readAudit } from "../src/audit";
 import { runDir } from "../src/engine";
 import { until } from "./support/host";
 import { twoMachines } from "./support/peers";
 import { TOOLS } from "../src/tools";
 import { runEffect, suiteEnv } from "./support/effect";
+import { registeredAt } from "./support/records";
 
 const encodeValue = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
@@ -227,10 +227,7 @@ test(
               (view) => Arr.some(view?.waiting ?? [], (one) => one.answer === null),
             );
             const agent = Option.getOrUndefined(
-              Arr.findFirst(
-                yield* everyRegistered(first.world.state),
-                (one) => one.runId === runId,
-              ),
+              Arr.findFirst(yield* registeredAt(first.world.state), (one) => one.runId === runId),
             )!;
             const server = yield* openServer({
               ...first.env,
