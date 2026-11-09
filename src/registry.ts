@@ -2,9 +2,10 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { Data, Schema, Effect, FileSystem, Path, flow, Result } from "effect";
+import { Context, Layer, Schema, Effect, flow, Result } from "effect";
+import * as Reactivity from "effect/reactivity/Reactivity";
+import * as SqlClient from "effect/sql/SqlClient";
 import type { AgentInfo } from "./herdr";
-import { ensureLockDir, withLock } from "./lock";
 import { epochMs } from "./time";
 
 /**
@@ -45,7 +46,7 @@ export const IncarnationSchema = Schema.Struct({
   backend: Schema.optionalKey(Schema.Literal("core")),
 });
 
-const AgentEntrySchema = Schema.Struct({
+export const AgentEntrySchema = Schema.Struct({
   role: Schema.String,
   agent: Schema.String,
   paneId: Schema.String,
@@ -57,24 +58,23 @@ const AgentEntrySchema = Schema.Struct({
   // entry that can be stopped and pruned but never delivered to, which is what it is.
   incarnation: Schema.optionalKey(IncarnationSchema),
 });
-const RegistryJson = Schema.fromJsonString(Schema.Array(AgentEntrySchema));
-const encodeRegistry = flow(Schema.encodeResult(RegistryJson), Result.getOrThrow);
-const decodeRegistry = Schema.decodeUnknownEffect(RegistryJson);
+const EntryJson = Schema.fromJsonString(AgentEntrySchema);
+export const encodeAgentEntry = flow(Schema.encodeResult(EntryJson), Result.getOrThrow);
+const decodeEntry = Schema.decodeOption(EntryJson);
+/** A register file as an older build wrote it, for the import. */
+export const decodeRegisterOption = Schema.decodeOption(
+  Schema.fromJsonString(Schema.Array(AgentEntrySchema)),
+);
 
-/**
- * `Bun.hash` and not an Effect equivalent: Effect has no non-cryptographic digest, and
- * this only needs a short stable key for a filename. `Crypto` offers randomness and
- * cryptographic hashing, neither of which is what a scope key is.
- */
-export const registryPath = Effect.fn("registryPath")(function* (
-  stateDir: string,
-  scope: RegistryScope,
-) {
-  const path = yield* Path.Path;
+/** The register a scope's agents are kept in, named as its file was so the import keeps it. */
+export function registerOf(scope: RegistryScope): string {
   const where = scope.workspaceId ?? scope.cwd;
-  const name = pipe_(path.basename(where), Str.replace(/[^A-Za-z0-9._-]+/g, "-")) || "repo";
-  return path.join(stateDir, "agents", `${name}-${scopeKey(scope)}.json`);
-});
+  const last = Option.getOrElse(
+    Arr.last(Arr.filter(pipe_(where, Str.split("/")), (part) => part !== "")),
+    () => "",
+  );
+  return `${pipe_(last, Str.replace(/[^A-Za-z0-9._-]+/g, "-")) || "repo"}-${scopeKey(scope)}`;
+}
 
 /**
  * The short stable key a Session's per-workspace state is filed under. The workspace is
@@ -83,6 +83,7 @@ export const registryPath = Effect.fn("registryPath")(function* (
  * no longer the only thing keyed this way — steering defaults are too — and two copies of
  * the formula is two answers to "which workspace is this".
  */
+// `Bun.hash`: Effect has no non-cryptographic digest, and this only needs a short stable key.
 export function scopeKey(scope: RegistryScope): string {
   const where = scope.workspaceId ?? scope.cwd;
   return pipe_(Bun.hash(`${scope.session ?? ""} ${where}`).toString(16), Str.slice(0, 12));
@@ -95,85 +96,81 @@ export function scopeFor(
   return { session: env.socketPath, workspaceId: env.workspaceId, cwd };
 }
 
-/**
- * The Session's live agents, or none. A register half-written or edited by hand is a
- * cache of what herdr was last seen to have, not a source of truth, so it is read as
- * empty rather than failing a stop, a hand-off or the Control Plane. The decode runs
- * in the error channel, not as a throw inside `Effect.map`: a `SchemaError` raised
- * there was a defect, and the fallback on the next line never ran.
- */
-export const readRegistry = Effect.fn("readRegistry")(function* (file: string) {
-  const fs = yield* FileSystem.FileSystem;
-  if (!(yield* fs.exists(file))) return [];
-  return yield* fs.readFileString(file).pipe(
-    Effect.flatMap(decodeRegistry),
-    Effect.orElseSucceed(() => []),
-  );
-});
+/** What a write to the register invalidates. */
+export const REGISTERED = "collie/registered";
 
-const registryFiles = Effect.fn("registryFiles")(function* (stateDir: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const dir = path.join(stateDir, "agents");
-  const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
-  return Arr.map(
-    Arr.filter(names, (one) => pipe_(one, Str.endsWith(".json"))),
-    (name) => path.join(dir, name),
-  );
-});
+/** The register, in the host's database (ADR-draft-collies-own-records-live-in-the-hosts-database). */
+export interface RegisteredApi {
+  /** Oldest registration first. */
+  readonly all: Effect.Effect<ReadonlyArray<AgentEntry>>;
+  readonly register: (
+    scope: RegistryScope,
+    entry: AgentEntry,
+    alive?: { readonly agents: ReadonlyArray<AgentInfo>; readonly listedAt: string },
+  ) => Effect.Effect<ReadonlyArray<AgentEntry>>;
+}
+
+export class Registered extends Context.Service<Registered, RegisteredApi>()("collie/Registered") {}
+
+const decoded = (rows: ReadonlyArray<{ readonly record: string }>) =>
+  Arr.flatMap(rows, (row) => Option.toArray(decodeEntry(row.record)));
+
+export const registeredLayer = Layer.effect(Registered)(
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const reactivity = yield* Reactivity.Reactivity;
+    const inRegister = (register: string) =>
+      sql<{ readonly record: string }>`
+        SELECT record FROM collie_agents WHERE register = ${register} ORDER BY rowid
+      `.pipe(Effect.map(decoded));
+    return {
+      all: sql<{ readonly record: string }>`SELECT record FROM collie_agents ORDER BY rowid`.pipe(
+        Effect.map(decoded),
+        Effect.orDie,
+      ),
+      register: (scope, entry, alive) => {
+        const register = registerOf(scope);
+        return Effect.gen(function* () {
+          const others = Arr.filter(yield* inRegister(register), (e) => e.agent !== entry.agent);
+          const live = new Set(alive === undefined ? others : liveEntries(others, alive.agents));
+          const dropped =
+            alive === undefined
+              ? []
+              : Arr.filter(others, (e) => !live.has(e) && epochMs(e.at) < epochMs(alive.listedAt));
+          if (dropped.length > 0)
+            yield* sql`
+              DELETE FROM collie_agents
+              WHERE register = ${register} AND agent IN ${sql.in(Arr.map(dropped, (e) => e.agent))}
+            `;
+          yield* sql`
+            INSERT OR REPLACE INTO collie_agents (register, agent, record)
+            VALUES (${register}, ${entry.agent}, ${encodeAgentEntry(entry)})
+          `;
+          return yield* inRegister(register);
+        }).pipe(
+          sql.withTransaction,
+          Effect.tap(() => reactivity.invalidate([REGISTERED])),
+          Effect.orDie,
+        );
+      },
+    } satisfies RegisteredApi;
+  }),
+);
 
 /** Every agent registered in this state directory, whichever Session registered it. */
-export const everyRegistered = Effect.fn("everyRegistered")(function* (stateDir: string) {
-  const entries: AgentEntry[] = [];
-  for (const file of yield* registryFiles(stateDir)) entries.push(...(yield* readRegistry(file)));
-  return entries;
-});
-
-const write = Effect.fn("writeRegistry")(function* (
-  file: string,
-  entries: ReadonlyArray<AgentEntry>,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  yield* fs.makeDirectory(path.dirname(file), { recursive: true });
-  yield* fs.writeFileString(file, `${encodeRegistry(entries)}\n`);
-});
+export const everyRegistered = Registered.use((registered) => registered.all);
 
 /**
- * One entry per agent: every Run started from the same place shares this file, and a
+ * One entry per agent: every Run started from the same place shares a register, and a
  * panel's seats share a Run and a role. Given what herdr listed, an entry registered
  * before that listing whose agent it did not have is dropped; one registered since may be
  * an agent that started after it, as another seat launched at once does.
  */
-export const registerAgent = Effect.fn("registerAgent")(function* (
-  file: string,
+export const registerAgent = (
+  scope: RegistryScope,
   entry: AgentEntry,
   alive?: { readonly agents: ReadonlyArray<AgentInfo>; readonly listedAt: string },
-) {
-  yield* ensureLockDir(file);
-  // Unlocked, one write loses another's.
-  return yield* withLock(
-    `${file}.lock`,
-    Effect.fail(new RegistryBusy({ file })),
-    Effect.gen(function* () {
-      const others = Arr.filter(yield* readRegistry(file), (e) => e.agent !== entry.agent);
-      const live = new Set(alive === undefined ? others : liveEntries(others, alive.agents));
-      const kept =
-        alive === undefined
-          ? others
-          : Arr.filter(others, (e) => live.has(e) || epochMs(e.at) >= epochMs(alive.listedAt));
-      const entries = [...kept, entry];
-      yield* write(file, entries);
-      return entries;
-    }),
-    REGISTER_CLAIMS,
-  );
-});
-
-/** Ten seconds of claims: a registration holds the lock only for one read and one write. */
-const REGISTER_CLAIMS = 400;
-
-export class RegistryBusy extends Data.TaggedError("RegistryBusy")<{ file: string }> {}
+) => Registered.use((registered) => registered.register(scope, entry, alive));
 
 /**
  * Whether anything may be sent to this entry at all. A register is a cache of what herdr
@@ -232,17 +229,14 @@ export function liveEntries(
 /**
  * The live agent in this role nearest the first of these Runs: that Run's own, then the
  * Run it came from, and so on. Another Run's agent in the role is never the answer. Only
- * read: `alive` may predate an agent registered since, and other Herds share these files.
+ * read: `alive` may predate an agent registered since, and other Herds share the register.
  */
 export const lineageAgent = Effect.fn("lineageAgent")(function* (
-  stateDir: string,
   alive: ReadonlyArray<AgentInfo>,
   role: string,
   lineage: ReadonlyArray<string>,
 ) {
-  const live: AgentEntry[] = [];
-  for (const file of yield* registryFiles(stateDir))
-    live.push(...liveEntries(yield* readRegistry(file), alive));
+  const live = liveEntries(yield* everyRegistered, alive);
   for (const runId of lineage) {
     const found = Option.getOrUndefined(
       Arr.findLast(live, (e) => e.role === role && e.runId === runId),

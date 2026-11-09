@@ -1354,7 +1354,12 @@ A **session** is one herdr session and one workspace, taken together; a Run's ow
 does not move it out of the workspace it was started from.
 `registry.ts` records which long-lived agents a session still has, per workspace and repo:
 one entry per agent, whatever its Run or role, so a panel's seats and every Run started
-from the same place are all there. Registering an agent drops the entries registered before
+from the same place are all there. The register is `collie_agents` in `host.db`, written
+only by the host when it launches an agent
+([ADR-draft-collies-own-records-live-in-the-hosts-database](adr/draft-collies-own-records-live-in-the-hosts-database.md)):
+other processes, `collie doctor` and the board's Enter among them, read it through the
+host's `registered` request, and the first host on a state directory imports every
+`agents/<register>.json` once and leaves the files in place. Registering an agent drops the entries registered before
 its launch listed herdr's agents that the listing did not have; one registered since is kept,
 since it may be a seat that started alongside it. A question or a hand-off looks only at the asking Run's lineage —
 `Place.lineage`, the Run and the Runs it was started from or whose `runs/<id>/plan` it builds — so `handoff.ts` gives one run's

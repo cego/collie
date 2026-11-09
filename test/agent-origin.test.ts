@@ -9,8 +9,7 @@ import { connect } from "../src/host";
 import { readAudit } from "../src/audit";
 import { runDir } from "../src/engine";
 import { appendLine } from "../src/steering";
-import { deliveredTo, recordsAt } from "./support/records";
-import { everyRegistered } from "../src/registry";
+import { deliveredTo, recordsAt, registeredAt } from "./support/records";
 import { runEffect } from "./support/effect";
 import { stopHost, until } from "./support/host";
 import { type Side, twoMachines } from "./support/peers";
@@ -37,7 +36,7 @@ const attendedAgent = Effect.fn("attendedAgent")(function* (side: Side) {
     (view) => Arr.some(view?.waiting ?? [], (one) => one.answer === null),
   );
   const agent = Option.getOrUndefined(
-    Arr.findFirst(yield* everyRegistered(side.world.state), (entry) => entry.runId === runId),
+    Arr.findFirst(yield* registeredAt(side.world.state), (entry) => entry.runId === runId),
   )!;
   return { runId, agent };
 });
@@ -223,7 +222,7 @@ test(
                 );
                 const entry = Option.getOrUndefined(
                   Arr.findFirst(
-                    yield* everyRegistered(side.world.state),
+                    yield* registeredAt(side.world.state),
                     (one) => one.runId === runId,
                   ),
                 )!;

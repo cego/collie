@@ -11,9 +11,8 @@ import { appendMetric } from "../src/metrics";
 import { appendDrift } from "../src/drift";
 import { readCards } from "../src/cards";
 import { readIntent } from "../src/intent";
-import { everyRegistered } from "../src/registry";
 import { appendLine } from "../src/steering";
-import { ledgerOf, recordsAt } from "./support/records";
+import { ledgerOf, recordsAt, registeredAt } from "./support/records";
 import { readAudit } from "../src/audit";
 import { encodeVerifying, readVerifications, VERIFYING_FILE } from "../src/verify";
 import { runEffect } from "./support/effect";
@@ -296,7 +295,7 @@ test(
             );
             const agent = Option.getOrUndefined(
               Arr.findFirst(
-                yield* everyRegistered(second.world.state),
+                yield* registeredAt(second.world.state),
                 (one) => one.runId === built.runId,
               ),
             )!;

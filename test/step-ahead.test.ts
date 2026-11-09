@@ -5,8 +5,7 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem, Option, Schema, Stream, flow, Result } from "effect";
 import { frontDoor, socketOf } from "../src/host";
 import { readLaunches } from "../src/launches";
-import { everyRegistered } from "../src/registry";
-import { deliveredTo } from "./support/records";
+import { deliveredTo, registeredAt } from "./support/records";
 import { collie, proves } from "./support/world";
 import { until } from "./support/host";
 import { recordIn } from "../src/board-model";
@@ -113,7 +112,7 @@ test(
           expect(late.envelope.ok).toBe(false);
           expect(late.envelope.error?.message).toContain("a");
           const entry = Option.getOrUndefined(
-            Arr.findFirst(yield* everyRegistered(world.state), (one) => one.agent === first.agent),
+            Arr.findFirst(yield* registeredAt(world.state), (one) => one.agent === first.agent),
           )!;
           expect(
             (yield* collie(world, ["run", "hold", runId, "--before", "c"], {

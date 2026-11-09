@@ -60,13 +60,14 @@ import {
   steerAbout,
   steerRun,
   usageReadings,
+  hostRegistered,
 } from "./lifecycle";
 import type { UsageReading } from "./usage-model";
 import { keyboard } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
 import { COLLIE_TAB, reason, runTitle } from "./naming";
 import { listRuns, settled, type RunFacts } from "./runs";
-import { everyRegistered, type AgentEntry } from "./registry";
+import { type AgentEntry } from "./registry";
 import { reportedWorktrees } from "./worktree";
 import { scopeFor, type RegistryScope } from "./registry";
 import type { CompactionSettings } from "./compaction";
@@ -1048,7 +1049,7 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       // A run is where its newest agent is; one that has started none is only reachable
       // as the workspace it lives in.
       const agent = Option.getOrUndefined(
-        Arr.findLast(yield* everyRegistered(env.stateDir), (entry) => entry.runId === run.id),
+        Arr.findLast(yield* hostRegistered(env), (entry) => entry.runId === run.id),
       );
       if (agent) return yield* went(session.herdr.agentFocus(agent.agent));
       const workspace =
@@ -1613,7 +1614,7 @@ const scan = Effect.fn("Flows.scan")(function* (env: PluginEnv, runsOf: RunsOf =
   return {
     runs: yield* runsOf(env),
     tasks: yield* hostTasks(env),
-    registered: yield* everyRegistered(env.stateDir),
+    registered: yield* hostRegistered(env),
   } satisfies Scanned;
 });
 

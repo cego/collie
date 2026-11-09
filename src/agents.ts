@@ -166,7 +166,6 @@ import { ownCodexReading } from "./usage";
 import {
   lineageAgent,
   registerAgent,
-  registryPath,
   scopeFor,
   verifyIncarnation,
   type AgentEntry,
@@ -2289,11 +2288,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           );
           const found = yield* entryFor(ask, agent, { paneId: terminal, workspaceId: null });
           if (found.entry === null) return undefined;
-          yield* registerAgent(
-            yield* registryPath(host.env.stateDir, scopeFor(host.env, ask.cwd)),
-            found.entry,
-            alive,
-          );
+          yield* registerAgent(scopeFor(host.env, ask.cwd), found.entry, alive);
           return found.entry.incarnation;
         }
         const workspace = ask.workspace ?? (yield* taskWorkspace(ask));
@@ -2342,11 +2337,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           workspaceId: workspace,
         });
         if (found.entry === null) return undefined;
-        yield* registerAgent(
-          yield* registryPath(host.env.stateDir, scopeFor(host.env, ask.cwd)),
-          found.entry,
-          alive,
-        );
+        yield* registerAgent(scopeFor(host.env, ask.cwd), found.entry, alive);
         return found.entry.incarnation;
       }),
     );
@@ -3250,7 +3241,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       Effect.gen(function* () {
         const alive = yield* host.herdr.agentList();
         const others = Arr.filter(options.lineage, (runId) => runId !== options.runId);
-        const entry = yield* lineageAgent(host.env.stateDir, alive, options.role, others);
+        const entry = yield* lineageAgent(alive, options.role, others);
         // Without a proven incarnation the entry names a pane, not the agent now in it.
         if (entry === null) return null;
         if (!verifyIncarnation(entry, alive).ok) return null;
@@ -3637,7 +3628,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       under(
         Effect.gen(function* () {
           const alive = yield* host.herdr.agentList();
-          const entry = yield* lineageAgent(host.env.stateDir, alive, role, lineage);
+          const entry = yield* lineageAgent(alive, role, lineage);
           // A register entry with no incarnation names a pane, and whatever is in that
           // pane now is not the agent it was written about.
           return askRouteTo(entry !== null && verifyIncarnation(entry, alive).ok ? entry : null);

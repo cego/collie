@@ -73,13 +73,13 @@ import { FixOutputSchema, SynthesisSchema } from "../src/output";
 import { Triage } from "../workflows/retrospective";
 import { seedIntent, writeIntent } from "../src/intent";
 import { appendLine, herdOf, reconcile } from "../src/steering";
-import { deliveredTo, ledgerOf, recordsAt } from "./support/records";
+import { deliveredTo, ledgerOf, recordsAt, registeredAt } from "./support/records";
 import { readLaunches } from "../src/launches";
 import { Store } from "../src/store";
 import type { AuditLine } from "../src/audit";
 import { listTasks, readTask, taskKeptIn, withTaskLock, writeTask } from "../src/task";
 import { taskFor } from "../src/operations";
-import { lineageAgent, readRegistry, registerAgent, registryPath, scopeFor } from "../src/registry";
+import { everyRegistered, lineageAgent, registerAgent, scopeFor } from "../src/registry";
 import { Herdr, HerdrError } from "../src/herdr";
 import { retitleGenericTasks } from "../src/tasknames";
 import { runFacts } from "./support/records";
@@ -3424,7 +3424,7 @@ test("a stop of a Run that launched no agent needs nothing from herdr", () =>
 const liveImplementer = Effect.gen(function* () {
   yield* rig.addAgent("impl-live", "9-1");
   const env = rig.pluginEnv();
-  yield* registerAgent(yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)), {
+  yield* registerAgent(scopeFor(env, rig.projectDir), {
     role: "implementer",
     agent: "impl-live",
     paneId: "9-1",
@@ -3433,7 +3433,7 @@ const liveImplementer = Effect.gen(function* () {
     workflow: "implement",
     at: "2026-09-23T10:00:00Z",
     incarnation: { terminalId: "term-impl-live", agentSession: null },
-  });
+  }).pipe(Effect.provide(recordsAt(dir)));
 });
 
 /** A herdr that takes a prompt and never answers, so nobody can say it arrived. */
@@ -3495,7 +3495,7 @@ const liveIn = Effect.fn("test.liveIn")(function* (
 ) {
   yield* rig.addAgent(agent, paneId);
   const env = rig.pluginEnv();
-  yield* registerAgent(yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)), {
+  yield* registerAgent(scopeFor(env, rig.projectDir), {
     role,
     agent,
     paneId,
@@ -3504,7 +3504,7 @@ const liveIn = Effect.fn("test.liveIn")(function* (
     workflow: "plan",
     at: "2026-09-30T10:00:00Z",
     incarnation: { terminalId: `term-${agent}`, agentSession: null },
-  });
+  }).pipe(Effect.provide(recordsAt(dir)));
 });
 
 test("a Run's authority is the branch it created and who started it; an older record and a roaming one authorise no branch", () =>
@@ -3627,10 +3627,7 @@ test("a question and a hand-off stay in the asking Run's lineage, whoever else r
       // Started later from the same place, in the same roles.
       yield* liveIn("r-other", "planner", "other-grill", "9-3");
       yield* liveIn("r-other.implement", "implementer", "other-build", "9-4");
-      const env = rig.pluginEnv();
-      const kept = yield* readRegistry(
-        yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)),
-      );
+      const kept = yield* registeredAt(dir);
       expect(Arr.map(kept, (entry) => entry.agent)).toEqual([
         "plan-grill",
         "plan-build",
@@ -3670,7 +3667,7 @@ test("seats launched together all stay registered, and a gone agent's entry leav
   runEffect(
     Effect.gen(function* () {
       const env = rig.pluginEnv();
-      const file = yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir));
+      const scope = scopeFor(env, rig.projectDir);
       const seat = (agent: string, runId: string, at: string) => ({
         role: "reviewer",
         agent,
@@ -3681,25 +3678,22 @@ test("seats launched together all stay registered, and a gone agent's entry leav
         at,
         incarnation: { terminalId: `term-${agent}`, agentSession: null },
       });
-      yield* registerAgent(file, seat("old-review", "r-done", "2026-09-30T09:00:00.000Z"));
+      yield* registerAgent(scope, seat("old-review", "r-done", "2026-09-30T09:00:00.000Z"));
       // Both seats listed herdr's agents before either had started, as a panel launched
       // at once does: neither list has the other seat, and neither has the gone agent.
       const listed = { agents: [], listedAt: "2026-09-30T10:00:00.000Z" };
-      yield* registerAgent(file, seat("seat-1", "r-panel", "2026-09-30T10:00:05.000Z"), listed);
-      yield* registerAgent(file, seat("seat-2", "r-panel", "2026-09-30T10:00:06.000Z"), listed);
-      expect(Arr.map(yield* readRegistry(file), (entry) => entry.agent)).toEqual([
-        "seat-1",
-        "seat-2",
-      ]);
-    }),
+      yield* registerAgent(scope, seat("seat-1", "r-panel", "2026-09-30T10:00:05.000Z"), listed);
+      yield* registerAgent(scope, seat("seat-2", "r-panel", "2026-09-30T10:00:06.000Z"), listed);
+      expect(Arr.map(yield* everyRegistered, (entry) => entry.agent)).toEqual(["seat-1", "seat-2"]);
+    }).pipe(Effect.provide(recordsAt(dir))),
   ));
 
 test("a lineage lookup leaves every register as it found it, and registrations at once all land", () =>
   runEffect(
     Effect.gen(function* () {
       const env = rig.pluginEnv();
-      const file = yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir));
-      const elsewhere = `${env.stateDir}/agents/other-herd-0123456789ab.json`;
+      const scope = scopeFor(env, rig.projectDir);
+      const elsewhere = { ...scope, session: `${rig.root}/other-herd.sock` };
       const seat = (agent: string) => ({
         role: "reviewer",
         agent,
@@ -3710,20 +3704,20 @@ test("a lineage lookup leaves every register as it found it, and registrations a
         at: "2026-09-30T10:00:00.000Z",
         incarnation: { terminalId: `term-${agent}`, agentSession: null },
       });
-      // Ten seats registering at the same moment, each reading and rewriting one file.
+      // Ten seats registering at the same moment, each reading and rewriting one register.
       const seats = Array.from({ length: 10 }, (_, at) => `seat-${at}`);
       yield* Effect.all(
-        Arr.map(seats, (agent) => registerAgent(file, seat(agent))),
+        Arr.map(seats, (agent) => registerAgent(scope, seat(agent))),
         { concurrency: "unbounded" },
       );
       yield* registerAgent(elsewhere, seat("another-herds"));
-      expect(Arr.map(yield* readRegistry(file), (entry) => entry.agent).sort()).toEqual(seats);
+      const agents = Effect.map(everyRegistered, (all) => Arr.map(all, (entry) => entry.agent));
+      expect((yield* agents).sort()).toEqual([...seats, "another-herds"].sort());
 
       // A list taken before any of them started, as an ask's is, knows none of them.
-      expect(yield* lineageAgent(env.stateDir, [], "reviewer", ["r-panel"])).toBeNull();
-      expect(yield* readRegistry(file)).toHaveLength(10);
-      expect(yield* readRegistry(elsewhere)).toHaveLength(1);
-    }),
+      expect(yield* lineageAgent([], "reviewer", ["r-panel"])).toBeNull();
+      expect(yield* agents).toHaveLength(11);
+    }).pipe(Effect.provide(recordsAt(dir))),
   ));
 
 /** The controls an operator sets, as the host keeps them beside the run. */
@@ -5270,10 +5264,7 @@ test(
         expect(tabsIn(yield* rig.calls())).toEqual(["wT"]);
         const starts = Arr.filter(yield* rig.calls(), (call) => call.cmd === "agent start");
         expect(starts.at(-1)?.argv).toEqual(expect.arrayContaining(["--pane", `${reopened}-p1`]));
-        const env = hostOf().env;
-        const registered = yield* readRegistry(
-          yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)),
-        );
+        const registered = yield* everyRegistered;
         expect(
           Option.getOrUndefined(Arr.findFirst(registered, (entry) => entry.agent === sweeper))
             ?.workspaceId,

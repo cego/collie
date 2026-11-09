@@ -86,7 +86,7 @@ import type { TaskChoice, TaskRecord } from "./task";
 import { encodeApprovedFile, rememberedFile, renderApproved, type VerifySpec } from "./verify-spec";
 import { projectHere, shell } from "./mr";
 import { defaultsPath, readDefaults, readIntent, type Change, type IntentSeed } from "./intent";
-import { scopeFor, scopeKey } from "./registry";
+import { scopeFor, scopeKey, type AgentEntry } from "./registry";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { reason } from "./naming";
 import { attachmentRefusal } from "./attachments";
@@ -419,6 +419,14 @@ export const hostTasks = (
   env: PluginEnv,
 ): Effect.Effect<ReadonlyArray<TaskRecord>, never, Client> =>
   asks({ ...env, machine: undefined }, (client) => client.tasks()).pipe(
+    Effect.map((answered) => (answered.ok ? answered.value : [])),
+  );
+
+/** Every agent this Machine's host has registered; none where it cannot be asked. */
+export const hostRegistered = (
+  env: PluginEnv,
+): Effect.Effect<ReadonlyArray<AgentEntry>, never, Client> =>
+  asks({ ...env, machine: undefined }, (client) => client.registered()).pipe(
     Effect.map((answered) => (answered.ok ? answered.value : [])),
   );
 

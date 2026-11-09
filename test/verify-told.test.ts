@@ -11,8 +11,7 @@ import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { connect } from "../src/host";
 import { resetExecutors } from "../src/executors";
 import { Launched } from "../src/launches";
-import { everyRegistered } from "../src/registry";
-import { deliveredTo } from "./support/records";
+import { deliveredTo, registeredAt } from "./support/records";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { root, stopHost, until } from "./support/host";
@@ -92,7 +91,7 @@ test(
             ),
           );
           const pane = Option.getOrUndefined(
-            Arr.findFirst(yield* everyRegistered(world.state), (entry) => entry.runId === runId),
+            Arr.findFirst(yield* registeredAt(world.state), (entry) => entry.runId === runId),
           )!.paneId;
           const asked = (
             name: string,

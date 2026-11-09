@@ -6,6 +6,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
 import * as SqlClient from "effect/sql/SqlClient";
+import { decodeRegisterOption, encodeAgentEntry } from "./registry";
 import { decodeTaskOption } from "./task";
 
 const isJson = (text: string) =>
@@ -34,6 +35,26 @@ export const importLedgers = Effect.fn("RecordsImport.ledgers")(function* (state
       .pipe(Effect.orElseSucceed(() => ""));
     for (const line of journalLines(raw))
       yield* sql`INSERT INTO collie_deliveries (ledger, line) VALUES (${ledger}, ${line})`;
+  }
+});
+
+/** Every `agents/<register>.json`, its entries in the order it kept them. */
+export const importRegisters = Effect.fn("RecordsImport.registers")(function* (stateDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const sql = yield* SqlClient.SqlClient;
+  const root = path.join(stateDir, "agents");
+  for (const name of yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []))) {
+    if (!Str.endsWith(".json")(name)) continue;
+    const raw = yield* fs
+      .readFileString(path.join(root, name))
+      .pipe(Effect.orElseSucceed(() => ""));
+    const register = Str.slice(0, -".json".length)(name);
+    for (const entry of Option.getOrElse(decodeRegisterOption(raw), () => []))
+      yield* sql`
+        INSERT OR REPLACE INTO collie_agents (register, agent, record)
+        VALUES (${register}, ${entry.agent}, ${encodeAgentEntry(entry)})
+      `;
   }
 });
 

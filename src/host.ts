@@ -282,7 +282,7 @@ import {
 import { carryOut, carryOutAsked, followUpField } from "./run-actions";
 import { retitleGenericTasks } from "./tasknames";
 import { VerifySpecSchema } from "./verify-spec";
-import { everyRegistered } from "./registry";
+import { AgentEntrySchema, everyRegistered, REGISTERED } from "./registry";
 import { listTasks, readTask, taskKeptIn, TASKS, TaskSchema } from "./task";
 import { epochMs, nowIso } from "./time";
 import { appendLog } from "./oversight";
@@ -531,6 +531,8 @@ export const HostRpcs = RpcGroup.make(
   Rpc.make("overridden", { success: Schema.Array(Schema.String) }),
   /** This Machine's Tasks, newest first. */
   Rpc.make("tasks", { success: Schema.Array(TaskSchema) }),
+  /** Every agent this Machine's host has registered, oldest registration first. */
+  Rpc.make("registered", { success: Schema.Array(AgentEntrySchema) }),
   Rpc.make("runs", {
     payload: { task: Schema.NullOr(Schema.String) },
     success: Schema.Array(RunView),
@@ -850,6 +852,7 @@ const handlers = (
           }),
         overridden: () => Effect.map(overriddenRuns, (runs) => [...runs]),
         tasks: () => listTasks,
+        registered: () => everyRegistered,
         runs: ({ task }) => registry.views(task),
         watch: ({ runId }) => registry.watch(runId),
         recover: () => registry.recover,
@@ -913,7 +916,7 @@ const handlers = (
         wake: ({ machine }) => peers.wake(machine),
         unpair: ({ machine }) => peers.unpair(machine),
         agentRun: ({ agent }) =>
-          everyRegistered(dir).pipe(
+          everyRegistered.pipe(
             Effect.map(
               (entries) =>
                 Option.getOrUndefined(Arr.findLast(entries, (entry) => entry.agent === agent))
@@ -1230,7 +1233,7 @@ const hostBoard = (dir: string) =>
             sessions,
             stateDir: env.stateDir,
             runs: all,
-            registered: yield* everyRegistered(env.stateDir),
+            registered: yield* everyRegistered,
             cwd: env.cwd,
             settling: settlingOf({
               stateDir: env.stateDir,
@@ -1390,7 +1393,7 @@ const sharedBoardLayer = (dir: string) =>
           ),
           // A signal alone: the rows are read by the build, not once more per write.
           store.watching(Effect.void),
-          reactivity.stream([DELIVERIES, TASKS], Effect.void),
+          reactivity.stream([DELIVERIES, REGISTERED, TASKS], Effect.void),
         ],
         { concurrency: "unbounded" },
       ).pipe(Stream.share({ capacity: 1, strategy: "sliding" }));
@@ -2053,7 +2056,7 @@ const frontDoorHandlers = (
             let where = from;
             if (frontDoor === "agent" && from?.machine === undefined) {
               const entry = Option.getOrUndefined(
-                Arr.findLast(yield* everyRegistered(dir), (one) => one.agent === from?.agent),
+                Arr.findLast(yield* everyRegistered, (one) => one.agent === from?.agent),
               );
               if (entry === undefined || (from?.run !== undefined && from.run !== entry.runId))
                 return yield* new HostRefused({
@@ -3367,10 +3370,7 @@ const frontDoorHandlers = (
               const task = view.task === null ? null : yield* readTask(view.task);
               const agents = Arr.filter(
                 Arr.map(
-                  Arr.filter(
-                    yield* everyRegistered(env.stateDir),
-                    (entry) => entry.runId === runId,
-                  ),
+                  Arr.filter(yield* everyRegistered, (entry) => entry.runId === runId),
                   (entry) => entry.agent,
                 ),
                 (name) => agent === undefined || name === agent,

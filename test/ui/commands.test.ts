@@ -7,7 +7,7 @@ import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import type { PlatformServices } from "../../src/platform";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, PlatformError } from "effect";
+import { Effect, PlatformError, type Scope } from "effect";
 import { Rig, type RigError } from "../support/recorder";
 import { installBaseline } from "../support/engine";
 import { installFakeSkills } from "../support/defs";
@@ -16,10 +16,11 @@ import { runEffect } from "../support/effect";
 import { runCommand, type ControlSession } from "../../src/flows";
 import type { Jump } from "../../src/ui/state";
 import { Herdr } from "../../src/herdr";
-import { registerAgent, registryPath, scopeFor } from "../../src/registry";
+import { registerAgent, scopeFor } from "../../src/registry";
 import { loadDefaults, readConfig, readSettingsSet } from "../../src/config";
 import type { RunFacts } from "../../src/runs";
-import { madeRun } from "../support/records";
+import { openHost } from "../support/host";
+import { madeRun, recordsAt } from "../support/records";
 import { Path, FileSystem } from "effect";
 
 let rig: Rig;
@@ -32,7 +33,7 @@ function effectTest(
   body: () => Effect.gen.Return<
     void,
     RigError | PlatformError.PlatformError | Error,
-    PlatformServices
+    PlatformServices | Scope.Scope
   >,
 ) {
   test(name, () => runEffect(Effect.gen(body)));
@@ -211,7 +212,7 @@ const elsewhere = Effect.fn("commands.elsewhere")(function* (opts: {
   });
   runs = [run, ...runs];
   // Its agent, registered in the pane herdr opened for it.
-  yield* registerAgent(yield* registryPath(env.stateDir, scopeFor(env, run.cwd)), {
+  yield* registerAgent(scopeFor(env, run.cwd), {
     role: "implementer",
     agent: "impl-9",
     paneId: "w9:p1",
@@ -219,7 +220,7 @@ const elsewhere = Effect.fn("commands.elsewhere")(function* (opts: {
     runId: run.id,
     workflow: run.workflow,
     at: "2026-09-14T10:00:00Z",
-  });
+  }).pipe(Effect.provide(recordsAt(env.stateDir)));
   return run;
 });
 
@@ -229,6 +230,8 @@ const jump = (jump: Jump) =>
 effectTest("Enter goes where the row points, in one call, and says where it went", function* () {
   yield* rig.startSocket();
   const run = yield* elsewhere({ workspaceId: "w9" });
+  // The register is read through the host.
+  yield* openHost(rig.stateDir);
 
   // A workspace row: whatever tab that workspace was last on, and nothing else.
   expect(yield* jump({ kind: "workspace", workspaceId: "w9", label: "Implement · glass" })).toBe(

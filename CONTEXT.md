@@ -507,7 +507,7 @@ until it is seen (ADR-draft-a-finished-run-is-seen-once-for-the-flock).
 and lifted by a human.
 
 **Session** — One herdr session and one workspace, taken together. It is the
-scope of a register file of live agents, which holds one entry
+scope of a register of live agents, which holds one entry
 per agent for every Run started there. An agent on core is in no herdr workspace, but
 its entry is kept in the same register, its Incarnation marked as core's. One workspace, always: a mutating Run's checkout
 does not take it out of the Session it was started in.

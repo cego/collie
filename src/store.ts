@@ -36,7 +36,7 @@ import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 import { AuditLine } from "./audit";
-import { importLedgers, importTasks } from "./records-import";
+import { importLedgers, importRegisters, importTasks } from "./records-import";
 import { StoreWrites } from "./store-writes";
 import { RequestConflict } from "./board-model";
 import { nowIso } from "./time";
@@ -348,11 +348,14 @@ const RUNS = ["collie/runs"];
 const field = (name: string) =>
   `CASE WHEN json_valid(line) THEN json_extract(line, '$.${name}') END`;
 
-type ImportError = Effect.Error<ReturnType<typeof importLedgers | typeof importTasks>>;
+type ImportError = Effect.Error<
+  ReturnType<typeof importLedgers | typeof importTasks | typeof importRegisters>
+>;
 
 const migrations = (imports: {
   readonly ledgers: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
   readonly tasks: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
+  readonly registers: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
 }) => ({
   "1_runs": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -466,6 +469,18 @@ const migrations = (imports: {
     yield* sql`CREATE INDEX collie_tasks_workspace ON collie_tasks (workspace)`;
     yield* imports.tasks;
   }),
+  "14_agents": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      CREATE TABLE collie_agents (
+        register TEXT NOT NULL,
+        agent TEXT NOT NULL,
+        record TEXT NOT NULL,
+        PRIMARY KEY (register, agent)
+      )
+    `;
+    yield* imports.registers;
+  }),
 });
 
 /** How often a commit by another connection, another process's, is looked for. */
@@ -495,7 +510,11 @@ function makeStore(
     // not a request that failed.
     yield* SqliteMigrator.run({
       loader: Migrator.fromRecord(
-        migrations({ ledgers: imported(importLedgers), tasks: imported(importTasks) }),
+        migrations({
+          ledgers: imported(importLedgers),
+          tasks: imported(importTasks),
+          registers: imported(importRegisters),
+        }),
       ),
       table: "collie_migrations",
     }).pipe(Effect.orDie);

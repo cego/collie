@@ -1040,7 +1040,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   const quietMs = opts.quietMs ?? DEFAULT_QUIET_MS;
   const all = newestFirst(opts.runs ?? (yield* listRuns(opts.env)));
   const tasks = new Map(Arr.map(opts.tasks ?? (yield* listTasks), (task) => [task.id, task]));
-  const registered = opts.registered ?? (yield* everyRegistered(stateDir));
+  const registered = opts.registered ?? (yield* everyRegistered);
   const proposals = opts.proposals ?? (yield* proposalsOf(stateDir));
   const mrStates = opts.mrStates ?? (yield* readMrStates(stateDir));
   const forge = opts.forge ?? (yield* readForge(stateDir));

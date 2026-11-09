@@ -5,7 +5,7 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
-import { Deferred, Effect, Fiber, FileSystem, Path, Result, Schema, Stream, flow } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Result, Schema, Stream, flow } from "effect";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
@@ -36,8 +36,8 @@ import {
 } from "../src/steering";
 import {
   deliverable,
+  everyRegistered,
   registerAgent,
-  readRegistry,
   verifyIncarnation,
   type AgentEntry,
 } from "../src/registry";
@@ -95,6 +95,8 @@ const live = (over: Partial<AgentInfo> = {}): AgentInfo => ({
   ...over,
 });
 
+const scope = { session: null, workspaceId: "w1", cwd: "/project" };
+
 const entry = (over: Partial<AgentEntry> = {}): AgentEntry => ({
   role: "implementer",
   agent: "impl-1",
@@ -110,13 +112,11 @@ const entry = (over: Partial<AgentEntry> = {}): AgentEntry => ({
 test("an entry written before incarnations still decodes, and is never a delivery target", () =>
   runEffect(
     Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const file = path.join(stateDir, "register.json");
       const legacy = entry();
       delete legacy.incarnation;
-      yield* registerAgent(file, legacy);
+      yield* registerAgent(scope, legacy);
 
-      const [back] = yield* readRegistry(file);
+      const [back] = yield* everyRegistered;
       expect(back).toBeDefined();
       expect(deliverable(back!)).toBe(false);
       expect(verifyIncarnation(back!, [live()])).toEqual({ ok: false, reason: "no_incarnation" });
@@ -129,17 +129,15 @@ test("an entry with no incarnation is not an answer either, so a later read can 
       // herdr had not named a `terminal_id` when the agent started. Treating that as the
       // final word would make one listing's gap an unsteerable Run for ever, so the entry
       // is not deliverable and a later read is free to replace it with what herdr has now.
-      const path = yield* Path.Path;
-      const file = path.join(stateDir, "register.json");
       const early = entry();
       delete early.incarnation;
-      yield* registerAgent(file, early);
-      expect(deliverable((yield* readRegistry(file))[0]!)).toBe(false);
+      yield* registerAgent(scope, early);
+      expect(deliverable((yield* everyRegistered)[0]!)).toBe(false);
 
       // Registering the same agent again replaces it rather than adding a second row,
       // which is what makes healing on read a write of one line and not a duplicate.
-      yield* registerAgent(file, entry());
-      const healed = yield* readRegistry(file);
+      yield* registerAgent(scope, entry());
+      const healed = yield* everyRegistered;
       expect(healed).toHaveLength(1);
       expect(deliverable(healed[0]!)).toBe(true);
       expect(verifyIncarnation(healed[0]!, [live()])).toMatchObject({ ok: true });

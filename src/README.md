@@ -38,7 +38,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `door.ts`              | The host's door: a Worker that owns `host.sock`, reads records itself, passes the rest to the engine                        |
 | `herds.ts`             | Every running herdr session the host reads, its agents, and the events it pushes                                            |
 | `attention.ts`         | Why a run wants a human, and which actions are safe now                                                                     |
-| `registry.ts`          | Which long-lived agents this Session still has, per workspace + repo                                                        |
+| `registry.ts`          | Which long-lived agents each Session still has, as the host keeps them in `collie_agents`                                   |
 | `handoff.ts`           | Giving one Run's result to another Run's live agent                                                                         |
 | `output.ts`            | The Output and Synthesis schemas, their parsers, `review.md`, and which findings the loop still owns                        |
 | `run.ts`               | The run directory: audit trail and resume state                                                                             |

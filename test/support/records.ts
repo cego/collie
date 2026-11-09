@@ -7,6 +7,7 @@
 import { Data, Effect, FileSystem } from "effect";
 import type { RunFacts } from "../../src/runs";
 import { recordsReadLayer, type Records } from "../../src/records";
+import { everyRegistered } from "../../src/registry";
 import { deliveriesOf, readLedger } from "../../src/steering";
 
 export function runFacts(over: Partial<RunFacts> = {}): RunFacts {
@@ -80,3 +81,7 @@ export const deliveredTo = (stateDir: string, run: string) =>
 
 export const ledgerOf = (stateDir: string, terminalId: string) =>
   hostRecords(stateDir, readLedger(terminalId));
+
+/** The agents a host on `stateDir` registered; none before it has made `host.db`. */
+export const registeredAt = (stateDir: string) =>
+  hostRecords(stateDir, everyRegistered).pipe(Effect.orElseSucceed(() => []));

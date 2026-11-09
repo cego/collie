@@ -35,7 +35,14 @@ import { projectsRoot } from "./projects";
 import { claudeSettingsPath, readStatusLine, STATUS_LINE_ARGS } from "./statusline";
 import { humanBytes } from "./bytes";
 import { collieCache } from "./cleanup";
-import { anyRuns, cleanupListing, machineList, machineShell, type Door } from "./lifecycle";
+import {
+  anyRuns,
+  cleanupListing,
+  hostRegistered,
+  machineList,
+  machineShell,
+  type Door,
+} from "./lifecycle";
 import { peersOf } from "./peers";
 import { HERDLESS, herdOfHost } from "./host";
 import { tmpdir } from "node:os";
@@ -56,7 +63,6 @@ import {
 import { gitlabChecks } from "./forge/gitlab-checks";
 import { connect, coreSocket } from "./hc";
 import { hcInstallDir, hcMeets, hcVersion } from "./hc-install";
-import { everyRegistered } from "./registry";
 import hcPin from "../hc-pin.json";
 import { githubChecks } from "./forge/github-checks";
 
@@ -168,7 +174,7 @@ const onHerdrOne = Effect.fn("Doctor.onHerdrOne")(function* (env: PluginEnv, her
   );
   // An entry from before incarnations has no backend either: it was on Herdr 1.
   const live = Arr.filter(
-    yield* everyRegistered(env.stateDir),
+    (yield* anyRuns(env)) ? yield* hostRegistered(env) : [],
     (entry) => entry.incarnation?.backend === undefined && open.has(entry.paneId),
   );
   const found = [

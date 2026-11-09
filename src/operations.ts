@@ -895,7 +895,7 @@ export const request = Effect.fn("operations.request")(function* (
     if (intent !== null) intents.set(id, { version: intent.version, authority: intent.authority });
   }
 
-  const registered = yield* everyRegistered(env.stateDir);
+  const registered = yield* everyRegistered;
   const checked = validate(
     {
       interpretation: options.interpretation,
@@ -1065,7 +1065,7 @@ export const steer = Effect.fn("operations.steer")(function* (
 
   const checked = validate(proposed, {
     runs: new Set([run.id]),
-    agents: new Map([[run.id, agentsOf(yield* everyRegistered(env.stateDir), run.id)]]),
+    agents: new Map([[run.id, agentsOf(yield* everyRegistered, run.id)]]),
     intents: new Map(
       intent === null ? [] : [[run.id, { version: intent.version, authority: intent.authority }]],
     ),
@@ -1189,7 +1189,7 @@ const CARDS_IN_CONTEXT = 3;
  */
 export const herdFacts = Effect.fn("operations.herdFacts")(function* (env: PluginEnv) {
   const runs = yield* listRuns(env);
-  const registered = yield* everyRegistered(env.stateDir);
+  const registered = yield* everyRegistered;
   const listed = runs.slice(0, HERD_LINES);
   const lines: string[] = [];
   for (const item of listed) {
