@@ -619,7 +619,10 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) 
   // The Tasks too: a Task with no Run yet is in no Herd listing, so this is the only
   // place a conversation can find out the work a new Run could join.
   const open = new Set(Arr.map(all, (workspace) => workspace.workspaceId));
-  const tasks = Arr.filter(yield* hostTasks(env), (task) => isOpen(task, open));
+  const asked = yield* Effect.result(hostTasks(env));
+  const tasks = Result.isSuccess(asked)
+    ? Arr.filter(asked.success, (task) => isOpen(task, open))
+    : [];
   const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
   return Arr.join(
     [
@@ -630,7 +633,11 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) 
         (task) =>
           `- task ${task.id} (${task.label})${task.workspace === null ? "" : ` in workspace ${task.workspace}`}`,
       ),
-      ...(tasks.length === 0 ? ["- (no Tasks with an open workspace)"] : []),
+      ...(Result.isFailure(asked)
+        ? [`- (the Tasks are unknown: ${asked.failure.message})`]
+        : tasks.length === 0
+          ? ["- (no Tasks with an open workspace)"]
+          : []),
       "",
       root === null
         ? "Projects root: none"

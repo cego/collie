@@ -1050,7 +1050,10 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       // A run is where its newest agent is; one that has started none is only reachable
       // as the workspace it lives in.
       const agent = Option.getOrUndefined(
-        Arr.findLast(yield* hostRegistered(env), (entry) => entry.runId === run.id),
+        Arr.findLast(
+          yield* hostRegistered(env).pipe(Effect.orElseSucceed(() => [])),
+          (entry) => entry.runId === run.id,
+        ),
       );
       if (agent) return yield* went(session.herdr.agentFocus(agent.agent));
       const workspace =
@@ -1058,7 +1061,10 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
         (run.task === null
           ? null
           : (Option.getOrUndefined(
-              Arr.findFirst(yield* hostTasks(env), (task) => task.id === run.task),
+              Arr.findFirst(
+                yield* hostTasks(env).pipe(Effect.orElseSucceed(() => [])),
+                (task) => task.id === run.task,
+              ),
             )?.workspace ?? null));
       if (!workspace) return `${jump.label} has no tab to jump to`;
       return yield* went(session.herdr.workspaceFocus(workspace));
@@ -1103,7 +1109,10 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
         (run.task === null
           ? null
           : (Option.getOrUndefined(
-              Arr.findFirst(yield* hostTasks(env), (task) => task.id === run.task),
+              Arr.findFirst(
+                yield* hostTasks(env).pipe(Effect.orElseSucceed(() => [])),
+                (task) => task.id === run.task,
+              ),
             )?.workspace ?? null));
       // The same state directory as this board's, whatever the pane's shell would default to.
       const follow = yield* Effect.orDie(
@@ -1615,8 +1624,9 @@ type RunsOf = (
 const scan = Effect.fn("Flows.scan")(function* (env: PluginEnv, runsOf: RunsOf = listRuns) {
   return {
     runs: yield* runsOf(env),
-    tasks: yield* hostTasks(env),
-    registered: yield* hostRegistered(env),
+    // A host that cannot be asked says so on the board itself.
+    tasks: yield* hostTasks(env).pipe(Effect.orElseSucceed(() => [])),
+    registered: yield* hostRegistered(env).pipe(Effect.orElseSucceed(() => [])),
   } satisfies Scanned;
 });
 
