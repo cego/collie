@@ -3,6 +3,8 @@
 
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { Cause, Effect, FileSystem, Result, Schema, Semaphore } from "effect";
 import { CommandLine } from "effect/process";
 import { MARKER } from "./sweep";
@@ -43,13 +45,29 @@ const answerers = new Map<string, Answerer<never>>();
 const failedAnswer = <E>(cause: Cause.Cause<E>): Effect.Effect<Answer> =>
   Effect.succeed({ code: 70, stdout: "", stderr: `${Cause.pretty(cause)}\n` });
 
+/** The environments of the calls this process is answering now. */
+const inFlight = new Set<Readonly<Record<string, string>>>();
+
+/**
+ * How many calls this process is still answering whose environment holds every one of
+ * `bindings`. An answer outlives the forwarder that asked once its host has stopped, and
+ * still writes where it was asked to.
+ */
+export const answering = (bindings: Readonly<Record<string, string>>): number =>
+  Arr.filter(Arr.fromIterable(inFlight), (env) =>
+    Arr.every(Rec.toEntries(bindings), ([key, value]) => env[key] === value),
+  ).length;
+
 const answer = (request: string) =>
   Schema.decodeEffect(Call)(request).pipe(
     Effect.flatMap(({ argv, cwd, env }) => {
       const answerer = answerers.get(env[ANSWERER] ?? "");
       return answerer === undefined
         ? Effect.succeed({ code: 70, stdout: "", stderr: `no fake answers ${argv[0]}\n` })
-        : answerer(argv, { ...env }, cwd);
+        : Effect.sync(() => inFlight.add(env)).pipe(
+            Effect.andThen(answerer(argv, { ...env }, cwd)),
+            Effect.ensuring(Effect.sync(() => inFlight.delete(env))),
+          );
     }),
     Effect.catchCause(failedAnswer),
   );

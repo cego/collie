@@ -236,7 +236,7 @@ test(
 );
 
 test(
-  "a suspended Run is polled on every listing, and reads complete once it finishes",
+  "a suspended Run is not polled again while the engine writes nothing for it, and reads complete once it finishes",
   () =>
     runEffect(
       hosted(
@@ -249,7 +249,7 @@ test(
 
           yield* registry.views(null);
           yield* registry.views(null);
-          expect(polls.get(run.execution)).toBe(2);
+          expect(polls.get(run.execution)).toBeUndefined();
 
           yield* registry.answer({
             runId: run.runId,
