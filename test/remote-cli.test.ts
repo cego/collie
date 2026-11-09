@@ -12,7 +12,8 @@ import { appendDrift } from "../src/drift";
 import { readCards } from "../src/cards";
 import { readIntent } from "../src/intent";
 import { everyRegistered } from "../src/registry";
-import { appendLine, ledgerPath, readLedger } from "../src/steering";
+import { appendLine } from "../src/steering";
+import { ledgerOf, recordsAt } from "./support/records";
 import { readAudit } from "../src/audit";
 import { encodeVerifying, readVerifications, VERIFYING_FILE } from "../src/verify";
 import { runEffect } from "./support/effect";
@@ -300,17 +301,18 @@ test(
               ),
             )!;
             const terminal = agent.incarnation!.terminalId;
-            const ledger = yield* ledgerPath(second.world.state, terminal);
-            yield* appendLine(ledger, {
+            yield* appendLine({
               kind: "manual_override",
               at: "2026-10-12T00:00:00Z",
               incarnation: terminal,
               by: "hook:UserPromptSubmit",
-            });
+            }).pipe(Effect.provide(recordsAt(second.world.state)));
             expect(
               (yield* first.cli(["run", "clear-override", built.runId, agent.agent])).envelope.ok,
             ).toBe(true);
-            expect((yield* readLedger(ledger)).at(-1)).toMatchObject({ kind: "override_cleared" });
+            expect((yield* ledgerOf(second.world.state, terminal)).at(-1)).toMatchObject({
+              kind: "override_cleared",
+            });
             yield* fs.writeFileString(`${dir}/intent.json`, "broken intent");
             const held = yield* first.cli([
               "run",

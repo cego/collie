@@ -17,7 +17,9 @@ import {
   Context,
   Effect,
   Exit,
+  FileSystem,
   Layer,
+  Path,
   Option,
   Order,
   Schedule,
@@ -34,6 +36,8 @@ import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 import { AuditLine } from "./audit";
+import { importLedgers } from "./records-import";
+import { StoreWrites } from "./store-writes";
 import { RequestConflict } from "./board-model";
 import { nowIso } from "./time";
 
@@ -328,19 +332,27 @@ export interface StoreApi {
 
 export class Store extends Context.Service<Store, StoreApi>()("collie/Store") {}
 
-/** Told the Runs each write of this store's names. */
-export class StoreWrites extends Context.Service<
-  StoreWrites,
-  (runs: ReadonlyArray<string>) => void
->()("collie/StoreWrites") {}
-
-export const storeLayer: Layer.Layer<Store, never, SqlClient.SqlClient | Reactivity.Reactivity> =
-  Layer.effect(Store)(makeStore());
+/** Over `host.db`; given the state directory, the files its first migration imports too. */
+export const storeLayer = (
+  stateDir?: string,
+): Layer.Layer<
+  Store,
+  never,
+  SqlClient.SqlClient | Reactivity.Reactivity | FileSystem.FileSystem | Path.Path
+> => Layer.effect(Store)(makeStore(stateDir));
 
 /** What a committed write invalidates, and what a subscriber is listening for. */
 const RUNS = ["collie/runs"];
 
-const MIGRATIONS = {
+/** A field of a record kept as JSON, null where the line is not JSON. */
+const field = (name: string) =>
+  `CASE WHEN json_valid(line) THEN json_extract(line, '$.${name}') END`;
+
+type ImportError = Effect.Error<ReturnType<typeof importLedgers>>;
+
+const migrations = (imports: {
+  readonly ledgers: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
+}) => ({
   "1_runs": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`
@@ -420,23 +432,55 @@ const MIGRATIONS = {
       )
     `;
   }),
-};
+  "12_deliveries": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql.unsafe(`
+      CREATE TABLE collie_deliveries (
+        seq INTEGER PRIMARY KEY,
+        ledger TEXT NOT NULL,
+        line TEXT NOT NULL,
+        id TEXT AS (${field("id")}),
+        run TEXT AS (${field("run")}),
+        state TEXT AS (${field("state")}),
+        kind TEXT AS (${field("kind")}),
+        human INTEGER AS (${field("human")} IS NOT NULL)
+      )
+    `);
+    yield* sql`CREATE INDEX collie_deliveries_ledger ON collie_deliveries (ledger, seq)`;
+    yield* sql`CREATE INDEX collie_deliveries_run ON collie_deliveries (run, ledger, id)`;
+    yield* sql`CREATE INDEX collie_deliveries_kind ON collie_deliveries (ledger, seq) WHERE kind IS NOT NULL`;
+    yield* sql`CREATE INDEX collie_deliveries_human ON collie_deliveries (id, seq) WHERE human = 1`;
+    yield* imports.ledgers;
+  }),
+});
 
 /** How often a commit by another connection, another process's, is looked for. */
 const ELSEWHERE_EVERY = "250 millis";
 
-function makeStore(): Effect.Effect<
+function makeStore(
+  stateDir: string | undefined,
+): Effect.Effect<
   StoreApi,
   never,
-  SqlClient.SqlClient | Reactivity.Reactivity | Scope.Scope
+  SqlClient.SqlClient | Reactivity.Reactivity | Scope.Scope | FileSystem.FileSystem | Path.Path
 > {
   return Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const reactivity = yield* Reactivity.Reactivity;
+    const files = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
+    const imported = (
+      read: (
+        stateDir: string,
+      ) => Effect.Effect<
+        void,
+        ImportError,
+        SqlClient.SqlClient | FileSystem.FileSystem | Path.Path
+      >,
+    ) => (stateDir === undefined ? Effect.void : Effect.provideContext(read(stateDir), files));
     // Before anything reads a table: a database that will not migrate is a broken host,
     // not a request that failed.
     yield* SqliteMigrator.run({
-      loader: Migrator.fromRecord(MIGRATIONS),
+      loader: Migrator.fromRecord(migrations({ ledgers: imported(importLedgers) })),
       table: "collie_migrations",
     }).pipe(Effect.orDie);
     // SQLite moves `data_version` only for another connection's commits.

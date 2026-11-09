@@ -4,8 +4,10 @@
 // point of these tests, and a cast would let one silently disappear without the test
 // noticing.
 
-import { Effect, FileSystem } from "effect";
+import { Data, Effect, FileSystem } from "effect";
 import type { RunFacts } from "../../src/runs";
+import { recordsReadLayer, type Records } from "../../src/records";
+import { deliveriesOf, readLedger } from "../../src/steering";
 
 export function runFacts(over: Partial<RunFacts> = {}): RunFacts {
   const id = over.id ?? "r1";
@@ -57,3 +59,24 @@ export const madeRun = Effect.fn("test.madeRun")(function* (
   yield* fs.makeDirectory(run.evidence, { recursive: true }).pipe(Effect.orDie);
   return run;
 });
+
+export { recordsAt } from "../../src/records";
+
+export class NoHostDb extends Data.TaggedError("NoHostDb")<{ readonly stateDir: string }> {}
+
+/**
+ * What a host on `stateDir` recorded, read over a connection of the test's own; a failure,
+ * which a poll retries, until that host has made `host.db`.
+ */
+export const hostRecords = <A, E>(stateDir: string, read: Effect.Effect<A, E, Records>) =>
+  Effect.gen(function* () {
+    if (!(yield* (yield* FileSystem.FileSystem).exists(`${stateDir}/host.db`).pipe(Effect.orDie)))
+      return yield* new NoHostDb({ stateDir });
+    return yield* read.pipe(Effect.provide(recordsReadLayer(stateDir)));
+  });
+
+export const deliveredTo = (stateDir: string, run: string) =>
+  hostRecords(stateDir, deliveriesOf(run));
+
+export const ledgerOf = (stateDir: string, terminalId: string) =>
+  hostRecords(stateDir, readLedger(terminalId));

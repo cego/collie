@@ -2,6 +2,8 @@
 // changes something. So: the journal has both turns, a proposal is recorded pending, and
 // nothing at all reached an agent — whatever authority the Run has granted.
 
+import { recordsAt } from "./support/records";
+import type { Records } from "../src/records";
 import * as Arr from "effect/Array";
 import { Effect, FileSystem, Path, Schema, type Scope, flow, Result } from "effect";
 import type { PlatformServices } from "../src/platform";
@@ -88,7 +90,7 @@ let setReply: (text: string) => Effect.Effect<void, PlatformError, FileSystem.Fi
 let originalPath: string;
 
 /** One test, in a Herd of its own with a host in it, and a `claude` that says what it is told. */
-const inWorld = <A, E>(body: Effect.Effect<A, E, PlatformServices | Scope.Scope>) =>
+const inWorld = <A, E>(body: Effect.Effect<A, E, PlatformServices | Records | Scope.Scope>) =>
   hosted("hw-steer-", (herd) =>
     Effect.gen(function* () {
       world = herd.world;
@@ -99,6 +101,7 @@ const inWorld = <A, E>(body: Effect.Effect<A, E, PlatformServices | Scope.Scope>
       yield* setReply("{}");
       herdKey = yield* herdOf(env.socketPath);
       return yield* body.pipe(
+        Effect.provide(recordsAt(stateDir)),
         Effect.ensuring(
           Effect.sync(() => {
             Bun.env.PATH = originalPath;

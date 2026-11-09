@@ -3,16 +3,19 @@
 // lines, never by rewriting them — a ledger whose past can be edited cannot answer
 // "was this already sent" after a crash, which is the only question it exists for.
 //
-// This module is the only writer of `deliveries.jsonl` and `budget.jsonl` — the second a
+// This module is the only writer of the ledgers and of `budget.jsonl` — the second a
 // record of every model call and what it cost, never a permission to make one.
 
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
-import { appendJournal, journalOf, readJournal, readJournalWhole } from "./journal";
+import { Context, Data, Effect, FileSystem, Layer, Path, Schema, flow, Result } from "effect";
+import * as Reactivity from "effect/reactivity/Reactivity";
+import * as SqlClient from "effect/sql/SqlClient";
+import { readJournal, type Journal } from "./journal";
 import { ensureLockDir, withLock } from "./lock";
+import { StoreWrites } from "./store-writes";
 import { nowIso, epochMs } from "./time";
 import { terminalBackend } from "./config";
 import { coreSocket } from "./hc";
@@ -153,55 +156,138 @@ export function causalKey(run: string, cause: Cause, intentVersion: number): str
 
 export const LEDGER_FILE = "deliveries.jsonl";
 
-/** The directory an incarnation's ledger lives in, keyed by herdr's own identity. */
+/** The key an incarnation's ledger is kept under, from herdr's own identity for it. */
 export function incarnationKey(terminalId: string): string {
   return digest(terminalId);
 }
 
-export const ledgerPath = Effect.fn("Steering.ledgerPath")(function* (
-  stateDir: string,
-  incarnation: string,
-) {
-  const path = yield* Path.Path;
-  return path.join(stateDir, "agents", incarnationKey(incarnation), LEDGER_FILE);
-});
+type HumanSubmit = Delivery & { readonly human: HumanDoor };
 
-/** Every incarnation's ledger this state dir has. */
-export const ledgerFiles = Effect.fn("Steering.ledgerFiles")(function* (stateDir: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const root = path.join(stateDir, "agents");
-  const names = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []));
-  // A ledger's directory is its incarnation's hash; a Run's own, of its launches, holds none.
-  return Arr.map(
-    Arr.filter(names, (name) => /^[0-9a-f]+$/.test(name)),
-    (name) => path.join(root, name, LEDGER_FILE),
+export interface DeliveriesApi {
+  readonly append: (line: LedgerLine) => Effect.Effect<void>;
+  /** One incarnation's ledger, oldest first, with the lines nobody can read counted. */
+  readonly ledger: (incarnation: string) => Effect.Effect<Journal<LedgerLine>>;
+  /**
+   * Every delivery about this Run, newest state each, in the order each was first written,
+   * across every incarnation it has had: an incarnation that exited after a reservation went
+   * `unknown` still has the entry blocking that causal key.
+   */
+  readonly ofRun: (run: string) => Effect.Effect<ReadonlyArray<Delivery>>;
+  /** Every Delivery of a human's words herdr took, at its first line saying so. */
+  readonly humanSubmits: Effect.Effect<ReadonlyArray<HumanSubmit>>;
+  /**
+   * The Runs a human has typed at behind Collie's back: those delivered to through an
+   * incarnation whose last word is a manual override.
+   */
+  readonly overridden: Effect.Effect<ReadonlySet<string>>;
+  /** Removes the ledgers every delivery of which is about one of `runs`. */
+  readonly forget: (runs: ReadonlyArray<string>) => Effect.Effect<void>;
+}
+
+/** The delivery ledgers, in the host's database (ADR-draft-collies-own-records-live-in-the-hosts-database). */
+export class Deliveries extends Context.Service<Deliveries, DeliveriesApi>()("collie/Deliveries") {}
+
+/** What a write to the ledgers invalidates. */
+export const DELIVERIES = "collie/deliveries";
+
+const encodeLedgerLine = flow(Schema.encodeResult(LedgerLineJson), Result.getOrThrow);
+const decodeLedgerLine = Schema.decodeUnknownOption(LedgerLineJson);
+const deliveriesIn = (rows: ReadonlyArray<{ readonly line: string }>) =>
+  Arr.filter(
+    Arr.flatMap(rows, (row) => Option.toArray(decodeLedgerLine(row.line))),
+    isDelivery,
   );
-});
 
-/**
- * The ledger's lock, held around a whole send so two Drivers cannot both find a causal
- * key free and both reserve it.
- */
-export function withLedgerLock<A, E, R>(file: string, effect: Effect.Effect<A, E, R>) {
-  return withLock(`${file}.lock`, Effect.fail(new LedgerBusy({ file })), effect);
-}
+/** Over the host's connection, or the door's own read-only one, to `host.db`. */
+export const deliveriesLayer = Layer.effect(Deliveries)(
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const reactivity = yield* Reactivity.Reactivity;
+    const told = Option.getOrUndefined(yield* Effect.serviceOption(StoreWrites));
+    const newest = (run: string) => sql<{ readonly line: string }>`
+      SELECT line FROM collie_deliveries
+      JOIN (
+        SELECT MIN(seq) AS first, MAX(seq) AS last FROM collie_deliveries
+        WHERE run = ${run} AND id IS NOT NULL GROUP BY ledger, id
+      ) ON seq = last
+      ORDER BY first
+    `;
+    return {
+      append: (line) =>
+        Effect.gen(function* () {
+          const ledger = incarnationKey(line.incarnation);
+          yield* sql`INSERT INTO collie_deliveries (ledger, line) VALUES (${ledger}, ${encodeLedgerLine(line)})`;
+          const runs = isDelivery(line)
+            ? [line.run]
+            : Arr.map(
+                yield* sql<{ readonly run: string }>`
+                  SELECT DISTINCT run FROM collie_deliveries WHERE ledger = ${ledger} AND run IS NOT NULL
+                `,
+                (row) => row.run,
+              );
+          told?.(runs);
+          yield* reactivity.invalidate([DELIVERIES]);
+        }).pipe(Effect.orDie),
+      ledger: (incarnation) =>
+        sql<{ readonly line: string }>`
+          SELECT line FROM collie_deliveries WHERE ledger = ${incarnationKey(incarnation)} ORDER BY seq
+        `.pipe(
+          Effect.map((rows) => {
+            const lines: LedgerLine[] = [];
+            let corrupt = 0;
+            for (const row of rows) {
+              const line = decodeLedgerLine(row.line);
+              if (Option.isSome(line)) lines.push(line.value);
+              else corrupt += 1;
+            }
+            return { lines, corrupt };
+          }),
+          Effect.orDie,
+        ),
+      ofRun: (run) => newest(run).pipe(Effect.map(deliveriesIn), Effect.orDie),
+      humanSubmits: sql<{ readonly line: string }>`
+        SELECT line FROM collie_deliveries WHERE seq IN (
+          SELECT MIN(seq) FROM collie_deliveries
+          WHERE human = 1 AND state IN ('submitted', 'acknowledged') GROUP BY id
+        ) ORDER BY seq
+      `.pipe(
+        Effect.map((rows) =>
+          Arr.flatMap(deliveriesIn(rows), (one) =>
+            one.human === undefined ? [] : [{ ...one, human: one.human }],
+          ),
+        ),
+        Effect.orDie,
+      ),
+      overridden: sql<{ readonly run: string }>`
+        SELECT DISTINCT run FROM collie_deliveries WHERE run IS NOT NULL AND ledger IN (
+          SELECT ledger FROM collie_deliveries WHERE kind = 'manual_override' AND seq IN (
+            SELECT MAX(seq) FROM collie_deliveries WHERE kind IS NOT NULL GROUP BY ledger
+          )
+        )
+      `.pipe(
+        Effect.map((rows) => new Set(Arr.map(rows, (row) => row.run))),
+        Effect.orDie,
+      ),
+      forget: (runs) =>
+        Effect.gen(function* () {
+          if (runs.length === 0) return;
+          yield* sql`
+            DELETE FROM collie_deliveries WHERE ledger IN (
+              SELECT ledger FROM collie_deliveries WHERE run IS NOT NULL GROUP BY ledger
+              HAVING SUM(run NOT IN ${sql.in(runs)}) = 0
+            )
+          `;
+          yield* reactivity.invalidate([DELIVERIES]);
+        }).pipe(Effect.orDie),
+    } satisfies DeliveriesApi;
+  }),
+);
 
-export class LedgerBusy extends Data.TaggedError("LedgerBusy")<{ file: string }> {
-  override get message() {
-    return `${this.file} is locked by another process`;
-  }
-}
+export const appendLine = (line: LedgerLine) => Deliveries.use((ledgers) => ledgers.append(line));
 
-export const appendLine = (file: string, line: LedgerLine) =>
-  appendJournal(file, LedgerLineJson, line);
-
-/**
- * Every line, oldest first. A half-written last line is skipped rather than failing the
- * read: an append interrupted mid-write is exactly the crash this journal exists to
- * survive, and refusing to read it would leave the crash unrecoverable.
- */
-export const readLedger = (file: string) => readJournal(file, LedgerLineJson);
+/** Every line of this incarnation's ledger, oldest first. */
+export const readLedger = (incarnation: string) =>
+  Effect.map(readLedgerWhole(incarnation), (ledger) => ledger.lines);
 
 /**
  * The ledger with its corruption counted. A delivery line that cannot be read is a
@@ -209,7 +295,8 @@ export const readLedger = (file: string) => readJournal(file, LedgerLineJson);
  * it was about until a human settles it — so the one caller that decides whether to send
  * reads it this way and refuses rather than sending into a gap.
  */
-export const readLedgerWhole = (file: string) => readJournalWhole(file, LedgerLineJson);
+export const readLedgerWhole = (incarnation: string) =>
+  Deliveries.use((ledgers) => ledgers.ledger(incarnation));
 
 /** The newest line for each delivery id, which is that delivery's current state. */
 export function newestById(lines: ReadonlyArray<LedgerLine>): Map<string, Delivery> {
@@ -218,83 +305,16 @@ export function newestById(lines: ReadonlyArray<LedgerLine>): Map<string, Delive
   return newest;
 }
 
-/**
- * Every delivery about this Run, newest state each, across every incarnation it has had.
- * Every ledger and not the live agents': an incarnation that exited after a reservation
- * went `unknown` still has the entry blocking that causal key.
- */
-export const deliveriesOf = Effect.fn("Steering.deliveriesOf")(function* (
-  stateDir: string,
-  run: string,
-) {
-  const found: Array<{ file: string; delivery: Delivery }> = [];
-  for (const file of yield* ledgerFiles(stateDir))
-    for (const delivery of newestById(yield* readLedger(file)).values())
-      if (delivery.run === run) found.push({ file, delivery });
-  return found;
+export const deliveriesOf = Effect.fn("Steering.deliveriesOf")(function* (run: string) {
+  return yield* Deliveries.use((ledgers) => ledgers.ofRun(run));
 });
 
-type HumanSubmit = Delivery & { readonly human: HumanDoor };
+export const humanSubmits = Deliveries.use((ledgers) => ledgers.humanSubmits);
 
-/** Each ledger's submits at the size it was read: a ledger only grows, so the same size holds the same. */
-export type LedgerScan = Map<
-  string,
-  { readonly size: bigint; readonly submits: ReadonlyArray<HumanSubmit> }
->;
+export const forgetDeliveries = (runs: ReadonlyArray<string>) =>
+  Deliveries.use((ledgers) => ledgers.forget(runs));
 
-/** Every Delivery of a human's words herdr took, at its first line saying so. */
-export const humanSubmits = Effect.fn("Steering.humanSubmits")(function* (
-  stateDir: string,
-  scanned: LedgerScan,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const files = yield* ledgerFiles(stateDir);
-  for (const file of scanned.keys()) if (!files.includes(file)) scanned.delete(file);
-  const first = new Map<string, HumanSubmit>();
-  for (const file of files) {
-    const size = yield* fs.stat(file).pipe(
-      Effect.map((info) => info.size),
-      Effect.option,
-    );
-    if (Option.isNone(size)) continue;
-    let known = scanned.get(file);
-    if (known?.size !== size.value) {
-      const raw = yield* fs.readFileString(file).pipe(Effect.option);
-      if (Option.isSome(raw)) {
-        known = {
-          size: size.value,
-          submits: submitsIn(journalOf(raw.value, LedgerLineJson).lines),
-        };
-        scanned.set(file, known);
-      }
-    }
-    for (const one of known?.submits ?? []) if (!first.has(one.id)) first.set(one.id, one);
-  }
-  return [...first.values()];
-});
-
-const submitsIn = (lines: ReadonlyArray<LedgerLine>): ReadonlyArray<HumanSubmit> => {
-  const first = new Map<string, HumanSubmit>();
-  for (const line of lines)
-    if (
-      isDelivery(line) &&
-      line.human !== undefined &&
-      SENT_STATES.has(line.state) &&
-      !first.has(line.id)
-    )
-      first.set(line.id, { ...line, human: line.human });
-  return [...first.values()];
-};
-
-/** Every delivery this state directory's ledgers hold, newest state each, read once for a board. */
-export const everyDelivery = Effect.fn("Steering.everyDelivery")(function* (stateDir: string) {
-  const found: Delivery[] = [];
-  for (const file of yield* ledgerFiles(stateDir))
-    found.push(
-      ...newestById(yield* readLedger(file).pipe(Effect.orElseSucceed(() => []))).values(),
-    );
-  return found;
-});
+export const overriddenRuns = Deliveries.use((ledgers) => ledgers.overridden);
 
 /**
  * The delivery, if any, that stops new work with this causal key going out: one still in

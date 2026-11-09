@@ -204,6 +204,7 @@ import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } fro
 import { Collecting, collectingLayer, type CollectingApi } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
 import { causalKey, deliveriesOf, SENT_STATES, toldLine } from "./steering";
+import type { Records } from "./records";
 import { readTask, withTaskLock, writeTask } from "./task";
 import { malformedIn, mentionedSkills, renderTemplate, skillMention, skillsIn } from "./template";
 import {
@@ -1467,7 +1468,7 @@ export interface AgentHost {
   readonly self?: ReadonlyArray<string>;
 }
 
-type AgentServices = FileSystem.FileSystem | Path.Path | PlatformServices | ForgeHttp;
+type AgentServices = FileSystem.FileSystem | Path.Path | PlatformServices | ForgeHttp | Records;
 
 const DEFAULT_POLL_MS = 2000;
 const READING_EVERY_MS = 60_000;
@@ -2625,11 +2626,11 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       const key = causalKey(launched.runId, { kind, ref: stemOf(launched) }, 0);
       // Only this agent's own ledger: another incarnation's is listed in no time order.
       const last = Arr.filter(
-        yield* deliveriesOf(host.env.stateDir, launched.runId),
-        ({ delivery }) =>
+        yield* deliveriesOf(launched.runId),
+        (delivery) =>
           delivery.causal_key === key &&
           delivery.incarnation === found.entry?.incarnation?.terminalId,
-      ).at(-1)?.delivery;
+      ).at(-1);
       // Settled as not sent, or refused by herdr on the last resend: not delivered either way.
       const resend =
         Option.getOrUndefined(
@@ -3259,12 +3260,11 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         if (!verifyIncarnation(entry, alive).ok) return null;
         const handed = { agent: entry.agent, delivered: true, detail: "" };
         const earlier = Arr.filter(
-          yield* deliveriesOf(host.env.stateDir, entry.runId),
-          ({ delivery }) =>
-            delivery.cause.kind === "handoff" && delivery.cause.ref === options.runId,
+          yield* deliveriesOf(entry.runId),
+          (delivery) => delivery.cause.kind === "handoff" && delivery.cause.ref === options.runId,
         );
         if (
-          Arr.some(earlier, ({ delivery }) =>
+          Arr.some(earlier, (delivery) =>
             Boolean(
               Option.getOrUndefined(
                 Option.map(Option.fromNullishOr(delivery.note), (present____) =>
@@ -3558,13 +3558,13 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             };
           const previous = Option.getOrUndefined(
             Arr.findFirst(
-              yield* deliveriesOf(host.env.stateDir, options.runId),
+              yield* deliveriesOf(options.runId),
               (one) =>
-                one.delivery.cause.kind === "steer" &&
-                one.delivery.cause.ref === options.request &&
-                !Arr.contains(["failed", "superseded"], one.delivery.state),
+                one.cause.kind === "steer" &&
+                one.cause.ref === options.request &&
+                !Arr.contains(["failed", "superseded"], one.state),
             ),
-          )?.delivery;
+          );
           if (previous !== undefined) {
             const result = SENT_STATES.has(previous.state)
               ? receipt(previous.agent, {

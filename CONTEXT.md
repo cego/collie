@@ -291,7 +291,7 @@ Output. Collie types it after the step's pointer, so a harness reviewing the age
 reads it as the user's request for exactly that. Not a permission rule, which would skip
 that review. Not **Authority**, which is what Collie may do to a Run.
 
-**Dispatcher** — The only code that sends text to an agent. Holds that agent's ledger lock
+**Dispatcher** — The only code that sends text to an agent. Holds that agent's ledger
 across the compaction decision, the composition and the send.
 
 **Incarnation** — An agent as one live process, identified by herdr's own `terminal_id` and

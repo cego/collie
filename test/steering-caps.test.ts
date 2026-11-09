@@ -10,7 +10,7 @@ import { Effect, FileSystem } from "effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { CAPABILITIES, gate, interruptKeys, needed } from "../src/steering-caps";
 import { transaction } from "../src/dispatcher";
-import { ledgerPath, readLedger } from "../src/steering";
+import { readLedger } from "../src/steering";
 import type { AgentEntry } from "../src/registry";
 import type { AgentInfo } from "../src/herdr";
 import { runEffect } from "./support/effect";
@@ -148,7 +148,7 @@ test("a refused mode is written down, and nothing reaches the agent", () =>
 
       expect(outcome).toMatchObject({ ok: false, reason: "failed" });
       expect(h.calls).toEqual([]);
-      const lines = yield* readLedger(yield* ledgerPath(stateDir, "term-1"));
+      const lines = yield* readLedger("term-1");
       expect(lines).toHaveLength(1);
       expect(lines[0]).toMatchObject({
         state: "failed",

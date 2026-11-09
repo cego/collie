@@ -190,7 +190,8 @@ import {
   type Watched,
 } from "./oversight";
 import { evaluationDeps } from "./evaluator";
-import { budgetPath, herdOf, humanSubmits, machineHerd, type LedgerScan } from "./steering";
+import { budgetPath, herdOf, humanSubmits, machineHerd } from "./steering";
+import { recordsLayer, type Records } from "./records";
 import { Steered } from "./delivery-queue";
 import type { JudgementDeps } from "./drift";
 import { finishedOnRecord, type Card } from "./cards";
@@ -3506,7 +3507,7 @@ export const hostLayer = (options: {
 }): Layer.Layer<
   Host | Notifier | Oversight | Reliance,
   never,
-  Store | PlatformServices | ForgeHttp
+  Store | Records | PlatformServices | ForgeHttp
 > =>
   Layer.effectContext(
     Effect.gen(function* () {
@@ -3518,9 +3519,10 @@ export const hostLayer = (options: {
         | FileSystem.FileSystem
         | Path.Path
         | ChildProcessSpawner.ChildProcessSpawner
-        | ForgeHttp;
+        | ForgeHttp
+        | Records;
       const services = yield* Effect.context<Collecting>();
-      const bun = yield* Effect.context<PlatformServices>();
+      const bun = yield* Effect.context<PlatformServices | Records>();
       const under = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
         Effect.provideContext(effect, services);
       const anySet = (runId: string, ...controls: ReadonlyArray<string>) =>
@@ -6016,6 +6018,7 @@ export type HostServices =
   | WorkflowEngine.WorkflowEngine
   | Host
   | Agents
+  | Records
   | FileSystem.FileSystem
   | Path.Path
   | ChildProcessSpawner.ChildProcessSpawner
@@ -6329,6 +6332,7 @@ export const foundationLayer = (options: {
   | Oversight
   | Reliance
   | Store
+  | Records
   | WorkflowEngine.WorkflowEngine
   | MessageStorage.MessageStorage
   | SqlClient.SqlClient
@@ -6338,7 +6342,11 @@ export const foundationLayer = (options: {
   PlatformServices
 > =>
   hostLayer(options).pipe(
-    Layer.provideMerge(storeLayer.pipe(Layer.provideMerge(engineLayer(options)))),
+    Layer.provideMerge(
+      recordsLayer.pipe(
+        Layer.provideMerge(storeLayer(options.dir).pipe(Layer.provideMerge(engineLayer(options)))),
+      ),
+    ),
     Layer.provideMerge(forgeHttpLayer),
   );
 
@@ -6373,7 +6381,7 @@ const makeRegistry: (
       Effect.orDie,
     ));
   // Captured, so placing a Run asks git and herdr without its callers providing either.
-  const bun = yield* Effect.context<PlatformServices | SecureRandom.SecureRandom>();
+  const bun = yield* Effect.context<PlatformServices | SecureRandom.SecureRandom | Records>();
 
   /**
    * Every `diff-target` as `mr:`, `branch:` or `worktree`, since every reader decides from
@@ -7907,11 +7915,10 @@ const makeRegistry: (
    * agent's pane, which its hook records as `external`, and a Delivery herdr took before
    * the host that sent it could set the question aside.
    */
-  const scannedLedgers: LedgerScan = new Map();
   const missedMessages = Effect.gen(function* () {
     const runs = Arr.dedupe(Arr.map(yield* store.supersedable, (row) => row.run));
     if (runs.length === 0) return;
-    const delivered = yield* humanSubmits(placing.env.stateDir, scannedLedgers);
+    const delivered = yield* humanSubmits;
     for (const runId of runs) {
       const rows = yield* store.asked(runId);
       const launches = yield* readLaunches(dir, runId).pipe(Effect.orElseSucceed(() => []));

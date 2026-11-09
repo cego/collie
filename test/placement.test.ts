@@ -8,6 +8,7 @@
 // The host here is the real registry, engine and agents over a stand-in herdr, and the
 // repository is a real git one, so the worktree is one git actually made.
 
+import { recordsAt } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
@@ -1508,7 +1509,7 @@ test(
         });
         expect(yield* fs.exists(`${roaming}-2`)).toBe(false);
         expect(yield* fs.readFileString(`${roaming}/left.txt`)).toBe("work");
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
@@ -3418,7 +3419,7 @@ test(
         expect(after).not.toBe("");
         expect(after).not.toBe(first);
         expect(layoutCalls(yield* rig.calls())).toEqual([]);
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );

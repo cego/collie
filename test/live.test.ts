@@ -4,17 +4,17 @@
 // about is unmarked rather than reassuringly marked clean.
 
 import * as Arr from "effect/Array";
-import { Effect, FileSystem, Path, Schema, flow, Result } from "effect";
+import { Effect, FileSystem, Layer, Path, Schema, flow, Result } from "effect";
 import { DriftReportSchema } from "../src/evaluator";
 import { expect, test } from "bun:test";
 import { appendCard, type Card } from "../src/cards";
 import { appendDrift } from "../src/drift";
-import { appendLine, ledgerPath } from "./support/live-paths";
-import { liveFor, pendingReportsPath, readPendingReports } from "../src/live";
+import { liveFor, pendingReportsPath, readPendingReports, type Ledgers } from "../src/live";
 import { DEFAULT_AUTHORITY, seedIntent, writeIntent } from "../src/intent";
 import { marksOf } from "../src/lines";
 import { proposalsPath, record as recordProposal } from "../src/proposals";
-import { herdOf } from "../src/steering";
+import { appendLine, deliveriesOf, herdOf, overriddenRuns } from "../src/steering";
+import { recordsAt } from "./support/records";
 import { runEffect } from "./support/effect";
 
 const encodeReport = flow(
@@ -58,13 +58,19 @@ const rig = Effect.fn("live.rig")(function* () {
   const stateDir = yield* fs.makeTempDirectoryScoped();
   const runDir = path.join(stateDir, "runs", "r1");
   yield* fs.makeDirectory(runDir, { recursive: true });
-  return { stateDir, runDir };
+  const records = yield* Layer.build(recordsAt(stateDir));
+  /** The ledgers as the board is given them, read from the host's own. */
+  const ledgers: Ledgers = {
+    overridden: overriddenRuns.pipe(Effect.provideContext(records)),
+    deliveriesOf: (run) => deliveriesOf(run).pipe(Effect.provideContext(records)),
+  };
+  return { stateDir, runDir, records, ledgers };
 });
 
 test("the Live region is the Selection's own cards, drift and deliveries", () =>
   runEffect(
     Effect.gen(function* () {
-      const { stateDir, runDir } = yield* rig();
+      const { stateDir, runDir, ledgers } = yield* rig();
       yield* appendCard(runDir, card());
       yield* appendDrift(runDir, {
         id: "d1",
@@ -81,6 +87,7 @@ test("the Live region is the Selection's own cards, drift and deliveries", () =>
 
       const { live } = yield* liveFor({
         stateDir,
+        ledgers,
         socketPath: null,
         run: { id: "r1", dir: runDir },
         runs: [{ id: "r1", dir: runDir, held: false, harnesses: [] }],
@@ -97,7 +104,7 @@ test("the Live region is the Selection's own cards, drift and deliveries", () =>
 test("one pass answers both: the region and the row's marks", () =>
   runEffect(
     Effect.gen(function* () {
-      const { stateDir, runDir } = yield* rig();
+      const { stateDir, runDir, ledgers } = yield* rig();
       yield* appendCard(runDir, card({ significance: "try-it" }));
       yield* appendDrift(runDir, {
         id: "d1",
@@ -116,6 +123,7 @@ test("one pass answers both: the region and the row's marks", () =>
       // asking twice was reading each Run's cards and drift twice a tick.
       const { live, marks } = yield* liveFor({
         stateDir,
+        ledgers,
         socketPath: null,
         run: { id: "r1", dir: runDir },
         runs: [{ id: "r1", dir: runDir, held: false, harnesses: [] }],
@@ -137,7 +145,7 @@ test("one pass answers both: the region and the row's marks", () =>
 test("a Run's marks come from its own journals and nowhere else", () =>
   runEffect(
     Effect.gen(function* () {
-      const { stateDir, runDir } = yield* rig();
+      const { stateDir, runDir, ledgers, records } = yield* rig();
       yield* appendCard(runDir, card({ significance: "try-it" }));
       yield* appendDrift(runDir, {
         id: "d1",
@@ -151,8 +159,7 @@ test("a Run's marks come from its own journals and nowhere else", () =>
         evidence_truncated: false,
         resolution: "open",
       });
-      const ledger = yield* ledgerPath(stateDir, "t1");
-      yield* appendLine(ledger, {
+      yield* appendLine({
         id: "s1",
         at: "2026-09-10T10:02:00.000Z",
         run: "r1",
@@ -166,18 +173,19 @@ test("a Run's marks come from its own journals and nowhere else", () =>
         intent_version: 1,
         attempt: 1,
         state: "submitted",
-      });
-      yield* appendLine(ledger, {
+      }).pipe(Effect.provideContext(records));
+      yield* appendLine({
         kind: "manual_override",
         at: "2026-09-10T10:03:00.000Z",
         incarnation: "t1",
         by: "human",
-      });
+      }).pipe(Effect.provideContext(records));
 
       // The marks are read whether or not the region is on screen: they are on a
       // History row too, and a View that draws no region still draws those.
       const { live, marks } = yield* liveFor({
         stateDir,
+        ledgers,
         socketPath: null,
         run: null,
         runs: [{ id: "r1", dir: runDir, held: true, harnesses: [] }],
@@ -199,7 +207,7 @@ test("a Run's marks come from its own journals and nowhere else", () =>
 test("correcting a Run nobody can prove they own says so on the row, permanently", () =>
   runEffect(
     Effect.gen(function* () {
-      const { stateDir, runDir } = yield* rig();
+      const { stateDir, runDir, ledgers } = yield* rig();
       // SPEC §7.5: without attribution, `auto_correct` is honoured only with
       // `exclusive_steering` **plus** a permanent row warning. The gate was there; the
       // disclosure was not, so a human could receive automatic corrections to an agent
@@ -215,6 +223,7 @@ test("correcting a Run nobody can prove they own says so on the row, permanently
       const marked = { id: "r1", dir: runDir, held: false, harnesses: ["claude"] };
       const on = yield* liveFor({
         stateDir,
+        ledgers,
         socketPath: null,
         run: null,
         runs: [marked],
@@ -229,6 +238,7 @@ test("correcting a Run nobody can prove they own says so on the row, permanently
       yield* writeIntent(runDir, seedIntent("r1", {}));
       const off = yield* liveFor({
         stateDir,
+        ledgers,
         socketPath: null,
         run: null,
         runs: [marked],
@@ -241,9 +251,10 @@ test("correcting a Run nobody can prove they own says so on the row, permanently
 test("a Run with nothing recorded about it has no marks at all", () =>
   runEffect(
     Effect.gen(function* () {
-      const { stateDir, runDir } = yield* rig();
+      const { stateDir, runDir, ledgers } = yield* rig();
       const { marks } = yield* liveFor({
         stateDir,
+        ledgers,
         socketPath: null,
         run: null,
         runs: [{ id: "r1", dir: runDir, held: false, harnesses: [] }],
@@ -258,7 +269,7 @@ test("an undelivered report is read for its Run and never delivered by reading i
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const { stateDir } = yield* rig();
+      const { stateDir, ledgers } = yield* rig();
       const file = yield* pendingReportsPath(stateDir, "herd1", "r1");
       yield* fs.makeDirectory(path.dirname(file), { recursive: true });
       yield* fs.writeFileString(
@@ -290,7 +301,7 @@ test("a proposal about the installation is drawn whatever row is selected", () =
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const { stateDir, runDir } = yield* rig();
+      const { stateDir, runDir, ledgers } = yield* rig();
       // A socket path is what names a Herd, so the proposal is filed under the key this
       // state directory resolves to rather than one the test picked.
       const socketPath = path.join(stateDir, "herdr.sock");
@@ -312,6 +323,7 @@ test("a proposal about the installation is drawn whatever row is selected", () =
       for (const selected of [null, { id: "r1", dir: runDir }]) {
         const { live } = yield* liveFor({
           stateDir,
+          ledgers,
           socketPath,
           run: selected,
           runs: [{ id: "r1", dir: runDir, held: false, harnesses: [] }],

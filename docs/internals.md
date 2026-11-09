@@ -1262,7 +1262,7 @@ boundary `turnEnded` in `agents.ts` polls herdr's status first, with no budget w
 agent is `working` or `blocked`, and only then samples its context, asks it to compact or
 sends the step. A status herdr cannot give ends the wait, and so does a stop of the Run,
 which sends nothing. The wait is outside the Dispatcher's transaction, because that holds
-the agent's ledger lock and a steer would otherwise wait for the turn to end. The Run log
+the agent's ledger and a steer would otherwise wait for the turn to end. The Run log
 says once that the step waits, and how long it waited.
 
 Only sending the compaction request takes the Dispatcher's transaction. Reading the
@@ -1382,12 +1382,12 @@ prompt, a repair, a nudge, two hand-offs and a compaction request — none of th
 the others, so a hand-off from the board and a nudge could land in one pane
 in either order.
 
-`Dispatcher.transaction(deps, entry, body)` holds one agent's ledger lock for the whole of
+`Dispatcher.transaction(deps, entry, body)` holds one agent's ledger for the whole of
 what a caller wants to do with it: it revalidates the incarnation against a fresh
-`agent list`, hands `body` a `Channel` bound to that identity, and releases the lock when
-`body` returns. A channel used after its transaction closes, or a second transaction for
-one agent in one process, is a defect rather than a runtime error — the second would
-deadlock on the lock that makes the first safe.
+`agent list`, hands `body` a `Channel` bound to that identity, and lets the ledger go when
+`body` returns. Only the host writes a ledger, so holding one is the host's own: a second
+transaction for that agent fails at once, saying the ledger is already open, and a channel
+used after its transaction closes is a defect.
 
 `channel.submit(text, draft)` writes `reserved` **before** it calls herdr and settles it
 after: `submitted` where herdr took it, `failed` where herdr refused, `unknown` where the
@@ -1452,11 +1452,16 @@ launch recorded, proves nothing
 
 ## Steering ledgers
 
-Two append-only journals, both written only by `steering.ts`, both read by deriving state
+Two append-only records, both written only by `steering.ts`, both read by deriving state
 from their lines rather than by rewriting them:
 
-- `<state>/agents/<incarnation>/deliveries.jsonl` — one line per state change of one
-  message to one agent, under a lock per incarnation. `reserved` is written **before**
+- `collie_deliveries` in the host's `host.db` — one row per state change of one message to
+  one agent, in one ledger per incarnation, written only by the host
+  ([ADR-draft-collies-own-records-live-in-the-hosts-database](adr/draft-collies-own-records-live-in-the-hosts-database.md)).
+  Other processes read it through the host's `deliveries` and `overridden` requests; the
+  first host on a state directory imports every `agents/<incarnation>/deliveries.jsonl` once
+  and leaves the files in place. When retention forgets a Task, the ledgers that name only
+  its Runs go with it. `reserved` is written **before**
   herdr is called, so a crash leaves a durable record that something may have been sent;
   `submitted` and `acknowledged` are separate facts and are never collapsed.
   A `reserved` line nobody settled becomes `unknown`, which blocks further deliveries

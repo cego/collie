@@ -1,4 +1,6 @@
 import * as Order from "effect/Order";
+import { recordsAt } from "./support/records";
+import type { Records } from "../src/records";
 import * as Cause from "effect/Cause";
 // What native chat may ask Collie. Two things must hold however the board is being
 // looked at: the reads cover the whole Herd, and they say when they could not carry all
@@ -55,7 +57,7 @@ import {
   type ProposalRecord,
 } from "../src/proposals";
 import type { Action } from "../src/actions";
-import { appendLine, herdOf, ledgerPath } from "../src/steering";
+import { appendLine, herdOf } from "../src/steering";
 import { chatPath, HEARD_MAX, hear, writeChat } from "../src/chat";
 import { selectionPath, writeSelection } from "../src/selection";
 import { newTask, writeTask } from "../src/task";
@@ -103,7 +105,7 @@ const call = (name: string, input: JsonObject = {}) =>
   });
 
 /** One test, in a Herd of its own with a host in it. */
-const inWorld = <A, E>(body: Effect.Effect<A, E, PlatformServices | Scope.Scope>) =>
+const inWorld = <A, E>(body: Effect.Effect<A, E, PlatformServices | Records | Scope.Scope>) =>
   hosted("hw-tools-", (herd) =>
     Effect.gen(function* () {
       world = herd.world;
@@ -111,7 +113,7 @@ const inWorld = <A, E>(body: Effect.Effect<A, E, PlatformServices | Scope.Scope>
       project = world.project;
       env = herd.env;
       KEY = yield* herdOf(env.socketPath);
-      return yield* body;
+      return yield* body.pipe(Effect.provide(recordsAt(stateDir)));
     }),
   );
 
@@ -2062,7 +2064,7 @@ test("the host answers a Flock chat's read with Native chat's own answer, delive
       );
       expect(yield* readThroughHost("collie_run", { run: run.id })).toBe(native);
 
-      yield* appendLine(yield* ledgerPath(stateDir, "term-1"), {
+      yield* appendLine({
         id: "d-1",
         at: "2026-10-07T10:00:00.000Z",
         run: run.id,

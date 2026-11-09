@@ -16,7 +16,7 @@ import { Launched } from "../src/launches";
 import { holdsBudgetOf, memoryWaitOf, waitLine } from "../src/memory-wait";
 import { everyRegistered } from "../src/registry";
 import { readVerifications } from "../src/verify";
-import { deliveriesOf } from "../src/steering";
+import { deliveredTo } from "./support/records";
 import { evidenceDir } from "../src/engine";
 import { exec } from "./support/command";
 import { stopHost, until } from "./support/host";
@@ -145,8 +145,8 @@ test(
             });
             expect(yield* ran()).toBe(before + 1);
             expect(
-              Arr.filter(yield* deliveriesOf(world.state, runId), (one) =>
-                pipe_(one.delivery.cause.ref, Str.startsWith("verify-")),
+              Arr.filter(yield* deliveredTo(world.state, runId), (one) =>
+                pipe_(one.cause.ref, Str.startsWith("verify-")),
               ),
             ).toHaveLength(1);
             expect(yield* waiting()).toBeNull();

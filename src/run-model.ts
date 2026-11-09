@@ -11,7 +11,7 @@ import type { RunRevision, TaskView } from "./board-model";
 import { readBranchHead } from "./board";
 import { shell } from "./mr";
 import type { RunFacts } from "./runs";
-import { StoreWrites } from "./store";
+import { StoreWrites } from "./store-writes";
 import { workSourceOf } from "./strategies";
 
 /** A path under a Run's own directories, by its Run. */

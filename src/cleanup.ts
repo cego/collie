@@ -18,6 +18,7 @@ import {
   Result,
 } from "effect";
 import type { PlatformServices } from "./platform";
+import type { Records } from "./records";
 import {
   FrontDoor,
   mrLabel,
@@ -53,7 +54,7 @@ import {
 import { readForge, readMrStates } from "./merges";
 import { latest, readDispositions } from "./disposition";
 import { repositoryOf } from "./strategies";
-import { LEDGER_FILE, ledgerPath, newestById, readLedger } from "./steering";
+import { forgetDeliveries, LEDGER_FILE, newestById, readLedger } from "./steering";
 import { readQueue } from "./delivery-queue";
 import { desktopVerdicts, trimUsage, type DesktopOwn } from "./desktop";
 import {
@@ -92,12 +93,12 @@ export interface Sweeper {
       retry?: ReadonlyArray<CleanupItem>;
     },
     never,
-    PlatformServices
+    PlatformServices | Records
   >;
   /** Removes `item` if it still should go, answering with the bytes freed or why it stays. */
   readonly remove: (
     item: CleanupItem,
-  ) => Effect.Effect<{ freed: number } | { kept: string }, never, PlatformServices>;
+  ) => Effect.Effect<{ freed: number } | { kept: string }, never, PlatformServices | Records>;
 }
 
 /** `sweeper`, judging and removing through `fs`. */
@@ -1330,7 +1331,7 @@ export const idleAgentsSweeper = (opts: {
   /** Why `one` stays, or how long it has been idle since its Run finished. */
   const verdict = (
     one: Candidate,
-  ): Effect.Effect<{ keep: string } | { idleFor: number }, never, PlatformServices> =>
+  ): Effect.Effect<{ keep: string } | { idleFor: number }, never, PlatformServices | Records> =>
     Effect.gen(function* () {
       if (!IDLE.has(one.at.status)) return { keep: one.at.status ?? "unknown" };
       const now = yield* Clock.currentTimeMillis;
@@ -1340,9 +1341,7 @@ export const idleAgentsSweeper = (opts: {
       const idleFor = now - Math.max(since, finished);
       if (idleFor < opts.idleCloseMs)
         return { keep: `idle ${minutes(idleFor)} of ${minutes(opts.idleCloseMs)} min` };
-      const ledger = yield* readLedger(yield* ledgerPath(opts.stateDir, one.at.terminalId)).pipe(
-        Effect.orElseSucceed(() => []),
-      );
+      const ledger = yield* readLedger(one.at.terminalId);
       if (Arr.some([...newestById(ledger).values()], (delivery) => QUEUED.has(delivery.state)))
         return { keep: "a Delivery to it is queued" };
       const queued = yield* readQueue(launchDir(opts.stateDir, one.run.id)).pipe(Effect.option);
@@ -1763,6 +1762,7 @@ export const retentionSweeper = (opts: {
             );
             // Rows first: a file left behind without its row is the no-row rule's next sweep.
             const gone = yield* opts.retire(judged.ids);
+            yield* forgetDeliveries(gone);
             const goneSet = new Set(gone);
             const markers = Arr.flatMap(gone, (id) =>
               Arr.map(MARKER_KINDS, (one) => `${opts.stateDir}/${one}.${id}`),

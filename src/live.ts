@@ -10,7 +10,8 @@
 
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
-import { Clock, Effect, Path, Schema } from "effect";
+import { Clock, Effect, FileSystem, Path, Schema } from "effect";
+import type { ChildProcessSpawner } from "effect/process";
 import type { AgentEntry } from "./registry";
 import type { RunFacts } from "./runs";
 import { newest, readCards, type Card } from "./cards";
@@ -33,16 +34,7 @@ import {
   read as readProposals,
   type ProposalRecord,
 } from "./proposals";
-import {
-  deliveriesOf,
-  herdOf,
-  herdDir,
-  ledgerFiles,
-  newestById,
-  overrideActive,
-  readLedger,
-  type Delivery,
-} from "./steering";
+import { herdOf, herdDir, type Delivery } from "./steering";
 
 /** How many cards the region draws. Newest first, and a screen's worth is the point. */
 const CARDS = 5;
@@ -154,9 +146,19 @@ export interface BoardLive {
  * say what has been happening. The marks are facts, not a verdict: a mark is what makes
  * a row worth selecting, so a Run nobody has found anything about must not carry one.
  */
+/** What the host's delivery ledgers say, as the board reads them from it. */
+export interface Ledgers {
+  /** The Runs a human has typed at behind Collie's back. */
+  readonly overridden: Effect.Effect<ReadonlySet<string>, never, Client>;
+  readonly deliveriesOf: (run: string) => Effect.Effect<ReadonlyArray<Delivery>, never, Client>;
+}
+
+type Client = FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner;
+
 export const liveFor = Effect.fn("Live.for")(function* (opts: {
   stateDir: string;
   socketPath: string | null;
+  ledgers: Ledgers;
   /** The Selection's Run, where one is selected. */
   run: LiveRun | null;
   /** Every Run on the board: what the marks are for, and the Herd-wide cards. */
@@ -168,7 +170,7 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
   const key = yield* herdOrNull(opts.socketPath);
   const proposalFile = key === null ? null : yield* proposalsPath(opts.stateDir, key);
   const lines = proposalFile === null ? [] : yield* readProposals(proposalFile);
-  const overridden = yield* runsUnderOverride(opts.stateDir);
+  const overridden = yield* opts.ledgers.overridden;
 
   // One read of each Run's own journals, kept for whichever of the two wants it.
   const cardsOf = new Map<string, Card[]>();
@@ -222,7 +224,7 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
         run: one.id,
         cards: newest(own).slice(-CARDS).reverse(),
         drift: openReports(yield* readDrift(one.dir)),
-        deliveries: Arr.map(yield* deliveriesOf(opts.stateDir, one.id), (found) => found.delivery),
+        deliveries: [...(yield* opts.ledgers.deliveriesOf(one.id))],
         proposals: [...pendingFor(lines, one.id, now), ...herdWide],
         pending: key === null ? [] : yield* readPendingReports(opts.stateDir, key, one.id),
       };
@@ -249,19 +251,4 @@ const unattributed = Effect.fn("Live.unattributed")(function* (run: MarkedRun) {
     run.harnesses,
     (harness) => capabilitiesOf(harness)?.attribution?.status !== "proven",
   );
-});
-
-/**
- * The Runs a human has typed at behind Collie's back. An override is recorded against an
- * incarnation, so which Runs it is about is what that incarnation was delivered for —
- * which is the ledger's own answer rather than a second index of it.
- */
-const runsUnderOverride = Effect.fn("Live.runsUnderOverride")(function* (stateDir: string) {
-  const runs = new Set<string>();
-  for (const file of yield* ledgerFiles(stateDir)) {
-    const lines = yield* readLedger(file);
-    if (!overrideActive(lines)) continue;
-    for (const delivery of newestById(lines).values()) runs.add(delivery.run);
-  }
-  return runs;
 });

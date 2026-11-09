@@ -47,9 +47,8 @@ import { connect } from "../src/hc";
 import { Herdr } from "../src/herdr";
 import { ownerOf } from "../src/host";
 import { BOARD_TERMINAL } from "../src/side-jobs";
-import { carryOutProposal } from "../src/operations";
 import { readIntent } from "../src/intent";
-import { startRun } from "../src/lifecycle";
+import { confirmProposed, startRun } from "../src/lifecycle";
 import {
   append as appendNews,
   newsPath,
@@ -311,9 +310,11 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
     `${waiting.length} pending`,
   );
   if (one !== undefined) {
-    const replay = yield* carryOutProposal(env, one.id, one.content_hash, {
-      origin: "chat",
-      requestId: "probe-replay",
+    const replay = yield* confirmProposed(env, {
+      door: { origin: "chat" },
+      proposal: one.id,
+      hash: one.content_hash,
+      request: "probe-replay",
     });
     const after = yield* readIntent(mine.dir);
     say(

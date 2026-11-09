@@ -6,7 +6,7 @@ import { Effect, FileSystem, Option, Schema, Stream, flow, Result } from "effect
 import { frontDoor, socketOf } from "../src/host";
 import { readLaunches } from "../src/launches";
 import { everyRegistered } from "../src/registry";
-import { deliveriesOf } from "../src/steering";
+import { deliveredTo } from "./support/records";
 import { collie, proves } from "./support/world";
 import { until } from "./support/host";
 import { recordIn } from "../src/board-model";
@@ -342,8 +342,8 @@ test(
           );
           const { runId } = runIdOf(start.envelope.data);
           yield* until(
-            () => deliveriesOf(world.state, runId),
-            (all) => Arr.some(all, (one) => one.delivery.state === "deferred"),
+            () => deliveredTo(world.state, runId),
+            (all) => Arr.some(all, (one) => one.state === "deferred"),
           );
           const told = yield* collie(world, ["run", "steer", runId, "Check the race first."]);
           expect(told.envelope).toMatchObject({ ok: true });

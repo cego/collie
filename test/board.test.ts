@@ -66,14 +66,14 @@ import { checkSentence, followLog } from "../src/checks";
 import { encodeCheckRecord, runningChecksDir } from "../src/check-processes";
 import { readEnv } from "../src/env";
 import type { AgentInfo } from "../src/herdr";
-import { toldIn, toldLine, type Delivery } from "../src/steering";
+import { appendLine, toldIn, toldLine, type Delivery } from "../src/steering";
 import { herdLines } from "../src/toolkit";
 import { append as appendProposal, type ProposalLine } from "../src/proposals";
 import type { AgentEntry } from "../src/registry";
 import { factsOfView, type RunFacts } from "../src/runs";
 import type { RunView } from "../src/engine";
 import type { TaskRecord } from "../src/task";
-import { runEffect } from "./support/effect";
+import { memoryRecords, runEffect } from "./support/effect";
 import { madeRun } from "./support/records";
 import { collie, proves } from "./support/world";
 import { stopHost, until } from "./support/host";
@@ -2648,7 +2648,12 @@ const steerAt = (at: string, state: Delivery["state"] = "submitted"): Delivery =
 const reopened = Effect.fn("board.reopened")(function* (
   status: AgentInfo["status"],
   steeredAt = "2026-09-14T10:02:00Z",
-  over: Partial<Parameters<typeof buildBoard>[0]> = {},
+  {
+    delivered = steerAt(steeredAt),
+    ...over
+  }: Partial<Parameters<typeof buildBoard>[0]> & {
+    delivered?: Delivery;
+  } = {},
   passedAt?: string,
 ) {
   const { dir, env } = yield* scratch();
@@ -2665,14 +2670,14 @@ const reopened = Effect.fn("board.reopened")(function* (
     `${dir}/agents/${run.id}/agents.log`,
     'builder: told "merge and tag it"\n',
   );
+  yield* appendLine(delivered);
   const views = yield* board(env, [run], {
     alive: [agent("builder", status)],
     registered: [registered("builder", run.id)],
-    deliveries: [steerAt(steeredAt)],
     ...over,
   });
   return views[0]!;
-});
+}, Effect.provide(memoryRecords));
 
 test("a succeeded Run whose agent works on what it was told after it ended is Working", () =>
   runEffect(
@@ -2825,13 +2830,13 @@ test("only a steer herdr took, dated after the Run ended, reopens it", () =>
     Effect.gen(function* () {
       const at = "2026-09-14T10:02:00Z";
       for (const state of ["reserved", "deferred", "failed", "unknown"] as const) {
-        const card = yield* reopened("working", at, { deliveries: [steerAt(at, state)] });
+        const card = yield* reopened("working", at, { delivered: steerAt(at, state) });
         expect([state, card.reopened]).toEqual([state, null]);
       }
       const step = { ...steerAt(at), cause: { kind: "step" as const, ref: "build" } };
-      expect((yield* reopened("working", at, { deliveries: [step] })).reopened).toBeNull();
+      expect((yield* reopened("working", at, { delivered: step })).reopened).toBeNull();
       expect(
-        (yield* reopened("working", at, { deliveries: [steerAt(at, "acknowledged")] })).reopened,
+        (yield* reopened("working", at, { delivered: steerAt(at, "acknowledged") })).reopened,
       ).not.toBeNull();
     }),
   ));

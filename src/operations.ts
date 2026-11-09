@@ -53,7 +53,6 @@ import { readIntent, type Authority } from "./intent";
 import {
   appendLine,
   budgetPath,
-  ledgerPath,
   overrideActive,
   readLedger,
   reserve,
@@ -829,10 +828,9 @@ export const clearOverride = Effect.fn("operations.clearOverride")(function* (
     Option.getOrUndefined(Arr.findFirst(live, (a) => a.name === agent))?.terminalId ?? null;
   if (terminalId === null)
     return err("invalid_state", `herdr has no live agent "${agent}" to clear an override on.`);
-  const file = yield* ledgerPath(stateDir, terminalId);
-  if (!overrideActive(yield* readLedger(file)))
+  if (!overrideActive(yield* readLedger(terminalId)))
     return err("invalid_state", `"${agent}" is not under a manual override.`);
-  yield* appendLine(file, {
+  yield* appendLine({
     kind: "override_cleared",
     at: yield* nowIso,
     incarnation: terminalId,

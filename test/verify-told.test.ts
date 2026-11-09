@@ -12,7 +12,7 @@ import { connect } from "../src/host";
 import { resetExecutors } from "../src/executors";
 import { Launched } from "../src/launches";
 import { everyRegistered } from "../src/registry";
-import { deliveriesOf } from "../src/steering";
+import { deliveredTo } from "./support/records";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { root, stopHost, until } from "./support/host";
@@ -133,9 +133,9 @@ test(
               .pipe(Effect.orDie);
           const asAgent = { HERDR_PANE_ID: pane };
           const told = () =>
-            deliveriesOf(world.state, runId).pipe(
+            deliveredTo(world.state, runId).pipe(
               Effect.map((all) =>
-                Arr.filter(all, (one) => pipe_(one.delivery.cause.ref, Str.startsWith("verify-"))),
+                Arr.filter(all, (one) => pipe_(one.cause.ref, Str.startsWith("verify-"))),
               ),
             );
 
@@ -151,7 +151,7 @@ test(
           expect(ran.ran).toBe(true);
           const [one, ...more] = yield* told();
           expect(more).toEqual([]);
-          expect(one!.delivery).toMatchObject({
+          expect(one!).toMatchObject({
             agent: launched.agent,
             mode: "boundary",
             cause: { kind: "steer", ref: `verify-${ran.verification.id}` },

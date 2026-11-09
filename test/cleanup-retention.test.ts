@@ -9,6 +9,7 @@ import { retentionSweeper, sweep } from "../src/cleanup";
 import { Herdr } from "../src/herdr";
 import type { RunFacts } from "../src/runs";
 import { readTask, writeTask, type TaskRecord } from "../src/task";
+import { appendLine, deliveriesOf, readLedger, type Delivery } from "../src/steering";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
 import { runFacts } from "./support/records";
@@ -86,6 +87,37 @@ test("a Task whose last Run ended 31 days ago is forgotten: its rows, then its f
       for (const gone of ["runs/r1", "agents/r1", "evidence/r1", "stop.r1", "agents/abc"])
         expect([gone, yield* fs.exists(`${rig.stateDir}/${gone}`)]).toEqual([gone, false]);
       expect(yield* readTask(rig.stateDir, "task-1")).toBeNull();
+    }),
+  ));
+
+const deliveredTo = (run: string, incarnation: string): Delivery => ({
+  id: `d-${run}-${incarnation}`,
+  at: "2026-09-01T00:00:00.000Z",
+  run,
+  incarnation,
+  agent: "builder",
+  causal_key: `k-${run}`,
+  request_id: "q",
+  cause: { kind: "steer", ref: "s" },
+  mode: "boundary",
+  text_hash: "h",
+  intent_version: 1,
+  attempt: 1,
+  state: "acknowledged",
+});
+
+test("a forgotten Task's deliveries go with its rows, and a ledger another Run shares stays", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const ended = yield* arranged(31);
+      yield* appendLine(deliveredTo("r1", "term-own"));
+      yield* appendLine(deliveredTo("r1", "term-shared"));
+      yield* appendLine(deliveredTo("r2", "term-shared"));
+
+      yield* sweep([sweeper([ended])], rig.stateDir, "host");
+      expect(yield* readLedger("term-own")).toEqual([]);
+      expect(Arr.map(yield* deliveriesOf("r1"), (one) => one.incarnation)).toEqual(["term-shared"]);
+      expect(yield* deliveriesOf("r2")).toHaveLength(1);
     }),
   ));
 

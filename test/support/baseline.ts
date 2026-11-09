@@ -119,6 +119,7 @@ import { findingsIn } from "../../src/output";
 import { FINGERPRINT_MAX_BYTES, collect, fingerprint, readVerifications } from "../../src/verify";
 import { inputsFor, offersFrom } from "../../src/offers";
 import { Store, storeLayer } from "../../src/store";
+import { recordsAt, type Records } from "../../src/records";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import { everyRegistered, registerAgent, registryPath, scopeFor } from "../../src/registry";
@@ -269,6 +270,7 @@ const session = <A, E>(
     | Children
     | Host
     | Store
+    | Records
     | SqlClient.SqlClient
     | FileSystem.FileSystem
     | Path.Path
@@ -352,7 +354,7 @@ const laneNow = (runId: string, state?: RunState) => session(laneIn(runId, state
 const laneRead = (runId: string) =>
   laneIn(runId).pipe(
     Effect.provide(
-      storeLayer.pipe(
+      storeLayer().pipe(
         Layer.provide(
           SqliteClient.layer({ filename: `${dir}/host.db` }).pipe(
             Layer.orDie,
@@ -907,9 +909,8 @@ scenario(
         expect((yield* prompts()).at(-1)).toContain("From implementer of r-impl on laptop.");
         expect(
           Arr.some(
-            yield* deliveriesOf(hostOf().env.stateDir, "r-plan"),
-            (one) =>
-              one.delivery.cause.ref === "planner-question" && SENT_STATES.has(one.delivery.state),
+            yield* deliveriesOf("r-plan").pipe(Effect.provide(recordsAt(dir))),
+            (one) => one.cause.ref === "planner-question" && SENT_STATES.has(one.state),
           ),
         ).toBe(true);
       }),

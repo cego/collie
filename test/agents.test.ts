@@ -72,7 +72,8 @@ import { readDrift } from "../src/drift";
 import { FixOutputSchema, SynthesisSchema } from "../src/output";
 import { Triage } from "../workflows/retrospective";
 import { seedIntent, writeIntent } from "../src/intent";
-import { appendLine, deliveriesOf, herdOf, readLedger, reconcile } from "../src/steering";
+import { appendLine, herdOf, reconcile } from "../src/steering";
+import { deliveredTo, ledgerOf, recordsAt } from "./support/records";
 import { readLaunches } from "../src/launches";
 import { Store } from "../src/store";
 import type { AuditLine } from "../src/audit";
@@ -1218,8 +1219,7 @@ test(
                 Effect.provideService(Path.Path, yield* Path.Path),
                 Effect.map(
                   (found) =>
-                    found.length > 0 &&
-                    Arr.every(found, (one) => one.delivery.state === "acknowledged"),
+                    found.length > 0 && Arr.every(found, (one) => one.state === "acknowledged"),
                 ),
               ),
             );
@@ -1283,8 +1283,7 @@ test(
                 Effect.provideService(Path.Path, yield* Path.Path),
                 Effect.map(
                   (found) =>
-                    found.length > 0 &&
-                    Arr.every(found, (one) => one.delivery.state === "acknowledged"),
+                    found.length > 0 && Arr.every(found, (one) => one.state === "acknowledged"),
                 ),
               ),
             );
@@ -1381,8 +1380,7 @@ test(
                 Effect.provideService(Path.Path, yield* Path.Path),
                 Effect.map(
                   (found) =>
-                    found.length > 0 &&
-                    Arr.every(found, (one) => one.delivery.state === "acknowledged"),
+                    found.length > 0 && Arr.every(found, (one) => one.state === "acknowledged"),
                 ),
               ),
             );
@@ -2066,8 +2064,9 @@ const statusNow = (runId: string) =>
   );
 
 const steps = (runId: string) =>
-  deliveriesOf(hostOf().env.stateDir, runId).pipe(
-    Effect.map((found) => Arr.filter(found, (one) => one.delivery.cause.kind === "step")),
+  deliveredTo(dir, runId).pipe(
+    Effect.map((found) => Arr.filter(found, (one) => one.cause.kind === "step")),
+    Effect.orDie,
   );
 
 test("a pane that is busy when the step's prompt goes out is waited out, and the work is one prompt", () =>
@@ -2082,7 +2081,7 @@ test("a pane that is busy when the step's prompt goes out is waited out, and the
       expect(result._tag === "Success" && result.success.note).toBe("after the dialog");
       // Two refused and one taken, all of them one delivery.
       expect(sent(yield* rig.calls(), "Your task for this step")).toBe(3);
-      expect(Arr.map(yield* steps("r1"), (one) => one.delivery.state)).toEqual(["acknowledged"]);
+      expect(Arr.map(yield* steps("r1"), (one) => one.state)).toEqual(["acknowledged"]);
       expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
     }),
   ));
@@ -2105,13 +2104,13 @@ test(
         expect(why).toMatch(/agent_blocked held for \d+s over \d+ attempts/);
         expect(why).toContain(promptPath("r1"));
         expect(why).toContain("collie run resume r1");
-        expect(Arr.map(yield* steps("r1"), (one) => one.delivery.state)).toEqual(["failed"]);
+        expect(Arr.map(yield* steps("r1"), (one) => one.state)).toEqual(["failed"]);
 
         // The dialog has gone. The same agent is given the same prompt, and nothing new starts.
         const result = yield* releasedInto("r1");
         expect(result._tag === "Success" && result.success.note).toBe("resumed");
         expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
-        expect(Arr.map(yield* steps("r1"), (one) => one.delivery.state)).toEqual(["acknowledged"]);
+        expect(Arr.map(yield* steps("r1"), (one) => one.state)).toEqual(["acknowledged"]);
         expect(yield* fs.exists(controlPath(dir, PARKED, "r1"))).toBe(false);
       }),
     ),
@@ -3468,16 +3467,16 @@ test("a hand-off nobody can say arrived parks until a human says what became of 
       );
       expect(sent(yield* rig.calls(), "the review is ready")).toBe(0);
 
-      const [held] = yield* deliveriesOf(rig.pluginEnv().stateDir, "r-building");
+      const [held] = yield* deliveredTo(dir, "r-building");
       const settled = reconcile(
-        yield* readLedger(held!.file),
-        held!.delivery.id,
+        yield* ledgerOf(dir, held!.incarnation),
+        held!.id,
         "sent",
         "tester",
         "2026-09-23T10:01:00Z",
       );
       if ("error" in settled) throw new Error(settled.error);
-      yield* appendLine(held!.file, settled);
+      yield* appendLine(settled).pipe(Effect.provide(recordsAt(dir)));
       const after = yield* session(handedOff);
       expect(after._tag === "Success" && after.success).toMatchObject({
         agent: "impl-live",
@@ -3854,12 +3853,9 @@ test("an unsupported busy delivery survives restart and reaches the idle agent o
       yield* session(tendIdle);
       yield* session(tendIdle);
       expect(Arr.filter(prompts(yield* rig.calls()), (one) => one === text)).toHaveLength(1);
-      const sent = Arr.filter(
-        yield* deliveriesOf(rig.pluginEnv().stateDir, "r1"),
-        (one) => one.delivery.cause.kind === "steer",
-      );
+      const sent = Arr.filter(yield* deliveredTo(dir, "r1"), (one) => one.cause.kind === "steer");
       expect(sent).toHaveLength(1);
-      expect(sent[0]?.delivery).toMatchObject({ mode: "boundary", state: "acknowledged" });
+      expect(sent[0]).toMatchObject({ mode: "boundary", state: "acknowledged" });
     }),
   ));
 
@@ -4570,10 +4566,10 @@ test("a steer nothing shows taken is reported sent and not observed, and a role 
       });
       expect(told.how).toBeUndefined();
       const [one] = Arr.filter(
-        yield* deliveriesOf(rig.pluginEnv().stateDir, "r1"),
-        ({ delivery }) => delivery.cause.kind === "steer",
+        yield* deliveredTo(dir, "r1"),
+        (delivery) => delivery.cause.kind === "steer",
       );
-      expect(one?.delivery).toMatchObject({ state: "submitted", note: "unobserved" });
+      expect(one).toMatchObject({ state: "submitted", note: "unobserved" });
     }),
   ));
 
@@ -4868,8 +4864,8 @@ test(
         expect(state.pollSent.length).toBeGreaterThan(1);
         expect(Arr.every(state.pollSent, (ok) => !ok)).toBe(true);
         const compactions = Arr.filter(
-          yield* deliveriesOf(rig.pluginEnv().stateDir, "r1"),
-          ({ delivery }) => delivery.cause.kind === "compaction",
+          yield* deliveredTo(dir, "r1"),
+          (delivery) => delivery.cause.kind === "compaction",
         );
         expect(compactions).toHaveLength(1);
         expect(sent(yield* rig.calls(), "from a poll")).toBe(0);
@@ -5812,14 +5808,12 @@ test("a step pointer the harness took is recorded as Collie's, with its delivery
         ),
         (line) => decodeJson(line),
       );
-      expect(events).toMatchObject([
-        { kind: "submit", reason: "collie", delivery: step!.delivery.id },
-      ]);
+      expect(events).toMatchObject([{ kind: "submit", reason: "collie", delivery: step!.id }]);
       expect(
         Option.getOrUndefined(
           Option.map(Option.fromNullishOr(pointer), (present__) => Str.split(present__, "\n")),
         ),
-      ).toContain(`collie-delivery:${step!.delivery.id}`);
+      ).toContain(`collie-delivery:${step!.id}`);
     }),
   ));
 
@@ -5863,7 +5857,7 @@ test(
         });
         const why = yield* read(controlPath(dir, PARKED, "r1"));
         const [step] = yield* steps("r1");
-        expect(why).toContain(step!.delivery.id);
+        expect(why).toContain(step!.id);
         expect(why).toMatch(/pane 1-\d+/);
         const calls = yield* rig.calls();
         expect(sent(calls, "Your task for this step")).toBe(1);
@@ -5881,10 +5875,10 @@ const reconciled = (runId: string, as: "sent" | "not-sent") =>
   Effect.gen(function* () {
     const why = yield* read(controlPath(dir, PARKED, runId));
     const [step] = yield* steps(runId);
-    expect(why).toContain(`--reconcile ${step!.delivery.id} --as sent|not-sent`);
-    const settled = reconcile(yield* readLedger(step!.file), step!.delivery.id, as, "tester", "t");
+    expect(why).toContain(`--reconcile ${step!.id} --as sent|not-sent`);
+    const settled = reconcile(yield* ledgerOf(dir, step!.incarnation), step!.id, as, "tester", "t");
     if ("error" in settled) throw new Error(settled.error);
-    yield* appendLine(step!.file, settled);
+    yield* appendLine(settled).pipe(Effect.provide(recordsAt(dir)));
   });
 
 test(
@@ -5904,7 +5898,7 @@ test(
         const result = yield* releasedInto("r1", { collectMs: OUTLASTS_IO });
         expect(result._tag === "Success" && result.success.note).toBe("sent again");
         expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
-        expect(new Set(Arr.map(yield* steps("r1"), (one) => one.delivery.id)).size).toBe(2);
+        expect(new Set(Arr.map(yield* steps("r1"), (one) => one.id)).size).toBe(2);
       }),
     ),
   120_000,
@@ -5930,7 +5924,7 @@ test(
               yield* TestClock.withLive(Effect.sleep("10 millis"));
             }
             const [first] = yield* steps("r1");
-            expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(first!.delivery.id);
+            expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(first!.id);
             for (let tries = 0; !(yield* suspended("r1")); tries++) {
               if (tries === 100) throw new Error("parked collection never suspended");
               yield* TestClock.withLive(Effect.sleep("10 millis"));
@@ -5945,8 +5939,8 @@ test(
             expect(sent(calls, "Your task for this step")).toBe(2);
             expect(Arr.filter(calls, (call) => call.cmd === "agent start")).toHaveLength(1);
             const delivered = yield* steps("r1");
-            expect(Arr.map(delivered, (one) => one.delivery.attempt)).toEqual([1, 2]);
-            expect(new Set(Arr.map(delivered, (one) => one.delivery.id)).size).toBe(2);
+            expect(Arr.map(delivered, (one) => one.attempt)).toEqual([1, 2]);
+            expect(new Set(Arr.map(delivered, (one) => one.id)).size).toBe(2);
           }),
           { herdr: new FakeHerdr(env), confirmGraceMs: 300, collectMs: 300_000 },
         );

@@ -74,14 +74,8 @@ import {
   read as readProposals,
   record as recordProposal,
 } from "./proposals";
-import {
-  appendLine,
-  deliveriesOf,
-  ledgerPath,
-  newestById,
-  overrideActive,
-  readLedger,
-} from "./steering";
+import { appendLine, deliveriesOf, newestById, overrideActive, readLedger } from "./steering";
+import type { Records } from "./records";
 import { capabilitiesOf } from "./steering-caps";
 import { externalSubmissions } from "./compactors";
 import { controlDir } from "./compaction";
@@ -115,7 +109,11 @@ export interface Watched {
   readonly herd: string | null;
 }
 
-type Services = FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner;
+type Services =
+  | FileSystem.FileSystem
+  | Path.Path
+  | ChildProcessSpawner.ChildProcessSpawner
+  | Records;
 
 /** Where `rev` left the default branch: their merge-base, or `rev` itself. */
 export const baseOf = Effect.fn("Oversight.baseOf")(function* (cwd: string, rev = "HEAD") {
@@ -219,10 +217,7 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
     inspect: inspectFor({ worktree: at.worktree, base, mr: at.mr }),
     links: at.mr === null ? {} : { mr: at.mr },
     drift: Arr.map(open, (report) => report.id),
-    deliveries: Arr.map(
-      yield* deliveriesOf(at.stateDir, at.runId).pipe(Effect.orElseSucceed(() => [])),
-      (entry) => entry.delivery.id,
-    ),
+    deliveries: Arr.map(yield* deliveriesOf(at.runId), (delivery) => delivery.id),
     aligned: alignment(intent, drift, judged).aligned,
     crossRun: yield* crossRunOf(at),
     significance: {
@@ -437,7 +432,6 @@ const NOTHING_CORRECTED: Corrected = { sent: [], escalated: [] };
 const noticeOverride = Effect.fn("Oversight.noticeOverride")(function* (
   at: Watched,
   to: Correcting["agent"],
-  ledger: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const seen = yield* externalSubmissions(yield* controlDir(at.stateDir, to.agent)).pipe(
@@ -448,7 +442,7 @@ const noticeOverride = Effect.fn("Oversight.noticeOverride")(function* (
   if (seen <= before || to.terminalId === undefined) return;
   yield* fs.makeDirectory(`${at.runDir}/steering`, { recursive: true }).pipe(Effect.ignore);
   yield* fs.writeFileString(file, String(seen)).pipe(Effect.ignore({ log: "Unhandled" }));
-  yield* appendLine(ledger, {
+  yield* appendLine({
     kind: "manual_override",
     at: yield* nowIso,
     incarnation: to.terminalId,
@@ -471,9 +465,8 @@ const correctDrift = Effect.fn("Oversight.correctDrift")(function* (
   if (!intent.authority.auto_correct) return NOTHING_CORRECTED;
   const open = openReports(yield* readDrift(at.runDir).pipe(Effect.orElseSucceed(() => [])));
   if (open.length === 0 || to.agent.terminalId === undefined) return NOTHING_CORRECTED;
-  const ledger = yield* ledgerPath(at.stateDir, to.agent.terminalId);
-  yield* noticeOverride(at, to.agent, ledger);
-  const lines = yield* readLedger(ledger).pipe(Effect.orElseSucceed(() => []));
+  yield* noticeOverride(at, to.agent);
+  const lines = yield* readLedger(to.agent.terminalId);
   const deliveries = [...newestById(lines).values()];
   const sentSoFar = correctionsSent(deliveries);
   const capabilities = capabilitiesOf(to.agent.harness);
@@ -573,7 +566,7 @@ export const checkDrift = Effect.fn("Oversight.checkDrift")(function* (
   judging: "none" | "boundary" | "finish",
   deps: JudgementDeps | null,
   to: Correcting | null,
-): Effect.fn.Return<Corrected, never, PlatformServices> {
+): Effect.fn.Return<Corrected, never, PlatformServices | Records> {
   yield* followRunPlan(at);
   const intent = yield* readIntent(at.runDir).pipe(Effect.orElseSucceed(() => null));
   if (intent === null) return NOTHING_CORRECTED;
@@ -886,7 +879,7 @@ export const standForElection = Effect.fn("Oversight.standForElection")(function
   where: string,
   leaving: boolean,
   deps: JudgementDeps | null,
-): Effect.fn.Return<void, never, PlatformServices> {
+): Effect.fn.Return<void, never, PlatformServices | Records> {
   const key = at.herd;
   if (key === null) {
     if (at.family.length > 1)

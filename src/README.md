@@ -44,7 +44,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `run.ts`               | The run directory: audit trail and resume state                                                                             |
 | `intent.ts`            | What a Run is for, what bounds it, and what Collie may do about it without asking                                           |
 | `intent-model.ts`      | The Intent's Schemas alone, so a browser bundle of the board can carry a start                                              |
-| `steering.ts`          | The delivery ledger per live agent, and the Herd's model-call budget                                                        |
+| `steering.ts`          | The delivery ledgers in `host.db`, one per live agent, and the Herd's model-call budget                                     |
 | `delivery-queue.ts`    | Durable messages awaiting a supported idle submission, and their receipts                                                   |
 | `dispatcher.ts`        | The only sender: one transaction per agent, reserved before the send, ordered                                               |
 | `steering-caps.ts`     | What each harness has been shown to do about a delivery, and the gate that fails closed                                     |
@@ -97,6 +97,9 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `authoring.ts`         | What a module says about itself, how it is checked, and the file an author starts from                                      |
 | `definitions-model.ts` | A host's Workflows and Personas as front doors read them: Schemas shared with Desktop (pure)                                |
 | `store.ts`             | Rows beside Effect's: request claims, run identity, generations, questions                                                  |
+| `store-writes.ts`      | Told the Runs each write to `host.db` names, for the Run model                                                              |
+| `records.ts`           | Collie's own records in `host.db`: the host's layer, a read-only one, one at a directory                                    |
+| `records-import.ts`    | The record files a host's first migration imports once                                                                      |
 | `release.ts`           | Whether an installation is a release or a development checkout, and placing the release a runner carries                    |
 | `releases.ts`          | The newest published release, and a release's runner downloaded and verified against the release key                        |
 | `onboard.ts`           | A Machine from bare to a working host, one streamed step at a time, never with sudo                                         |

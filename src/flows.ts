@@ -29,7 +29,7 @@ import { offerFields, offerInput, StepResult, type RunDetail } from "./board-mod
 import { gitlabHostOf, loadDefaults, setSetting } from "./config";
 import { parseSetting, settingText } from "./settings";
 import { herdDir, machineHerd } from "./steering";
-import { liveFor, markedOf } from "./live";
+import { liveFor, markedOf, type Ledgers } from "./live";
 import { isStale, layers, loadDefinitions, type Definitions, type Provenance } from "./definitions";
 import { selfCommand, type PluginEnv } from "./env";
 import { Herdr, type AgentInfo, type WorkspaceInfo } from "./herdr";
@@ -47,6 +47,7 @@ import {
   followUpRun,
   followRunDetail,
   runDetailNow,
+  asks,
   type DetailKey,
   invokeOffer,
   type BoardRead,
@@ -945,6 +946,7 @@ export function appState(session: ControlSession, env: PluginEnv) {
         : yield* liveFor({
             stateDir: env.stateDir,
             socketPath: env.socketPath,
+            ledgers: ledgersOf(env),
             run: where === null ? null : { id: where.id, dir: where.dir },
             // From the scan this read already made, never a second read per Run: the
             // facts are the only thing the marks need that a row does not carry.
@@ -1390,6 +1392,7 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
     const live = yield* liveFor({
       stateDir: env.stateDir,
       socketPath: env.socketPath,
+      ledgers: ledgersOf(env),
       run: null,
       runs: yield* Effect.gen(function* () {
         const { runs, registered } = yield* scan(env, session.runsOf);
@@ -1545,6 +1548,17 @@ interface SessionNow {
  * the register can disagree — which had the two boards reconciling one tab's label from
  * two different answers about the same agent.
  */
+/** The host's ledgers, asked of it: a board that cannot reach it marks nothing. */
+const ledgersOf = (env: PluginEnv): Ledgers => ({
+  overridden: asks(env, (client) => client.overridden()).pipe(
+    Effect.map((read) => new Set(read.ok ? read.value : [])),
+  ),
+  deliveriesOf: (run) =>
+    asks(env, (client) => client.deliveries({ runId: run })).pipe(
+      Effect.map((read) => (read.ok ? (read.value ?? []) : [])),
+    ),
+});
+
 const liveOf = Effect.fn("Flows.liveOf")(function* (session: ControlSession) {
   return yield* Effect.all(
     { alive: session.herdr.agentList(), workspaces: session.herdr.workspaceList() },

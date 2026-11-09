@@ -93,7 +93,7 @@ takes `step`, and `withdraw_note` takes the note id, with the same rules.
 `boundary` is the only one that works everywhere: it goes out as an ordinary prompt, which
 every harness takes, and a busy agent's harness takes it when the turn it is in ends. A
 human's message is about the work under way, so a `deliver` with no mode is `now`. Every
-mode goes out from the host, through the Dispatcher, under the agent's ledger lock. `now`
+mode goes out from the host, through the Dispatcher, in a transaction on the agent's ledger. `now`
 and `interrupt` are gated on a **recorded live result** per harness; where that harness
 has none the Dispatcher refuses that mode, with `capability_unproven:<harness>:<mode>`
 on the ledger. A Run's `now` message instead uses the durable idle fallback described
@@ -164,8 +164,7 @@ prompt to that agent. A human's steer is sent once and told the refusal, since t
 waiting on the answer.
 
 A step's prompt or repair also waits out another sender holding the agent's ledger — a
-transaction already open on it in the host, or its lock held by another process — on the
-same backoff, and parks once that has lasted ten minutes. A steer to an agent whose step
+transaction already open on it in the host — on the same backoff, and parks once that has lasted ten minutes. A steer to an agent whose step
 is still being launched or given waits until that step's prompt has gone out, so the work
 reaches the agent first.
 
