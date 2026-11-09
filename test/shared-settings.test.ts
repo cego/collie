@@ -108,6 +108,22 @@ test(
   120_000,
 );
 
+test("a settings file naming a notification kind Collie no longer raises still loads whole", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const userDir = yield* fs.makeTempDirectoryScoped();
+      yield* fs.writeFileString(
+        `${userDir}/config.json`,
+        `{"model":"sonnet","max_iterations":7,"notifications":{"output-unusable":false,"run-done":false}}`,
+      );
+      const defaults = yield* loadDefaults(userDir);
+      expect(defaults.model).toBe("sonnet");
+      expect(defaults.maxIterations).toBe(7);
+      expect(defaults.notifications["run-done"]).toBe(false);
+    }).pipe(Effect.scoped),
+  ));
+
 test("a Flock's auto-compact window is taken when it is the latest edit, and refused whole when Claude Code would not take it", () =>
   runEffect(
     Effect.gen(function* () {
