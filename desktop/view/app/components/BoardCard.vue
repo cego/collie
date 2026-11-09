@@ -6,6 +6,7 @@ import { pipe } from "effect/Function";
 import {
   type CardAction,
   cardActions,
+  disposeLabel,
   dispositionActions,
   mrUrlOf,
   openMrLabel,
@@ -19,7 +20,8 @@ import type { DesktopAction } from "../../../src/shared/flock";
 import { type Gesture, seenBy } from "../../../src/shared/board-clicks";
 import { cardQuestion, openQuestions } from "../../../src/shared/pending-answer";
 import { cardFlow } from "../../../src/shared/flow-strip";
-import { runDetailKey } from "../flock";
+import { flockMrsAtom, runDetailKey } from "../flock";
+import { useAtomValue } from "@effect/atom-vue";
 import { kept } from "../kept";
 
 const props = defineProps<{
@@ -73,6 +75,8 @@ const chosen = computed(
 const openRecord = (event: MouseEvent) =>
   gesture({ kind: "name", card: props.cardKey }, null, event.timeStamp);
 const flow = computed(() => cardFlow(props.task.flow));
+const shownMrs = useAtomValue(() => flockMrsAtom);
+const mrs = computed(() => shownMrs.value.get(props.cardKey) ?? []);
 
 const STATES: Record<
   TaskView["state"],
@@ -143,7 +147,7 @@ const doing = (action: CardAction, primary: boolean) => {
       const url = mrUrlOf(action.mr);
       return url === null
         ? null
-        : { label: openMrLabel(action.mr, primary), press: () => openLink(url) };
+        : { label: openMrLabel(action.mr, primary, action.named), press: () => openLink(url) };
     }
     case "offer": {
       const offer = action.offer.id;
@@ -177,7 +181,7 @@ const doing = (action: CardAction, primary: boolean) => {
       };
     case "dispose":
       return {
-        label: `Mark ${action.disposition}`,
+        label: disposeLabel(action),
         press: () => act({ _tag: "Dispose", runId, kind: action.disposition, ref: action.ref }),
       };
     case "acknowledge":
@@ -268,6 +272,29 @@ const menu = computed(() =>
         }}</small>
       </template>
       <p data-testid="sentence" class="text-sm">{{ task.sentence }}</p>
+      <ul v-if="mrs.length > 0" class="mt-2 flex flex-col gap-1 text-xs" data-testid="mrs">
+        <li v-for="one in mrs" :key="one.id" class="flex flex-wrap items-center gap-x-2">
+          <span class="min-w-0 text-muted">{{ one.line }}</span>
+          <UButton
+            v-if="one.open"
+            size="xs"
+            variant="link"
+            :label="one.open.label"
+            @click="openLink(one.open.url)"
+          />
+          <template v-if="one.links.length > 1">
+            <UButton
+              v-for="link in one.links"
+              :key="link.key"
+              size="xs"
+              variant="ghost"
+              color="neutral"
+              :label="`on ${link.machine}`"
+              @click="gesture({ kind: 'name', card: link.key }, null, $event.timeStamp)"
+            />
+          </template>
+        </li>
+      </ul>
       <button
         v-if="flow !== null"
         type="button"

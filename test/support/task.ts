@@ -1,7 +1,9 @@
 // The TaskView a test starts from. Shared rather than copied per file, for the reason
 // `focus.ts` gives: one fixture that grows every time a card learns to say something new.
 
-import type { TaskView } from "../../src/board-model";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import type { TaskMr, TaskView } from "../../src/board-model";
 import { epochMs } from "../../src/time";
 
 /** One Task, with the parts a test does not care about at rest. */
@@ -41,6 +43,27 @@ export function task(over: Partial<TaskView> = {}): TaskView {
     run: "r1",
     runs: ["r1"],
     at: epochMs("2026-09-16T12:00:00.000Z"),
+    ...over,
+  };
+}
+
+/** One of a Task's merge requests on `gitlab.cego.dk`, open and not ready unless said. */
+export function taskMr(project: string, iid: number, over: Partial<TaskMr> = {}): TaskMr {
+  const url = `https://gitlab.cego.dk/${project}/-/merge_requests/${iid}`;
+  const short = `${Arr.lastNonEmpty(Str.split(project, "/"))}!${iid}`;
+  return {
+    id: `gitlab.cego.dk/${project}!${iid}`,
+    mr: url,
+    label: `${project}!${iid}`,
+    short,
+    url,
+    run: "r1",
+    state: "open",
+    checks: null,
+    head: null,
+    ready: false,
+    disposition: null,
+    waitsOn: [],
     ...over,
   };
 }

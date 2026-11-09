@@ -1121,6 +1121,15 @@ then the release. The glyphs show their states and the label names the current S
 With more than ten Steps, done Steps fold into one counted glyph; release glyphs stay
 separate. Press the strip to open the Task's record on **Flow**. Older hosts show no strip.
 
+A card of a Task with several merge requests has a line for each under its sentence: its
+state, whether it is ready to release at which head, and what it waits on, with an **Open**
+of its own. Its record has a tab for each, in place of the one **Merge request** tab. A
+merge request that Tasks on more than one Machine hold is drawn once, on the first of those
+cards, with an **on <Machine>** link to each Machine's Task. A link only opens that Task's
+record: what is done there goes to that Machine's host, never to another. A card with one
+merge request on one Machine, and every card from a host older than the list, is drawn as
+before.
+
 The record opens on **Flow**, with one row per Run, oldest first, then Release. A row
 wraps its Steps to the record's width under a line naming the Run, its Machine and who
 started it; a long Step name is shortened, and its hover and spoken name give it whole.
