@@ -99,7 +99,10 @@ start, since renaming a file the process still writes to would not move its writ
 
 A host makes no spans unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set, since making them was most
 of what an idle host allocated. When it is set, the host sends its spans and logs as OTLP/JSON
-to that base URL, under the service `collie-host`. Every `Effect.fn` name becomes a span, for
+to that base URL, under the service `collie-host`. It sends only spans that took at least
+`COLLIE_TRACE_MIN_MS` (5 ms by default). A busy host makes thousands of sub-millisecond file
+reads a second, and that many spans stalled the exporter within a minute. A span's parent
+always lasts at least as long as the span, so every span sent arrives with its parents. Every `Effect.fn` name becomes a span, for
 example `Board.build`, `Engine.viewOf` and each RPC, so a trace shows where a slow board build
 or a slow answer spends its time, on the live host and without a benchmark.
 [motel](https://github.com/kitlangton/motel) is a local OTLP store that serves this. Run it from
