@@ -16393,7 +16393,7 @@ for (const [what, declared] of [
       runEffect(
         Effect.gen(function* () {
           const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
-          const runId = `r-tune-redeclared-${Object.keys(declared)[0]}`;
+          const runId = `r-tune-redeclared-${Rec.keys(declared)[0]}`;
           const guardrail = { ...NOISY_GUARDRAIL, why: "the plan's limits are what matter here" };
           yield* rig.queueOutputs([
             TUNE_DISCOVERED,
