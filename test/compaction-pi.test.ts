@@ -421,7 +421,6 @@ test("an error stop on a usage limit is the agent running out; an overload is no
 const EXPIRED = "CodexApiError: Your authentication token has expired";
 const PI_SESSION = "/home/mk/.pi/sessions/one.jsonl";
 
-/** The generated extension, loaded, and a turn of pi's that ends as `message` says. */
 const loadedPi = Effect.gen(function* () {
   yield* pi.install({ agent: "build-r1", harness: "pi", cwd: rig.projectDir, dir });
   const handlers = new Map<string, (event: PiEvent, ctx: PiContext) => void>();
