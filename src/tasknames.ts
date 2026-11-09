@@ -21,7 +21,7 @@ import { Herdr } from "./herdr";
 import { liveHerds } from "./herds";
 import { oneLine, taskWorkspaceLabel } from "./naming";
 import type { RunFacts } from "./runs";
-import { listTasks, readTask, withTaskLock, writeTask } from "./task";
+import { listTasks, readTask, withTaskLockIfFree, writeTask } from "./task";
 
 /** The names this person already has, as herdr reports them. Read-only context. */
 export interface LiveNames {
@@ -390,7 +390,7 @@ export const retitleGenericTasks = Effect.fn("tasknames.retitleGenericTasks")(fu
     );
     if (isGenericTitle(named.title, first.workflow)) continue;
     const label = `${project} | ${named.title}`;
-    yield* withTaskLock(
+    yield* withTaskLockIfFree(
       task.id,
       Effect.gen(function* () {
         const now = yield* readTask(task.id);

@@ -547,7 +547,7 @@ test(
         // Nothing exists to clean up: no Run, no Task, no worktree, no workspace, no agent.
         expect(outcome.rows).toEqual([]);
         expect(yield* fs.exists(`${rig.root}/.collie/worktrees`)).toBe(false);
-        expect(yield* fs.exists(`${env().stateDir}/tasks`)).toBe(false);
+        expect(yield* listTasks.pipe(Effect.provide(recordsAt(dir())))).toEqual([]);
         expect(yield* rig.cmds()).toEqual([]);
       }),
     ),
@@ -789,8 +789,7 @@ test(
         expect(outcome.rows).toHaveLength(1);
         const cmds = yield* rig.cmds();
         expect(Arr.filter(cmds, (cmd) => cmd === "workspace create")).toHaveLength(1);
-        const fs = yield* FileSystem.FileSystem;
-        expect(yield* fs.readDirectory(`${env().stateDir}/tasks`)).toHaveLength(1);
+        expect(yield* listTasks.pipe(Effect.provide(recordsAt(dir())))).toHaveLength(1);
       }),
     ),
   120_000,

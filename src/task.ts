@@ -68,6 +68,11 @@ export interface TasksApi {
   readonly remove: (id: string) => Effect.Effect<void>;
   /** Held from reading a Task to writing it back, so two Runs cannot both replace its workspace. */
   readonly locked: <A, E, R>(id: string, effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  /** `locked`, or nothing where another holds it now. */
+  readonly lockedIfFree: <A, E, R>(
+    id: string,
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<Option.Option<A>, E, R>;
 }
 
 export class Tasks extends Context.Service<Tasks, TasksApi>()("collie/Tasks") {}
@@ -84,6 +89,11 @@ export const tasksLayer = Layer.effect(Tasks)(
     const reactivity = yield* Reactivity.Reactivity;
     const told = Option.getOrUndefined(yield* Effect.serviceOption(TaskWrites));
     const locks = new Map<string, Semaphore.Semaphore>();
+    const lockOf = (id: string) => {
+      const lock = locks.get(id) ?? Semaphore.makeUnsafe(1);
+      locks.set(id, lock);
+      return lock;
+    };
     const changed = (id: string) =>
       Effect.andThen(
         Effect.sync(() => told?.([id])),
@@ -115,12 +125,9 @@ export const tasksLayer = Layer.effect(Tasks)(
           Effect.andThen(changed(id)),
           Effect.orDie,
         ),
-      locked: (id, effect) =>
-        Effect.suspend(() => {
-          const lock = locks.get(id) ?? Semaphore.makeUnsafe(1);
-          locks.set(id, lock);
-          return lock.withPermits(1)(effect);
-        }),
+      locked: (id, effect) => Effect.suspend(() => lockOf(id).withPermits(1)(effect)),
+      lockedIfFree: (id, effect) =>
+        Effect.suspend(() => lockOf(id).withPermitsIfAvailable(1)(effect)),
     } satisfies TasksApi;
   }),
 );
@@ -145,6 +152,9 @@ export const removeTask = (id: string) => Tasks.use((tasks) => tasks.remove(id))
 
 export const withTaskLock = <A, E, R>(id: string, effect: Effect.Effect<A, E, R>) =>
   Tasks.use((tasks) => tasks.locked(id, effect));
+
+export const withTaskLockIfFree = <A, E, R>(id: string, effect: Effect.Effect<A, E, R>) =>
+  Tasks.use((tasks) => tasks.lockedIfFree(id, effect));
 
 export const newTask = Effect.fn("task.newTask")(function* (opts: {
   readonly workspace: string | null;
