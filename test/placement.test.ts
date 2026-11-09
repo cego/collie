@@ -3337,7 +3337,7 @@ test("a Connection deadline provided around the host is the one its start reads 
               .pipe(Effect.result),
           );
         }),
-      );
+      ).pipe(Effect.provideService(ConnectionDeadline, Duration.millis(1)));
 
       expect(reason).toContain("release needs helle");
       expect(reason).toContain("within 1ms");
