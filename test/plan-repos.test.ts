@@ -473,7 +473,6 @@ test("what only a merge can show is not a criterion, and is read as the ticket's
   expect(afterMergeIn("# 01: a\n\n- [ ] One.\n")).toEqual([]);
 });
 
-/** A ticket in a named Change, beside its `Repo:` line. */
 function inChange(file: string, change: string, opts: { repo?: string; blockedBy?: string } = {}) {
   const plain = ticket(file, opts);
   return { file, text: `${plain.text}**Change:** ${change}\n` };

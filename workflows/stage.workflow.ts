@@ -192,7 +192,6 @@ const stageRuns = step({
   kind: "workflow",
 });
 
-/** Each merge request of a set staged by a Stage Run of its own, all at once. */
 const stageEach = (members: ReadonlyArray<SetMember>) =>
   Effect.gen(function* () {
     const host = yield* Host;

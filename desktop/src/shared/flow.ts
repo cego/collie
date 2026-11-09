@@ -301,7 +301,6 @@ export const inspectorOf = (
     open: openIn(node, owningRun(flow, selection)),
   };
 };
-/** A release row's own run key: `release`, or `release:<MR id>` where the Task has several. */
 const releaseRows = (flow: Flow) =>
   flow.releases !== undefined && flow.releases.length > 1
     ? Arr.map(flow.releases, (one) => ({

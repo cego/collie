@@ -82,14 +82,12 @@ export const actionRunner = (
   return run;
 };
 
-/** Which offer is meant: its id, on the Run that makes it where that is not the Run asked. */
 export const offerKey = (offer: Pick<OfferView, "id" | "run">): string =>
   offer.run === undefined ? offer.id : `${offer.run}:${offer.id}`;
 
 export const chosenOffer = (offers: ReadonlyArray<OfferView>, chosen: string | null) =>
   Option.getOrUndefined(Arr.findFirst(offers, (offer) => offerKey(offer) === chosen));
 
-/** Making `offer`, asked of `runId`: on the Run that owns its merge request, where another does. */
 export const invokeOf = (
   runId: string,
   offer: OfferView,
