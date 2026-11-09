@@ -1,5 +1,13 @@
 import * as Arr from "effect/Array";
-import { Cause, Effect, type FileSystem, type Path, type PlatformError } from "effect";
+import {
+  Cause,
+  Context,
+  Duration,
+  Effect,
+  type FileSystem,
+  type Path,
+  type PlatformError,
+} from "effect";
 import type { Connection, ConnectionId, ConnectionReading } from "./connection-model";
 import type { PluginEnv } from "./env";
 import {
@@ -20,6 +28,11 @@ import { ghLogin } from "./forge/github";
 
 export const CONNECTION_TIMEOUT_MS = 6_000;
 
+/** How long a Connection read waits on the host's `Clock` before it reads `broken`. */
+export const ConnectionDeadline = Context.Reference<Duration.Duration>("collie/ConnectionDeadline", {
+  defaultValue: () => Duration.millis(CONNECTION_TIMEOUT_MS),
+});
+
 export interface ConnectionProbe<R = never, E = never> {
   readonly id: ConnectionId;
   readonly fix: string;
@@ -27,27 +40,30 @@ export interface ConnectionProbe<R = never, E = never> {
 }
 
 export const readConnections = <R, E>(probes: ReadonlyArray<ConnectionProbe<R, E>>) =>
-  Effect.forEach(
-    probes,
-    ({ id, fix, read }) =>
-      read.pipe(
-        Effect.timeoutOrElse({
-          duration: CONNECTION_TIMEOUT_MS,
-          orElse: () => Effect.fail(`${id} did not answer within ${CONNECTION_TIMEOUT_MS / 1000}s`),
-        }),
-        Effect.catchCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.interrupt
-            : Effect.succeed<ConnectionReading>({
-                state: "broken",
-                detail: redact(Cause.pretty(cause)),
-                fix,
-              }),
+  Effect.gen(function* () {
+    const deadline = yield* ConnectionDeadline;
+    return yield* Effect.forEach(
+      probes,
+      ({ id, fix, read }) =>
+        read.pipe(
+          Effect.timeoutOrElse({
+            duration: deadline,
+            orElse: () => Effect.fail(`${id} did not answer within ${Duration.format(deadline)}`),
+          }),
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.interrupt
+              : Effect.succeed<ConnectionReading>({
+                  state: "broken",
+                  detail: redact(Cause.pretty(cause)),
+                  fix,
+                }),
+          ),
+          Effect.map((reading): Connection => ({ id, reading })),
         ),
-        Effect.map((reading): Connection => ({ id, reading })),
-      ),
-    { concurrency: "unbounded" },
-  );
+      { concurrency: "unbounded" },
+    );
+  });
 
 export const connectionProbes = (
   env: PluginEnv,
