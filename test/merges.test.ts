@@ -481,6 +481,53 @@ test("a merge request opened from a Task's branch by anyone is found, recorded a
     }),
   ));
 
+test("a merge request opened by hand from one Change run's branch is found when another Change run's is already recorded", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-discover-" });
+      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
+      const of = (over: Partial<RunFacts>) =>
+        madeRun(stateDir, { task: "task-1", created: "2026-10-15T08:00:00Z", ...over });
+      const runs = [
+        yield* of({ id: "r-implement", state: "running" }),
+        yield* of({
+          id: "r-implement.app",
+          parent: "r-implement",
+          state: "succeeded",
+          branch: `${BRANCH}--app`,
+          mr: MR,
+        }),
+        yield* of({
+          id: "r-implement.schema",
+          parent: "r-implement",
+          change: "schema",
+          state: "succeeded",
+          branch: BRANCH,
+        }),
+      ];
+      const recorded = new Map<string, string>();
+      yield* settleMerges({
+        stateDir,
+        cwd: "/project",
+        run: forge("gitlab", {
+          origin: REPO.gitlab.origin,
+          mrs: [mr65({ sourceBranch: `${BRANCH}--app` }), fromBranch("gitlab")],
+        }),
+        views: yield* buildBoard({ env, runs, now: TEN, quietMs: Infinity }),
+        runs,
+        record: (run, url) => Effect.sync(() => void recorded.set(run, url)),
+        stop: () => Effect.die("nothing here is stopped"),
+        now: TEN,
+        checked: new Map(),
+        states: new Map(),
+        panels: new Map(),
+        making: new Set(),
+      });
+      expect(recorded).toEqual(new Map([["r-implement.schema", URL115.gitlab]]));
+    }),
+  ));
+
 test("a merge request opened from a Task's branch that ended before the Task began is not its", () =>
   runWithForge(
     Effect.gen(function* () {

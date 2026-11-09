@@ -95,8 +95,8 @@ function stateOf(state: string): MrState {
 }
 
 /**
- * One round: a Task with a branch and no merge request takes the one opened from its
- * branch, every Task's and fan-out Repo run's merge request whose answer is stale is asked
+ * One round: each branch of a Task with no merge request recorded takes the one opened
+ * from it, every Task's and fan-out Repo run's merge request whose answer is stale is asked
  * about, a merged one gets its `merged` disposition recorded as its forge's word, and what
  * was learned is written where `collie --json board` reads it. `checked` and `states` are
  * the caller's memory between rounds; the file is everyone else's.
@@ -129,7 +129,8 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
   let learned = false;
   const watched: Array<Watched> = [];
   for (const view of opts.views) {
-    const found = view.mr === null ? yield* fromBranch(view, opts) : null;
+    const adopted = yield* fromBranches(view, opts);
+    const found = view.mr === null ? adopted[0] : undefined;
     const mr = view.mr ?? found?.url ?? null;
     const repos = Arr.flatMap(view.children, (child) =>
       child.run === null || child.mr === null ? [] : [{ run: child.run, mr: child.mr }],
@@ -160,6 +161,9 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
           runs: [repo.run],
           owner: repo.run,
         });
+    for (const one of adopted)
+      if (one !== found)
+        watched.push({ mr: one.url, disposition: null, runs: [one.run], owner: one.run });
     if (several)
       for (const entry of view.mrs!)
         if (!Arr.some(repos, (repo) => repo.run === entry.run))
@@ -369,11 +373,11 @@ const firstMerged = Effect.fn("Merges.firstMerged")(function* (
 });
 
 /**
- * The merge request opened from a Task's branch, by whoever opened it, recorded as the
- * newest Run's on that branch; null for none, or where the forge cannot say. A merge
- * request that merged or closed before the Task's first Run is an older branch's.
+ * The merge requests opened from the Task's branches that have none recorded, by whoever
+ * opened them, each recorded as the newest Run's on its branch; none where the forge cannot
+ * say. A merge request that merged or closed before the Task's first Run is an older branch's.
  */
-const fromBranch = Effect.fn("Merges.fromBranch")(function* <R>(
+const fromBranches = Effect.fn("Merges.fromBranches")(function* <R>(
   view: TaskView,
   opts: {
     readonly runs: ReadonlyArray<RunFacts>;
@@ -384,27 +388,44 @@ const fromBranch = Effect.fn("Merges.fromBranch")(function* <R>(
     readonly now: number;
   },
 ) {
-  if (view.branch === null || view.disposition !== null) return null;
+  if (view.mr === null && view.disposition !== null) return [];
   const runs = Arr.filter(opts.runs, (run) => view.runs.includes(run.id));
-  const newest = Arr.filter(runs, (run) => run.branch === view.branch).sort(
-    (a, b) => epochMs(b.created) - epochMs(a.created),
-  )[0];
-  if (newest === undefined) return null;
-  const key = `branch:${newest.project}:${view.branch}`;
-  if ((opts.checked.get(key) ?? 0) + MERGE_POLL_MS > opts.now) return null;
-  opts.checked.set(key, opts.now);
-  const here = yield* forgeHere(newest.project, opts.run, opts.gitlabHost);
-  if (!here.ok) return null;
-  const listed = yield* here.forge.fromBranch(here.project, view.branch, newest.project, opts.run);
-  if (!listed.ok) return null;
+  const branchOf = (run: RunFacts) => `branch:${run.project}:${run.branch}`;
+  const owned = new Set(
+    Arr.map(
+      Arr.filter(runs, (run) => mrOf(run) !== null),
+      branchOf,
+    ),
+  );
+  const newest = new Map<string, RunFacts>();
+  for (const run of runs) {
+    const key = branchOf(run);
+    const known = newest.get(key);
+    if (
+      run.branch !== null &&
+      !owned.has(key) &&
+      (known === undefined || epochMs(run.created) > epochMs(known.created))
+    )
+      newest.set(key, run);
+  }
   const began = Math.min(...Arr.map(runs, (run) => epochMs(run.created)));
-  const mr = Arr.filter(
-    listed.mrs,
-    (one) => one.ended === null || epochMs(one.ended) >= began,
-  ).sort((a, b) => epochMs(b.created) - epochMs(a.created))[0];
-  if (mr === undefined) return null;
-  yield* opts.record(newest.id, mr.url);
-  return { run: newest.id, url: mr.url };
+  const found: Array<{ readonly run: string; readonly url: string }> = [];
+  for (const [key, run] of newest) {
+    if ((opts.checked.get(key) ?? 0) + MERGE_POLL_MS > opts.now) continue;
+    opts.checked.set(key, opts.now);
+    const here = yield* forgeHere(run.project, opts.run, opts.gitlabHost);
+    if (!here.ok) continue;
+    const listed = yield* here.forge.fromBranch(here.project, run.branch!, run.project, opts.run);
+    if (!listed.ok) continue;
+    const mr = Arr.filter(
+      listed.mrs,
+      (one) => one.ended === null || epochMs(one.ended) >= began,
+    ).sort((a, b) => epochMs(b.created) - epochMs(a.created))[0];
+    if (mr === undefined) continue;
+    yield* opts.record(run.id, mr.url);
+    found.push({ run: run.id, url: mr.url });
+  }
+  return found;
 });
 
 const sameFacts = (a: ForgeFacts | undefined, b: ForgeFacts) =>

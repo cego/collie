@@ -725,8 +725,8 @@ request's own forge, through that forge's adapter — GitLab with `glab`, GitHub
 about each of a Task's merge requests every 5 minutes, whatever section its card is in, so a
 merge while a Run is busy or parked is noticed too; one
 that merged gets its `merged` disposition recorded as that forge's word and its card moves
-to Finished. A Task whose Runs recorded no merge request takes the one opened from its
-branch, whoever opened it — you on the forge, or a builder you told to in its pane — and
+to Finished. Each branch of a Task's Runs on which none recorded a merge request takes the
+one opened from it, even where another Change run's is already recorded, whoever opened it — you on the forge, or a builder you told to in its pane — and
 it is recorded as the newest Run on that branch's own, so the drawer, offers, Ready to
 release and Cleanup all see it. The forge is the one the branch's checkout pushes to, and
 it is asked about each branch at most once every 5 minutes. A merge request that merged or
