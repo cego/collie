@@ -8939,7 +8939,6 @@ const makeRegistry: (
           reason: `run "${options.runId}" is not waiting on a decision called "${name}"`,
         });
       }
-      // Taken in any case, ids before titles, and recorded as the option's id.
       const said = Str.toLowerCase(options.value);
       const named = Option.getOrUndefined(
         Arr.findFirst(question.options, (option) => Str.toLowerCase(option.id) === said).pipe(

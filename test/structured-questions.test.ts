@@ -18,13 +18,11 @@ const decodeShown = flow(
   Result.getOrThrow,
 );
 
-/** The Run as `collie run show` hands it over. */
 const shown = (world: World, runId: string) =>
   collie(world, ["run", "show", runId]).pipe(
     Effect.map(({ envelope }) => decodeShown(envelope.data).run),
   );
 
-/** The board's Questions for the Run, built from what the CLI was shown. */
 const boardQuestions = (world: World, view: RunView) =>
   Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;

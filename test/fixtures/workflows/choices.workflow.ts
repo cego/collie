@@ -1,5 +1,3 @@
-// One Choice per goal, each authored the way its case needs, answered and then reported.
-
 import { ask, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
 
