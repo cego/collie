@@ -15,7 +15,18 @@ import * as Option from "effect/Option";
 import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
-import { Clock, ConfigProvider, Effect, FileSystem, Layer, Result, Schema, flow } from "effect";
+import {
+  Clock,
+  ConfigProvider,
+  Duration,
+  Effect,
+  FileSystem,
+  Layer,
+  Result,
+  Schema,
+  flow,
+} from "effect";
+import { ConnectionDeadline } from "../src/connections";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { exec } from "./support/command";
@@ -3295,6 +3306,42 @@ test.each([
     ),
   120_000,
 );
+
+test("a Connection deadline provided around the host is the one its start reads under", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const helle = yield* Effect.acquireRelease(
+        Effect.sync(() => Bun.serve({ port: 0, fetch: () => new Promise<Response>(() => {}) })),
+        (server) => Effect.promise(() => server.stop(true)),
+      );
+      helleUrl = `http://127.0.0.1:${helle.port}`;
+      yield* fs.makeDirectory(`${rig.root}/.config/helle`, { recursive: true });
+      yield* fs.writeFileString(`${rig.root}/.config/helle/env`, "HELLE_API_TOKEN=fixture-token\n");
+
+      const reason = yield* hosted(
+        Effect.gen(function* () {
+          const registry = yield* Registry;
+          const [release] = yield* loaded(registry, [shipped("release")]);
+          return refusedWith(
+            yield* registry
+              .start({
+                generation: release!,
+                request: "r1",
+                project: rig.projectDir,
+                input: { mr: MR_TARGET },
+                text: {},
+              })
+              .pipe(Effect.result),
+          );
+        }),
+      ).pipe(Effect.provideService(ConnectionDeadline, Duration.millis(1)));
+
+      expect(reason).toContain("release needs helle");
+      expect(reason).toContain("within 1ms");
+      expect(reason).not.toContain("6s");
+    }).pipe(Effect.scoped),
+  ));
 
 /** This Machine set to core, with no herdr session open and `settings` beside the backend. */
 const aCoreMachine = (settings = "") =>

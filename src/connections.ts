@@ -29,9 +29,12 @@ import { ghLogin } from "./forge/github";
 export const CONNECTION_TIMEOUT_MS = 6_000;
 
 /** How long a Connection read waits on the host's `Clock` before it reads `broken`. */
-export const ConnectionDeadline = Context.Reference<Duration.Duration>("collie/ConnectionDeadline", {
-  defaultValue: () => Duration.millis(CONNECTION_TIMEOUT_MS),
-});
+export const ConnectionDeadline = Context.Reference<Duration.Duration>(
+  "collie/ConnectionDeadline",
+  {
+    defaultValue: () => Duration.millis(CONNECTION_TIMEOUT_MS),
+  },
+);
 
 export interface ConnectionProbe<R = never, E = never> {
   readonly id: ConnectionId;
