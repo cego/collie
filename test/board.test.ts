@@ -1842,10 +1842,12 @@ test("a Run released with a set of merge requests adds none of its own beside it
 
       const [view] = yield* board(env, runs);
 
-      expect(Arr.sort(Arr.map(view!.mrs ?? [], (one) => one.id), Order.String)).toEqual([
-        idOf("api", 7),
-        idOf("app", 12),
-      ]);
+      expect(
+        Arr.sort(
+          Arr.map(view!.mrs ?? [], (one) => one.id),
+          Order.String,
+        ),
+      ).toEqual([idOf("api", 7), idOf("app", 12)]);
     }),
   ));
 

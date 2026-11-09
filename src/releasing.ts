@@ -159,7 +159,7 @@ export const RollbackReadSchema = Schema.Union([
 export type RollbackRead = typeof RollbackReadSchema.Type;
 
 /** Where a Change run's merge request falls in its fan-out's plan: that Run, and the wave. */
-const PlanWaveSchema = Schema.Struct({ plan: Schema.String, at: Schema.Number });
+const PlanWaveSchema = Schema.Struct({ plan: Schema.String, at: Schema.Finite });
 type PlanWave = typeof PlanWaveSchema.Type;
 
 /**
