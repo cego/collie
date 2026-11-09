@@ -2939,6 +2939,9 @@ export function engineLayer(options: {
   return engine.pipe(Layer.provideMerge(sql));
 }
 
+/** The one shard this engine holds, which every message is on. */
+const ONE_SHARD = "default:1";
+
 /**
  * Moves what an engine on upstream's 300 shards left onto the one shard this engine holds,
  * before the cluster reads its storage: a message on any other shard is never read again.
@@ -2951,8 +2954,8 @@ const oneShard = Layer.effectDiscard(
     }>`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('cluster_messages', 'cluster_locks')`;
     for (const { name } of tables)
       yield* name === "cluster_messages"
-        ? sql`UPDATE cluster_messages SET shard_id = 'default:1' WHERE shard_id <> 'default:1'`
-        : sql`DELETE FROM cluster_locks WHERE shard_id <> 'default:1'`;
+        ? sql`UPDATE cluster_messages SET shard_id = ${ONE_SHARD} WHERE shard_id <> ${ONE_SHARD}`
+        : sql`DELETE FROM cluster_locks WHERE shard_id <> ${ONE_SHARD}`;
   }).pipe(Effect.orDie),
 );
 
@@ -7376,13 +7379,18 @@ const makeRegistry: (
     return status;
   });
 
-  /** When the engine's durable clock next wakes this execution, read from its own table. */
+  /**
+   * When the engine's durable clock next wakes this execution, read from its own table.
+   * By shard and processed, so upstream's one index serves it: by entity alone it scans
+   * every message ever sent, once per suspended Run on each sweep.
+   */
   const wakeOf = Effect.fn("Engine.wakeOf")(function* (execution: string) {
     const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
     if (Option.isNone(sql)) return null;
     const rows = yield* sql.value<{ readonly deliver_at: number | null }>`
       SELECT deliver_at FROM cluster_messages
-      WHERE entity_type = 'Workflow/-/DurableClock' AND entity_id = ${execution} AND processed = 0
+      WHERE shard_id = ${ONE_SHARD} AND processed = 0
+        AND entity_type = 'Workflow/-/DurableClock' AND entity_id = ${execution}
       ORDER BY deliver_at LIMIT 1
     `.pipe(Effect.orElseSucceed(() => []));
     const at = rows[0]?.deliver_at ?? null;
