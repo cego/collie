@@ -6,6 +6,7 @@ import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
+import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { connect } from "../src/host";
@@ -495,6 +496,57 @@ test(
           expect(many.permissionDecision).toBe("deny");
           expect(many.permissionDecisionReason).toContain("one decision per question");
           expect(many.permissionDecisionReason).not.toContain("on your Run");
+        }).pipe(Effect.ensuring(stopHost(world.state))),
+      ["told.workflow.ts"],
+    ),
+  120_000,
+);
+
+test(
+  "a question an older host posted in words is answered to the agent in those words, not by position",
+  () =>
+    proves(
+      "collie-agent-legacy-answer-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const { client } = yield* hostedOver(world, [null]);
+          const { runId, dir } = yield* launchedRun(world, client);
+          const db = new Database(`${world.state}/host.db`);
+          db.run(
+            `INSERT INTO collie_decisions (run, decision, prompt, options, asked, asker)
+             VALUES (?, 'ask-build-1', 'Workers: How many workers? (8 | 2 | 4)', '[]', ?, 'build')`,
+            [runId, "2026-01-01T00:00:00.000Z"],
+          );
+          db.close();
+          yield* recordClaudeEvent(
+            dir,
+            asking("toolu_1", [
+              {
+                question: "How many workers?",
+                header: "Workers",
+                options: [{ label: "8" }, { label: "2 (Recommended)" }, { label: "4" }],
+                multiSelect: false,
+              },
+            ]),
+          ).pipe(Effect.orDie);
+          yield* openOf(client, runId);
+          const answered = yield* collie(world, [
+            "run",
+            "answer",
+            runId,
+            "2",
+            "--decision",
+            "ask-build-1",
+          ]);
+          expect(answered.envelope).toMatchObject({ ok: true, data: { value: "2" } });
+          const prompts = yield* until(
+            () =>
+              fs.readFileString(Bun.env.FAKE_HERDR_LOG ?? "").pipe(Effect.orElseSucceed(() => "")),
+            (all) => pipe_(all, Str.includes("Your question Workers is answered:")),
+          );
+          expect(prompts).toContain("Your question Workers is answered: 2");
+          expect(prompts).not.toContain("Your question Workers is answered: 8");
         }).pipe(Effect.ensuring(stopHost(world.state))),
       ["told.workflow.ts"],
     ),

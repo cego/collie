@@ -339,11 +339,9 @@ const goneAnswer = (agent: string) => `closed: ${agent} is gone`;
 const promptOf = (question: AgentQuestion) =>
   question.header ? `${question.header}: ${question.question}` : question.question;
 
-/** An answer as the agent is told it: the title of the solution it names, else its words. */
-const answerTitle = (question: AgentQuestion | undefined, answer: string | null | undefined) =>
-  Option.getOrUndefined(
-    Arr.findFirst(question === undefined ? [] : solutionsOf(question), (one) => one.id === answer),
-  )?.title ?? answer;
+const answerTitle = (asked: AskedQuestion | undefined) =>
+  Option.getOrUndefined(Arr.findFirst(asked?.options ?? [], (one) => one.id === asked?.answer))
+    ?.title ?? asked?.answer;
 
 /** What a host lends a workflow that needs an agent. */
 export interface AgentsApi {
@@ -2765,7 +2763,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             // The ledger refuses a second copy, so a replay sends nothing again.
             const label = (at: number) =>
               call.questions[at]?.header || call.questions[at]?.question || names[at];
-            const answered = (at: number) => answerTitle(call.questions[at], given[at]?.answer);
+            const answered = (at: number) => answerTitle(given[at]);
             for (const group of bySender(Arr.map(given, (one) => one.by))) {
               const sent = yield* deliver(
                 launched,

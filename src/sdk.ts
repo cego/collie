@@ -1282,6 +1282,7 @@ export interface AskedQuestion {
   readonly name: string;
   readonly answer: string | null;
   readonly superseded?: string | null;
+  readonly options?: ReadonlyArray<Solution>;
   /** Who answered it, where the Run's audit says. */
   readonly by?: Asker;
 }

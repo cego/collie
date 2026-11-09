@@ -4326,20 +4326,29 @@ export const hostLayer = (options: {
             const audit = yield* under(readAudit(runDir(dir, runId))).pipe(
               Effect.orElseSucceed(() => []),
             );
-            return Arr.map(rows, (row) => {
-              const actor =
-                row.answerer ??
-                Option.getOrUndefined(
-                  Arr.findFirst(
-                    audit,
-                    (line) => line.operation === "answer" && line.request === row.request,
+            return yield* Effect.forEach(rows, (row) =>
+              Effect.gen(function* () {
+                const actor =
+                  row.answerer ??
+                  Option.getOrUndefined(
+                    Arr.findFirst(
+                      audit,
+                      (line) => line.operation === "answer" && line.request === row.request,
+                    ),
+                  )?.actor;
+                const asked = {
+                  name: row.decision,
+                  answer: row.answer,
+                  superseded: row.superseded,
+                  options: yield* decodeOptions(row.options).pipe(
+                    Effect.orElseSucceed((): ReadonlyArray<Solution> => []),
                   ),
-                )?.actor;
-              const asked = { name: row.decision, answer: row.answer, superseded: row.superseded };
-              if (actor === undefined) return asked;
-              const { requestId: _, schedule: __, ...by } = actor;
-              return { ...asked, by };
-            });
+                };
+                if (actor === undefined) return asked;
+                const { requestId: _, schedule: __, ...by } = actor;
+                return { ...asked, by };
+              }),
+            );
           }),
         close: (runId, decision, value) =>
           store
