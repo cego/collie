@@ -30,7 +30,6 @@ const decodeLaunched = flow(
   Result.getOrThrow,
 );
 
-/** A hook payload for one `AskUserQuestion` call. */
 const asking = (id: string, questions: ReadonlyArray<unknown>) =>
   encode({
     session_id: "s-1",
@@ -115,7 +114,6 @@ const Hooked = Schema.fromJsonString(
     }),
   }),
 );
-/** What the hook told Claude about its call. */
 const toldBy = flow(
   Schema.decodeUnknownResult(Hooked),
   Result.getOrThrow,
@@ -124,7 +122,6 @@ const toldBy = flow(
 
 const Board = Schema.Struct({ tasks: Schema.Array(TaskView) });
 
-/** The board's Questions for `runId`, as `collie board` prints them. */
 const boardQuestions = (world: World, runId: string) =>
   Effect.gen(function* () {
     const printed = yield* collie(world, ["board"]);
@@ -227,7 +224,9 @@ test(
           const log = Bun.env.FAKE_HERDR_LOG ?? "";
           const prompts = yield* until(
             () => fs.readFileString(log).pipe(Effect.orElseSucceed(() => "")),
-            (all) => pipe_(all, Str.includes("Your question Checks is answered:")),
+            (all) =>
+              pipe_(all, Str.includes("Your question Checks is answered:")) &&
+              pipe_(all, Str.includes("Your question Database is answered:")),
           );
           expect(prompts).toMatch(
             /From cli, [^\n]*\.\\nYour question Database is answered: SQLite/,
@@ -336,7 +335,6 @@ test(
   120_000,
 );
 
-/** A `told` Run whose agent has launched, and that agent's control directory. */
 const launchedRun = Effect.fn("test.launchedRun")(function* (world: World, client: Client) {
   const fs = yield* FileSystem.FileSystem;
   const { runId } = yield* client

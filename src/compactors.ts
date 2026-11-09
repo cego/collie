@@ -739,7 +739,6 @@ export const AskedCall = Schema.Struct({
 });
 export type AskedCall = typeof AskedCall.Type;
 
-/** Whether this call is repaired: one short of standard that does not follow a repair. */
 const repairs = (last: AskedCall | undefined, questions: ReadonlyArray<AgentQuestion>) =>
   last?.repair === undefined && !Arr.every(questions, isToStandard);
 const encodeAskedCall = flow(

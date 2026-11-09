@@ -25,7 +25,6 @@ const shown = (world: World, runId: string) =>
 
 const Board = Schema.Struct({ tasks: Schema.Array(TaskView) });
 
-/** The board's Questions for `runId`, as `collie board` prints them. */
 const boardQuestions = (world: World, runId: string) =>
   Effect.gen(function* () {
     const printed = yield* collie(world, ["board"]);
