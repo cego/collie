@@ -117,6 +117,7 @@ import { declaredBy } from "../../src/discovery";
 import { readMeasurements } from "../../src/measurement";
 import type { BenchmarkPlan, Measurement } from "../../src/measurement-model";
 import { nothingToLandFile } from "../../src/standing";
+import { mergeRequestFile } from "../../src/oversight";
 import { VerifySpecSchema } from "../../src/verify-spec";
 import { findingsIn } from "../../src/output";
 import { FINGERPRINT_MAX_BYTES, collect, fingerprint, readVerifications } from "../../src/verify";
@@ -10565,6 +10566,74 @@ scenario(
         expect(outcomeText(status)).toBe(
           `2 released, 0 failed, 0 not started: ${app.url} released: done; ${api.url} released: done`,
         );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "release of app!12 and api!7 in two repositories, where the plan's api Change is blocked by its app Change, starts api!7's Release Run only once app!12's merged it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const app = member("app", "12", "mk/plan");
+        const api = member("api", "7", "mk/plan");
+        const { bin, merged } = yield* setOnForge([app, api]);
+        const plan = `${rig.root}/fan-plan`;
+        yield* fs.makeDirectory(`${plan}/issues`, { recursive: true });
+        yield* fs.writeFileString(`${plan}/SPEC.md`, "# Two repositories\n");
+        yield* fs.writeFileString(
+          `${plan}/issues/01-app.md`,
+          "# app\n\n**Blocked by:** None\n\n**Repo:** app\n",
+        );
+        yield* fs.writeFileString(
+          `${plan}/issues/02-api.md`,
+          "# api\n\n**Blocked by:** 01\n\n**Repo:** api\n",
+        );
+        yield* session(
+          Effect.gen(function* () {
+            yield* admit({ runId: "r-fan", workflow: "implement", input: { plan } });
+            for (const [one, repo] of [
+              [app, "app"],
+              [api, "api"],
+            ] as const) {
+              yield* fs.makeDirectory(`${rig.projectDir}/${repo}/.git`, { recursive: true });
+              yield* admit({
+                runId: `r-fan.${repo}`,
+                workflow: "implement",
+                input: {},
+                options: { repo },
+                parent: "r-fan",
+              });
+              yield* fs.makeDirectory(runDir(dir, `r-fan.${repo}`), { recursive: true });
+              yield* fs.writeFileString(mergeRequestFile(runDir(dir, `r-fan.${repo}`)), one.url);
+            }
+          }),
+        );
+        const appReleased = yield* Deferred.make<void>();
+        childWaits.set(app.invocation("release"), appReleased);
+        const status = yield* driven(
+          {
+            entry: shipped("release"),
+            runId: "r-set-waves",
+            input: { mr: `${api.ref} ${app.ref}` },
+          },
+          (run) =>
+            Effect.gen(function* () {
+              yield* until(
+                () => Effect.sync(() => started),
+                (now) => now.length > 0,
+              );
+              expect(started).toEqual([startedChild(app, "release")]);
+              yield* merged(app);
+              yield* Deferred.succeed(appReleased, undefined);
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+        expect(started).toEqual([startedChild(app, "release"), startedChild(api, "release")]);
+        expect(status.status).toBe("complete");
       }),
     ),
   120_000,

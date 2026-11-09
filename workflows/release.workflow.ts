@@ -425,7 +425,12 @@ const releaseEach = (members: ReadonlyArray<SetMember>) =>
       const now = yield* read(`read-${invocationFor("release", member)}`, member);
       if (now._tag === "Unreadable")
         return yield* fail(`${member.url} could not be read: ${now.why}, so nothing was released`);
-      branches.push({ id: member.id, source: now.source, target: now.target });
+      branches.push({
+        id: member.id,
+        source: now.source,
+        target: now.target,
+        ...(now.wave === undefined ? {} : { wave: now.wave }),
+      });
     }
     const stacked = stackOrder(branches);
     const byId = new Map(Arr.map(members, (member) => [member.id, member] as const));

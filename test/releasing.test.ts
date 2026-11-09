@@ -321,6 +321,29 @@ test("a set is released blockers first: one targeting another's branch waits on 
   });
 });
 
+test("a set follows its plan's waves too: a Change of a later wave waits on the set's Changes of earlier ones", () => {
+  const app = "gitlab.example.com/group/app!12";
+  const api = "gitlab.example.com/group/api!7";
+  const web = "gitlab.example.com/group/web!3";
+  const other = "gitlab.example.com/group/cli!4";
+  expect(
+    stackOrder([
+      { id: api, source: "plan", target: "main", wave: { plan: "r-fan", at: 1 } },
+      { id: app, source: "plan", target: "main", wave: { plan: "r-fan", at: 0 } },
+      { id: web, source: "plan", target: "main", wave: { plan: "r-fan", at: 1 } },
+      { id: other, source: "cli-fix", target: "main", wave: { plan: "r-other", at: 3 } },
+    ]),
+  ).toEqual({
+    _tag: "Ordered",
+    order: [
+      { id: app, waitsOn: [] },
+      { id: other, waitsOn: [] },
+      { id: api, waitsOn: [app] },
+      { id: web, waitsOn: [app] },
+    ],
+  });
+});
+
 test("a set whose merge requests target each other's branches is a cycle, naming each", () => {
   const app = "gitlab.example.com/group/app!12";
   const api = "gitlab.example.com/group/app!7";

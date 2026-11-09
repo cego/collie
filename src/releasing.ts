@@ -158,12 +158,20 @@ export const RollbackReadSchema = Schema.Union([
 ]);
 export type RollbackRead = typeof RollbackReadSchema.Type;
 
-/** A merge request as its forge reads it now: its state and the branches it merges. */
+/** Where a Change run's merge request falls in its fan-out's plan: that Run, and the wave. */
+const PlanWaveSchema = Schema.Struct({ plan: Schema.String, at: Schema.Number });
+type PlanWave = typeof PlanWaveSchema.Type;
+
+/**
+ * A merge request as its forge reads it now: its state and the branches it merges, and its
+ * plan's wave where a fan-out's Change run opened it.
+ */
 export const MergeRequestReadSchema = Schema.Union([
   Schema.TaggedStruct("Read", {
     state: Schema.String,
     source: Schema.String,
     target: Schema.String,
+    wave: Schema.optionalKey(PlanWaveSchema),
   }),
   Schema.TaggedStruct("Unreadable", { why: Schema.String }),
 ]);
@@ -187,10 +195,16 @@ export const readMergeRequest = Effect.fn("Releasing.readMergeRequest")(function
 
 /**
  * A set's merge requests, blockers first, each with those of the set it waits on: one whose
- * target branch is another's source branch. A `Cycle` names those that wait on each other.
+ * target branch is another's source branch, and those of its plan's earlier waves. A `Cycle`
+ * names those that wait on each other.
  */
 export function stackOrder(
-  mrs: ReadonlyArray<{ readonly id: string; readonly source: string; readonly target: string }>,
+  mrs: ReadonlyArray<{
+    readonly id: string;
+    readonly source: string;
+    readonly target: string;
+    readonly wave?: PlanWave;
+  }>,
 ):
   | {
       readonly _tag: "Ordered";
@@ -202,7 +216,25 @@ export function stackOrder(
   | { readonly _tag: "Cycle"; readonly ids: ReadonlyArray<string> } {
   const ids = Arr.map(mrs, (one) => one.id);
   const branches = new Map(Arr.map(mrs, (one) => [one.id, one] as const));
-  const waits = new Map(Arr.map(ids, (id) => [id, waitsOnOf(id, ids, branches)] as const));
+  const earlier = (one: (typeof mrs)[number]) =>
+    Arr.filter(
+      mrs,
+      (other) =>
+        one.wave !== undefined && other.wave?.plan === one.wave.plan && other.wave.at < one.wave.at,
+    );
+  const waits = new Map(
+    Arr.map(
+      mrs,
+      (one) =>
+        [
+          one.id,
+          Arr.union(
+            waitsOnOf(one.id, ids, branches),
+            Arr.map(earlier(one), (other) => other.id),
+          ),
+        ] as const,
+    ),
+  );
   const order: Array<{ readonly id: string; readonly waitsOn: ReadonlyArray<string> }> = [];
   let left = ids;
   while (left.length > 0) {

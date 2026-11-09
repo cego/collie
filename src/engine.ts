@@ -172,6 +172,7 @@ import { outcomeRecordsOf, type OutcomeRecords } from "./outcomes";
 import type { Metrics } from "./board-model";
 import {
   forgeOfRef,
+  mrId,
   mrRefOf,
   mrRefsIn,
   mrWords,
@@ -739,14 +740,14 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly _tag: "Moved"; readonly head: string; readonly environments?: ReadonlyArray<string> }
     | { readonly _tag: "Failed"; readonly why: string; readonly environments?: ReadonlyArray<string> };
   export const StageReadSchema: Schema.Codec<StageRead, unknown, never, never>;
-  /** A merge request as its forge reads it now: its state and the branches it merges. */
+  /** A merge request as its forge reads it now: its state and the branches it merges, and its plan's wave where a fan-out's Change run opened it. */
   export type MergeRequestRead =
-    | { readonly _tag: "Read"; readonly state: string; readonly source: string; readonly target: string }
+    | { readonly _tag: "Read"; readonly state: string; readonly source: string; readonly target: string; readonly wave?: { readonly plan: string; readonly at: number } }
     | { readonly _tag: "Unreadable"; readonly why: string };
   export const MergeRequestReadSchema: Schema.Codec<MergeRequestRead, unknown, never, never>;
-  /** A set's merge requests, blockers first, each with those of the set it waits on; or those waiting on each other. */
+  /** A set's merge requests, blockers first, each with those of the set it waits on, by branch and by its plan's earlier waves; or those waiting on each other. */
   export function stackOrder(
-    mrs: ReadonlyArray<{ readonly id: string; readonly source: string; readonly target: string }>,
+    mrs: ReadonlyArray<{ readonly id: string; readonly source: string; readonly target: string; readonly wave?: { readonly plan: string; readonly at: number } }>,
   ):
     | { readonly _tag: "Ordered"; readonly order: ReadonlyArray<{ readonly id: string; readonly waitsOn: ReadonlyArray<string> }> }
     | { readonly _tag: "Cycle"; readonly ids: ReadonlyArray<string> };
@@ -4947,7 +4948,13 @@ export const hostLayer = (options: {
                 _tag: "Unreadable",
                 why: `${asked.mr} is not a merge request`,
               } satisfies MergeRequestRead)
-            : under(readMergeRequest({ ref, cwd: asked.cwd, run: runShell }));
+            : Effect.gen(function* () {
+                const read = yield* under(readMergeRequest({ ref, cwd: asked.cwd, run: runShell }));
+                const id = mrId(asked.mr);
+                const wave =
+                  read._tag === "Read" && id !== null ? yield* planWaveOf(id) : undefined;
+                return wave === undefined ? read : { ...read, wave };
+              });
         },
         readProduction: (asked) =>
           Effect.gen(function* () {
@@ -5078,6 +5085,45 @@ export const hostLayer = (options: {
           const worktree = placed?.worktree?.path ?? null;
           return { worktree, cwd: worktree ?? placed?.cwd ?? dir };
         });
+      /** The wave of its fan-out's plan the Change run that opened `id` is in; none for no such Run. */
+      const planWaveOf = (id: string) =>
+        Effect.gen(function* () {
+          const rows = yield* store.runs;
+          for (const row of rows) {
+            if (row.parent === null) continue;
+            const opened = yield* mergeRequestOf(fs, dir, row.run);
+            if (opened === null || mrId(opened) !== id) continue;
+            const options = yield* decodeStrings(row.options ?? "{}").pipe(
+              Effect.orElseSucceed((): Record<string, string> => ({})),
+            );
+            const parent = Arr.findFirst(rows, (one) => one.run === row.parent);
+            if ((options.repo ?? "") === "" || Option.isNone(parent)) return undefined;
+            const given = yield* decodeInput(parent.value.input).pipe(
+              Effect.orElseSucceed((): Readonly<Record<string, Schema.Json>> => ({})),
+            );
+            const root = (yield* checkoutOf(parent.value)).cwd;
+            for (const value of Rec.values(given)) {
+              if (!isText(value)) continue;
+              const source = yield* classifyWorkSource(value).pipe(
+                Effect.orElseSucceed(() => null),
+              );
+              if (source?.kind !== "plan-dir") continue;
+              const plan = yield* planReposOf(source.value, root).pipe(
+                Effect.orElseSucceed(() => null),
+              );
+              const key = changeKey({ path: options.repo!, change: options.change });
+              const at =
+                plan === null || plan.refusal !== null
+                  ? -1
+                  : Arr.findFirstIndex(plan.waves, (wave) => wave.includes(key)).pipe(
+                      Option.getOrElse(() => -1),
+                    );
+              return at < 0 ? undefined : { plan: parent.value.run, at };
+            }
+            return undefined;
+          }
+          return undefined;
+        }).pipe(Effect.provideContext(bun));
       /** A Run as a card sees it: where it works, and where its records are. */
       const watched = (runId: string): Effect.Effect<Watched> =>
         Effect.gen(function* () {

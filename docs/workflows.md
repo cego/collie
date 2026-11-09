@@ -551,9 +551,11 @@ targets, `owner/repo#n`, or `!n` in the project the start is made from. Each is 
 its MR id, and one named twice is released once. A start naming one that is no merge
 request is refused, naming it, before anything runs. The set is what you named: no other
 merge request of the Task is added. Each merge request of the set is released by a Release
-Run of its own, a child of this one, started in stack order: one whose target branch is
-another's source branch waits on it, and is started only once that one's Release Run has
-merged it, costing nothing meanwhile. Merge requests that wait on each other are refused.
+Run of its own, a child of this one, started in stack and wave order: one whose target
+branch is another's source branch waits on it, and so does one a fan-out's Change run opened
+on each of the set's merge requests whose Change is in an earlier wave of the same plan. A
+waiting one is started only once those Release Runs have merged theirs, costing nothing
+meanwhile. Merge requests that wait on each other are refused.
 Each child is a release as below, of its one merge request: its own Go at its own head,
 withdrawn only when its own head moves; its own production go; its own Helle claims. One
 waiting on a release that failed, or on a merge request left open, is not started. The Run

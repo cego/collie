@@ -948,10 +948,12 @@ reference, its URL and its forge.
 each once by its MR `id`, with its `mr:` `target` and `url`, or `unresolved`, the first
 reference that names none; null where the text names one or none.
 `host.readMergeRequest({ cwd, mr })` reads one from its forge now: `Read` with its `state`
-and its `source` and `target` branches, or `Unreadable` with `why`. `stackOrder` puts a
-set's merge requests, given their branches, blockers first, each with the ones of the set
-it `waitsOn`: those whose source branch is its target branch, in its own project where any
-are. `Cycle` names those that wait on each other.
+and its `source` and `target` branches, and the `wave` it is `at` in its fan-out's `plan`
+where one of its Change runs opened it, or `Unreadable` with `why`. `stackOrder` puts a
+set's merge requests, given their branches and waves, blockers first, each with the ones of
+the set it `waitsOn`: those whose source branch is its target branch, in its own project
+where any are, and those of an earlier wave of the same plan. `Cycle` names those that wait
+on each other.
 
 ## Markdown as content
 
