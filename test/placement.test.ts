@@ -3312,8 +3312,10 @@ test("a Connection deadline provided around the host is the one its start reads 
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const helle = yield* Effect.acquireRelease(
-        Effect.sync(() => Bun.serve({ port: 0, fetch: () => new Promise<Response>(() => {}) })),
-        (server) => Effect.promise(() => server.stop(true)),
+        Effect.sync(() =>
+          Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data: () => {} } }),
+        ),
+        (listener) => Effect.sync(() => listener.stop(true)),
       );
       helleUrl = `http://127.0.0.1:${helle.port}`;
       yield* fs.makeDirectory(`${rig.root}/.config/helle`, { recursive: true });

@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
-import { Effect, Fiber, FileSystem } from "effect";
+import { Clock, Effect, Fiber, FileSystem } from "effect";
 import { TestClock } from "effect/testing";
 import { CONNECTION_TIMEOUT_MS, readConnections, connectionsOnMachine } from "../src/connections";
 import { Rig } from "./support/recorder";
@@ -96,7 +96,8 @@ test("a fast-forwarded Connection read waits for a probe that takes real time", 
         {
           id: "gitlab",
           fix: "glab auth login",
-          read: Effect.promise(() => Bun.sleep(1_000)).pipe(
+          read: Effect.sleep("1 second").pipe(
+            Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()),
             Effect.as({ state: "ok" as const, account: "mk", detail: "gitlab.example as mk" }),
           ),
         },
