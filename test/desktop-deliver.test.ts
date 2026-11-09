@@ -121,6 +121,7 @@ test("a delivery the host did not apply fails in the host's words, under its req
         new ActionFailed({
           request: "send-2",
           reason: "r-1 is finished; start a follow-up with `collie run followup r-1`",
+          refused: true,
         }),
       );
     }),

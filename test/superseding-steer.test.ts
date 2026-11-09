@@ -10,6 +10,7 @@ import { expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
 import { Config, Effect, FileSystem, Option, Schema, type Scope, flow, Result } from "effect";
 import { act, bridgeCommand, openBridge } from "../desktop/src/bun/machine";
+import { questionnaire, questionnaireView, stepped } from "../desktop/src/shared/questionnaire";
 import { readEnv, type PluginEnv } from "../src/env";
 import { resetExecutors } from "../src/executors";
 import { connect } from "../src/host";
@@ -244,6 +245,68 @@ test(
           (rows) => (rowOf(rows, "go")?.superseded ?? null) !== null,
         );
         expect(rowOf(waiting, "go")).toMatchObject({ answer: null, cause: "missed-steer-1" });
+      }),
+    ),
+  180_000,
+);
+
+test(
+  "Desktop's steering entry sends the words to the board's steer target, which sets the Choice aside with no answer",
+  () =>
+    atQuestion("collie-questionnaire-steer-", (at) =>
+      Effect.gen(function* () {
+        const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
+        const command = Option.isSome(binary)
+          ? [binary.value]
+          : [process.execPath, `${root}src/main.ts`];
+        const bridge = yield* openBridge(bridgeCommand(command, "mk-pc"), {
+          PATH: "/usr/bin:/bin",
+          HOME: at.world.home,
+          HERDR_PLUGIN_ROOT: at.world.install,
+          HERDR_PLUGIN_STATE_DIR: at.world.state,
+          COLLIE_USER_DIR: at.world.config,
+          COLLIE_HOST: encode(command),
+          ...(yield* suiteEnv),
+          HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH ?? "",
+          FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG ?? "",
+        });
+        const reached = { machine: { profile: "local", name: "mk-pc" }, desktop: bridge };
+        // herdr's live agents are read again at the board's next tick.
+        const card = yield* until(
+          () => cardOf(at),
+          (task) => task?.questions?.[0]?.steer?.agent != null,
+        );
+        const go = card!.questions![0]!;
+        expect(go.steer).toEqual({ agent: at.agent, why: null });
+
+        const typed = stepped(questionnaire(go), { kind: "draft", text: "Call it the chooser" });
+        const { state: sending, does } = stepped(typed.state, {
+          kind: "steer",
+          request: "desktop-steer-1",
+        });
+        expect(does).toEqual({
+          kind: "send",
+          request: "desktop-steer-1",
+          action: {
+            _tag: "Deliver",
+            runId: at.runId,
+            agent: at.agent,
+            text: "Call it the chooser",
+          },
+        });
+        if (does?.kind !== "send") return;
+        yield* act(reached, does.request, does.action).pipe(Effect.orDie);
+        const steered = stepped(sending, { kind: "replied", ok: true, fresh: true }).state;
+        expect(questionnaireView(steered).status).toBe(
+          `Sent to ${at.agent}; the question is set aside`,
+        );
+
+        const waiting = yield* until(
+          () => waitingOf(at),
+          (rows) => rowOf(rows, "go")?.superseded != null,
+        );
+        expect(rowOf(waiting, "go")).toMatchObject({ answer: null });
+        expect(Arr.filter(waiting, (one) => one.answer !== null)).toEqual([]);
       }),
     ),
   180_000,

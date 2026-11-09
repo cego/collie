@@ -19,13 +19,11 @@ export interface Answering {
   readonly answers: ReadonlyMap<string, InFlight>;
   /** The newest send per question. */
   readonly latest: ReadonlyMap<string, number>;
-  readonly drafts: ReadonlyMap<string, string>;
 }
 
 export const nothingAnswered: Answering = {
   answers: new Map(),
   latest: new Map(),
-  drafts: new Map(),
 };
 
 export const answerKey = (installation: string, runId: string, questionId: string) =>
@@ -62,15 +60,8 @@ export const answerTried = (
   return {
     ...state,
     answers: withOne(state.answers, key, { ...sent, confirmed: done === true }),
-    drafts: done === true ? without(state.drafts, key) : state.drafts,
   };
 };
-
-export const draftOf = (state: Answering, key: string) => state.drafts.get(key) ?? "";
-export const draftTyped = (state: Answering, key: string, text: string): Answering => ({
-  ...state,
-  drafts: withOne(state.drafts, key, text),
-});
 
 /** Drops what is held for each question no Task on the Flock's board has open. */
 export const answersSettled = (
@@ -82,14 +73,13 @@ export const answersSettled = (
       Arr.map(openQuestions(task), (asked) => answerKey(installation, asked.run, asked.id)),
     ),
   );
-  const held = [...state.answers.keys(), ...state.latest.keys(), ...state.drafts.keys()];
+  const held = [...state.answers.keys(), ...state.latest.keys()];
   if (Arr.every(held, (key) => open.has(key))) return state;
   const settle = <A>(map: ReadonlyMap<string, A>) =>
     new Map(Arr.filter([...map], ([key]) => open.has(key)));
   return {
     answers: settle(state.answers),
     latest: settle(state.latest),
-    drafts: settle(state.drafts),
   };
 };
 

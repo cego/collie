@@ -6,6 +6,7 @@ import type { Flow, FlowAction, RunDetail } from "../../../../src/board-model";
 import type { InspectorPart } from "../../../src/shared/step-inspector";
 import { desktopFlowAction, nextMove, type FlowActionView } from "../../../src/shared/flow-actions";
 import type { PlacedTask } from "../../../src/shared/flock";
+import { openQuestions } from "../../../src/shared/pending-answer";
 import type { Gesture } from "../../../src/shared/board-clicks";
 import { inField, overlayOpen } from "../../../src/shared/board-clicks";
 import {
@@ -114,7 +115,15 @@ const decision = computed(() => {
     props.placed.installation,
     props.placed.asOf === null,
   )?.effect;
-  return effect?.kind === "answer" || effect?.kind === "proposal" ? effect : null;
+  if (effect?.kind !== "answer") return effect?.kind === "proposal" ? effect : null;
+  // The board's question carries what the record's does not: Hold and the steering target.
+  const board = Option.getOrUndefined(
+    Arr.findFirst(
+      openQuestions(props.placed.task),
+      (one) => one.run === effect.question.run && one.id === effect.question.id,
+    ),
+  );
+  return board === undefined ? effect : { ...effect, question: board };
 });
 const press = (action: FlowActionView, spot?: FlowSpot) =>
   controls.press(action, () => {

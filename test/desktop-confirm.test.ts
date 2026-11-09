@@ -82,7 +82,9 @@ test("a refusal is said at once, tried once, and logged with the host's reason",
       const { lines, log } = logged();
       const door = answering([Effect.fail(new HostRefused({ reason: "already answered" }))]);
       const failed = yield* act(door.reached, "ask-3", answer, log).pipe(Effect.flip);
-      expect(failed).toEqual(new ActionFailed({ request: "ask-3", reason: "already answered" }));
+      expect(failed).toEqual(
+        new ActionFailed({ request: "ask-3", reason: "already answered", refused: true }),
+      );
       expect(door.requests).toEqual(["ask-3"]);
       expect(lines).toEqual([
         {
