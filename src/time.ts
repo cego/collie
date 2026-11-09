@@ -4,12 +4,22 @@ import { DateTime, Effect, Option } from "effect";
 
 export const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 
+/** Timestamps parsed before: a board build reads the same recorded times again and again. */
+const parsed = new Map<string, number>();
+const PARSED_KEPT = 100_000;
+
 /** A recorded timestamp in epoch milliseconds, and `NaN` for one that is not a time. */
 export function epochMs(iso: string): number {
-  return Option.match(DateTime.make(iso), {
+  const known = parsed.get(iso);
+  if (known !== undefined) return known;
+  const ms = Option.match(DateTime.make(iso), {
     onNone: () => Number.NaN,
     onSome: DateTime.toEpochMillis,
   });
+  // Dropped whole when full: an LRU only if a host ever sees that many distinct times.
+  if (parsed.size >= PARSED_KEPT) parsed.clear();
+  parsed.set(iso, ms);
+  return ms;
 }
 
 /** Epoch milliseconds as an ISO timestamp. */
