@@ -137,10 +137,12 @@ import { land, LandingSchema, readLanding, takeOver } from "./landing";
 import {
   carried,
   fastForward,
+  readMergeRequest,
   readProduction,
   readRollback,
   readStage,
   readTag,
+  type MergeRequestRead,
   type ProductionRead,
   type RollbackRead,
   type StageRead,
@@ -168,7 +170,15 @@ import { redact } from "./redact";
 import { reportOf, type Recorded } from "./report";
 import { outcomeRecordsOf, type OutcomeRecords } from "./outcomes";
 import type { Metrics } from "./board-model";
-import { forgeOfRef, mrId, mrRefOf, mrWords, parseMrTarget, readMrRef } from "./board-model";
+import {
+  forgeOfRef,
+  mrId,
+  mrRefOf,
+  mrRefsIn,
+  mrWords,
+  parseMrTarget,
+  readMrRef,
+} from "./board-model";
 import { readMrStates } from "./merges";
 import { forgeOf } from "./forge/forge";
 import { links } from "./forge/review";
@@ -278,7 +288,7 @@ import {
   type StepLine,
   type StepNote,
 } from "./steps";
-import { classifyGivenTarget, classifyWorkSource, defaultBase } from "./inputs";
+import { classifyGivenSet, classifyGivenTarget, classifyWorkSource, defaultBase } from "./inputs";
 import type { PlatformServices } from "./platform";
 import {
   approvedFile,
@@ -730,6 +740,17 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly _tag: "Moved"; readonly head: string; readonly environments?: ReadonlyArray<string> }
     | { readonly _tag: "Failed"; readonly why: string; readonly environments?: ReadonlyArray<string> };
   export const StageReadSchema: Schema.Codec<StageRead, unknown, never, never>;
+  /** A merge request as its forge reads it now: its state and the branches it merges. */
+  export type MergeRequestRead =
+    | { readonly _tag: "Read"; readonly state: string; readonly source: string; readonly target: string }
+    | { readonly _tag: "Unreadable"; readonly why: string };
+  export const MergeRequestReadSchema: Schema.Codec<MergeRequestRead, unknown, never, never>;
+  /** A set's merge requests, blockers first, each with those of the set it waits on; or those waiting on each other. */
+  export function stackOrder(
+    mrs: ReadonlyArray<{ readonly id: string; readonly source: string; readonly target: string }>,
+  ):
+    | { readonly _tag: "Ordered"; readonly order: ReadonlyArray<{ readonly id: string; readonly waitsOn: ReadonlyArray<string> }> }
+    | { readonly _tag: "Cycle"; readonly ids: ReadonlyArray<string> };
 
   /** A landing taken over from the Run that made it, or why there was none to take. */
   export type Takeover =
@@ -1089,6 +1110,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly head: string;
       readonly jobs: ReadonlyArray<string>;
     }) => Effect.Effect<StageRead>;
+    /** A merge request as its forge reads it now, from \`cwd\`. Take it inside an Activity. */
+    readonly readMergeRequest: (options: {
+      readonly cwd: string;
+      readonly mr: string;
+    }) => Effect.Effect<MergeRequestRead>;
     /** Whether stage is shown back on what production carries, and off \`off\`, in \`environments\` where named. Take it inside an Activity. */
     readonly readRollback: (options: {
       readonly runId: string;
@@ -1935,6 +1961,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function mrUrlOf(ref: MrRef): string | null;
   /** The forge a merge request is on. */
   export function forgeOfRef(ref: MrRef): "gitlab" | "github";
+  /** The merge requests a set names, each once by MR id, or the first reference naming none; null for one or none. */
+  export function mrSet(text: string):
+    | { readonly mrs: ReadonlyArray<{ readonly id: string; readonly target: string; readonly url: string }> }
+    | { readonly unresolved: string }
+    | null;
 
   /** Which of the three kinds of change a settled diff target names. */
   export function targetKind(target: string): "mr" | "branch" | "worktree" | "";
@@ -4910,6 +4941,15 @@ export const hostLayer = (options: {
               }),
             );
           }),
+        readMergeRequest: (asked) => {
+          const ref = readMrRef(asked.mr);
+          return ref === null
+            ? Effect.succeed({
+                _tag: "Unreadable",
+                why: `${asked.mr} is not a merge request`,
+              } satisfies MergeRequestRead)
+            : under(readMergeRequest({ ref, cwd: asked.cwd, run: runShell }));
+        },
         readProduction: (asked) =>
           Effect.gen(function* () {
             const ref = yield* recordedRef(asked.runId);
@@ -5385,7 +5425,8 @@ const pointedAt = (
 
 const isText = Schema.is(Schema.String);
 
-const mrIdOf = (said: string | null) => (said === null ? null : mrId(said));
+/** A set's first merge request stands for it. */
+const mrIdOf = (said: string | null) => (said === null ? null : mrId(mrRefsIn(said)[0] ?? ""));
 
 /** The field a module gives this strategy, if it gives it to one. */
 const fieldWith = (hints: Readonly<Record<string, InputStrategy>>, strategy: InputStrategy) =>
@@ -6436,6 +6477,12 @@ const makeRegistry: (
     const field = fieldWith(generation.hints, "diff-target");
     const value = field === undefined ? undefined : settled.input[field];
     if (field === undefined || !isText(value) || Str.trim(value) === "") return settled;
+    const set = yield* classifyGivenSet(value, { cwd }).pipe(Effect.provideContext(bun));
+    if (set !== null && "unresolved" in set)
+      return yield* refusedInput(
+        `"${field}" names ${set.unresolved}, which is not a merge request`,
+      );
+    if (set !== null) return { ...settled, input: { ...settled.input, [field]: set.value } };
     const target = yield* classifyGivenTarget(value, { cwd }).pipe(Effect.provideContext(bun));
     if (target === null) {
       return yield* refusedInput(

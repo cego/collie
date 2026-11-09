@@ -944,6 +944,15 @@ released, or merged at another commit. Each of these calls takes its place insid
 Activity. `readMrRef`, `mrUrlOf` and `forgeOfRef` turn a merge request input into its
 reference, its URL and its forge.
 
+`mrSet(text)` reads an input naming several merge requests, separated by spaces or commas:
+each once by its MR `id`, with its `mr:` `target` and `url`, or `unresolved`, the first
+reference that names none; null where the text names one or none.
+`host.readMergeRequest({ cwd, mr })` reads one from its forge now: `Read` with its `state`
+and its `source` and `target` branches, or `Unreadable` with `why`. `stackOrder` puts a
+set's merge requests, given their branches, blockers first, each with the ones of the set
+it `waitsOn`: those whose source branch is its target branch, in its own project where any
+are. `Cycle` names those that wait on each other.
+
 ## Markdown as content
 
 A workflow's Markdown is what its agents are told, and nothing else: what it takes, what it

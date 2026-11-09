@@ -1,11 +1,12 @@
 // Holding a merge request's Helle claims and putting its head on stage, shared by `release`
-// and `stage` so a merge request is claimed, staged and rolled back the same way either way.
-// Each caller asks in its own words.
+// and `stage` so a merge request is claimed, staged and rolled back the same way either way,
+// and a set of merge requests taken one Run each. Each caller asks in its own words.
 
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import {
+  Children,
   ClaimedSchema,
   FindingSchema,
   Host,
@@ -13,6 +14,8 @@ import {
   StageReadSchema,
   WorkflowError,
   ask,
+  mrSet,
+  type ActionFacts,
   type JobLink,
 } from "collie";
 import { Effect, Schema, Option } from "effect";
@@ -257,3 +260,39 @@ export const staging = <R1, R2>(options: {
       }),
   };
 };
+
+export interface SetMember {
+  readonly id: string;
+  readonly target: string;
+  readonly url: string;
+}
+
+export const invocationFor = (workflow: "release" | "stage", member: SetMember) =>
+  `${workflow}-${pipe_(member.id, Str.replace(/[^a-z0-9]+/g, "-"))}`;
+
+/** Whether a Run was started with one merge request: a set is never offered again whole. */
+export const startedWithOne = (facts: ActionFacts) => {
+  const set = mrSet(facts.diffTarget ?? "");
+  return set === null || ("mrs" in set && set.mrs.length === 1);
+};
+
+/** A Run of this workflow on `member` alone, waited on: its result, or why it failed. */
+export const runOn = (workflow: "release" | "stage", member: SetMember) =>
+  Effect.gen(function* () {
+    const children = yield* Children;
+    const child = yield* children
+      .start({
+        invocation: invocationFor(workflow, member),
+        workflow: "self",
+        input: { mr: member.target },
+      })
+      .pipe(Effect.result);
+    if (child._tag === "Failure")
+      return { ok: false, said: `not started: ${child.failure.reason}` };
+    return yield* children.result(child.success).pipe(
+      Effect.match({
+        onSuccess: (value) => ({ ok: true, said: String(value) }),
+        onFailure: (failure) => ({ ok: false, said: failure.reason }),
+      }),
+    );
+  });

@@ -66,6 +66,7 @@ import {
   flowActions,
   mrId,
   mrIdProject,
+  waitsOnOf,
   mrLabel,
   mrWords,
   readMrRef,
@@ -1023,22 +1024,6 @@ function dispositionFor(
     ),
   );
   return named.sort((a, b) => epochMs(a.at) - epochMs(b.at)).at(-1) ?? null;
-}
-
-/**
- * The MR ids among `ids` whose source branch is `id`'s target branch, those in its own
- * project where any are: a fan-out's repositories share their branch's name.
- */
-function waitsOnOf(
-  id: string,
-  ids: ReadonlyArray<string>,
-  forge: ReadonlyMap<string, ForgeFacts>,
-): string[] {
-  const target = forge.get(id)?.target ?? "";
-  if (target === "") return [];
-  const sources = Arr.filter(ids, (other) => other !== id && forge.get(other)?.source === target);
-  const here = Arr.filter(sources, (other) => mrIdProject(other) === mrIdProject(id));
-  return here.length > 0 ? here : sources;
 }
 
 /** The forge's words for an MR id, in `said`'s own case where it names that one. */

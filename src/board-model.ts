@@ -2071,6 +2071,59 @@ export function mrId(text: string, typedIn?: { readonly project: string | null }
 /** `host/group/project` of an MR id. */
 export const mrIdProject = (id: string) => pipe(id, Str.replace(/[!#]\d+$/, ""));
 
+/** The references a set is named by, separated by spaces or commas. */
+export const mrRefsIn = (text: string): ReadonlyArray<string> =>
+  Arr.filter(Str.split(Str.trim(text), /[\s,]+/), Str.isNonEmpty);
+
+/**
+ * The merge requests a set names, each once by MR id, or the first reference naming none.
+ * Null where it names one or none, which is no set.
+ */
+export function mrSet(text: string):
+  | {
+      readonly mrs: ReadonlyArray<{
+        readonly id: string;
+        readonly target: string;
+        readonly url: string;
+      }>;
+    }
+  | { readonly unresolved: string }
+  | null {
+  const said = mrRefsIn(text);
+  if (said.length < 2) return null;
+  const named = new Map<
+    string,
+    { readonly id: string; readonly target: string; readonly url: string }
+  >();
+  for (const one of said) {
+    const id = mrId(one);
+    const ref = readMrRef(one);
+    const words = ref === null ? null : mrWords(ref);
+    if (id === null || words === null || words.url === null) return { unresolved: one };
+    if (!named.has(id)) named.set(id, { id, target: words.target, url: words.url });
+  }
+  return { mrs: [...named.values()] };
+}
+
+/**
+ * The MR ids among `ids` whose source branch is `id`'s target branch, those in its own
+ * project where any are: a fan-out's repositories share their branch's name.
+ */
+export function waitsOnOf(
+  id: string,
+  ids: ReadonlyArray<string>,
+  branches: ReadonlyMap<string, { readonly source?: string; readonly target?: string }>,
+): string[] {
+  const target = branches.get(id)?.target ?? "";
+  if (target === "") return [];
+  const sources = Arr.filter(
+    ids,
+    (other) => other !== id && branches.get(other)?.source === target,
+  );
+  const here = Arr.filter(sources, (other) => mrIdProject(other) === mrIdProject(id));
+  return here.length > 0 ? here : sources;
+}
+
 const hosted = (project: string) => mrPath({ project, iid: "" }) !== project;
 
 const endsIn = (project: string | null, path: string) =>

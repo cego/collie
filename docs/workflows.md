@@ -541,7 +541,24 @@ review approved and its checks proved, tagged, and the tag read back on origin. 
 merge or from its tag after it, and to production on your go.
 
 **Inputs:** `mr`, the merge request or pull request, picked from the same target menu
-`review` offers ([Reviewing someone else's merge request](using.md#reviewing-someone-elses-merge-request)).
+`review` offers ([Reviewing someone else's merge request](using.md#reviewing-someone-elses-merge-request)),
+or a set of them.
+
+**A set:** `mr` takes several references, separated by spaces or commas: URLs, `mr:`
+targets, `owner/repo#n`, or `!n` in the project the start is made from. Each is resolved to
+its MR id, and one named twice is released once. A start naming one that is no merge
+request is refused, naming it, before anything runs. The set is what you named: no other
+merge request of the Task is added. Each merge request of the set is released by a Release
+Run of its own, a child of this one, started in stack order: one whose target branch is
+another's source branch waits on it, and is started only once that one's Release Run has
+merged it, costing nothing meanwhile. Merge requests that wait on each other are refused.
+Each child is a release as below, of its one merge request: its own Go at its own head,
+withdrawn only when its own head moves; its own production go; its own Helle claims. One
+waiting on a release that failed, or on a merge request left open, is not started. The Run
+ends saying how many released, failed and were not started, and how many were left open,
+naming each, and fails where one failed. A failed child offers **Release again** with its
+one merge request; the set's Run never offers the whole set again. Picking several Gos in
+one question is not yet offered: each child asks its own.
 
 **Checkout:** its own, of the merge request's source branch (the pull request's head
 branch on GitHub): the one git already has for it, which is the implement Run's worktree
@@ -757,8 +774,15 @@ deploys is what the forge's own pipeline built. It never merges, tags, pushes, p
 plays a production job. A merge request you want released after testing is `release`'s
 **Stage the merge request**; one you only want to test is this.
 
-**Inputs:** `mr`, the merge request or pull request, as `release` takes it. A Stage Run on a
-merge request joins that merge request's Task.
+**Inputs:** `mr`, the merge request or pull request, as `release` takes it, a set included.
+A Stage Run on a merge request joins that merge request's Task; one on a set joins the Task
+of its first.
+
+**A set:** a set named as `release` takes one starts a Stage Run per merge request, as
+children of this one, all at once and with no Go: each claims its own Helle projects, so two
+that stage under one project wait on each other's claim as any two Stage Runs do. The Run
+ends saying how many staged and how many failed, naming each, and fails where one failed. A
+failed child offers **Stage again** with its one merge request.
 
 **Checkout:** the merge request's source branch, as `release`'s, only ever fast-forwarded. A
 refusal parks the Run with why.

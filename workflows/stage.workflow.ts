@@ -15,7 +15,9 @@ import {
   ask,
   contentOf,
   defineWorkflow,
+  forecast,
   forgeOfRef,
+  mrSet,
   mrUrlOf,
   readMrRef,
   step,
@@ -32,11 +34,15 @@ import {
   StagedMergeRequest,
   claiming,
   fitting,
+  invocationFor,
   nth,
   plays,
   quoted,
+  runOn,
   short,
   staging,
+  startedWithOne,
+  type SetMember,
 } from "./staging.ts";
 import onGitlab from "./stage.gitlab.md" with { type: "text" };
 import onGithub from "./stage.github.md" with { type: "text" };
@@ -179,6 +185,43 @@ const rollBack = step({
   role: "implementer",
 });
 
+const stageRuns = step({
+  id: "stage-runs",
+  title: "Stage Runs",
+  description: "One Stage Run per merge request of the set.",
+  kind: "workflow",
+});
+
+/** Each merge request of a set staged by a Stage Run of its own, all at once. */
+const stageEach = (members: ReadonlyArray<SetMember>) =>
+  Effect.gen(function* () {
+    const host = yield* Host;
+    const runId = (yield* Run).id;
+    yield* forecast([stageRuns]);
+    const items = Arr.map(members, (member) => invocationFor("stage", member));
+    const ended = yield* Effect.forEach(
+      members,
+      (member) =>
+        Effect.gen(function* () {
+          const ran = yield* stageRuns(runOn("stage", member), {
+            item: invocationFor("stage", member),
+            items,
+          });
+          const line = `${member.url} ${ran.ok ? "staged" : "failed"}: ${ran.said}`;
+          yield* host.record(runId, line);
+          return { ok: ran.ok, line };
+        }),
+      { concurrency: "unbounded" },
+    );
+    const failed = Arr.filter(ended, (one) => !one.ok).length;
+    const said = `${ended.length - failed} staged, ${failed} failed: ${Arr.join(
+      Arr.map(ended, (one) => one.line),
+      "; ",
+    )}`;
+    if (failed > 0) return yield* new WorkflowError({ reason: said });
+    return said;
+  });
+
 export default defineWorkflow({
   connections: {
     needs: {
@@ -189,9 +232,12 @@ export default defineWorkflow({
   id: "stage",
   title: "stage — put an open merge request on stage for testing, unmerged",
   description:
-    "Puts one open merge request's head on stage for testing, unmerged, and does nothing more: it asks for no approval, answered comments, passed pipeline or Go, and never merges, tags, posts or deploys to production. It claims the Helle projects stage deploys under, plays the merge request pipeline's stage jobs, proves every stage environment carries the head, and holds stage until the human says Done, which rolls it back, Stage again, or Leave it on stage.",
+    "Puts one open merge request's head on stage for testing, unmerged, and does nothing more: it asks for no approval, answered comments, passed pipeline or Go, and never merges, tags, posts or deploys to production. It claims the Helle projects stage deploys under, plays the merge request pipeline's stage jobs, proves every stage environment carries the head, and holds stage until the human says Done, which rolls it back, Stage again, or Leave it on stage. Given several, it stages each by a Stage Run of its own.",
   input: Schema.Struct({
-    mr: Schema.String.annotate({ description: "The merge request or pull request to stage" }),
+    mr: Schema.String.annotate({
+      description:
+        "The merge request or pull request to stage, or several, separated by spaces or commas",
+    }),
   }),
   output: Schema.String,
   agents: { roles: { implementer: IMPLEMENTER } },
@@ -204,6 +250,7 @@ export default defineWorkflow({
       workflow: "self",
       when: "failed",
       inputs: { mr: "started-with" },
+      eligible: startedWithOne,
     },
   ],
   run: ({ input: asked }) =>
@@ -219,10 +266,17 @@ export default defineWorkflow({
           return yield* Workflow.suspend(yield* WorkflowInstance);
         });
 
-      const ref = readMrRef(asked.mr);
+      const set = mrSet(asked.mr);
+      if (set !== null && "unresolved" in set)
+        return yield* fail(
+          `${set.unresolved} is not a merge request this Run can find, so nothing was staged`,
+        );
+      if (set !== null && set.mrs.length > 1) return yield* stageEach(set.mrs);
+      const said = set === null ? asked.mr : set.mrs[0]!.target;
+      const ref = readMrRef(said);
       const mr = ref === null ? null : mrUrlOf(ref);
       if (ref === null || mr === null)
-        return yield* fail(`${asked.mr || "an empty mr"} is not a merge request this Run can find`);
+        return yield* fail(`${said || "an empty mr"} is not a merge request this Run can find`);
       yield* host.mergeRequest(runId, mr);
       const { cwd } = yield* checkingOut(
         Effect.gen(function* () {

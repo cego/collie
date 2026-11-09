@@ -81,7 +81,14 @@ import type { Integration } from "./integrate";
 import type { BenchmarkPlan, Measurement } from "./measurement-model";
 import type { MergeOutcome, Takeover } from "./landing";
 import type { ReviewHead, ReviewStanding } from "./review-wait";
-import type { FastForward, ProductionRead, RollbackRead, StageRead, TagRead } from "./releasing";
+import type {
+  FastForward,
+  MergeRequestRead,
+  ProductionRead,
+  RollbackRead,
+  StageRead,
+  TagRead,
+} from "./releasing";
 import type { Holders } from "./helle";
 import { ConnectionId, type ConnectionReading } from "./connection-model";
 export { ConnectionId, ConnectionReading } from "./connection-model";
@@ -100,7 +107,7 @@ export { repoArgs } from "./forge/gitlab";
 export { mrForgeFacts } from "./forge/forge";
 /** How much of a Subscription is used, as the host reads it (ADR-0049). */
 export { subscriptionOf, usedFor, type UsageReading } from "./usage-model";
-export { forgeOfRef, mrUrlOf, parseMrTarget, readMrRef, type MrRef } from "./board-model";
+export { forgeOfRef, mrSet, mrUrlOf, parseMrTarget, readMrRef, type MrRef } from "./board-model";
 /** What merging the default branch into a Run's branch did (`HostApi.integrate`). */
 export { IntegrationSchema, type Integration } from "./integrate";
 /** A Measurement as the host recorded it (`HostApi.measure`), an infinite ratio kept as JSON. */
@@ -129,18 +136,22 @@ export {
   type SettledAnswers,
 } from "./review-wait";
 /**
- * A checkout brought to a head, and a tag, production and stage read back
- * (`HostApi.fastForward`, `readTag`, `readProduction`, `readStage`, `readRollback`).
+ * A checkout brought to a head, a tag, production and stage read back, and a merge request
+ * read and a set of them ordered (`HostApi.fastForward`, `readTag`, `readProduction`,
+ * `readStage`, `readRollback`, `readMergeRequest`).
  */
 export {
   FastForwardSchema,
   JobLinkSchema,
+  MergeRequestReadSchema,
   ProductionReadSchema,
   RollbackReadSchema,
   StageReadSchema,
   TagReadSchema,
+  stackOrder,
   type FastForward,
   type JobLink,
+  type MergeRequestRead,
   type ProductionRead,
   type RollbackRead,
   type StageRead,
@@ -1150,6 +1161,14 @@ export interface HostApi {
     readonly head: string;
     readonly jobs: ReadonlyArray<string>;
   }) => Effect.Effect<StageRead>;
+  /**
+   * A merge request as its forge reads it now, from `cwd`: its state and the branches it
+   * merges, or why it cannot be read. Take it inside an Activity.
+   */
+  readonly readMergeRequest: (options: {
+    readonly cwd: string;
+    readonly mr: string;
+  }) => Effect.Effect<MergeRequestRead>;
   /**
    * Whether the forge shows stage rolled back: the newest successful deployment of each of
    * `environments` carries none of `off` and carries what production's has. Where
