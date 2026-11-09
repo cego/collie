@@ -788,6 +788,42 @@ describe("status", () => {
       status: "superseded",
     },
     {
+      rule: "a refusal heard off the board survives the board's next refresh",
+      question: choice(),
+      events: [
+        { kind: "pick", id: "pg" },
+        { kind: "submit", request: "q-1" },
+        { kind: "seen", question: null },
+        { kind: "replied", request: "q-1", ok: false, refused: true, reason: "superseded" },
+        { kind: "seen", question: null },
+      ],
+      status: "superseded",
+    },
+    {
+      rule: "a hold refused off the board survives the board's next refresh",
+      question: TWO,
+      events: [
+        { kind: "pick", id: HOLD },
+        { kind: "submit", request: "h-1" },
+        { kind: "seen", question: null },
+        { kind: "replied", request: "h-1", ok: false, refused: true, reason: "r-1 is finished" },
+        { kind: "seen", question: null },
+      ],
+      status: "r-1 is finished",
+    },
+    {
+      rule: "a steer refused off the board survives the board's next refresh",
+      question: choice(),
+      events: [
+        { kind: "draft", text: "use a schema" },
+        { kind: "steer", request: "s-1" },
+        { kind: "seen", question: null },
+        { kind: "replied", request: "s-1", ok: false, refused: true, reason: "no such agent" },
+        { kind: "seen", question: null },
+      ],
+      status: "no such agent",
+    },
+    {
       rule: "a steer in flight when the question leaves the board reads steered once confirmed",
       question: choice(),
       events: [

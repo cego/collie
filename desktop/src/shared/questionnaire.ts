@@ -273,6 +273,8 @@ const replied = (state: Questionnaire, event: Extract<Event, { kind: "replied" }
 
 const seen = (state: Questionnaire, question: Question | null): Questionnaire => {
   if (question === null) {
+    // Already off the board: what its send came to stays shown.
+    if (!state.onBoard) return state;
     const kind = state.status.kind;
     return kind === "sending" || kind === "answered" || kind === "steered"
       ? { ...state, onBoard: false }
