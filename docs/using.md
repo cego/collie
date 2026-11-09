@@ -1123,7 +1123,8 @@ separate. Press the strip to open the Task's record on **Flow**. Older hosts sho
 
 A card of a Task with several merge requests has a line for each under its sentence: its
 state, whether it is ready to release at which head, and what it waits on, with an **Open**
-of its own. Its record has a tab for each, in place of the one **Merge request** tab. A
+of its own. Its record has a tab for each, in place of the one **Merge request** tab, and
+its **Flow** a **Release** row for each, named by its merge request. A
 merge request that Tasks on more than one Machine hold is drawn once, on the first of those
 cards, with an **on <Machine>** link to each Machine's Task. A link only opens that Task's
 record: what is done there goes to that Machine's host, never to another. A card with one
