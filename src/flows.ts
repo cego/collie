@@ -130,6 +130,8 @@ export interface ControlSession extends BoardSession {
   releases?: string;
   /** Where the board's Runs come from: the host's, unless a test hands over its own. */
   runsOf?: RunsOf;
+  /** Where the board's Tasks and registered agents come from: the host's, unless a test hands over its own. */
+  recordsOf?: RecordsOf;
   /** Where the board's Tasks come from: one read of the host's board, unless followed. */
   tasksOf?: () => Effect.Effect<BoardRead>;
   /** Where the drawer's details come from: one read of the host's, unless followed; null closes it. */
@@ -860,7 +862,7 @@ export function appState(session: ControlSession, env: PluginEnv) {
     const reuse = again.reuse ? last : null;
     // One scan of the run dirs per read, shared by the board and History: they are two
     // Views over the same directory, and reading it twice doubles the cost of a refresh.
-    const scanned = reuse ? undefined : yield* scan(env, runsOf);
+    const scanned = reuse ? undefined : yield* scan(env, session);
     const runs = scanned?.runs;
     // One read of the register and the workspace list for both boards: a wide tick
     // costs the local board's calls plus nothing, and the two boards cannot reconcile
@@ -1408,7 +1410,7 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
       ledgers: ledgersOf(env),
       run: null,
       runs: yield* Effect.gen(function* () {
-        const { runs, registered } = yield* scan(env, session.runsOf);
+        const { runs, registered } = yield* scan(env, session);
         return Arr.map(rows, (row) => {
           const run = Option.getOrUndefined(Arr.findFirst(runs, (one) => one.id === row.id));
           return run === undefined
@@ -1423,14 +1425,14 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
   // Nothing to loop on: with no keyboard the board is a report, so it is printed once
   // and the entrypoint ends rather than spinning on a `takeKey` that can never answer.
   if (!process.stdin.isTTY) {
-    const view = yield* boardOf(session, yield* scan(env, session.runsOf));
+    const view = yield* boardOf(session, yield* scan(env, session));
     const steering = yield* steeringOf(view);
     const once = renderWorkspace(view, unreadable ?? why, undefined, steering);
     process.stdout.write(`${once}\n`);
     return 0;
   }
   const keys = yield* keyboard();
-  let view = yield* boardOf(session, yield* scan(env, session.runsOf));
+  let view = yield* boardOf(session, yield* scan(env, session));
   let note: string | null = why;
   let drawn = "";
   let read = yield* Clock.currentTimeMillis;
@@ -1464,12 +1466,12 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
       } else {
         note = yield* act(session, env, view, key);
       }
-      view = yield* boardOf(session, yield* scan(env, session.runsOf));
+      view = yield* boardOf(session, yield* scan(env, session));
       read = yield* Clock.currentTimeMillis;
       continue;
     }
     if ((yield* Clock.currentTimeMillis) - read >= REFRESH_MS) {
-      view = yield* boardOf(session, yield* scan(env, session.runsOf));
+      view = yield* boardOf(session, yield* scan(env, session));
       read = yield* Clock.currentTimeMillis;
     }
   }
@@ -1621,12 +1623,22 @@ type RunsOf = (
   FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
 >;
 
-const scan = Effect.fn("Flows.scan")(function* (env: PluginEnv, runsOf: RunsOf = listRuns) {
+type RecordsOf = (env: PluginEnv) => ReturnType<typeof hostRecordsOf>;
+
+// A host that cannot be asked says so on the board itself.
+const hostRecordsOf = (env: PluginEnv) =>
+  Effect.all({
+    tasks: hostTasks(env).pipe(Effect.orElseSucceed(() => [])),
+    registered: hostRegistered(env).pipe(Effect.orElseSucceed(() => [])),
+  });
+
+const scan = Effect.fn("Flows.scan")(function* (
+  env: PluginEnv,
+  from: Pick<ControlSession, "runsOf" | "recordsOf">,
+) {
   return {
-    runs: yield* runsOf(env),
-    // A host that cannot be asked says so on the board itself.
-    tasks: yield* hostTasks(env).pipe(Effect.orElseSucceed(() => [])),
-    registered: yield* hostRegistered(env).pipe(Effect.orElseSucceed(() => [])),
+    runs: yield* (from.runsOf ?? listRuns)(env),
+    ...(yield* (from.recordsOf ?? hostRecordsOf)(env)),
   } satisfies Scanned;
 });
 
