@@ -36,7 +36,7 @@ import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 import { AuditLine } from "./audit";
-import { importLedgers, importRegisters, importTasks } from "./records-import";
+import { importLedgers, importProposals, importRegisters, importTasks } from "./records-import";
 import { StoreWrites } from "./store-writes";
 import { RequestConflict } from "./board-model";
 import { nowIso } from "./time";
@@ -349,13 +349,16 @@ const field = (name: string) =>
   `CASE WHEN json_valid(line) THEN json_extract(line, '$.${name}') END`;
 
 type ImportError = Effect.Error<
-  ReturnType<typeof importLedgers | typeof importTasks | typeof importRegisters>
+  ReturnType<
+    typeof importLedgers | typeof importTasks | typeof importRegisters | typeof importProposals
+  >
 >;
 
 const migrations = (imports: {
   readonly ledgers: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
   readonly tasks: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
   readonly registers: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
+  readonly proposals: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
 }) => ({
   "1_runs": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -481,6 +484,21 @@ const migrations = (imports: {
     `;
     yield* imports.registers;
   }),
+  "15_proposals": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      CREATE TABLE collie_proposals (
+        seq INTEGER PRIMARY KEY,
+        journal TEXT NOT NULL,
+        line TEXT NOT NULL,
+        kind TEXT AS (json_extract(line, '$.kind')),
+        proposal TEXT AS (coalesce(json_extract(line, '$.proposal'), json_extract(line, '$.id')))
+      )
+    `;
+    yield* sql`CREATE INDEX collie_proposals_journal ON collie_proposals (journal)`;
+    yield* sql`CREATE INDEX collie_proposals_proposal ON collie_proposals (proposal)`;
+    yield* imports.proposals;
+  }),
 });
 
 /** How often a commit by another connection, another process's, is looked for. */
@@ -514,6 +532,7 @@ function makeStore(
           ledgers: imported(importLedgers),
           tasks: imported(importTasks),
           registers: imported(importRegisters),
+          proposals: imported(importProposals),
         }),
       ),
       table: "collie_migrations",

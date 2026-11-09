@@ -55,7 +55,8 @@ import {
   pending as pendingNews,
   read as readNews,
 } from "../src/news";
-import { pendingFor, proposalsPath, read as readProposals } from "../src/proposals";
+import { pendingFor, read as readProposals } from "../src/proposals";
+import { recordsReadLayer } from "../src/records";
 import { machineHerd } from "../src/steering";
 
 const runtime = ManagedRuntime.make(platformLayer);
@@ -271,9 +272,8 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
   // The key the *tools* use, which is this socket's — not the probe's own Herd identity.
   // Both are inside the disposable state directory; reading the wrong one would say
   // nothing was requested.
-  const file = yield* proposalsPath(stateDir, key);
   const now = yield* Clock.currentTimeMillis;
-  const records = yield* readProposals(file);
+  const records = yield* readProposals(key).pipe(Effect.provide(recordsReadLayer(stateDir)));
   const one = Option.getOrUndefined(
     Arr.findFirst(
       Arr.filter(records, (line) => line.kind === "proposal"),

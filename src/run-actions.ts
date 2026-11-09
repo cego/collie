@@ -642,7 +642,7 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
   // and every action is refused as `executor_missing`, which would be a lie about this
   // build rather than a fact about it.
   yield* registerRunExecutors();
-  const file = yield* journalOf(env.stateDir, proposalId);
+  const file = yield* journalOf(proposalId);
   if (file === null)
     return yield* new ProposalRefused({
       refused: "not_found",

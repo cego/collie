@@ -49,7 +49,6 @@ import { carryOutProposal, workspaceNamed } from "../src/operations";
 import type { JsonObject } from "../src/schema";
 import {
   confirm as confirmProposal,
-  proposalsPath,
   pendingHerdWide,
   read as readProposals,
   record as recordProposal,
@@ -350,7 +349,7 @@ test("chat carries out a request immediately and records who asked", () =>
       expect((yield* readIntent(run.dir))?.goal).toBe("ship the picker");
 
       const proposals = Arr.filter(
-        yield* readProposals(yield* proposalsPath(stateDir, KEY)),
+        yield* readProposals(KEY),
         (line): line is ProposalRecord => line.kind === "proposal",
       );
       expect(proposals).toHaveLength(1);
@@ -359,7 +358,7 @@ test("chat carries out a request immediately and records who asked", () =>
       expect(pipe_(proposal.by, Str.startsWith("chat:"))).toBe(true);
       expect(
         Arr.some(
-          yield* readProposals(yield* proposalsPath(stateDir, KEY)),
+          yield* readProposals(KEY),
           (line) =>
             line.kind === "confirmed" &&
             line.id === proposal.id &&
@@ -370,13 +369,7 @@ test("chat carries out a request immediately and records who asked", () =>
       // A replay still cannot execute twice.
       const asChat: Actor = { origin: "chat", requestId: "c-1" };
       expect(
-        yield* confirmProposal(
-          yield* proposalsPath(stateDir, KEY),
-          proposal.id,
-          proposal.content_hash,
-          asChat,
-          new Map(),
-        ),
+        yield* confirmProposal(KEY, proposal.id, proposal.content_hash, asChat, new Map()),
       ).toMatchObject({ refused: "not_pending" });
     }),
   ));
@@ -425,7 +418,7 @@ test(
     inWorld(
       Effect.gen(function* () {
         const run = yield* aRun("add a picker");
-        const journal = yield* proposalsPath(stateDir, KEY);
+        const journal = KEY;
         const pending = yield* withLock(
           `${run.dir}/run.json.lock`,
           Effect.die("the Run's lock was already taken"),
@@ -475,7 +468,7 @@ test(
     inWorld(
       Effect.gen(function* () {
         const run = yield* aRun("add a picker");
-        const journal = yield* proposalsPath(stateDir, KEY);
+        const journal = KEY;
         yield* ensureLockDir(journal);
         const pending = yield* withLock(
           `${journal}.lock`,
@@ -525,12 +518,7 @@ test("retrying a chat request returns its receipt instead of applying it again",
       expect(first).toContain("applied");
       expect(yield* call("collie_propose", input)).toBe(first);
       expect((yield* readIntent(run.dir))?.version).toBe(2);
-      expect(
-        Arr.filter(
-          yield* readProposals(yield* proposalsPath(stateDir, KEY)),
-          (l) => l.kind === "proposal",
-        ),
-      ).toHaveLength(1);
+      expect(Arr.filter(yield* readProposals(KEY), (l) => l.kind === "proposal")).toHaveLength(1);
     }),
   ));
 
@@ -614,10 +602,7 @@ test("a partial request ending in a question keeps its execution receipt", () =>
       expect(yield* call("collie_propose", input)).toBe(first);
       expect((yield* readIntent(run.dir))?.version).toBe(2);
       expect(
-        Arr.filter(
-          yield* readProposals(yield* proposalsPath(stateDir, KEY)),
-          (line) => line.kind === "proposal",
-        ),
+        Arr.filter(yield* readProposals(KEY), (line) => line.kind === "proposal"),
       ).toHaveLength(1);
     }),
   ));
@@ -785,7 +770,7 @@ test("a Run nobody has is refused, never retargeted at one nearby", () =>
         }),
       ).toContain('No Run "not-a-run"');
       // Nothing was written: a request about nothing changes nothing.
-      expect(yield* readProposals(yield* proposalsPath(stateDir, KEY))).toEqual([]);
+      expect(yield* readProposals(KEY)).toEqual([]);
     }),
   ));
 
@@ -815,7 +800,7 @@ test("a request outside the closed set of actions is not a request", () =>
       });
       const proposal = Option.getOrUndefined(
         Arr.findFirst(
-          yield* readProposals(yield* proposalsPath(stateDir, KEY)),
+          yield* readProposals(KEY),
           (line): line is ProposalRecord => line.kind === "proposal",
         ),
       );
@@ -850,7 +835,7 @@ test("an action about something Collie was not shown comes back as a question", 
       });
       const proposal = Option.getOrUndefined(
         Arr.findFirst(
-          yield* readProposals(yield* proposalsPath(stateDir, KEY)),
+          yield* readProposals(KEY),
           (line): line is ProposalRecord => line.kind === "proposal",
         ),
       );
@@ -912,7 +897,7 @@ test("a chat request amends Intent without a second confirmation", () =>
           },
         ],
       });
-      const file = yield* proposalsPath(stateDir, KEY);
+      const file = KEY;
       const proposal = Option.getOrUndefined(
         Arr.findFirst(
           yield* readProposals(file),
@@ -1024,7 +1009,7 @@ test("collie_do carries out what the human asked for, and says what happened", (
       });
 
       expect(said).toContain("stop: applied");
-      expect(yield* readProposals(yield* proposalsPath(stateDir, KEY))).toEqual([]);
+      expect(yield* readProposals(KEY)).toEqual([]);
       const view = yield* runView(env, run.id);
       expect(view !== null && "controls" in view ? view.controls : []).toContain("stop");
     }),
@@ -1047,7 +1032,7 @@ test("collie_do settles a proposal the human said yes to in chat", () =>
       const run = yield* aRun("add a picker");
       // The evaluator's own idea, waiting on the board: the one kind of proposal there is
       // now that chat's requests are carried out as they are made.
-      const file = yield* proposalsPath(stateDir, KEY);
+      const file = KEY;
       const pending = (interpretation: string, actions: Action[]) =>
         recordProposal(file, {
           interpretation,
@@ -1069,7 +1054,7 @@ test("collie_do settles a proposal the human said yes to in chat", () =>
         actions: [{ kind: "confirm", proposal: proposal.id, hash: proposal.content_hash }],
       });
       expect(said).toContain("release");
-      const lines = yield* readProposals(yield* proposalsPath(stateDir, KEY));
+      const lines = yield* readProposals(KEY);
       const settled = Arr.flatMap(lines, (line) => (line.kind === "confirmed" ? [line] : []));
       expect(Arr.map(settled, (line) => line.id)).toEqual([proposal.id]);
       // Recorded as chat's: relaying what they said is not becoming them.
@@ -1080,7 +1065,7 @@ test("collie_do settles a proposal the human said yes to in chat", () =>
       const second = Option.getOrUndefined(
         Arr.findFirst(
           Arr.filter(
-            yield* readProposals(yield* proposalsPath(stateDir, KEY)),
+            yield* readProposals(KEY),
             (line): line is ProposalRecord => line.kind === "proposal",
           ),
           (line) => line.id !== proposal.id,
@@ -1091,7 +1076,7 @@ test("collie_do settles a proposal the human said yes to in chat", () =>
       });
       expect(
         Arr.some(
-          yield* readProposals(yield* proposalsPath(stateDir, KEY)),
+          yield* readProposals(KEY),
           (line) => line.kind === "declined" && line.id === second.id,
         ),
       ).toBe(true);
@@ -1145,9 +1130,8 @@ test("a confirmation whose actions failed stops the rest of what was asked", () 
         interpretation: "start the review",
         actions: [{ kind: "start", workflow: "no-such-workflow", inputs: { goal: "x" } }],
       });
-      const proposal = Arr.flatMap(
-        yield* readProposals(yield* proposalsPath(stateDir, KEY)),
-        (line) => (line.kind === "proposal" ? [line] : []),
+      const proposal = Arr.flatMap(yield* readProposals(KEY), (line) =>
+        line.kind === "proposal" ? [line] : [],
       )[0]!;
 
       const said = yield* call("collie_do", {
@@ -1464,12 +1448,9 @@ test("chat manages Schedules at once through the host, with the conversation and
           yield* call("collie_propose", { interpretation: "bad request", actions: [action] }),
         ).toContain("InvalidInput");
       expect(yield* list()).toMatchObject({ ok: true, value: { schedules: [] } });
-      expect(
-        pendingHerdWide(
-          yield* readProposals(yield* proposalsPath(stateDir, KEY)),
-          yield* Clock.currentTimeMillis,
-        ),
-      ).toEqual([]);
+      expect(pendingHerdWide(yield* readProposals(KEY), yield* Clock.currentTimeMillis)).toEqual(
+        [],
+      );
     }),
   ));
 
@@ -1612,7 +1593,7 @@ test("a proposal chat settles carries the words it was settled with", () =>
   inWorld(
     Effect.gen(function* () {
       yield* chatting();
-      const file = yield* proposalsPath(stateDir, KEY);
+      const file = KEY;
       const proposal = yield* recordProposal(file, {
         interpretation: "nothing to do",
         targets: [],

@@ -6,6 +6,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
 import * as SqlClient from "effect/sql/SqlClient";
+import { decodeProposalLineOption } from "./proposals";
 import { decodeRegisterOption, encodeAgentEntry } from "./registry";
 import { decodeTaskOption } from "./task";
 
@@ -35,6 +36,22 @@ export const importLedgers = Effect.fn("RecordsImport.ledgers")(function* (state
       .pipe(Effect.orElseSucceed(() => ""));
     for (const line of journalLines(raw))
       yield* sql`INSERT INTO collie_deliveries (ledger, line) VALUES (${ledger}, ${line})`;
+  }
+});
+
+/** Every `herd/<key>/proposals.jsonl`, each line that is a proposal's. */
+export const importProposals = Effect.fn("RecordsImport.proposals")(function* (stateDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const sql = yield* SqlClient.SqlClient;
+  const root = path.join(stateDir, "herd");
+  for (const journal of yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []))) {
+    const raw = yield* fs
+      .readFileString(path.join(root, journal, "proposals.jsonl"))
+      .pipe(Effect.orElseSucceed(() => ""));
+    for (const line of journalLines(raw))
+      if (Option.isSome(decodeProposalLineOption(line)))
+        yield* sql`INSERT INTO collie_proposals (journal, line) VALUES (${journal}, ${line})`;
   }
 });
 

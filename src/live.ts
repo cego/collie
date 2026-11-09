@@ -27,13 +27,7 @@ import {
   read as readNews,
   uncertain as uncertainNews,
 } from "./news";
-import {
-  pendingFor,
-  pendingHerdWide,
-  proposalsPath,
-  read as readProposals,
-  type ProposalRecord,
-} from "./proposals";
+import { pendingFor, pendingHerdWide, type ProposalLine, type ProposalRecord } from "./proposals";
 import { herdOf, herdDir, type Delivery } from "./steering";
 
 /** How many cards the region draws. Newest first, and a screen's worth is the point. */
@@ -151,6 +145,7 @@ export interface Ledgers {
   /** The Runs a human has typed at behind Collie's back. */
   readonly overridden: Effect.Effect<ReadonlySet<string>, never, Client>;
   readonly deliveriesOf: (run: string) => Effect.Effect<ReadonlyArray<Delivery>, never, Client>;
+  readonly proposals: (herd: string) => Effect.Effect<ReadonlyArray<ProposalLine>, never, Client>;
 }
 
 type Client = FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner;
@@ -168,8 +163,7 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
 }) {
   const now = yield* Clock.currentTimeMillis;
   const key = yield* herdOrNull(opts.socketPath);
-  const proposalFile = key === null ? null : yield* proposalsPath(opts.stateDir, key);
-  const lines = proposalFile === null ? [] : yield* readProposals(proposalFile);
+  const lines = key === null ? [] : yield* opts.ledgers.proposals(key);
   const overridden = yield* opts.ledgers.overridden;
 
   // One read of each Run's own journals, kept for whichever of the two wants it.

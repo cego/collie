@@ -81,7 +81,7 @@ import type { Action } from "./actions";
 import { NEEDS_INPUT, REFUSED_INPUT, runDir, type Given, type RunView } from "./engine";
 import type { OfferView } from "./board-model";
 import { err, ExpectedError, taskFor, type Failure, type OpResult } from "./operations";
-import { voiceOf, type Asker } from "./proposals";
+import { voiceOf, type Asker, type ProposalLine } from "./proposals";
 import type { TaskChoice, TaskRecord } from "./task";
 import { encodeApprovedFile, rememberedFile, renderApproved, type VerifySpec } from "./verify-spec";
 import { projectHere, shell } from "./mr";
@@ -427,6 +427,15 @@ export const hostRegistered = (
   env: PluginEnv,
 ): Effect.Effect<ReadonlyArray<AgentEntry>, never, Client> =>
   asks({ ...env, machine: undefined }, (client) => client.registered()).pipe(
+    Effect.map((answered) => (answered.ok ? answered.value : [])),
+  );
+
+/** A Herd's proposals journal, as this Machine's host keeps it; none where it cannot be asked. */
+export const hostProposals = (
+  env: PluginEnv,
+  herd: string,
+): Effect.Effect<ReadonlyArray<ProposalLine>, never, Client> =>
+  asks({ ...env, machine: undefined }, (client) => client.proposals({ herd })).pipe(
     Effect.map((answered) => (answered.ok ? answered.value : [])),
   );
 

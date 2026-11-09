@@ -60,6 +60,7 @@ import {
   steerAbout,
   steerRun,
   usageReadings,
+  hostProposals,
   hostRegistered,
 } from "./lifecycle";
 import type { UsageReading } from "./usage-model";
@@ -1560,6 +1561,7 @@ const ledgersOf = (env: PluginEnv): Ledgers => ({
     asks(env, (client) => client.deliveries({ runId: run })).pipe(
       Effect.map((read) => (read.ok ? (read.value ?? []) : [])),
     ),
+  proposals: (herd) => hostProposals(env, herd),
 });
 
 const liveOf = Effect.fn("Flows.liveOf")(function* (session: ControlSession) {

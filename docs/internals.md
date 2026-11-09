@@ -1433,8 +1433,11 @@ its socket. On a Machine set to core, it is that Machine's core session, keyed b
 socket. Never by a directory: a cwd would key two sessions in one repository to the
 same Herd, and one session across two repositories to different ones. Everything shared
 across a session's workspaces lives under `<state>/herd/<herdKey>/`: the conversation, the
-proposals, the budget and the elections. That directory has no checkout, and it is where
-the Home works.
+budget and the elections. That directory has no checkout, and it is where the Home works.
+The proposals journal is the Herd's rows of `collie_proposals` in the host's `host.db`,
+written only by the host and read by other processes through its `proposals` and
+`proposal` requests; the first host on a state directory imports each
+`herd/<herdKey>/proposals.jsonl` once and leaves the file in place.
 
 The **Home** is two core terminals the Machine's host keeps, whatever its
 `terminal_backend`: `collie-board`, which runs `collie board --draw`, and `collie-chat`,

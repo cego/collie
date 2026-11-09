@@ -17,7 +17,6 @@ import {
   contentHash,
   decline,
   judgeConfirmation,
-  proposalsPath,
   read,
   pendingFor,
   pendingHerdWide,
@@ -64,7 +63,7 @@ beforeEach(() =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       stateDir = yield* fs.makeTempDirectory({ prefix: "hw-proposals-" });
-      file = yield* proposalsPath(stateDir, "herd-1");
+      file = "herd-1";
       resetExecutors();
     }),
   ),
@@ -408,7 +407,7 @@ const inHerd = <A, E>(
       // this env resolves to rather than under a key the test picked.
       const fs = yield* FileSystem.FileSystem;
       yield* fs.writeFileString(env.socketPath!, "");
-      const herdFile = yield* proposalsPath(world.state, yield* herdOf(env.socketPath));
+      const herdFile = yield* herdOf(env.socketPath);
       return yield* body({ world, env, herdFile }).pipe(Effect.provide(recordsAt(world.state)));
     }),
   );

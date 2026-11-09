@@ -18,12 +18,7 @@ import { carryOutAsked } from "../src/run-actions";
 import { SENT_STATES, appendLine } from "../src/steering";
 import { deliveredTo, recordsAt } from "./support/records";
 import { TaskView } from "../src/board-model";
-import {
-  proposalsPath,
-  read as readProposals,
-  record as recordProposal,
-  type Actor,
-} from "../src/proposals";
+import { read as readProposals, record as recordProposal, type Actor } from "../src/proposals";
 import { agentName } from "../src/naming";
 import { controlDir } from "../src/compaction";
 import { recordClaudeEvent } from "../src/compactors";
@@ -513,7 +508,7 @@ test(
   () =>
     atQuestion("collie-supersede-held-", (at) =>
       Effect.gen(function* () {
-        const proposals = yield* proposalsPath(at.world.state, "some-herd");
+        const proposals = "some-herd";
         yield* recordProposal(proposals, {
           interpretation: "stop it",
           targets: [{ run: at.runId }],

@@ -11,7 +11,7 @@ import { expect, setDefaultTimeout, test } from "bun:test";
 import { steer } from "../src/operations";
 import { DEFAULT_AUTHORITY, readIntent, type Authority } from "../src/intent";
 import { conversationPath, read as readConversation } from "../src/conversation";
-import { proposalsPath, read as readProposals } from "../src/proposals";
+import { read as readProposals } from "../src/proposals";
 import { budgetPath, herdOf, readBudget } from "../src/steering";
 import type { PluginEnv } from "../src/env";
 import type { PlatformError } from "effect/PlatformError";
@@ -148,7 +148,7 @@ test("a steer executes the requested change without a confirmation hop", () =>
       expect(Arr.map(turns, (turn) => turn.role)).toEqual(["human", "collie"]);
       expect(turns[1]?.proposal).toBeDefined();
 
-      const proposals = yield* readProposals(yield* proposalsPath(stateDir, herdKey));
+      const proposals = yield* readProposals(herdKey);
       const recorded = Arr.filter(proposals, (line) => line.kind === "proposal");
       expect(recorded).toHaveLength(1);
 
@@ -176,7 +176,7 @@ test("a steer retried under its request reports what it did, and asks nobody aga
       const again = yield* steer(env, deps(stateDir), asked);
 
       expect(again).toEqual(first);
-      const proposals = yield* readProposals(yield* proposalsPath(stateDir, herdKey));
+      const proposals = yield* readProposals(herdKey);
       expect(Arr.filter(proposals, (line) => line.kind === "proposal")).toHaveLength(1);
       const spent = yield* readBudget(yield* budgetPath(stateDir, herdKey));
       expect(Arr.filter(spent, (line) => line.kind === "reserve")).toHaveLength(1);
@@ -315,7 +315,7 @@ test("a dry run prints what it would propose and records nothing", () =>
       expect(result.ok).toBe(true);
       if (result.ok) expect(result.human).toContain("hold it while you look");
 
-      const proposals = yield* readProposals(yield* proposalsPath(stateDir, herdKey));
+      const proposals = yield* readProposals(herdKey);
       expect(Arr.filter(proposals, (line) => line.kind === "proposal")).toEqual([]);
     }),
   ));

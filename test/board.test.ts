@@ -1593,7 +1593,7 @@ test("the board reads every Herd's proposals, not only the one its host came fro
         by: "evaluator:call-1",
         state: "pending",
       });
-      yield* appendProposal(`${dir}/herd/other-session/proposals.jsonl`, proposal("p-other"));
+      yield* appendProposal("other-session", proposal("p-other"));
 
       const views = yield* board(env, [run], { proposals: undefined });
 

@@ -71,7 +71,6 @@ import {
 import { ActionSchema, type Action } from "./actions";
 import {
   actorName,
-  proposalsPath,
   record as recordProposal,
   type Recorded,
   type Actor,
@@ -912,7 +911,7 @@ export const request = Effect.fn("operations.request")(function* (
     },
   );
 
-  const file = yield* proposalsPath(env.stateDir, herdKey);
+  const file = herdKey;
   const addressed = yield* incarnationsFor(env, checked);
   const proposal: Recorded = {
     interpretation: options.interpretation,
@@ -1018,10 +1017,7 @@ export const steer = Effect.fn("operations.steer")(function* (
   if (run === null) return err("run_not_found", `No Run "${target}".`, { run: target });
   // A retry asks nobody again: a second answer could order the same actions differently.
   if (options.dryRun !== true && options.asked !== "event") {
-    const before = yield* carriedBefore(
-      yield* proposalsPath(env.stateDir, deps.herdKey),
-      options.requestId,
-    );
+    const before = yield* carriedBefore(deps.herdKey, options.requestId);
     if (before !== null) return before;
   }
 
@@ -1082,7 +1078,7 @@ export const steer = Effect.fn("operations.steer")(function* (
       previewOf(proposed.interpretation, checked),
     );
 
-  const file = yield* proposalsPath(env.stateDir, deps.herdKey);
+  const file = deps.herdKey;
   const bound = yield* cardRevision(run, from);
   if (bound === "unknown")
     return err("invalid_input", `Run ${run.id} has no card "${from}".`, { card: from ?? "" });

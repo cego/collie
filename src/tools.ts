@@ -64,6 +64,7 @@ import {
   connectionReadings,
   type Door,
   hostTaskOf,
+  hostProposals,
   hostTasks,
 } from "./lifecycle";
 import { modelsLines } from "./catalogue-model";
@@ -71,7 +72,7 @@ import { connectionsLines } from "./connection-model";
 import { peersOf } from "./peers";
 import { cleanupLines } from "./cleanup";
 import { isOpen } from "./task";
-import { pendingFor, proposalsPath, read as readProposals } from "./proposals";
+import { pendingFor } from "./proposals";
 import { statusLine } from "./disposition";
 import { Herdr } from "./herdr";
 import { ASKED_KINDS, Flow, type FLOCK_READS, type RunProgress } from "./board-model";
@@ -691,10 +692,7 @@ const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run:
   if (found === null) return `No Run "${run}".`;
   const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   const now = yield* Clock.currentTimeMillis;
-  const proposals =
-    key === null
-      ? []
-      : pendingFor(yield* readProposals(yield* proposalsPath(env.stateDir, key)), run, now);
+  const proposals = key === null ? [] : pendingFor(yield* hostProposals(env, key), run, now);
   const asked = yield* asks(env, (client) => client.deliveries({ runId: run }));
   // Every delivery is on the ledger now: the one sender writes there before it sends,
   // so there is no second place a steer can be sitting unrecorded.

@@ -68,12 +68,7 @@ import { reason } from "./naming";
 import { appendPendingReport } from "./live";
 import { withDirLock, withLock } from "./lock";
 import { shell } from "./mr";
-import {
-  pendingFor,
-  proposalsPath,
-  read as readProposals,
-  record as recordProposal,
-} from "./proposals";
+import { pendingFor, read as readProposals, record as recordProposal } from "./proposals";
 import { appendLine, deliveriesOf, newestById, overrideActive, readLedger } from "./steering";
 import type { Records } from "./records";
 import { capabilitiesOf } from "./steering-caps";
@@ -141,9 +136,7 @@ const crossRunOf = Effect.fn("Oversight.crossRunOf")(function* (at: Watched) {
 const pendingProposals = Effect.fn("Oversight.pendingProposals")(function* (at: Watched) {
   const key = at.herd;
   if (key === null) return [];
-  const found = yield* readProposals(yield* proposalsPath(at.stateDir, key)).pipe(
-    Effect.orElseSucceed(() => []),
-  );
+  const found = yield* readProposals(key);
   return pendingFor(found, at.runId, yield* Clock.currentTimeMillis);
 });
 
@@ -1005,19 +998,14 @@ export const settleAtFinish = Effect.fn("Oversight.settleAtFinish")(function* (a
     ),
     "\n",
   );
-  return yield* recordProposal(yield* proposalsPath(at.stateDir, key), {
+  return yield* recordProposal(key, {
     interpretation: `${at.runId} finished with ${blocking.length} blocking constraint(s) still open`,
     targets: [{ run: at.runId }],
     actions: [{ kind: "followup", run: at.runId, text }],
     allowedNow: [],
     intentVersions: {},
     by: `host:${at.runId}`,
-  }).pipe(
-    Effect.map((recorded) => recorded.id),
-    Effect.catch((cause) =>
-      said(at, `could not record a follow-up proposal: ${reason(cause)}`).pipe(Effect.as(null)),
-    ),
-  );
+  }).pipe(Effect.map((recorded) => recorded.id));
 });
 
 /** Which checkpoints have a card already, so a restart does not card them twice. */

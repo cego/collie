@@ -21,7 +21,7 @@ import {
 import { readAudit } from "../src/audit";
 import { loadEntry } from "../src/engine";
 import { connect } from "../src/host";
-import { proposalsPath, record as recordProposal } from "../src/proposals";
+import { record as recordProposal } from "../src/proposals";
 import { CleanupReport } from "../src/board-model";
 import {
   CHECK_ID,
@@ -37,6 +37,7 @@ import { VerifySpecSchema } from "../src/verify-spec";
 import { exec, startDetached } from "./support/command";
 import { fastForward, runEffect } from "./support/effect";
 import { fixtures, root, until } from "./support/host";
+import { recordsAt } from "./support/records";
 import { collie, proves, type World } from "./support/world";
 
 const DAY_MS = 24 * 60 * 60_000;
@@ -363,7 +364,7 @@ test(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const stale = yield* generation(world, "stale", 8);
-          const file = yield* proposalsPath(world.state, "some-herd");
+          const file = "some-herd";
           const proposal = yield* recordProposal(file, {
             interpretation: "free some disk",
             targets: [],
@@ -371,7 +372,7 @@ test(
             allowedNow: [],
             intentVersions: {},
             by: "evaluator:e-1",
-          });
+          }).pipe(Effect.provide(recordsAt(world.state)));
           // Started as an operator's would be, with the world's home and so its cache.
           yield* collie(world, ["cleanup"]);
           const client = yield* connect(world.state);

@@ -12,7 +12,7 @@ import { appendDrift } from "../src/drift";
 import { liveFor, pendingReportsPath, readPendingReports, type Ledgers } from "../src/live";
 import { DEFAULT_AUTHORITY, seedIntent, writeIntent } from "../src/intent";
 import { marksOf } from "../src/lines";
-import { proposalsPath, record as recordProposal } from "../src/proposals";
+import { read as readProposals, record as recordProposal } from "../src/proposals";
 import { appendLine, deliveriesOf, herdOf, overriddenRuns } from "../src/steering";
 import { recordsAt } from "./support/records";
 import { runEffect } from "./support/effect";
@@ -63,6 +63,7 @@ const rig = Effect.fn("live.rig")(function* () {
   const ledgers: Ledgers = {
     overridden: overriddenRuns.pipe(Effect.provideContext(records)),
     deliveriesOf: (run) => deliveriesOf(run).pipe(Effect.provideContext(records)),
+    proposals: (herd) => readProposals(herd).pipe(Effect.provideContext(records)),
   };
   return { stateDir, runDir, records, ledgers };
 });
@@ -301,22 +302,19 @@ test("a proposal about the installation is drawn whatever row is selected", () =
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const { stateDir, runDir, ledgers } = yield* rig();
+      const { stateDir, runDir, records, ledgers } = yield* rig();
       // A socket path is what names a Herd, so the proposal is filed under the key this
       // state directory resolves to rather than one the test picked.
       const socketPath = path.join(stateDir, "herdr.sock");
       yield* fs.writeFileString(socketPath, "");
-      const herdWide = yield* recordProposal(
-        yield* proposalsPath(stateDir, yield* herdOf(socketPath)),
-        {
-          interpretation: "bring this installation up to date",
-          targets: [],
-          actions: [{ kind: "upgrade" }],
-          allowedNow: [],
-          intentVersions: {},
-          by: "chat:c-1",
-        },
-      );
+      const herdWide = yield* recordProposal(yield* herdOf(socketPath), {
+        interpretation: "bring this installation up to date",
+        targets: [],
+        actions: [{ kind: "upgrade" }],
+        allowedNow: [],
+        intentVersions: {},
+        by: "chat:c-1",
+      }).pipe(Effect.provideContext(records));
 
       // It names no Run, so no row would carry it — and `collie_propose` tells the model,
       // and the prompt tells the human, that the board is where it is confirmed.

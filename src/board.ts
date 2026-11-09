@@ -20,7 +20,7 @@ import { readSeen, seenSince } from "./seen";
 import { runTitle } from "./naming";
 import { planIssuesIn, planReposOf } from "./plan";
 import { diffTargetOf } from "./strategies";
-import { everyJournal, pendingFor, type ProposalLine } from "./proposals";
+import { everyProposal, pendingFor, type ProposalLine } from "./proposals";
 import { everyRegistered, type AgentEntry } from "./registry";
 import { listRuns, newestFirst, settled as ended, type RunFacts, type RunState } from "./runs";
 import type { PluginEnv } from "./env";
@@ -951,10 +951,6 @@ function asProposal(line: Extract<ProposalLine, { kind: "proposal" }>): Proposal
 }
 
 /** Every Herd's proposals: the host serves every Herd on its Machine, not the one it came from. */
-const proposalsOf = (stateDir: string) =>
-  everyJournal(stateDir).pipe(
-    Effect.map((journals) => Arr.flatMap(journals, ({ lines }) => lines)),
-  );
 
 /** How many Tasks a build reads at once. */
 const READS_AT_ONCE = 8;
@@ -1041,7 +1037,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   const all = newestFirst(opts.runs ?? (yield* listRuns(opts.env)));
   const tasks = new Map(Arr.map(opts.tasks ?? (yield* listTasks), (task) => [task.id, task]));
   const registered = opts.registered ?? (yield* everyRegistered);
-  const proposals = opts.proposals ?? (yield* proposalsOf(stateDir));
+  const proposals = opts.proposals ?? (yield* everyProposal);
   const mrStates = opts.mrStates ?? (yield* readMrStates(stateDir));
   const forge = opts.forge ?? (yield* readForge(stateDir));
   const since = yield* seenSince(stateDir);

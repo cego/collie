@@ -270,7 +270,10 @@ import {
   answeredBy,
   decline,
   journalOf,
+  LineSchema as ProposalLineSchema,
+  PROPOSALS,
   read as readProposals,
+  RecordSchema,
   reconcileStep,
   stepResults,
   type ProposalLine,
@@ -531,6 +534,13 @@ export const HostRpcs = RpcGroup.make(
   Rpc.make("overridden", { success: Schema.Array(Schema.String) }),
   /** This Machine's Tasks, newest first. */
   Rpc.make("tasks", { success: Schema.Array(TaskSchema) }),
+  /** A Herd's proposals journal, oldest line first. */
+  Rpc.make("proposals", {
+    payload: { herd: Schema.String },
+    success: Schema.Array(ProposalLineSchema),
+  }),
+  /** The proposal by that id, in whichever Herd's journal has it. */
+  Rpc.make("proposal", { payload: { id: Schema.String }, success: Schema.NullOr(RecordSchema) }),
   /** Every agent this Machine's host has registered, oldest registration first. */
   Rpc.make("registered", { success: Schema.Array(AgentEntrySchema) }),
   Rpc.make("runs", {
@@ -853,6 +863,22 @@ const handlers = (
         overridden: () => Effect.map(overriddenRuns, (runs) => [...runs]),
         tasks: () => listTasks,
         registered: () => everyRegistered,
+        proposals: ({ herd }) => readProposals(herd),
+        proposal: ({ id }) =>
+          journalOf(id).pipe(
+            Effect.flatMap((journal) =>
+              journal === null ? Effect.succeed([]) : readProposals(journal),
+            ),
+            Effect.map(
+              (lines) =>
+                Option.getOrUndefined(
+                  Arr.findFirst(
+                    lines,
+                    (line): line is ProposalRecord => line.kind === "proposal" && line.id === id,
+                  ),
+                ) ?? null,
+            ),
+          ),
         runs: ({ task }) => registry.views(task),
         watch: ({ runId }) => registry.watch(runId),
         recover: () => registry.recover,
@@ -1393,7 +1419,7 @@ const sharedBoardLayer = (dir: string) =>
           ),
           // A signal alone: the rows are read by the build, not once more per write.
           store.watching(Effect.void),
-          reactivity.stream([DELIVERIES, REGISTERED, TASKS], Effect.void),
+          reactivity.stream([DELIVERIES, PROPOSALS, REGISTERED, TASKS], Effect.void),
         ],
         { concurrency: "unbounded" },
       ).pipe(Stream.share({ capacity: 1, strategy: "sliding" }));
@@ -1961,7 +1987,7 @@ const frontDoorHandlers = (
         ) => Effect.Effect<A, E | ProposalRefused | RequestConflict, R>,
       ) =>
         Effect.gen(function* () {
-          const file = yield* journalOf(env.stateDir, proposal);
+          const file = yield* journalOf(proposal);
           if (file === null)
             return yield* new ProposalRefused({
               refused: "not_found",
@@ -2757,7 +2783,7 @@ const frontDoorHandlers = (
         reconcile: ({ proposal, index, as, request }, { client }) =>
           plainly(
             Effect.gen(function* () {
-              const file = yield* journalOf(env.stateDir, proposal);
+              const file = yield* journalOf(proposal);
               if (file === null)
                 return yield* new ProposalRefused({
                   refused: "not_found",
