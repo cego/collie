@@ -334,6 +334,21 @@ export const TaskMr = Schema.Struct({
 });
 export type TaskMr = typeof TaskMr.Type;
 
+/** One of a Task's merge requests: its state, whether it is ready to release at which head, and what it waits on. */
+export const mrReadiness = (one: TaskMr, mrs: ReadonlyArray<TaskMr>): string => {
+  const shortOf = new Map(Arr.map(mrs, (other) => [other.id, other.short]));
+  const waits = Arr.map(one.waitsOn, (id) => shortOf.get(id) ?? id);
+  const head = one.head === null ? "" : ` at ${pipe(one.head, Str.slice(0, 8))}`;
+  return Arr.join(
+    [
+      one.state ?? "not watched",
+      one.ready ? `ready to release${head}` : "not ready to release",
+      ...(waits.length === 0 ? [] : [`waits on ${Arr.join(waits, ", ")}`]),
+    ],
+    ", ",
+  );
+};
+
 /** One Task as the board draws it. */
 export const TaskView = Schema.Struct({
   /** The Task's id, or the Run's own where it belongs to no Task. */
@@ -832,6 +847,12 @@ export const Flow = Schema.Struct({
   current: Schema.NullOr(Schema.Struct({ run: Schema.String, node: Schema.String })),
   /** The merge request's way through CI, the merge and deploys, once the Task has one. */
   release: Schema.NullOr(Schema.Array(FlowNode)),
+  /** Each of a Task's several merge requests' way out, by MR id and wave; `release` is the first. */
+  releases: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({ mr: Schema.String, short: Schema.String, nodes: Schema.Array(FlowNode) }),
+    ),
+  ),
 });
 export type Flow = typeof Flow.Type;
 
@@ -922,6 +943,12 @@ export const RunDetail = Schema.Struct({
   finishedAt: Schema.Finite,
   /** What the host's merge watch last read, for a Run that has a merge request. */
   mr: Schema.NullOr(MrPanel),
+  /** Where it owns none of its Task's several merge requests, each one's, by wave; `mr` is the first. */
+  mrs: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({ id: Schema.String, mr: Schema.String, panel: Schema.NullOr(MrPanel) }),
+    ),
+  ),
   findings: Schema.Array(ReviewFinding),
   verifications: Schema.Array(VerificationView),
   steering: Schema.Array(SteeringCard),
@@ -996,6 +1023,8 @@ export const RunProgress = Schema.Struct({
   /** The forge's pipeline at its merge request's head; null where it has not been asked. */
   ci: Schema.NullOr(ForgeChecks),
   steps: Schema.Array(RunStep),
+  /** Every merge request of its Task, by wave; absent from an older host. */
+  mrs: Schema.optional(Schema.Array(TaskMr)),
 });
 export type RunProgress = typeof RunProgress.Type;
 
@@ -1442,6 +1471,8 @@ export const RunDetailRpc = Rpc.make("runDetail", {
     tail: Schema.Boolean,
     pages: Schema.Int,
     refreshMr: Schema.Boolean,
+    /** The MR id `refreshMr` asks again about; absent, the first merge request shown. */
+    refreshMrId: Schema.optionalKey(Schema.String),
     /** The Flow first, then each part as it comes; absent, every value is the whole record. */
     parts: Schema.optionalKey(Schema.Boolean),
     /** The revision of a record already held, answered `Unchanged` while it is current. */
@@ -2241,14 +2272,17 @@ export function flowActions(
     };
   });
   const leading = Option.getOrUndefined(Arr.findFirst(lanes, (lane) => lane.run === view.run));
-  const release =
-    flow.release === null || leading === undefined
-      ? flow.release
-      : Arr.map(flow.release, (node): FlowNode => ({
+  const releaseOf = (nodes: ReadonlyArray<FlowNode>) =>
+    leading === undefined
+      ? nodes
+      : Arr.map(nodes, (node): FlowNode => ({
           ...offered(node, leading, factsOf(leading)),
           runs: node.runs,
         }));
-  return { ...flow, lanes, release };
+  const release = flow.release === null ? null : releaseOf(flow.release);
+  if (flow.releases === undefined) return { ...flow, lanes, release };
+  const releases = Arr.map(flow.releases, (row) => ({ ...row, nodes: releaseOf(row.nodes) }));
+  return { ...flow, lanes, release, releases };
 }
 
 /** However the Task names its merge request: the URL one opened, or the target one was pointed at. */

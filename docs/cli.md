@@ -721,9 +721,11 @@ Answer what the wait returned with `run answer <run-id> <option> --decision <nam
 Operation, which a Step may hold several of or none,
 `{"type":"agent","agent":…,"operation":…}` when an agent is launched,
 `{"type":"parked","reason":…}`, `{"type":"awaiting","on":…,"who":…}` when it starts
-waiting for something that comes by itself, `{"type":"mr","mr":…}` when the merge request opens and
-`{"type":"ci","ci":…}` when the forge's pipeline changes state. Without `--json` each is
-one line: `run-1a2b: operation 01-a.md finished`, `run-1a2b: parked: …`, `run-1a2b: CI running`. Failures still arrive as a normal envelope — a timeout, or a
+waiting for something that comes by itself, `{"type":"mr","mr":…}` when each merge request of
+the Run's Task opens and `{"type":"mr","mr":…,"state":"merged"|"closed"}` when one merges or
+closes, and `{"type":"ci","ci":…}` when the forge's pipeline changes state. Without `--json` each is
+one line: `run-1a2b: operation 01-a.md finished`, `run-1a2b: parked: …`, `run-1a2b: CI running`,
+`run-1a2b: merge request … merged`. Failures still arrive as a normal envelope — a timeout, or a
 run the host could not watch — so a consumer reads each line as JSON and branches on
 whether `type` is present.
 
@@ -739,7 +741,9 @@ Desktop: `lanes`, one row per Run of the Task, oldest first, with its `execution
 `ranOn`, the `link` to a child started as a Task of its own and, for a Step called per item
 or round or a fan-out's Repo runs by `wave`, its `runs`; then `current`, the node the
 leading Run's work is at, `null` once the Task has settled; and `release`, the merge
-request's CI, Merged and furthest deploy, `null` until there is one
+request's CI, Merged and furthest deploy, `null` until there is one, and for a Task of
+several merge requests `releases`, one such row per merge request by wave, each with its
+`mr` (its MR id) and `short`, `release` being the first
 ([ADR-draft-a-step-is-declared-where-its-work-is-written](adr/draft-a-step-is-declared-where-its-work-is-written.md)).
 A Step's `links` are Runs its agents started, without expanding those Runs' Steps.
 Each node's `usual` is a duration in milliseconds or null until three completed
@@ -1113,19 +1117,19 @@ when the turn ends, and a message from any other Claude session is not used.
 reach. Claude gets it over a local MCP server (`collie mcp`, which you never type) and Pi
 through a generated extension; this is the third way in.
 
-| tool                  | What it does                                                                                                                                                                                                                                 |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `collie_herd`         | Every run in the Herd, bounded, saying how many it left out                                                                                                                                                                                  |
-| `collie_run`          | One run: its goal, constraints, the Choice it waits on and how to answer it, its answers with who and when, its result, the Runs it started, its merge request and branch, plan, findings, disposition, last log lines, cards and open drift |
-| `collie_workspaces`   | The workspaces this session has (the Home marked as no checkout), the Tasks whose workspace is open, the Projects root, and each workflow with its Inputs                                                                                    |
-| `collie_receipts`     | What one run waits on the human for — its Choice and proposals — and what state each message to its agents actually reached                                                                                                                  |
-| `collie_definitions`  | The Workflows and Personas there are; one resolved and checked, or one Persona's body                                                                                                                                                        |
-| `collie_installation` | What Collie needs, the defaults                                                                                                                                                                                                              |
-| `collie_connections`  | Each Machine's service logins, accounts, absent or broken states, and fixes; `machine` keeps one Machine                                                                                                                                     |
-| `collie_news`         | What this conversation has not been told; reading it settles those items for it                                                                                                                                                              |
-| `collie_hold`         | Hold a run, or every unfinished run in a workspace, until someone releases it                                                                                                                                                                |
-| `collie_do`           | Carry out, at once, a board action or decision on a named run the human asked for                                                                                                                                                            |
-| `collie_propose`      | Carry out the rest of what the human can ask for, with a request id that makes retries safe                                                                                                                                                  |
+| tool                  | What it does                                                                                                                                                                                                                                                                                          |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `collie_herd`         | Every run in the Herd, bounded, saying how many it left out, and each merge request of a card with several, with its state, readiness and wait                                                                                                                                                        |
+| `collie_run`          | One run: its goal, constraints, the Choice it waits on and how to answer it, its answers with who and when, its result, the Runs it started, its merge request and branch, plan, findings, disposition, last log lines, cards and open drift, and Ready to release for each merge request of its Task |
+| `collie_workspaces`   | The workspaces this session has (the Home marked as no checkout), the Tasks whose workspace is open, the Projects root, and each workflow with its Inputs                                                                                                                                             |
+| `collie_receipts`     | What one run waits on the human for — its Choice and proposals — and what state each message to its agents actually reached                                                                                                                                                                           |
+| `collie_definitions`  | The Workflows and Personas there are; one resolved and checked, or one Persona's body                                                                                                                                                                                                                 |
+| `collie_installation` | What Collie needs, the defaults                                                                                                                                                                                                                                                                       |
+| `collie_connections`  | Each Machine's service logins, accounts, absent or broken states, and fixes; `machine` keeps one Machine                                                                                                                                                                                              |
+| `collie_news`         | What this conversation has not been told; reading it settles those items for it                                                                                                                                                                                                                       |
+| `collie_hold`         | Hold a run, or every unfinished run in a workspace, until someone releases it                                                                                                                                                                                                                         |
+| `collie_do`           | Carry out, at once, a board action or decision on a named run the human asked for                                                                                                                                                                                                                     |
+| `collie_propose`      | Carry out the rest of what the human can ask for, with a request id that makes retries safe                                                                                                                                                                                                           |
 
 The reads are Herd-wide and are never narrowed **implicitly**: no read is filtered by what
 the board is showing or which card is open. The selection is an **input** a tool may be
@@ -2909,8 +2913,9 @@ standing in for a Run nobody named. It records nothing. Desktop's Flock chat rea
 it.
 
 `progress` answers for one Run what its status does not carry: its Ready to release, the
-forge's pipeline at its merge request's head, and each operation's latest agent and whether
-it has written its Output. `run show`, `run wait` and chat read it; `null` is a Run the host
+forge's pipeline at its merge request's head, each operation's latest agent and whether
+it has written its Output, and `mrs`, each merge request of its Task with its state, the head
+it is ready at and what it waits on. `run show`, `run wait` and chat read it; `null` is a Run the host
 does not have.
 
 `runDetail` streams one Run's details while a drawer is open — intent, plan, review,
@@ -2923,7 +2928,9 @@ branch or a pruned checkout does not lose it and a resumed Run that committed mo
 again. An untracked file reached through a link, or that is not a regular file, is listed
 without being read. The review's findings come as
 a list. The merge request is what the merge watch last read, asked again after 5 minutes or
-when `refreshMr` is set. Large items are fetched by reference with `runFile`: `log`,
+when `refreshMr` is set. A Run that owns none of its Task's several merge requests, a fan-out's
+parent among them, has `mrs`, each one's panel by wave, and `mr` is the first; `refreshMrId`
+names the one `refreshMr` asks again about, and without it the first is asked. Large items are fetched by reference with `runFile`: `log`,
 `review`, `diff:<path>`, `evidence:<name>`, `verification:<id>`, `plan:<file>`, `attachment:<name>` (one of the Run's attachments), `file:<path>` (read
 only, from the Run's checkout) and `pipeline:<url>` (the status glab reads for a GitLab pipeline, or gh for a GitHub Actions run), text as it is and anything else as base64. Each answer is
 at most 4 MiB from `offset` (or `length` bytes where asked) and says the item's whole

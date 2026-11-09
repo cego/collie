@@ -2066,6 +2066,7 @@ const frontDoorHandlers = (
             ),
             ci: forged?.checks ?? null,
             steps: yield* operationsOf(env.stateDir, runId),
+            mrs: card?.mrs,
           };
         }).pipe(Effect.provideContext(bun));
       return FrontDoorRpcs.of({

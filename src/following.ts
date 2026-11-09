@@ -2,7 +2,13 @@
 // view and its progress. Pure, so the wait and its tests decide the same way.
 
 import * as Arr from "effect/Array";
-import type { ForgeChecks, ReadyToRelease, RunProgress } from "./board-model";
+import {
+  mrReadiness,
+  type ForgeChecks,
+  type ReadyToRelease,
+  type RunProgress,
+  type TaskMr,
+} from "./board-model";
 import type { RunView } from "./engine";
 import { HOLD, STOP } from "./controls";
 import { isSetAside, isUnanswered } from "./store";
@@ -51,7 +57,8 @@ export type FollowEvent =
     }
   | { readonly type: "parked"; readonly reason: string }
   | { readonly type: "awaiting"; readonly on: string; readonly who: string | null }
-  | { readonly type: "mr"; readonly mr: string }
+  /** A merge request that opened, or with `state`, one that merged or closed. */
+  | { readonly type: "mr"; readonly mr: string; readonly state?: "merged" | "closed" }
   | { readonly type: "ci"; readonly ci: ForgeChecks };
 
 export interface Followed {
@@ -99,10 +106,35 @@ export function followEvents(before: Followed, after: Followed): ReadonlyArray<F
   const awaiting = after.view?.awaiting ?? null;
   if (awaiting !== null && awaiting.on !== before.view?.awaiting?.on)
     events.push({ type: "awaiting", on: awaiting.on, who: awaiting.who });
-  const mr = after.view?.mr ?? null;
-  if (mr !== null && mr !== (before.view?.mr ?? null)) events.push({ type: "mr", mr });
+  const mrs = after.progress?.mrs;
+  if (mrs !== undefined) events.push(...mrEvents(before.progress?.mrs ?? [], mrs));
+  else {
+    const mr = after.view?.mr ?? null;
+    if (mr !== null && mr !== (before.view?.mr ?? null)) events.push({ type: "mr", mr });
+  }
   return events;
 }
+
+const MERGED: ReadonlySet<string> = new Set(["merged", "on-stage", "in-prod"]);
+
+const endOf = (state: TaskMr["state"]) =>
+  state === null ? null : MERGED.has(state) ? "merged" : state === "closed" ? "closed" : null;
+
+/** Each merge request of a Task that appeared, merged or closed between two looks. */
+const mrEvents = (
+  before: ReadonlyArray<TaskMr>,
+  after: ReadonlyArray<TaskMr>,
+): ReadonlyArray<FollowEvent> => {
+  const was = new Map(Arr.map(before, (one) => [one.id, one]));
+  return Arr.flatMap(after, (one): ReadonlyArray<FollowEvent> => {
+    const prior = was.get(one.id);
+    if (prior === undefined) return [{ type: "mr", mr: one.mr }];
+    const end = endOf(one.state);
+    return end !== null && end !== endOf(prior.state)
+      ? [{ type: "mr", mr: one.mr, state: end }]
+      : [];
+  });
+};
 
 /** One event as `--follow` prints it without `--json`. */
 export function followLine(runId: string, event: FollowEvent): string {
@@ -116,7 +148,7 @@ export function followLine(runId: string, event: FollowEvent): string {
     case "awaiting":
       return `${runId}: Waiting for ${event.on}.`;
     case "mr":
-      return `${runId}: merge request ${event.mr} opened`;
+      return `${runId}: merge request ${event.mr} ${event.state ?? "opened"}`;
     case "ci":
       return `${runId}: CI ${ciSaid(event.ci)}`;
   }
@@ -133,3 +165,9 @@ export const readyLines = (ready: ReadyToRelease): ReadonlyArray<string> =>
           (one) => `- ${one.said}${one.settling ? " (may come by itself)" : ""}`,
         ),
       ];
+
+/** Ready to release for each of a Task's several merge requests; the Task's own where it has one. */
+export const progressReadyLines = (progress: RunProgress): ReadonlyArray<string> =>
+  progress.mrs !== undefined && progress.mrs.length > 1
+    ? Arr.map(progress.mrs, (one) => `- ${one.short}: ${mrReadiness(one, progress.mrs!)}`)
+    : readyLines(progress.ready);

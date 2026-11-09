@@ -1629,6 +1629,15 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
             mrState,
             mrStates,
             ci: forged?.checks ?? null,
+            releases: several
+              ? Arr.map(each, (one, at) => ({
+                  id: one.id,
+                  short: mrs[at]!.short,
+                  mrState: one.state,
+                  ci: one.forged?.checks ?? null,
+                  url: mrs[at]!.url,
+                }))
+              : undefined,
             readiness:
               mr !== null && (mrState === null || mrState === "open")
                 ? readiness.ready
@@ -1789,15 +1798,21 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   return sortBoard(Arr.filter(views, (view) => view !== null));
 });
 
-/** The whole Flow of the Task a Run belongs to, built as its card is. */
-export const taskFlowOf = Effect.fn("Board.taskFlow")(function* (
+/** The card of the Task a Run belongs to, and its whole Flow, built as the board builds it. */
+export const taskCardOf = Effect.fn("Board.taskCard")(function* (
   opts: Omit<Parameters<typeof buildBoard>[0], "only" | "flows">,
   runId: string,
 ) {
   const flows = new Map<string, Flow>();
   const [view] = yield* buildBoard({ ...opts, only: runId, flows });
-  return view === undefined ? null : (flows.get(view.id) ?? null);
+  return view === undefined ? null : { view, flow: flows.get(view.id) ?? null };
 });
+
+/** The whole Flow of the Task a Run belongs to, built as its card is. */
+export const taskFlowOf = (
+  opts: Omit<Parameters<typeof buildBoard>[0], "only" | "flows">,
+  runId: string,
+) => Effect.map(taskCardOf(opts, runId), (card) => card?.flow ?? null);
 
 /** Each Ready to release card's Run, with the revision its checks passed at and its sentence. */
 export function readyRuns(

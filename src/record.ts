@@ -15,7 +15,7 @@ import type {
   RunDiff,
   RunRevision,
 } from "./board-model";
-import { taskFlowOf } from "./board";
+import { taskCardOf } from "./board";
 import type { PluginEnv } from "./env";
 import { timedFlow, timeless } from "./flow-timing";
 import type { AgentInfo } from "./herdr";
@@ -46,6 +46,7 @@ export interface RecordKey {
   readonly tail: boolean;
   readonly pages: number;
   readonly refreshMr: boolean;
+  readonly refreshMrId?: string;
   readonly parts?: boolean;
   readonly held?: RunRevision;
 }
@@ -78,7 +79,7 @@ export const recordBase = (sources: RecordSources, runId: string, pages: number)
       [...new Set(Arr.flatMap(runs, (one) => (one.task === null ? [] : [one.task])))],
       (task) => readTask(env.stateDir, task),
     );
-    const found = yield* taskFlowOf(
+    const card = yield* taskCardOf(
       {
         env,
         runs,
@@ -89,6 +90,7 @@ export const recordBase = (sources: RecordSources, runId: string, pages: number)
       },
       runId,
     ).pipe(Effect.orElseSucceed(() => null));
+    const found = card?.flow ?? null;
     const ids = Arr.map(runs, (one) => one.id);
     for (const lane of found?.lanes ?? [])
       for (const node of lane.nodes)
@@ -105,11 +107,22 @@ export const recordBase = (sources: RecordSources, runId: string, pages: number)
       parts: false,
     });
     if (detail === null) return null;
+    const mrs = card?.view.mrs ?? [];
     return {
       run: run.value,
       runs,
       ids,
       detail,
+      // A Run that owns one of them shows its own, as one that is a Task's only one does.
+      shown:
+        mrs.length > 1 && !Arr.some(mrs, (one) => one.run === runId)
+          ? Arr.flatMap(mrs, (one) =>
+              Arr.map(
+                Arr.filter(runs, (owner) => owner.id === one.run),
+                (owner) => ({ id: one.id, mr: one.mr, owner }),
+              ),
+            )
+          : null,
     };
   }).pipe(Effect.provideService(FileSystem.FileSystem, sources.model.reading));
 
@@ -157,7 +170,7 @@ export const recordFrames = (
     Effect.gen(function* () {
       const { model } = sources;
       const parted = key.parts === true;
-      let fresh = key.refreshMr;
+      let fresh: boolean | string = key.refreshMr && (key.refreshMrId ?? true);
       let kept: { readonly at: string; readonly diff: RunDiff | null } | undefined;
       let sent: string | undefined;
       const stampKey = `${key.runId}\0${key.tail}\0${key.pages}`;
@@ -207,7 +220,20 @@ export const recordFrames = (
           ),
           part(
             "mr",
-            Effect.map(sources.mr(run, asked), (mr) => ({ mr })),
+            base.shown === null
+              ? Effect.map(sources.mr(run, asked !== false), (mr) => ({ mr }))
+              : Effect.map(
+                  Effect.forEach(
+                    base.shown,
+                    (one, at) =>
+                      Effect.map(
+                        sources.mr(one.owner, asked === one.id || (asked === true && at === 0)),
+                        (panel) => ({ id: one.id, mr: one.mr, panel }),
+                      ),
+                    { concurrency: "unbounded" },
+                  ),
+                  (mrs) => ({ mr: mrs[0]?.panel ?? null, mrs }),
+                ),
           ),
           ...(key.tail ? [part("tail", tailOf(run))] : []),
         ];

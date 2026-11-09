@@ -51,6 +51,7 @@ import {
   sectionsOf,
   SECTIONS,
   sortBoard,
+  type TaskMr,
   type TaskView,
 } from "../src/board-model";
 import { recordAudit } from "../src/audit";
@@ -3261,6 +3262,33 @@ test("chat's line for a card names its merge request as the board does", () => {
   );
 });
 
+test("chat's line for a card of several merge requests names each, with its state, readiness and wait", () => {
+  const entry = (repo: string, iid: number, over: Partial<TaskMr>): TaskMr => ({
+    id: idOf(repo, iid),
+    mr: GITLAB(repo, iid),
+    label: `cego/${repo}!${iid}`,
+    short: `${repo}!${iid}`,
+    url: GITLAB(repo, iid),
+    run: `r-${repo}`,
+    state: "open",
+    checks: null,
+    head: null,
+    ready: false,
+    disposition: null,
+    waitsOn: [],
+    ...over,
+  });
+  const app = entry("app", 12, { ready: true, head: pipe("a", Str.repeat(40)) });
+  const api = entry("api", 7, { waitsOn: [app.id] });
+  const said = herdLines(
+    [task({ id: "r1", state: "done", landed: false, mr: app.mr, mrs: [app, api] })],
+    0,
+  );
+  expect(said).toContain(
+    ", merge requests app!12 (open, ready to release at aaaaaaaa); api!7 (open, not ready to release, waits on app!12)",
+  );
+});
+
 test("two checks with the same command are each passed by a record of that command", () => {
   const command = { executable: "/usr/bin/true", argv: [], cwd: "/project" };
   const both = [
@@ -3634,6 +3662,61 @@ test("the Release row follows a merge request through CI, the merge and the furt
         null,
         "Closed without merging",
       ]);
+    }),
+  ));
+
+test("a fan-out's Flow has a release row per merge request, by wave, its release row the first", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const runs = yield* fannedOut(dir, [
+        ["api", 7],
+        ["web", 8],
+      ]);
+
+      const { flow } = yield* boardAndFlows(env, runs, {
+        mrStates: new Map<string, MrState>([
+          [idOf("api", 7), "merged"],
+          [idOf("web", 8), "open"],
+        ]),
+        forge: new Map([[idOf("web", 8), { checks: { state: "running" as const }, head: null }]]),
+      });
+
+      const fan = flow("task-1");
+      expect(
+        Arr.map(fan.releases ?? [], (row) => [
+          row.mr,
+          Arr.map(row.nodes, (node) => [node.title, node.state, node.url]),
+        ]),
+      ).toEqual([
+        [
+          idOf("api", 7),
+          [
+            ["CI", "done", undefined],
+            ["Merged", "done", GITLAB("api", 7)],
+          ],
+        ],
+        [
+          idOf("web", 8),
+          [
+            ["CI", "waiting", undefined],
+            ["Merged", "expected", GITLAB("web", 8)],
+          ],
+        ],
+      ]);
+      expect(fan.release).toEqual(fan.releases![0]!.nodes);
+
+      const alone = yield* madeRun(dir, {
+        id: "r-alone",
+        task: "task-2",
+        state: "succeeded",
+        mr: PR,
+      });
+      const single = yield* boardAndFlows(env, [alone], {
+        tasks: [TASK, { ...TASK, id: "task-2" }],
+      });
+      expect(single.flow("task-2").release).not.toBeNull();
+      expect(single.flow("task-2").releases).toBeUndefined();
     }),
   ));
 

@@ -180,6 +180,16 @@ export interface TaskFacts {
   readonly mrState: MrState | null;
   readonly mrStates: ReadonlyMap<string, MrState>;
   readonly ci: Parameters<typeof releaseRow>[0]["ci"];
+  /** Each of the Task's merge requests where it has several, by wave. */
+  readonly releases?:
+    | ReadonlyArray<{
+        readonly id: string;
+        readonly short: string;
+        readonly mrState: MrState | null;
+        readonly ci: Parameters<typeof releaseRow>[0]["ci"];
+        readonly url: string | null;
+      }>
+    | undefined;
   /** Ready to release's first missing fact, or its word that it is ready, while the MR is open. */
   readonly readiness: string | null;
   readonly mrOf: (run: RunFacts) => string | null;
@@ -370,5 +380,12 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
             mrUrl: mrRefOf(task.mr) === null ? null : mrUrlOf(mrRefOf(task.mr)!),
           }),
   } satisfies Flow;
-  return settleFlow(flow, yield* Clock.currentTimeMillis);
+  const now = yield* Clock.currentTimeMillis;
+  if (task.releases === undefined) return settleFlow(flow, now);
+  const releases = Arr.map(task.releases, (one) => ({
+    mr: one.id,
+    short: one.short,
+    nodes: releaseRow({ mrState: one.mrState, ci: one.ci, mrUrl: one.url }),
+  }));
+  return settleFlow({ ...flow, release: releases[0]?.nodes ?? flow.release, releases }, now);
 });

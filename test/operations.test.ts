@@ -9,6 +9,10 @@ import { installBaseline } from "./support/engine";
 import { installFakeSkills } from "./support/defs";
 import { FakeBin } from "./support/bin";
 import { upgrade } from "../src/operations";
+import { answerRead } from "../src/tools";
+import { readEnv } from "../src/env";
+import type { RunProgress, TaskMr } from "../src/board-model";
+import { madeRun } from "./support/records";
 
 let rig: Rig;
 let bin: FakeBin;
@@ -164,5 +168,66 @@ OUT`,
       });
       expect(moved.ok && moved.human).toContain("from abc1234 to def5678");
       expect(moved.ok && moved.human).toMatch(/skills\s+skipped/);
+    }),
+  ));
+
+const shaOf = (digit: string) => Arr.join(Arr.replicate(digit, 40), "");
+
+const taskMr = (repo: string, iid: number, over: Partial<TaskMr> = {}): TaskMr => ({
+  id: `gitlab.cego.dk/cego/${repo}!${iid}`,
+  mr: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`,
+  label: `cego/${repo}!${iid}`,
+  short: `${repo}!${iid}`,
+  url: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`,
+  run: `r-${repo}`,
+  state: "open",
+  checks: null,
+  head: null,
+  ready: false,
+  disposition: null,
+  waitsOn: [],
+  ...over,
+});
+
+test("collie_run on a Task of several merge requests names each, ready at its head or waiting on another", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({
+        prefix: "collie-run-mrs-",
+      });
+      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" });
+      const run = yield* madeRun(dir, { id: "r-fan", task: "task-1", state: "succeeded" });
+      const app = taskMr("app", 12, { ready: true, head: shaOf("a") });
+      const api = taskMr("api", 7, { waitsOn: [app.id] });
+      const progress: RunProgress = {
+        ready: { ready: true, missing: [] },
+        ci: null,
+        steps: [],
+        mrs: [app, api],
+      };
+
+      const said = yield* answerRead(
+        env,
+        "collie_run",
+        { run: run.id },
+        {
+          runs: Effect.succeed([run]),
+          offers: () => Effect.succeed("(none)"),
+          progress: () => Effect.succeed(progress),
+          flow: () => Effect.succeed(null),
+        },
+      );
+
+      expect(said).toContain(
+        Arr.join(
+          [
+            "### Ready to release",
+            "",
+            "- app!12: open, ready to release at aaaaaaaa",
+            "- api!7: open, not ready to release, waits on app!12",
+          ],
+          "\n",
+        ),
+      );
     }),
   ));

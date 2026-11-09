@@ -15,6 +15,7 @@ import {
   ASKED_KINDS,
   headerSentence,
   mrLabel,
+  mrReadiness,
   sectionOf,
   SECTIONS,
   type TaskView,
@@ -421,12 +422,18 @@ const HERD_CARDS = 40;
 /** One card as chat reads it: what the human sees on it, plus the id an action needs. */
 function cardLine(view: TaskView): string {
   const project = view.project === "" ? "" : ` (${view.project})`;
+  const mrs = view.mrs ?? [];
   const where =
-    view.mr !== null
-      ? `, ${mrNounOf(view.mr)} ${mrLabel(view.mr)}`
-      : view.branch !== null
-        ? `, branch ${view.branch}`
-        : "";
+    mrs.length > 1
+      ? `, merge requests ${Arr.join(
+          Arr.map(mrs, (one) => `${one.short} (${mrReadiness(one, mrs)})`),
+          "; ",
+        )}`
+      : view.mr !== null
+        ? `, ${mrNounOf(view.mr)} ${mrLabel(view.mr)}`
+        : view.branch !== null
+          ? `, branch ${view.branch}`
+          : "";
   const agents =
     view.agents.length === 0
       ? ""
