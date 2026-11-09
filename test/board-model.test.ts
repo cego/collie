@@ -10,6 +10,7 @@ import {
   cardActions,
   flowActions,
   givenOfferInput,
+  mrId,
   mrUrlOf,
   mrWords,
   openMrLabel,
@@ -483,6 +484,39 @@ test.each([
   ["a branch", "branch:main...x"],
 ])("%s is not a merge request", (_, text) => {
   expect(readMrRef(text)).toBeNull();
+});
+
+const SPILNU = "gitlab.cego.dk/spilnu/app";
+
+test.each([
+  [
+    "a GitLab URL",
+    "https://GitLab.cego.dk/Spilnu/App/-/merge_requests/42",
+    undefined,
+    `${SPILNU}!42`,
+  ],
+  [
+    "a GitHub URL",
+    "https://github.com/Cego/Collie/pull/300/files",
+    undefined,
+    "github.com/cego/collie#300",
+  ],
+  ["an mr: target", "mr:gitlab.cego.dk/SPILNU/app!42", undefined, `${SPILNU}!42`],
+  ["GitHub's owner/repo#n", "Cego/Collie#300", undefined, "github.com/cego/collie#300"],
+  ["a typed !n", "!42", { project: "gitlab.cego.dk/Spilnu/App" }, `${SPILNU}!42`],
+  ["an MR id", `${SPILNU}!42`, undefined, `${SPILNU}!42`],
+  ["a legacy bare mr: target in its checkout", "mr:42", { project: SPILNU }, `${SPILNU}!42`],
+  ["a hostless label in its checkout", "Spilnu/App!42", { project: SPILNU }, `${SPILNU}!42`],
+  ["a short label in its checkout", "app!42", { project: SPILNU }, `${SPILNU}!42`],
+  ["a bare !n with no project", "!42", undefined, null],
+  ["a bare !n typed nowhere", "!42", { project: null }, null],
+  ["a legacy bare mr: target read anywhere", "mr:42", undefined, null],
+  ["a hostless label read anywhere", "spilnu/app!42", undefined, null],
+  ["a hostless label of another checkout", "spilnu/web!42", { project: SPILNU }, null],
+  ["a label that only ends like its checkout", "pnu/app!42", { project: SPILNU }, null],
+  ["anything else", "branch:main...x", undefined, null],
+])("%s has the MR id it names", (_, text, typedIn, id) => {
+  expect(mrId(text, typedIn)).toBe(id);
 });
 
 test.each([

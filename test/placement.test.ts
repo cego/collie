@@ -43,7 +43,7 @@ import { SqlClient } from "effect/sql";
 import { VerifySpecSchema } from "../src/verify-spec";
 import { readTask, writeTask, type TaskRecord } from "../src/task";
 import { writeMrStates } from "../src/merges";
-import { mrLabel, type MrState } from "../src/board-model";
+import { type MrState } from "../src/board-model";
 import { HELLE_URL } from "../src/helle-url";
 import type { Call } from "./support/recorder";
 
@@ -2728,7 +2728,8 @@ const builtFromItsPlan = (mrState: MrState | null) =>
         const plan = `${runDir(dir(), planner)}/plan`;
         yield* fs.makeDirectory(plan, { recursive: true });
         yield* fs.writeFileString(`${plan}/SPEC.md`, "# Add a picker\n");
-        if (mrState !== null) yield* writeMrStates(dir(), new Map([[mrLabel(MR_URL), mrState]]));
+        if (mrState !== null)
+          yield* writeMrStates(dir(), new Map([["gitlab.example.com/group/app!355", mrState]]));
         const started = yield* start(builds!, {
           request: "r-by-hand",
           text: { work: plan },
@@ -2854,6 +2855,52 @@ test(
         );
 
         expect(fresh?.task).toBe("task-new");
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a fresh start joins the Task whose merge request it names in any case, and only on its host",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* writeTask(env().stateDir, {
+          id: "task-1",
+          workspace: "w-task-1",
+          label: "Project | task-1",
+          cwd: rig.projectDir,
+          created_at: "2026-09-01T00:00:00.000Z",
+        });
+        const [shouted, elsewhere] = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [targeted] = yield* loaded(registry, [`${fixtures}/targeted.workflow.ts`]);
+            const named = yield* start(targeted!, {
+              request: "r-task",
+              text: { target: MR_TARGET },
+              task: "task-1",
+            });
+            if (named._tag === "Failure") return yield* Effect.die(named.failure);
+            yield* finished(named.success.runId);
+            return yield* Effect.forEach(
+              ["mr:GitLab.example.com/Group/App!355", "mr:gitlab.other.com/group/app!355"],
+              (target, at) =>
+                Effect.gen(function* () {
+                  const started = yield* start(targeted!, {
+                    request: `r-fresh-${at}`,
+                    text: { target },
+                    taskLabel: "Project | Release",
+                  });
+                  if (started._tag === "Failure") return yield* Effect.die(started.failure);
+                  return yield* finished(started.success.runId);
+                }),
+            );
+          }),
+        );
+
+        expect(shouted?.task).toBe("task-1");
+        expect(elsewhere?.task).not.toBe("task-1");
       }),
     ),
   120_000,

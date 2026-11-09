@@ -1477,8 +1477,8 @@ test("landed is a disposition, a merge the forge reports, or work with nothing t
       };
       const views = yield* board(env, runs, {
         mrStates: new Map([
-          ["mk/collie!65", "merged"],
-          ["mk/collie!66", "closed"],
+          ["gitlab.cego.dk/mk/collie!65", "merged"],
+          ["gitlab.cego.dk/mk/collie!66", "closed"],
         ]),
         offers: (runId) => Effect.succeed(runId === "plan" ? [implementNow] : []),
       });
@@ -2268,8 +2268,10 @@ test("a succeeded Run's open merge request is ready only on checks at its branch
         board(env, [run], {
           alive: [agent("builder", "idle")],
           registered: [registered("builder", run.id)],
-          mrStates: new Map([["cego/collie#30", "open"]]),
-          forge: new Map([["cego/collie#30", { checks: { state: "passed" }, head, mergeable }]]),
+          mrStates: new Map([["github.com/cego/collie#30", "open"]]),
+          forge: new Map([
+            ["github.com/cego/collie#30", { checks: { state: "passed" }, head, mergeable }],
+          ]),
         });
       // Green, but nobody has asked the forge whether it can merge.
       expect(
@@ -2706,10 +2708,10 @@ test("a Reopened Run whose agent is idle again stands on its own facts", () =>
         "idle",
         "2026-09-14T10:02:00Z",
         {
-          mrStates: new Map([["cego/collie#30", "open"]]),
+          mrStates: new Map([["github.com/cego/collie#30", "open"]]),
           forge: new Map([
             [
-              "cego/collie#30",
+              "github.com/cego/collie#30",
               {
                 checks: { state: "passed" },
                 head: "abc1234def",
@@ -3350,8 +3352,8 @@ test("the Release row follows a merge request through CI, the merge and the furt
       const release = (state: MrState, checks: ForgeChecks) =>
         Effect.map(
           boardAndFlows(env, [run], {
-            mrStates: new Map([["cego/collie#30", state]]),
-            forge: new Map([["cego/collie#30", { checks, head: null }]]),
+            mrStates: new Map([["github.com/cego/collie#30", state]]),
+            forge: new Map([["github.com/cego/collie#30", { checks, head: null }]]),
           }),
           ({ flow }) =>
             Arr.map(flow("task-1").release ?? [], (node) => [
@@ -3406,10 +3408,10 @@ test("the Step that made an open merge request says what Ready to release still 
       );
       yield* appendVerification(run.evidence, checked("test", head));
       const { views, flow } = yield* boardAndFlows(env, [run], {
-        mrStates: new Map([["cego/collie#30", "open"]]),
+        mrStates: new Map([["github.com/cego/collie#30", "open"]]),
         forge: new Map([
           [
-            "cego/collie#30",
+            "github.com/cego/collie#30",
             {
               checks: { state: "passed" },
               head,
@@ -3499,8 +3501,10 @@ test("a card's strip is its leading Run's Steps, then the Release row, and where
       });
       yield* stepsRecorded(build, [BUILD, SHIP], [{ step: BUILD, left: false }]);
       const { views, flow } = yield* boardAndFlows(env, [build, plan], {
-        mrStates: new Map([["cego/collie#30", "open"]]),
-        forge: new Map([["cego/collie#30", { checks: { state: "running" }, head: null }]]),
+        mrStates: new Map([["github.com/cego/collie#30", "open"]]),
+        forge: new Map([
+          ["github.com/cego/collie#30", { checks: { state: "running" }, head: null }],
+        ]),
       });
       const whole = flow("task-1");
       expect(Arr.map(whole.lanes, (lane) => lane.run)).toEqual(["plan", "build"]);
@@ -3597,10 +3601,10 @@ test.each([false, true])("a fan-out's Repo runs appear once, by Wave (item calls
         env,
         [
           yield* repoRun("r-b", "b"),
-          yield* repoRun("r-a", "a", { state: "succeeded", mr: "mr:cego/a!12" }),
+          yield* repoRun("r-a", "a", { state: "succeeded", mr: "mr:gitlab.cego.dk/cego/a!12" }),
           parent,
         ],
-        { mrStates: new Map([["cego/a!12", "merged"]]) },
+        { mrStates: new Map([["gitlab.cego.dk/cego/a!12", "merged"]]) },
       );
       expect(merged.flow("task-1").lanes[0]!.nodes[0]!.runs[0]!.said).toBe("!12 merged");
     }),

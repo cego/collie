@@ -190,7 +190,7 @@ import { installation as installedRelease, RELEASE_TAG } from "./release";
 import { Herdr, isSettled, serverSocket, type AgentInfo } from "./herdr";
 import { buildBoard, type KeptCards, LANDED_STATES, mrOf, taskFlowOf } from "./board";
 import { readForge, readMrStates, watchedMr, type MrPanels } from "./merges";
-import { shell } from "./mr";
+import { mrIdIn, shell } from "./mr";
 import { ForgeHttp, forgeHttpLayer } from "./forge/http";
 import { fetchRef, followDetail } from "./run-detail";
 import { buildMachineOwn, buildRunDetail, type PlanCache } from "./views";
@@ -214,7 +214,6 @@ import {
   SharedSettings,
   ShellResult,
   PROTOCOL,
-  mrLabel,
   readinessOfRun,
   ProposalRefused,
   PART_BYTES,
@@ -1965,7 +1964,7 @@ const frontDoorHandlers = (
           mr === null
             ? undefined
             : (yield* readMrStates(env.stateDir).pipe(Effect.orElseSucceed(() => new Map()))).get(
-                mrLabel(mr),
+                (yield* mrIdIn(mr, run!.cwd, shell)) ?? "",
               );
         if (state === undefined || !LANDED_STATES.has(state)) return yield* registry.resume(runId);
         return {
@@ -1986,8 +1985,8 @@ const frontDoorHandlers = (
             Arr.findFirst(board, (one) => one.runs.includes(runId)),
           );
           const mr = card?.run === runId ? card.mr : null;
-          const forged =
-            mr === null ? undefined : (yield* readForge(env.stateDir)).get(mrLabel(mr));
+          const id = mr === null ? null : yield* mrIdIn(mr, view.cwd, shell);
+          const forged = id === null ? undefined : (yield* readForge(env.stateDir)).get(id);
           return {
             ready: readinessOfRun(
               runId,

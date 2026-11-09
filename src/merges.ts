@@ -12,6 +12,7 @@ import { type ForgeFacts } from "./board";
 import {
   ForgeChecks,
   Mergeability,
+  mrId,
   mrLabel,
   mrRefOf,
   type MrPanel,
@@ -22,7 +23,7 @@ import { latest, readDispositions, recordDisposition } from "./disposition";
 import { forgeOf } from "./forge/forge";
 import type { ReviewRead } from "./forge/review";
 import { readLanding, settleLeft } from "./landing";
-import { forgeHere, type Runner } from "./mr";
+import { forgeHere, mrIdIn, type Runner } from "./mr";
 import { runDir } from "./engine";
 import type { RunFacts } from "./runs";
 import { epochMs } from "./time";
@@ -30,7 +31,7 @@ import { epochMs } from "./time";
 /** How long one merge request's answer stands before its forge is asked again. */
 export const MERGE_POLL_MS = 5 * 60_000;
 
-/** What the merge watch last read of each merge request, by label, and when. */
+/** What the merge watch last read of each merge request, by MR id, and when. */
 export type MrPanels = Map<string, { readonly at: number; readonly panel: MrPanel }>;
 
 /**
@@ -47,11 +48,11 @@ export const watchedMr = Effect.fn("Merges.watchedMr")(function* <R>(opts: {
 }) {
   const ref = mrRefOf(opts.target);
   if (ref === null) return null;
-  const label = mrLabel(opts.target);
-  const known = opts.panels.get(label);
+  const id = yield* mrIdIn(opts.target, opts.cwd, opts.run);
+  const known = id === null ? undefined : opts.panels.get(id);
   if (known !== undefined && !opts.fresh && known.at + MERGE_POLL_MS > opts.now) return known.panel;
   const panel = yield* forgeOf(ref).details(ref, opts.cwd, opts.run);
-  opts.panels.set(label, { at: opts.now, panel });
+  if (id !== null) opts.panels.set(id, { at: opts.now, panel });
   return panel;
 });
 
@@ -120,7 +121,10 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
     );
     // A card showing its one Repo run's merge request watches it as that Repo run's.
     const shown = Option.getOrUndefined(
-      Arr.findFirst(repos, (repo) => mr !== null && mrLabel(repo.mr) === mrLabel(mr)),
+      Arr.findFirst(
+        repos,
+        (repo) => mr !== null && mrId(repo.mr) !== null && mrId(repo.mr) === mrId(mr),
+      ),
     );
     if (mr !== null)
       watched.push({
@@ -143,22 +147,25 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
     if (disposition !== null && !pipe_(disposition, Str.startsWith("merged"))) continue;
     const label = mrLabel(mr);
     if (mrRefOf(mr) === null) continue;
+    const owning = Arr.findFirst(opts.runs, (run) => run.id === owner);
+    const id = yield* mrIdIn(mr, Option.getOrUndefined(owning)?.cwd ?? opts.cwd, opts.run);
+    if (id === null) continue;
     const dirs = Arr.map(runs, (run) => runDir(opts.stateDir, run));
     if (
-      opts.states.get(label) !== "in-prod" &&
-      (opts.checked.get(label) ?? 0) + MERGE_POLL_MS <= opts.now
+      opts.states.get(id) !== "in-prod" &&
+      (opts.checked.get(id) ?? 0) + MERGE_POLL_MS <= opts.now
     ) {
       // Stamped before asking: a forge that cannot be asked is not asked again every tick.
-      opts.checked.set(label, opts.now);
+      opts.checked.set(id, opts.now);
       const answered = yield* forgeAnswer(mr, opts.cwd, opts.run, (panel) =>
-        opts.panels.set(label, { at: opts.now, panel }),
+        opts.panels.set(id, { at: opts.now, panel }),
       );
       if (answered !== null) {
         const { state, facts, by, mergedAt } = answered;
-        if (opts.states.get(label) !== state || !sameFacts(forge.get(label), facts)) learned = true;
-        opts.states.set(label, state);
-        forge.set(label, facts);
-        if (state !== "open" && state !== "closed" && (yield* firstMerged(dirs, label)) === null)
+        if (opts.states.get(id) !== state || !sameFacts(forge.get(id), facts)) learned = true;
+        opts.states.set(id, state);
+        forge.set(id, facts);
+        if (state !== "open" && state !== "closed" && (yield* firstMerged(dirs, id)) === null)
           yield* recordDisposition(runDir(opts.stateDir, owner), {
             at: mergedAt ?? DateTime.formatIso(DateTime.makeUnsafe(opts.now)),
             by,
@@ -169,14 +176,14 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
       }
     }
     // Every round, not only when the forge is asked: a stop that did not take is asked again.
-    const state = opts.states.get(label);
+    const state = opts.states.get(id);
     if (state === undefined || state === "open" || state === "closed") continue;
-    const read = opts.panels.get(label)?.panel;
+    const read = opts.panels.get(id)?.panel;
     // ponytail: the forge's time lives as long as this host's panels; a new host asks again.
     const merged =
       read?._tag === "Details" && read.mergedAt !== undefined
         ? epochMs(read.mergedAt)
-        : yield* firstMerged(dirs, label);
+        : yield* firstMerged(dirs, id);
     if (merged === null) continue;
     const going = Arr.filter(
       opts.runs,
@@ -186,7 +193,7 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
         epochMs(run.created) < merged,
     );
     if (going.length === 0) continue;
-    const spared = yield* sparedBy(mr, runs, opts);
+    const spared = yield* sparedBy(mr, id, runs, opts);
     // An attempt the forge cannot settle yet spares nothing and stops nothing.
     if (spared === null) continue;
     for (const run of going) if (!spared.has(run.id)) yield* opts.stop(run.id, `${label} merged`);
@@ -201,6 +208,7 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
  */
 const sparedBy = Effect.fn("Merges.sparedBy")(function* <R>(
   mr: string,
+  id: string,
   /** The ids of the Runs that land it. */
   ids: ReadonlyArray<string>,
   opts: {
@@ -210,13 +218,16 @@ const sparedBy = Effect.fn("Merges.sparedBy")(function* <R>(
     readonly making: ReadonlySet<string>;
   },
 ) {
-  const label = mrLabel(mr);
   const ref = mrRefOf(mr);
   const landers: Array<string> = [];
   let read: ReviewRead | undefined;
   for (const run of Arr.filter(opts.runs, (one) => ids.includes(one.id))) {
     const landing = yield* readLanding(run.dir);
-    if (landing === null || mrLabel(landing.mr) !== label || landing.state === "withdrawn")
+    if (
+      landing === null ||
+      (yield* mrIdIn(landing.mr, run.cwd, opts.run)) !== id ||
+      landing.state === "withdrawn"
+    )
       continue;
     if (landing.state === "landed" || opts.making.has(run.dir)) {
       landers.push(run.id);
@@ -257,17 +268,21 @@ const dispositionIn = Effect.fn("Merges.dispositionIn")(function* (dir: string) 
   return line === null ? null : line.ref === "" ? line.kind : `${line.kind} ${line.ref}`;
 });
 
-/** When the Task's merge request merged, as its first `merged` Disposition says; null for none. */
+/**
+ * When the Task's merge request merged, as its first `merged` Disposition says; null for none.
+ * A hostless ref an earlier host wrote is read as in `id`'s project.
+ */
 const firstMerged = Effect.fn("Merges.firstMerged")(function* (
   dirs: ReadonlyArray<string>,
-  label: string,
+  id: string,
 ) {
+  const project = pipe_(id, Str.replace(/[!#]\d+$/, ""));
   let first: number | null = null;
   for (const dir of dirs)
     for (const line of yield* readDispositions(dir).pipe(Effect.orElseSucceed(() => [])))
       if (
         line.kind === "merged" &&
-        line.ref === label &&
+        mrId(line.ref, { project }) === id &&
         (first === null || epochMs(line.at) < first)
       )
         first = epochMs(line.at);

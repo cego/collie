@@ -156,6 +156,7 @@ import { AwaitingJson, AwaitingSchema, overdueLine } from "./awaiting";
 import {
   autoMergingHere,
   forgeHere,
+  mrIdIn,
   prepareMergeRequest,
   postNote,
   productionCarries,
@@ -166,7 +167,7 @@ import { redact } from "./redact";
 import { reportOf, type Recorded } from "./report";
 import { outcomeRecordsOf, type OutcomeRecords } from "./outcomes";
 import type { Metrics } from "./board-model";
-import { forgeOfRef, mrLabel, mrRefOf, mrWords, parseMrTarget, readMrRef } from "./board-model";
+import { forgeOfRef, mrId, mrRefOf, mrWords, parseMrTarget, readMrRef } from "./board-model";
 import { readMrStates } from "./merges";
 import { forgeOf } from "./forge/forge";
 import { links } from "./forge/review";
@@ -5302,11 +5303,7 @@ const pointedAt = (
 
 const isText = Schema.is(Schema.String);
 
-/** A merge request as the forge names it, or null for anything that names no project's. */
-const mrKeyOf = (said: string | null) => {
-  const ref = mrRefOf(said);
-  return ref === null || ref.project === null ? null : `${ref.project}!${ref.iid}`;
-};
+const mrIdOf = (said: string | null) => (said === null ? null : mrId(said));
 
 /** The field a module gives this strategy, if it gives it to one. */
 const fieldWith = (hints: Readonly<Record<string, InputStrategy>>, strategy: InputStrategy) =>
@@ -6625,7 +6622,8 @@ const makeRegistry: (
       if (!(yield* lineageIn(store)(row.run)).includes(planRun)) continue;
       branch = on;
       const mr = yield* mergeRequestOf(fs, dir, row.run);
-      const state = mr === null ? undefined : states.get(mrLabel(mr));
+      const id = mr === null ? null : yield* mrIdIn(mr, placedOf(row, {}).cwd, runShell);
+      const state = id === null ? undefined : states.get(id);
       if (state !== undefined && state !== "open") return null;
     }
     return branch;
@@ -6906,7 +6904,7 @@ const makeRegistry: (
       strategies: generation.hints,
       sources: ask.provenance,
     });
-    const mr = mrKeyOf(pointedAt(generation, ask.input));
+    const mr = mrIdOf(pointedAt(generation, ask.input));
     if (branch === null && mr === null) return null;
     const open = new Set(
       branch === null || (yield* terminalBackend(placing.env.userDir)) === "core"
@@ -6935,7 +6933,7 @@ const makeRegistry: (
             yield* mergeRequestOf(fs, dir, row.run),
             recorded === undefined ? null : pointedAt(recorded, given),
           ],
-          mrKeyOf,
+          mrIdOf,
         );
         if (mrs.includes(mr)) return task;
       }

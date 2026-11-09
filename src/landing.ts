@@ -4,10 +4,10 @@
 import * as Num from "effect/Number";
 import * as Arr from "effect/Array";
 import { DateTime, Effect, FileSystem, Option, Schema } from "effect";
-import { mrLabel, mrRefOf } from "./board-model";
+import { mrRefOf } from "./board-model";
 import { forgeOf } from "./forge/forge";
 import type { ReviewRead } from "./forge/review";
-import type { Runner } from "./mr";
+import { mrIdIn, type Runner } from "./mr";
 import { appendLog } from "./oversight";
 import { WorkflowError } from "./sdk";
 import { epochMs } from "./time";
@@ -114,6 +114,17 @@ export const settleLeft = Effect.fn("Landing.settleLeft")(function* (
 
 const outside = (by: string) => `merged outside this Run by ${by}`;
 
+/** Whether two references name one merge request, a legacy one read in the checkout at `cwd`. */
+const sameMr = <R>(
+  one: string,
+  other: string,
+  at: { readonly cwd: string; readonly run: Runner<R> },
+) =>
+  Effect.gen(function* () {
+    const id = yield* mrIdIn(one, at.cwd, at.run);
+    return id !== null && id === (yield* mrIdIn(other, at.cwd, at.run));
+  });
+
 /**
  * Merges the merge request a Run recorded at `head`, writing the attempt first and its
  * outcome after. A landing already recorded at `head` is answered from its record, and an
@@ -134,10 +145,10 @@ export const land = Effect.fn("Landing.land")(function* <R>(opts: {
   const withdraw = (record: Landing, why: string) =>
     writeLanding(opts.runDir, { ...record, state: "withdrawn", why });
   const left = yield* readLanding(opts.runDir);
-  const same = left !== null && mrLabel(left.mr) === mrLabel(mr) && left.head === opts.head;
-  if (same && left.state === "landed" && left.sha !== undefined)
+  const ours = left !== null && (yield* sameMr(left.mr, mr, opts));
+  if (ours && left.head === opts.head && left.state === "landed" && left.sha !== undefined)
     return { _tag: "Merged", sha: left.sha } satisfies MergeOutcome;
-  if (left?.state === "attempt" && mrLabel(left.mr) === mrLabel(mr)) {
+  if (ours && left.state === "attempt") {
     const read = yield* forge.readReview(ref, opts.cwd, opts.run);
     if (!read.ok)
       return yield* new WorkflowError({
@@ -234,11 +245,10 @@ export const takeOver = Effect.fn("Landing.takeOver")(function* <R>(opts: {
       head: own.head,
       failure: ended(own.from)?.failure ?? "",
     } satisfies Takeover;
-  const finished = Arr.flatMap(opts.runs, (one) =>
-    one.landing?.state === "landed" && mrLabel(one.landing.mr) === mrLabel(mr)
-      ? [{ ...one, landing: one.landing }]
-      : [],
-  );
+  const finished: Array<Lander & { readonly landing: Landing }> = [];
+  for (const one of opts.runs)
+    if (one.landing?.state === "landed" && (yield* sameMr(one.landing.mr, mr, opts)))
+      finished.push({ ...one, landing: one.landing });
   const landed = Arr.sortWith(
     finished,
     (value) => value,

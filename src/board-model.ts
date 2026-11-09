@@ -1989,6 +1989,31 @@ export function mrWords(ref: MrRef) {
   };
 }
 
+/**
+ * A merge request's one identity, compared wherever two references might be the same one:
+ * host, project path and number in lower case, as `gitlab.cego.dk/spilnu/app!42`. Read from
+ * anything `readMrRef` reads or an MR id itself. A bare or hostless reference (`mr:42`,
+ * `spilnu/app!42`, `app!42`) is resolved only against the project `typedIn` names. Null
+ * where no host can be told.
+ */
+export function mrId(text: string, typedIn?: { readonly project: string | null }): string | null {
+  const said = Str.trim(text);
+  const ref =
+    readMrRef(said, typedIn) ??
+    (pipe(said, Str.startsWith("mr:")) ? null : readMrRef(`mr:${said}`));
+  if (ref === null) return null;
+  const here = typedIn?.project ?? null;
+  const named = ref.project;
+  const project = named === null || (!hosted(named) && endsIn(here, named)) ? here : named;
+  if (project === null || !hosted(project)) return null;
+  return Str.toLowerCase(`${project}${mrWords({ project, iid: ref.iid }).sign}${ref.iid}`);
+}
+
+const hosted = (project: string) => mrPath({ project, iid: "" }) !== project;
+
+const endsIn = (project: string | null, path: string) =>
+  project !== null && pipe(Str.toLowerCase(project), Str.endsWith(`/${Str.toLowerCase(path)}`));
+
 export function mrTarget(project: string | null, iid: string): string {
   return mrWords({ project: project || null, iid }).target;
 }

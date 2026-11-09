@@ -132,11 +132,37 @@ test("a merge GitLab reports lands the work: a disposition by gitlab, and the ca
       expect(Arr.map(recorded, (line) => [line.by, line.kind, line.ref])).toEqual([
         ["gitlab", "merged", "mk/collie!65"],
       ]);
-      expect(yield* readMrStates(stateDir)).toEqual(new Map([["mk/collie!65", "merged"]]));
+      expect(yield* readMrStates(stateDir)).toEqual(new Map([[`${GITLAB}!65`, "merged"]]));
       // Nothing passed in: the CLI's board reads what the pane's watch wrote.
       const after = yield* boardOf({ now: epochMs("2026-09-17T11:00:00Z") });
       expect(after[0]!.landed).toBe(true);
       expect(after[0]!.sentence).toBe("Merged as mk/collie!65.");
+    }),
+  ));
+
+test("what an earlier host kept under a label is not taken for the merge request: its forge is asked again", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const { stateDir, board: boardOf } = yield* seeded();
+      yield* writeMrStates(stateDir, new Map([["mk/collie!65", "in-prod"]]));
+      const log: string[] = [];
+      yield* settleMerges({
+        stateDir,
+        cwd: "/project",
+        runs: [],
+        record: () => Effect.void,
+        stop: () => Effect.die("nothing here is stopped"),
+        run: gitlab("open", log),
+        views: yield* boardOf({ mrStates: new Map() }),
+        now: epochMs("2026-09-17T10:00:00Z"),
+        checked: new Map(),
+        states: new Map(),
+        panels: new Map(),
+        making: new Set(),
+      });
+
+      expect(log).not.toEqual([]);
+      expect((yield* readMrStates(stateDir)).get(`${GITLAB}!65`)).toBe("open");
     }),
   ));
 
@@ -236,7 +262,7 @@ test("a merged card follows its deploy jobs: on stage, then in production, then 
 
       // Stage has a child of the merge commit; prod still runs something older.
       yield* settle(deployed({ stage: "child", prod: "0000000" }));
-      expect(states.get("mk/collie!65")).toBe("on-stage");
+      expect(states.get(`${GITLAB}!65`)).toBe("on-stage");
       expect(Arr.map(yield* readDispositions(run.dir), (line) => line.kind)).toEqual(["merged"]);
       let board = yield* boardOf({ now });
       expect(board[0]!.landed).toBe(true);
@@ -245,7 +271,7 @@ test("a merged card follows its deploy jobs: on stage, then in production, then 
       // Disposed of, and still followed: production now has the merge commit itself.
       now += 6 * 60_000;
       yield* settle(deployed({ stage: "child", prod: "35ae2cea5e5848602729dbc0e8a87ed0d9049c46" }));
-      expect(states.get("mk/collie!65")).toBe("in-prod");
+      expect(states.get(`${GITLAB}!65`)).toBe("in-prod");
       board = yield* boardOf({ now });
       expect(board[0]!.sentence).toBe("Merged as mk/collie!65. In production.");
       // One merged disposition, not one per round.
@@ -706,6 +732,54 @@ test("the forge's merge time is the cutoff, not when a merge was recorded by han
     }),
   ));
 
+test("a merge an earlier host recorded under its hostless label is not recorded again, nor stops what began after it", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-restart-" });
+      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
+      const of = (over: Partial<RunFacts>) =>
+        madeRun(stateDir, { task: "task-1", created: "2026-10-15T08:00:00Z", ...over });
+      const runs = [
+        yield* of({ id: "r-build", workflow: "implement", state: "succeeded", mr: MR }),
+        yield* of({
+          id: "r-follow-up",
+          workflow: "implement",
+          state: "running",
+          created: "2026-10-15T09:30:00Z",
+        }),
+      ];
+      // As v0.118.0 wrote it: the label, with no host.
+      yield* recordDisposition(runDir(stateDir, "r-build"), {
+        at: MERGED_AT,
+        by: "gitlab",
+        kind: "merged",
+        ref: "mk/collie!65",
+        note: null,
+      });
+      const stops: Array<string> = [];
+      yield* settleMerges({
+        stateDir,
+        cwd: "/project",
+        // No merge time from the forge: only the recorded Disposition dates the merge.
+        run: forge("gitlab", { mrs: [mr65({ state: "merged" })] }),
+        views: yield* buildBoard({ env, runs, now: TEN, quietMs: Infinity }),
+        runs,
+        record: () => Effect.void,
+        stop: (run) => Effect.sync(() => void stops.push(run)),
+        now: TEN,
+        checked: new Map(),
+        states: new Map(),
+        panels: new Map(),
+        making: new Set(),
+      });
+
+      const recorded = yield* Effect.forEach(runs, (run) => readDispositions(run.dir));
+      expect(Arr.map(Arr.flatten(recorded), (line) => line.at)).toEqual([MERGED_AT]);
+      expect(stops).toEqual([]);
+    }),
+  ));
+
 test("a stop that did not take is asked again next round, before the forge is due and once it is in production", () =>
   runWithForge(
     Effect.gen(function* () {
@@ -720,7 +794,7 @@ test("a stop that did not take is asked again next round, before the forge is du
       ]);
 
       const restored = yield* merging();
-      yield* writeMrStates(restored.stateDir, new Map([["mk/collie!65", "in-prod"]]));
+      yield* writeMrStates(restored.stateDir, new Map([[`${GITLAB}!65`, "in-prod"]]));
       yield* recordDisposition(runDir(restored.stateDir, "r-plan.implement"), {
         at: MERGED_AT,
         by: "gitlab",
@@ -1123,8 +1197,8 @@ test("a board file in the old shape still reads, with nothing known of the forge
       const { stateDir, board: boardOf } = yield* seeded();
       const fs = yield* FileSystem.FileSystem;
       yield* fs.makeDirectory(`${stateDir}/board`, { recursive: true });
-      yield* fs.writeFileString(`${stateDir}/board/mr-states.json`, '{"mk/collie!65":"open"}\n');
-      expect(yield* readMrStates(stateDir)).toEqual(new Map([["mk/collie!65", "open"]]));
+      yield* fs.writeFileString(`${stateDir}/board/mr-states.json`, `{"${GITLAB}!65":"open"}\n`);
+      expect(yield* readMrStates(stateDir)).toEqual(new Map([[`${GITLAB}!65`, "open"]]));
       expect(yield* readForge(stateDir)).toEqual(new Map());
       const [card] = yield* boardOf({ now: epochMs("2026-09-17T10:00:00Z") });
       expect(card!.mrState).toBe("open");
@@ -1343,11 +1417,11 @@ test("a fan-out's Repo run's merge request is watched: its facts recorded, its m
       expect(yield* readDispositions(runDir(stateDir, "r-fan"))).toEqual([]);
       expect(yield* readMrStates(stateDir)).toEqual(
         new Map([
-          ["mk/collie!65", "merged"],
-          ["mk/collie!66", "open"],
+          [`${GITLAB}!65`, "merged"],
+          [`${GITLAB}!66`, "open"],
         ]),
       );
-      const facts = (yield* readForge(stateDir)).get("mk/collie!66");
+      const facts = (yield* readForge(stateDir)).get(`${GITLAB}!66`);
       expect(facts?.head).toBe(HEAD);
       expect(facts?.checks.state).toBe("passed");
       expect(facts?.draft).toBe(false);

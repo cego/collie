@@ -7,6 +7,7 @@ import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Clock, Effect, FileSystem } from "effect";
+import type { ChildProcessSpawner } from "effect/process";
 import type { Flow, FlowLane, FlowNode, FlowRun, MrState } from "./board-model";
 import { mrRefOf, mrUrlOf } from "./board-model";
 import { readAudit, whoActed } from "./audit";
@@ -181,7 +182,10 @@ export interface TaskFacts {
   /** Ready to release's first missing fact, or its word that it is ready, while the MR is open. */
   readonly readiness: string | null;
   readonly mrOf: (run: RunFacts) => string | null;
-  readonly mrLabel: (mr: string) => string;
+  /** The MR id of the merge request `run` opened or was pointed at, keying `mrStates`. */
+  readonly mrIdOf: (
+    run: RunFacts,
+  ) => Effect.Effect<string | null, never, ChildProcessSpawner.ChildProcessSpawner>;
 }
 
 export const flowInputsFor = Effect.fn("Flow.inputs")(function* (
@@ -230,6 +234,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
     const linked = yield* lane(child);
     const at = currentOf(linked);
     const mr = task.mrOf(child);
+    const mrId = yield* task.mrIdOf(child);
     return {
       run: child.id,
       machine,
@@ -244,7 +249,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
         finished: child.finished,
         note: child.note,
         mr,
-        mrState: mr === null ? null : (task.mrStates.get(task.mrLabel(mr)) ?? null),
+        mrState: mrId === null ? null : (task.mrStates.get(mrId) ?? null),
         current:
           at === null
             ? null

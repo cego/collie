@@ -70,13 +70,7 @@ import { isSettled } from "../src/lifecycle";
 import { appendLog } from "../src/oversight";
 import { readAudit, trimAudit } from "../src/audit";
 import { writeMrStates } from "../src/merges";
-import {
-  Flow,
-  FrontDoorRpcs,
-  mrLabel,
-  type Declaration,
-  type FLOCK_READS,
-} from "../src/board-model";
+import { Flow, FrontDoorRpcs, type Declaration, type FLOCK_READS } from "../src/board-model";
 
 const encodeJson = Schemaflow(
   Schema.encodeUnknownResult(Schema.fromJsonString(Schema.Any)),
@@ -1802,8 +1796,8 @@ test("a Run's row for a Run it started shows that Run's merge request as the mer
 
       yield* writeMrStates(
         stateDir,
-        new Map([["mk/api!4", "open"]]),
-        new Map([["mk/api!4", { checks: { state: "passed" }, head: null }]]),
+        new Map([["gitlab.cego.dk/mk/api!4", "open"]]),
+        new Map([["gitlab.cego.dk/mk/api!4", { checks: { state: "passed" }, head: null }]]),
       );
       expect(yield* call("collie_run", { run: parent.id })).toContain(
         `- run ${child.id}: hello, succeeded; mk/api!4 open, checks passed`,
@@ -1822,11 +1816,11 @@ test("a Run's own merge request is shown as recorded, with what the merge watch 
         `Pull request: ${pull} — not watched`,
       );
 
-      const label = mrLabel(pull);
+      const id = "github.com/cego/collie#61";
       yield* writeMrStates(
         stateDir,
-        new Map([[label, "open"]]),
-        new Map([[label, { checks: { state: "failed", name: "test" }, head: null }]]),
+        new Map([[id, "open"]]),
+        new Map([[id, { checks: { state: "failed", name: "test" }, head: null }]]),
       );
       expect(yield* call("collie_run", { run: run.id })).toContain(
         `Pull request: ${pull} — open, checks failed (test)`,

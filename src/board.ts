@@ -46,7 +46,7 @@ import { awaitingLine } from "./awaiting";
 import { readForge, readMrStates } from "./merges";
 import { filed, nothingToLandFile, standingOf } from "./standing";
 import { offersOf } from "./lifecycle";
-import { shell } from "./mr";
+import { mrIdIn, shell } from "./mr";
 import type {
   Disposition,
   Flow,
@@ -902,6 +902,12 @@ export function mrOf(run: RunFacts): string | null {
   return run.mr ?? (isMrTarget(target) ? target : null);
 }
 
+/** The MR id of `mrOf(run)`, a legacy bare or hostless one read in the Run's checkout. */
+const mrIdOf = (run: RunFacts) => {
+  const mr = mrOf(run);
+  return mr === null ? Effect.succeed(null) : mrIdIn(mr, run.cwd, shell);
+};
+
 /** The branch a Run left to land: none where it recorded it had nothing to land. */
 const branchOwed = Effect.fn("Board.branchOwed")(function* (run: RunFacts) {
   if (run.branch === null) return null;
@@ -1007,9 +1013,9 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   now?: number;
   /** How long a Run may write nothing before its card says it has gone quiet. */
   quietMs?: number;
-  /** What the forge last said about each merge request, by the reference the card carries. */
+  /** What the forge last said about each merge request, by MR id. */
   mrStates?: ReadonlyMap<string, MrState>;
-  /** What the forge last said about each merge request's checks, by its label. */
+  /** What the forge last said about each merge request's checks, by MR id. */
   forge?: ReadonlyMap<string, ForgeFacts>;
   /** Every steer and step Delivery the ledgers hold; read from them where not given. */
   deliveries?: ReadonlyArray<Delivery>;
@@ -1105,8 +1111,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
                 agentsOf(everyRun, registered, live),
                 pending,
                 Arr.map(
-                  Arr.filter(Arr.map(everyRun, mrOf), (one) => one !== null),
-                  (one) => [mrStates.get(mrLabel(one)) ?? null, forge.get(mrLabel(one)) ?? null],
+                  Arr.filter(yield* Effect.forEach(everyRun, mrIdOf), (one) => one !== null),
+                  (one) => [mrStates.get(one) ?? null, forge.get(one) ?? null],
                 ),
                 since,
                 quietMs,
@@ -1270,7 +1276,10 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
 
         const mr = repoRun === undefined ? own : mrOf(repoRun);
         const merging = repoRun ?? leader;
-        const mrState = mr === null ? null : (mrStates.get(mrLabel(mr)) ?? null);
+        const mrRun =
+          repoRun ?? Option.getOrUndefined(Arr.findFirst(runs, (run) => mrOf(run) !== null));
+        const mrIdent = mrRun === undefined ? null : yield* mrIdOf(mrRun);
+        const mrState = mrIdent === null ? null : (mrStates.get(mrIdent) ?? null);
         const branch =
           Option.getOrUndefined(
             Arr.findFirst(
@@ -1300,7 +1309,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           !landed &&
           (mrState === null || mrState === "open");
         // Collie's own evidence counts at the head the forge reported, where it reported one.
-        const forged = mr === null ? null : (forge.get(mrLabel(mr)) ?? null);
+        const forged = mrIdent === null ? null : (forge.get(mrIdent) ?? null);
         const verified = awaitingMerge
           ? {
               records: yield* readVerifications(merging.evidence).pipe(
@@ -1396,7 +1405,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
                   : (readiness.missing[0]?.said ?? null)
                 : null,
             mrOf,
-            mrLabel: (one) => mrLabel(one),
+            mrIdOf,
           },
           flowInputs,
         );
