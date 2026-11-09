@@ -88,6 +88,7 @@ import {
   QUESTIONS,
   takeHarnessQuestions,
   ranOutSince,
+  stoppedSince,
   submittedDelivery,
   piQuestionTool,
   type AgentQuestion,
@@ -400,6 +401,8 @@ export interface AgentsApi {
    * its Subscription reads Exhausted for it — why. Never succeeds otherwise.
    */
   readonly ranOut: (launched: Launched) => Effect.Effect<RanOut>;
+  /** What its harness said when a turn died on an error it will not retry; null where none has. */
+  readonly stopped: (launched: Launched) => Effect.Effect<string | null>;
   /** Closes this one agent's pane, with `line` in the Run's log; parks unless it is gone. */
   readonly retire: (launched: Launched, line: string) => Effect.Effect<void, AgentParked>;
   /** A line in the Run's log. */
@@ -842,9 +845,30 @@ export const agentWork = <
             ),
           }).pipe(Effect.as(value));
 
+    const harnessSaid = (on: Launched, why: string) =>
+      `its harness ${said(choiceOfLaunch(on))} said "${why}". Collie keeps collecting it; tell it to carry on once its harness is fixed.`;
     // An agent past its budget may still be working: park, and go on collecting.
     const pastBudget = (on: Launched) =>
-      `${on.agent} has written nothing to ${output} after ${Math.round(agents.collectMs / 60_000)} minutes idle. Collie keeps collecting it; if it has stopped, ask it to write it.`;
+      Effect.map(agents.stopped(on), (why) => {
+        const idle = `${on.agent} has written nothing to ${output} after ${Math.round(agents.collectMs / 60_000)} minutes idle`;
+        return why === null
+          ? `${idle}. Collie keeps collecting it; if it has stopped, ask it to write it.`
+          : `${idle}; ${harnessSaid(on, why)}`;
+      });
+    // Never ends, so collecting goes on after it parks.
+    const parksOnStop = (on: Launched) =>
+      Effect.gen(function* () {
+        let why = yield* agents.stopped(on);
+        while (why === null) {
+          yield* Effect.sleep(Duration.millis(agents.pollMs));
+          why = yield* agents.stopped(on);
+        }
+        yield* host.parked(
+          runId,
+          `${on.agent} stopped before writing ${output}: ${harnessSaid(on, why)}`,
+        );
+        return yield* Effect.never;
+      });
     const questions: Questions = {
       ask: (question, asker) => host.asking(runId, question, asker),
       asked: host.asked(runId),
@@ -880,11 +904,18 @@ export const agentWork = <
       // Collected throughout, so a verify ending between attempts is still told to it.
       const output = agents.collectedDuring(
         on,
-        watching(agents.collect(on, null, questions)).pipe(
-          Effect.filterOrElse(
-            (text) => text !== null,
-            () => host.parked(runId, waiting ?? pastBudget(on)).pipe(Effect.andThen(late)),
+        Effect.raceFirst(
+          watching(agents.collect(on, null, questions)).pipe(
+            Effect.filterOrElse(
+              (text) => text !== null,
+              () =>
+                (waiting === undefined ? pastBudget(on) : Effect.succeed(waiting)).pipe(
+                  Effect.flatMap((why) => host.parked(runId, why)),
+                  Effect.andThen(late),
+                ),
+            ),
           ),
+          parksOnStop(on),
         ),
       );
       return stoppable(
@@ -3721,6 +3752,13 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     launch: (ask, note) => launch(ask, false, note),
     revive,
     ranOut,
+    stopped: (launched) =>
+      under(
+        Effect.gen(function* () {
+          const dir = yield* controlDir(host.env.stateDir, launched.agent);
+          return (yield* stoppedSince(dir, launched.at ?? 0))?.why ?? null;
+        }).pipe(Effect.orDie),
+      ),
     retire,
     say: (runId, line) => under(log(runId, line)),
     handOff,
