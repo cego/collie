@@ -9,7 +9,7 @@ import * as Struct from "effect/Struct";
 import { pipe as pipe_ } from "effect/Function";
 import * as Rec from "effect/Record";
 import { DateTime, Effect, FileSystem, Option, Path, Schema } from "effect";
-import { type ForgeFacts, mrOf } from "./board";
+import type { ForgeFacts } from "./board";
 import {
   ForgeChecks,
   Mergeability,
@@ -28,7 +28,17 @@ import { readLanding, settleLeft } from "./landing";
 import { forgeHere, mrIdIn, type Runner } from "./mr";
 import { runDir } from "./engine";
 import type { RunFacts } from "./runs";
+import { diffTargetOf } from "./strategies";
 import { epochMs } from "./time";
+
+const isMrTarget = (target: string | null): target is string =>
+  target !== null && pipe_(target, Str.startsWith("mr:"));
+
+/** The merge request this Run opened, or the one it was pointed at; null for neither. */
+export function mrOf(run: RunFacts): string | null {
+  const target = diffTargetOf(run.settled)?.value ?? null;
+  return run.mr ?? (isMrTarget(target) ? target : null);
+}
 
 /** How long one merge request's answer stands before its forge is asked again. */
 export const MERGE_POLL_MS = 5 * 60_000;

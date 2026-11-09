@@ -19,7 +19,6 @@ import { latest, readDispositions } from "./disposition";
 import { readSeen, seenSince } from "./seen";
 import { runTitle } from "./naming";
 import { planIssuesIn, planReposOf } from "./plan";
-import { diffTargetOf } from "./strategies";
 import { everyJournal, pendingFor, type ProposalLine } from "./proposals";
 import { everyRegistered, type AgentEntry } from "./registry";
 import { listRuns, newestFirst, settled as ended, type RunFacts, type RunState } from "./runs";
@@ -43,7 +42,7 @@ import { recordsIn } from "./check-processes";
 import { waitLine } from "./memory-wait";
 import { runWaits } from "./run-waits";
 import { awaitingLine } from "./awaiting";
-import { readForge, readMrStates } from "./merges";
+import { mrOf, readForge, readMrStates } from "./merges";
 import { filed, nothingToLandFile, standingOf } from "./standing";
 import { offersOf } from "./lifecycle";
 import { mrIdIn, shell } from "./mr";
@@ -945,15 +944,6 @@ const lastActivityAt = Effect.fn("Board.lastActivityAt")(function* (
     yield* writtenIn(run.evidence),
   );
 });
-
-const isMrTarget = (target: string | null): target is string =>
-  target !== null && pipe(target, Str.startsWith("mr:"));
-
-/** The merge request this Run opened, or the one it was pointed at; null for neither. */
-export function mrOf(run: RunFacts): string | null {
-  const target = diffTargetOf(run.settled)?.value ?? null;
-  return run.mr ?? (isMrTarget(target) ? target : null);
-}
 
 /** The MR id of `mrOf(run)`, a legacy bare or hostless one read in the Run's checkout. */
 const mrIdOf = (run: RunFacts) => {

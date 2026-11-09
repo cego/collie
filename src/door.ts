@@ -24,7 +24,7 @@ import * as RpcServer from "effect/rpc/RpcServer";
 import * as SocketServer from "effect/socket/SocketServer";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
 import { IdentityRpc, RunDetailRpc, type MrPanel, type OfferView } from "./board-model";
-import { mrOf } from "./board";
+import { mrOf } from "./merges";
 import type { PluginEnv } from "./env";
 import { foregroundLayer } from "./foreground";
 import type { AgentInfo } from "./herdr";
