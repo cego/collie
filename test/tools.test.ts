@@ -2129,3 +2129,41 @@ test("collie_installation gives the Standing direction as it is now, with its ed
       expect(second).not.toContain("Stage only");
     }),
   ));
+
+test("collie_do disposes of a merge request of several on the Run that owns it, and of none outside the Task", () =>
+  inWorld(
+    Effect.gen(function* () {
+      yield* save(world.user, ["fans-out.workflow.ts", "records-mr.workflow.ts"]);
+      const mrOf = (repo: string, iid: number) =>
+        `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`;
+      const fan = yield* startedRun(
+        "fans-out",
+        { mrs: `${mrOf("api", 3)} ${mrOf("web", 8)}` },
+        (view) => view.status.status === "complete",
+        undefined,
+        "task-fan",
+      );
+      const client = yield* connect(stateDir).pipe(Effect.orDie);
+      const web = Option.getOrThrow(
+        Arr.findFirst(
+          yield* client.runs({ task: "task-fan" }).pipe(Effect.orDie),
+          (one) => one.mr === mrOf("web", 8),
+        ),
+      );
+
+      const marked = yield* call("collie_do", {
+        actions: [{ kind: "disposition", run: fan.id, became: "abandoned", ref: "web!8" }],
+      });
+      expect(marked).toContain("disposition: applied");
+      expect(yield* readDispositions(runDir(stateDir, web.runId))).toMatchObject([
+        { kind: "abandoned", ref: "gitlab.cego.dk/cego/web!8" },
+      ]);
+      expect(yield* readDispositions(fan.dir)).toEqual([]);
+
+      const refused = yield* call("collie_do", {
+        actions: [{ kind: "disposition", run: fan.id, became: "merged", ref: mrOf("cli", 9) }],
+      });
+      expect(refused).toContain("disposition: failed");
+      expect(refused).toMatch(/cego\/api!3.*cego\/web!8/);
+    }),
+  ));

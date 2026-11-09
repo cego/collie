@@ -663,7 +663,9 @@ export const makeOffer = Effect.fn("Flows.makeOffer")(function* (
 ) {
   const listed = yield* offersOf(env, runId);
   if ("ok" in listed) return listed.error.message;
-  const offer = Option.getOrUndefined(Arr.findFirst(listed, (one) => one.id === chosen));
+  const offer = Option.getOrUndefined(
+    Arr.findFirst(listed, (one) => one.id === chosen && (one.run ?? runId) === runId),
+  );
   if (offer === undefined) return `${runId} no longer offers ${chosen}`;
   if (offer.unavailable !== null) return `${offer.title}: ${offer.unavailable}`;
   const input = yield* offerArguments(prompts, offer.arguments);
@@ -1152,11 +1154,12 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       const open = Arr.filter(listed, (one) => one.unavailable === null);
       if (open.length === 0) return `${command.runId} offers nothing now`;
       const chosen = yield* prompts.menu(
-        Arr.map(open, (one) => ({ id: one.id, title: one.title, subtitle: one.workflow })),
+        Arr.map(open, (one, at) => ({ id: String(at), title: one.title, subtitle: one.workflow })),
         { header: `What next for ${command.runId}?` },
       );
       if (chosen === null) return null;
-      return yield* makeOffer(env, prompts, command.runId, chosen.id);
+      const offer = open[Number(chosen.id)]!;
+      return yield* makeOffer(env, prompts, offer.run ?? command.runId, offer.id);
     }
 
     case "RunWorkflow":

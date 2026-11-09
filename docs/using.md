@@ -863,9 +863,9 @@ closes it, as does Esc, and the key beside each item does it from the keyboard:
 | `g`     | Go to its tab      | always                                                   |
 | `s`     | Steer…             | while something is still driving it                      |
 | `a`     | Attach files…      | while something is still driving it                      |
-| `w`     | Open merge request | when there is one                                        |
+| `w`     | Open merge request | when there is one; one per merge request, by name        |
 | `i`     | its first offer    | a plan that is ready, by its title                       |
-| `o`     | What it offers…    | always: the workflow's own offers                        |
+| `o`     | What it offers…    | always: the workflow's own offers, each MR's own too     |
 | `u`     | Resume run         | failed or stopped                                        |
 | `x`     | Follow-up run      | finished                                                 |
 | `h`     | Hold run           | working, quiet or waiting on you; Release hold once held |
@@ -885,8 +885,13 @@ See [Stop and resume](cli.md#stop-and-resume) for recovery and delivery reconcil
 The drawer's header carries the same as buttons, without the one that opens what is already
 open, and adds **Mark merged** and **Mark abandoned** once the work is over — recorded
 [beside the run's status, never over it](cli.md#what-became-of-the-work), with its merge request
-as the reference where the board knows one. A Task with a decision open shows **Answer
-above** instead, which closes the drawer to the card whose buttons answer it.
+as the reference where the board knows one. A Task with several merge requests has one of
+each per merge request, `Mark merged app!12`, and `Open MR app!12`, with no key of their
+own; **What it offers…** lists each owning Run's offers, `Release app!12`, made by that Run.
+Its first button is about the first one waiting on you: one closed with nobody saying why,
+then one ready to release. Nothing on the card acts on all of them at once. A Task with a
+decision open shows **Answer above** instead, which closes the drawer to the card whose
+buttons answer it.
 
 **Steer…** opens the record with the keyboard in the field at its foot; type and press
 Enter, and Collie answers with a proposal on that Task's card. The field is not there for a

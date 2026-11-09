@@ -189,7 +189,8 @@ import { usagePhrase } from "./usage-model";
 import { currentEnv, leaveLauncher, withoutLauncher } from "./env";
 import { installation as installedRelease, RELEASE_TAG } from "./release";
 import { Herdr, isSettled, serverSocket, type AgentInfo } from "./herdr";
-import { buildBoard, type KeptCards, LANDED_STATES, taskFlowOf } from "./board";
+import { taskOffers, type Offer } from "./offers";
+import { buildBoard, type KeptCards, LANDED_STATES, ownedMrs, taskFlowOf } from "./board";
 import { mrOf, readForge, readMrStates, watchedMr, type MrPanels } from "./merges";
 import { mrIdIn, shell } from "./mr";
 import { ForgeHttp, forgeHttpLayer } from "./forge/http";
@@ -216,6 +217,7 @@ import {
   ShellResult,
   PROTOCOL,
   readinessOfRun,
+  readMrRef,
   ProposalRefused,
   PART_BYTES,
   RequestConflict,
@@ -1844,6 +1846,54 @@ const frontDoorHandlers = (
             () => new HostRefused({ reason: `no Run ${runId}` }),
           ),
         );
+      /** The merge requests of `view`'s Task, each with the Run that owns it. */
+      const mrsOfTask = (view: RunView) =>
+        Effect.gen(function* () {
+          const runs = view.task === null ? [view] : yield* registry.views(view.task);
+          return yield* ownedMrs(Arr.map(runs, (one) => factsOfView(env.stateDir, one)));
+        }).pipe(Effect.provideContext(bun));
+      /** What a Run offers, and on a Task of several merge requests what each owning Run does. */
+      const offersOn = Effect.fn("Host.offersOn")(function* (runId: string) {
+        const own = yield* registry.offers(runId);
+        const view = yield* registry.view(runId);
+        const mrs = view === null ? [] : yield* mrsOfTask(view);
+        if (mrs.length < 2) return own;
+        const owned = yield* Effect.forEach(mrs, (one) =>
+          registry.offers(one.owner).pipe(
+            Effect.orElseSucceed((): ReadonlyArray<Offer> => []),
+            Effect.map((offers) => ({ run: one.owner, named: one.short, offers })),
+          ),
+        );
+        return taskOffers(runId, own, owned);
+      });
+      /**
+       * Where a Disposition naming `ref` is kept: on the Run that owns that merge request of
+       * the Task, under its MR id, whichever of the Task's Runs was asked.
+       */
+      const disposedOn = (ref: string) =>
+        Effect.fn("Host.disposedOn")(function* (view: RunView) {
+          const asked = { run: view.runId, ref };
+          const said = Str.toLowerCase(Str.trim(ref));
+          if (said === "") return asked;
+          const mrs = yield* mrsOfTask(view);
+          const id = yield* mrIdIn(ref, view.cwd, shell);
+          const named = Arr.findFirst(
+            mrs,
+            (one) =>
+              one.id === id ||
+              Str.toLowerCase(one.short) === said ||
+              Str.toLowerCase(one.label) === said,
+          );
+          if (Option.isSome(named)) return { run: named.value.owner, ref: named.value.id };
+          const anMr = id !== null || (readMrRef(ref) ?? readMrRef(`mr:${said}`)) !== null;
+          if (mrs.length === 0 || !anMr) return asked;
+          return yield* new HostRefused({
+            reason: `${ref} is not one of this Task's merge requests: ${Arr.join(
+              Arr.map(mrs, (one) => one.label),
+              ", ",
+            )}`,
+          });
+        }, Effect.provideContext(bun));
       const auditedControl =
         (
           runId: string,
@@ -2216,7 +2266,7 @@ const frontDoorHandlers = (
           ).pipe(Effect.provideContext(hosted)),
         resume: ({ runId, request }, { client }) =>
           auditedControl(runId, "resume", request, whoOf(client))(takeUp(runId)),
-        offers: ({ runId }) => serve(registry.offers(runId)),
+        offers: ({ runId }) => serve(offersOn(runId)),
         workflows: ({ project }) =>
           discover(searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project })).pipe(
             Effect.map(({ entries }) =>
@@ -3295,7 +3345,8 @@ const frontDoorHandlers = (
           ),
         dispose: ({ runId, kind, ref, note, request }, { client }) =>
           known(runId).pipe(
-            Effect.andThen(
+            Effect.flatMap(disposedOn(ref)),
+            Effect.flatMap((kept) =>
               once(
                 trail(runId),
                 {
@@ -3310,10 +3361,10 @@ const frontDoorHandlers = (
                     at: yield* nowIso,
                     by: actorName({ ...whoOf(client), requestId: request }),
                     kind,
-                    ref,
+                    ref: kept.ref,
                     note,
                   };
-                  yield* recordDisposition(trail(runId), line);
+                  yield* recordDisposition(trail(kept.run), line);
                   return line;
                 }),
               ),

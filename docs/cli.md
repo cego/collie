@@ -1289,6 +1289,14 @@ The board records the same thing: **Mark merged** and **Mark abandoned** in a fi
 Task's drawer, with its merge request as the reference. See
 [the Control Plane](using.md#the-control-plane).
 
+`--ref` names the merge request the disposition is about, in any form Collie reads one: a
+URL, an [MR id](../CONTEXT.md), `cego/collie!43` or `collie!43`. Where it is one of the
+Task's merge requests, the disposition is recorded on the Run that owns it, under its MR id,
+whichever of the Task's Runs you named. A merge request that is not one of the Task's is
+refused, and the refusal lists the Task's. Anything else, a commit or a Run, is recorded as
+given on the Run you named. The board and chat's `collie_do` `disposition` take the same
+path.
+
 Without `--as` the command reads. With it, `--as` is `merged`, `abandoned`, or
 `superseded`, and there is deliberately no value meaning the run succeeded after all.
 `run show` then says both: `failed · merged cego/collie!43 by mk`. Nothing is inferred —

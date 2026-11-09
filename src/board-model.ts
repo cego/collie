@@ -961,6 +961,8 @@ export const OfferView = Schema.Struct({
   primary: Schema.Boolean,
   /** Why it cannot be made now, or null when it can. */
   unavailable: Schema.NullOr(Schema.String),
+  /** The Run that makes it, where that is not the Run asked: one owning a merge request of its Task. */
+  run: Schema.optionalKey(Schema.String),
 });
 export type OfferView = typeof OfferView.Type;
 
@@ -2266,7 +2268,7 @@ export type CardAction =
   | { readonly kind: "go-to-tab" }
   | { readonly kind: "steer" }
   | { readonly kind: "attach" }
-  | { readonly kind: "open-mr"; readonly mr: MrRef }
+  | { readonly kind: "open-mr"; readonly mr: MrRef; readonly named?: string }
   | { readonly kind: "offer"; readonly offer: BoardOffer }
   | { readonly kind: "check-output" }
   | { readonly kind: "offers" }
@@ -2274,15 +2276,40 @@ export type CardAction =
   | { readonly kind: "follow-up" }
   | { readonly kind: "hold"; readonly set: boolean }
   | { readonly kind: "stop" }
-  | { readonly kind: "dispose"; readonly disposition: DispositionKind; readonly ref: string }
+  | {
+      readonly kind: "dispose";
+      readonly disposition: DispositionKind;
+      readonly ref: string;
+      /** The merge request's short words, where its Task has several. */
+      readonly named?: string;
+    }
   | { readonly kind: "acknowledge" };
 
+type DisposeAction = Extract<CardAction, { kind: "dispose" }>;
+
 /** `collie!151` or `collie#30` rather than the whole URL: a disposition's ref ends up in the card's sentence. */
-const dispose = (view: TaskView, disposition: DispositionKind): CardAction => {
+const dispose = (view: TaskView, disposition: DispositionKind): DisposeAction => {
   const mr = mrRefOf(view.mr);
   const ref = disposition === "abandoned" || mr === null ? "" : mrWords(mr).short;
   return { kind: "dispose", disposition, ref };
 };
+
+/** A Task's merge requests where it has several, each acted on by itself; none otherwise. */
+const severalOf = (view: TaskView): ReadonlyArray<TaskMr> =>
+  view.mrs !== undefined && view.mrs.length > 1 ? view.mrs : [];
+
+const openEach = (one: TaskMr): CardAction => {
+  const recorded = readMrRef(one.mr);
+  const mr = recorded?.project ? recorded : readMrRef(`mr:${one.id}`)!;
+  return { kind: "open-mr", mr, named: one.short };
+};
+
+const disposeEach = (one: TaskMr, disposition: DispositionKind): DisposeAction => ({
+  kind: "dispose",
+  disposition,
+  ref: one.id,
+  named: one.short,
+});
 
 /** "merge request", or "pull request" for one on GitHub, however it is named. */
 export function mrNounOf(mr: string): string {
@@ -2291,10 +2318,17 @@ export function mrNounOf(mr: string): string {
 }
 
 /** The Open action's label, in the merge request's own forge's words. */
-export function openMrLabel(mr: MrRef, primary: boolean): string {
+export function openMrLabel(mr: MrRef, primary: boolean, named?: string): string {
   const github = forgeOfRef(mr) === "github";
+  if (named !== undefined) return `${github ? "Open PR" : "Open MR"} ${named}`;
   if (primary) return github ? "Open PR" : "Open MR";
   return github ? "Open pull request" : "Open merge request";
+}
+
+export function disposeLabel(action: DisposeAction): string {
+  return action.named === undefined
+    ? `Mark ${action.disposition}`
+    : `Mark ${action.disposition} ${action.named}`;
 }
 
 /**
@@ -2304,8 +2338,10 @@ export function openMrLabel(mr: MrRef, primary: boolean): string {
 export function cardActions(view: TaskView): CardAction[] {
   const actions: CardAction[] = [{ kind: "go-to-tab" }];
   if (!isSettled(view.state)) actions.push({ kind: "steer" }, { kind: "attach" });
+  const several = severalOf(view);
   const mr = mrRefOf(view.mr);
-  if (mr !== null) actions.push({ kind: "open-mr", mr });
+  if (several.length > 0) actions.push(...Arr.map(several, openEach));
+  else if (mr !== null) actions.push({ kind: "open-mr", mr });
   if (view.offer !== null) actions.push({ kind: "offer", offer: view.offer });
   if (view.check !== null) actions.push({ kind: "check-output" });
   actions.push({ kind: "offers" });
@@ -2332,6 +2368,20 @@ export function primaryAction(view: TaskView): CardAction | null {
   // Whatever the plan's module offers first, under its own title; none, no button.
   if (view.planReady) return view.offer === null ? null : { kind: "offer", offer: view.offer };
   if (canResume(view.state)) return { kind: "resume" };
+  const several = severalOf(view);
+  if (several.length > 0) {
+    const closed = Arr.findFirst(
+      several,
+      (one) => one.state === "closed" && one.disposition === null,
+    );
+    if (Option.isSome(closed)) return disposeEach(closed.value, "superseded");
+    return openEach(
+      Option.getOrElse(
+        Arr.findFirst(several, (one) => one.ready),
+        () => several[0]!,
+      ),
+    );
+  }
   if (view.mrState === "closed") return dispose(view, "superseded");
   const mr = mrRefOf(view.mr);
   return mr === null ? null : { kind: "open-mr", mr };
@@ -2341,8 +2391,18 @@ export function primaryAction(view: TaskView): CardAction | null {
  * What became of the work, for any settled Task: a Run that failed and was finished by
  * hand is what a disposition is for. Superseded where its merge request was closed.
  */
-export function dispositionActions(view: TaskView): CardAction[] {
+export function dispositionActions(view: TaskView): DisposeAction[] {
   if (!isSettled(view.state)) return [];
+  const several = severalOf(view);
+  if (several.length > 0)
+    return Arr.flatMap(several, (one) =>
+      Arr.map(
+        one.state === "closed"
+          ? (["merged", "abandoned", "superseded"] as const)
+          : (["merged", "abandoned"] as const),
+        (kind) => disposeEach(one, kind),
+      ),
+    );
   const kinds: DispositionKind[] = ["merged", "abandoned"];
   if (view.mrState === "closed") kinds.push("superseded");
   return Arr.map(kinds, (kind) => dispose(view, kind));

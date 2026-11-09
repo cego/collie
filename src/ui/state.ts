@@ -32,7 +32,7 @@ import {
   type TaskView,
 } from "../board-model";
 import { mrTarget } from "../mr";
-import { openMrLabel } from "../board-model";
+import { disposeLabel, openMrLabel } from "../board-model";
 import type { Live } from "../live";
 import type { Selection } from "../selection";
 
@@ -1191,8 +1191,9 @@ function itemFor(view: TaskView, action: CardAction, primary: boolean): MenuItem
       return { key: "a", label: "Attach files…", command: { _tag: "AttachFiles", runId } };
     case "open-mr":
       return {
-        key: "w",
-        label: openMrLabel(action.mr, primary),
+        // One key cannot say which of several merge requests it opens.
+        key: action.named === undefined ? "w" : "",
+        label: openMrLabel(action.mr, primary, action.named),
         command: { _tag: "OpenMr", target: mrTarget(action.mr.project, action.mr.iid), runId },
       };
     case "offer":
@@ -1223,8 +1224,8 @@ function itemFor(view: TaskView, action: CardAction, primary: boolean): MenuItem
       return { key: "k", label: "Stop run", command: { _tag: "StopRun", runId } };
     case "dispose":
       return {
-        key: DISPOSITION_KEYS[action.disposition],
-        label: `Mark ${action.disposition}`,
+        key: action.named === undefined ? DISPOSITION_KEYS[action.disposition] : "",
+        label: disposeLabel(action),
         command: { _tag: "RecordDisposition", runId, kind: action.disposition, ref: action.ref },
       };
     case "acknowledge":

@@ -991,6 +991,24 @@ function mrsOf(
   );
 }
 
+/** A Task's merge requests by MR id, each in the forge's words and with the Run that owns it. */
+export const ownedMrs = Effect.fn("Board.ownedMrs")(function* (runs: ReadonlyArray<RunFacts>) {
+  const carried = yield* Effect.forEach(newestFirst(runs), (run) =>
+    Effect.map(mrIdOf(run), (id) => ({ run, id, mr: mrOf(run) })),
+  );
+  const entries = mrsOf(
+    Arr.flatMap(carried, ({ run, id, mr }) =>
+      id === null || mr === null ? [] : [{ run, id, mr }],
+    ),
+    [],
+  );
+  return Arr.map(entries, (one) => ({
+    ...wordsOf(one.id, one.mr),
+    id: one.id,
+    owner: one.owner.id,
+  }));
+});
+
 /** A merge request's latest Disposition: one naming it on any Run, or naming none on its owner. */
 function dispositionFor(
   entry: Carried & { readonly id: string },

@@ -229,3 +229,35 @@ export function inputsFor(
   }
   return given;
 }
+
+/**
+ * A Task's offers where it has several merge requests: the asked Run's own unless it owns
+ * one, then each owning Run's own, titled with its merge request and made by that Run.
+ */
+export function taskOffers<
+  O extends {
+    readonly primary: boolean;
+    readonly unavailable: string | null;
+    readonly title: string;
+  },
+>(
+  asked: string,
+  own: ReadonlyArray<O>,
+  owned: ReadonlyArray<{
+    readonly run: string;
+    readonly named: string;
+    readonly offers: ReadonlyArray<O>;
+  }>,
+): Array<O & { readonly run?: string }> {
+  const listed: Array<O & { readonly run?: string }> = [
+    ...(Arr.some(owned, (one) => one.run === asked) ? [] : own),
+    ...Arr.flatMap(owned, ({ run, named, offers }) =>
+      Arr.map(offers, (offer) => ({ ...offer, title: `${offer.title} ${named}`, run })),
+    ),
+  ];
+  const first = Arr.findFirstIndex(listed, (one) => one.unavailable === null);
+  return Arr.map(listed, (one, at) => ({
+    ...one,
+    primary: Option.isSome(first) && at === first.value,
+  }));
+}
