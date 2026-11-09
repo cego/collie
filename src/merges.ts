@@ -17,6 +17,7 @@ import {
   mrIdProject,
   mrLabel,
   mrRefOf,
+  parseMrTarget,
   type MrPanel,
   type MrState,
   type TaskView,
@@ -32,7 +33,7 @@ import { diffTargetOf } from "./strategies";
 import { epochMs } from "./time";
 
 const isMrTarget = (target: string | null): target is string =>
-  target !== null && pipe_(target, Str.startsWith("mr:"));
+  target !== null && parseMrTarget(target) !== null;
 
 /** The merge request this Run opened, or the one it was pointed at; null for neither. */
 export function mrOf(run: RunFacts): string | null {

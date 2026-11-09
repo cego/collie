@@ -1982,7 +1982,7 @@ export function forgeOfRef(ref: MrRef): MrForge {
     : "gitlab";
 }
 
-const MR_TARGET = /^mr:(?:(.*)([!#]))?(\d+)$/;
+const MR_TARGET = /^mr:(?:([^\s,]*)([!#]))?(\d+)$/;
 const MR_URL =
   /^(?:https?:\/\/)?(?:(github\.com\/[^/\s]+\/[^/\s]+)\/pull|([^/\s]+\/.+?)\/-\/merge_requests)\/(\d+)(?:[/?#]|$)/i;
 

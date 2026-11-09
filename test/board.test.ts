@@ -4,6 +4,7 @@
 // human reads on a card — a form nobody has a case for is a form nobody can trust.
 
 import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -1821,6 +1822,30 @@ test("a multi-repository fan-out's card lists each Repo run's merge request by w
         [idOf("web", 8), "web!8", "r-web"],
       ]);
       expect(view!.mr).toBe(GITLAB("api", 7));
+    }),
+  ));
+
+test("a Run released with a set of merge requests adds none of its own beside its children's", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const single = (target: string) => ({
+        settled: { inputs: { mr: target }, strategies: { mr: "diff-target" as const } },
+      });
+      const app = `mr:${idOf("app", 12)}`;
+      const api = `mr:${idOf("api", 7)}`;
+      const runs = [
+        yield* madeRun(dir, { id: "r-set", task: "task-1", ...single(`${app} ${api}`) }),
+        yield* madeRun(dir, { id: "r-set.app", task: "task-1", parent: "r-set", ...single(app) }),
+        yield* madeRun(dir, { id: "r-set.api", task: "task-1", parent: "r-set", ...single(api) }),
+      ];
+
+      const [view] = yield* board(env, runs);
+
+      expect(Arr.sort(Arr.map(view!.mrs ?? [], (one) => one.id), Order.String)).toEqual([
+        idOf("api", 7),
+        idOf("app", 12),
+      ]);
     }),
   ));
 
