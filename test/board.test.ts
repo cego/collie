@@ -1719,6 +1719,216 @@ test("a fan-out's card lists its Repo runs and every repository still to come, b
     }),
   ));
 
+const GITLAB = (repo: string, iid: number) =>
+  `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`;
+const idOf = (repo: string, iid: number) => `gitlab.cego.dk/cego/${repo}!${iid}`;
+
+/**
+ * A succeeded fan-out whose Repo runs each opened a merge request, one wave each in the
+ * order given. A later wave's Run started earlier, so wave order is not start order.
+ */
+const fannedOut = Effect.fn("board.fannedOut")(function* (
+  dir: string,
+  mrs: ReadonlyArray<readonly [repo: string, iid: number]>,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const root = `${dir}/root`;
+  const parent = yield* madeRun(dir, {
+    id: "r-fan",
+    task: "task-1",
+    cwd: root,
+    state: "succeeded",
+    created: "2026-09-14T09:00:00Z",
+  });
+  yield* fs.makeDirectory(`${parent.dir}/plan/issues`, { recursive: true });
+  for (const [at, [repo]] of mrs.entries()) {
+    yield* fs.makeDirectory(`${root}/${repo}/.git`, { recursive: true });
+    yield* fs.writeFileString(
+      `${parent.dir}/plan/issues/0${at + 1}-${repo}.md`,
+      `# ${repo}\n\n**Blocked by:** ${at === 0 ? "None" : `0${at}`}\n\n**Repo:** ${repo}\n`,
+    );
+  }
+  const children = yield* Effect.forEach(mrs, ([repo, iid], at) =>
+    madeRun(dir, {
+      id: `r-${repo}`,
+      task: "task-1",
+      parent: "r-fan",
+      repo,
+      state: "succeeded",
+      mr: GITLAB(repo, iid),
+      created: `2026-09-14T09:0${mrs.length - at}:00Z`,
+    }),
+  );
+  return [...children, parent];
+});
+
+test("a multi-repository fan-out's card lists each Repo run's merge request by wave, and says the first", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const runs = yield* fannedOut(dir, [
+        ["api", 7],
+        ["web", 8],
+      ]);
+
+      const [view] = yield* board(env, runs);
+
+      expect(Arr.map(view!.mrs ?? [], (one) => [one.id, one.short, one.run])).toEqual([
+        [idOf("api", 7), "api!7", "r-api"],
+        [idOf("web", 8), "web!8", "r-web"],
+      ]);
+      expect(view!.mr).toBe(GITLAB("api", 7));
+    }),
+  ));
+
+test("a Task of several merge requests lands once each merged or was disposed of, and nothing is going", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const runs = yield* fannedOut(dir, [
+        ["api", 7],
+        ["web", 8],
+        ["cli", 9],
+      ]);
+      const states = (api: MrState, web: MrState, cli: MrState) =>
+        new Map([
+          [idOf("api", 7), api],
+          [idOf("web", 8), web],
+          [idOf("cli", 9), cli],
+        ]);
+
+      const [one] = yield* board(env, runs, { mrStates: states("merged", "open", "open") });
+      expect(one!.landed).toBe(false);
+      expect(sectionOf(one!)).toBe("waiting");
+      expect(one!.sentence).toBe("1 of 3 merged; web!8 is open; cli!9 is open.");
+
+      yield* recordDisposition(`${dir}/runs/r-cli`, {
+        at: "2026-09-14T10:00:00Z",
+        by: "mk",
+        kind: "abandoned",
+        ref: "",
+        note: null,
+      });
+      const settled = states("merged", "merged", "closed");
+      const [still] = yield* board(
+        env,
+        Arr.map(runs, (run) => (run.id === "r-web" ? { ...run, state: "running" as const } : run)),
+        { mrStates: settled },
+      );
+      expect(still!.landed).toBe(false);
+
+      const [landed] = yield* board(env, runs, { mrStates: settled });
+      expect(landed!.landed).toBe(true);
+      expect(sectionOf(landed!)).toBe("finished");
+      expect(landed!.sentence).toBe("2 of 3 merged; cli!9 abandoned.");
+    }),
+  ));
+
+test("a merge request of several that closed without merging, with nobody saying why, keeps its Task waiting on you by name", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const runs = yield* fannedOut(dir, [
+        ["api", 7],
+        ["web", 8],
+      ]);
+
+      const [view] = yield* board(env, runs, {
+        mrStates: new Map<string, MrState>([
+          [idOf("api", 7), "merged"],
+          [idOf("web", 8), "closed"],
+        ]),
+      });
+
+      expect(view!.landed).toBe(false);
+      expect(sectionOf(view!)).toBe("waiting");
+      expect(view!.sentence).toBe("1 of 2 merged; web!8 closed without merging.");
+    }),
+  ));
+
+test("Ready to release is each merge request's own, at its own head", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const runs = yield* fannedOut(dir, [
+        ["api", 7],
+        ["web", 8],
+      ]);
+      const sha = (digit: string) => pipe(digit, Str.repeat(40));
+      const [apiHead, webHead, movedHead] = [sha("a"), sha("b"), sha("c")];
+      yield* appendVerification(`${dir}/evidence/r-api`, checked("test", apiHead));
+      yield* appendVerification(`${dir}/evidence/r-web`, checked("test", webHead));
+      const forgeSays = (web: string) =>
+        board(env, runs, {
+          mrStates: new Map<string, MrState>([
+            [idOf("api", 7), "open"],
+            [idOf("web", 8), "open"],
+          ]),
+          forge: new Map([
+            [
+              idOf("api", 7),
+              {
+                checks: { state: "passed" as const },
+                head: apiHead,
+                mergeable: { state: "mergeable" as const, said: "mergeable" },
+              },
+            ],
+            [
+              idOf("web", 8),
+              {
+                checks: { state: "passed" as const },
+                head: web,
+                mergeable: { state: "blocked" as const, said: "not approved" },
+              },
+            ],
+          ]),
+        });
+
+      const [approved] = yield* forgeSays(webHead);
+      expect(Arr.map(approved!.mrs ?? [], (one) => [one.short, one.ready, one.head])).toEqual([
+        ["api!7", true, apiHead],
+        ["web!8", false, webHead],
+      ]);
+      expect(approved!.ready).toBe(true);
+      expect(approved!.sentence).toBe("0 of 2 merged; api!7 ready to release; web!8 is open.");
+
+      const [moved] = yield* forgeSays(movedHead);
+      expect(Arr.map(moved!.mrs ?? [], (one) => [one.short, one.ready, one.head])).toEqual([
+        ["api!7", true, apiHead],
+        ["web!8", false, movedHead],
+      ]);
+    }),
+  ));
+
+test("a merge request whose target branch is another's source branch waits on it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const runs = yield* fannedOut(dir, [
+        ["app", 12],
+        ["api", 7],
+      ]);
+      const unchecked = { checks: { state: "unknown" as const }, head: null };
+
+      const [view] = yield* board(env, runs, {
+        mrStates: new Map<string, MrState>([
+          [idOf("app", 12), "open"],
+          [idOf("api", 7), "open"],
+        ]),
+        forge: new Map([
+          [idOf("app", 12), { ...unchecked, source: "mk/app", target: "master" }],
+          [idOf("api", 7), { ...unchecked, source: "mk/api", target: "mk/app" }],
+        ]),
+      });
+
+      expect(Arr.map(view!.mrs ?? [], (one) => [one.short, one.waitsOn])).toEqual([
+        ["app!12", []],
+        ["api!7", [idOf("app", 12)]],
+      ]);
+      expect(view!.sentence).toBe("0 of 2 merged; app!12 is open; api!7 waits on app!12.");
+    }),
+  ));
+
 const waitingForMemory = (runDir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

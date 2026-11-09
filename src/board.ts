@@ -65,6 +65,8 @@ import { owedLocally } from "./check-proof";
 import {
   Answered,
   flowActions,
+  mrId,
+  mrIdProject,
   mrLabel,
   mrWords,
   readMrRef,
@@ -84,6 +86,7 @@ import {
   type Reopened,
   type Section,
   type StepState,
+  type TaskMr,
   type TaskState,
   type TaskView,
 } from "./board-model";
@@ -206,6 +209,9 @@ export interface ForgeFacts {
   readonly head: string | null;
   readonly draft?: boolean;
   readonly mergeable?: Mergeability;
+  /** Its source and target branches, where the forge named them. */
+  readonly source?: string;
+  readonly target?: string;
 }
 
 /**
@@ -263,6 +269,8 @@ export interface Sentence {
   disposition: { kind: string; ref: string; ago: string; by: string } | null;
   /** The merge request the work opened or was pointed at, where there is one. */
   mr: string | null;
+  /** Each of the Task's merge requests, where it has several. */
+  mrs?: ReadonlyArray<SaidMr> | undefined;
   /** What the finished Run returned: its own account, never evidence. */
   summary: string | null;
   /** What checked that merge request, where it is open; null reads as unchecked. */
@@ -304,6 +312,34 @@ const VERBS = new Map<string, string>(
     record: "Recording what happened",
   }),
 );
+
+/** One of a Task's several merge requests, as its sentence says it. */
+export interface SaidMr {
+  readonly short: string;
+  readonly state: MrState | null;
+  readonly merged: boolean;
+  readonly disposed: Disposition["kind"] | null;
+  readonly ready: boolean;
+  /** The short names of what it waits on. */
+  readonly waitsOn: ReadonlyArray<string>;
+}
+
+/** `1 of 3 merged; app!12 ready to release; api!7 waits on app!12.` */
+function severalSentence(mrs: ReadonlyArray<SaidMr>): string {
+  const each = Arr.flatMap(mrs, (one) =>
+    one.merged
+      ? []
+      : one.disposed !== null
+        ? [`${one.short} ${one.disposed}`]
+        : one.state === "closed"
+          ? [`${one.short} closed without merging`]
+          : one.waitsOn.length > 0
+            ? [`${one.short} waits on ${Arr.join(one.waitsOn, ", ")}`]
+            : [`${one.short} ${one.ready ? "ready to release" : "is open"}`],
+  );
+  const merged = `${Arr.filter(mrs, (one) => one.merged).length} of ${mrs.length} merged`;
+  return `${Arr.join([merged, ...each], "; ")}.`;
+}
 
 /** An embedded workflow's step is that workflow's: `review.synthesize` is a synthesis. */
 function verbOf(facts: Sentence): string {
@@ -502,6 +538,7 @@ export function sentenceFor(facts: Sentence): string {
   if (facts.memory != null) return facts.memory;
   switch (facts.state) {
     case "done":
+      if (facts.mrs !== undefined && facts.mrs.length > 1) return severalSentence(facts.mrs);
       return doneSentence(
         facts.disposition,
         facts.mr,
@@ -924,6 +961,85 @@ const mrIdOf = (run: RunFacts) => {
   return mr === null ? Effect.succeed(null) : mrIdIn(mr, run.cwd, shell);
 };
 
+/** A merge request of a Task, as its Runs carry it. */
+interface Carried {
+  readonly id: string | null;
+  readonly mr: string;
+  /** The Run that opened it, else the newest given it. */
+  readonly owner: RunFacts;
+}
+
+/**
+ * A Task's merge requests, one per MR id its Runs carry, by wave and then by when a Run
+ * first carried it. `carried` is newest first, so each is written as its newest Run wrote it.
+ */
+function mrsOf(
+  carried: ReadonlyArray<{ readonly run: RunFacts; readonly mr: string; readonly id: string }>,
+  waves: ReadonlyArray<{ readonly run: string | null; readonly wave: number }>,
+): Array<Carried & { readonly id: string }> {
+  const waveOf = new Map(Arr.map(waves, (one) => [one.run, one.wave]));
+  const byId = new Map<string, { id: string; mr: string; runs: RunFacts[] }>();
+  for (const { run, mr, id } of carried) {
+    const known = byId.get(id);
+    if (known === undefined) byId.set(id, { id, mr, runs: [run] });
+    else known.runs.push(run);
+  }
+  const least = (entry: { runs: RunFacts[] }, of: (run: RunFacts) => number) =>
+    Math.min(...Arr.map(entry.runs, of));
+  const wave = (entry: { runs: RunFacts[] }) =>
+    least(entry, (run) => waveOf.get(run.id) ?? Infinity);
+  const seen = (entry: { runs: RunFacts[] }) => least(entry, (run) => epochMs(run.created));
+  return Arr.map(
+    [...byId.values()].sort((a, b) => wave(a) - wave(b) || seen(a) - seen(b)),
+    (entry) => ({
+      ...entry,
+      owner: Option.getOrElse(
+        Arr.findFirst(entry.runs, (run) => run.mr !== null),
+        () => entry.runs[0]!,
+      ),
+    }),
+  );
+}
+
+/** A merge request's latest Disposition: one naming it on any Run, or naming none on its owner. */
+function dispositionFor(
+  entry: Carried & { readonly id: string },
+  ledgers: ReadonlyMap<string, ReadonlyArray<Disposition>>,
+): Disposition | null {
+  const project = mrIdProject(entry.id);
+  const named = Arr.flatMap([...ledgers], ([run, lines]) =>
+    Arr.filter(lines, (line) =>
+      line.ref === "" ? run === entry.owner.id : mrId(line.ref, { project }) === entry.id,
+    ),
+  );
+  return named.sort((a, b) => epochMs(a.at) - epochMs(b.at)).at(-1) ?? null;
+}
+
+/**
+ * The MR ids among `ids` whose source branch is `id`'s target branch, those in its own
+ * project where any are: a fan-out's repositories share their branch's name.
+ */
+function waitsOnOf(
+  id: string,
+  ids: ReadonlyArray<string>,
+  forge: ReadonlyMap<string, ForgeFacts>,
+): string[] {
+  const target = forge.get(id)?.target ?? "";
+  if (target === "") return [];
+  const sources = Arr.filter(ids, (other) => other !== id && forge.get(other)?.source === target);
+  const here = Arr.filter(sources, (other) => mrIdProject(other) === mrIdProject(id));
+  return here.length > 0 ? here : sources;
+}
+
+/** The forge's words for an MR id, in `said`'s own case where it names that one. */
+function wordsOf(id: string, said: string) {
+  const own = readMrRef(said);
+  return mrWords(own !== null && mrId(mrWords(own).target) === id ? own : readMrRef(`mr:${id}`)!);
+}
+
+const dispositionLine = (line: Disposition) =>
+  line.ref === "" ? line.kind : `${line.kind} ${line.ref}`;
+
 /** The branch a Run left to land: none where it recorded it had nothing to land. */
 const branchOwed = Effect.fn("Board.branchOwed")(function* (run: RunFacts) {
   if (run.branch === null) return null;
@@ -1107,6 +1223,9 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           return null;
         const pending = Arr.flatMap(everyRun, (run) => pendingFor(proposals, run.id, now));
         const cards = opts.only === undefined ? opts.cards : undefined;
+        const carried = yield* Effect.forEach(everyRun, (run) =>
+          Effect.map(mrIdOf(run), (id) => ({ run, id, mr: mrOf(run) })),
+        );
         const key =
           cards === undefined
             ? ""
@@ -1126,9 +1245,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
                 tasks.get(runs[0]!.task ?? "") ?? null,
                 agentsOf(everyRun, registered, live),
                 pending,
-                Arr.map(
-                  Arr.filter(yield* Effect.forEach(everyRun, mrIdOf), (one) => one !== null),
-                  (one) => [mrStates.get(one) ?? null, forge.get(one) ?? null],
+                Arr.flatMap(carried, ({ id }) =>
+                  id === null ? [] : [[mrStates.get(id) ?? null, forge.get(id) ?? null]],
                 ),
                 since,
                 quietMs,
@@ -1158,16 +1276,25 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         const last = Math.max(0, ...Arr.filter(Arr.map(runs, endedAt), Number.isFinite));
         const fanned = Option.getOrUndefined(Arr.findFirst(runs, (run) => repoRunsOf.has(run.id)));
         const fan = fanned === undefined ? null : yield* fanOf(fanned, repoRunsOf.get(fanned.id)!);
-        const own =
-          Option.getOrUndefined(Arr.findFirst(Arr.map(runs, mrOf), (one) => one !== null)) ?? null;
-        const only = fan?.children.length === 1 ? fan.children[0]!.run : null;
-        // A single-repository fan-out's card is its one Repo run's merge request.
+        const entries = mrsOf(
+          Arr.flatMap(carried, ({ run, id, mr }) =>
+            id === null || mr === null ? [] : [{ run, id, mr }],
+          ),
+          fan?.waves ?? [],
+        );
+        const several = entries.length > 1;
+        // Where no MR id can be told, the reference as its newest Run recorded it.
+        const lead: Carried | undefined =
+          entries[0] ??
+          Option.getOrUndefined(
+            Option.map(
+              Arr.findFirst(carried, (one) => one.mr !== null),
+              ({ run, mr }) => ({ id: null, mr: mr!, owner: run }),
+            ),
+          );
+        // A card whose one merge request is a Repo run's reads it in that Repo run.
         const repoRun =
-          own === null
-            ? Option.getOrUndefined(
-                Arr.findFirst(children, (run) => run.id === only && mrOf(run) !== null),
-              )
-            : undefined;
+          !several && lead !== undefined && children.includes(lead.owner) ? lead.owner : undefined;
         // Read whatever the state: a merge GitLab reported lands the work even while the Run
         // is still going, and the card must say so.
         const disposition = yield* dispositionOf(repoRun === undefined ? runs : [...runs, repoRun]);
@@ -1290,11 +1417,9 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         // A Task is as old as its first Run; a Run with no readable stamp has no age.
         const first = started.length === 0 ? 0 : Math.min(...started);
 
-        const mr = repoRun === undefined ? own : mrOf(repoRun);
+        const mr = lead?.mr ?? null;
         const merging = repoRun ?? leader;
-        const mrRun =
-          repoRun ?? Option.getOrUndefined(Arr.findFirst(runs, (run) => mrOf(run) !== null));
-        const mrIdent = mrRun === undefined ? null : yield* mrIdOf(mrRun);
+        const mrIdent = lead?.id ?? null;
         const mrState = mrIdent === null ? null : (mrStates.get(mrIdent) ?? null);
         const branch =
           Option.getOrUndefined(
@@ -1308,64 +1433,144 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         for (const run of runs) issues = Math.max(issues, yield* planIssuesIn(run.dir));
         let owed: string | null = null;
         for (const run of runs) owed ??= yield* branchOwed(run);
+        const ledgers = new Map(
+          entries.length === 0
+            ? []
+            : yield* Effect.forEach(everyRun, (run) =>
+                Effect.map(
+                  readDispositions(run.dir).pipe(Effect.orElseSucceed(() => [])),
+                  (lines) => [run.id, lines] as const,
+                ),
+              ),
+        );
+        const fates = Arr.map(entries, (entry) => {
+          const state = mrStates.get(entry.id) ?? null;
+          const disposed = dispositionFor(entry, ledgers);
+          const merged =
+            (state !== null && LANDED_STATES.has(state)) || disposed?.kind === "merged";
+          return { ...entry, state, disposed, merged };
+        });
         const { planReady, landed } = standingOf({
           settled: settledNow,
           succeeded: status === "succeeded",
           branch: owed,
           mr,
-          mrLanded: mrState !== null && LANDED_STATES.has(mrState),
+          // Several land together: each merged or disposed of, and nothing of the Task going.
+          mrLanded: several
+            ? Arr.every(fates, (one) => one.merged || one.disposed !== null) &&
+              Arr.every(everyRun, (run) => over(run, everyRun))
+            : mrState !== null && LANDED_STATES.has(mrState),
           planIssues: issues,
-          disposed: disposition !== null,
+          disposed: !several && disposition !== null,
           asking: decision !== null,
         });
-        const awaitingMerge =
-          state === "done" &&
-          mr !== null &&
-          disposition === null &&
-          !landed &&
-          (mrState === null || mrState === "open");
-        // Collie's own evidence counts at the head the forge reported, where it reported one.
-        const forged = mrIdent === null ? null : (forge.get(mrIdent) ?? null);
-        const verified = awaitingMerge
-          ? {
-              records: yield* readVerifications(merging.evidence).pipe(
-                Effect.orElseSucceed(() => []),
-              ),
-              head: forged?.head ?? (yield* opts.head?.(merging) ?? branchHead(merging, now)),
-              approved: yield* Effect.forEach(
-                approvedFor(
-                  yield* approvedIn(merging.evidence),
-                  yield* readIntent(merging.dir).pipe(Effect.orElseSucceed(() => null)),
+        /** A merge request's checks and readiness, read in the Run `merging`. */
+        const judged = Effect.fnUntraced(function* (
+          id: string | null,
+          mr: string | null,
+          merging: RunFacts,
+          running: RunningCheck | null,
+          awaiting: boolean,
+        ) {
+          const forged = id === null ? null : (forge.get(id) ?? null);
+          // Collie's own evidence counts at the head the forge reported, where it reported one.
+          const verified = awaiting
+            ? {
+                records: yield* readVerifications(merging.evidence).pipe(
+                  Effect.orElseSucceed(() => []),
                 ),
-                (spec) =>
-                  commandOf(
-                    {
-                      id: merging.id,
-                      cwd: merging.cwd,
-                      worktree: merging.worktree?.path ?? null,
-                    },
-                    spec,
+                head: forged?.head ?? (yield* opts.head?.(merging) ?? branchHead(merging, now)),
+                approved: yield* Effect.forEach(
+                  approvedFor(
+                    yield* approvedIn(merging.evidence),
+                    yield* readIntent(merging.dir).pipe(Effect.orElseSucceed(() => null)),
                   ),
-              ),
-            }
-          : null;
-        const checks =
-          verified === null
-            ? null
-            : withForge(checksAt(verified.records, verified.head, verified.approved), forged);
-        const readiness = readyToRelease({
-          succeeded: merging.state === "succeeded",
-          mr,
-          mrState,
-          draft: forged?.draft ?? false,
-          checks: check !== null && checks?.state !== "failed" ? { state: "running" } : checks,
-          ci: forged?.checks ?? null,
-          blocking:
-            mr === null
-              ? 0
-              : Arr.filter(yield* findingsIn(merging.dir), (one) => isBlocking(one)).length,
-          mergeable: forged?.mergeable ?? null,
+                  (spec) =>
+                    commandOf(
+                      {
+                        id: merging.id,
+                        cwd: merging.cwd,
+                        worktree: merging.worktree?.path ?? null,
+                      },
+                      spec,
+                    ),
+                ),
+              }
+            : null;
+          const checks =
+            verified === null
+              ? null
+              : withForge(checksAt(verified.records, verified.head, verified.approved), forged);
+          const mrState = id === null ? null : (mrStates.get(id) ?? null);
+          const readiness = readyToRelease({
+            succeeded: merging.state === "succeeded",
+            mr,
+            mrState,
+            draft: forged?.draft ?? false,
+            checks: running !== null && checks?.state !== "failed" ? { state: "running" } : checks,
+            ci: forged?.checks ?? null,
+            blocking:
+              mr === null
+                ? 0
+                : Arr.filter(yield* findingsIn(merging.dir), (one) => isBlocking(one)).length,
+            mergeable: forged?.mergeable ?? null,
+          });
+          return { forged, head: verified?.head ?? forged?.head ?? null, checks, readiness };
         });
+        const alone = yield* judged(
+          mrIdent,
+          mr,
+          merging,
+          check,
+          state === "done" &&
+            mr !== null &&
+            disposition === null &&
+            !landed &&
+            (mrState === null || mrState === "open"),
+        );
+        const each = several
+          ? yield* Effect.forEach(fates, (one) =>
+              Effect.gen(function* () {
+                return {
+                  ...one,
+                  ...(yield* judged(
+                    one.id,
+                    one.mr,
+                    one.owner,
+                    yield* runningCheck(one.owner, all, markers, now),
+                    one.disposed === null && (one.state === null || one.state === "open"),
+                  )),
+                };
+              }),
+            )
+          : Arr.map(fates, (one) => ({ ...one, ...alone }));
+        const forged = alone.forged;
+        const checks = several ? each[0]!.checks : alone.checks;
+        const readiness: ReadyToRelease = several
+          ? Option.match(
+              Arr.findFirst(each, (one) => one.readiness.ready),
+              { onNone: () => each[0]!.readiness, onSome: (one) => one.readiness },
+            )
+          : alone.readiness;
+        const ids = Arr.map(entries, (one) => one.id);
+        const mrs = Arr.map(each, (one): TaskMr => {
+          const words = wordsOf(one.id, one.mr);
+          return {
+            id: one.id,
+            mr: one.mr,
+            label: words.label,
+            short: words.short,
+            url: words.url,
+            run: one.owner.id,
+            state: one.state,
+            checks: one.checks,
+            head: one.head,
+            ready: one.readiness.ready,
+            disposition: one.disposed === null ? null : dispositionLine(one.disposed),
+            waitsOn: waitsOnOf(one.id, ids, forge),
+          };
+        });
+        const shortOf = new Map(Arr.map(mrs, (one) => [one.id, one.short]));
         const finishedAt = settledNow ? endedAt(leader) : 0;
         const unseen = landed && state === "done" && (yield* unseenReport(leader));
         // Only a ready plan's first action is an offer; asking every card would ask every refresh.
@@ -1436,6 +1641,16 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         const sentenceAt = (now: number) =>
           sentenceFor({
             mr,
+            mrs: several
+              ? Arr.map(each, (one, at) => ({
+                  short: mrs[at]!.short,
+                  state: one.state,
+                  merged: one.merged,
+                  disposed: one.disposed?.kind ?? null,
+                  ready: one.readiness.ready,
+                  waitsOn: Arr.map(mrs[at]!.waitsOn, (id) => shortOf.get(id) ?? id),
+                }))
+              : undefined,
             mrState,
             state: said,
             checks,
@@ -1471,7 +1686,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
                     by: disposition.by,
                   },
           });
-        const view: TaskView = {
+        const bare: TaskView = {
           id,
           name,
           project,
@@ -1493,12 +1708,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           children: fan?.children ?? [],
           mr,
           branch,
-          disposition:
-            disposition === null
-              ? null
-              : disposition.ref === ""
-                ? disposition.kind
-                : `${disposition.kind} ${disposition.ref}`,
+          disposition: disposition === null ? null : dispositionLine(disposition),
           landed,
           unseen,
           ended: finishedAt > 0 ? finishedAt : null,
@@ -1515,6 +1725,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           at: at === 0 ? first : at,
           flow: stripOf(flow, leader.id),
         };
+        const view: TaskView = mrs.length === 0 ? bare : { ...bare, mrs };
         opts.flows?.set(
           id,
           flowActions(

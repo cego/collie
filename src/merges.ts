@@ -5,6 +5,7 @@
 
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
+import * as Struct from "effect/Struct";
 import { pipe as pipe_ } from "effect/Function";
 import * as Rec from "effect/Record";
 import { DateTime, Effect, FileSystem, Option, Path, Schema } from "effect";
@@ -13,6 +14,7 @@ import {
   ForgeChecks,
   Mergeability,
   mrId,
+  mrIdProject,
   mrLabel,
   mrRefOf,
   type MrPanel,
@@ -66,6 +68,8 @@ const EntrySchema = Schema.Struct({
   head: Schema.optionalKey(Schema.NullOr(Schema.String)),
   draft: Schema.optionalKey(Schema.Boolean),
   mergeable: Schema.optionalKey(Mergeability),
+  source: Schema.optionalKey(Schema.String),
+  target: Schema.optionalKey(Schema.String),
 });
 const StatesJson = Schema.fromJsonString(Schema.Record(Schema.String, EntrySchema));
 /** The shape written before checks were kept: a bare state per merge request. */
@@ -119,14 +123,18 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
     const repos = Arr.flatMap(view.children, (child) =>
       child.run === null || child.mr === null ? [] : [{ run: child.run, mr: child.mr }],
     );
+    // A card of several merge requests watches each as the Run that owns it alone.
+    const several = (view.mrs?.length ?? 0) > 1;
     // A card showing its one Repo run's merge request watches it as that Repo run's.
-    const shown = Option.getOrUndefined(
-      Arr.findFirst(
-        repos,
-        (repo) => mr !== null && mrId(repo.mr) !== null && mrId(repo.mr) === mrId(mr),
-      ),
-    );
-    if (mr !== null)
+    const shown = several
+      ? undefined
+      : Option.getOrUndefined(
+          Arr.findFirst(
+            repos,
+            (repo) => mr !== null && mrId(repo.mr) !== null && mrId(repo.mr) === mrId(mr),
+          ),
+        );
+    if (mr !== null && !several)
       watched.push({
         mr,
         disposition: view.disposition,
@@ -141,6 +149,15 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
           runs: [repo.run],
           owner: repo.run,
         });
+    if (several)
+      for (const entry of view.mrs!)
+        if (!Arr.some(repos, (repo) => repo.run === entry.run))
+          watched.push({
+            mr: entry.mr,
+            disposition: entry.disposition,
+            runs: [entry.run],
+            owner: entry.run,
+          });
   }
   for (const { mr, disposition, runs, owner } of watched) {
     // A merged one is still followed to its deploy jobs, until production has it.
@@ -276,7 +293,7 @@ const firstMerged = Effect.fn("Merges.firstMerged")(function* (
   dirs: ReadonlyArray<string>,
   id: string,
 ) {
-  const project = pipe_(id, Str.replace(/[!#]\d+$/, ""));
+  const project = mrIdProject(id);
   let first: number | null = null;
   for (const dir of dirs)
     for (const line of yield* readDispositions(dir).pipe(Effect.orElseSucceed(() => [])))
@@ -335,7 +352,9 @@ const sameFacts = (a: ForgeFacts | undefined, b: ForgeFacts) =>
   ("name" in a.checks ? a.checks.name : "") === ("name" in b.checks ? b.checks.name : "") &&
   a.draft === b.draft &&
   a.mergeable?.state === b.mergeable?.state &&
-  a.mergeable?.said === b.mergeable?.said;
+  a.mergeable?.said === b.mergeable?.said &&
+  a.source === b.source &&
+  a.target === b.target;
 
 /**
  * One merge request's state and checks, from whichever forge it is on, or null where that
@@ -363,6 +382,8 @@ const forgeAnswer = Effect.fn("Merges.forgeAnswer")(function* <R>(
     checks: panel.checks ?? { state: "unknown" },
     head: (panel.head ?? "") === "" ? null : panel.head!,
     draft: panel.state === "draft",
+    source: panel.sourceBranch,
+    target: panel.targetBranch,
   };
   return {
     state,
@@ -415,9 +436,7 @@ const readEntries = Effect.fn("Merges.readEntries")(function* (stateDir: string)
 
 const factsOf = (entry: Entry | undefined): ForgeFacts | null => {
   if (entry?.checks === undefined) return null;
-  const facts: ForgeFacts = { checks: entry.checks, head: entry.head ?? null };
-  const drafted = entry.draft === undefined ? facts : { ...facts, draft: entry.draft };
-  return entry.mergeable === undefined ? drafted : { ...drafted, mergeable: entry.mergeable };
+  return { ...Struct.omit(entry, ["state"]), checks: entry.checks, head: entry.head ?? null };
 };
 
 /** Each merge request's state, as the last watch learned it. */

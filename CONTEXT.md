@@ -480,7 +480,9 @@ computed once in the board model, that the board, `collie run show`, `collie run
 --until ready` and chat all read, with each missing fact named and marked as one that may
 still come by itself (CI running, the forge still working it out) or one only a human can
 move. A card leaves Ready to release when CI or mergeability later says no. An open merge
-request that is not ready is still Waiting on you, and its card says what is missing.
+request that is not ready is still Waiting on you, and its card says what is missing. A
+Task with several merge requests judges each at its own head, and is Ready to release when
+any one of them is.
 
 **Reopened** — A finished Run one of whose agents was sent a steer Delivery after the Run
 finished. Not a status: the Run still reads `succeeded`, `failed` or `stopped`, because
@@ -494,7 +496,9 @@ A finished Run's agent is closed once it has been idle for an hour since the Run
 **Landed** — What a Task's work has done once it needs nothing more from anyone: a
 **Disposition** was recorded — merged, abandoned or superseded — the Run succeeded at a
 Workflow that produces nothing to land, such as a review, or it ended with nothing anyone
-could file: no branch, no merge request, no plan, no question. A Task whose work has landed
+could file: no branch, no merge request, no plan, no question. A Task with several merge
+requests has landed only once each is merged or carries an `abandoned` or `superseded`
+Disposition, and none of its Runs is still going. A Task whose work has landed
 is **Finished**, the board's last section, as long as none of its Runs is still going,
 asking or stalled and none of its agents is working. Finished is what **Cleanup** waits
 for before it closes anything of a Task.

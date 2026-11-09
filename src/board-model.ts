@@ -311,6 +311,29 @@ export type Reopened = typeof Reopened.Type;
 export const RunRevision = Schema.Struct({ epoch: Schema.String, seq: Schema.Finite });
 export type RunRevision = typeof RunRevision.Type;
 
+/** One merge request of a Task, with its own facts. */
+export const TaskMr = Schema.Struct({
+  /** Its MR id (`mrId`). */
+  id: Schema.String,
+  /** The reference as a Run recorded it. */
+  mr: Schema.String,
+  label: Schema.String,
+  short: Schema.String,
+  url: Schema.NullOr(Schema.String),
+  /** The Run that opened it, else the newest given it. */
+  run: Schema.String,
+  state: Schema.NullOr(MrState),
+  checks: Schema.NullOr(Checks),
+  /** The revision its checks and readiness were judged at, where one is known. */
+  head: Schema.NullOr(Schema.String),
+  ready: Schema.Boolean,
+  /** Its latest Disposition, as `kind` or `kind ref`. */
+  disposition: Schema.NullOr(Schema.String),
+  /** The MR ids of the Task's merge requests whose source branch it targets. */
+  waitsOn: Schema.Array(Schema.String),
+});
+export type TaskMr = typeof TaskMr.Type;
+
 /** One Task as the board draws it. */
 export const TaskView = Schema.Struct({
   /** The Task's id, or the Run's own where it belongs to no Task. */
@@ -334,7 +357,10 @@ export const TaskView = Schema.Struct({
   questions: Schema.optionalKey(Schema.Array(Question)),
   agents: Schema.Array(BoardAgent),
   children: Schema.Array(BoardChild),
+  /** The first of `mrs`, for a reader older than the list. */
   mr: Schema.NullOr(Schema.String),
+  /** Every merge request its Runs opened or were given, by wave; absent from an older host. */
+  mrs: Schema.optionalKey(Schema.Array(TaskMr)),
   branch: Schema.NullOr(Schema.String),
   /** What became of the work, where someone recorded it. */
   disposition: Schema.NullOr(Schema.String),
@@ -2008,6 +2034,9 @@ export function mrId(text: string, typedIn?: { readonly project: string | null }
   if (project === null || !hosted(project)) return null;
   return Str.toLowerCase(`${project}${mrWords({ project, iid: ref.iid }).sign}${ref.iid}`);
 }
+
+/** `host/group/project` of an MR id. */
+export const mrIdProject = (id: string) => pipe(id, Str.replace(/[!#]\d+$/, ""));
 
 const hosted = (project: string) => mrPath({ project, iid: "" }) !== project;
 

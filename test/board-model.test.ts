@@ -15,6 +15,7 @@ import {
   mrWords,
   openMrLabel,
   primaryAction,
+  PROTOCOL,
   readMrRef,
   readinessOfRun,
   readyToRelease,
@@ -316,6 +317,63 @@ test("a TaskView carries its open questions, and one from an older host without 
   expect(decode(JSON.parse(JSON.stringify(newer))).questions).toEqual(newer.questions);
   expect(decode(older).unseen).toBeUndefined();
   expect(decode({ ...older, unseen: true }).unseen).toBe(true);
+});
+
+test("a TaskView from v0.118.0 has no merge request list and still decodes; a newer one keeps its list beside the scalar, on protocol 5", () => {
+  const api = "https://gitlab.cego.dk/cego/api/-/merge_requests/7";
+  const older = {
+    id: "task-1",
+    name: "Pure board module",
+    project: "/work/collie",
+    state: "done",
+    steps: [],
+    sentence: "api!7 is open; nothing has checked it.",
+    age: "2m",
+    drift: null,
+    held: null,
+    heldBy: null,
+    decision: null,
+    agents: [],
+    children: [],
+    mr: api,
+    branch: null,
+    disposition: null,
+    landed: false,
+    ended: null,
+    mrState: "open",
+    planReady: false,
+    offer: null,
+    run: "run-1",
+    runs: ["run-1"],
+    at: 1_700_000_000_000,
+  };
+  const entry = (repo: string, iid: number) => ({
+    id: `gitlab.cego.dk/cego/${repo}!${iid}`,
+    mr: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`,
+    label: `cego/${repo}!${iid}`,
+    short: `${repo}!${iid}`,
+    url: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`,
+    run: `r-${repo}`,
+    state: "open",
+    checks: null,
+    head: null,
+    ready: false,
+    disposition: null,
+    waitsOn: [],
+  });
+  const decode = Schemaflow(
+    Schema.decodeUnknownResult(Schema.toCodecJson(TaskView)),
+    Result.getOrThrow,
+  );
+
+  expect(decode(older).mrs).toBeUndefined();
+  expect(decode(older).mr).toBe(api);
+  const newer = decode({ ...older, mrs: [entry("api", 7), entry("web", 8)] });
+  expect(Arr.map(newer.mrs ?? [], (one) => one.id)).toEqual([
+    "gitlab.cego.dk/cego/api!7",
+    "gitlab.cego.dk/cego/web!8",
+  ]);
+  expect(PROTOCOL).toBe(5);
 });
 
 test("a TaskView and a RunDetail survive a round trip through JSON", () => {

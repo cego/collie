@@ -8,7 +8,7 @@ import type { FetchLike } from "forges";
 import { forgeHttpTest, type ForgeHttp } from "../src/forge/http";
 import { recordAudit } from "../src/audit";
 import { buildBoard } from "../src/board";
-import { sectionOf } from "../src/board-model";
+import { sectionOf, type MrState } from "../src/board-model";
 import { readDispositions, recordDisposition } from "../src/disposition";
 import {
   MERGE_POLL_MS,
@@ -163,6 +163,65 @@ test("what an earlier host kept under a label is not taken for the merge request
 
       expect(log).not.toEqual([]);
       expect((yield* readMrStates(stateDir)).get(`${GITLAB}!65`)).toBe("open");
+    }),
+  ));
+
+test("each merge request of a Task is asked about, and the branches it is stacked by are kept", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-merges-" });
+      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
+      const runs = [
+        yield* madeRun(stateDir, {
+          id: "r-build",
+          task: "task-1",
+          state: "succeeded",
+          mr: MR,
+          created: "2026-09-17T09:00:00Z",
+        }),
+        yield* madeRun(stateDir, {
+          id: "r-follow-up",
+          task: "task-1",
+          state: "succeeded",
+          mr: mrUrl("66"),
+          created: "2026-09-17T09:30:00Z",
+        }),
+      ];
+      const board = (states: ReadonlyMap<string, MrState>) =>
+        buildBoard({ env, runs, mrStates: states, now: epochMs("2026-09-17T10:00:00Z") });
+      const states = new Map<string, MrState>();
+      yield* settleMerges({
+        stateDir,
+        cwd: "/project",
+        runs: [],
+        record: () => Effect.void,
+        stop: () => Effect.die("nothing here is stopped"),
+        run: forge("gitlab", {
+          mrs: [
+            mr65({ sourceBranch: "mk/cards", targetBranch: "master" }),
+            mr65({ iid: "66", sourceBranch: "mk/cards-stage", targetBranch: "mk/cards" }),
+          ],
+        }),
+        views: yield* board(states),
+        now: epochMs("2026-09-17T10:00:00Z"),
+        checked: new Map(),
+        states,
+        panels: new Map(),
+        making: new Set(),
+      });
+
+      expect(yield* readMrStates(stateDir)).toEqual(
+        new Map([
+          [`${GITLAB}!65`, "open"],
+          [`${GITLAB}!66`, "open"],
+        ]),
+      );
+      const [view] = yield* board(states);
+      expect(Arr.map(view!.mrs ?? [], (one) => [one.short, one.waitsOn])).toEqual([
+        ["collie!65", []],
+        ["collie!66", [`${GITLAB}!65`]],
+      ]);
     }),
   ));
 

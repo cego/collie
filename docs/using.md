@@ -710,9 +710,19 @@ it, however old: it does not go behind `older…` until it is seen. Its sentence
 button, records it seen once for the whole Flock, on every board and Desktop, and it goes back
 behind the line.
 
+A Task whose Runs opened or were given several merge requests — a fan-out across
+repositories, or a Follow-up Run that opened its own — lists each on its card, by wave, with
+its own state, checks and head. Each is judged Ready to release at its own head, and the
+Task is when any one of them is. It has landed only once each is merged, abandoned or
+superseded and none of its Runs is still going. Its sentence says where each stands:
+`1 of 3 merged; app!12 ready to release; api!7 waits on app!12.` A merge request waits on
+another of the Task's when the forge says it targets that one's source branch. One closed
+without merging that nobody has disposed of keeps the Task waiting on you, by name:
+`web!8 closed without merging`. A Task with one merge request reads as it always has.
+
 Collie learns a merge by itself, whether or not a pane is open: the host asks the merge
 request's own forge, through that forge's adapter — GitLab with `glab`, GitHub with `gh` —
-about each Task's merge request every 5 minutes, whatever section its card is in, so a
+about each of a Task's merge requests every 5 minutes, whatever section its card is in, so a
 merge while a Run is busy or parked is noticed too; one
 that merged gets its `merged` disposition recorded as that forge's word and its card moves
 to Finished. A Task whose Runs recorded no merge request takes the one opened from its
