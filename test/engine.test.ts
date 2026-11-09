@@ -21,6 +21,7 @@ import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import * as Workflow from "effect/workflow/Workflow";
 import * as DurableDeferred from "effect/workflow/DurableDeferred";
 import { answerDecision, engineLayer, loadEntry, TOOLCHAIN } from "../src/engine";
+import { EngineTouches } from "../src/engine-touches";
 import type { HostCodec, HostPayload, HostWorkflow } from "../src/sdk";
 import { runEffect } from "./support/effect";
 import { HostReply, events, fixtures, openHost, root, until, workspace } from "./support/host";
@@ -850,3 +851,44 @@ test(
     ),
   120_000,
 );
+
+test("the engine's count for an execution stands while it sleeps and moves when it is written to", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-engine-touches-" });
+      const sleeper = Workflow.make("sleeper", {
+        payload: { runId: Schema.String },
+        idempotencyKey: (payload) => payload.runId,
+        success: Schema.String,
+      });
+      const never = DurableDeferred.make("never");
+      const executionId = yield* sleeper.executionId({ runId: "r1" });
+      yield* Effect.gen(function* () {
+        const touches = yield* EngineTouches;
+        expect(touches.of(executionId)).toBe(0);
+        yield* sleeper.execute({ runId: "r1" }, { discard: true });
+        yield* until(
+          () => sleeper.poll(executionId),
+          (result) => Option.isSome(result) && result.value._tag === "Suspended",
+        );
+        const asleep = touches.of(executionId);
+        expect(asleep).toBeGreaterThan(0);
+        // What lets a host keep a suspended Run's view instead of asking the engine again.
+        yield* Effect.sleep("300 millis");
+        expect(touches.of(executionId)).toBe(asleep);
+        yield* sleeper.interrupt(executionId);
+        yield* until(
+          () => Effect.sync(() => touches.of(executionId)),
+          (count) => count > asleep,
+        );
+      }).pipe(
+        Effect.provide(
+          sleeper
+            .toLayer(() => DurableDeferred.await(never).pipe(Effect.as("woke")))
+            .pipe(Layer.provideMerge(engineLayer({ dir }))),
+        ),
+        Effect.scoped,
+      );
+    }).pipe(Effect.scoped),
+  ));
