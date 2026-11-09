@@ -15,7 +15,7 @@ import type { PlatformError } from "effect/PlatformError";
 import type { PluginEnv } from "./env";
 import type { HerdrError } from "./herdr";
 import { currentPid, withLock } from "./lock";
-import { err, newRequestId, ExpectedError, type OpResult } from "./operations";
+import { err, HostUnread, newRequestId, ExpectedError, type OpResult } from "./operations";
 
 export const ResultBoundary = Schema.Union([
   Schema.Struct({
@@ -95,7 +95,14 @@ export function attempt<E, R>(operation: Effect.Effect<Result, E, R>, json: bool
  */
 export function guarded<E, R>(operation: Effect.Effect<void, E, R>, json: boolean) {
   return operation.pipe(
-    Effect.catch((cause) => printResult(err("operation_failed", String(cause)), json)),
+    Effect.catch((cause) =>
+      printResult(
+        cause instanceof HostUnread
+          ? { ok: false, error: cause.error }
+          : err("operation_failed", String(cause)),
+        json,
+      ),
+    ),
     Effect.catchDefect((defect) => printResult(err("operation_failed", String(defect)), json)),
     // A signal is still an ending: a caller piping this into a parser otherwise reads an
     // empty stream and cannot tell a wait that was cut short from one that said nothing.

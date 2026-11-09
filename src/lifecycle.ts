@@ -80,7 +80,7 @@ import {
 import type { Action } from "./actions";
 import { NEEDS_INPUT, REFUSED_INPUT, runDir, type Given, type RunView } from "./engine";
 import type { OfferView } from "./board-model";
-import { err, ExpectedError, taskFor, type Failure, type OpResult } from "./operations";
+import { err, ExpectedError, HostUnread, taskFor, type Failure, type OpResult } from "./operations";
 import { voiceOf, type Asker, type ProposalLine } from "./proposals";
 import type { TaskChoice, TaskRecord } from "./task";
 import { encodeApprovedFile, rememberedFile, renderApproved, type VerifySpec } from "./verify-spec";
@@ -414,30 +414,43 @@ export const asks = <A>(
     ),
   );
 
-/** This Machine's Tasks, newest first, as its host keeps them; none where it cannot be asked. */
+const hostRead = <A>(
+  env: PluginEnv,
+  question: (client: HostClient) => Effect.Effect<A, HostFailure>,
+): Effect.Effect<A, HostUnread, Client> =>
+  asks({ ...env, machine: undefined }, question).pipe(
+    Effect.flatMap((answered) =>
+      answered.ok
+        ? Effect.succeed(answered.value)
+        : Effect.fail(new HostUnread({ error: answered.error, message: answered.error.message })),
+    ),
+  );
+
+/** This Machine's Tasks, newest first, as its host keeps them. */
 export const hostTasks = (
   env: PluginEnv,
-): Effect.Effect<ReadonlyArray<TaskRecord>, never, Client> =>
-  asks({ ...env, machine: undefined }, (client) => client.tasks()).pipe(
-    Effect.map((answered) => (answered.ok ? answered.value : [])),
-  );
+): Effect.Effect<ReadonlyArray<TaskRecord>, HostUnread, Client> =>
+  hostRead(env, (client) => client.tasks());
 
-/** Every agent this Machine's host has registered; none where it cannot be asked. */
+/** Every agent this Machine's host has registered. */
 export const hostRegistered = (
   env: PluginEnv,
-): Effect.Effect<ReadonlyArray<AgentEntry>, never, Client> =>
-  asks({ ...env, machine: undefined }, (client) => client.registered()).pipe(
-    Effect.map((answered) => (answered.ok ? answered.value : [])),
-  );
+): Effect.Effect<ReadonlyArray<AgentEntry>, HostUnread, Client> =>
+  hostRead(env, (client) => client.registered());
 
-/** A Herd's proposals journal, as this Machine's host keeps it; none where it cannot be asked. */
+/** A Herd's proposals journal, as this Machine's host keeps it. */
 export const hostProposals = (
   env: PluginEnv,
   herd: string,
-): Effect.Effect<ReadonlyArray<ProposalLine>, never, Client> =>
-  asks({ ...env, machine: undefined }, (client) => client.proposals({ herd })).pipe(
-    Effect.map((answered) => (answered.ok ? answered.value : [])),
-  );
+): Effect.Effect<ReadonlyArray<ProposalLine>, HostUnread, Client> =>
+  hostRead(env, (client) => client.proposals({ herd }));
+
+/** Every line about a proposal that names this Run, as this Machine's host keeps them. */
+export const hostRunProposals = (
+  env: PluginEnv,
+  run: string,
+): Effect.Effect<ReadonlyArray<ProposalLine>, HostUnread, Client> =>
+  hostRead(env, (client) => client.runProposals({ run }));
 
 /** The Task this Machine's host keeps in that workspace, which is what "the current Task" means. */
 export const hostTaskOf = (env: PluginEnv, workspace: string | null) =>

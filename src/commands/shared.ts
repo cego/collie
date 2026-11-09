@@ -104,30 +104,30 @@ const callerReaches = Effect.fn("collie.callerReaches")(function* (
 });
 
 /** Why `view`, on `machine` (null for this one), is out of `scope`'s reach; null where it is not. */
-export const outOfReach = Effect.fn("collie.outOfReach")(function* (
-  env: PluginEnv,
-  view: RunView,
-  machine: string | null,
-  scope: RunScope,
-) {
-  // A Task is this Machine's, so a Run on another is never outside it.
-  if (machine !== null || scope.task === null || view.task === scope.task) return null;
-  if (yield* callerReaches(env, view, scope.caller)) return null;
-  const workspace =
-    view.task === null
-      ? null
-      : (Option.getOrUndefined(
-          Arr.findFirst(yield* hostTasks(env), (task) => task.id === view.task),
-        )?.workspace ?? null);
-  const where = view.task === null ? "in no task" : `in task "${view.task}"`;
-  const reach =
-    workspace === null ? "no workspace reaches it." : `\`--workspace ${workspace}\` reaches it.`;
-  return err(
-    "run_outside_task",
-    `Run "${view.runId}" is ${where}, not task "${scope.task}": ${reach}`,
-    { run: view.runId, task: view.task, workspace },
-  );
-});
+export const outOfReach = Effect.fn("collie.outOfReach")(
+  function* (env: PluginEnv, view: RunView, machine: string | null, scope: RunScope) {
+    // A Task is this Machine's, so a Run on another is never outside it.
+    if (machine !== null || scope.task === null || view.task === scope.task) return null;
+    if (yield* callerReaches(env, view, scope.caller)) return null;
+    const workspace =
+      view.task === null
+        ? null
+        : (Option.getOrUndefined(
+            Arr.findFirst(yield* hostTasks(env), (task) => task.id === view.task),
+          )?.workspace ?? null);
+    const where = view.task === null ? "in no task" : `in task "${view.task}"`;
+    const reach =
+      workspace === null ? "no workspace reaches it." : `\`--workspace ${workspace}\` reaches it.`;
+    return err(
+      "run_outside_task",
+      `Run "${view.runId}" is ${where}, not task "${scope.task}": ${reach}`,
+      { run: view.runId, task: view.task, workspace },
+    );
+  },
+  Effect.catchTag("HostUnread", (unread) =>
+    Effect.succeed<Failure>({ ok: false, error: unread.error }),
+  ),
+);
 
 export type ContextResolution =
   | {

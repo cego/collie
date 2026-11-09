@@ -272,6 +272,7 @@ import {
   journalOf,
   LineSchema as ProposalLineSchema,
   PROPOSALS,
+  proposalsOf,
   read as readProposals,
   RecordSchema,
   reconcileStep,
@@ -537,6 +538,11 @@ export const HostRpcs = RpcGroup.make(
   /** A Herd's proposals journal, oldest line first. */
   Rpc.make("proposals", {
     payload: { herd: Schema.String },
+    success: Schema.Array(ProposalLineSchema),
+  }),
+  /** Every line about a proposal that names this Run, oldest first. */
+  Rpc.make("runProposals", {
+    payload: { run: Schema.String },
     success: Schema.Array(ProposalLineSchema),
   }),
   /** The proposal by that id, in whichever Herd's journal has it. */
@@ -864,6 +870,7 @@ const handlers = (
         tasks: () => listTasks,
         registered: () => everyRegistered,
         proposals: ({ herd }) => readProposals(herd),
+        runProposals: ({ run }) => proposalsOf(run),
         proposal: ({ id }) =>
           journalOf(id).pipe(
             Effect.flatMap((journal) =>

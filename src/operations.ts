@@ -12,7 +12,7 @@ import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
 import type { PlatformServices } from "./platform";
 import { repositoryCheckout } from "./projects";
-import { Effect, FileSystem, Path, Schema, flow, Result } from "effect";
+import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { ChildProcessSpawner } from "effect/process";
 import { nowIso } from "./time";
@@ -115,6 +115,12 @@ export const ExpectedError = Schema.Struct({
 export interface ExpectedError extends Schema.Schema.Type<typeof ExpectedError> {}
 
 export type Failure = { ok: false; error: ExpectedError };
+
+/** This Machine's host could not be asked, which is not the same as it having nothing. */
+export class HostUnread extends Data.TaggedError("HostUnread")<{
+  readonly error: ExpectedError;
+  readonly message: string;
+}> {}
 export type OpResult =
   | {
       ok: true;

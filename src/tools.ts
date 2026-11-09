@@ -64,7 +64,7 @@ import {
   connectionReadings,
   type Door,
   hostTaskOf,
-  hostProposals,
+  hostRunProposals,
   hostTasks,
 } from "./lifecycle";
 import { modelsLines } from "./catalogue-model";
@@ -690,9 +690,8 @@ const newsFacts = Effect.fn("Tools.news")(function* (env: PluginEnv) {
 const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run: string) {
   const found = yield* findRun(env, run);
   if (found === null) return `No Run "${run}".`;
-  const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   const now = yield* Clock.currentTimeMillis;
-  const proposals = key === null ? [] : pendingFor(yield* hostProposals(env, key), run, now);
+  const proposals = pendingFor(yield* hostRunProposals(env, run), run, now);
   const asked = yield* asks(env, (client) => client.deliveries({ runId: run }));
   // Every delivery is on the ledger now: the one sender writes there before it sends,
   // so there is no second place a steer can be sitting unrecorded.

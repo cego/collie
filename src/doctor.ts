@@ -172,9 +172,12 @@ const onHerdrOne = Effect.fn("Doctor.onHerdrOne")(function* (env: PluginEnv, her
       (pane) => pane.paneId,
     ),
   );
+  const registered = (yield* anyRuns(env))
+    ? yield* Effect.result(hostRegistered(env))
+    : Result.succeed([]);
   // An entry from before incarnations has no backend either: it was on Herdr 1.
   const live = Arr.filter(
-    (yield* anyRuns(env)) ? yield* hostRegistered(env) : [],
+    Result.getOrElse(registered, () => []),
     (entry) => entry.incarnation?.backend === undefined && open.has(entry.paneId),
   );
   const found = [
@@ -182,6 +185,11 @@ const onHerdrOne = Effect.fn("Doctor.onHerdrOne")(function* (env: PluginEnv, her
     ...(Result.isFailure(panes)
       ? [
           `could not read Herdr 1's open panes, so which agents still run there is unknown (${panes.failure.message})`,
+        ]
+      : []),
+    ...(Result.isFailure(registered)
+      ? [
+          `could not ask this Machine's host which agents it registered, so which still run on Herdr 1 is unknown (${registered.failure.message})`,
         ]
       : []),
     ...(live.length === 0
@@ -195,7 +203,7 @@ const onHerdrOne = Effect.fn("Doctor.onHerdrOne")(function* (env: PluginEnv, her
   ];
   if (found.length === 0) return passed("nothing on this Machine uses Herdr 1");
   const fix = set ? "collie settings set terminal_backend core" : "";
-  return Result.isFailure(panes)
+  return Result.isFailure(panes) || Result.isFailure(registered)
     ? warned(Arr.join(found, "; "), fix)
     : noted(Arr.join(found, "; "), fix);
 });
