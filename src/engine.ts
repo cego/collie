@@ -172,7 +172,6 @@ import { outcomeRecordsOf, type OutcomeRecords } from "./outcomes";
 import type { Metrics } from "./board-model";
 import {
   forgeOfRef,
-  mrId,
   mrRefOf,
   mrRefsIn,
   mrWords,
@@ -5425,8 +5424,9 @@ const pointedAt = (
 
 const isText = Schema.is(Schema.String);
 
-/** A set's first merge request stands for it. */
-const mrIdOf = (said: string | null) => (said === null ? null : mrId(mrRefsIn(said)[0] ?? ""));
+/** A set's first merge request stands for it; a bare or hostless one is read in `cwd`. */
+const mrIdOf = (said: string | null, cwd: string) =>
+  said === null ? Effect.succeed(null) : mrIdIn(mrRefsIn(said)[0] ?? "", cwd, runShell);
 
 /** The field a module gives this strategy, if it gives it to one. */
 const fieldWith = (hints: Readonly<Record<string, InputStrategy>>, strategy: InputStrategy) =>
@@ -7050,7 +7050,7 @@ const makeRegistry: (
       strategies: generation.hints,
       sources: ask.provenance,
     });
-    const mr = mrIdOf(pointedAt(generation, ask.input));
+    const mr = yield* mrIdOf(pointedAt(generation, ask.input), placed.cwd);
     if (branch === null && mr === null) return null;
     const open = new Set(
       branch === null || (yield* terminalBackend(placing.env.userDir)) === "core"
@@ -7074,12 +7074,13 @@ const makeRegistry: (
       if (mr !== null) {
         const recorded = live.get(row.generation);
         const given = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
-        const mrs = Arr.map(
+        const cwd = placedOf(row, {}).cwd;
+        const mrs = yield* Effect.forEach(
           [
             yield* mergeRequestOf(fs, dir, row.run),
             recorded === undefined ? null : pointedAt(recorded, given),
           ],
-          mrIdOf,
+          (said) => mrIdOf(said, cwd),
         );
         if (mrs.includes(mr)) return task;
       }

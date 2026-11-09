@@ -2980,6 +2980,49 @@ test(
 );
 
 test(
+  "a legacy bare merge request target joins the Task given it in full in its checkout, and the reverse",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        for (const [id, first, fresh] of [
+          ["task-full", MR_TARGET, "mr:355"],
+          ["task-bare", "mr:356", "mr:gitlab.example.com/group/app!356"],
+        ] as const) {
+          yield* writeTask(env().stateDir, {
+            id,
+            workspace: `w-${id}`,
+            label: `Project | ${id}`,
+            cwd: rig.projectDir,
+            created_at: "2026-09-01T00:00:00.000Z",
+          });
+          const joined = yield* hosted(
+            Effect.gen(function* () {
+              const registry = yield* Registry;
+              const [targeted] = yield* loaded(registry, [`${fixtures}/targeted.workflow.ts`]);
+              const named = yield* start(targeted!, {
+                request: `r-${id}`,
+                text: { target: first },
+                task: id,
+              });
+              if (named._tag === "Failure") return yield* Effect.die(named.failure);
+              yield* finished(named.success.runId);
+              const started = yield* start(targeted!, {
+                request: `r-${id}-fresh`,
+                text: { target: fresh },
+                taskLabel: "Project | Release",
+              });
+              if (started._tag === "Failure") return yield* Effect.die(started.failure);
+              return yield* finished(started.success.runId);
+            }),
+          );
+          expect(joined?.task).toBe(id);
+        }
+      }),
+    ),
+  120_000,
+);
+
+test(
   "a fresh start on the branch of a Task whose workspace has closed is a Task of its own",
   () =>
     runEffect(
