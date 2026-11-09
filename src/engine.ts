@@ -519,7 +519,20 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     /** Each sample runs every one, in order, in the tree's root, with no shell between. */
     readonly commands: Schema.NonEmptyArray<Schema.Struct<{ readonly name: Schema.String; readonly executable: Schema.String; readonly argv: Schema.$Array<Schema.String> }>>;
     /** \`<command>.wall_ms\`, \`<command>.cpu_ms\`, \`<command>.peak_kb\`, which the host reads, or \`<command>.<key>\` of its last stdout line's JSON. */
-    readonly metrics: Schema.NonEmptyArray<Schema.Struct<{ readonly name: Schema.String; readonly direction: Schema.Literals<readonly ["lower", "higher"]>; readonly role: Schema.Literals<readonly ["primary", "guardrail"]> }>>;
+    readonly metrics: Schema.NonEmptyArray<Schema.Struct<{
+      readonly name: Schema.String;
+      readonly direction: Schema.Literals<readonly ["lower", "higher"]>;
+      readonly role: Schema.Literals<readonly ["primary", "guardrail"]>;
+      /** The plan's own, for this metric alone. */
+      readonly threshold: Schema.optionalKey<Schema.Finite>;
+      readonly tolerance: Schema.optionalKey<Schema.Finite>;
+      /** In the metric's units: a difference this small is neither a gain nor a regression. */
+      readonly absolute: Schema.optionalKey<Schema.Finite>;
+      /** A deterministic count, such as a correctness check's mismatches: judged by value. */
+      readonly exact: Schema.optionalKey<Schema.Boolean>;
+      /** Why its limits are these, written before anything is measured by them. */
+      readonly why: Schema.optionalKey<Schema.String>;
+    }>>;
     readonly warmup: Schema.withDecodingDefaultKey<Schema.Int>;
     readonly samples: Schema.withDecodingDefaultKey<Schema.Int>;
     /** Seconds one sample, all its commands, or one tree's prepare may take. */
@@ -585,6 +598,21 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   }
   /** Keeps an infinite ratio, which plain JSON writes as null: journal a Measurement with it. */
   export const MeasurementSchema: Schema.Codec<Measurement, unknown, never, never>;
+  /** A metric's own limits, and the plan's where it declares none. */
+  export function limitsOf(
+    plan: Pick<typeof BenchmarkPlan.Type, "threshold" | "tolerance">,
+    metric: (typeof BenchmarkPlan.Type)["metrics"][number],
+  ): { readonly threshold: number; readonly tolerance: number; readonly absolute: number; readonly exact: boolean };
+  /**
+   * What a Measurement of the base against itself says of its plan. A harness that ran nothing
+   * to judge, or whose exact count differs on identical trees, is broken; a metric too noisy for
+   * its limits leaves proof unavailable.
+   */
+  export type Calibration =
+    | { readonly _tag: "Calibrated" }
+    | { readonly _tag: "HarnessBroken"; readonly why: ReadonlyArray<string> }
+    | { readonly _tag: "ProofUnavailable"; readonly lost: ReadonlyArray<{ readonly metric: string; readonly why: string }> };
+  export function calibrationOf(measured: Pick<Measurement, "plan" | "result">): Calibration;
 
   /** What a merge at a head came to: \`MergedOutside\` is a merge this Run did not make. */
   export type MergeOutcome =

@@ -3,15 +3,18 @@
 import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
 import { Effect, Schema, flow, Result } from "effect";
+import { BenchmarkPlan, decodeBenchmarkPlan, limitsOf } from "../src/measurement-model";
 import {
+  Judgement,
   JudgementJson,
   judge,
-  type Judgement,
+  type Limits,
   type MetricSamples,
 } from "../src/measurement-verdict";
+import ff23b932 from "./fixtures/measurements/run-ff23b932-calibration.json" with { type: "json" };
 
 const ID = "measurement-7f3a";
-const LIMITS = { threshold: 5, tolerance: 2 };
+const LIMITS: Limits = { threshold: 5, tolerance: 2 };
 
 const of = (value: number, count = 10) => Array.from({ length: count }, () => value);
 
@@ -60,6 +63,14 @@ describe("a metric's verdict", () => {
     );
     expect(judged.verdict).toBe("inconclusive");
     expect(judged.held).toBe(false);
+  });
+
+  test("a tolerance wider than the threshold leaves the inconclusive width at twice the threshold", () => {
+    const samples = [80, 90, 100, 110, 120];
+    const judged = run(latency(samples, samples), ID, { threshold: 5, tolerance: 50 });
+    expect(judged.interval[1] - judged.interval[0]).toBeGreaterThan(0.1);
+    expect(judged.verdict).toBe("inconclusive");
+    expect(judged.held).toBe(true);
   });
 
   test("a higher-is-better metric gains when the candidate's median is the larger", () => {
@@ -178,5 +189,106 @@ describe("samples that cannot be judged", () => {
   test("a non-finite sample is refused, naming the metric", () => {
     expect(refusal(latency(of(100), [80, Number.NaN, 80])).message).toContain("p95");
     expect(refusal(latency([100, Infinity], of(80))).message).toContain("p95");
+  });
+});
+
+describe("a metric's own limits", () => {
+  test("an absolute slack holds a near-zero guardrail whose ratio swings wide", () => {
+    const lag = latency([6, 7, 6, 8, 10], [7, 6, 10, 17, 7]);
+    expect(run(lag).held).toBe(false);
+    expect(run(lag, ID, { ...LIMITS, absolute: 20 })).toMatchObject({
+      verdict: "no-change",
+      held: true,
+    });
+  });
+
+  test("a gain smaller than the absolute slack is not a gain", () => {
+    const cpu = latency(of(200), of(180));
+    expect(run(cpu, ID, { ...LIMITS, absolute: 30 }).verdict).toBe("no-change");
+    expect(run(cpu, ID, { ...LIMITS, absolute: 10 }).verdict).toBe("gain");
+  });
+
+  test("a zero base is judged by the absolute slack", () => {
+    expect(run(latency(of(0), of(3)), ID, { ...LIMITS, absolute: 5 })).toMatchObject({
+      verdict: "no-change",
+      held: true,
+    });
+    expect(run(latency(of(0), of(3)), ID, { ...LIMITS, absolute: 2 })).toMatchObject({
+      verdict: "regression",
+      held: false,
+    });
+  });
+
+  test("a guardrail's own tolerance decides whether it holds", () => {
+    const rss = latency([100, 104, 97, 110, 99], [103, 112, 96, 108, 101]);
+    expect(run(rss).held).toBe(false);
+    expect(run(rss, ID, { threshold: 5, tolerance: 25 }).held).toBe(true);
+  });
+});
+
+describe("an exact metric", () => {
+  test("whose samples differ within a tree is inconclusive and not held", () => {
+    const mismatches = latency(of(10), [10, 10, 10, 10, 11, 10, 10, 10, 10, 10]);
+    expect(run(mismatches)).toMatchObject({ verdict: "no-change", held: true });
+    expect(run(mismatches, ID, { ...LIMITS, exact: true })).toMatchObject({
+      verdict: "inconclusive",
+      held: false,
+    });
+  });
+});
+
+describe("run-ff23b932's calibration, replayed", () => {
+  const Recorded = Schema.Struct({
+    id: Schema.String,
+    plan: BenchmarkPlan,
+    samples: Schema.Array(
+      Schema.Struct({
+        tree: Schema.Literals(["base", "candidate"]),
+        warmup: Schema.Boolean,
+        readings: Schema.Record(Schema.String, Schema.Finite),
+      }),
+    ),
+    result: Schema.Struct({ verdicts: Schema.Array(Judgement) }),
+  });
+  const recorded = Effect.runSync(Schema.decodeUnknownEffect(Recorded)(ff23b932));
+
+  test("judges a plan without metric limits exactly as the host recorded it", () => {
+    const judged = Arr.map(recorded.plan.metrics, (metric) => {
+      const of = (tree: "base" | "candidate") =>
+        Arr.flatMap(recorded.samples, (one) =>
+          !one.warmup && one.tree === tree ? [one.readings[metric.name]!] : [],
+        );
+      return run(
+        {
+          metric: metric.name,
+          direction: metric.direction,
+          base: of("base"),
+          candidate: of("candidate"),
+        },
+        recorded.id,
+        limitsOf(recorded.plan, metric),
+      );
+    });
+    expect<ReadonlyArray<Judgement>>(judged).toEqual(recorded.result.verdicts);
+  });
+});
+
+describe("a plan's metric limits", () => {
+  const plan = (metric: { readonly absolute: number; readonly why?: string }) => ({
+    harness: { commits: [], paths: ["bench"] },
+    commands: [{ name: "bench", executable: "sh", argv: [] }],
+    metrics: [{ name: "bench.cpu", direction: "lower", role: "primary", ...metric }],
+  });
+  const decoded = (metric: { readonly absolute: number; readonly why?: string }) =>
+    Effect.runSync(Effect.result(decodeBenchmarkPlan(plan(metric))));
+
+  test("are refused without the reason they were chosen", () => {
+    const refused = decoded({ absolute: 20 });
+    expect(Result.isFailure(refused) && refused.failure).toContain("bench.cpu");
+  });
+
+  test("are kept with it", () => {
+    const kept = decoded({ absolute: 20, why: "10 ms ticks: two ticks a side is resolution" });
+    expect(Result.isSuccess(kept) && kept.success.metrics[0]).toMatchObject({ absolute: 20 });
   });
 });

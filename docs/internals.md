@@ -95,6 +95,26 @@ opens that file for appending and `exec`s the host with its pid. The host keeps 
 by copying it to `host.out.1` and emptying it in place, checked each minute and at each
 start, since renaming a file the process still writes to would not move its writes.
 
+### Tracing the host
+
+A host makes no spans unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set, since making them was most
+of what an idle host allocated. When it is set, the host sends its spans and logs as OTLP/JSON
+to that base URL, under the service `collie-host`. Every `Effect.fn` name becomes a span, for
+example `Board.build`, `Engine.viewOf` and each RPC, so a trace shows where a slow board build
+or a slow answer spends its time, on the live host and without a benchmark.
+[motel](https://github.com/kitlangton/motel) is a local OTLP store that serves this. Run it from
+a clone with `bun install && bun src/motel.ts daemon`, which listens on `127.0.0.1:27686`. Then
+restart the host with the variable set:
+
+```sh
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:27686 collie host restart
+```
+
+Read the spans with `bun src/motel.ts trace-stats operation count collie-host`, or with
+`search-traces` or the TUI. A host started any other way, such as by a client or by
+`collie upgrade`, starts without the variable and so stops tracing. Spans cost time of their
+own, so compare durations within one trace rather than against an untraced host.
+
 A workflow is a TypeScript module, and the host runs it on Effect's own engine
 ([ADR-0014](adr/0014-native-workflows-run-on-effects-own-engine.md)): a
 `ClusterWorkflowEngine` over a `SingleRunner`, with execution state in `host.db`, a Bun
