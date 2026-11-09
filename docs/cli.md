@@ -498,10 +498,13 @@ A module that has an agent do its work opens a tab and starts one on the harness
 permissions this installation is configured for, with the compaction controls every agent
 Collie starts gets. What it was actually sent and what it wrote are files under the host's state
 directory — `agents/<run>/<operation>.prompt.md` and `.json`, with the repair beside them —
-so a Run that ended `output-unusable` can be read rather than reconstructed. An Output the
+so an Output that could not be used can be read rather than reconstructed. An Output the
 workflow's schema refuses buys exactly one rewrite from that same agent, and a second
-unusable one ends the Run with the reasons named.
-[ADR-0020](adr/0020-an-agent-is-launched-once-and-its-output-is-decoded.md) is why.
+unusable one parks the Run at its Step with the reasons named. Correct the file, or not,
+and `run resume` it: the file is read again, and one still unusable gets one more rewrite.
+[ADR-0020](adr/0020-an-agent-is-launched-once-and-its-output-is-decoded.md) and
+[ADR-draft-a-fixable-failure-parks-its-step](adr/draft-a-fixable-failure-parks-its-step.md)
+are why.
 
 ### Tasks
 

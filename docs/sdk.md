@@ -324,8 +324,12 @@ const verdict =
   validated answer.
 - **One unusable Output buys one repair**, sent back to the agent that wrote it, with the
   schema's own issues. A rewrite the schema still refuses is judged once the agent's turn
-  has ended, so a file caught half rewritten is not the answer; one still unusable then fails
-  the run with `output-unusable`. A stop while the
+  has ended, so a file caught half rewritten is not the answer; one still unusable then parks
+  the Step, naming the file, the agent and the schema's issues. A resume reads the file
+  again and goes on if it decodes now; if not, the agent gets one more repair, and the Step
+  parks again where that is unusable too
+  ([ADR-draft-a-fixable-failure-parks-its-step](adr/draft-a-fixable-failure-parks-its-step.md)).
+  A stop while the
   rewrite is awaited parks the wait, as it does the first; the resume starts an agent that
   went with the stop again on the work.
 - **A busy pane is waited out, then parked.** Where herdr answers that the agent's pane

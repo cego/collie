@@ -46,7 +46,7 @@ import {
   promptFor,
   type AgentHost,
 } from "../src/agents";
-import { Children, Host, Run, WorkflowAgents, jsonSchemaFor, withAgents } from "../src/sdk";
+import { Children, Host, Run, WorkflowAgents, jsonSchemaFor, step, withAgents } from "../src/sdk";
 import { asRun, enveloped } from "./support/enveloped";
 import {
   PARKED,
@@ -60,6 +60,7 @@ import {
   pollStatus,
   runDir,
 } from "../src/engine";
+import { readStepLines } from "../src/steps";
 import { readMetrics } from "../src/metrics";
 import { Launched, runAgents } from "../src/launches";
 import { Collected } from "../src/agents";
@@ -140,22 +141,34 @@ const work = enveloped({
 
 const SKIPPED = { verdict: "clean", note: "nothing to review" } as const;
 
+const reviewWork = () =>
+  agentWork({
+    operation: "review",
+    role: "reviewer",
+    workflow: "agent-work",
+    cwd: rig.projectDir,
+    instructions: "Review {{target}} as the {{role}}.",
+    input: { target: "the diff" },
+    output: Verdict,
+    ...clearing,
+  });
+
 const body = work.toLayer((payload) =>
   Effect.gen(function* () {
     // Eligibility first, and before anything expensive: skipped work opens no tab.
     if (payload.input.skip) return SKIPPED;
-    return yield* agentWork({
-      operation: "review",
-      role: "reviewer",
-      workflow: "agent-work",
-      cwd: rig.projectDir,
-      instructions: "Review {{target}} as the {{role}}.",
-      input: { target: "the diff" },
-      output: Verdict,
-      ...clearing,
-    });
+    return yield* reviewWork();
   }).pipe(asRun(payload)),
 );
+
+/** The same work inside a Step, for what a Run's Steps record of it. */
+const stepped = enveloped({
+  name: "agent-work-stepped",
+  input: { skip: Schema.Boolean },
+  success: Verdict,
+});
+const reviewing = step({ id: "review", title: "Review the diff", kind: "agent" });
+const steppedBody = stepped.toLayer((payload) => reviewing(reviewWork()).pipe(asRun(payload)));
 
 const CLAUDE_HELP = "  --autocompact <auto|tokens>           Auto-compact window size";
 const CODEX_HELP = "  --dangerously-bypass-hook-trust";
@@ -254,7 +267,7 @@ const session = <A, E>(
 ) =>
   run.pipe(
     Effect.provide(
-      body.pipe(
+      Layer.merge(body, steppedBody).pipe(
         Layer.provideMerge(
           agentsLayer({
             ...hostOf(),
@@ -625,7 +638,7 @@ test("a step's message and its repair are Collie's own and carry no sender line,
 test("a step's prompt opens with the three shell habits on its address line", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* rig.queueOutputs([{ verdict: "clean" }]);
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
       yield* session(started("r1"));
       const [address] = Str.split(yield* read(promptPath("r1")), "\n");
       expect(address).toContain(
@@ -782,18 +795,117 @@ test("a step started with a skill is measured with its command line", () =>
     }),
   ));
 
-test("a second unusable Output is the end of it, and the failure names what was wrong", () =>
+const steppedPayload = (runId: string) => ({ runId, input: { skip: false } });
+
+const steppedStatus = (runId: string) =>
+  Effect.gen(function* () {
+    const engine = yield* WorkflowEngine.WorkflowEngine;
+    const id = yield* stepped.executionId(steppedPayload(runId));
+    return pollStatus(yield* engine.poll(stepped, id), "agent-work-stepped").status;
+  });
+
+/**
+ * The stepped work, submitted, or resumed where `resume`, until `repairs` repairs were sent
+ * and it settled: it has to have parked, not failed.
+ */
+const parkedOnOutput = (runId: string, repairs: number, resume = false) =>
+  session(
+    Effect.gen(function* () {
+      const engine = yield* WorkflowEngine.WorkflowEngine;
+      if (resume) {
+        // As the host wakes a parked Run: its parked reason cleared first.
+        yield* (yield* FileSystem.FileSystem).remove(controlPath(dir, PARKED, runId));
+        yield* engine.resume(stepped, yield* stepped.executionId(steppedPayload(runId)));
+      }
+      yield* stepped.execute(steppedPayload(runId), { discard: true });
+      yield* until(prompted("not usable", repairs));
+      yield* until(
+        steppedStatus(runId).pipe(
+          Effect.map((status) => status === "failed" || status === "suspended"),
+        ),
+      );
+      expect(yield* steppedStatus(runId)).toBe("suspended");
+      expect(yield* parked(runId)).toBe(true);
+    }),
+  );
+
+/** The parked stepped work, resumed and waited on. */
+const resumedStepped = (runId: string) =>
+  session(
+    Effect.gen(function* () {
+      const engine = yield* WorkflowEngine.WorkflowEngine;
+      yield* engine.resume(stepped, yield* stepped.executionId(steppedPayload(runId)));
+      return yield* stepped.execute(steppedPayload(runId)).pipe(Effect.result);
+    }),
+  );
+
+const starts = () =>
+  rig.cmds().pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "agent start")));
+
+test("an Output still unusable after its repair parks the Step, saying what to correct", () =>
   runEffect(
     Effect.gen(function* () {
       yield* rig.queueOutputs([{ verdict: "maybe" }, { verdict: "still maybe" }]);
-      const result = yield* session(started("r1"));
-      expect(result._tag).toBe("Failure");
-      const reason = result._tag === "Failure" ? result.failure.reason : "";
-      expect(reason).toContain("output-unusable");
-      expect(reason).toContain(agentFor("r1"));
-      expect(reason).toContain(`["note"]`);
+      yield* parkedOnOutput("r1", 1);
+      const why = yield* read(controlPath(dir, PARKED, "r1"));
+      expect(why).toContain(agentFor("r1"));
+      expect(why).toContain(outputPath("r1"));
+      expect(why).toContain(`["note"]`);
+      expect(why).toEndWith("Correct it, then resume r1.");
+      expect(Arr.last(yield* readStepLines(runDir(dir, "r1")))).toEqual(
+        Option.some(expect.objectContaining({ kind: "fail", key: "review", why })),
+      );
       // Exactly one: the allowance is one repair, not one per issue.
       expect(sent(yield* rig.calls(), "not usable")).toBe(1);
+    }),
+  ));
+
+test("a parked Output corrected by hand is taken on resume, with no launch or repair", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* rig.queueOutputs([{ verdict: "maybe" }, { verdict: "still maybe" }]);
+      yield* parkedOnOutput("r1", 1);
+      yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"by hand"}`);
+      const result = yield* resumedStepped("r1");
+      expect(result._tag === "Success" && result.success.note).toBe("by hand");
+      expect(yield* starts()).toHaveLength(1);
+      expect(sent(yield* rig.calls(), "not usable")).toBe(1);
+    }),
+  ));
+
+test("a parked Output still unusable on resume gets one more repair, and a good one finishes", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([
+        { verdict: "maybe" },
+        { verdict: "still maybe" },
+        { verdict: "clean", note: "repaired again" },
+      ]);
+      yield* parkedOnOutput("r1", 1);
+      const result = yield* resumedStepped("r1");
+      expect(result._tag === "Success" && result.success.note).toBe("repaired again");
+      expect(sent(yield* rig.calls(), "not usable")).toBe(2);
+      expect(yield* starts()).toHaveLength(1);
+    }),
+  ));
+
+test("a parked Output whose next repair is unusable too parks again, launching nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([
+        { verdict: "maybe" },
+        { verdict: "still maybe" },
+        { verdict: "maybe again" },
+      ]);
+      yield* parkedOnOutput("r1", 1);
+      yield* parkedOnOutput("r1", 2, true);
+      expect(yield* read(outputPath("r1"))).toContain("maybe again");
+      expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(
+        `${outputPath("r1")} is still unusable`,
+      );
+      expect(sent(yield* rig.calls(), "not usable")).toBe(2);
+      expect(yield* starts()).toHaveLength(1);
     }),
   ));
 

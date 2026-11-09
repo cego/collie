@@ -1044,6 +1044,8 @@ class SteerUnanswered extends Schema.TaggedError<
 
 /** What `act` carries out with no proposal: what the human asks for by name, and chat's hold. */
 const ACTED_KINDS = new Set<string>([...ASKED_KINDS, "hold"]);
+/** How many acts' first revisions a host keeps for their retries, oldest dropped first. */
+const ACT_REVISIONS_KEPT = 1024;
 
 /** An operation's result as the front doors print it: a failure carries its code. */
 const outcomeOf = (result: OpResult): SteerOutcome =>
@@ -1684,6 +1686,24 @@ const frontDoorHandlers = (
       // ponytail: kept for the host's life; evict by age if a host lives for months.
       const plans: PlanCache = new Map();
       const record = yield* recordSources({ panels, plans });
+      /**
+       * The revision each act of a request was first answered with. A retried request carries
+       * nothing out again, so its answer is the one it had: read anew, it was the Run's
+       * revision now, which a follow-up's child had moved since. A model's revisions compare
+       * only within its epoch, so the host's life is as long as one is worth keeping.
+       */
+      const actRevisions = new Map<string, RunRevision>();
+      const revisionOfAct = (request: string, index: number, now: RunRevision) => {
+        const key = `${request}#${index}`;
+        const first = actRevisions.get(key);
+        if (first !== undefined && first.epoch === now.epoch) return first;
+        if (actRevisions.size >= ACT_REVISIONS_KEPT) {
+          const oldest = actRevisions.keys().next();
+          if (oldest.done !== true) actRevisions.delete(oldest.value);
+        }
+        actRevisions.set(key, now);
+        return now;
+      };
       const { serve } = yield* Foreground;
       /** An act on a Step of a record refused where that Step has finished since. */
       const stepStill = (run: string, step: string | undefined, shown: RunRevision | undefined) =>
@@ -2689,7 +2709,14 @@ const frontDoorHandlers = (
                                 const revised =
                                   record === undefined || run === undefined
                                     ? result
-                                    : { ...result, revision: record.model.revision(run) };
+                                    : {
+                                        ...result,
+                                        revision: revisionOfAct(
+                                          request,
+                                          index,
+                                          record.model.revision(run),
+                                        ),
+                                      };
                                 return notice === null
                                   ? revised
                                   : {
@@ -3941,6 +3968,7 @@ const own = (
     const graceMs = yield* supersedeGraceMs;
     const seconds = yield* scheduleSeconds;
     const bun = yield* Effect.context<PlatformServices>();
+    const runModel = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
     const herdr = new Herdr(env);
     // Under the lock, so anything at this path belongs to a host that is gone: a unix
     // socket cannot be bound while its file is there, and a dead host's is still there.
@@ -4060,6 +4088,10 @@ const own = (
                       supersedeGraceMs: graceMs,
                       namesTasks: true,
                       placing: { herdr, env: { ...env, stateDir: dir } },
+                      keep:
+                        runModel === undefined
+                          ? undefined
+                          : { revision: runModel.factsAt, reading: runModel.reading },
                     }),
                   ),
                 ),

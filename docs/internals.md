@@ -922,6 +922,13 @@ naming the session (`default` when unset). All of it goes through `src/herdr.ts`
   started core. Its env is the launch env herdr's agents get, with the profile's file-held
   values read in, and `HERDR_SOCKET_PATH` and `HERDR_PANE_ID` blanked, so `collie` in that
   terminal knows itself by `COLLIE_AGENT`, which the host confirms against its Runs.
+  Every `terminal.run` Collie sends, the board's and chat's too, carries the host's own
+  `PATH` under that env: core finds the program on the `PATH` it is handed, and a core that
+  another Machine's SSH dial started has a bare system one, without the harness.
+- **The board and chat** (`keepTerminals` in `src/side-jobs.ts`) are started again on each
+  terminal core says ended or was removed. A round that leaves either unstarted waits before
+  the next — a second, doubling to five minutes — since core says a terminal it could not
+  start was `removed`, and retrying on that is a start a few milliseconds, for good.
 - **Delivery** is `terminal.send`. One that answers `started: false` gets one Enter
   (`terminal.keys`), and the Run's log says so. Core's `blocked` refusal is herdr's
   `agent_blocked`, so the Dispatcher holds the send as it does on herdr.
