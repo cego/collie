@@ -182,6 +182,7 @@ import {
   Template,
   WorkflowError,
   panelOf,
+  stepFailed,
   type AskedQuestion,
   type DecisionSpec,
   type HostApi,
@@ -462,7 +463,14 @@ export interface AgentsApi {
     launched: Launched,
     problem: string,
     unusable: string,
+    /** Which repair of this Output; each is a delivery of its own. */
+    round?: number,
   ) => Effect.Effect<boolean, AgentUncertain | AgentParked>;
+  /**
+   * The Output as its file holds it now, where this park of it is being resumed; null where
+   * it is parking for the first time, which marks it parked.
+   */
+  readonly resumedOutput: (launched: Launched, round: number) => Effect.Effect<string | null>;
   /**
    * Says something of a human's to the agent this run has. The request is the claim on
    * the delivery: the same one twice is one message, which is what the ledger refuses a
@@ -653,8 +661,8 @@ const untilPushable = (operation: string, cwd: string) =>
  * Launch and collection are separate Activities on purpose: replaying a collection must
  * never start a second agent, and only a recorded launch makes that true. The repair is a
  * third, which is what stops a restart from handing out another one — a workflow that
- * comes back to an Output it has already had repaired finds the repair recorded and is
- * left with the failure, not with a fresh allowance.
+ * comes back to an Output it has already had repaired finds the repair recorded, not a
+ * fresh allowance. Only a resume of the park that follows gives one more.
  */
 export const agentWork = <
   Output extends OutputContract = typeof Schema.String,
@@ -1026,52 +1034,26 @@ export const agentWork = <
     }
     const first = isRanOut(collected) ? null : collected;
     if (first === null) {
-      return yield* unusable(current, `wrote nothing to ${output}`);
+      return yield* new WorkflowError({
+        reason: `${current.agent} wrote nothing to ${output}`,
+      });
     }
     const read = decodeOutput(work.output, first, plain);
     if (read.ok) return yield* carded(read.value);
 
-    // The repair is its own Activity, so what a restart finds is a repair that happened
+    // Each repair is its own Activity, so what a restart finds is a repair that happened
     // rather than an allowance that has come back.
-    const asked = yield* Activity.make({
-      name: `${work.operation}.repair`,
-      success: Schema.Boolean,
-      error: AgentUncertain,
-      execute: stoppable(
-        parkedWhenStuck(
-          reviving(currentAsk, first).pipe(
-            Effect.andThen(agents.repair(current, read.problem, first)),
-          ),
-          host,
-          work.runId,
-        ),
-        host,
-        work.runId,
-        agents.pollMs,
-      ),
-    });
-    const again = !asked
-      ? null
-      : yield* Activity.make({
-          name: `${work.operation}.recollect`,
-          success: Schema.NullOr(Schema.String),
+    const repairing = (round: number, unusable: string, problem: string) =>
+      Effect.gen(function* () {
+        const suffix = round === 1 ? "" : `-${round}`;
+        const asked = yield* Activity.make({
+          name: `${work.operation}.repair${suffix}`,
+          success: Schema.Boolean,
           error: AgentUncertain,
           execute: stoppable(
-            // Null here is also the same unusable Output written again, which a repair
-            // has had its one chance at, so it ends the work rather than parking it.
             parkedWhenStuck(
-              reviving(currentAsk, first).pipe(
-                Effect.andThen(
-                  watching(
-                    agents.collect(
-                      current,
-                      first,
-                      questions,
-                      undefined,
-                      (text) => decodeOutput(work.output, text, plain).ok,
-                    ),
-                  ),
-                ),
+              reviving(currentAsk, unusable).pipe(
+                Effect.andThen(agents.repair(current, problem, unusable, round)),
               ),
               host,
               work.runId,
@@ -1081,12 +1063,61 @@ export const agentWork = <
             agents.pollMs,
           ),
         });
-    if (again === null) {
-      return yield* unusable(current, `did not write ${output} again: ${read.problem}`);
+        const again = !asked
+          ? null
+          : yield* Activity.make({
+              name: `${work.operation}.recollect${suffix}`,
+              success: Schema.NullOr(Schema.String),
+              error: AgentUncertain,
+              execute: stoppable(
+                parkedWhenStuck(
+                  reviving(currentAsk, unusable).pipe(
+                    Effect.andThen(
+                      watching(
+                        agents.collect(
+                          current,
+                          unusable,
+                          questions,
+                          undefined,
+                          (text) => decodeOutput(work.output, text, plain).ok,
+                        ),
+                      ),
+                    ),
+                  ),
+                  host,
+                  work.runId,
+                ),
+                host,
+                work.runId,
+                agents.pollMs,
+              ),
+            });
+        if (again === null)
+          return { ok: false as const, problem: `did not write ${output} again: ${problem}` };
+        const repaired = decodeOutput(work.output, again, plain);
+        return repaired.ok
+          ? repaired
+          : { ok: false as const, problem: `${output} is still unusable: ${repaired.problem}` };
+      });
+    // Unusable after its repair parks the Step (ADR-draft-a-fixable-failure-parks-its-step D2).
+    let repaired = yield* repairing(1, first, read.problem);
+    for (let round = 1; !repaired.ok; round++) {
+      const why = `${current.agent} ${repaired.problem}. Correct it, then resume ${runId}.`;
+      const now = yield* Activity.make({
+        name: `${work.operation}.parked-${round}`,
+        success: Schema.String,
+        execute: Effect.gen(function* () {
+          const resumed = yield* agents.resumedOutput(current, round);
+          if (resumed !== null) return resumed;
+          yield* stepFailed(why);
+          yield* host.parked(runId, why);
+          return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
+        }),
+      });
+      const reread = decodeOutput(work.output, now, plain);
+      repaired = reread.ok ? reread : yield* repairing(round + 1, now, reread.problem);
     }
-    const repaired = decodeOutput(work.output, again, plain);
-    if (repaired.ok) return yield* carded(repaired.value);
-    return yield* unusable(current, `${output} is still unusable: ${repaired.problem}`);
+    return yield* carded(repaired.value);
   }).pipe(
     Effect.catchTag("AgentUncertain", (cause) =>
       Effect.fail(
@@ -1241,9 +1272,6 @@ const untilStopped = (host: HostApi, runId: string, pollMs: number) =>
       Effect.asVoid,
       Effect.orDie,
     );
-
-const unusable = (launched: Launched, what: string) =>
-  Effect.fail(new WorkflowError({ reason: `output-unusable: ${launched.agent} ${what}` }));
 
 /** What an Output decoded to, or every reason it could not be used. */
 type Read<T> =
@@ -2929,7 +2957,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       ),
     );
 
-  const repair = (launched: Launched, problem: string, unusable: string) =>
+  const repair = (launched: Launched, problem: string, unusable: string, round = 1) =>
     under(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -2941,7 +2969,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         yield* write(file, text);
         const sent = yield* deliver(launched, text, {
           kind: "repair",
-          ref: stemOf(launched),
+          ref: round === 1 ? stemOf(launched) : `${stemOf(launched)}.${round}`,
         });
         yield* log(
           launched.runId,
@@ -3717,6 +3745,17 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     collectedDuring: (launched, waiting) =>
       collecting.during(launched.runId, launched.agent, waiting),
     repair,
+    resumedOutput: (launched, round) =>
+      under(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const marker = `${dirFor(launched.runId)}/${stemOf(launched)}.parked-${round}`;
+          if (yield* fs.exists(marker))
+            return yield* fs.readFileString(launched.output).pipe(Effect.orElseSucceed(() => ""));
+          yield* fs.writeFileString(marker, "");
+          return null;
+        }),
+      ).pipe(Effect.orDie),
     steer,
     tendQuestions,
     statusOf: (agent) =>

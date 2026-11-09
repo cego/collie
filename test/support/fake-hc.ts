@@ -46,6 +46,16 @@ export interface FakeHc {
   readonly exit: (name: string, code: number) => Effect.Effect<void>;
   /** Every live terminal ends at once, as losing core's holder ends them. */
   readonly lose: Effect.Effect<void>;
+  /**
+   * Whether core can start `program`: one it cannot, as one missing from core's own PATH,
+   * is `spawn_failed`, and core says the terminal it had made for it was `removed`.
+   */
+  readonly startable: (program: string, can: boolean) => void;
+  /**
+   * Core's own PATH is a bare system one, as for a core another Machine's SSH dial started:
+   * it finds a program only on the PATH the launch passes in its `env`.
+   */
+  readonly barePath: () => void;
 }
 
 interface Added {
@@ -134,6 +144,14 @@ const Prompted = Schema.Struct({ parts: Schema.Array(Schema.Struct({ text: Schem
 /** How long a fake harness works on a prompt before its Output is written. */
 const TURN = "200 millis";
 const text = (value: Schema.Json | undefined) => (isString(value) ? value : undefined);
+/** The PATH a launch's `env` passes, if it passes one. */
+const pathIn = (env: Schema.Json | undefined) =>
+  Option.getOrUndefined(
+    Option.map(
+      Schema.decodeUnknownOption(Schema.Struct({ PATH: Schema.String }))(env),
+      (passed) => passed.PATH,
+    ),
+  );
 
 /** Serves a fake core at `socketPath` until `scope` closes, logging calls to `logPath`. */
 export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
@@ -154,6 +172,8 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
   let seq = 0;
   let stall = false;
   let blocked = false;
+  const unstartable = new Set<string>();
+  let bare = false;
   const typed = new Map<string, string>();
   const viewing = new Set<Viewer>();
   const opencodes = new Map<string, Bun.Server<undefined>>();
@@ -351,6 +371,18 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
             return {
               failure: { code: -32000, message: "spawn_failed", kind: "spawn_failed" },
             };
+          const program = Arr.filter(Arr.isArray(params.argv) ? params.argv : [], isString)[0];
+          const notFound =
+            bare &&
+            program !== undefined &&
+            Bun.which(program, { PATH: pathIn(params.env) ?? "/usr/bin:/bin" }) === null;
+          if (program !== undefined && (unstartable.has(program) || notFound)) {
+            made += 1;
+            yield* emit(`t${made}`, "removed", {});
+            return {
+              failure: { code: -32000, message: "spawn_failed", kind: "spawn_failed" },
+            };
+          }
           made += 1;
           const terminal: Terminal = {
             address: `t${made}`,
@@ -666,5 +698,12 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
         { discard: true },
       ),
     ),
+    startable: (program, can) => {
+      if (can) unstartable.delete(program);
+      else unstartable.add(program);
+    },
+    barePath: () => {
+      bare = true;
+    },
   } satisfies FakeHc;
 });

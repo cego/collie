@@ -694,6 +694,21 @@ function basename(path: string): string {
   return Str.split(pipe(path, Str.replace(/\/+$/, "")), "/").at(-1) ?? path;
 }
 
+/** Each Run's registered agents, grouped once for every card a build asks about. */
+const groupedRegistered = new WeakMap<ReadonlyArray<AgentEntry>, Map<string, AgentEntry[]>>();
+const registeredByRun = (registered: ReadonlyArray<AgentEntry>) => {
+  const kept = groupedRegistered.get(registered);
+  if (kept !== undefined) return kept;
+  const byRun = new Map<string, AgentEntry[]>();
+  for (const entry of registered) {
+    const known = byRun.get(entry.runId);
+    if (known === undefined) byRun.set(entry.runId, [entry]);
+    else known.push(entry);
+  }
+  groupedRegistered.set(registered, byRun);
+  return byRun;
+};
+
 /**
  * The Task's agents herdr still has. One entry per live agent, however many Runs it
  * worked for: a card counts agents, not the work they took.
@@ -703,10 +718,11 @@ function agentsOf(
   registered: ReadonlyArray<AgentEntry>,
   live: ReadonlyMap<string, AgentInfo>,
 ): BoardAgent[] {
+  const byRun = registeredByRun(registered);
   const found = new Map<string, BoardAgent>();
   for (const run of runs) {
-    for (const entry of registered) {
-      const agent = entry.runId === run.id ? live.get(entry.agent) : undefined;
+    for (const entry of byRun.get(run.id) ?? []) {
+      const agent = live.get(entry.agent);
       if (agent === undefined || found.has(agent.name)) continue;
       found.set(agent.name, {
         name: agent.name,

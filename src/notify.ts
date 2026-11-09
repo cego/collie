@@ -23,7 +23,6 @@ export const NOTIFICATION_KINDS = [
   "needs-you",
   "run-done",
   "run-failed",
-  "output-unusable",
   "mr-opened",
   /**
    * Drift that Collie could not settle: the correction bound was spent, or nobody was
@@ -56,7 +55,6 @@ export const SOUND = {
   "needs-you": "request",
   "run-done": "done",
   "run-failed": "request",
-  "output-unusable": "request",
   "mr-opened": "done",
   "drift-unresolved": "request",
   "correction-sent": "request",
@@ -74,7 +72,6 @@ const HEADLINE = {
   "needs-you": () => "needs you",
   "run-done": () => "finished",
   "run-failed": () => "failed",
-  "output-unusable": () => "stopped on an unusable Output",
   "mr-opened": (mr?: string) => (mr ? `opened ${mr}` : "opened a merge request"),
   "drift-unresolved": (what?: string) =>
     what ? `drifted from ${what} and could not be corrected` : "has drift nobody has settled",

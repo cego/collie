@@ -47,6 +47,8 @@ before anything expensive, which is the only place where deciding it is free.
 something is an item that finished; the findings are carried and the summary is where they
 add up. An Output the contract refuses is the work not having been done — after the one
 repair `agentWork` allows — and the list stops there with the reason visible.
+It stops parked at that item, and a resume goes on from it
+([ADR-draft-a-fixable-failure-parks-its-step](draft-a-fixable-failure-parks-its-step.md) D2).
 
 **D8. A repository's share is settled by the parent, and its identity is the repository.**
 Fan-out is `readPlanRepos` for the waves and `child()` for the Runs: the parent settles
