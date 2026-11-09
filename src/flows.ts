@@ -132,6 +132,8 @@ export interface ControlSession extends BoardSession {
   runsOf?: RunsOf;
   /** Where the board's Tasks and registered agents come from: the host's, unless a test hands over its own. */
   recordsOf?: RecordsOf;
+  /** What the live region reads of the host's ledgers: the host's, unless a test hands over its own. */
+  ledgers?: Ledgers;
   /** Where the board's Tasks come from: one read of the host's board, unless followed. */
   tasksOf?: () => Effect.Effect<BoardRead>;
   /** Where the drawer's details come from: one read of the host's, unless followed; null closes it. */
@@ -952,7 +954,7 @@ export function appState(session: ControlSession, env: PluginEnv) {
         : yield* liveFor({
             stateDir: env.stateDir,
             socketPath: env.socketPath,
-            ledgers: ledgersOf(env),
+            ledgers: session.ledgers ?? ledgersOf(env),
             run: where === null ? null : { id: where.id, dir: where.dir },
             // From the scan this read already made, never a second read per Run: the
             // facts are the only thing the marks need that a row does not carry.
@@ -1407,7 +1409,7 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
     const live = yield* liveFor({
       stateDir: env.stateDir,
       socketPath: env.socketPath,
-      ledgers: ledgersOf(env),
+      ledgers: session.ledgers ?? ledgersOf(env),
       run: null,
       runs: yield* Effect.gen(function* () {
         const { runs, registered } = yield* scan(env, session);

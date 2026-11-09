@@ -88,6 +88,11 @@ function session(): ControlSession {
     pluginRoot: env.pluginRoot,
     runsOf: () => Effect.succeed(runs),
     recordsOf: () => Effect.succeed({ tasks: [], registered: [] }),
+    ledgers: {
+      overridden: Effect.succeed(new Set()),
+      deliveriesOf: () => Effect.succeed([]),
+      proposals: () => Effect.succeed([]),
+    },
     tasksOf: () => Effect.succeed({ tasks: [], unreadable: null }),
     detailOf: () => Effect.succeed(null),
   };
