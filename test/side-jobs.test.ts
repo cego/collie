@@ -89,7 +89,7 @@ test(
           );
           yield* stopHost(world.state);
           expect(Arr.map(recorded, (line) => [line.by, line.kind, line.ref])).toEqual([
-            ["gitlab", "merged", "mk/project!7"],
+            ["gitlab", "merged", "gitlab.example.com/mk/project!7"],
           ]);
         }),
       ["targeted.workflow.ts"],
@@ -439,7 +439,7 @@ test(
           expect(log).toContain(`ci: waiting on job nuxi-job for nuxi on ${head}`);
           expect(Arr.filter(recorded, (one) => one.pass === "ci")).toEqual([]);
           expect(Arr.map(merged, (line) => [line.kind, line.ref])).toEqual([
-            ["merged", "mk/project!7"],
+            ["merged", "gitlab.example.com/mk/project!7"],
           ]);
         }),
       ["waits-on-ci.workflow.ts"],
