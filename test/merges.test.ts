@@ -130,7 +130,7 @@ test("a merge GitLab reports lands the work: a disposition by gitlab, and the ca
 
       const recorded = yield* readDispositions(run.dir);
       expect(Arr.map(recorded, (line) => [line.by, line.kind, line.ref])).toEqual([
-        ["gitlab", "merged", "mk/collie!65"],
+        ["gitlab", "merged", `${GITLAB}!65`],
       ]);
       expect(yield* readMrStates(stateDir)).toEqual(new Map([[`${GITLAB}!65`, "merged"]]));
       // Nothing passed in: the CLI's board reads what the pane's watch wrote.
@@ -378,8 +378,8 @@ test("what is working is asked about, and what is already disposed of is not", (
       });
       // A merge while a Run is busy or parked still lands its Task.
       for (const [run, label] of [
-        ["r-working", "mk/collie!65"],
-        ["r-needs-you", "mk/collie!67"],
+        ["r-working", `${GITLAB}!65`],
+        ["r-needs-you", `${GITLAB}!67`],
       ] as const)
         expect(
           Arr.map(yield* readDispositions(runDir(stateDir, run)), (line) => [line.by, line.ref]),
@@ -396,6 +396,7 @@ const REPO = {
   gitlab: { project: "gitlab.cego.dk/mk/collie", origin: "git@gitlab.cego.dk:mk/collie.git" },
 } as const;
 const LABEL = { github: "cego/collie#115", gitlab: "mk/collie!115" } as const;
+const ID115 = { github: "github.com/cego/collie#115", gitlab: `${GITLAB}!115` } as const;
 const URL115 = {
   github: "https://github.com/cego/collie/pull/115",
   gitlab: "https://gitlab.cego.dk/mk/collie/-/merge_requests/115",
@@ -471,7 +472,7 @@ test("a merge request opened from a Task's branch by anyone is found, recorded a
         expect(recorded).toEqual(new Map([["r-implement", URL115[name]]]));
         expect(
           Arr.map(yield* readDispositions(run.dir), (line) => [line.by, line.kind, line.ref]),
-        ).toEqual([[name, "merged", LABEL[name]]]);
+        ).toEqual([[name, "merged", ID115[name]]]);
         const after = yield* card(TEN);
         expect(after.mr).not.toBeNull();
         expect(after.disposition).toBe(`merged ${LABEL[name]}`);
@@ -637,7 +638,7 @@ test("a merge stops what in its Task is still going: the parked builder and the 
           line.kind,
           line.ref,
         ]),
-      ).toEqual([["gitlab", "merged", "mk/collie!65"]]);
+      ).toEqual([["gitlab", "merged", `${GITLAB}!65`]]);
       expect(
         Arr.sort(
           stops,
@@ -1232,7 +1233,7 @@ test("a merged GitHub pull request lands its card, by github's word", () =>
       const { card, run } = yield* cardAfter(PR, github("merged", []));
       const recorded = yield* readDispositions(run.dir);
       expect(Arr.map(recorded, (line) => [line.by, line.kind, line.ref])).toEqual([
-        ["github", "merged", "cego/collie#30"],
+        ["github", "merged", "github.com/cego/collie#30"],
       ]);
       expect(sectionOf(card)).toBe("finished");
       expect(card.sentence).toBe("Merged as cego/collie#30.");
@@ -1472,7 +1473,7 @@ test("a fan-out's Repo run's merge request is watched: its facts recorded, its m
           line.kind,
           line.ref,
         ]),
-      ).toEqual([["gitlab", "merged", "mk/collie!65"]]);
+      ).toEqual([["gitlab", "merged", `${GITLAB}!65`]]);
       expect(yield* readDispositions(runDir(stateDir, "r-fan"))).toEqual([]);
       expect(yield* readMrStates(stateDir)).toEqual(
         new Map([

@@ -1033,7 +1033,7 @@ function wordsOf(id: string, said: string) {
 }
 
 const dispositionLine = (line: Disposition) =>
-  line.ref === "" ? line.kind : `${line.kind} ${line.ref}`;
+  line.ref === "" ? line.kind : `${line.kind} ${mrLabel(line.ref)}`;
 
 /** The branch a Run left to land: none where it recorded it had nothing to land. */
 const branchOwed = Effect.fn("Board.branchOwed")(function* (run: RunFacts) {

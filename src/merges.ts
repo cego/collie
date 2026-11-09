@@ -197,7 +197,7 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
             at: mergedAt ?? DateTime.formatIso(DateTime.makeUnsafe(opts.now)),
             by,
             kind: "merged",
-            ref: label,
+            ref: id,
             note: null,
           });
       }
