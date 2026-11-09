@@ -14,6 +14,7 @@ import {
   actionsFor,
   emptyStateOf,
   menuFor,
+  mrChoices,
   olderFinished,
   runRowId,
   viewRows,
@@ -172,8 +173,17 @@ export function App(props: AppProps) {
     queueMicrotask(() => setMenuOn(null));
   };
   const act = (command: Command) => {
+    const at = menuOn()?.at;
     closeMenu();
     setToast(null);
+    if (command._tag === "ChooseMr")
+      return queueMicrotask(() =>
+        setMenuOn({ items: mrChoices(command), at: at ?? { x: MENU_GAP, y: 1 } }),
+      );
+    if (command._tag === "CopyLink") {
+      renderer.copyToClipboardOSC52(command.url);
+      return setToast(`copied ${command.url}`);
+    }
     if (command._tag === "EditSetting")
       return setEditing({ key: command.key, typed: "", multiline: command.multiline });
     if (command._tag === "OpenRecord") return setOpenId(command.id);

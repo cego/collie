@@ -863,7 +863,8 @@ closes it, as does Esc, and the key beside each item does it from the keyboard:
 | `g`     | Go to its tab      | always                                                   |
 | `s`     | Steer…             | while something is still driving it                      |
 | `a`     | Attach files…      | while something is still driving it                      |
-| `w`     | Open merge request | when there is one; one per merge request, by name        |
+| `w`     | Open merge request | when there is one; with several, asks which, keyed 1–9   |
+| `c`     | Copy its link…     | with several merge requests: asks which, keyed 1–9       |
 | `i`     | its first offer    | a plan that is ready, by its title                       |
 | `o`     | What it offers…    | always: the workflow's own offers, each MR's own too     |
 | `u`     | Resume run         | failed or stopped                                        |

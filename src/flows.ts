@@ -1316,6 +1316,8 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
 
     case "EditSetting":
     case "NextQuestion":
+    case "ChooseMr":
+    case "CopyLink":
     case "OpenRecord":
     case "OpenSteer":
     case "ShowView":
