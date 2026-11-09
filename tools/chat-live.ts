@@ -48,15 +48,14 @@ import { Herdr } from "../src/herdr";
 import { ownerOf } from "../src/host";
 import { BOARD_TERMINAL } from "../src/side-jobs";
 import { readIntent } from "../src/intent";
-import { confirmProposed, startRun } from "../src/lifecycle";
+import { confirmProposed, hostRunProposals, startRun } from "../src/lifecycle";
 import {
   append as appendNews,
   newsPath,
   pending as pendingNews,
   read as readNews,
 } from "../src/news";
-import { pendingFor, read as readProposals } from "../src/proposals";
-import { recordsReadLayer } from "../src/records";
+import { pendingFor } from "../src/proposals";
 import { machineHerd } from "../src/steering";
 
 const runtime = ManagedRuntime.make(platformLayer);
@@ -269,11 +268,8 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
     `Use your collie_propose tool to add the constraint "stay in src" to the Intent of Run ${mine.id}, against base_version 1, with request_id "probe-intent". Then call collie_run for that Run and reply with one line: APPLIED followed by a space and the Intent version it reports.`,
   );
   const applied = yield* answers(socket, "APPLIED 2");
-  // The key the *tools* use, which is this socket's — not the probe's own Herd identity.
-  // Both are inside the disposable state directory; reading the wrong one would say
-  // nothing was requested.
   const now = yield* Clock.currentTimeMillis;
-  const records = yield* readProposals(key).pipe(Effect.provide(recordsReadLayer(stateDir)));
+  const records = yield* hostRunProposals(env, mine.id).pipe(Effect.orElseSucceed(() => []));
   const one = Option.getOrUndefined(
     Arr.findFirst(
       Arr.filter(records, (line) => line.kind === "proposal"),
