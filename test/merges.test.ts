@@ -718,6 +718,24 @@ test("a merge's stop ends the Run's agents through the one end, and its log name
     }),
   ));
 
+test("a merge of the one merge request recorded so far leaves a sibling Change run without one running, and the plan waiting on it", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const { stops, round } = yield* merging([
+        {
+          id: "r-plan.implement--schema",
+          workflow: "implement",
+          parent: "r-plan",
+          change: "schema",
+          state: "running",
+          branch: `${BRANCH}--schema`,
+        },
+      ]);
+      yield* round(TEN);
+      expect(Arr.map(stops, ([run]) => run)).toEqual(["r-plan.implement"]);
+    }),
+  ));
+
 test("a Run of the Task started after the merge is not stopped by it", () =>
   runWithForge(
     Effect.gen(function* () {
@@ -726,6 +744,7 @@ test("a Run of the Task started after the merge is not stopped by it", () =>
           id: "r-follow-up",
           workflow: "implement",
           state: "running",
+          branch: BRANCH,
           created: "2026-10-15T09:30:00Z",
         },
       ]);
@@ -739,8 +758,20 @@ test("where the forge gives no merge time, the time the watch first read it merg
     Effect.gen(function* () {
       const { stops, round } = yield* merging(
         [
-          { id: "r-before", workflow: "review", state: "running", created: "2026-10-15T09:59:00Z" },
-          { id: "r-after", workflow: "review", state: "running", created: "2026-10-15T10:01:00Z" },
+          {
+            id: "r-before",
+            workflow: "review",
+            state: "running",
+            created: "2026-10-15T09:59:00Z",
+            ...ON_65,
+          },
+          {
+            id: "r-after",
+            workflow: "review",
+            state: "running",
+            created: "2026-10-15T10:01:00Z",
+            ...ON_65,
+          },
         ],
         null,
       );
@@ -759,7 +790,12 @@ test("a Run that follows the merge is not stopped when it leads the Task, howeve
       const { stops, round, stopped, join } = yield* merging([], null);
       yield* round(TEN);
       stopped();
-      yield* join({ id: "r-follow-up", workflow: "implement", created: "2026-10-15T10:01:00Z" });
+      yield* join({
+        id: "r-follow-up",
+        workflow: "implement",
+        branch: BRANCH,
+        created: "2026-10-15T10:01:00Z",
+      });
       yield* round(TEN + MERGE_POLL_MS);
       expect(Arr.map(stops, ([run]) => run).sort()).toEqual(["r-plan", "r-plan.implement"]);
     }),
@@ -773,6 +809,7 @@ test("the forge's merge time is the cutoff, not when a merge was recorded by han
           id: "r-follow-up",
           workflow: "implement",
           state: "running",
+          branch: BRANCH,
           created: "2026-10-15T09:30:00Z",
         },
       ]);
@@ -874,6 +911,13 @@ test("a stop that did not take is asked again next round, before the forge is du
 
 const LANDED_HEAD = "head-1";
 /** A Release Run under the parked builder, and a sibling review of the same Task. */
+/** Given the merged merge request as its target. */
+const ON_65 = {
+  settled: {
+    inputs: { target: `mr:${GITLAB}!65` },
+    strategies: { target: "diff-target" as const },
+  },
+};
 const RELEASE: ReadonlyArray<Partial<RunFacts>> = [
   {
     id: "r-release",
@@ -881,8 +925,15 @@ const RELEASE: ReadonlyArray<Partial<RunFacts>> = [
     parent: "r-plan.implement",
     state: "running",
     created: "2026-10-15T08:20:00Z",
+    ...ON_65,
   },
-  { id: "r-review", workflow: "review", state: "running", created: "2026-10-15T08:30:00Z" },
+  {
+    id: "r-review",
+    workflow: "review",
+    state: "running",
+    created: "2026-10-15T08:30:00Z",
+    ...ON_65,
+  },
 ];
 const attempt = (over: Partial<Landing> = {}): Landing => ({
   state: "attempt",

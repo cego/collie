@@ -213,7 +213,10 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
         ? epochMs(read.mergedAt)
         : yield* firstMerged(dirs, id);
     if (merged === null) continue;
-    const working = Arr.union(runs, yield* workingOn(id, owner, forge.get(id)?.source, opts));
+    const working = withWaitingParents(
+      yield* workingOn(id, owner, forge.get(id)?.source, opts),
+      opts.runs,
+    );
     const going = Arr.filter(
       opts.runs,
       (run) =>
@@ -254,6 +257,28 @@ const workingOn = Effect.fn("Merges.workingOn")(function* <R>(
   }
   return ids;
 });
+
+/** `ids`, and each Run all of whose going children are among them. */
+function withWaitingParents(ids: ReadonlyArray<string>, runs: ReadonlyArray<RunFacts>) {
+  const working = new Set(ids);
+  const going = (run: RunFacts) => run.state === "running" || run.state === "waiting";
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const run of runs) {
+      if (working.has(run.id)) continue;
+      const children = Arr.filter(runs, (child) => child.parent === run.id);
+      if (
+        Arr.some(children, (child) => working.has(child.id)) &&
+        Arr.every(children, (child) => working.has(child.id) || !going(child))
+      ) {
+        working.add(run.id);
+        grew = true;
+      }
+    }
+  }
+  return [...working];
+}
 
 /**
  * The Runs a merge of `mr` leaves running: each whose landing of it is landed, being made
