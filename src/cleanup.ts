@@ -602,12 +602,8 @@ export const stateSweeper = (stateDir: string, rows: ReadonlySet<string>): Sweep
         const inside = yield* fs
           .readDirectory(target)
           .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-        if (inside.includes(LEDGER_FILE)) {
-          const runs = yield* readJournal(`${target}/${LEDGER_FILE}`, LedgerRuns);
-          return Arr.some(runs, (line) => owned(line.run))
-            ? null
-            : yield* quiet(target, "a ledger of Runs none of which has a row");
-        }
+        // Imported into host.db, and left for a later release to delete (D5).
+        if (inside.includes(LEDGER_FILE)) return null;
       }
       return owned(name) ? null : yield* quiet(target, rowless);
     });
@@ -676,8 +672,6 @@ export const uploadsSweeper = (stateDir: string): Sweeper => {
     remove: (item) => removeIf(item.target, verdict(item.target)),
   };
 };
-
-const LedgerRuns = Schema.fromJsonString(Schema.Struct({ run: Schema.String }));
 
 /** Removes `target` where `verdict`, asked now, still says it goes. */
 const removeIf = (
@@ -1686,25 +1680,6 @@ export const retentionSweeper = (opts: {
       return { remove: `its last Run ended ${days} days ago`, ids };
     });
 
-  /** The steering ledgers whose every line is about one of `gone`. */
-  const ledgersOf = (gone: ReadonlySet<string>) =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const root = `${opts.stateDir}/agents`;
-      const names = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []));
-      const found: string[] = [];
-      for (const name of names) {
-        const inside = yield* fs
-          .readDirectory(`${root}/${name}`)
-          .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-        if (!inside.includes(LEDGER_FILE)) continue;
-        const lines = yield* readJournal(`${root}/${name}/${LEDGER_FILE}`, LedgerRuns);
-        if (lines.length > 0 && Arr.every(lines, (line) => gone.has(line.run)))
-          found.push(`${root}/${name}`);
-      }
-      return found;
-    });
-
   return {
     kind,
     judge: Effect.gen(function* () {
@@ -1760,11 +1735,10 @@ export const retentionSweeper = (opts: {
             // Rows first: a file left behind without its row is the no-row rule's next sweep.
             const gone = yield* opts.retire(judged.ids);
             yield* forgetDeliveries(gone);
-            const goneSet = new Set(gone);
             const markers = Arr.flatMap(gone, (id) =>
               Arr.map(MARKER_KINDS, (one) => `${opts.stateDir}/${one}.${id}`),
             );
-            for (const path of [...filesOf(gone), ...markers, ...(yield* ledgersOf(goneSet))])
+            for (const path of [...filesOf(gone), ...markers])
               yield* fs
                 .remove(path, {
                   recursive: true,
