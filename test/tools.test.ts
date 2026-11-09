@@ -65,6 +65,7 @@ import { save, type World } from "./support/world";
 import { Herdr } from "../src/herdr";
 import { until } from "./support/host";
 import { exec } from "./support/command";
+import { runEffect } from "./support/effect";
 import { connect, frontDoor, socketOf } from "../src/host";
 import { runDir, type RunView } from "../src/engine";
 import { isSettled } from "../src/lifecycle";
@@ -219,6 +220,22 @@ test("the Tasks a Run can be started into are something chat can read", () =>
       expect(said).toContain(task.id);
       expect(said).toContain("picker");
     }),
+  ));
+
+test("with no host to ask, chat is told the Tasks are unknown, not that there are none", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const alone = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({
+        prefix: "hw-tools-no-host-",
+      });
+      const tool = toolNamed("collie_workspaces")!;
+      const said = yield* tool.call(
+        readEnv({ ...process.env, HERDR_PLUGIN_STATE_DIR: alone, PATH: "" }),
+        {},
+      );
+      expect(said).toContain("the Tasks are unknown");
+      expect(said).not.toContain("no Tasks with an open workspace");
+    }).pipe(Effect.scoped),
   ));
 
 test("a Herd too big for one answer says how much it left out", () =>
