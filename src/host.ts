@@ -3595,6 +3595,11 @@ const frontDoorHandlers = (
                       Effect.catch((cause) => Effect.succeed(refusal(cause).error.message)),
                     ),
                   progress: (id) => progressFor(id).pipe(Effect.provideContext(bun)),
+                  launches: (id) =>
+                    readLaunches(id).pipe(
+                      Effect.orElseSucceed(() => []),
+                      Effect.provideContext(bun),
+                    ),
                   flow: (id) =>
                     record !== undefined
                       ? recordFlow(record, id).pipe(
