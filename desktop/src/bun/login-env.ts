@@ -76,6 +76,65 @@ export const readLoginEnv = (shell: string, limit: Duration.Input = LIMIT) =>
     ),
   );
 
+/** What an SSH agent socket has: keys, none, no agent answering, or nothing could ask it. */
+export type AgentState = "holds" | "empty" | "gone" | "unknown";
+
+/** How long `ssh-add -l` gets to answer for one agent. */
+const AGENT_LIMIT = "2 seconds";
+
+/** What the agent at `socket` has, as `ssh-add -l` says by its exit: 0 keys, 1 none, 2 no agent. */
+export const agentState = (
+  socket: string,
+  sshAdd = "ssh-add",
+  limit: Duration.Input = AGENT_LIMIT,
+) =>
+  Effect.gen(function* () {
+    const child = yield* Effect.try(() =>
+      Bun.spawn([sshAdd, "-l"], {
+        cwd: CHILD_CWD,
+        env: { ...childEnv(), SSH_AUTH_SOCK: socket },
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+      }),
+    );
+    const code = yield* Effect.promise(() => child.exited).pipe(
+      Effect.timeoutOption(limit),
+      Effect.ensuring(Effect.sync(() => child.kill())),
+    );
+    if (Option.isNone(code)) return "unknown" as const;
+    return code.value === 0
+      ? "holds"
+      : code.value === 1
+        ? "empty"
+        : code.value === 2
+          ? "gone"
+          : "unknown";
+  }).pipe(Effect.orElseSucceed((): AgentState => "unknown"));
+
+/**
+ * Whether the login shell's SSH agent replaces the one Desktop was started with. An rc file
+ * may start an agent of its own, such as keychain's, that holds a key only once a terminal has
+ * asked for its passphrase; Desktop's SSH has no terminal to ask in, so the agent that holds
+ * keys wins, the login shell's first, and where neither does, one that answers.
+ */
+export const takesLoginAgent = Effect.fn("Desktop.takesLoginAgent")(function* (
+  session: string | undefined,
+  login: string | undefined,
+  stateOf: (socket: string) => Effect.Effect<AgentState>,
+) {
+  if (login === undefined || session === undefined || login === session) return true;
+  const theirs = yield* stateOf(login);
+  if (theirs === "holds") return true;
+  const ours = yield* stateOf(session);
+  if (ours === "holds") return false;
+  if (theirs === "empty") return true;
+  return ours !== "empty";
+});
+
+/** The variables that name an SSH agent, which are taken or kept together. */
+const AGENT_VARIABLES = ["SSH_AUTH_SOCK", "SSH_AGENT_PID"];
+
 /** Merges the interactive login environment into Desktop's; true where it was taken. */
 export const takeLoginEnv = Effect.gen(function* () {
   const shell = yield* Config.String("SHELL").pipe(
@@ -87,7 +146,15 @@ export const takeLoginEnv = Effect.gen(function* () {
     return false;
   }
   const env = desktopEnv();
-  for (const [name, value] of taken) env[name] = value;
+  const session = env.SSH_AUTH_SOCK;
+  const login = taken.get("SSH_AUTH_SOCK");
+  const keepsAgent = !(yield* takesLoginAgent(session, login, (socket) => agentState(socket)));
+  if (keepsAgent)
+    yield* Effect.logInfo(
+      `Keeping the SSH agent at ${session}: the login shell's at ${login} holds no keys`,
+    );
+  for (const [name, value] of taken)
+    if (!(keepsAgent && AGENT_VARIABLES.includes(name))) env[name] = value;
   return true;
 }).pipe(Effect.orElseSucceed(() => false));
 

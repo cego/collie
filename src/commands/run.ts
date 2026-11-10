@@ -1073,7 +1073,7 @@ const runAnswer = Command.make(
   {
     runId: runIdArg,
     answer: Argument.String("answer").pipe(
-      Argument.withDescription("The Choice to take, as `run show` titles it"),
+      Argument.withDescription("The Choice to take, by the id or the title `run show` lists"),
     ),
     decision: Flag.String("decision").pipe(
       Flag.withDescription(

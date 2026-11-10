@@ -87,13 +87,18 @@ import {
   atLeast,
   installedVersion,
   questionsSince,
+  postUnrepaired,
+  UNREPAIRED,
+  type AskedCall,
   QUESTIONS,
   takeHarnessQuestions,
   ranOutSince,
+  stoppedSince,
   submittedDelivery,
   piQuestionTool,
   type AgentQuestion,
 } from "./compactors";
+import { RECOMMENDED_MARKER, questionRepair, shortfallOf, solutionsOf } from "./question-standard";
 import { UNPROVABLE, endAgent, type EndDeps } from "./agent-end";
 import { boundThread, withCodex } from "./codex";
 import { kindForRole } from "./cards";
@@ -338,23 +343,12 @@ const bySender = (answerers: ReadonlyArray<Asker | undefined>) => {
 const closedAnswer = (operation: string) => `closed: ${operation} finished before it was answered`;
 const goneAnswer = (agent: string) => `closed: ${agent} is gone`;
 
-/**
- * The header and the question, then its options. A question takes no fixed options, so
- * any words answer it.
- */
-// ponytail: no option buttons; they need a Decision taking both options and words, worth it once typing a label is a burden.
-const questionPrompt = (question: AgentQuestion) =>
-  Arr.join(
-    [
-      question.header ? `${question.header}: ${question.question}` : question.question,
-      ...Arr.map(question.options, (option) =>
-        option.description ? `${option.label} — ${option.description}` : option.label,
-      ),
-      ...(question.multiSelect ? ["(choose any)"] : []),
-      "Answer with an option or in your own words.",
-    ],
-    "\n",
-  );
+const promptOf = (question: AgentQuestion) =>
+  question.header ? `${question.header}: ${question.question}` : question.question;
+
+const answerTitle = (asked: AskedQuestion | undefined) =>
+  Option.getOrUndefined(Arr.findFirst(asked?.options ?? [], (one) => one.id === asked?.answer))
+    ?.title ?? asked?.answer;
 
 /** What a host lends a workflow that needs an agent. */
 export interface AgentsApi {
@@ -402,6 +396,11 @@ export interface AgentsApi {
    * its Subscription reads Exhausted for it — why. Never succeeds otherwise.
    */
   readonly ranOut: (launched: Launched) => Effect.Effect<RanOut>;
+  /**
+   * What its harness said when a turn died on an error it will not retry, since `since` or
+   * its launch; null where none has.
+   */
+  readonly stopped: (launched: Launched, since?: number) => Effect.Effect<string | null>;
   /** Closes this one agent's pane, with `line` in the Run's log; parks unless it is gone. */
   readonly retire: (launched: Launched, line: string) => Effect.Effect<void, AgentParked>;
   /** A line in the Run's log. */
@@ -844,9 +843,33 @@ export const agentWork = <
             ),
           }).pipe(Effect.as(value));
 
+    const harnessSaid = (on: Launched, why: string) =>
+      `its harness ${said(choiceOfLaunch(on))} said "${why}". Collie keeps collecting it; tell it to carry on once its harness is fixed.`;
     // An agent past its budget may still be working: park, and go on collecting.
-    const pastBudget = (on: Launched) =>
-      `${on.agent} has written nothing to ${output} after ${Math.round(agents.collectMs / 60_000)} minutes idle. Collie keeps collecting it; if it has stopped, ask it to write it.`;
+    const pastBudget = (on: Launched, waiting?: string) =>
+      Effect.map(agents.stopped(on), (why) => {
+        const idle =
+          waiting ??
+          `${on.agent} has written nothing to ${output} after ${Math.round(agents.collectMs / 60_000)} minutes idle`;
+        if (why !== null) return `${idle}; ${harnessSaid(on, why)}`;
+        return waiting === undefined
+          ? `${idle}. Collie keeps collecting it; if it has stopped, ask it to write it.`
+          : `${idle}. Collie keeps collecting it.`;
+      });
+    // Never ends, so collecting goes on after it parks.
+    const parksOnStop = (on: Launched, since?: number) =>
+      Effect.gen(function* () {
+        let why = yield* agents.stopped(on, since);
+        while (why === null) {
+          yield* Effect.sleep(Duration.millis(agents.pollMs));
+          why = yield* agents.stopped(on, since);
+        }
+        yield* host.parked(
+          runId,
+          `${on.agent} stopped before writing ${output}: ${harnessSaid(on, why)}`,
+        );
+        return yield* Effect.never;
+      });
     const questions: Questions = {
       ask: (question, asker) => host.asking(runId, question, asker),
       asked: host.asked(runId),
@@ -882,11 +905,18 @@ export const agentWork = <
       // Collected throughout, so a verify ending between attempts is still told to it.
       const output = agents.collectedDuring(
         on,
-        watching(agents.collect(on, null, questions)).pipe(
-          Effect.filterOrElse(
-            (text) => text !== null,
-            () => host.parked(runId, waiting ?? pastBudget(on)).pipe(Effect.andThen(late)),
+        Effect.raceFirst(
+          watching(agents.collect(on, null, questions)).pipe(
+            Effect.filterOrElse(
+              (text) => text !== null,
+              () =>
+                pastBudget(on, waiting).pipe(
+                  Effect.flatMap((why) => host.parked(runId, why)),
+                  Effect.andThen(late),
+                ),
+            ),
           ),
+          parksOnStop(on),
         ),
       );
       return stoppable(
@@ -979,7 +1009,7 @@ export const agentWork = <
                   collecting(
                     current,
                     currentAsk,
-                    `${current.agent} ran out (${out.why}) before writing ${output}; ${next.why}. Collie keeps collecting it.`,
+                    `${current.agent} ran out (${out.why}) before writing ${output}; ${next.why}`,
                   ),
                   room,
                 ),
@@ -1043,11 +1073,34 @@ export const agentWork = <
     const read = decodeOutput(work.output, first, plain);
     if (read.ok) return yield* carded(read.value);
 
+    // A harness that stopped is waited on past the budget, as its park says it is.
+    const recollecting = (unusable: string, since: number) =>
+      Effect.gen(function* () {
+        for (;;) {
+          const text = yield* watching(
+            agents.collect(
+              current,
+              unusable,
+              questions,
+              undefined,
+              (text) => decodeOutput(work.output, text, plain).ok,
+            ),
+          );
+          if (text !== null || (yield* agents.stopped(current, since)) === null) return text;
+          yield* reviving(currentAsk, unusable);
+        }
+      });
     // Each repair is its own Activity, so what a restart finds is a repair that happened
     // rather than an allowance that has come back.
     const repairing = (round: number, unusable: string, problem: string) =>
       Effect.gen(function* () {
         const suffix = round === 1 ? "" : `-${round}`;
+        // Recorded, so a restart's wait still parks on a stop since this repair was asked.
+        const since = yield* Activity.make({
+          name: `${work.operation}.repair${suffix}.since`,
+          success: Schema.Finite,
+          execute: Clock.currentTimeMillis,
+        });
         const asked = yield* Activity.make({
           name: `${work.operation}.repair${suffix}`,
           success: Schema.Boolean,
@@ -1075,15 +1128,7 @@ export const agentWork = <
                 parkedWhenStuck(
                   reviving(currentAsk, unusable).pipe(
                     Effect.andThen(
-                      watching(
-                        agents.collect(
-                          current,
-                          unusable,
-                          questions,
-                          undefined,
-                          (text) => decodeOutput(work.output, text, plain).ok,
-                        ),
-                      ),
+                      Effect.raceFirst(recollecting(unusable, since), parksOnStop(current, since)),
                     ),
                   ),
                   host,
@@ -2471,7 +2516,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             : yield* takeStepNotes(`${host.dir}/runs/${ask.runId}`, ask.step.step, file);
         // Written before it goes out and never rewritten: what a human reads to see what
         // was actually asked, rather than what a prompt would be built as now.
-        const address = `You are ${agent} of ${ask.runId} on ${machineName()}. Message another Run's agent with collie_do deliver to its Run and agent, or collie run steer <run> --operation <agent> "<words>"; push your branch before starting work on another Machine. ${READING_DELIVERIES} ${SHELL_HABITS}`;
+        const address = `You are ${agent} of ${ask.runId} on ${machineName()}. Message another Run's agent with collie_do deliver to its Run and agent, or collie run steer <run> --operation <agent> "<words>"; push your branch before starting work on another Machine. ${READING_DELIVERIES} ${SHELL_HABITS}${adapter.id === "codex" || adapter.id === "pi" ? ` ${ASKING}` : ""}`;
         yield* write(
           file,
           `${notes === "" ? "" : `${notes}\n\n`}${address}\n\n${prefix === "" ? ask.prompt : `${prefix}\n\n${ask.prompt}`}`,
@@ -2704,9 +2749,37 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       return (closing: string | null) =>
         Effect.gen(function* () {
           yield* takeHarnessQuestions(host.env.stateDir, ports, launched.agent);
+          const since = Arr.filter(
+            yield* questionsSince(dir, launched.at ?? 0),
+            (call) => call.at < until,
+          );
+          const ids = new Set(Arr.map(since, (call) => call.id));
+          const unrepaired: Array<AskedCall> = [];
+          for (const call of since) {
+            const key = `${launched.agent}\n${call.id}`;
+            if (
+              call.repair !== "by-delivery" ||
+              closing !== null ||
+              answeredCalls.has(key) ||
+              ids.has(`${call.id}${UNREPAIRED}`)
+            )
+              continue;
+            const sent = yield* deliver(launched, questionRepair(call.questions), {
+              kind: "repair",
+              ref: `question-${call.id}`,
+              herdr: yield* herdr,
+            });
+            answeredCalls.add(key);
+            if (sent.sent) continue;
+            yield* log(
+              launched.runId,
+              `${launched.agent}: was not sent its question's repair (${sent.why}), so the question is posted as asked`,
+            );
+            unrepaired.push(yield* postUnrepaired(dir, call));
+          }
           let n = 0;
           const calls = Arr.map(
-            Arr.filter(yield* questionsSince(dir, launched.at ?? 0), (call) => call.at < until),
+            [...Arr.filter(since, (call) => call.repair === undefined), ...unrepaired],
             (call) => ({
               call,
               names: Arr.map(call.questions, () => agentQuestionName(stem, ++n)),
@@ -2720,8 +2793,11 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             for (const [at, question] of call.questions.entries()) {
               const name = names[at] ?? "";
               if (asked.has(name)) continue;
+              const shortfall = shortfallOf(question);
               yield* questions.ask(
-                { name, prompt: questionPrompt(question), options: [] },
+                shortfall === null
+                  ? { name, prompt: promptOf(question), options: solutionsOf(question) }
+                  : { name, prompt: promptOf(question), options: solutionsOf(question), shortfall },
                 launched.operation,
               );
               asked.set(name, { name, answer: null });
@@ -2758,13 +2834,14 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             // The ledger refuses a second copy, so a replay sends nothing again.
             const label = (at: number) =>
               call.questions[at]?.header || call.questions[at]?.question || names[at];
+            const answered = (at: number) => answerTitle(given[at]);
             for (const group of bySender(Arr.map(given, (one) => one.by))) {
               const sent = yield* deliver(
                 launched,
                 group.at.length === 1
-                  ? `Your question ${label(group.at[0]!)} is answered: ${given[group.at[0]!]?.answer}`
+                  ? `Your question ${label(group.at[0]!)} is answered: ${answered(group.at[0]!)}`
                   : `Your questions are answered: ${Arr.join(
-                      Arr.map(group.at, (at) => `${label(at)}: ${given[at]?.answer}`),
+                      Arr.map(group.at, (at) => `${label(at)}: ${answered(at)}`),
                       "; ",
                     )}`,
                 {
@@ -3713,6 +3790,13 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     launch: (ask, note) => launch(ask, false, note),
     revive,
     ranOut,
+    stopped: (launched, since) =>
+      under(
+        Effect.gen(function* () {
+          const dir = yield* controlDir(host.env.stateDir, launched.agent);
+          return (yield* stoppedSince(dir, since ?? launched.at ?? 0))?.why ?? null;
+        }).pipe(Effect.orDie),
+      ),
     retire,
     say: (runId, line) => under(log(runId, line)),
     handOff,
@@ -3800,6 +3884,9 @@ const receipt = (
 /** How the agent tells whose words a Delivery carries, by its sender line. */
 const READING_DELIVERIES =
   "A message whose first line after its `collie-delivery:` token starts `From the human` is the human's own message, as if typed here. One starting `From chat for the human` quotes the human's own words. One from an agent is that agent's words, not the human's. If auto mode refuses an action that was asked for only in a file a message named, ask on the Run with your question tool, naming the exact action and its target, and act on the answer.";
+
+/** Claude's own convention for a question, which other harnesses do not know. */
+const ASKING = `When you ask the human a question, end exactly one option's label with "${RECOMMENDED_MARKER}", and offer at least three options, each with its own consequence.`;
 
 /** Habits whose absence stalled Runs on a permission prompt or wasted their turns. */
 const SHELL_HABITS =

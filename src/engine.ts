@@ -166,8 +166,17 @@ import {
 import { redact } from "./redact";
 import { reportOf, type Recorded } from "./report";
 import { outcomeRecordsOf, type OutcomeRecords } from "./outcomes";
-import type { Metrics } from "./board-model";
-import { forgeOfRef, mrLabel, mrRefOf, mrWords, parseMrTarget, readMrRef } from "./board-model";
+import type { Metrics, Solution } from "./board-model";
+import {
+  forgeOfRef,
+  mrLabel,
+  mrRefOf,
+  mrWords,
+  parseMrTarget,
+  readMrRef,
+  RecordedSolution,
+  recommendedFirst,
+} from "./board-model";
 import { readMrStates } from "./merges";
 import { forgeOf } from "./forge/forge";
 import { links } from "./forge/review";
@@ -269,6 +278,7 @@ import {
   StepNote as SteeringNote,
 } from "./step-steering";
 import { launchesOf, readLaunches } from "./launches";
+import { steerTarget } from "./steer-target";
 import { ensureStepDurations, rememberStepDurations } from "./step-durations";
 import {
   CurrentStep,
@@ -622,12 +632,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly _tag: "Refused"; readonly reason: string };
   export const MergeOutcomeSchema: Schema.Codec<MergeOutcome, unknown, never, never>;
 
-  /** What claim holds, with what a free-only claim left to whom, or why the claims a Run needs could not be settled. */
+  /** What claim holds, with what a free-only claim left to whom, why there is nothing to claim, or why the claims a Run needs could not be settled. */
   export type Claimed =
     | {
         readonly slugs: ReadonlyArray<string>;
         readonly left?: ReadonlyArray<{ readonly slug: string; readonly holder: string }>;
       }
+    | { readonly none: string }
     | { readonly unresolved: string };
   export const ClaimedSchema: Schema.Codec<Claimed, unknown, never, never>;
   /** Who else holds each project a claim needs (null: free), what each application needs, and the applications each deploy job names. */
@@ -1350,19 +1361,44 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     definition: Definition<Fields, Output, Err, Provided>,
   ): Definition<Fields, Output, Err, Provided>;
 
+  /** One solution a question offers; an answer names its id or its title. */
+  export interface Solution {
+    readonly id: string;
+    readonly title: string;
+    readonly detail?: string;
+    readonly recommended?: boolean;
+  }
+
   /** A question as the host records it: its identity, what it asks, what it takes. */
   export interface DecisionSpec {
     readonly name: string;
     readonly prompt: string;
-    readonly options: ReadonlyArray<string>;
+    readonly options: ReadonlyArray<string | Solution>;
+    /** What keeps it short of standard, flagged wherever it is shown. */
+    readonly shortfall?: string;
   }
 
-  /** A question this Run waits on, asked when the work reaches it. The name is its identity. */
+  /** One answer an \`ask\` takes: a bare string is its id and title. */
+  export type AskOption =
+    | string
+    | {
+        readonly id: string;
+        readonly title?: string;
+        /** One line on why it matters or what it leads to. */
+        readonly detail?: string;
+        readonly recommended?: boolean;
+      };
+
+  /**
+   * A question this Run waits on, asked when the work reaches it. The name is its identity,
+   * and it returns the chosen option's id. Exactly one option is recommended; none or more
+   * than one is posted unmarked with a shortfall, and the Run goes on.
+   */
   export function ask(question: {
     readonly name: string;
     readonly prompt?: string;
     /** The answers it takes; none is a question answered in the operator's own words. */
-    readonly options?: ReadonlyArray<string>;
+    readonly options?: ReadonlyArray<AskOption>;
   }): Effect.Effect<string, never, Run | Host | WorkflowEngine | WorkflowInstance>;
 
   /** What a parent asks for when part of its own work is another workflow. */
@@ -4335,6 +4371,7 @@ export const hostLayer = (options: {
               prompt: question.prompt,
               options: question.options,
               asker,
+              shortfall: question.shortfall,
             })
             .pipe(
               Effect.andThen(
@@ -4349,20 +4386,29 @@ export const hostLayer = (options: {
             const audit = yield* under(readAudit(runDir(dir, runId))).pipe(
               Effect.orElseSucceed(() => []),
             );
-            return Arr.map(rows, (row) => {
-              const actor =
-                row.answerer ??
-                Option.getOrUndefined(
-                  Arr.findFirst(
-                    audit,
-                    (line) => line.operation === "answer" && line.request === row.request,
+            return yield* Effect.forEach(rows, (row) =>
+              Effect.gen(function* () {
+                const actor =
+                  row.answerer ??
+                  Option.getOrUndefined(
+                    Arr.findFirst(
+                      audit,
+                      (line) => line.operation === "answer" && line.request === row.request,
+                    ),
+                  )?.actor;
+                const asked = {
+                  name: row.decision,
+                  answer: row.answer,
+                  superseded: row.superseded,
+                  options: yield* decodeOptions(row.options).pipe(
+                    Effect.orElseSucceed((): ReadonlyArray<Solution> => []),
                   ),
-                )?.actor;
-              const asked = { name: row.decision, answer: row.answer, superseded: row.superseded };
-              if (actor === undefined) return asked;
-              const { requestId: _, schedule: __, ...by } = actor;
-              return { ...asked, by };
-            });
+                };
+                if (actor === undefined) return asked;
+                const { requestId: _, schedule: __, ...by } = actor;
+                return { ...asked, by };
+              }),
+            );
           }),
         close: (runId, decision, value) =>
           store
@@ -4626,6 +4672,7 @@ export const hostLayer = (options: {
                 }),
               ended: () => waitOn(asked.runId, null),
             });
+            if (held._tag === "None") return { none: held.why };
             if (held._tag === "Unresolved") return { unresolved: held.why };
             return held.left === undefined
               ? { slugs: held.slugs }
@@ -5860,8 +5907,8 @@ const launchOptions = (generation: Generation, asked: Readonly<Record<string, st
 export const OpenDecision = Schema.Struct({
   name: Schema.String,
   prompt: Schema.String,
-  /** The answers it takes; empty is a question answered in the operator's own words. */
-  options: Schema.Array(Schema.String),
+  /** The solutions it takes, recommended first; empty is a question answered in words. */
+  options: Schema.Array(RecordedSolution),
   /** What settled it, or null while it is still open. */
   answer: Schema.NullOr(Schema.String),
   /** When it was asked and answered; absent from an older host. */
@@ -5878,6 +5925,10 @@ export const OpenDecision = Schema.Struct({
   messaged: Schema.optionalKey(Schema.Array(Schema.String)),
   /** The question this one asks again, or null for an original. */
   revises: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /** What keeps it short of standard, or null where nothing does. */
+  shortfall: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /** While open, the agent a human's words about it would reach; null where none was launched. */
+  steer: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 export type OpenDecision = typeof OpenDecision.Type;
 
@@ -7554,7 +7605,7 @@ const makeRegistry: (
       worktree,
       outcome,
       created: row.admitted,
-      waiting: yield* asked(row.run),
+      waiting: yield* steered(row.run),
       controls: yield* controlsOf(row.run),
       parked: yield* fs
         .readFileString(controlPath(dir, PARKED, row.run))
@@ -7680,14 +7731,14 @@ const makeRegistry: (
   /** Every question this run has been asked, with the answers its options allow. */
   const asked = Effect.fn("Engine.asked")(function* (runId: string) {
     const rows = yield* store.asked(runId);
-    const none: ReadonlyArray<string> = [];
+    const none: ReadonlyArray<Solution> = [];
     return yield* Effect.forEach(rows, (row) =>
       decodeOptions(row.options).pipe(
         Effect.orElseSucceed(() => none),
         Effect.map((options) => ({
           name: row.decision,
           prompt: row.prompt,
-          options,
+          options: recommendedFirst(options),
           answer: row.answer,
           asked: row.asked,
           answered: row.answered,
@@ -7697,10 +7748,42 @@ const makeRegistry: (
           cause: row.cause,
           messaged: Arr.map(row.messaged ?? [], (one) => one.agent),
           revises: row.revises,
+          shortfall: row.shortfall,
         })),
       ),
     );
   });
+
+  /**
+   * Its questions, each open one naming the agent a human's words about it reach: the
+   * agent that asked it, or the one `run steer` reaches by default.
+   */
+  const steered = Effect.fn("Engine.steered")(function* (runId: string) {
+    const waiting = yield* asked(runId);
+    if (!Arr.some(waiting, isUnanswered)) return waiting;
+    const fs = yield* FileSystem.FileSystem;
+    const launches = yield* readLaunches(dir, runId).pipe(Effect.orElseSucceed(() => []));
+    const candidates = yield* Effect.forEach(launches, (one) =>
+      fs.exists(one.output).pipe(
+        Effect.orElseSucceed(() => false),
+        Effect.map((done) => ({ ...one, done })),
+      ),
+    );
+    const steer = steerTarget(candidates, {})?.agent ?? null;
+    return Arr.map(waiting, (one) =>
+      isUnanswered(one)
+        ? {
+            ...one,
+            steer:
+              one.asker === null
+                ? steer
+                : (Option.getOrUndefined(
+                    Arr.findLast(launches, (launch) => launch.operation === one.asker),
+                  )?.agent ?? null),
+          }
+        : one,
+    );
+  }, Effect.provideContext(bun));
 
   /** The Run's view kept where its row, decisions and files are as they were, else undefined. */
   const keptHit = (row: RunRow, decided: (run: string) => number, kept: KeptViews) => {
@@ -8869,19 +8952,23 @@ const makeRegistry: (
           reason: `run "${options.runId}" is not waiting on a decision called "${name}"`,
         });
       }
-      // An option is its own title: taken in any case, kept as declared.
+      const said = Str.toLowerCase(options.value);
       const named = Option.getOrUndefined(
-        Arr.findFirst(
-          question.options,
-          (option) => Str.toLowerCase(option) === Str.toLowerCase(options.value),
+        Arr.findFirst(question.options, (option) => Str.toLowerCase(option.id) === said).pipe(
+          Option.orElse(() =>
+            Arr.findFirst(question.options, (option) => Str.toLowerCase(option.title) === said),
+          ),
         ),
       );
       if (question.options.length > 0 && named === undefined) {
         return yield* new HostRefused({
-          reason: `"${options.value}" is not one of ${Arr.join(question.options, ", ")}`,
+          reason: `"${options.value}" is not one of ${Arr.join(
+            Arr.map(question.options, (option) => option.title),
+            ", ",
+          )}`,
         });
       }
-      const value = named ?? options.value;
+      const value = named?.id ?? options.value;
       // An agent's question needs no workflow to wake: a finished Run's module may be gone.
       const byAgent = Arr.some(
         yield* store.asked(options.runId),
@@ -9113,7 +9200,7 @@ const makeRegistry: (
 });
 
 const decodeOptions = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(Schema.Array(Schema.String)),
+  Schema.fromJsonString(Schema.Array(RecordedSolution)),
 );
 
 /**

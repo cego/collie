@@ -24,7 +24,14 @@ import {
 import type { AgentEntry } from "../src/registry";
 import type { RunFacts } from "../src/runs";
 import { runFacts } from "./support/records";
-import { renovateClonesSweeper, settlingOf, sweep, worktreesSweeper } from "../src/cleanup";
+import {
+  measurementTreesSweeper,
+  renovateClonesSweeper,
+  settlingOf,
+  sweep,
+  worktreesSweeper,
+} from "../src/cleanup";
+import { withLock } from "../src/lock";
 import { NOTHING_SETTLING, onBranch, type Settling } from "../src/worktree";
 import { encodeCheckRecord, runningChecksDir } from "../src/check-processes";
 import { shell } from "../src/mr";
@@ -3320,6 +3327,83 @@ test("a Renovate clone no Run uses and no checkout is left of goes; one a Run us
         { kind: "renovate-clone", target: used, reason: "a Run with a row cut a checkout from it" },
       ]);
       expect(yield* fs.exists(unused)).toBe(false);
+    }),
+  ));
+
+/** A failed Run's base tree, as `measure` leaves it, and the sweeper over it. */
+const failedRunsTree = Effect.fn("worktreeTest.failedRunsTree")(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const tree = `${rig.stateDir}/measurements/trees/run-failed/base-abc`;
+  yield* fs.makeDirectory(tree, { recursive: true });
+  yield* fs.writeFileString(`${tree}/bench.ts`, "");
+  yield* fakeGitAnswering({
+    "rev-parse --path-format=absolute --git-common-dir": `${rig.projectDir}/.git\\n`,
+    "--git-dir": "",
+  });
+  const sweeper = measurementTreesSweeper(rig.stateDir, [
+    runFacts({ id: "run-failed", state: "failed" }),
+  ]);
+  return { tree, sweeper };
+});
+const machineLock = () => `${rig.stateDir}/measurements/machine.lock`;
+const whileMeasuring = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  withLock(machineLock(), Effect.die("the test could not take the Machine lock"), effect);
+const RUNNING = "a Measurement is running on this Machine";
+
+test("a running Measurement keeps a failed Run's tree from a sweep; once it ends the tree goes", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { tree, sweeper } = yield* failedRunsTree();
+
+      const during = yield* whileMeasuring(sweep([sweeper], rig.stateDir, "host"));
+      expect(during.remove).toEqual([]);
+      expect(during.keep).toEqual([{ kind: "measurement-tree", target: tree, reason: RUNNING }]);
+      expect(yield* fs.exists(tree)).toBe(true);
+
+      const after = yield* sweep([sweeper], rig.stateDir, "host");
+      expect(Arr.map(after.remove, (item) => item.target)).toEqual([tree]);
+      expect(yield* fs.exists(tree)).toBe(false);
+      expect(yield* asked()).toContain(`--git-dir ${rig.projectDir}/.git worktree prune`);
+    }),
+  ));
+
+test("a Measurement that starts between judging and removing keeps the judged tree", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { tree, sweeper } = yield* failedRunsTree();
+      const judged = yield* sweeper.judge;
+      expect(Arr.map(judged.remove, (item) => item.target)).toEqual([tree]);
+
+      expect(yield* whileMeasuring(sweeper.remove(judged.remove[0]!))).toEqual({ kept: RUNNING });
+      expect(yield* fs.exists(tree)).toBe(true);
+    }),
+  ));
+
+test("a dry run while a Measurement runs lists the tree as kept, not to remove", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const { tree, sweeper } = yield* failedRunsTree();
+
+      const judged = yield* whileMeasuring(sweeper.judge);
+      expect(judged.remove).toEqual([]);
+      expect(judged.keep).toEqual([{ kind: "measurement-tree", target: tree, reason: RUNNING }]);
+    }),
+  ));
+
+test("a Machine lock left by a dead Measurement keeps no tree", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { tree, sweeper } = yield* failedRunsTree();
+      const gone = Bun.spawn(["true"]);
+      yield* Effect.promise(() => gone.exited);
+      yield* fs.writeFileString(machineLock(), `{"pid":${gone.pid},"start":null}\n`);
+
+      const report = yield* sweep([sweeper], rig.stateDir, "host");
+      expect(Arr.map(report.remove, (item) => item.target)).toEqual([tree]);
+      expect(yield* fs.exists(tree)).toBe(false);
     }),
   ));
 

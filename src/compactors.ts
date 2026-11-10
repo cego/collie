@@ -111,6 +111,7 @@ const submitCompaction = Effect.fn("Compactors.submitCompaction")(function* (
 import { selfCommand } from "./env";
 import { shell } from "./mr";
 import { reason } from "./naming";
+import { isToStandard, questionRepair } from "./question-standard";
 import type { JsonObject } from "./schema";
 
 /**
@@ -153,7 +154,17 @@ const EventSchema = Schema.Struct({
   at: Schema.Finite,
   /** The harness's own session identity, so a `/new` in the pane invalidates the rest. */
   session: Schema.NullOr(Schema.String),
-  kind: Schema.Literals(["session", "usage", "start", "done", "failed", "auto", "submit", "out"]),
+  kind: Schema.Literals([
+    "session",
+    "usage",
+    "start",
+    "done",
+    "failed",
+    "auto",
+    "submit",
+    "out",
+    "stopped",
+  ]),
   /** Current-context total. `null` where the harness has not measured this context. */
   tokens: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
   /** Collie's own request id, which is what correlates an outcome to an attempt. */
@@ -553,16 +564,26 @@ export default function (pi) {
     write({ kind: "usage", tokens, transcript: ctx.sessionManager.getSessionFile() ?? undefined });
   };
 
+  // How the last turn died, where it did: pi may still retry it until it settles.
+  let died = null;
   pi.on("session_start", async (_event, ctx) => sample(ctx));
   pi.on("turn_end", async (event, ctx) => {
     sample(ctx);
     // pi does not retry a spent subscription, so an error stop saying so is the end of it.
     const message = event?.message;
     const said = String(message?.errorMessage ?? "");
-    if (message?.stopReason === "error" && USAGE_LIMIT.test(said) && !/overloaded/i.test(said))
+    const error = message?.stopReason === "error";
+    const out = error && USAGE_LIMIT.test(said) && !/overloaded/i.test(said);
+    if (out)
       write({ kind: "out", reason: said, transcript: ctx.sessionManager.getSessionFile() ?? undefined });
+    died = error && !out ? said : null;
   });
-  pi.on("agent_settled", async (_event, ctx) => sample(ctx));
+  pi.on("agent_settled", async (event, ctx) => {
+    sample(ctx);
+    if (died !== null && event?.aborted !== true)
+      write({ kind: "stopped", reason: died || undefined, transcript: ctx.sessionManager.getSessionFile() ?? undefined });
+    died = null;
+  });
 
   // Recorded with their reason and no request id: a threshold or overflow compaction is
   // Pi's own, and must never satisfy a request Collie made.
@@ -660,6 +681,8 @@ const ClaudePayload = Schema.Struct({
   hook_event_name: Schema.optionalKey(Schema.String),
   /** `StopFailure` only: why the turn stopped, `rate_limit` among them. */
   error: Schema.optionalKey(Schema.String),
+  /** `StopFailure` only: the API's own words for it, where it gave any. */
+  error_details: Schema.optionalKey(Schema.String),
   transcript_path: Schema.optionalKey(Schema.String),
   trigger: Schema.optionalKey(Schema.String),
   /** `UserPromptSubmit` only: what was submitted, which is how Collie's own is told. */
@@ -716,7 +739,7 @@ export const piQuestionTool = (self: ReadonlyArray<string>, dir: string) => {
     name: "ask_user_question",
     label: "Ask the human",
     description:
-      "Ask the human one or more questions, each with options to choose from; they can also answer in their own words. The questions go on your Run, and the answers arrive as your next message.",
+      'Ask the human one or more questions. Give each at least three options, each with a description of what it leads to, and end exactly one option\'s label with " (Recommended)". The questions go on your Run, and the answers arrive as your next message.',
     // SAFETY: a JSON Schema document is JSON.
     parameters: { ...document.schema, $defs: document.definitions } as JsonObject,
     helper: [...self, "herdr", "compaction", dir],
@@ -730,8 +753,16 @@ export const AskedCall = Schema.Struct({
   /** The call's `tool_use_id`, or the time where the payload had none. */
   id: Schema.String,
   questions: Schema.Array(AgentQuestion),
+  /**
+   * Where it fell short and was not posted: repaired in the tool's own reply, or to be
+   * repaired by a Delivery for a harness whose question tool has already returned.
+   */
+  repair: Schema.optionalKey(Schema.Literals(["in-reply", "by-delivery"])),
 });
 export type AskedCall = typeof AskedCall.Type;
+
+const repairs = (last: AskedCall | undefined, questions: ReadonlyArray<AgentQuestion>) =>
+  last?.repair === undefined && !Arr.every(questions, isToStandard);
 const encodeAskedCall = flow(
   Schema.encodeResult(Schema.fromJsonString(AskedCall)),
   Result.getOrThrow,
@@ -741,13 +772,42 @@ const decodeAskedCall = Schema.decodeUnknownOption(Schema.fromJsonString(AskedCa
 /** Apart from the telemetry, whose cap trims lines: a question must not be trimmed away. */
 export const QUESTIONS = "questions.jsonl";
 
-const DENIED_QUESTION = JSON.stringify({
-  hookSpecificOutput: {
-    hookEventName: "PreToolUse",
-    permissionDecision: "deny",
-    permissionDecisionReason:
-      "Collie has put your question on your Run for a human to answer. End your turn now: the answer will be your next message.",
-  },
+const deniedWith = (reason: string) =>
+  JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: reason,
+    },
+  });
+
+const DENIED_QUESTION = deniedWith(
+  "Collie has put your question on your Run for a human to answer. End your turn now: the answer will be your next message.",
+);
+
+/** Marks the copy of a call whose repair could not be sent, recorded to be posted as asked. */
+export const UNREPAIRED = "#unrepaired";
+
+/**
+ * Records `call` again to be posted as asked, its repair having failed. Appended, so the
+ * questions already posted keep their numbers.
+ */
+export const postUnrepaired = Effect.fn("Compactors.postUnrepaired")(function* (
+  dir: string,
+  call: AskedCall,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const asked: AskedCall = {
+    at: call.at,
+    session: call.session,
+    id: `${call.id}${UNREPAIRED}`,
+    questions: call.questions,
+  };
+  yield* fs.writeFileString(path.join(dir, QUESTIONS), `${encodeAskedCall(asked)}\n`, {
+    flag: "a",
+  });
+  return asked;
 });
 
 /** The `AskUserQuestion` calls this agent made at or after `since`, oldest first. */
@@ -779,15 +839,21 @@ export const takeHarnessQuestions = Effect.fn("Compactors.takeHarnessQuestions")
   const read = record === null ? undefined : ports[record.harness]?.questions;
   if (record === null || read === undefined) return;
   const asked = yield* read(record).pipe(Effect.orElseSucceed(() => []));
-  const known = new Set(Arr.map(yield* questionsSince(record.dir, 0), (call) => call.id));
+  const recorded = yield* questionsSince(record.dir, 0);
+  const known = new Set(Arr.map(recorded, (call) => call.id));
   const fresh = Arr.filter(asked, (call) => !known.has(call.id));
   if (fresh.length === 0) return;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const at = yield* Clock.currentTimeMillis;
-  const lines = Arr.map(fresh, (call) =>
-    encodeAskedCall({ at, session: null, id: call.id, questions: call.questions }),
-  );
+  let last = recorded.at(-1);
+  const lines = Arr.map(fresh, (call) => {
+    const line: AskedCall = repairs(last, call.questions)
+      ? { at, session: null, id: call.id, questions: call.questions, repair: "by-delivery" }
+      : { at, session: null, id: call.id, questions: call.questions };
+    last = line;
+    return encodeAskedCall(line);
+  });
   yield* fs.writeFileString(path.join(record.dir, QUESTIONS), `${Arr.join(lines, "\n")}\n`, {
     flag: "a",
   });
@@ -888,24 +954,30 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     const owner = yield* lockHolder(hostLockOf(path.dirname(path.dirname(dir))));
     if (owner === null || !(yield* holderLives(owner))) return "";
     const at = yield* Clock.currentTimeMillis;
-    const line = encodeAskedCall({
-      at,
-      session,
-      id: payload.tool_use_id ?? String(at),
-      questions: asked.value.questions,
-    });
+    const { questions } = asked.value;
+    const repairing = repairs((yield* questionsSince(dir, 0)).at(-1), questions);
+    const call: AskedCall = { at, session, id: payload.tool_use_id ?? String(at), questions };
+    const line = encodeAskedCall(repairing ? { ...call, repair: "in-reply" } : call);
     yield* fs.makeDirectory(dir, { recursive: true });
     yield* fs.writeFileString(path.join(dir, QUESTIONS), `${line}\n`, { flag: "a" });
-    return DENIED_QUESTION;
+    return repairing ? deniedWith(questionRepair(questions)) : DENIED_QUESTION;
   }
   const transcript = payload.transcript_path;
   if (event === "StopFailure") {
-    // Only a spent subscription; an overload or a transient limit is retried by Claude.
-    if (payload.error === "rate_limit" || payload.error === "billing_error")
+    // It fires once Claude has given up on the turn. An overload stops nothing (ADR-0049 D9).
+    const error = payload.error ?? "unknown";
+    if (error === "rate_limit" || error === "billing_error")
       yield* writeEvent(dir, {
         session,
         kind: "out",
-        reason: (yield* lastFullWindow(dir)) ?? payload.error,
+        reason: (yield* lastFullWindow(dir)) ?? error,
+        ...(transcript && { transcript }),
+      });
+    else if (error !== "overloaded")
+      yield* writeEvent(dir, {
+        session,
+        kind: "stopped",
+        reason: payload.error_details ?? error,
         ...(transcript && { transcript }),
       });
     return "";
@@ -981,10 +1053,7 @@ export function claudeSettings(dir: string, stopFailure: boolean): string {
   // is what attribution rests on: a prompt with no delivery token is somebody typing in
   // the pane. It carries no matcher — every submission counts, which is the point.
   const submitted = { hooks: [{ type: "command", command: helper }] };
-  const spent = {
-    matcher: "rate_limit|billing_error",
-    hooks: [{ type: "command", command: helper }],
-  };
+  const failed = { hooks: [{ type: "command", command: helper }] };
   return `${JSON.stringify(
     {
       statusLine: { type: "command", command: helper },
@@ -993,7 +1062,7 @@ export function claudeSettings(dir: string, stopFailure: boolean): string {
         PostCompact: [hook],
         UserPromptSubmit: [submitted],
         PreToolUse: [{ matcher: "AskUserQuestion", hooks: [{ type: "command", command: helper }] }],
-        ...(stopFailure && { StopFailure: [spent] }),
+        ...(stopFailure && { StopFailure: [failed] }),
       },
     },
     null,
@@ -1080,6 +1149,28 @@ export const ranOutSince = Effect.fn("Compactors.ranOutSince")(function* (
   return out === undefined
     ? null
     : { why: out.reason ?? "its usage ran out", transcript: out.transcript ?? null };
+});
+
+/**
+ * What this agent's harness last said when a turn died on an error it will not retry, at
+ * or after `since`, and where its conversation is; null where it has not.
+ */
+export const stoppedSince = Effect.fn("Compactors.stoppedSince")(function* (
+  dir: string,
+  since: number,
+) {
+  const stopped = Option.getOrUndefined(
+    Arr.findLast(
+      yield* readEvents(dir).pipe(Effect.orElseSucceed(() => [])),
+      (event) => event.kind === "stopped" && event.at >= since,
+    ),
+  );
+  return stopped === undefined
+    ? null
+    : {
+        why: stopped.reason ?? "its turn ended on an error",
+        transcript: stopped.transcript ?? null,
+      };
 });
 
 /** Where this agent's harness last said it keeps its conversation, or null where it never did. */

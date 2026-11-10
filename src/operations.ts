@@ -18,7 +18,7 @@ import { ChildProcessSpawner } from "effect/process";
 import { nowIso } from "./time";
 import { attentionFor } from "./attention";
 import type { PluginEnv } from "./env";
-import { Answered, mrLabel, mrNounOf, ranOn, type FrontDoor } from "./board-model";
+import { Answered, mrLabel, mrNounOf, ranOn, solutionTitle, type FrontDoor } from "./board-model";
 import { agentOfLaunch } from "./launches";
 import { hostLaunches } from "./lifecycle";
 import { readAudit, type AuditLine } from "./audit";
@@ -1249,7 +1249,10 @@ export const choiceLines = (run: string, asked: Asked): string[] => [
   `Waiting on the Choice "${asked.name}": ${asked.prompt}`,
   asked.options.length === 0
     ? "It has no options: it is answered in words."
-    : `Options: ${Arr.join(asked.options, " | ")}`,
+    : `Options: ${Arr.join(Arr.map(asked.options, solutionTitle), " | ")}`,
+  ...Arr.flatMap(asked.options, (option) =>
+    option.detail === undefined ? [] : [`${solutionTitle(option)}: ${option.detail}`],
+  ),
   `Answer it with the collie_do action ${answerAction(
     run,
     asked.name,

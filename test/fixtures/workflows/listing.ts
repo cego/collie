@@ -107,7 +107,7 @@ export const listing = defineWorkflow({
         const answer = yield* ask({
           name: "carry-on",
           prompt: "Findings were raised. Carry on?",
-          options: ["yes", "no"],
+          options: [{ id: "yes", recommended: true }, "no"],
         });
         if (answer !== "yes") return `stopped: ${findings.length} finding(s), ${summary}`;
       }

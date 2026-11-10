@@ -288,6 +288,13 @@ export default defineWorkflow({
         // post to is decided when it is invoked, by whoever can actually see GitLab.
         if (!fixing) {
           const fixOffered = unfixable === "" || handOff;
+          const offered = [
+            ...(handed ? [AGAIN] : split.live.length > 0 && fixOffered ? [FIX] : []),
+            ...(unfixable === "" ? [IMPLEMENT] : []),
+            ...(kind === "mr" ? [POST] : []),
+            DONE,
+          ];
+          const [recommended] = Arr.filter(offered, (one) => one !== IMPLEMENT);
           chosen = yield* menu(
             ask({
               name: `post-${(asks += 1)}`,
@@ -305,12 +312,7 @@ export default defineWorkflow({
                 ],
                 " ",
               ),
-              options: [
-                ...(handed ? [AGAIN] : split.live.length > 0 && fixOffered ? [FIX] : []),
-                ...(unfixable === "" ? [IMPLEMENT] : []),
-                ...(kind === "mr" ? [POST] : []),
-                DONE,
-              ],
+              options: Arr.map(offered, (id) => ({ id, recommended: id === recommended })),
             }),
             { round: asks },
           );

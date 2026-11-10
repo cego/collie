@@ -1226,6 +1226,7 @@ const refusal = (request?: string) => (error: Refused) =>
           ? error.detail
           : error.message,
     step: error._tag === "StaleAct" ? error.step : undefined,
+    refused: error._tag === "Unconfirmed" || error._tag === "RpcClientError" ? undefined : true,
   });
 
 export type Reached = Pick<Doors, "machine" | "desktop">;
@@ -1333,6 +1334,7 @@ export const act = (
             control: action.control,
             set: action.set,
             request,
+            reason: action.reason,
             before: action.before,
             shown: action.shown,
           })

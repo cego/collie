@@ -11,6 +11,7 @@ import { expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
 import { Config, Effect, FileSystem, Option, Schema, type Scope, flow, Result } from "effect";
 import { act, bridgeCommand, openBridge } from "../desktop/src/bun/machine";
+import { questionnaire, questionnaireView, stepped } from "../desktop/src/shared/questionnaire";
 import { readEnv, type PluginEnv } from "../src/env";
 import { resetExecutors } from "../src/executors";
 import { connect } from "../src/host";
@@ -32,6 +33,9 @@ const FakeState = Schema.fromJsonString(
   Schema.Struct({ agents: Schema.Array(Schema.Struct({ name: Schema.String })) }),
 );
 const Board = Schema.Struct({ tasks: Schema.Array(TaskView) });
+
+/** An agent question's options, to standard so it is posted as asked. */
+const PICKS = [{ label: "Postgres (Recommended)" }, { label: "SQLite" }, { label: "JSONL" }];
 
 const GRACE_MS = 3_000;
 /** Past the grace and two of the host's board ticks: long enough for a revision to have opened. */
@@ -245,6 +249,73 @@ test(
 );
 
 test(
+  "Desktop's steering entry sends the words to the board's steer target, which sets the Choice aside with no answer",
+  () =>
+    atQuestion("collie-questionnaire-steer-", (at) =>
+      Effect.gen(function* () {
+        const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
+        const command = Option.isSome(binary)
+          ? [binary.value]
+          : [process.execPath, `${root}src/main.ts`];
+        const bridge = yield* openBridge(bridgeCommand(command, "mk-pc"), {
+          PATH: "/usr/bin:/bin",
+          HOME: at.world.home,
+          HERDR_PLUGIN_ROOT: at.world.install,
+          HERDR_PLUGIN_STATE_DIR: at.world.state,
+          COLLIE_USER_DIR: at.world.config,
+          COLLIE_HOST: encode(command),
+          ...(yield* suiteEnv),
+          HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH ?? "",
+          FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG ?? "",
+        });
+        const reached = { machine: { profile: "local", name: "mk-pc" }, desktop: bridge };
+        // herdr's live agents are read again at the board's next tick.
+        const card = yield* until(
+          () => cardOf(at),
+          (task) => task?.questions?.[0]?.steer?.agent != null,
+        );
+        const go = card!.questions![0]!;
+        expect(go.steer).toEqual({ agent: at.agent, why: null });
+
+        const typed = stepped(questionnaire(go), { kind: "draft", text: "Call it the chooser" });
+        const { state: sending, does } = stepped(typed.state, {
+          kind: "steer",
+          request: "desktop-steer-1",
+        });
+        expect(does).toEqual({
+          kind: "send",
+          request: "desktop-steer-1",
+          action: {
+            _tag: "Deliver",
+            runId: at.runId,
+            agent: at.agent,
+            text: "Call it the chooser",
+          },
+        });
+        if (does?.kind !== "send") return;
+        yield* act(reached, does.request, does.action).pipe(Effect.orDie);
+        const steered = stepped(sending, {
+          kind: "replied",
+          request: does.request,
+          ok: true,
+          fresh: true,
+        }).state;
+        expect(questionnaireView(steered).status).toBe(
+          `Sent to ${at.agent}; the question is set aside`,
+        );
+
+        const waiting = yield* until(
+          () => waitingOf(at),
+          (rows) => rowOf(rows, "go")?.superseded != null,
+        );
+        expect(rowOf(waiting, "go")).toMatchObject({ answer: null });
+        expect(Arr.filter(waiting, (one) => one.answer !== null)).toEqual([]);
+      }),
+    ),
+  180_000,
+);
+
+test(
   "a human's Desktop message sets the question aside while its agent works, and the question is asked again after",
   () =>
     atQuestion("collie-supersede-replay-", (at) =>
@@ -310,7 +381,10 @@ test(
         expect(revision.name).not.toBe("go");
         expect(revision).toMatchObject({
           prompt: "Ship it?",
-          options: ["yes", "no"],
+          options: [
+            { id: "yes", title: "yes" },
+            { id: "no", title: "no" },
+          ],
           answer: null,
         });
         expect(yield* notified(at)).toContain(`needs-you:ask:${revision.name}`);
@@ -681,7 +755,14 @@ test(
         expect(set?.superseded ?? null).not.toBeNull();
 
         const third = yield* revised(at, second.name);
-        expect(third).toMatchObject({ prompt: "Ship it?", options: ["yes", "no"], answer: null });
+        expect(third).toMatchObject({
+          prompt: "Ship it?",
+          options: [
+            { id: "yes", title: "yes" },
+            { id: "no", title: "no" },
+          ],
+          answer: null,
+        });
         for (const name of ["go", second.name]) {
           const refused = yield* answer(at, "yes", name);
           expect(refused.envelope.error?.message).toContain(`"${name}" was superseded`);
@@ -766,7 +847,7 @@ test(
                 hook_event_name: "PreToolUse",
                 tool_name: "AskUserQuestion",
                 tool_use_id: `toolu-${agent}`,
-                tool_input: { questions: [{ question, header: question, options: [] }] },
+                tool_input: { questions: [{ question, header: question, options: PICKS }] },
               }),
             ).pipe(Effect.orDie);
           yield* until(
@@ -862,7 +943,7 @@ test(
             tool_name: "AskUserQuestion",
             tool_use_id: "toolu-own",
             tool_input: {
-              questions: [{ question: "Which database?", header: "Database", options: [] }],
+              questions: [{ question: "Which database?", header: "Database", options: PICKS }],
             },
           }),
         ).pipe(Effect.orDie);
@@ -876,6 +957,29 @@ test(
         yield* revised(at);
         yield* Effect.sleep(SETTLED);
         expect(revisionOf(yield* waitingOf(at), "ask-build-1")).toBeUndefined();
+      }),
+    ),
+  180_000,
+);
+
+test(
+  "a workflow Choice's steering entry names the agent `run steer` reaches, and blank words are refused and supersede nothing",
+  () =>
+    atQuestion("collie-steer-entry-", (at) =>
+      Effect.gen(function* () {
+        // herdr's live agents are read again at the board's next tick.
+        const card = yield* until(
+          () => cardOf(at),
+          (one) => one?.questions?.[0]?.steer?.agent != null,
+        );
+        expect(Arr.map(card?.questions ?? [], (one) => one.steer)).toEqual([
+          { agent: at.agent, why: null },
+        ]);
+
+        const blank = yield* tell(at, " \n\t ", desktop("blank-1"));
+        expect(blank?.state).not.toBe("applied");
+        expect(blank?.note).toContain("nothing to send");
+        expect(rowOf(yield* waitingOf(at), "go")).toMatchObject({ answer: null, superseded: null });
       }),
     ),
   180_000,

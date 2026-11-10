@@ -89,7 +89,14 @@ test("a release Run awaiting CI or a teammate's approval says nothing consequent
     "changes are requested",
   );
 
-  const go = { name: "go-1", prompt: "Release group/app!345?", options: ["Release", "Finish"] };
+  const go = {
+    name: "go-1",
+    prompt: "Release group/app!345?",
+    options: [
+      { id: "Release", title: "Release" },
+      { id: "Finish", title: "Finish" },
+    ],
+  };
   const asked = release({ state: "waiting", asking: [go], awaiting })[0]!;
   expect(asked.significance).toBe("decision");
   expect(asked.key).toBe("r1:asking:go-1");

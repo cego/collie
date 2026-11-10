@@ -1206,6 +1206,14 @@ profile may reset PATH. If the shell fails or does not answer within five second
 keeps the environment it was given, runs them in a login shell as before, and logs why.
 Children never get what Electrobun's launcher sets for Desktop itself.
 
+The SSH agent is the one exception. An rc file may start an agent of its own, such as
+`eval $(keychain --eval id_rsa)`, that holds a key only once a terminal has asked for its
+passphrase, and an SSH connection Desktop opens has no terminal to ask in: it would fail with
+`Permission denied (publickey)` until you next open one. So Desktop asks each agent with
+`ssh-add -l` and takes the login shell's `SSH_AUTH_SOCK` only where it holds keys or the agent
+Desktop was started with — your desktop session's, such as GNOME Keyring's — holds none;
+otherwise it keeps its own, and logs that it did.
+
 It shows up as **Collie**, with the Collie mark — the dog on the white tile the TUI board
 shows, which reads on a dark taskbar too — in your app launcher, on its window, in the
 taskbar and at the top left of the board.
@@ -1305,12 +1313,20 @@ Every Decision and action the TUI board has is on Desktop's cards, and goes to t
 the card is on. A question card shows the first two lines of the question and one button,
 **Answer…**, or **Answer 3 questions…** where the Task's Runs have three open. It opens a
 dialog that takes you through them one at a time: "Question 1 of 3" with the Workflow and
-Run that asks, the whole question in a body that scrolls, then its options as a list, one
-click sending, or a field Enter sends. Back and Next move between them without answering. A
-question that arrives while it is open joins it, and one answered elsewhere stays, marked
-"No longer open". It closes by itself once everything is answered and every answer has
-reached its host; Esc closes it at any time, and a half-typed answer is kept until its
-question is answered or gone. A proposal is read in a drawer whose Confirm stays off until all of it has been on
+Run that asks, the whole question in a body that scrolls, then its solutions in the order
+the host gives them, the recommended one marked **Recommended** and each with what it leads
+to, and **Hold the Run** where the host offers it. Nothing is picked for you: the arrow
+keys, Home and End move the choice, Space or a click picks, and **Submit answer** or
+Ctrl/Cmd+Enter sends it. A question answered in words has a field instead. Below them,
+**Send to <agent>** tells the agent the host names something else instead, which sets the
+question aside; Enter in that field sends nothing, its button or Ctrl/Cmd+Enter does. The
+line under the solutions says `Sending…`, then `Answered: <title>`, `Run held · question
+still open`, or the host's reason for refusing, with your pick still shown and nothing sent
+again; trying again after a lost connection sends the same request, which the host takes
+once. Back and Next move between them without answering. A question that arrives while it
+is open joins it, and one answered elsewhere stays, marked "No longer open". Esc closes it
+at any time and keeps your pick and your words. The record's Flow shows its open question
+the same way. A proposal is read in a drawer whose Confirm stays off until all of it has been on
 screen, then sent with its id
 and content hash. Each card's `⋯` menu offers what the TUI menu does, by the same rules —
 Steer…, the Run's offers (asked of its host when opened, with a field for each argument),
@@ -3893,9 +3909,14 @@ agent changed is in the checkout, and where its conversation is. The Run's log s
 <agent>`, and the Run's record lists both agents, the new one saying what it fell back
 from. The new agent takes the old one's place for later work that names it, such as the
 next slices of a build. A transient rate limit or an overloaded API moves nothing, nor
-does a harness that will not start or is signed out: the Run parks with its reason as
-before. Where nothing has room, the agent is left where it is, and the Run waits for it,
-parking after its collection time with when each Subscription resets.
+does a harness that will not start or is signed out: the Run parks with its reason. A turn
+that dies on an error its harness will not retry — an expired login, a refused account, a
+server error after the harness's own retries — parks the Run at once, quoting the
+harness's message, and leaves the agent open. Fix the harness and tell the agent to carry
+on; Collie keeps collecting its Output, and the Run goes on when it is written. pi and
+Claude Code report such a stop; Codex and OpenCode do not yet. Where nothing has room, the
+agent is left where it is, and the Run waits for it, parking after its collection time with
+when each Subscription resets.
 
 Usage is data: it never refuses, holds or delays work.
 

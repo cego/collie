@@ -983,7 +983,13 @@ const handlers = (
           // Files go only into a Run this host has.
           const known =
             (attachments ?? []).length === 0
-              ? Effect.void
+              ? Str.trim(text) === ""
+                ? Effect.fail(
+                    new HostRefused({
+                      reason: "The message is empty, so there is nothing to send.",
+                    }),
+                  )
+                : Effect.void
               : Effect.flatMap(FileSystem.FileSystem, (fs) => fs.exists(runDir(dir, runId))).pipe(
                   Effect.orElseSucceed(() => false),
                   Effect.flatMap((exists) =>

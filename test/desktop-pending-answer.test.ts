@@ -9,8 +9,6 @@ import {
   answersSettled,
   answerTried,
   cardQuestion,
-  draftOf,
-  draftTyped,
   type InFlight,
   nothingAnswered,
   openQuestions,
@@ -111,12 +109,7 @@ test("an answer whose question left the board is dropped, and a late try of it c
 });
 
 test("a question another Task or Machine still has open keeps what is held for it", () => {
-  const typed = draftTyped(
-    draftTyped(nothingAnswered, keyOf(A), "half"),
-    answerKey("vm-other", A.run, A.id),
-    "keep me",
-  );
-  const { state } = sending(typed, A, "yes");
+  const { state } = sending(nothingAnswered, A, "yes");
   const board = (installation: string, open: ReadonlyArray<Question>) => ({
     installation,
     task: { decision: null, questions: open },
@@ -125,11 +118,9 @@ test("a question another Task or Machine still has open keeps what is held for i
   expect(moved).toBe(state);
   const elsewhere = answersSettled(state, [board("vm-other", [A])]);
   expect(elsewhere.answers.has(keyOf(A))).toBe(false);
-  expect(draftOf(elsewhere, keyOf(A))).toBe("");
-  expect(draftOf(elsewhere, answerKey("vm-other", A.run, A.id))).toBe("keep me");
 });
 
-test("a Task that leaves its Machine's board, by a Snapshot without it or a Remove, drops its answers and drafts", () => {
+test("a Task that leaves its Machine's board, by a Snapshot without it or a Remove, drops its answers", () => {
   const machine = { installation: "vm", profile: "remote", name: "vm-mk" };
   const asked = question("scope");
   const snapshot = (tasks: ReadonlyArray<ReturnType<typeof task>>, seq: number): FlockItem => ({
@@ -153,7 +144,7 @@ test("a Task that leaves its Machine's board, by a Snapshot without it or a Remo
     return answersSettled(state, Arr.map(board.tasks, board.placedOf));
   };
   const observed = settledOn(nothingAnswered, start);
-  const { state, answer } = sending(draftTyped(observed, keyOf(asked), "api"), asked, "api");
+  const { state, answer } = sending(observed, asked, "api");
   expect(settledOn(state, start)).toBe(state);
   for (const gone of [
     applyItem(start, snapshot([], 2)),
@@ -162,7 +153,6 @@ test("a Task that leaves its Machine's board, by a Snapshot without it or a Remo
     const settled = settledOn(state, gone);
     expect(settled.answers.size).toBe(0);
     expect(settled.latest.size).toBe(0);
-    expect(settled.drafts.size).toBe(0);
     expect(answerTried(settled, keyOf(asked), answer, null)).toBe(settled);
   }
 });
@@ -372,9 +362,8 @@ test("closed and reopened while an answer is sending, the dialog waits for it, a
 
 test("closed and reopened while an answer is sending, its failure brings the reopened dialog to it", () => {
   const a = sending(nothingAnswered, A, "yes");
-  const typed = draftTyped(a.state, keyOf(A), "yes");
-  let sitting = sittingStarts(now([A, B], typed));
-  const b = sending(typed, B, "no");
+  let sitting = sittingStarts(now([A, B], a.state));
+  const b = sending(a.state, B, "no");
   sitting = sittingAnswered(sitting, now([A, B], b.state));
   const bConfirmed = answerTried(b.state, keyOf(B), b.answer, true);
   sitting = sittingSees(sitting, now([A, B], bConfirmed));
@@ -386,21 +375,6 @@ test("closed and reopened while an answer is sending, its failure brings the reo
     condition: { kind: "unanswered" },
     done: false,
   });
-  expect(draftOf(aFailed, keyOf(A))).toBe("yes");
-});
-
-test("a draft starts empty per question, is kept through a failure, and is dropped once confirmed or gone", () => {
-  expect(draftOf(nothingAnswered, keyOf(A))).toBe("");
-  const shown = shownBy(nothingAnswered, [A, B]);
-  const typed = draftTyped(draftTyped(shown, keyOf(A), "half"), keyOf(B), "other");
-  expect(draftOf(typed, keyOf(A))).toBe("half");
-  const a = sending(typed, A, "half");
-  expect(draftOf(answerTried(a.state, keyOf(A), a.answer, false), keyOf(A))).toBe("half");
-  const confirmed = answerTried(a.state, keyOf(A), a.answer, true);
-  expect(draftOf(confirmed, keyOf(A))).toBe("");
-  expect(draftOf(confirmed, keyOf(B))).toBe("other");
-  expect(draftOf(shownBy(typed, [A]), keyOf(B))).toBe("");
-  expect(draftOf(shownBy(typed, [A]), keyOf(A))).toBe("half");
 });
 
 test("a sitting's question is the one the board shows now, and N never shrinks", () => {

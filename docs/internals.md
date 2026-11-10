@@ -978,7 +978,10 @@ naming the session (`default` when unset). All of it goes through `src/herdr.ts`
   pi has no question tool, so its per-launch `.tools.ts` registers Collie's
   `ask_user_question` (`piQuestionTool` in `src/compactors.ts`). The tool hands its call to
   `collie herdr compaction <control dir>` as the payload Claude's `AskUserQuestion` hook
-  gets, so it is recorded in the same `questions.jsonl` and becomes the same Decisions.
+  gets, so it is recorded in the same `questions.jsonl` and becomes the same Decisions, and
+  a call short of standard gets the hook's repair as the tool's result. A call repaired
+  rather than posted is recorded with `repair` (`in-reply`, or `by-delivery` for a Codex
+  call whose repair goes as a Delivery), so the call after it is posted whatever it holds.
 - **Stop** at the Run's end is `terminal.kill`.
 - **Resume.** What each agent was started with, less its credentials and its Run's
   authority, is kept in `relaunch/<run>/<agent>.json` under the state directory until it is
@@ -1660,6 +1663,11 @@ untyped error channels, and resources started outside their Effect context. `lin
 uses `effect-tsgo oxlint` directly so lint cannot silently lose Effect rules when a
 package installation skips the patch hook. Root typechecking also covers `tools/`.
 
+Typechecking runs tsrs, a Rust port of TypeScript 7.1, with `--fast`: it reports what
+`tsc` does in a fifth of the time and under half the memory. The Effect language service's
+diagnostics are off in `tsconfig.json`, so typechecking needs no Effect plugin; lint
+reports them.
+
 `lint:vue` prepares Nuxt's declarations and projects Vue scripts and template expressions
 through Vue's compiler before running the same rules. Diagnostics map back to the Vue
 source. Static attribute and slot names are excluded because their generated JavaScript
@@ -1689,11 +1697,15 @@ dependencies, run `bun install` in `desktop/` first: the root install refuses a 
 Desktop lockfile. CI relies on that one install before its root gate.
 Desktop's full typecheck, including its Vue views, runs separately with
 `cd desktop && bun run typecheck`; CI runs that as a job of its own.
-Desktop installs TypeScript twice. `@typescript/native` is TypeScript 7, the `tsc` that
-checks its `.ts` code, as the CLI's does. `typescript` is an alias for
-`@typescript/typescript6`, because TypeScript 7's package has no JS API and vue-tsc, which
-checks the `.vue` views through `nuxi typecheck`, loads one. The alias goes once
-TypeScript 7.1 ships its API and vue-tsc supports it: then `typescript` is 7 again.
+Desktop's `.ts` code is checked by tsrs, as the CLI's is, and its `.vue` views by golar
+through `nuxi typecheck --checker=golar`. Golar bundles its own TypeScript 7 and reads
+`view/golar.config.ts`. Not `@vue/content-mapper`, TypeScript 7.1's route for `.vue`
+files: it reads `@nuxt/ui`'s compiled `.vue` files instead of their declarations, and
+misses wrong props on Nuxt UI components. `typescript` is an alias for
+`@typescript/typescript6` because `tools/lint-vue.ts` loads TypeScript's JS API, which
+TypeScript 7.0 does not have. That tool also imports `@vue/language-core` and
+`@vue/compiler-dom`, so Desktop declares both at the versions `@golar/vue` uses: with two
+copies of `@vue/compiler-dom` installed, their template AST types do not match.
 
 A test leaves nothing behind. `test/support/hosts.ts`, a preload, gives each test file a
 temporary root of its own, `TMPDIR` inside it, and removes it when the file ends. Every

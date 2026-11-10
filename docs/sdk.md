@@ -32,7 +32,11 @@ export default defineWorkflow({
           .record((yield* Run).id, input.text)
           .pipe(Effect.as(input.text.repeat(input.times))),
       });
-      const keep = yield* ask({ name: "keep", prompt: "Keep this?", options: ["yes", "no"] });
+      const keep = yield* ask({
+        name: "keep",
+        prompt: "Keep this?",
+        options: [{ id: "yes", recommended: true }, "no"],
+      });
       return `${line}|${keep}`;
     }),
 });
@@ -818,9 +822,10 @@ retrying; the issue might already exist. Workflows call these methods directly a
 never construct forge CLI commands.
 
 `host.claim({ runId, cwd, adopting, say, deploys })` blocks until this Run holds every shared
-claim it needs, each recorded on the Run, and answers `{ slugs }`; `{ unresolved }` says why
-they could not be settled, with nothing claimed, and what to do then is your workflow's
-call. Without `deploys` it needs the repository's own project. With `deploys`
+claim it needs, each recorded on the Run, and answers `{ slugs }`. `{ none }` says why the
+repository has no Helle project, so there is nothing to claim; `{ unresolved }` says why the
+claims could not be settled for any other reason. Either way nothing is claimed, and what
+to do then is your workflow's call. Without `deploys` it needs the repository's own project. With `deploys`
 (`{ applications, jobs }`), it also needs each project of the repository's group that an
 application or a deploy job's name (`stage:spilnu`) names. A repository's
 `.collie/helle.json`, `{"projects": [...]}`, overrides both, and `[]` declares none.
@@ -982,8 +987,18 @@ the first.
 
 - **`name` is its identity.** The same name is the same question, however often the work
   replays; a question inside a loop is named after its item, never after its position.
-- **`options` is what it takes.** An answer outside them is refused before your workflow is
-  told anything. Leave it out for a question answered in the operator's own words.
+- **`options` is what it takes.** Each is a bare string, its id and title, or
+  `{ id, title?, detail?, recommended? }`: `detail` is one line on why it matters or what it
+  leads to. `ask` returns the chosen id. An answer names an option's id or its title, and one
+  outside them is refused before your workflow is told anything. Leave `options` out for a
+  question answered in the operator's own words: it has no recommendation and no Hold.
+- **Recommend exactly one.** Every front door lists it first, marked Recommended, and never
+  takes it for the human. None, or more than one, is a defect of the definition and never
+  stops the Run: the Choice is posted with no option marked and a shortfall saying "this
+  workflow recommended none" or "… more than one", and the Run's log records the same line.
+- **Fewer than three options offers Hold the Run as a third path.** It is no option and never
+  an answer: a front door holds the Run with reason `held at question <name>`, and the
+  question stays open. On a Run already held it reads unavailable, "Run already held".
 - **One answer, whoever sends it.** Two answers racing make one piece of work; the second is
   refused with what the run already has, and retrying one under the same request id is the
   same answer rather than another.
@@ -1209,7 +1224,7 @@ export default defineWorkflow({
   run: () =>
     Effect.gen(function* () {
       yield* build(agentWork({ operation: "build" /* … */ }));
-      yield* decide(ask({ name: "go", options: ["yes", "no"] }));
+      yield* decide(ask({ name: "go", options: [{ id: "yes", recommended: true }, "no"] }));
       // Once the Run knows its branch, it may forecast again.
       yield* forecast([build, slice, review]);
       yield* Effect.forEach(items, (item) => slice(agentWork({/* … */}), { item, items }));

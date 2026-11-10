@@ -39,6 +39,7 @@ import { BUILD, boardWrites, connect, frontDoor, socketOf } from "../src/host";
 import { drawerWrites } from "../src/record";
 import { makeRunModel } from "../src/run-model";
 import { handoffsIn } from "../src/handoffs";
+import { editState } from "./support/fake-herdr-core";
 import { followDetail } from "../src/run-detail";
 import { foundationLayer } from "../src/engine";
 import { Store } from "../src/store";
@@ -384,13 +385,10 @@ test(
           yield* until(shown, (actions) => actions?.includes("tell") === true);
           yield* until(drawn, (actions) => actions?.includes("tell") === true);
 
-          const state = `${(yield* Path.Path).dirname(world.state)}/herdr-calls.jsonl.state.json`;
-          const herd = yield* Schema.decodeEffect(Herd)(yield* fs.readFileString(state)).pipe(
-            Effect.orDie,
-          );
-          yield* fs.writeFileString(
-            state,
-            asJson({ ...herd, agents: Arr.filter(herd.agents, (one) => one.name !== agent) }),
+          yield* editState(`${(yield* Path.Path).dirname(world.state)}/herdr-calls.jsonl`, (text) =>
+            Effect.map(Schema.decodeEffect(Herd)(text).pipe(Effect.orDie), (herd) =>
+              asJson({ ...herd, agents: Arr.filter(herd.agents, (one) => one.name !== agent) }),
+            ),
           );
 
           expect(yield* shown()).not.toContain("tell");
