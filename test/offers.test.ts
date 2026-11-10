@@ -128,7 +128,7 @@ test("an owning Run asked for a Task's offers lists its own once, by its merge r
     { run: "api", named: "api!7", offers: own },
   ]);
   expect(Arr.map(listed, (one) => [one.title, one.run])).toEqual([
-    ["Fix what is open app!12", "app"],
+    ["Fix what is open app!12", undefined],
     ["Fix what is open api!7", "api"],
   ]);
 });

@@ -232,7 +232,8 @@ export function inputsFor(
 
 /**
  * A Task's offers where it has several merge requests: the asked Run's own unless it owns
- * one, then each owning Run's own, titled with its merge request and made by that Run.
+ * one, then each owning Run's own, titled with its merge request and, unless it is the
+ * asked Run, made by that Run.
  */
 export function taskOffers<
   O extends {
@@ -252,7 +253,11 @@ export function taskOffers<
   const listed: Array<O & { readonly run?: string }> = [
     ...(Arr.some(owned, (one) => one.run === asked) ? [] : own),
     ...Arr.flatMap(owned, ({ run, named, offers }) =>
-      Arr.map(offers, (offer) => ({ ...offer, title: `${offer.title} ${named}`, run })),
+      Arr.map(offers, (offer) => ({
+        ...offer,
+        title: `${offer.title} ${named}`,
+        ...(run === asked ? {} : { run }),
+      })),
     ),
   ];
   const first = Arr.findFirstIndex(listed, (one) => one.unavailable === null);

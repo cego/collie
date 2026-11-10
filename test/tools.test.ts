@@ -1283,6 +1283,42 @@ test("an offer's argument that is not text is taken from the text chat gives it"
     }),
   ));
 
+test("an owning Run's own offer in a Task of several merge requests reads its arguments as it declares them", () =>
+  inWorld(
+    Effect.gen(function* () {
+      yield* save(world.user, ["owns-mr.workflow.ts", "echo.workflow.ts"]);
+      const done = (view: RunView) => view.status.status === "complete";
+      const [app] = yield* Effect.forEach(["app", "api"], (repo) =>
+        startedRun(
+          "owns-mr",
+          { mr: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/7` },
+          done,
+          undefined,
+          "task-several",
+        ),
+      );
+
+      const said = yield* call("collie_do", {
+        actions: [
+          {
+            kind: "take_offer",
+            run: app!.id,
+            offer: "echo-louder",
+            inputs: { text: "again", times: "2" },
+          },
+        ],
+      });
+      expect(said).toContain("take_offer: applied");
+      const started = /Started run (\S+) from/.exec(said)?.[1] ?? "";
+      const client = yield* connect(stateDir).pipe(Effect.orDie);
+      const child = yield* until(
+        () => client.run({ runId: started }).pipe(Effect.orDie),
+        (view) => view !== null && view.waiting.length > 0,
+      );
+      expect(child?.input).toEqual({ text: "again", times: 2 });
+    }),
+  ));
+
 test("an offer the Run does not make, or cannot make now, starts nothing and says why", () =>
   inWorld(
     Effect.gen(function* () {
