@@ -3901,9 +3901,14 @@ agent changed is in the checkout, and where its conversation is. The Run's log s
 <agent>`, and the Run's record lists both agents, the new one saying what it fell back
 from. The new agent takes the old one's place for later work that names it, such as the
 next slices of a build. A transient rate limit or an overloaded API moves nothing, nor
-does a harness that will not start or is signed out: the Run parks with its reason as
-before. Where nothing has room, the agent is left where it is, and the Run waits for it,
-parking after its collection time with when each Subscription resets.
+does a harness that will not start or is signed out: the Run parks with its reason. A turn
+that dies on an error its harness will not retry — an expired login, a refused account, a
+server error after the harness's own retries — parks the Run at once, quoting the
+harness's message, and leaves the agent open. Fix the harness and tell the agent to carry
+on; Collie keeps collecting its Output, and the Run goes on when it is written. pi and
+Claude Code report such a stop; Codex and OpenCode do not yet. Where nothing has room, the
+agent is left where it is, and the Run waits for it, parking after its collection time with
+when each Subscription resets.
 
 Usage is data: it never refuses, holds or delays work.
 

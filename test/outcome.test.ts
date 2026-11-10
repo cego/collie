@@ -334,6 +334,55 @@ test("a bug is a fail then a pass, on two different trees", () => {
   ).toEqual(["the Output does not name the verification that reproduced the bug"]);
 });
 
+test("a regression that passed only before the tree moved says it has not run here, not that it fails", () => {
+  const middle = { head_sha: "abc0550000000", fingerprint: "tree-m" };
+  const reproduced = record({
+    name: "regression",
+    argv: ["test", "a.test.ts"],
+    expect: "fail",
+    exit: 1,
+    result: "pass",
+    start: EARLIER,
+    end: EARLIER,
+  });
+  const fixedEarlier = record({
+    name: "regression",
+    argv: ["test", "a.test.ts"],
+    start: middle,
+    end: middle,
+  });
+  const gaps = (after: ReadonlyArray<Verification>) =>
+    evidenceGaps(
+      "bug",
+      withOutput(
+        { reproduced: "regression" },
+        { verifications: [record({ name: "tests" }), reproduced, fixedEarlier, ...after] },
+      ),
+    );
+  expect(gaps([])).toEqual([
+    'regression passed on abc055000000 but has not run on the current tree, so the fix is not proven: run "/usr/bin/true test a.test.ts" in /repo again here',
+  ]);
+  expect(
+    gaps([record({ name: "regression", argv: ["test", "a.test.ts"], exit: 1, result: "fail" })]),
+  ).toEqual(["regression does not pass on the current tree, so the fix is not proven"]);
+});
+
+test("a promised check that passed only before the tree moved names the command to run here", () => {
+  const got = withOutput(
+    { tickets_done: ["01"], scope_met: true },
+    {
+      tickets: [{ file: "01.md", checks: ["typecheck"] }],
+      verifications: [
+        record({ name: "tests" }),
+        record({ name: "typecheck", argv: ["x"], start: EARLIER, end: EARLIER }),
+      ],
+    },
+  );
+  expect(evidenceGaps("feature", got)).toEqual([
+    '01.md promised check "typecheck", which passed on abc000 but has not run on this tree: run "/usr/bin/true x" in /repo again here',
+  ]);
+});
+
 /** A bug Run's `regression` failing as expected on an earlier tree, then passing. */
 const regressionPair = (before: Partial<Verification>, after: Partial<Verification>) =>
   withOutput(

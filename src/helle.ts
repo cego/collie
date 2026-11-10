@@ -188,7 +188,11 @@ export function resolveProject(
   return { _tag: "Ambiguous", slugs: Arr.map(matched, (p) => p.slug) };
 }
 
-export type Needed = { _tag: "Projects"; slugs: string[] } | { _tag: "Unresolved"; why: string };
+/** `None` is a repository Helle has no project for at all, so there is nothing to claim. */
+export type Needed =
+  | { _tag: "Projects"; slugs: string[] }
+  | { _tag: "None"; why: string }
+  | { _tag: "Unresolved"; why: string };
 
 /** What a release deploys, which is what decides the Helle projects it needs. */
 export interface Deploys {
@@ -234,8 +238,8 @@ const twice = (name: string, found: readonly HelleProject[]) =>
 /**
  * Every Helle project a release needs: the repository's own alone where it has one, else each
  * project of the repository's group that an application or a deploy job's name
- * (`stage:spilnu`) names, by slug or shorthand. Anything it cannot settle is `Unresolved`,
- * never an empty set.
+ * (`stage:spilnu`) names, by slug or shorthand. Where nothing names one it is `None`, and
+ * anything else it cannot settle is `Unresolved`, never an empty set.
  */
 export function resolveProjects(projects: readonly HelleProject[], release: Deploys): Needed {
   if (release.declared !== null) {
@@ -285,7 +289,7 @@ export function resolveProjects(projects: readonly HelleProject[], release: Depl
     }
   if (slugs.size === 0)
     return {
-      _tag: "Unresolved",
+      _tag: "None",
       why: `no Helle project for ${release.repoName}, its applications or its deploy jobs`,
     };
   return { _tag: "Projects", slugs: [...slugs].sort() };
@@ -345,7 +349,7 @@ const neededOf = Effect.fn("Helle.neededOf")(function* (
     );
   return resolved._tag === "Project"
     ? ({ _tag: "Projects", slugs: [resolved.slug] } satisfies Needed)
-    : ({ _tag: "Unresolved", why: `no Helle project for ${where.repoName}` } satisfies Needed);
+    : ({ _tag: "None", why: `no Helle project for ${where.repoName}` } satisfies Needed);
 });
 
 export const HoldersSchema = Schema.Union([
@@ -372,7 +376,7 @@ export const helleHolders = Effect.fn("Helle.holders")(function* (where: HelleWh
   const creds = yield* credentials(where);
   const projects = yield* helleProjects(creds);
   const needed = yield* neededOf(projects, where);
-  if (needed._tag === "Unresolved") return needed satisfies Holders;
+  if (needed._tag !== "Projects") return { _tag: "Unresolved", why: needed.why } satisfies Holders;
   const me = yield* helleMe(creds);
   const read: { slug: string; holder: string | null }[] = [];
   for (const slug of needed.slugs)
@@ -422,15 +426,16 @@ export interface HelleGate<E, R> extends HelleWhere {
 
 export type Held =
   | { _tag: "Held"; slugs: string[]; left?: { slug: string; holder: string }[] }
+  | { _tag: "None"; why: string }
   | { _tag: "Unresolved"; why: string };
 
 const AFFIRMATIVE = /^(y|yes)$/i;
 
 /**
- * Blocks until this Run holds every Helle project it needs, and answers which — or why
- * they could not be settled, which only the caller may decide to carry on from. Helle
- * failing to answer, or several projects the repository could be without `deploys`,
- * fails: "we could not ask" and "there is nothing to ask about" never come out the same.
+ * Blocks until this Run holds every Helle project it needs, and answers which — `None`
+ * where the repository has none, or why they could not be settled, which only the caller
+ * may decide to carry on from. Helle failing to answer, or several projects the
+ * repository could be without `deploys`, fails: "we could not ask" and "there is nothing to ask about" never come out the same.
  * Projects are held one at a time in a fixed order, and never waited for while a later
  * one is held, so Runs needing overlapping sets cannot each hold what the other waits for.
  */
@@ -445,7 +450,7 @@ const gateOf = Effect.fn("Helle.waitForHelle")(function* <E, R>(gate: HelleGate<
   const creds = yield* credentials(gate);
   const projects = yield* helleProjects(creds);
   const needed = yield* neededOf(projects, gate);
-  if (needed._tag === "Unresolved") return needed satisfies Held;
+  if (needed._tag !== "Projects") return needed satisfies Held;
   const me = yield* helleMe(creds);
   const recorded = new Set(Arr.map(gate.claimed, (one) => one.slug));
   let adopting: boolean | null = null;

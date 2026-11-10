@@ -187,6 +187,14 @@ function withoutSearches(got: Collected, name: string): Collected {
 const onlySearched = (what: string) =>
   `${what}, whose only pass on this tree is a text search, which proves nothing`;
 
+function passedOnlyBefore(got: Collected, name: string): Verification | undefined {
+  const proof = checkProof(withoutSearches(got, name), name);
+  return proof.state === "earlier" ? proof.runs.at(-1) : undefined;
+}
+
+const runAgain = (last: Verification, tree: string) =>
+  `passed on ${pipe(last.end.head_sha, Str.slice(0, 12))} but has not run on ${tree}: run ${shown(last)} again here`;
+
 type Journal = Pick<Collected, "verifications" | "final" | "commands"> &
   Partial<Pick<Collected, "approved">>;
 
@@ -517,10 +525,11 @@ function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; by: GapClo
         for (const name of ticket.checks) {
           const proof = provedAtFinal(got, name);
           if (proof === "passed" || settledUnpassed(got, name)) continue;
+          const earlier = passedOnlyBefore(got, name);
           check(
             proof === "searched"
               ? onlySearched(`${ticket.file} promised check "${name}"`)
-              : `${ticket.file} promised check "${name}", which has no passing verification on this tree`,
+              : `${ticket.file} promised check "${name}", which ${earlier === undefined ? "has no passing verification on this tree" : runAgain(earlier, "this tree")}`,
           );
         }
       }
@@ -542,11 +551,14 @@ function gapsOf(kind: Outcome, got: Collected): Array<{ text: string; by: GapClo
         );
       const fix = checkProof(withoutSearches(got, "regression"), "regression");
       const fixedBy = fix.state === "passed" ? fix.last : undefined;
+      const earlier = passedOnlyBefore(got, "regression");
       if (fixedBy === undefined)
         check(
           lastPassedAtFinal(got, "regression")
             ? onlySearched("regression")
-            : "regression does not pass on the current tree, so the fix is not proven",
+            : earlier === undefined
+              ? "regression does not pass on the current tree, so the fix is not proven"
+              : `regression ${runAgain(earlier, "the current tree, so the fix is not proven")}`,
         );
       else if (before.length > 0 && !Arr.some(before, (v) => sameAsked(v, fixedBy)))
         check(
