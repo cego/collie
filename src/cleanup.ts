@@ -79,6 +79,8 @@ import { uploadsDir } from "./uploads";
 import { finishedOnRecord } from "./cards";
 import type { CheckProcessesApi, Leftover } from "./check-processes";
 import { humanBytes } from "./bytes";
+import { holderLives, lockHolder, withLock } from "./lock";
+import { machineLockOf } from "./measurement";
 import { once } from "./audit";
 
 /** One kind of thing Collie cleans. */
@@ -1499,7 +1501,7 @@ export const renovateClonesSweeper = (stateDir: string, runs: ReadonlyArray<RunF
 
 /**
  * The base trees a Run's Measurements were taken on, each removed with git's record of it
- * once its Run has ended or has no row.
+ * once its Run has ended or has no row and no Measurement is running on this Machine.
  */
 export const measurementTreesSweeper = (
   stateDir: string,
@@ -1507,6 +1509,8 @@ export const measurementTreesSweeper = (
 ): Sweeper => {
   const kind = "measurement-tree";
   const root = `${stateDir}/measurements/trees`;
+  const lock = machineLockOf(stateDir);
+  const MEASURING = "a Measurement is running on this Machine";
   const live = new Set(
     Arr.map(
       Arr.filter(runs, (run) => !settled(run)),
@@ -1528,6 +1532,8 @@ export const measurementTreesSweeper = (
     kind,
     judge: Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+      const holder = yield* lockHolder(lock);
+      const measuring = holder !== null && (yield* holderLives(holder));
       const remove: CleanupItem[] = [];
       const keep: CleanupKept[] = [];
       for (const run of yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => [])))
@@ -1537,34 +1543,43 @@ export const measurementTreesSweeper = (
           const target = `${root}/${run}/${tree}`;
           const judged = yield* verdict(target);
           if (judged === null) continue;
-          if ("keep" in judged) keep.push({ kind, target, reason: judged.keep });
+          if (measuring) keep.push({ kind, target, reason: MEASURING });
+          else if ("keep" in judged) keep.push({ kind, target, reason: judged.keep });
           else remove.push({ kind, target, bytes: 0, reason: judged.remove });
         }
       const sizes = yield* sizesOf(Arr.map(remove, (item) => item.target));
       return { remove: Arr.map(remove, (item, at) => ({ ...item, bytes: sizes[at] ?? 0 })), keep };
     }),
+    // One claim: a Measurement holds the lock from before its tree is made until it ends.
     remove: (item) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const common = yield* shell(
-          "git",
-          ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-          item.target,
-        );
-        const freed = yield* removeIf(item.target, verdict(item.target));
-        if (common.code === 0)
-          yield* shell("git", ["--git-dir", Str.trim(common.stdout), "worktree", "prune"], "/");
-        const parent = pipe(
-          item.target,
-          Str.slice(
-            0,
-            Option.getOrElse(pipe(item.target, Str.lastIndexOf("/")), () => -1),
-          ),
-        );
-        if ((yield* fs.readDirectory(parent).pipe(Effect.orElseSucceed(() => ["?"]))).length === 0)
-          yield* fs.remove(parent, { recursive: true }).pipe(Effect.ignore);
-        return freed;
-      }),
+      withLock(
+        lock,
+        Effect.succeed({ kept: MEASURING }),
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const common = yield* shell(
+            "git",
+            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            item.target,
+          );
+          const freed = yield* removeIf(item.target, verdict(item.target));
+          if (common.code === 0)
+            yield* shell("git", ["--git-dir", Str.trim(common.stdout), "worktree", "prune"], "/");
+          const parent = pipe(
+            item.target,
+            Str.slice(
+              0,
+              Option.getOrElse(pipe(item.target, Str.lastIndexOf("/")), () => -1),
+            ),
+          );
+          if (
+            (yield* fs.readDirectory(parent).pipe(Effect.orElseSucceed(() => ["?"]))).length === 0
+          )
+            yield* fs.remove(parent, { recursive: true }).pipe(Effect.ignore);
+          return freed;
+        }),
+        0,
+      ).pipe(Effect.catch((error) => Effect.succeed({ kept: String(error) }))),
   };
 };
 
