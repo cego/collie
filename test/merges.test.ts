@@ -1894,3 +1894,51 @@ test("a legacy bare merge request is asked about in its owner's checkout, not th
       expect(stops).toEqual([]);
     }),
   ));
+
+test("a Task's one merge request is watched as the Run that owns it, so its merge leaves a newer Run on another branch going", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-owner-" });
+      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
+      const of = (over: Partial<RunFacts>) =>
+        madeRun(stateDir, { task: "task-1", workflow: "implement", ...over });
+      const runs = [
+        yield* of({
+          id: "r-build",
+          state: "succeeded",
+          branch: "feature-a",
+          mr: MR,
+          created: "2026-10-15T08:00:00Z",
+        }),
+        yield* of({
+          id: "r-other",
+          state: "running",
+          branch: "feature-b",
+          created: "2026-10-15T08:30:00Z",
+        }),
+      ];
+      const views = yield* buildBoard({ env, runs, now: TEN, quietMs: Infinity });
+      expect(Arr.map(views[0]!.mrs ?? [], (one) => one.run)).toEqual(["r-build"]);
+
+      const stops: Array<string> = [];
+      yield* settleMerges({
+        stateDir,
+        cwd: "/project",
+        run: forge("gitlab", {
+          mrs: [mr65({ state: "merged", sourceBranch: "feature-a", mergedAt: MERGED_AT })],
+        }),
+        views,
+        runs,
+        record: () => Effect.void,
+        stop: (run) => Effect.sync(() => void stops.push(run)),
+        now: TEN,
+        checked: new Map(),
+        states: new Map(),
+        panels: new Map(),
+        making: new Set(),
+      });
+
+      expect(stops).toEqual([]);
+    }),
+  ));

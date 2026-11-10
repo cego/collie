@@ -151,7 +151,7 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
         mr,
         disposition: view.disposition,
         runs: shown === undefined ? view.runs : [...view.runs, shown.run],
-        owner: shown?.run ?? found?.run ?? view.run,
+        owner: shown?.run ?? found?.run ?? view.mrs?.[0]?.run ?? view.run,
       });
     for (const repo of repos)
       if (repo !== shown)
