@@ -7762,7 +7762,7 @@ const makeRegistry: (
     const waiting = yield* asked(runId);
     if (!Arr.some(waiting, isUnanswered)) return waiting;
     const fs = yield* FileSystem.FileSystem;
-    const launches = yield* readLaunches(dir, runId).pipe(Effect.orElseSucceed(() => []));
+    const launches = yield* readLaunches(runId).pipe(Effect.orElseSucceed(() => []));
     const candidates = yield* Effect.forEach(launches, (one) =>
       fs.exists(one.output).pipe(
         Effect.orElseSucceed(() => false),
