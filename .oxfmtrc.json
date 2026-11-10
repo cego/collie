@@ -3,6 +3,8 @@
   "ignorePatterns": [
     // Third-party sources, pinned as submodules and never edited here.
     "desktop-rune/vendor/**",
+    // Agent messages kept verbatim, as the rendering corpus draws them.
+    "desktop-rune/fixtures/corpus/**",
     ".agent/**",
     ".agents/**",
     ".claude/**",

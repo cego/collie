@@ -211,10 +211,30 @@ case cannot mean the same:
   directly (`chat/tests/highlight.rs`); in Markdown the rest is plain.
 - **Images** draw their alt text.
 
-**Corpus.** 37 agent-written messages from Run artefacts on vm-mk (plans, handoffs, reviews,
-MR descriptions), secrets scrubbed, rendered under both highlighters to PNG at 960 by 2400.
-They describe internal repositories, so they stay in the Run's evidence, not in this public
-repository. What draws otherwise than today (`corpus`):
+**Corpus.** Two corpora of real Run agent messages, each rendered under both highlighters to
+PNG at 960 by 2400 (the Run's evidence).
+
+The checked-in one, `fixtures/corpus/`, is 40 pull request descriptions that Collie Runs
+wrote for this repository, the same words as each Run's `mr-description.md` or
+`pr-description.md`. They are public already, so checking them in discloses nothing new;
+`sources.json` names each pull request. `chat/tests/corpus.rs` checks there are at least 30
+and that this table is what `corpus` counts over them:
+
+40 messages; largest code block 615 bytes.
+
+| Construct   | rune-kit highlighter           | syntect + two-face | Occurrences | Messages |
+| ----------- | ------------------------------ | ------------------ | ----------- | -------- |
+| code `text` | plain                          | plain              | 1           | 1        |
+| raw HTML    | dropped, block content with it | same               | 41          | 11       |
+
+Most of that HTML is placeholders written outside backticks, such as
+`'dial-back to <peer> failed'`: CommonMark reads `<peer>` as an element, and rune-kit draws
+"dial-back to failed". Two messages fold their assumptions in `<details>`, which loses its
+summary and shows its body open.
+
+The other, 37 messages from Run artefacts on vm-mk (plans, handoffs, reviews, MR descriptions),
+secrets scrubbed, describes internal repositories, so it stays in the Run's evidence on the
+human's answer. Its count:
 
 | Construct         | rune-kit highlighter           | syntect + two-face | Occurrences | Messages |
 | ----------------- | ------------------------------ | ------------------ | ----------- | -------- |
@@ -224,8 +244,9 @@ repository. What draws otherwise than today (`corpus`):
 | code `powershell` | plain                          | plain              | 2           | 2        |
 | code `vue`        | plain                          | coloured           | 1           | 1        |
 
-Tables, task lists, the four Mermaid diagrams and the TypeScript, shell and JSON blocks drew.
-No message had footnotes, math, GFM alerts or a block over 32 KiB; the largest was 1,332 bytes.
+Across both, tables, task lists, the four Mermaid diagrams and the TypeScript, shell and JSON
+blocks drew. No message had footnotes, math, GFM alerts or a block over 32 KiB; the largest was
+1,332 bytes.
 
 **Highlighter cost.** On vm-mk, release build, best of five, the whole block:
 
