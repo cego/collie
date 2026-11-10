@@ -436,6 +436,8 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   const heads = new Map<string, string | null>();
   /** Each watched checkout, and the Runs whose heads were read in it. */
   const readers = new Map<string, Set<string>>();
+  /** The checkouts whose every watch is in place, so a head read in one stands until it moves. */
+  const watching = new Set<string>();
   const moves = yield* PubSub.unbounded<void>();
   /** How often each watched checkout has moved. */
   const checkouts = new Map<string, number>();
@@ -458,13 +460,26 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       const [own, common] = Str.split(Str.trim(said.stdout), "\n");
       if (said.code !== 0 || own === undefined || common === undefined) return;
       const shared = Str.startsWith("/")(common) ? common : `${cwd}/${common}`;
+      let ready = 0;
+      const onReady = () => {
+        if (++ready === 3) watching.add(cwd);
+      };
       yield* Stream.mergeAll(
-        [fs.watch(own), fs.watch(shared), fs.watch(`${shared}/refs`, { recursive: true })],
+        [
+          fs.watch(own, { onReady }),
+          fs.watch(shared, { onReady }),
+          fs.watch(`${shared}/refs`, { recursive: true, onReady }),
+        ],
         { concurrency: "unbounded" },
       ).pipe(Stream.runForEach(() => moved(cwd)));
     }).pipe(
       Effect.ignore,
-      Effect.ensuring(Effect.sync(() => readers.delete(cwd))),
+      Effect.ensuring(
+        Effect.sync(() => {
+          readers.delete(cwd);
+          watching.delete(cwd);
+        }),
+      ),
       Effect.provideContext(spawning),
     );
   const watch = (run: RunFacts) =>
@@ -483,8 +498,9 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       const key = `${run.cwd}\0${run.branch}`;
       yield* watch(run);
       if (heads.has(key)) return heads.get(key) ?? null;
+      const watched = watching.has(run.cwd);
       const read = yield* readBranchHead(run).pipe(Effect.orElseSucceed(() => null));
-      heads.set(key, read);
+      if (watched) heads.set(key, read);
       return read;
     }).pipe(Effect.provideContext(spawning));
 

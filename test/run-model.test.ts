@@ -3,13 +3,14 @@ import * as Str from "effect/String";
 import * as Struct from "effect/Struct";
 import { heapStats } from "bun:jsc";
 import { expect, test } from "bun:test";
-import { Deferred, Effect, Fiber, FileSystem, Layer, Schema } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Layer, Schema, Stream } from "effect";
 import { TaskView } from "../src/board-model";
 import { buildBoard } from "../src/board";
 import { readEnv } from "../src/env";
 import { makeRunModel, RunModel, runModelLayer } from "../src/run-model";
 import { writeTask } from "../src/task";
 import { epochMs } from "../src/time";
+import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { madeRun, recordsAt, runFacts } from "./support/records";
 
@@ -383,5 +384,33 @@ test("only a Run's files or its row move what its facts were read at; a card or 
       const written = model.factsAt("b");
       model.wrote(["b"]);
       expect(model.factsAt("b")).toBeGreaterThan(written);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a branch head read before its checkout is watched is read again, so a move then is not missed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-run-model-" });
+      const repo = `${dir}/repo`;
+      const git = (...args: ReadonlyArray<string>) =>
+        exec(["git", "-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", ...args]);
+      yield* fs.makeDirectory(repo, { recursive: true });
+      yield* git("init", "-q", "-b", "mk/ship");
+      yield* git("commit", "-q", "--allow-empty", "-m", "one");
+      const watched = yield* Deferred.make<void>();
+      const model = yield* makeRunModel(dir, "installation").pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          watch: (path, options) =>
+            Stream.unwrap(Effect.as(Deferred.await(watched), fs.watch(path, options))),
+        }),
+      );
+      const run = runFacts({ id: "r1", cwd: repo, branch: "mk/ship" });
+
+      yield* model.head(run);
+      yield* git("commit", "-q", "--allow-empty", "-m", "two");
+      const two = Str.trim((yield* git("rev-parse", "HEAD")).stdout);
+      expect(yield* model.head(run)).toBe(two);
     }).pipe(Effect.scoped),
   ));
