@@ -16,7 +16,7 @@ import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setSystemTime, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
 import {
   Clock,
@@ -2641,6 +2641,206 @@ test("an agent that ran out and stays idle past its budget parks the Run, and on
       expect(harnessesStarted(yield* rig.calls())).toEqual(["claude", "codex"]);
       expect(yield* (yield* FileSystem.FileSystem).exists(controlPath(dir, PARKED, "r1"))).toBe(
         false,
+      );
+    }),
+  ));
+
+const EXPIRED = "CodexApiError: Your authentication token has expired";
+const onPi = { harness: "pi", model: "openai-codex/gpt-5.5" };
+
+/** As much of pi's events, context and extension host as Collie's extension reads. */
+interface PiEvent {
+  readonly message?: { readonly stopReason: string; readonly errorMessage: string };
+  readonly aborted?: boolean;
+}
+interface PiContext {
+  readonly sessionManager: { readonly getSessionFile: () => string };
+  readonly getContextUsage: () => { readonly tokens: number };
+}
+type PiHandler = (event: PiEvent, ctx: PiContext) => void;
+interface PiHost {
+  readonly on: (event: string, handler: PiHandler) => void;
+  readonly registerCommand: () => void;
+}
+
+const stopsOnError = (agent: string, error: string, after = "Your task for this step") =>
+  Effect.gen(function* () {
+    while (!(yield* prompted(after))) yield* TestClock.withLive(Effect.sleep("10 millis"));
+    const control = yield* controlDir(rig.pluginEnv().stateDir, agent);
+    yield* (yield* FileSystem.FileSystem).makeDirectory(control, { recursive: true });
+    yield* COMPACTION_PORTS.pi!.install({
+      agent,
+      harness: "pi",
+      cwd: rig.projectDir,
+      dir: control,
+    });
+    const extension: { default: (pi: PiHost) => void } = yield* Effect.promise(
+      () => import(`${control}/collie.ts`),
+    );
+    const handlers = new Map<string, PiHandler>();
+    extension.default({
+      on: (event, handler) => handlers.set(event, handler),
+      registerCommand: () => {},
+    });
+    const ctx: PiContext = {
+      sessionManager: { getSessionFile: () => "/home/mk/.pi/sessions/one.jsonl" },
+      getContextUsage: () => ({ tokens: 1 }),
+    };
+    // The extension stamps the wall clock, which this Run's clock runs ahead of.
+    setSystemTime(yield* Clock.currentTimeMillis);
+    try {
+      handlers.get("turn_end")!({ message: { stopReason: "error", errorMessage: error } }, ctx);
+      handlers.get("agent_settled")!({ aborted: false }, ctx);
+    } finally {
+      setSystemTime();
+    }
+  }).pipe(Effect.orDie);
+
+test(
+  "a turn its harness will not retry parks the Run within a poll, quoting the harness",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([null]);
+        yield* session(
+          Effect.gen(function* () {
+            yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+            yield* stopsOnError(agentFor("r1"), EXPIRED);
+            yield* spend(5_000);
+            const why = yield* read(controlPath(dir, PARKED, "r1"));
+            expect(why).toContain(EXPIRED);
+            expect(why).toContain("pi/openai-codex/gpt-5.5");
+            expect(why).toContain(outputPath("r1"));
+            expect(why).not.toContain("minutes idle");
+          }),
+          { ...onPi, collectMs: 3_600_000, pollMs: 1_000 },
+        );
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "a Run parked on a harness stop goes on with the Output its agent writes after",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* rig.queueOutputs([null]);
+        const result = yield* session(
+          Effect.gen(function* () {
+            const fiber = yield* Effect.forkChild(started("r1"));
+            yield* stopsOnError(agentFor("r1"), EXPIRED);
+            yield* until(parkedSays(EXPIRED));
+            yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"carried on"}`);
+            return yield* Fiber.join(fiber);
+          }),
+          { ...onPi, collectMs: 3_600_000, pollMs: 1_000 },
+        );
+        expect(result._tag === "Success" && result.success.note).toBe("carried on");
+        expect(yield* fs.exists(controlPath(dir, PARKED, "r1"))).toBe(false);
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "an agent whose harness stopped and that stays idle past its budget is parked quoting the harness",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([null]);
+        yield* session(
+          Effect.gen(function* () {
+            yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+            yield* stopsOnError(agentFor("r1"), EXPIRED);
+            yield* until(parkedSays("minutes idle"));
+            expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(EXPIRED);
+          }),
+          { ...onPi, collectMs: 60_000, pollMs: 1_000 },
+        );
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "a turn its harness will not retry while it repairs its Output parks the Run within a poll, quoting the harness",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "maybe" }, null]);
+        yield* session(
+          Effect.gen(function* () {
+            yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+            yield* stopsOnError(agentFor("r1"), EXPIRED, "not usable");
+            yield* spend(5_000);
+            expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(EXPIRED);
+          }),
+          { ...onPi, collectMs: 3_600_000, pollMs: 1_000 },
+        );
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "a harness stop during a repair still parks its wait after a restart, and a late Output finishes it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const over = { ...onPi, collectMs: 3_600_000, pollMs: 1_000 };
+        yield* rig.queueOutputs([{ verdict: "maybe" }, null]);
+        yield* session(
+          Effect.gen(function* () {
+            yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+            yield* stopsOnError(agentFor("r1"), EXPIRED, "not usable");
+          }),
+          over,
+        );
+        yield* fs.remove(controlPath(dir, PARKED, "r1"), { force: true });
+        const result = yield* session(
+          Effect.gen(function* () {
+            const fiber = yield* Effect.forkChild(started("r1"));
+            yield* spend(5_000);
+            expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(EXPIRED);
+            yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"carried on"}`);
+            return yield* Fiber.join(fiber);
+          }),
+          over,
+        );
+        expect(result._tag === "Success" && result.success.note).toBe("carried on");
+        expect(yield* fs.exists(controlPath(dir, PARKED, "r1"))).toBe(false);
+      }),
+    ),
+  120_000,
+);
+
+test("an agent that ran out with nothing to take over, and whose harness then stopped, is parked past its budget quoting the harness", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null]);
+      yield* session(
+        Effect.gen(function* () {
+          yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+          yield* runsOut(agentFor("r1"));
+          yield* recordClaudeEvent(
+            yield* controlDir(rig.pluginEnv().stateDir, agentFor("r1")),
+            flow(
+              Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+              Result.getOrThrow,
+            )({
+              session_id: "s-out",
+              hook_event_name: "StopFailure",
+              error: "authentication_failed",
+              error_details: EXPIRED,
+            }),
+          ).pipe(Effect.orDie);
+          yield* until(parkedSays("ran out (rate_limit) before writing"));
+          expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(EXPIRED);
+        }),
+        { fallbacks: Effect.succeed([]), collectMs: 2_000 },
       );
     }),
   ));
