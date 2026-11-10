@@ -282,10 +282,7 @@ export interface SetMember {
 
 // Each other character is `-<its code in base 36>-`, so no two MR ids share a name.
 export const invocationFor = (workflow: "release" | "stage", member: SetMember) =>
-  `${workflow}-${pipe_(
-    member.id,
-    Str.replace(/[^a-z0-9]/g, (char) => `-${char.codePointAt(0)!.toString(36)}-`),
-  )}`;
+  `${workflow}-${member.id.replace(/[^a-z0-9]/g, (char) => `-${char.codePointAt(0)!.toString(36)}-`)}`;
 
 /** Whether a Run was started with one merge request: a set is never offered again whole. */
 export const startedWithOne = (facts: ActionFacts) => {
