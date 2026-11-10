@@ -107,6 +107,8 @@ pub struct Task {
     pub agents: Vec<Agent>,
     pub children: Vec<ChildrenItem>,
     pub mr: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mrs: Option<Vec<Mr>>,
     pub branch: Option<String>,
     pub disposition: Option<String>,
     pub landed: bool,
@@ -271,6 +273,23 @@ pub struct ChildrenItem {
     pub run: Option<String>,
     pub state: StepState,
     pub mr: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Mr {
+    pub id: String,
+    pub mr: String,
+    pub label: String,
+    pub short: String,
+    pub url: Option<String>,
+    pub run: String,
+    pub state: Option<MrState>,
+    pub checks: Option<Checks>,
+    pub head: Option<String>,
+    pub ready: bool,
+    pub disposition: Option<String>,
+    #[serde(rename = "waitsOn")]
+    pub waits_on: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1410,7 +1429,9 @@ pub struct Detail {
     pub outcome: Outcome,
     #[serde(rename = "finishedAt")]
     pub finished_at: f64,
-    pub mr: Option<Mr>,
+    pub mr: Option<DetailMr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mrs: Option<Vec<DetailMr2>>,
     pub findings: Vec<Finding>,
     pub verifications: Vec<Verification>,
     pub steering: Vec<SteeringItem>,
@@ -1632,7 +1653,7 @@ pub struct PeakContext {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum Mr {
+pub enum DetailMr {
     Details(Details),
     Unavailable(Unavailable),
 }
@@ -1743,6 +1764,13 @@ pub struct Unavailable {
 pub enum UnavailableTag {
     #[serde(rename = "Unavailable")]
     Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DetailMr2 {
+    pub id: String,
+    pub mr: String,
+    pub panel: Option<DetailMr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1908,6 +1936,8 @@ pub struct DetailFlow {
     pub lanes: Vec<Lane>,
     pub current: Option<DetailFlowCurrent>,
     pub release: Option<Vec<Node>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub releases: Option<Vec<Release>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2228,6 +2258,13 @@ pub struct StartedBy {
 pub struct DetailFlowCurrent {
     pub run: String,
     pub node: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Release {
+    pub mr: String,
+    pub short: String,
+    pub nodes: Vec<Node>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
