@@ -214,7 +214,12 @@ that cannot be pushed still fails, as below.
 
 It fails with the reason there is no merge request — a ticket stopped
 on a blocking finding, acceptance criteria unreadable or still unmet when Stop was answered, a review that halted — and says to
-continue with a follow-up Run, which **Keep going on this** starts. Nobody is asked along
+continue with a follow-up Run, which **Keep going on this** starts. A delivery the
+Merge request step's agent left undone — the branch not pushed, no merge request URL, or a
+blocking finding — does not fail it: the Run parks at Merge request with the reason, and a
+resume asks that agent again, told of the merge request already open. Its `minor` findings
+never stop the step: each is recorded in the Run's record as `unsettled: <title>`, and all of
+them go onto the merge request as one note from Collie. Nobody is asked along
 the way: the human verifies the work in the merge request, before it lands. Where a failed check's
 output names the tests that failed (bun test's does), the gate reruns each of those tests
 once, alone, on the same tree. A test that then passes is a **Flake**: it is not handed to a

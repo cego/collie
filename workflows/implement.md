@@ -411,6 +411,12 @@ Then write your Output, naming the merge request and the issues you linked. `cle
 the {{mr.noun}} exists or was updated; a push or a command above that failed is
 `findings`, saying what.
 
+A finding is `blocker` or `major` only where it leaves delivery undone: the branch not
+pushed, or the {{mr.noun}} not opened or updated. That parks the Run here until it is
+repaired. The {{mr.noun}}'s ordinary state is `minor`: approvals still needed, a pipeline
+still running, failures that were there before this Run. Collie records each `minor` one
+and notes it on the {{mr.noun}}.
+
 ## source.plan-dir
 
 A plan is already written. `{{inputs.plan}}/SPEC.md` is the spec and

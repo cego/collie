@@ -25,6 +25,7 @@ import {
   findingsIn,
   flakesOf,
   formatFindings,
+  isBlocking,
   isOutcome,
   leaveOutstanding,
   owedLocally,
@@ -610,8 +611,13 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
 
         const settledEvidence = yield* host.evidence(runId, cwd);
         const linear = yield* connection("linear", "connection.mr-linear");
+        const fs = yield* FileSystem.FileSystem;
+        // A park per attempt, so a resume asks again rather than replaying the undone Output.
+        const parkedAt = (attempt: number) => `${dir}/mr-parked-${attempt}`;
+        let attempt = 1;
+        while (yield* fs.exists(parkedAt(attempt)).pipe(Effect.orDie)) attempt += 1;
         const opened = yield* agentWork({
-          operation: "mr",
+          operation: attempt === 1 ? "mr" : `mr-${attempt}`,
           agent: ask.agent,
           role: ask.role,
           pushes: true,
@@ -649,22 +655,37 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           },
           output: ask.opened,
         });
-        if (
-          opened.verdict !== "clean" ||
-          !opened.pushed ||
-          !opened.mr_url ||
-          (opened.findings ?? []).length > 0
-        ) {
-          const missing = [
-            ...(!opened.pushed ? ["the branch was not pushed"] : []),
-            ...(!opened.mr_url ? ["no merge request URL was reported"] : []),
-            ...Arr.map(opened.findings ?? [], (finding) => finding.title),
-          ];
-          return yield* new WorkflowError({
-            reason: `Merge request delivery did not finish: ${Arr.join(missing, "; ") || opened.verdict}. Continue with a follow-up Run to finish delivery.`,
-          });
+        const blocking = Arr.filter(opened.findings ?? [], isBlocking);
+        const minor = Arr.filter(opened.findings ?? [], (one) => !isBlocking(one));
+        const undone = [
+          ...(!opened.pushed ? ["the branch was not pushed"] : []),
+          ...(!opened.mr_url ? ["no merge request URL was reported"] : []),
+          ...Arr.map(blocking, (finding) => finding.title),
+        ];
+        if (undone.length > 0 || !opened.mr_url) {
+          const reason = `Merge request delivery is undone: ${Arr.join(undone, "; ")}. Repair it, then resume ${runId}.`;
+          yield* fs.writeFileString(parkedAt(attempt), "").pipe(Effect.orDie);
+          yield* host.record(runId, reason);
+          yield* stepFailed(reason);
+          yield* host.parked(runId, reason);
+          return yield* Workflow.suspend(yield* WorkflowInstance);
         }
         yield* host.mergeRequest(runId, opened.mr_url);
+        if (minor.length > 0)
+          yield* Activity.make({
+            name: "mr-unsettled",
+            execute: Effect.gen(function* () {
+              for (const one of minor) yield* host.record(runId, `unsettled: ${one.title}`);
+              yield* host.note({
+                runId,
+                cwd,
+                body: `Delivery left these unsettled:\n\n${Arr.join(
+                  Arr.map(minor, (one) => `- ${one.title}${one.detail ? `: ${one.detail}` : ""}`),
+                  "\n",
+                )}`,
+              });
+            }),
+          });
         return opened.mr_url;
       }),
     );
