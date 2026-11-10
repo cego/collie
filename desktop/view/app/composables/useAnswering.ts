@@ -120,7 +120,9 @@ export const useAnswering = () => {
           const question = open.get(key) ?? null;
           return [
             key,
-            question === one.question ? one : stepped(one, { kind: "seen", question }).state,
+            question === one.question && one.onBoard
+              ? one
+              : stepped(one, { kind: "seen", question }).state,
           ] as const;
         }),
       );

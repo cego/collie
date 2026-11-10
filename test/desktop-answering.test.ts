@@ -130,3 +130,17 @@ test("of two tries of one answer, a failed one leaves the confirmed one standing
   reply(true);
   expect(questionnaireView(answering.of(installation, question)).status).toBe("Answered: Go on");
 });
+
+test("a question that returns to the board after a gesture made while it was gone opens again", () => {
+  const installation = "returns";
+  const question = asked("decide");
+  const answering = useAnswering();
+  const { act, sent } = replying();
+  answering.settle(boardOf(installation, question));
+  answering.settle(boardOf(installation));
+  answering.step(installation, "mk-pc", question, { kind: "pick", id: "go" }, act);
+  answering.settle(boardOf(installation, question));
+  answering.step(installation, "mk-pc", question, { kind: "pick", id: "go" }, act);
+  answering.step(installation, "mk-pc", question, { kind: "submit", request: "s-1" }, act);
+  expect(Arr.map(sent, (action) => action._tag)).toEqual(["Answer"]);
+});
