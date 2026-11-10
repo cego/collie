@@ -252,6 +252,28 @@ export const ForgeModel = Schema.Struct({
       }),
     ),
   ),
+  /** GitLab's pipelines on each sha beside the ones `mrs` describe, and those started on it. */
+  pipelinesOn: Schema.optionalKey(
+    Schema.Record(
+      Schema.String,
+      Schema.Array(
+        Schema.Struct({
+          id: Schema.Finite,
+          status: Schema.String,
+          /** GitLab's `merge_request_event` or `api`, where it was started. */
+          source: Schema.optionalKey(Schema.String),
+          ref: Schema.optionalKey(Schema.String),
+        }),
+      ),
+    ),
+  ),
+  /** The status GitLab refuses to start a merge request's pipeline, or a branch's, with. */
+  refusesPipeline: Schema.optionalKey(
+    Schema.Struct({
+      mr: Schema.optionalKey(Schema.Finite),
+      branch: Schema.optionalKey(Schema.Finite),
+    }),
+  ),
   /** The shas each sha descends from. */
   ancestry: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String))),
   /** Repositories gh cannot read, by `owner/repo`. */
@@ -335,6 +357,10 @@ interface Answer {
   readonly noted?: { readonly key: string; readonly body: string };
   readonly approved?: string;
   readonly retried?: { readonly mr: FakeMr; readonly at: number | ReadonlyArray<number> };
+  readonly pipelineStarted?: {
+    readonly sha: string;
+    readonly pipeline: NonNullable<ForgeModel["pipelinesOn"]>[string][number];
+  };
   readonly oauth?: { readonly token: string; readonly expiry: string };
   readonly replied?: { readonly mr: FakeMr; readonly thread: string | null; readonly body: string };
   readonly merged?: {
@@ -996,7 +1022,23 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
       const mr = Option.getOrUndefined(
         Arr.findFirst(model.mrs, (one) => one.base?.at === sha && one.base?.jobs !== undefined),
       );
-      return json(mr === undefined ? [] : [{ id: pipelineIdOf(mr) + 1, sha }]);
+      return json([
+        ...(mr === undefined ? [] : [{ id: pipelineIdOf(mr) + 1, sha, status: "success" }]),
+        ...Arr.map(model.pipelinesOn?.[sha] ?? [], ({ id, status }) => ({
+          id,
+          sha,
+          status,
+          web_url: `https://${flag(args, "--hostname")}/${decodeURIComponent(/^projects\/([^/]+)/.exec(route)?.[1] ?? "")}/-/pipelines/${id}`,
+        })),
+      ]);
+    }
+    const branchPipeline = /^projects\/([^/]+)\/pipeline\?ref=([^&]+)$/.exec(route);
+    if (branchPipeline && args.includes("POST")) {
+      const ref = decodeURIComponent(branchPipeline[2]!);
+      const mr = Option.getOrUndefined(Arr.findFirst(model.mrs, (one) => one.sourceBranch === ref));
+      return mr === undefined
+        ? refused("400 Reference not found")
+        : pipelineStart(model, mr, model.refusesPipeline?.branch, { source: "api", ref });
     }
     const byRef = /\/pipelines\?ref=([^&]+)/.exec(route);
     const tagged = byRef === null ? [] : runsFor(model, decodeURIComponent(byRef[1]!));
@@ -1074,6 +1116,34 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
   return no();
 }
 
+/** A pipeline started on `mr`'s head, or GitLab's refusal with `refusing`'s status. */
+function pipelineStart(
+  model: ForgeModel,
+  mr: FakeMr,
+  refusing: number | undefined,
+  how: { readonly source: string; readonly ref: string },
+): Answer {
+  if (refusing !== undefined)
+    return refused(
+      `${refusing} ${refusing === 400 ? "No stages / jobs for this pipeline." : "Internal Server Error"}`,
+    );
+  const sha = mr.head ?? "";
+  const id =
+    1 +
+    Math.max(
+      0,
+      ...Arr.flatMap(
+        Rec.values(model.pipelinesOn ?? {}),
+        Arr.map((one) => one.id),
+      ),
+    );
+  const pipeline = { id, status: "created", ...how };
+  return {
+    ...json({ id, sha, status: "created", web_url: `https://${mr.project}/-/pipelines/${id}` }),
+    pipelineStarted: { sha, pipeline },
+  };
+}
+
 /** `glab api` on one merge request: its approvals, its discussions, a reply and the merge. */
 function glabOnMr(
   model: ForgeModel,
@@ -1131,6 +1201,11 @@ function glabOnMr(
       replied: { mr, thread: thread ?? null, body: field(args, "body") ?? "" },
     };
   }
+  if (rest === "pipelines" && method === "POST")
+    return pipelineStart(model, mr, model.refusesPipeline?.mr, {
+      source: "merge_request_event",
+      ref: `refs/merge-requests/${mr.iid}/head`,
+    });
   if (rest === "merge" && method === "PUT")
     return model.refusesMerge === true
       ? refused(NOT_MERGEABLE.gitlab)
@@ -1864,6 +1939,11 @@ export function answer(
             },
       ),
     };
+  }
+  if (said.pipelineStarted !== undefined) {
+    const { sha, pipeline } = said.pipelineStarted;
+    const on = after.pipelinesOn ?? {};
+    after = { ...after, pipelinesOn: { ...on, [sha]: [...(on[sha] ?? []), pipeline] } };
   }
   if (said.replied !== undefined) {
     const { mr, thread, body } = said.replied;

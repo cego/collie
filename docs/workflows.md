@@ -248,7 +248,16 @@ an implementer made where the spec was silent — goes into the description unde
 settled by the run**, and the merge request opens anyway.
 
 Once the `mr` step has pushed and the merge request is recorded — opened by the step, or
-found from the Task's branch by the merge watch — each check
+found from the Task's branch by the merge watch — the head it delivered has a pipeline.
+The step reads the branch's head on `origin` before its agent runs; where that is the
+checkout's `HEAD` after it, the push sent nothing, because the build's or a fix's push with
+`ci.skip` already carried that head. Collie then starts a pipeline on it, unless one that
+was not skipped is there: on GitLab the merge request's, else the branch's, and on GitHub
+none, since Actions run on every push. The Run's record says `pipeline: started <url> on
+<sha>`, or that the head already has one. Where GitLab refuses both because the project's CI
+gives that head none, the record says so with GitLab's message and the run goes on; any
+other failure parks it at Merge request with the forge's reason, and a resume tries again.
+Then each check
 [left to CI](cli.md#what-collie-may-run-itself) is proved by its pipeline job on the merge
 request's head, which must be the checkout's `HEAD`. The run reads the job through the
 forge every 30 s while it is pending or running, and its log and `collie run checks` say

@@ -52,6 +52,7 @@ import { connection } from "./connections.ts";
 import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
 import * as Workflow from "effect/workflow/Workflow";
 import * as Activity from "effect/workflow/Activity";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 /** At most four fix rounds at the gate, and four for CI. */
 const ROUNDS = 4;
@@ -90,7 +91,25 @@ const ciFix = step({
   role: "implementer",
 });
 
-type Needs = Run | Agents | Host | WorkflowEngine | WorkflowInstance | FileSystem.FileSystem;
+type Needs =
+  | Run
+  | Agents
+  | Host
+  | WorkflowEngine
+  | WorkflowInstance
+  | FileSystem.FileSystem
+  | ChildProcessSpawner.ChildProcessSpawner;
+
+/** `branch`'s head on origin, null where origin has no such branch or cannot say. */
+const remoteHead = (cwd: string, branch: string) =>
+  Effect.gen(function* () {
+    if (branch === "") return null;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const listed = yield* spawner.string(
+      ChildProcess.make("git", ["ls-remote", "origin", `refs/heads/${branch}`], { cwd }),
+    );
+    return Str.split(Str.trim(listed), "\t")[0] || null;
+  }).pipe(Effect.orElseSucceed(() => null));
 
 /** What every prompt here is given beside its own fields. */
 type Told = Readonly<Record<string, Schema.Json>> & {
@@ -616,6 +635,12 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         const parkedAt = (attempt: number) => `${dir}/mr-parked-${attempt}`;
         let attempt = 1;
         while (yield* fs.exists(parkedAt(attempt)).pipe(Effect.orDie)) attempt += 1;
+        // Where the agent leaves this head, its push sent nothing and started no pipeline.
+        const remoteBefore = yield* Activity.make({
+          name: attempt === 1 ? "mr-remote-head" : `mr-remote-head-${attempt}`,
+          success: Schema.NullOr(Schema.String),
+          execute: remoteHead(cwd, ready.branch ?? ""),
+        });
         const opened = yield* agentWork({
           operation: attempt === 1 ? "mr" : `mr-${attempt}`,
           agent: ask.agent,
@@ -686,6 +711,33 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
               });
             }),
           });
+        yield* Activity.make({
+          name: "mr-pipeline",
+          execute: Effect.gen(function* () {
+            const head = (yield* host.evidence(runId, cwd)).final.head_sha;
+            if (head !== remoteBefore) return;
+            const at = pipe_(head, Str.slice(0, 12));
+            const answer = yield* host.startPipeline({ runId, cwd });
+            if (answer._tag === "Failed") {
+              const reason = `Cannot start a pipeline on ${at}: ${answer.reason}. Repair it, then resume ${runId}.`;
+              yield* host.record(runId, reason);
+              yield* stepFailed(reason);
+              yield* host.parked(runId, reason);
+              return yield* Workflow.suspend(yield* WorkflowInstance);
+            }
+            yield* host.record(
+              runId,
+              answer._tag === "Started"
+                ? `pipeline: started ${answer.url} on ${at}`
+                : answer._tag === "Has"
+                  ? `pipeline: ${at} already has ${answer.url}`
+                  : answer._tag === "Unneeded"
+                    ? `pipeline: none started on ${at}: ${answer.why}`
+                    : `pipeline: none on ${at}: the project's CI gives it none: ${answer.message}`,
+            );
+            yield* host.parked(runId, null);
+          }),
+        });
         return opened.mr_url;
       }),
     );

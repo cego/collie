@@ -3367,3 +3367,102 @@ test("a failed GitHub job's log command prints its workflow run's failed jobs", 
     }).pipe(Effect.provide(fake.layer)),
   );
 });
+
+test("GitHub's adapter starts no pipeline on a pull request's head and asks nothing, since Actions run on every push", () => {
+  const fake = fakeForge("github", model("github"));
+  return runEffect(
+    Effect.gen(function* () {
+      expect(yield* FORGES.github.startPipeline(ref("github"), HEAD, "/w", fake.run)).toMatchObject(
+        { _tag: "Unneeded" },
+      );
+      expect(fake.requests).toEqual([]);
+      expect(fake.calls).toEqual([]);
+    }).pipe(Effect.provide(fake.layer)),
+  );
+});
+
+describe("GitLab's start of a merge request head's pipeline", () => {
+  const started = (over: Partial<ForgeModel>) => {
+    const fake = fakeForge(
+      "gitlab",
+      model("gitlab", { mrs: [mr("gitlab", { sourceBranch: "feature" })], ...over }),
+    );
+    return FORGES.gitlab.startPipeline(ref("gitlab"), HEAD, "/w", fake.run).pipe(
+      Effect.map((answer) => ({
+        answer,
+        posted: Arr.map(
+          Arr.filter(fake.requests, (one) => one.method === "POST"),
+          (one) => `${new URL(one.url).pathname}${new URL(one.url).search}`,
+        ),
+        on: fake.model().pipelinesOn?.[HEAD] ?? [],
+      })),
+      Effect.provide(fake.layer),
+    );
+  };
+  const SKIPPED = { pipelinesOn: { [HEAD]: [{ id: 5, status: "skipped" }] } };
+  const MR_ROUTE = "/api/v4/projects/group%2Fapp/merge_requests/30/pipelines";
+  const BRANCH_ROUTE = "/api/v4/projects/group%2Fapp/pipeline?ref=feature";
+
+  test("a head whose only pipeline was skipped gets the merge request's pipeline", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { answer, posted, on } = yield* started(SKIPPED);
+        expect(posted).toEqual([MR_ROUTE]);
+        expect(on).toHaveLength(2);
+        expect(answer).toEqual({
+          _tag: "Started",
+          url: `https://${PROJECT.gitlab}/-/pipelines/${on[1]!.id}`,
+        });
+      }),
+    ));
+
+  test("a merge request pipeline refused with 400 falls back to the source branch's", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { answer, posted, on } = yield* started({ ...SKIPPED, refusesPipeline: { mr: 400 } });
+        expect(posted).toEqual([MR_ROUTE, BRANCH_ROUTE]);
+        expect(on[1]).toMatchObject({ source: "api", ref: "feature" });
+        expect(answer).toMatchObject({ _tag: "Started" });
+      }),
+    ));
+
+  test("both refused with 400 is the project's CI giving the head none, in GitLab's words", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { answer, posted } = yield* started({
+          refusesPipeline: { mr: 400, branch: 400 },
+        });
+        expect(posted).toEqual([MR_ROUTE, BRANCH_ROUTE]);
+        expect(answer).toMatchObject({ _tag: "NoneByRules" });
+        expect(answer._tag === "NoneByRules" && answer.message).toContain(
+          "No stages / jobs for this pipeline.",
+        );
+      }),
+    ));
+
+  test("a refusal that is not a 400 is a failure, and the branch's is not tried", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { answer, posted } = yield* started({ ...SKIPPED, refusesPipeline: { mr: 500 } });
+        expect(posted).toEqual([MR_ROUTE]);
+        expect(answer).toMatchObject({ _tag: "Failed" });
+        expect(answer._tag === "Failed" && answer.reason).toContain("500");
+      }),
+    ));
+
+  test("a head with a pipeline that was not skipped gets none", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { answer, posted } = yield* started({
+          pipelinesOn: {
+            [HEAD]: [
+              { id: 5, status: "skipped" },
+              { id: 6, status: "running" },
+            ],
+          },
+        });
+        expect(posted).toEqual([]);
+        expect(answer).toEqual({ _tag: "Has", url: `https://${PROJECT.gitlab}/-/pipelines/6` });
+      }),
+    ));
+});

@@ -347,6 +347,9 @@ background job.
 
 Push anything the earlier steps have not pushed yet, this time **without** `ci.skip`:
 yours is the push that runs the pipeline, and the state a human will look at.
+Where your push sends nothing, because an earlier push with `ci.skip` already carried this
+head, Collie starts the head's pipeline once you are done. Never start one yourself, and
+never report a missing or skipped pipeline as a finding.
 Merge only when a message of its own asks you to merge this merge request: the human typing
 in this pane, or a Delivery from the human, from chat for the human, or from another agent
 writing as itself. Who sent it is recorded, never a reason to refuse. Every request gets the
@@ -416,6 +419,12 @@ pushed, or the {{mr.noun}} not opened or updated. That parks the Run here until 
 repaired. The {{mr.noun}}'s ordinary state is `minor`: approvals still needed, a pipeline
 still running, failures that were there before this Run. Collie records each `minor` one
 and notes it on the {{mr.noun}}.
+
+## review.pipeline
+
+A pipeline on this change's final head is not yours to require: the Merge request step
+starts and proves it once the merge request is open. A missing or skipped pipeline on the
+head is never a finding.
 
 ## source.plan-dir
 

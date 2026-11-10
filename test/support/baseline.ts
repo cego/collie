@@ -2718,6 +2718,9 @@ scenario(
         expect(
           Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === "post-1"))?.prompt,
         ).toContain(`${rig.projectDir} has no remote, so group/project!42 may not be its own`);
+        expect(flat(yield* asked("r-review-no-remote", "review-1"))).not.toContain(
+          "the Merge request step starts and proves it",
+        );
       }),
     ),
   120_000,
@@ -5917,6 +5920,10 @@ scenario(
         expect(yield* prompts()).toHaveLength(4);
         expect(yield* asked("r-gate-judged", "review-5-1")).toContain('"scope_met": true');
         expect(yield* asked("r-gate-judged", "review-5-1")).toContain(`Spec: ${plan}\n`);
+        for (const review of ["review-1", "review-5-1"])
+          expect(flat(yield* asked("r-gate-judged", review))).toContain(
+            "A missing or skipped pipeline on the head is never a finding",
+          );
       }),
     ),
   120_000,
@@ -8787,6 +8794,188 @@ scenario(
   120_000,
 );
 
+/**
+ * A GitLab delivery from a branch of its own, open as merge request !31, whose head's only
+ * pipeline was skipped. The build's push carried that head to origin; where `pushed` is
+ * false, a commit after it has not been pushed yet, as the mr agent's push would carry it.
+ */
+const skippedHead = (pushed: boolean, over: Partial<ForgeModel> = {}) =>
+  Effect.gen(function* () {
+    const { bin } = yield* deliveringOn("gitlab");
+    const branch = "delivered";
+    for (const args of [
+      ["checkout", "-q", "-b", branch],
+      ["push", "-q", "origin", "HEAD"],
+      ...(pushed ? [] : [["commit", "-qm", "the mr agent's", "--allow-empty"]]),
+    ])
+      yield* exec(["git", ...args], { cwd: rig.projectDir });
+    const head = yield* headOf();
+    const forge = yield* forgeOnPath(bin, "gitlab", {
+      installed: true,
+      loggedIn: [FORGE_HOST.gitlab],
+      login: "tester",
+      mrs: [{ project: PROJECT.gitlab, iid: "31", state: "open", head, sourceBranch: branch }],
+      pipelinesOn: { [head]: [{ id: 9, status: "skipped" }] },
+      ...over,
+    });
+    const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+    /** The pipelines the forge was asked to start on the head. */
+    const started = Effect.map(forge.model(), (model) =>
+      Arr.filter(model.pipelinesOn?.[head] ?? [], (one) => one.source !== undefined),
+    );
+    return { bin, forge, head, branch, plan, started };
+  });
+const sha12 = (sha: string) => pipe(sha, Str.slice(0, 12));
+const flat = (text: string) => pipe(text, Str.replace(/\s+/g, " "));
+
+scenario(
+  "a delivery whose push sent nothing gets one merge request pipeline on its skipped head, and the Run records it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, head, plan, started } = yield* skippedHead(true);
+        const runId = "r-impl-pipeline-started";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED_CI]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+        });
+        yield* bin.restore();
+        expect(said(result)).toBe(CI_MR);
+        const [one, ...more] = yield* started;
+        expect(more).toEqual([]);
+        expect(one).toMatchObject({ source: "merge_request_event" });
+        expect(yield* runLog(runId)).toContain(
+          `pipeline: started https://${PROJECT.gitlab}/-/pipelines/${one!.id} on ${sha12(head)}`,
+        );
+        const mr = flat(yield* asked(runId, "mr"));
+        expect(mr).toContain("Collie starts the head's pipeline");
+        expect(mr).toContain("Never start one yourself");
+        expect(flat(yield* asked(runId, "review-1"))).toContain(
+          "the Merge request step starts and proves it once the merge request is open",
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a delivery whose push sent nothing gets its branch's pipeline where GitLab refuses the merge request's with 400",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, branch, plan, started } = yield* skippedHead(true, {
+          refusesPipeline: { mr: 400 },
+        });
+        const runId = "r-impl-pipeline-branch";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED_CI]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+        });
+        yield* bin.restore();
+        expect(said(result)).toBe(CI_MR);
+        const [one, ...more] = yield* started;
+        expect(more).toEqual([]);
+        expect(one).toMatchObject({ source: "api", ref: branch });
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a delivery whose push moved the head gets no pipeline started by Collie, so CI never runs twice",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, plan, started } = yield* skippedHead(false);
+        const runId = "r-impl-pipeline-moved";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED_CI]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+        });
+        yield* bin.restore();
+        expect(said(result)).toBe(CI_MR);
+        // Only the remote head read before the agent tells this from a push that sent nothing.
+        expect(yield* started).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a delivery whose project's CI gives its head no pipeline completes, recording the head and GitLab's message",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, head, plan, started } = yield* skippedHead(true, {
+          refusesPipeline: { mr: 400, branch: 400 },
+        });
+        const runId = "r-impl-pipeline-none";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED_CI]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+        });
+        yield* bin.restore();
+        expect(said(result)).toBe(CI_MR);
+        expect(yield* started).toEqual([]);
+        const line = Option.getOrUndefined(
+          Arr.findFirst(Str.split(yield* runLog(runId), "\n"), Str.startsWith("pipeline: ")),
+        );
+        expect(line).toContain(`pipeline: none on ${sha12(head)}`);
+        expect(line).toContain("No stages / jobs for this pipeline.");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a delivery whose pipeline GitLab fails to start parks at Merge request, and a resume once it is repaired starts it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, forge, plan, started } = yield* skippedHead(true, {
+          refusesPipeline: { mr: 500 },
+        });
+        const runId = "r-impl-pipeline-failed";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED_CI]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              const [, why] = yield* until(
+                () => Effect.zip(run.status, parkedWhy(runId)),
+                ([got, why]) => why !== "" || got.status !== "pending",
+              );
+              expect(why).toContain("500");
+              expect(why).toEndWith(`resume ${runId}.`);
+              const { refusesPipeline: _, ...repaired } = yield* forge.model();
+              yield* forge.set(repaired);
+              yield* run.resume;
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+        expect(status.status).toBe("complete");
+        expect(yield* started).toHaveLength(1);
+        // The mr agent was asked once: the resume tried the start again, not delivery.
+        expect(yield* prompts()).toHaveLength(3);
+      }),
+    ),
+  120_000,
+);
+
 scenario(
   "implement completes with nothing to land when its ticket is met with no commits and nothing uncommitted",
   () =>
@@ -8838,8 +9027,16 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* noGitlabMrs(bin);
         yield* levelRepository();
+        // The fake agent commits nothing, so its push sends nothing: the head's pipeline is read.
+        const head = yield* headOf();
+        yield* forgeOnPath(bin, "gitlab", {
+          installed: true,
+          loggedIn: [FORGE_HOST.gitlab],
+          login: "tester",
+          mrs: [{ project: "gitlab.example.com/group/project", iid: "7", state: "open", head }],
+          pipelinesOn: { [head]: [{ id: 1, status: "running" }] },
+        });
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const runId = "r-impl-uncommitted";
         yield* approve(runId, ["unit"]);

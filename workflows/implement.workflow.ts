@@ -813,7 +813,7 @@ export default defineWorkflow({
           rallied = yield* builderRally({
             ...rallyAsk,
             plan: yield* specNow,
-            criteria: renderAnswered(answeredFor),
+            criteria: reviewerCriteria(answeredFor),
             input,
             build: {
               item: done.item,
@@ -834,7 +834,7 @@ export default defineWorkflow({
         rallied = yield* builderRally({
           ...rallyAsk,
           plan: yield* specNow,
-          criteria: renderAnswered(answeredFor),
+          criteria: reviewerCriteria(answeredFor),
           input,
         });
       }
@@ -880,7 +880,7 @@ export default defineWorkflow({
                 previous: `${place.dir}/review.md`,
                 answered,
                 risks: place.options.risks ?? "",
-                criteria: renderAnswered(answeredFor),
+                criteria: reviewerCriteria(answeredFor),
                 base,
                 at: ROUNDS + 1,
                 of: ROUNDS + 1,
@@ -1140,6 +1140,16 @@ export interface Answered {
   readonly answers: ReadonlyArray<Criterion>;
   readonly assumptions: ReadonlyArray<string>;
 }
+
+/** What every review this Run starts holds the change to beside its spec. */
+const reviewerCriteria = (all: ReadonlyArray<Answered>) =>
+  Arr.join(
+    Arr.filter(
+      [renderAnswered(all), Str.trim(content.sections.get("review.pipeline") ?? "")],
+      Str.isNonEmpty,
+    ),
+    "\n\n",
+  );
 
 const showsAnything = (one: Answered) => one.criteria.length > 0 || one.assumptions.length > 0;
 
