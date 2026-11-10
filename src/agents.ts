@@ -49,6 +49,7 @@ import {
   Launched,
   launchDir,
   orderLaunch,
+  launchesOfAgents,
   readLaunches,
   recordLaunch,
   StartedWith,
@@ -2831,10 +2832,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           ),
         );
         if (asking.length === 0) return;
-        const runs = yield* fs
-          .readDirectory(launchDir(host.dir, ""))
-          .pipe(Effect.orElseSucceed(() => []));
-        const launches = (yield* Effect.forEach(runs, launchesOf)).flat();
+        const launches = yield* launchesOfAgents(asking);
         // Every Herd's, and none where one cannot be read: an agent there may be live.
         const alive = yield* Effect.cached(
           Effect.gen(function* () {

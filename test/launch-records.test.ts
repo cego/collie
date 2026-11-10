@@ -8,6 +8,7 @@ import {
   Launched,
   LAUNCHES,
   launchesOf,
+  launchesOfAgents,
   orderLaunch,
   readLaunches,
   recordLaunch,
@@ -58,6 +59,30 @@ const stems = (launches: ReadonlyArray<Launched>) =>
   Arr.map(launches, (one) =>
     one.sequence === undefined ? one.operation : `${one.operation}.r${one.sequence}`,
   );
+
+test("an agent's launches are read in one read across every Run it launched in", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const reviewer = (runId: string) =>
+        launch({ runId, operation: "review", agent: "reviewer", output: `/state/${runId}.json` });
+      yield* recordLaunch(reviewer("run-a"));
+      yield* recordLaunch(launch());
+      yield* recordLaunch(reviewer("run-b"));
+      yield* recordLaunch(launch({ runId: "run-c", agent: "other" }));
+
+      expect(
+        Arr.map(yield* launchesOfAgents(["reviewer", "run-a-implementer"]), (one) => [
+          one.runId,
+          one.agent,
+        ]),
+      ).toEqual([
+        ["run-a", "run-a-implementer"],
+        ["run-a", "reviewer"],
+        ["run-b", "reviewer"],
+      ]);
+      expect(yield* launchesOfAgents([])).toEqual([]);
+    }),
+  ));
 
 test("launches are read back in the order they were launched, an unordered one first, with no file written", () =>
   runEffect(

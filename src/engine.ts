@@ -268,7 +268,7 @@ import {
   readStepSteering,
   StepNote as SteeringNote,
 } from "./step-steering";
-import { readLaunches } from "./launches";
+import { launchesOf, readLaunches } from "./launches";
 import { ensureStepDurations, rememberStepDurations } from "./step-durations";
 import {
   CurrentStep,
@@ -7917,9 +7917,11 @@ const makeRegistry: (
     const runs = Arr.dedupe(Arr.map(yield* store.supersedable, (row) => row.run));
     if (runs.length === 0) return;
     const delivered = yield* humanSubmits;
+    const askedOf = yield* store.askedOf(runs);
+    const launchesOfRuns = yield* launchesOf(runs);
     for (const runId of runs) {
-      const rows = yield* store.asked(runId);
-      const launches = yield* readLaunches(runId).pipe(Effect.orElseSucceed(() => []));
+      const rows = askedOf.get(runId) ?? [];
+      const launches = launchesOfRuns.get(runId) ?? [];
       const typed = yield* Effect.forEach(
         Arr.dedupe(Arr.map(launches, (launch) => launch.agent)),
         (agent) =>
@@ -7973,7 +7975,11 @@ const makeRegistry: (
    */
   const reviseQuestions = Effect.gen(function* () {
     const agents = yield* Agents;
-    for (const row of yield* store.setAside) {
+    const setAside = yield* store.setAside;
+    const setAsideRuns = Arr.dedupe(Arr.map(setAside, (row) => row.run));
+    const askedOf = yield* store.askedOf(setAsideRuns);
+    const launchesOfRuns = yield* launchesOf(setAsideRuns);
+    for (const row of setAside) {
       if ((yield* controlsOf(row.run)).includes(STOP)) continue;
       const found = yield* routed(row.run).pipe(Effect.option);
       if (Option.isNone(found)) continue;
@@ -7983,9 +7989,9 @@ const makeRegistry: (
         generation.entry,
       );
       if (state.status !== "suspended") continue;
-      const rows = yield* store.asked(row.run);
+      const rows = askedOf.get(row.run) ?? [];
       if (!(yield* awaitsRoot(row.run, rows, row.decision))) continue;
-      const launches = yield* readLaunches(row.run).pipe(Effect.orElseSucceed(() => []));
+      const launches = launchesOfRuns.get(row.run) ?? [];
       const messaged = row.messaged ?? [];
       const keyOf = (agent: string) => `${row.run}/${row.decision}/${agent}`;
       const finished = Effect.fn("Engine.finished")(function* (agent: string, since: string) {

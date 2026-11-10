@@ -240,6 +240,10 @@ export interface StoreApi {
   }) => Effect.Effect<void>;
   /** Every question this run has been asked, answered or not, in the order they were. */
   readonly asked: (run: string) => Effect.Effect<ReadonlyArray<DecisionRow>>;
+  /** `asked` for each of these Runs that was asked anything, in one read. */
+  readonly askedOf: (
+    runs: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<DecisionRow>>>;
   /**
    * Settles one open question, or says why this answer is not the one that settles it.
    * The write is the decision: one UPDATE over the unanswered row, so two answers racing
@@ -658,6 +662,13 @@ function makeStore(
         sql`SELECT ${decisionColumns} FROM collie_decisions WHERE run = ${run} ORDER BY asked, decision`,
     });
 
+    const decisionsOfRuns = SqlSchema.findAll({
+      Request: Schema.Array(Schema.String),
+      Result: Decision,
+      execute: (runs) =>
+        sql`SELECT ${decisionColumns} FROM collie_decisions WHERE run IN ${sql.in(runs)} ORDER BY run, asked, decision`,
+    });
+
     const decisionRow = SqlSchema.findAll({
       Request: Schema.Struct({ run: Schema.String, decision: Schema.String }),
       Result: Decision,
@@ -792,6 +803,17 @@ function makeStore(
         }).pipe(Effect.orDie),
 
       asked: (run: string) => decisionsOf(run).pipe(Effect.orDie),
+      askedOf: (runs) =>
+        runs.length === 0
+          ? Effect.succeed(new Map())
+          : decisionsOfRuns(runs).pipe(
+              Effect.map((rows) => {
+                const byRun = new Map<string, DecisionRow[]>();
+                for (const row of rows) byRun.set(row.run, [...(byRun.get(row.run) ?? []), row]);
+                return byRun;
+              }),
+              Effect.orDie,
+            ),
 
       settle: Effect.fn("Store.settle")(function* (answer) {
         const at = yield* nowIso;

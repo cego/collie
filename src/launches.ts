@@ -274,6 +274,9 @@ export const readLaunches = Effect.fn("Launches.read")(function* (runId: string)
 export const launchesOf = (runs: ReadonlyArray<string>) =>
   Launches.use((launches) => launches.of(runs));
 
+export const launchesOfAgents = (agents: ReadonlyArray<string>) =>
+  Launches.use((launches) => launches.byAgent(agents));
+
 export const recordLaunch = (launched: Launched) =>
   Launches.use((launches) => launches.record(launched));
 
