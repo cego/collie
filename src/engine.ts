@@ -15,7 +15,14 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { speaksForHuman, type Asker } from "./proposals";
-import { actorOf, readAudit, recordAudit, whoActed, type ScheduledBy } from "./audit";
+import {
+  actorOf,
+  readAudit,
+  recordAudit,
+  whoActed,
+  type AuditLine,
+  type ScheduledBy,
+} from "./audit";
 import { LinkDelivery, readLinkDeliveries } from "./run-links";
 import { appendLogLine } from "./run-log";
 import { readReplies, recordReply } from "./replies";
@@ -277,7 +284,7 @@ import {
   readStepSteering,
   StepNote as SteeringNote,
 } from "./step-steering";
-import { launchesOf, readLaunches } from "./launches";
+import { launchesOf, readLaunches, type Launched } from "./launches";
 import { steerTarget } from "./steer-target";
 import { ensureStepDurations, rememberStepDurations } from "./step-durations";
 import {
@@ -4386,29 +4393,7 @@ export const hostLayer = (options: {
             const audit = yield* under(readAudit(runDir(dir, runId))).pipe(
               Effect.orElseSucceed(() => []),
             );
-            return yield* Effect.forEach(rows, (row) =>
-              Effect.gen(function* () {
-                const actor =
-                  row.answerer ??
-                  Option.getOrUndefined(
-                    Arr.findFirst(
-                      audit,
-                      (line) => line.operation === "answer" && line.request === row.request,
-                    ),
-                  )?.actor;
-                const asked = {
-                  name: row.decision,
-                  answer: row.answer,
-                  superseded: row.superseded,
-                  options: yield* decodeOptions(row.options).pipe(
-                    Effect.orElseSucceed((): ReadonlyArray<Solution> => []),
-                  ),
-                };
-                if (actor === undefined) return asked;
-                const { requestId: _, schedule: __, ...by } = actor;
-                return { ...asked, by };
-              }),
-            );
+            return yield* askedQuestions(rows, audit);
           }),
         close: (runId, decision, value) =>
           store
@@ -7975,9 +7960,12 @@ const makeRegistry: (
     actor: Asker,
     agent: string,
     submitted = Infinity,
+    read?: { readonly rows: ReadonlyArray<DecisionRow>; readonly launches: ReadonlyArray<Launched> },
   ) {
-    const launches = yield* readLaunches(runId).pipe(Effect.orElseSucceed(() => []));
-    const { aside, extended } = touchedBy(yield* store.asked(runId), launches, agent, submitted);
+    const launches =
+      read?.launches ?? (yield* readLaunches(runId).pipe(Effect.orElseSucceed(() => [])));
+    const rows = read?.rows ?? (yield* store.asked(runId));
+    const { aside, extended } = touchedBy(rows, launches, agent, submitted);
     for (const one of aside)
       yield* supersedeQuestion({ runId, decision: one.decision, cause, by: actor, agent });
     for (const one of extended) {
@@ -8003,7 +7991,7 @@ const makeRegistry: (
     const askedOf = yield* store.askedOf(runs);
     const launchesOfRuns = yield* launchesOf(runs);
     for (const runId of runs) {
-      const rows = askedOf.get(runId) ?? [];
+      let rows = askedOf.get(runId) ?? [];
       const launches = launchesOfRuns.get(runId) ?? [];
       const typed = yield* Effect.forEach(
         Arr.dedupe(Arr.map(launches, (launch) => launch.agent)),
@@ -8027,8 +8015,9 @@ const makeRegistry: (
       );
       for (const one of [...sent, ...Arr.flatten(typed)]) {
         const touched = touchedBy(rows, launches, one.agent, one.at);
-        if (touched.aside.length + touched.extended.length > 0)
-          yield* supersedeFor(runId, one.cause, one.actor, one.agent, one.at);
+        if (touched.aside.length + touched.extended.length === 0) continue;
+        yield* supersedeFor(runId, one.cause, one.actor, one.agent, one.at, { rows, launches });
+        rows = yield* store.asked(runId);
       }
     }
   });
@@ -9190,6 +9179,20 @@ const makeRegistry: (
           asked: host.asked(runId),
           close: (decision, value) => host.close(runId, decision, value),
         }),
+        (runs) =>
+          Effect.gen(function* () {
+            const rowsOf = yield* store.askedOf(runs);
+            const asked = new Map<string, ReadonlyArray<Sdk.AskedQuestion>>();
+            for (const [runId, rows] of rowsOf)
+              asked.set(
+                runId,
+                yield* askedQuestions(
+                  rows,
+                  yield* readAudit(runDir(dir, runId)).pipe(Effect.orElseSucceed(() => [])),
+                ),
+              );
+            return asked;
+          }).pipe(Effect.provideContext(bun)),
         (queued, sent) =>
           superseding(queued.runId, queued.actor, sent).pipe(Effect.provideContext(services)),
       );
@@ -9202,6 +9205,32 @@ const makeRegistry: (
 const decodeOptions = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Array(RecordedSolution)),
 );
+
+/** A Run's questions as its agents are told them, each answer by whoever the audit says gave it. */
+const askedQuestions = (rows: ReadonlyArray<DecisionRow>, audit: ReadonlyArray<AuditLine>) =>
+  Effect.forEach(rows, (row) =>
+    Effect.gen(function* () {
+      const actor =
+        row.answerer ??
+        Option.getOrUndefined(
+          Arr.findFirst(
+            audit,
+            (line) => line.operation === "answer" && line.request === row.request,
+          ),
+        )?.actor;
+      const asked = {
+        name: row.decision,
+        answer: row.answer,
+        superseded: row.superseded,
+        options: yield* decodeOptions(row.options).pipe(
+          Effect.orElseSucceed((): ReadonlyArray<Solution> => []),
+        ),
+      };
+      if (actor === undefined) return asked;
+      const { requestId: _, schedule: __, ...by } = actor;
+      return { ...asked, by };
+    }),
+  );
 
 /**
  * What a human's message submitted to `agent` at `submitted` does to its Run's questions

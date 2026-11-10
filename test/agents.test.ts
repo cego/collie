@@ -75,7 +75,7 @@ import { Triage } from "../workflows/retrospective";
 import { seedIntent, writeIntent } from "../src/intent";
 import { appendLine, herdOf, reconcile } from "../src/steering";
 import { deliveredTo, ledgerOf, recordsAt, registeredAt } from "./support/records";
-import { Store } from "../src/store";
+import { Store, type DecisionRow } from "../src/store";
 import type { AuditLine } from "../src/audit";
 import { listTasks, readTask, taskKeptIn, withTaskLock, writeTask } from "../src/task";
 import { taskFor } from "../src/operations";
@@ -1886,27 +1886,41 @@ test(
   120_000,
 );
 
-/** `r1`'s questions as the host tends them, read from and written to its Store. */
-const tendR1 = Effect.gen(function* () {
-  const store = yield* Store;
-  yield* (yield* Agents).tendQuestions((run) => ({
-    ask: (question, asker) =>
-      store.asking({
-        run,
-        decision: question.name,
-        prompt: question.prompt,
-        options: question.options,
-        asker,
+const askedOfRows = (rows: ReadonlyArray<DecisionRow>) =>
+  Arr.map(rows, (row) => ({ name: row.decision, answer: row.answer }));
+
+/** `r1`'s questions as the host tends them, read from and written to its Store; each read is put in `reads`. */
+const tendR1Reading = (reads: Array<string>) =>
+  Effect.gen(function* () {
+    const store = yield* Store;
+    yield* (yield* Agents).tendQuestions(
+      (run) => ({
+        ask: (question, asker) =>
+          store.asking({
+            run,
+            decision: question.name,
+            prompt: question.prompt,
+            options: question.options,
+            asker,
+          }),
+        asked: Effect.suspend(() => {
+          reads.push(`asked ${run}`);
+          return Effect.map(store.asked(run), askedOfRows);
+        }),
+        close: (decision, value) =>
+          store.settle({ run, decision, value, request: `closed-${decision}` }).pipe(Effect.asVoid),
       }),
-    asked: store
-      .asked(run)
-      .pipe(
-        Effect.map((rows) => Arr.map(rows, (row) => ({ name: row.decision, answer: row.answer }))),
-      ),
-    close: (decision, value) =>
-      store.settle({ run, decision, value, request: `closed-${decision}` }).pipe(Effect.asVoid),
-  }));
-});
+      (runs) =>
+        Effect.suspend(() => {
+          reads.push(`askedOf ${Arr.join(runs, ",")}`);
+          return Effect.map(
+            store.askedOf(runs),
+            (byRun) => new Map(Arr.map([...byRun], ([run, rows]) => [run, askedOfRows(rows)])),
+          );
+        }),
+    );
+  });
+const tendR1 = tendR1Reading([]);
 
 /** `r1` finished, and its agent asked two questions after. */
 const finishedThenAsked = Effect.gen(function* () {
@@ -1954,6 +1968,28 @@ test("a question whose agent is live in another Herd, or whose Herds cannot be l
           rig.pluginEnv({ FAKE_HERDR_SESSIONS: sessions, FAKE_HERDR_AGENTS_GONE: agentFor("r1") }),
         ),
       });
+      expect(yield* answersOfR1).toEqual([
+        `closed: ${agentFor("r1")} is gone`,
+        `closed: ${agentFor("r1")} is gone`,
+      ]);
+    }),
+  ));
+
+test("a pass of question tending reads its Runs' questions once, and closes what it asked when the agent is gone", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* finishedThenAsked;
+      const sessions = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))([
+        { name: "desk", socket_path: `${rig.root}/first.sock` },
+      ]).pipe(Effect.orDie);
+      const reads: Array<string> = [];
+      yield* session(tendR1Reading(reads));
+      yield* session(tendR1Reading(reads), {
+        herdr: new FakeHerdr(
+          rig.pluginEnv({ FAKE_HERDR_SESSIONS: sessions, FAKE_HERDR_AGENTS_GONE: agentFor("r1") }),
+        ),
+      });
+      expect(reads).toEqual(["askedOf r1", "askedOf r1"]);
       expect(yield* answersOfR1).toEqual([
         `closed: ${agentFor("r1")} is gone`,
         `closed: ${agentFor("r1")} is gone`,
@@ -4046,11 +4082,14 @@ test("an unsupported busy delivery survives restart and reaches the idle agent o
 
 const tendIdle = Agents.pipe(
   Effect.flatMap((agents) =>
-    agents.tendQuestions(() => ({
-      ask: () => Effect.void,
-      asked: Effect.succeed([]),
-      close: () => Effect.void,
-    })),
+    agents.tendQuestions(
+      () => ({
+        ask: () => Effect.void,
+        asked: Effect.succeed([]),
+        close: () => Effect.void,
+      }),
+      () => Effect.succeed(new Map()),
+    ),
   ),
 );
 

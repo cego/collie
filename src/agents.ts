@@ -510,6 +510,10 @@ export interface AgentsApi {
    */
   readonly tendQuestions: (
     questionsFor: (runId: string) => Questions,
+    /** Each of these Runs' questions, in one read; a Run with none is absent. */
+    askedOf: (
+      runs: ReadonlyArray<string>,
+    ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<AskedQuestion>>>,
     /** Told of each queued message it submits now. */
     submitted?: (queued: Queued, sent: Steered) => Effect.Effect<void>,
   ) => Effect.Effect<void>;
@@ -2741,6 +2745,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     questions: Questions,
     until = Infinity,
     herdr: Effect.Effect<Herdr, never, AgentServices> = Effect.succeed(host.herdr),
+    /** Its Run's questions as read once for a pass, kept up to date with what the pass asks and closes. */
+    known?: Map<string, AskedQuestion>,
   ) =>
     Effect.gen(function* () {
       const dir = yield* controlDir(host.env.stateDir, launched.agent);
@@ -2785,7 +2791,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               names: Arr.map(call.questions, () => agentQuestionName(stem, ++n)),
             }),
           );
-          const asked = new Map(Arr.map(yield* questions.asked, (one) => [one.name, one] as const));
+          const asked =
+            known ?? new Map(Arr.map(yield* questions.asked, (one) => [one.name, one] as const));
           let open = false;
           const opened = openQuestions.get(launched.agent) ?? new Set<string>();
           openQuestions.set(launched.agent, opened);
@@ -2812,7 +2819,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             };
             if (closing !== null) {
               for (const one of given)
-                if (isUnanswered(one)) yield* questions.close(one.name, closing);
+                if (isUnanswered(one)) {
+                  yield* questions.close(one.name, closing);
+                  asked.set(one.name, { ...one, answer: closing });
+                }
               holds(false);
               continue;
             }
@@ -2876,6 +2886,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
 
   const tendQuestions = (
     questionsFor: (runId: string) => Questions,
+    askedOf: (
+      runs: ReadonlyArray<string>,
+    ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<AskedQuestion>>>,
     submitted: (queued: Queued, sent: Steered) => Effect.Effect<void> = () => Effect.void,
   ) =>
     under(
@@ -2910,6 +2923,12 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         );
         if (asking.length === 0) return;
         const launches = yield* launchesOfAgents(asking);
+        const askedNow = new Map(
+          Arr.map(
+            [...(yield* askedOf(Arr.dedupe(Arr.map(launches, (one) => one.runId))))],
+            ([runId, asked]) => [runId, new Map(Arr.map(asked, (one) => [one.name, one] as const))],
+          ),
+        );
         // Every Herd's, and none where one cannot be read: an agent there may be live.
         const alive = yield* Effect.cached(
           Effect.gen(function* () {
@@ -2942,6 +2961,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             const next = own[at + 1];
             collected ||= yield* collecting.has(launched.runId, agent, stemOf(launched));
             if (collected) continue;
+            const known = askedNow.get(launched.runId) ?? new Map<string, AskedQuestion>();
+            askedNow.set(launched.runId, known);
             const tend = yield* questionsOf(
               launched,
               questionsFor(launched.runId),
@@ -2962,6 +2983,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                     ),
                   ) ?? host.herdr,
               ),
+              known,
             );
             if (!(yield* tend(null))) continue;
             if (
