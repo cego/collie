@@ -100,7 +100,7 @@ test("staging deploys the head's own pipeline and rolls back only what it staged
 });
 
 test("a set child's Run id stays one directory's length however long its merge request's path", () => {
-  const id = `github.com/cego/${"a-".repeat(49)}a#1`;
+  const id = `github.com/cego/${Str.repeat(49)("a-")}a#1`;
   for (const workflow of ["release", "stage"] as const) {
     const name = invocationFor(workflow, { id, target: `mr:${id}`, url: `https://${id}` });
     expect(Buffer.byteLength(`run-be824389.${name}`)).toBeLessThanOrEqual(255);
