@@ -324,7 +324,7 @@ import {
   type RelayHeader,
 } from "./peers-model";
 import { latest, readDispositions } from "./disposition";
-import { Launched, operationsOf, readLaunches, runAgents } from "./launches";
+import { Launched, LAUNCHES, operationsOf, readLaunches, runAgents } from "./launches";
 import { factsOfView, newestFirst, settled, type RunFacts } from "./runs";
 import { Store } from "./store";
 import { SESSIONS_EVERY, agentsIn, focusPane, herdChanges, liveHerds } from "./herds";
@@ -1419,6 +1419,13 @@ export const boardWrites = (dir: string, model?: RunModelApi) =>
     Stream.map((event) => event.path),
   );
 
+/** The writes to the host's tables that the board is built again for. */
+export const boardTableWrites = Stream.unwrap(
+  Effect.map(Reactivity.Reactivity, (reactivity) =>
+    reactivity.stream([DELIVERIES, LAUNCHES, PROPOSALS, REGISTERED, TASKS], Effect.void),
+  ),
+);
+
 /**
  * A write under the state directory, by this host or anyone else, to a file the board reads,
  * or a Run recorded from any door, is a reason to build again.
@@ -1445,7 +1452,7 @@ const sharedBoardLayer = (dir: string) =>
           ),
           // A signal alone: the rows are read by the build, not once more per write.
           store.watching(Effect.void),
-          reactivity.stream([DELIVERIES, PROPOSALS, REGISTERED, TASKS], Effect.void),
+          boardTableWrites.pipe(Stream.provideService(Reactivity.Reactivity, reactivity)),
         ],
         { concurrency: "unbounded" },
       ).pipe(Stream.share({ capacity: 1, strategy: "sliding" }));

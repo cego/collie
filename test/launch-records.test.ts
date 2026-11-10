@@ -3,10 +3,8 @@
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Deferred, Effect, Fiber, FileSystem, Result, Schema, Stream } from "effect";
-import * as Reactivity from "effect/reactivity/Reactivity";
 import {
   Launched,
-  LAUNCHES,
   launchesOf,
   launchesOfAgents,
   orderLaunch,
@@ -16,6 +14,7 @@ import {
   wasOrdered,
 } from "../src/launches";
 import { StoreWrites } from "../src/store-writes";
+import { boardTableWrites } from "../src/host";
 import { runEffect } from "./support/effect";
 import { recordsAt } from "./support/records";
 
@@ -198,14 +197,16 @@ test("a launch written tells the Run model which Run moved", () =>
     }),
   ));
 
-test("a launch written moves whatever follows the launches, as the board does", () =>
+test("a launch written moves the board", () =>
   runEffect(
     Effect.gen(function* () {
-      const reactivity = yield* Reactivity.Reactivity;
       const following = yield* Deferred.make<void>();
-      const reads = yield* reactivity
-        .stream([LAUNCHES], Deferred.succeed(following, undefined).pipe(Effect.asVoid))
-        .pipe(Stream.take(2), Stream.runCount, Effect.forkScoped);
+      const reads = yield* boardTableWrites.pipe(
+        Stream.tap(() => Deferred.succeed(following, undefined)),
+        Stream.take(2),
+        Stream.runCount,
+        Effect.forkScoped,
+      );
       yield* Deferred.await(following);
       yield* recordLaunch(launch());
       expect(yield* Fiber.join(reads).pipe(Effect.timeout("2 seconds"))).toBe(2);
