@@ -10,7 +10,7 @@ import type { FetchLike } from "forges";
 import { forgeHttpTest, type ForgeHttp } from "../src/forge/http";
 import { recordAudit } from "../src/audit";
 import { buildBoard } from "../src/board";
-import { sectionOf } from "../src/board-model";
+import { sectionOf, type MrState } from "../src/board-model";
 import { readDispositions, recordDisposition } from "../src/disposition";
 import {
   MERGE_POLL_MS,
@@ -131,13 +131,98 @@ test("a merge GitLab reports lands the work: a disposition by gitlab, and the ca
 
       const recorded = yield* readDispositions(run.dir);
       expect(Arr.map(recorded, (line) => [line.by, line.kind, line.ref])).toEqual([
-        ["gitlab", "merged", "mk/collie!65"],
+        ["gitlab", "merged", `${GITLAB}!65`],
       ]);
-      expect(yield* readMrStates(stateDir)).toEqual(new Map([["mk/collie!65", "merged"]]));
+      expect(yield* readMrStates(stateDir)).toEqual(new Map([[`${GITLAB}!65`, "merged"]]));
       // Nothing passed in: the CLI's board reads what the pane's watch wrote.
       const after = yield* boardOf({ now: epochMs("2026-09-17T11:00:00Z") });
       expect(after[0]!.landed).toBe(true);
       expect(after[0]!.sentence).toBe("Merged as mk/collie!65.");
+    }),
+  ));
+
+test("what an earlier host kept under a label is not taken for the merge request: its forge is asked again", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const { stateDir, board: boardOf } = yield* seeded();
+      yield* writeMrStates(stateDir, new Map([["mk/collie!65", "in-prod"]]));
+      const log: string[] = [];
+      yield* settleMerges({
+        stateDir,
+        cwd: "/project",
+        runs: [],
+        record: () => Effect.void,
+        stop: () => Effect.die("nothing here is stopped"),
+        run: gitlab("open", log),
+        views: yield* boardOf({ mrStates: new Map() }),
+        now: epochMs("2026-09-17T10:00:00Z"),
+        checked: new Map(),
+        states: new Map(),
+        panels: new Map(),
+        making: new Set(),
+      });
+
+      expect(log).not.toEqual([]);
+      expect((yield* readMrStates(stateDir)).get(`${GITLAB}!65`)).toBe("open");
+    }),
+  ));
+
+test("each merge request of a Task is asked about, and the branches it is stacked by are kept", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-merges-" });
+      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
+      const runs = [
+        yield* madeRun(stateDir, {
+          id: "r-build",
+          task: "task-1",
+          state: "succeeded",
+          mr: MR,
+          created: "2026-09-17T09:00:00Z",
+        }),
+        yield* madeRun(stateDir, {
+          id: "r-follow-up",
+          task: "task-1",
+          state: "succeeded",
+          mr: mrUrl("66"),
+          created: "2026-09-17T09:30:00Z",
+        }),
+      ];
+      const board = (states: ReadonlyMap<string, MrState>) =>
+        buildBoard({ env, runs, mrStates: states, now: epochMs("2026-09-17T10:00:00Z") });
+      const states = new Map<string, MrState>();
+      yield* settleMerges({
+        stateDir,
+        cwd: "/project",
+        runs: [],
+        record: () => Effect.void,
+        stop: () => Effect.die("nothing here is stopped"),
+        run: forge("gitlab", {
+          mrs: [
+            mr65({ sourceBranch: "mk/cards", targetBranch: "master" }),
+            mr65({ iid: "66", sourceBranch: "mk/cards-stage", targetBranch: "mk/cards" }),
+          ],
+        }),
+        views: yield* board(states),
+        now: epochMs("2026-09-17T10:00:00Z"),
+        checked: new Map(),
+        states,
+        panels: new Map(),
+        making: new Set(),
+      });
+
+      expect(yield* readMrStates(stateDir)).toEqual(
+        new Map([
+          [`${GITLAB}!65`, "open"],
+          [`${GITLAB}!66`, "open"],
+        ]),
+      );
+      const [view] = yield* board(states);
+      expect(Arr.map(view!.mrs ?? [], (one) => [one.short, one.waitsOn])).toEqual([
+        ["collie!65", []],
+        ["collie!66", [`${GITLAB}!65`]],
+      ]);
     }),
   ));
 
@@ -237,7 +322,7 @@ test("a merged card follows its deploy jobs: on stage, then in production, then 
 
       // Stage has a child of the merge commit; prod still runs something older.
       yield* settle(deployed({ stage: "child", prod: "0000000" }));
-      expect(states.get("mk/collie!65")).toBe("on-stage");
+      expect(states.get(`${GITLAB}!65`)).toBe("on-stage");
       expect(Arr.map(yield* readDispositions(run.dir), (line) => line.kind)).toEqual(["merged"]);
       let board = yield* boardOf({ now });
       expect(board[0]!.landed).toBe(true);
@@ -246,7 +331,7 @@ test("a merged card follows its deploy jobs: on stage, then in production, then 
       // Disposed of, and still followed: production now has the merge commit itself.
       now += 6 * 60_000;
       yield* settle(deployed({ stage: "child", prod: "35ae2cea5e5848602729dbc0e8a87ed0d9049c46" }));
-      expect(states.get("mk/collie!65")).toBe("in-prod");
+      expect(states.get(`${GITLAB}!65`)).toBe("in-prod");
       board = yield* boardOf({ now });
       expect(board[0]!.sentence).toBe("Merged as mk/collie!65. In production.");
       // One merged disposition, not one per round.
@@ -294,8 +379,8 @@ test("what is working is asked about, and what is already disposed of is not", (
       });
       // A merge while a Run is busy or parked still lands its Task.
       for (const [run, label] of [
-        ["r-working", "mk/collie!65"],
-        ["r-needs-you", "mk/collie!67"],
+        ["r-working", `${GITLAB}!65`],
+        ["r-needs-you", `${GITLAB}!67`],
       ] as const)
         expect(
           Arr.map(yield* readDispositions(runDir(stateDir, run)), (line) => [line.by, line.ref]),
@@ -312,6 +397,7 @@ const REPO = {
   gitlab: { project: "gitlab.cego.dk/mk/collie", origin: "git@gitlab.cego.dk:mk/collie.git" },
 } as const;
 const LABEL = { github: "cego/collie#115", gitlab: "mk/collie!115" } as const;
+const ID115 = { github: "github.com/cego/collie#115", gitlab: `${GITLAB}!115` } as const;
 const URL115 = {
   github: "https://github.com/cego/collie/pull/115",
   gitlab: "https://gitlab.cego.dk/mk/collie/-/merge_requests/115",
@@ -387,12 +473,59 @@ test("a merge request opened from a Task's branch by anyone is found, recorded a
         expect(recorded).toEqual(new Map([["r-implement", URL115[name]]]));
         expect(
           Arr.map(yield* readDispositions(run.dir), (line) => [line.by, line.kind, line.ref]),
-        ).toEqual([[name, "merged", LABEL[name]]]);
+        ).toEqual([[name, "merged", ID115[name]]]);
         const after = yield* card(TEN);
         expect(after.mr).not.toBeNull();
         expect(after.disposition).toBe(`merged ${LABEL[name]}`);
         expect(after.sentence).toBe(`Merged as ${LABEL[name]}.`);
       }
+    }),
+  ));
+
+test("a merge request opened by hand from one Change run's branch is found when another Change run's is already recorded", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-discover-" });
+      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
+      const of = (over: Partial<RunFacts>) =>
+        madeRun(stateDir, { task: "task-1", created: "2026-10-15T08:00:00Z", ...over });
+      const runs = [
+        yield* of({ id: "r-implement", state: "running" }),
+        yield* of({
+          id: "r-implement.app",
+          parent: "r-implement",
+          state: "succeeded",
+          branch: `${BRANCH}--app`,
+          mr: MR,
+        }),
+        yield* of({
+          id: "r-implement.schema",
+          parent: "r-implement",
+          change: "schema",
+          state: "succeeded",
+          branch: BRANCH,
+        }),
+      ];
+      const recorded = new Map<string, string>();
+      yield* settleMerges({
+        stateDir,
+        cwd: "/project",
+        run: forge("gitlab", {
+          origin: REPO.gitlab.origin,
+          mrs: [mr65({ sourceBranch: `${BRANCH}--app` }), fromBranch("gitlab")],
+        }),
+        views: yield* buildBoard({ env, runs, now: TEN, quietMs: Infinity }),
+        runs,
+        record: (run, url) => Effect.sync(() => void recorded.set(run, url)),
+        stop: () => Effect.die("nothing here is stopped"),
+        now: TEN,
+        checked: new Map(),
+        states: new Map(),
+        panels: new Map(),
+        making: new Set(),
+      });
+      expect(recorded).toEqual(new Map([["r-implement.schema", URL115.gitlab]]));
     }),
   ));
 
@@ -477,8 +610,12 @@ const merging = Effect.fn("merges.merging")(function* (
   /** What the host does with a stop, beside recording it. */
   stopping: (stateDir: string, run: string, reason: string) => Effect.Effect<void> = () =>
     Effect.void,
-  /** More of the merged merge request, and the Run directories whose attempt is being made. */
-  over: { readonly mr?: Partial<FakeMr>; readonly making?: ReadonlySet<string> } = {},
+  over: {
+    readonly mr?: Partial<FakeMr>;
+    readonly making?: ReadonlySet<string>;
+    readonly named?: string;
+    readonly forge?: Partial<ForgeModel>;
+  } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
   const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-settle-" });
@@ -494,13 +631,14 @@ const merging = Effect.fn("merges.merging")(function* (
       state: "waiting",
       parked: "Cannot open the merge request",
       branch: BRANCH,
-      mr: MR,
+      mr: over.named ?? MR,
       created: "2026-10-15T08:10:00Z",
     }),
   ];
   for (const over of others) runs.push(yield* of(over));
   const stops: Array<readonly [string, string]> = [];
   const runner = forge("gitlab", {
+    ...over.forge,
     mrs: [
       mr65({
         ...(mergedAt === null ? { state: "merged" } : { state: "merged", mergedAt }),
@@ -553,7 +691,7 @@ test("a merge stops what in its Task is still going: the parked builder and the 
           line.kind,
           line.ref,
         ]),
-      ).toEqual([["gitlab", "merged", "mk/collie!65"]]);
+      ).toEqual([["gitlab", "merged", `${GITLAB}!65`]]);
       expect(
         Arr.sort(
           stops,
@@ -630,6 +768,24 @@ test("a merge's stop ends the Run's agents through the one end, and its log name
     }),
   ));
 
+test("a merge of the one merge request recorded so far leaves a sibling Change run without one running, and the plan waiting on it", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const { stops, round } = yield* merging([
+        {
+          id: "r-plan.implement--schema",
+          workflow: "implement",
+          parent: "r-plan",
+          change: "schema",
+          state: "running",
+          branch: `${BRANCH}--schema`,
+        },
+      ]);
+      yield* round(TEN);
+      expect(Arr.map(stops, ([run]) => run)).toEqual(["r-plan.implement"]);
+    }),
+  ));
+
 test("a Run of the Task started after the merge is not stopped by it", () =>
   runWithForge(
     Effect.gen(function* () {
@@ -638,6 +794,7 @@ test("a Run of the Task started after the merge is not stopped by it", () =>
           id: "r-follow-up",
           workflow: "implement",
           state: "running",
+          branch: BRANCH,
           created: "2026-10-15T09:30:00Z",
         },
       ]);
@@ -651,8 +808,20 @@ test("where the forge gives no merge time, the time the watch first read it merg
     Effect.gen(function* () {
       const { stops, round } = yield* merging(
         [
-          { id: "r-before", workflow: "review", state: "running", created: "2026-10-15T09:59:00Z" },
-          { id: "r-after", workflow: "review", state: "running", created: "2026-10-15T10:01:00Z" },
+          {
+            id: "r-before",
+            workflow: "review",
+            state: "running",
+            created: "2026-10-15T09:59:00Z",
+            ...ON_65,
+          },
+          {
+            id: "r-after",
+            workflow: "review",
+            state: "running",
+            created: "2026-10-15T10:01:00Z",
+            ...ON_65,
+          },
         ],
         null,
       );
@@ -671,7 +840,12 @@ test("a Run that follows the merge is not stopped when it leads the Task, howeve
       const { stops, round, stopped, join } = yield* merging([], null);
       yield* round(TEN);
       stopped();
-      yield* join({ id: "r-follow-up", workflow: "implement", created: "2026-10-15T10:01:00Z" });
+      yield* join({
+        id: "r-follow-up",
+        workflow: "implement",
+        branch: BRANCH,
+        created: "2026-10-15T10:01:00Z",
+      });
       yield* round(TEN + MERGE_POLL_MS);
       expect(Arr.map(stops, ([run]) => run).sort()).toEqual(["r-plan", "r-plan.implement"]);
     }),
@@ -685,6 +859,7 @@ test("the forge's merge time is the cutoff, not when a merge was recorded by han
           id: "r-follow-up",
           workflow: "implement",
           state: "running",
+          branch: BRANCH,
           created: "2026-10-15T09:30:00Z",
         },
       ]);
@@ -704,6 +879,61 @@ test("the forge's merge time is the cutoff, not when a merge was recorded by han
     }),
   ));
 
+test("a merge an earlier host recorded under its hostless label is not recorded again, nor stops what began after it", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-restart-" });
+      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
+      const of = (over: Partial<RunFacts>) =>
+        madeRun(stateDir, { task: "task-1", created: "2026-10-15T08:00:00Z", ...over });
+      const runs = [
+        yield* of({
+          id: "r-build",
+          workflow: "implement",
+          state: "succeeded",
+          branch: BRANCH,
+          mr: MR,
+        }),
+        yield* of({
+          id: "r-follow-up",
+          workflow: "implement",
+          state: "running",
+          branch: BRANCH,
+          created: "2026-10-15T09:30:00Z",
+        }),
+      ];
+      // As v0.118.0 wrote it: the label, with no host.
+      yield* recordDisposition(runDir(stateDir, "r-build"), {
+        at: MERGED_AT,
+        by: "gitlab",
+        kind: "merged",
+        ref: "mk/collie!65",
+        note: null,
+      });
+      const stops: Array<string> = [];
+      yield* settleMerges({
+        stateDir,
+        cwd: "/project",
+        // No merge time from the forge: only the recorded Disposition dates the merge.
+        run: forge("gitlab", { mrs: [mr65({ state: "merged" })] }),
+        views: yield* buildBoard({ env, runs, now: TEN, quietMs: Infinity }),
+        runs,
+        record: () => Effect.void,
+        stop: (run) => Effect.sync(() => void stops.push(run)),
+        now: TEN,
+        checked: new Map(),
+        states: new Map(),
+        panels: new Map(),
+        making: new Set(),
+      });
+
+      const recorded = yield* Effect.forEach(runs, (run) => readDispositions(run.dir));
+      expect(Arr.map(Arr.flatten(recorded), (line) => line.at)).toEqual([MERGED_AT]);
+      expect(stops).toEqual([]);
+    }),
+  ));
+
 test("a stop that did not take is asked again next round, before the forge is due and once it is in production", () =>
   runWithForge(
     Effect.gen(function* () {
@@ -718,7 +948,7 @@ test("a stop that did not take is asked again next round, before the forge is du
       ]);
 
       const restored = yield* merging();
-      yield* writeMrStates(restored.stateDir, new Map([["mk/collie!65", "in-prod"]]));
+      yield* writeMrStates(restored.stateDir, new Map([[`${GITLAB}!65`, "in-prod"]]));
       yield* recordDisposition(runDir(restored.stateDir, "r-plan.implement"), {
         at: MERGED_AT,
         by: "gitlab",
@@ -738,6 +968,12 @@ test("a stop that did not take is asked again next round, before the forge is du
 
 const LANDED_HEAD = "head-1";
 /** A Release Run under the parked builder, and a sibling review of the same Task. */
+const ON_65 = {
+  settled: {
+    inputs: { target: `mr:${GITLAB}!65` },
+    strategies: { target: "diff-target" as const },
+  },
+};
 const RELEASE: ReadonlyArray<Partial<RunFacts>> = [
   {
     id: "r-release",
@@ -745,8 +981,15 @@ const RELEASE: ReadonlyArray<Partial<RunFacts>> = [
     parent: "r-plan.implement",
     state: "running",
     created: "2026-10-15T08:20:00Z",
+    ...ON_65,
   },
-  { id: "r-review", workflow: "review", state: "running", created: "2026-10-15T08:30:00Z" },
+  {
+    id: "r-review",
+    workflow: "review",
+    state: "running",
+    created: "2026-10-15T08:30:00Z",
+    ...ON_65,
+  },
 ];
 const attempt = (over: Partial<Landing> = {}): Landing => ({
   state: "attempt",
@@ -846,6 +1089,32 @@ test("an interrupted attempt merged by Collie's login at its head after it was w
       expect(yield* fs.readFileString(`${runDir(stateDir, "r-release")}/log.txt`)).toContain(
         `landing: merged ${MR} at ${LANDED_HEAD} as m1`,
       );
+    }),
+  ));
+
+test("an interrupted attempt on a legacy bare merge request is settled as the MR id it resolved to", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const bare = "mr:65";
+      const { stateDir, stops, round } = yield* merging(
+        Arr.map(RELEASE, (run) => ({
+          ...run,
+          settled: { ...ON_65.settled, inputs: { target: bare } },
+        })),
+        "2026-10-15T08:54:30Z",
+        undefined,
+        {
+          mr: { mergedBy: "mk", head: LANDED_HEAD, mergedSha: "m1" },
+          named: bare,
+          forge: { origin: "git@gitlab.cego.dk:mk/collie.git" },
+        },
+      );
+      yield* writeLanding(runDir(stateDir, "r-release"), attempt({ mr: bare }));
+      yield* round(TEN);
+      expect(yield* readLanding(runDir(stateDir, "r-release"))).toEqual(
+        attempt({ mr: bare, state: "landed", sha: "m1" }),
+      );
+      expect(stoppedIds(stops)).toEqual(["r-review"]);
     }),
   ));
 
@@ -1097,7 +1366,7 @@ test("a merged GitHub pull request lands its card, by github's word", () =>
       const { card, run } = yield* cardAfter(PR, github("merged", []));
       const recorded = yield* readDispositions(run.dir);
       expect(Arr.map(recorded, (line) => [line.by, line.kind, line.ref])).toEqual([
-        ["github", "merged", "cego/collie#30"],
+        ["github", "merged", "github.com/cego/collie#30"],
       ]);
       expect(sectionOf(card)).toBe("finished");
       expect(card.sentence).toBe("Merged as cego/collie#30.");
@@ -1121,8 +1390,8 @@ test("a board file in the old shape still reads, with nothing known of the forge
       const { stateDir, board: boardOf } = yield* seeded();
       const fs = yield* FileSystem.FileSystem;
       yield* fs.makeDirectory(`${stateDir}/board`, { recursive: true });
-      yield* fs.writeFileString(`${stateDir}/board/mr-states.json`, '{"mk/collie!65":"open"}\n');
-      expect(yield* readMrStates(stateDir)).toEqual(new Map([["mk/collie!65", "open"]]));
+      yield* fs.writeFileString(`${stateDir}/board/mr-states.json`, `{"${GITLAB}!65":"open"}\n`);
+      expect(yield* readMrStates(stateDir)).toEqual(new Map([[`${GITLAB}!65`, "open"]]));
       expect(yield* readForge(stateDir)).toEqual(new Map());
       const [card] = yield* boardOf({ now: epochMs("2026-09-17T10:00:00Z") });
       expect(card!.mrState).toBe("open");
@@ -1337,20 +1606,155 @@ test("a fan-out's Repo run's merge request is watched: its facts recorded, its m
           line.kind,
           line.ref,
         ]),
-      ).toEqual([["gitlab", "merged", "mk/collie!65"]]);
+      ).toEqual([["gitlab", "merged", `${GITLAB}!65`]]);
       expect(yield* readDispositions(runDir(stateDir, "r-fan"))).toEqual([]);
       expect(yield* readMrStates(stateDir)).toEqual(
         new Map([
-          ["mk/collie!65", "merged"],
-          ["mk/collie!66", "open"],
+          [`${GITLAB}!65`, "merged"],
+          [`${GITLAB}!66`, "open"],
         ]),
       );
-      const facts = (yield* readForge(stateDir)).get("mk/collie!66");
+      const facts = (yield* readForge(stateDir)).get(`${GITLAB}!66`);
       expect(facts?.head).toBe(HEAD);
       expect(facts?.checks.state).toBe("passed");
       expect(facts?.draft).toBe(false);
       expect(facts?.mergeable?.state).toBe("mergeable");
       expect(stops).toEqual([["r-fan.api", "mk/collie!65 merged"]]);
+    }),
+  ));
+
+test("a merge of a fan-out's only admitted Change leaves the fan-out running, since a later wave may be still to start", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const { stateDir, env, runs } = yield* fannedOut([{ repo: "app", iid: "65" }]);
+      const stops: Array<string> = [];
+      yield* settleMerges({
+        stateDir,
+        cwd: "/project",
+        run: forge("gitlab", { mrs: [mr65({ state: "merged", mergedAt: MERGED_AT })] }),
+        views: yield* buildBoard({ env, runs, now: TEN, quietMs: Infinity }),
+        runs,
+        record: () => Effect.void,
+        stop: (run) => Effect.sync(() => void stops.push(run)),
+        now: TEN,
+        checked: new Map(),
+        states: new Map(),
+        panels: new Map(),
+        making: new Set(),
+      });
+      expect(stops).toEqual(["r-fan.app"]);
+    }),
+  ));
+
+const API3 = "https://gitlab.cego.dk/cego/api/-/merge_requests/3";
+const WEB8 = "https://gitlab.cego.dk/cego/web/-/merge_requests/8";
+const given = (target: string) => ({
+  settled: { inputs: { target }, strategies: { target: "diff-target" as const } },
+});
+
+/**
+ * A running fan-out whose Repo runs share the plan branch: `api` opened api!3, which has
+ * merged, and `web` opened web!8, still open. One round of the watch, and what it stopped.
+ */
+const apiMerged = Effect.fn("merges.apiMerged")(function* (
+  others: ReadonlyArray<Partial<RunFacts>>,
+  /** The Run whose landing of api!3 is landed. */
+  lander?: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-own-work-" });
+  const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
+  const of = (over: Partial<RunFacts>) =>
+    madeRun(stateDir, { task: "task-1", created: "2026-10-15T08:00:00Z", ...over });
+  const child = (repo: string, mr: string) =>
+    of({
+      id: `r-fan.${repo}`,
+      parent: "r-fan",
+      repo,
+      project: `/root/${repo}`,
+      state: "running",
+      branch: "mk/plan",
+      mr,
+    });
+  const runs = [
+    yield* of({ id: "r-fan", state: "running" }),
+    yield* child("api", API3),
+    yield* child("web", WEB8),
+  ];
+  for (const over of others) runs.push(yield* of(over));
+  if (lander !== undefined)
+    yield* writeLanding(
+      runDir(stateDir, lander),
+      attempt({ state: "landed", sha: "m1", mr: API3 }),
+    );
+  const mr = (project: string, iid: string, state: FakeMr["state"]): FakeMr => ({
+    project: `gitlab.cego.dk/cego/${project}`,
+    iid,
+    title: project,
+    state,
+    sourceBranch: "mk/plan",
+    targetBranch: "master",
+  });
+  const stops: Array<string> = [];
+  yield* settleMerges({
+    stateDir,
+    cwd: "/project",
+    run: forge("gitlab", {
+      mrs: [{ ...mr("api", "3", "merged"), mergedAt: MERGED_AT }, mr("web", "8", "open")],
+    }),
+    views: yield* buildBoard({ env, runs, now: TEN, quietMs: Infinity }),
+    runs,
+    record: () => Effect.void,
+    stop: (run) => Effect.sync(() => void stops.push(run)),
+    now: TEN,
+    checked: new Map(),
+    states: new Map(),
+    panels: new Map(),
+    making: new Set(),
+  });
+  return Arr.sort(stops, Order.String);
+});
+
+test("a merge stops the Follow-up Run on its branch, and not the Repo run working on another merge request", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const stops = yield* apiMerged([
+        {
+          id: "r-fan.api.follow-up",
+          parent: "r-fan.api",
+          project: "/root/api",
+          branch: "mk/plan",
+          state: "running",
+          created: "2026-10-15T08:30:00Z",
+        },
+      ]);
+      expect(stops).toEqual(["r-fan.api", "r-fan.api.follow-up"]);
+    }),
+  ));
+
+test("a merge stops a Run given it as its target, and not one given another merge request", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const stops = yield* apiMerged([
+        { id: "r-review-api", state: "running", ...given("mr:gitlab.cego.dk/cego/api!3") },
+        { id: "r-review-web", state: "running", ...given("mr:gitlab.cego.dk/cego/web!8") },
+      ]);
+      expect(stops).toEqual(["r-fan.api", "r-review-api"]);
+    }),
+  ));
+
+test("a Release Run landing a merge request of several is spared by its merge, with its parent", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const target = given("mr:gitlab.cego.dk/cego/api!3");
+      const stops = yield* apiMerged(
+        [
+          { id: "r-fan.api.release", parent: "r-fan.api", state: "running", ...target },
+          { id: "r-review-api", state: "running", ...target },
+        ],
+        "r-fan.api.release",
+      );
+      expect(stops).toEqual(["r-review-api"]);
     }),
   ));
 
@@ -1462,5 +1866,107 @@ test("a single-repository fan-out's merge request is not watched once its Repo r
         making: new Set(),
       });
       expect(log).toEqual([]);
+    }),
+  ));
+
+test("a legacy bare merge request is asked about in its owner's checkout, not the host's", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-legacy-" });
+      const owner = yield* madeRun(stateDir, {
+        id: "r-a",
+        task: "t1",
+        cwd: "/checkout-a",
+        project: "/checkout-a",
+        state: "running",
+        created: "2026-10-15T08:00:00Z",
+        settled: {
+          inputs: { target: "mr:42" },
+          strategies: { target: "diff-target" },
+          sources: {},
+        },
+      });
+      const fake = forge("gitlab", {
+        mrs: [
+          { project: "gitlab.cego.dk/group/a", iid: "42", state: "open", title: "A" },
+          { project: "gitlab.cego.dk/group/b", iid: "42", state: "merged", title: "B" },
+        ],
+      });
+      const run: Runner = (cmd, args, cwd) =>
+        cmd === "git" && args[0] === "remote"
+          ? Effect.succeed({
+              code: 0,
+              stdout: `git@gitlab.cego.dk:group/${cwd === "/checkout-a" ? "a" : "b"}.git\n`,
+              stderr: "",
+            })
+          : fake(cmd, args, cwd);
+      const states = new Map<string, MrState>();
+      const stops: Array<string> = [];
+      yield* settleMerges({
+        stateDir,
+        cwd: "/checkout-b",
+        run,
+        views: [task({ run: "r-a", runs: ["r-a"], mr: "mr:42", branch: null })],
+        runs: [owner],
+        record: () => Effect.void,
+        stop: (id) => Effect.sync(() => void stops.push(id)),
+        now: TEN,
+        checked: new Map(),
+        states,
+        panels: new Map(),
+        making: new Set(),
+      });
+
+      expect(states.get("gitlab.cego.dk/group/a!42")).toBe("open");
+      expect(stops).toEqual([]);
+    }),
+  ));
+
+test("a Task's one merge request is watched as the Run that owns it, so its merge leaves a newer Run on another branch going", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-owner-" });
+      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
+      const of = (over: Partial<RunFacts>) =>
+        madeRun(stateDir, { task: "task-1", workflow: "implement", ...over });
+      const runs = [
+        yield* of({
+          id: "r-build",
+          state: "succeeded",
+          branch: "feature-a",
+          mr: MR,
+          created: "2026-10-15T08:00:00Z",
+        }),
+        yield* of({
+          id: "r-other",
+          state: "running",
+          branch: "feature-b",
+          created: "2026-10-15T08:30:00Z",
+        }),
+      ];
+      const views = yield* buildBoard({ env, runs, now: TEN, quietMs: Infinity });
+      expect(Arr.map(views[0]!.mrs ?? [], (one) => one.run)).toEqual(["r-build"]);
+
+      const stops: Array<string> = [];
+      yield* settleMerges({
+        stateDir,
+        cwd: "/project",
+        run: forge("gitlab", {
+          mrs: [mr65({ state: "merged", sourceBranch: "feature-a", mergedAt: MERGED_AT })],
+        }),
+        views,
+        runs,
+        record: () => Effect.void,
+        stop: (run) => Effect.sync(() => void stops.push(run)),
+        now: TEN,
+        checked: new Map(),
+        states: new Map(),
+        panels: new Map(),
+        making: new Set(),
+      });
+
+      expect(stops).toEqual([]);
     }),
   ));

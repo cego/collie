@@ -75,8 +75,10 @@ export interface RunFacts {
   /** The questions it has been answered, oldest first. */
   readonly answered: ReadonlyArray<Asked & { readonly answer: string }>;
   readonly held: boolean;
-  /** The repository of a fan-out this Run builds, or null for a Run that is no Repo run. */
+  /** The repository of a fan-out this Run builds, or null for a Run that is no Change run. */
   readonly repo: string | null;
+  /** The named Change of that repository it builds; null or absent for its default Change. */
+  readonly change?: string | null;
   /** Why it parked its own work, in its own words, or null while it has not. */
   readonly parked: string | null;
   /** What it waits for that ends without anyone repairing anything, or null. */
@@ -172,6 +174,7 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
   ),
   held: view.controls.includes(HOLD),
   repo: view.options.repo ?? null,
+  change: view.options.change ?? null,
   parked: view.parked,
   awaiting: view.awaiting,
   usage: view.usage ?? null,

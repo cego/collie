@@ -51,7 +51,8 @@ import { agentRows } from "../desktop/src/shared/run-agents";
 import { type Column, columnOf } from "../desktop/src/shared/columns";
 import { PeerView } from "../src/peers-model";
 import { epochMs } from "../src/time";
-import { task } from "./support/task";
+import { task, taskMr } from "./support/task";
+import { cardMrs } from "../desktop/src/shared/card-mrs";
 
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const fromJson = flow(
@@ -1086,4 +1087,35 @@ test.each<[string, Column]>([
   ["a tab not yet known", "reading"],
 ])("%s is laid out %s", (tab, width) => {
   expect(columnOf(tab)).toBe(width);
+});
+
+test("a card of two merge requests has a line and an Open for each, and one from an older host its single one", () => {
+  const app = taskMr("spilnu/app", 12, { ready: true, head: "aaaaaaaabbbb" });
+  const api = taskMr("spilnu/api", 7, { waitsOn: [app.id] });
+  expect(cardMrs(task({ mr: app.mr, mrs: [app, api] }))).toEqual([
+    {
+      id: "gitlab.cego.dk/spilnu/app!12",
+      line: "app!12 · open, ready to release at aaaaaaaa",
+      open: {
+        label: "Open MR app!12",
+        url: "https://gitlab.cego.dk/spilnu/app/-/merge_requests/12",
+      },
+    },
+    {
+      id: "gitlab.cego.dk/spilnu/api!7",
+      line: "api!7 · open, not ready to release, waits on app!12",
+      open: { label: "Open MR api!7", url: "https://gitlab.cego.dk/spilnu/api/-/merge_requests/7" },
+    },
+  ]);
+  expect(cardMrs(task({ mr: app.mr, mrState: "open" }))).toEqual([
+    {
+      id: "gitlab.cego.dk/spilnu/app!12",
+      line: "app!12 · open, not ready to release",
+      open: {
+        label: "Open merge request",
+        url: "https://gitlab.cego.dk/spilnu/app/-/merge_requests/12",
+      },
+    },
+  ]);
+  expect(cardMrs(task())).toEqual([]);
 });

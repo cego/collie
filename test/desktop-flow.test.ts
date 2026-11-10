@@ -3,10 +3,13 @@ import { expect, test } from "bun:test";
 import {
   flowAnnouncements,
   flowKey,
+  flowRows,
   inspectorOf,
   linkedCards,
+  nodeAt,
   nodeName,
   openIn,
+  owningRun,
   rowOrigin,
   selectEntry,
   selectNode,
@@ -57,6 +60,33 @@ test("selecting a Step toggles its inspector, and an earlier Run switches the re
     kind: "inspect",
     run: "plan-run",
   });
+});
+
+test("a Flow of several merge requests has a release row for each, each selected by its own merge request", () => {
+  const flow = {
+    ...mainFlow(),
+    release: [flowNode("ci-a", { kind: "release" })],
+    releases: [
+      {
+        mr: "gitlab.example.com/group/app!12",
+        short: "app!12",
+        nodes: [flowNode("ci-a", { kind: "release" })],
+      },
+      {
+        mr: "gitlab.example.com/group/api!7",
+        short: "api!7",
+        nodes: [flowNode("ci-b", { kind: "release" })],
+      },
+    ],
+  };
+  const rows = Arr.filter(flowRows(flow), (row) => row.nodes[0]?.kind === "release");
+  expect(Arr.map(rows, (row) => [row.title, Arr.map(row.nodes, (node) => node.id)])).toEqual([
+    ["Release app!12", ["ci-a"]],
+    ["Release api!7", ["ci-b"]],
+  ]);
+  expect(nodeAt(flow, { run: rows[1]!.run, node: "ci-b" })?.id).toBe("ci-b");
+  expect(nodeAt(flow, { run: rows[0]!.run, node: "ci-b" })).toBeNull();
+  expect(owningRun(flow, { run: rows[1]!.run, node: "ci-b" })).toBe("build-run");
 });
 
 test("Flow keys move by position between rows and stay at the ends", () => {

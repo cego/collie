@@ -32,7 +32,7 @@ import {
   type TaskView,
 } from "../board-model";
 import { mrTarget } from "../mr";
-import { openMrLabel } from "../board-model";
+import { disposeLabel, mrUrlOf, openMrLabel, readMrRef } from "../board-model";
 import type { Live } from "../live";
 import type { Selection } from "../selection";
 
@@ -268,6 +268,9 @@ export type Command =
    * board of every workspace that directory is not the run's.
    */
   | { _tag: "OpenMr"; target: string; runId: string | null }
+  /** Which of a card's merge requests to open, or to copy the link of. */
+  | { _tag: "ChooseMr"; copy: boolean; mrs: ReadonlyArray<MrChoice> }
+  | { _tag: "CopyLink"; url: string }
   | { _tag: "RunWorkflow"; workflow: string }
   /**
    * Say something to Collie. `runId` null is a question about the flock: read-only, and
@@ -1172,6 +1175,50 @@ export interface Windowed<T> {
   hidden: number;
 }
 
+/** One of a card's merge requests, as `w` and `y` offer it. */
+export interface MrChoice {
+  readonly short: string;
+  readonly target: string;
+  readonly url: string | null;
+  readonly runId: string | null;
+}
+
+/** The answers to a `ChooseMr` in the card's order, keyed 1 to 9; past nine, 9 is "More…". */
+export const mrChoices = (command: Extract<Command, { readonly _tag: "ChooseMr" }>): MenuItem[] => {
+  const usable = Arr.filter(command.mrs, (one) =>
+    command.copy ? one.url !== null : readMrRef(one.target) !== null,
+  );
+  const shown = usable.length > 9 ? usable.slice(0, 8) : usable;
+  const more: MenuItem[] =
+    usable.length > 9
+      ? [
+          {
+            key: "9",
+            label: "More…",
+            command: { _tag: "ChooseMr", copy: command.copy, mrs: usable.slice(8) },
+          },
+        ]
+      : [];
+  return [
+    ...Arr.map(shown, (one, at): MenuItem => {
+      const key = String(at + 1);
+      const ref = readMrRef(one.target);
+      return command.copy || ref === null
+        ? {
+            key,
+            label: `Copy ${one.short}'s link`,
+            command: { _tag: "CopyLink", url: one.url ?? "" },
+          }
+        : {
+            key,
+            label: openMrLabel(ref, false, one.short),
+            command: { _tag: "OpenMr", target: one.target, runId: one.runId },
+          };
+    }),
+    ...more,
+  ];
+};
+
 /** One line of a card's menu: what it says, the key beside it, and what it does. */
 export interface MenuItem {
   key: string;
@@ -1191,8 +1238,9 @@ function itemFor(view: TaskView, action: CardAction, primary: boolean): MenuItem
       return { key: "a", label: "Attach files…", command: { _tag: "AttachFiles", runId } };
     case "open-mr":
       return {
-        key: "w",
-        label: openMrLabel(action.mr, primary),
+        // One key cannot say which of several merge requests it opens.
+        key: action.named === undefined ? "w" : "",
+        label: openMrLabel(action.mr, primary, action.named),
         command: { _tag: "OpenMr", target: mrTarget(action.mr.project, action.mr.iid), runId },
       };
     case "offer":
@@ -1223,8 +1271,8 @@ function itemFor(view: TaskView, action: CardAction, primary: boolean): MenuItem
       return { key: "k", label: "Stop run", command: { _tag: "StopRun", runId } };
     case "dispose":
       return {
-        key: DISPOSITION_KEYS[action.disposition],
-        label: `Mark ${action.disposition}`,
+        key: action.named === undefined ? DISPOSITION_KEYS[action.disposition] : "",
+        label: disposeLabel(action),
         command: { _tag: "RecordDisposition", runId, kind: action.disposition, ref: action.ref },
       };
     case "acknowledge":
@@ -1242,9 +1290,36 @@ export function primaryFor(view: TaskView): MenuItem | null {
 
 /** What this Task can be asked for, in the order the menu shows it, its record first. */
 export function menuFor(view: TaskView): MenuItem[] {
+  const actions = cardActions(view);
+  const mrs = Arr.flatMap(actions, (action): MrChoice[] =>
+    action.kind === "open-mr" && action.named !== undefined
+      ? [
+          {
+            short: action.named,
+            target: mrTarget(action.mr.project, action.mr.iid),
+            url: mrUrlOf(action.mr),
+            runId: view.run,
+          },
+        ]
+      : [],
+  );
   return [
     { key: "enter", label: "Open record", command: { _tag: "OpenRecord", id: view.id } },
-    ...Arr.map(cardActions(view), (action) => itemFor(view, action, false)),
+    ...Arr.map(actions, (action) => itemFor(view, action, false)),
+    ...(mrs.length < 2
+      ? []
+      : [
+          {
+            key: "w",
+            label: "Open a merge request…",
+            command: { _tag: "ChooseMr", copy: false, mrs } as const,
+          },
+          {
+            key: "y",
+            label: "Copy a merge request's link…",
+            command: { _tag: "ChooseMr", copy: true, mrs } as const,
+          },
+        ]),
   ];
 }
 
@@ -1303,6 +1378,7 @@ export const ALL_KEYS: ReadonlyArray<{ key: string; what: string }> = [
   { key: "s", what: "Steer…" },
   { key: "a", what: "Attach files…" },
   { key: "w", what: "Open merge request" },
+  { key: "y", what: "Copy a merge request's link, on a card of several" },
   { key: "u", what: "Resume run" },
   { key: "o", what: "What its workflow offers next" },
   { key: "i", what: "The first of those, on a plan that is ready" },
@@ -1395,8 +1471,8 @@ export interface KeyContext {
   rows: readonly Row[];
   /** Whether the panel cut something short, which is the only thing `m` can act on. */
   cutShort: boolean;
-  /** The merge request URL `c` copies, where there is one. */
-  mrUrl: string | null;
+  /** The merge requests `c` copies the link of: the only one, or one asked for. */
+  mrs: ReadonlyArray<MrChoice>;
 }
 
 /**
@@ -1582,7 +1658,11 @@ export function keyIntent(at: KeyContext, key: Keypress): KeyIntent | null {
   if (key.sequence === "t") return at.row?.runId ? doing({ _tag: "ToggleTail" }) : null;
   // The rest of a review the panel cut short, a cap at a time.
   if (key.sequence === "m") return at.cutShort ? doing({ _tag: "MoreReview" }) : null;
-  if (key.sequence === "c") return at.mrUrl ? { _tag: "Copy", text: at.mrUrl } : null;
+  if (key.sequence === "c") {
+    if (at.mrs.length > 1) return doing({ _tag: "ChooseMr", copy: true, mrs: at.mrs });
+    const url = at.mrs[0]?.url ?? null;
+    return url !== null ? { _tag: "Copy", text: url } : null;
+  }
   if (key.name === "q" || (key.ctrl && key.name === "c")) return doing({ _tag: "Quit" });
   // A digit focuses that agent wherever the Selection is: those keys are the board's
   // shortcut into a pane, not an action on a row.

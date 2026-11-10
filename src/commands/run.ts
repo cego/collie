@@ -1335,7 +1335,9 @@ const runDisposition = Command.make(
       Flag.optional,
     ),
     ref: Flag.String("ref").pipe(
-      Flag.withDescription("What backs it up: a merge request, a commit, or the Run that took it"),
+      Flag.withDescription(
+        "The merge request it is about, or what backs it up: a commit, or the Run that took it",
+      ),
       Flag.withDefault(""),
     ),
     note: Flag.String("note").pipe(

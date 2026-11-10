@@ -10,6 +10,7 @@ import {
   FOLLOWING_LOG,
   keyAction,
   landingOf,
+  mrTabsOf,
   recordTabs,
   rememberScroll,
   type ScrollMemory,
@@ -159,6 +160,7 @@ const tabs = computed(() => {
     diff: Boolean(shown?.diff),
     terminal: offersTerminal(props.placed.asOf, chosen.value),
     mr: shown?.mr || shown?.pending?.includes("mr") ? mrTab(props.placed.task.mr) : null,
+    mrs: mrTabsOf(shown?.mrs),
     pending: shown?.pending,
   });
 });
@@ -455,6 +457,12 @@ const locationOf = (file: string, line: number | null) =>
             :run-id="detail.id"
           />
           <MrPanel v-if="kept.has('mr') && detail.mr" v-show="tab === 'mr'" :mr="detail.mr" />
+          <template v-for="one in detail.mrs ?? []" :key="one.id">
+            <template v-if="kept.has(`mr:${one.id}`)">
+              <MrPanel v-if="one.panel" v-show="tab === `mr:${one.id}`" :mr="one.panel" />
+              <p v-else v-show="tab === `mr:${one.id}`" class="text-sm text-muted">Not read yet.</p>
+            </template>
+          </template>
           <DiffTab
             v-if="detail.diff && kept.has('diff')"
             ref="diffTab"

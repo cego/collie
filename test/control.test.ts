@@ -16,7 +16,7 @@ import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem } from "effect";
 import { readAudit } from "../src/audit";
-import { mrLabel, type MrState } from "../src/board-model";
+import { type MrState } from "../src/board-model";
 import { connect } from "../src/host";
 import { factsOfView } from "../src/runs";
 import { writeMrStates } from "../src/merges";
@@ -416,7 +416,7 @@ const stoppedOn = Effect.fn("test.stoppedOn")(function* (prefix: string, mr: MrS
   );
   const claim = `${yield* runDirOf(state, "r1")}/helle.json`;
   yield* fs.writeFileString(claim, CLAIM);
-  yield* writeMrStates(state, new Map([[mrLabel(MR), mr]]));
+  yield* writeMrStates(state, new Map([["gitlab.example.com/group/project!7", mr]]));
   return { host, state, claim };
 });
 

@@ -81,7 +81,7 @@ import { asText as newsText, NATIVE } from "./news";
 import { reportLines } from "./report";
 import { epochMs } from "./time";
 import { findRun, listRuns, type RunFacts } from "./runs";
-import { readyLines } from "./following";
+import { progressReadyLines } from "./following";
 import { donePasses, markersOf, runningCheck } from "./checks";
 import { memoryWaitOf, waitLine } from "./memory-wait";
 import { machineHerd } from "./steering";
@@ -454,7 +454,7 @@ const runAnswer = Effect.fn("Tools.runAnswer")(function* (
   const ready =
     !progress.ok || progress.value === null
       ? []
-      : ["", "### Ready to release", "", ...readyLines(progress.value.ready)];
+      : ["", "### Ready to release", "", ...progressReadyLines(progress.value)];
   const shown =
     reads === undefined
       ? yield* runShown(env, run.id)

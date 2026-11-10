@@ -11,6 +11,7 @@
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
+import * as Option from "effect/Option";
 import { createEffect, createMemo, createResource, For, Show, type JSX } from "solid-js";
 import {
   TextAttributes,
@@ -28,6 +29,8 @@ import {
   type PlanPanel,
   type RunDetail,
   type TaskView,
+  mrReadiness,
+  mrTarget,
   mrWords,
   readMrRef,
 } from "../board-model";
@@ -212,6 +215,11 @@ export function Drawer(props: DrawerProps) {
    * review. The card's own line says only which one it is.
    */
   const mr = () => props.detail?.mr ?? null;
+  const readinessOf = (id: string) => {
+    const mrs = props.view.mrs ?? [];
+    const one = Option.getOrUndefined(Arr.findFirst(mrs, (entry) => entry.id === id));
+    return one === undefined ? null : mrReadiness(one, mrs);
+  };
 
   const findings = (): Line[] =>
     Arr.map(props.detail?.findings ?? [], (finding) => ({
@@ -360,11 +368,30 @@ export function Drawer(props: DrawerProps) {
             <Section title="ran on" lines={ranOnLines()} />
           </Show>
           <Section title="branch" lines={branch()} />
-          <MergeRequest
-            url={props.view.mr}
-            panel={mr()}
-            reviewedAt={props.detail?.finishedAt ?? 0}
-          />
+          <Show
+            when={(props.detail?.mrs ?? []).length > 1}
+            fallback={
+              <MergeRequest
+                url={props.view.mr}
+                panel={mr()}
+                reviewedAt={props.detail?.finishedAt ?? 0}
+              />
+            }
+          >
+            <For each={props.detail?.mrs ?? []}>
+              {(one) => (
+                <MergeRequest
+                  url={one.mr}
+                  panel={one.panel}
+                  readiness={readinessOf(one.id)}
+                  reviewedAt={props.detail?.finishedAt ?? 0}
+                  onOpen={(target) =>
+                    props.onAct({ _tag: "OpenMr", target, runId: props.view.run })
+                  }
+                />
+              )}
+            </For>
+          </Show>
           <Show when={card().length > 0}>
             <Section title="latest card" lines={card()} />
           </Show>
@@ -628,7 +655,14 @@ function Cards(props: { live: Live | null }) {
  * still arguing in it, and — the line that decides whether to look again — has anything
  * moved since this review finished.
  */
-function MergeRequest(props: { url: string | null; panel: MrPanel | null; reviewedAt: number }) {
+function MergeRequest(props: {
+  url: string | null;
+  panel: MrPanel | null;
+  reviewedAt: number;
+  /** Where it is one of several: its state, readiness and wait, and so which one it opens. */
+  readiness?: string | null;
+  onOpen?: (target: string) => void;
+}) {
   const details = () => (props.panel?._tag === "Details" ? props.panel : null);
   /**
    * The one line there is instead of the details: no merge request yet, no glab, no login,
@@ -642,14 +676,21 @@ function MergeRequest(props: { url: string | null; panel: MrPanel | null; review
   const ref = () => (props.url === null ? null : readMrRef(props.url));
   return (
     <Titled title={ref() === null ? "merge request" : mrWords(ref()!).noun}>
+      <Show when={props.readiness}>
+        <text fg={C.muted}>{props.readiness}</text>
+      </Show>
       <Show when={details() !== null} fallback={<text fg={C.dim}>{instead()}</text>}>
-        <MergeRequestDetails mr={details()!} reviewedAt={props.reviewedAt} />
+        <MergeRequestDetails mr={details()!} reviewedAt={props.reviewedAt} onOpen={props.onOpen} />
       </Show>
     </Titled>
   );
 }
 
-function MergeRequestDetails(props: { mr: MrDetails; reviewedAt: number }) {
+function MergeRequestDetails(props: {
+  mr: MrDetails;
+  reviewedAt: number;
+  onOpen?: ((target: string) => void) | undefined;
+}) {
   const renderer = useRenderer();
   const moved = () => sinceReview(props.mr, props.reviewedAt);
   const words = () => mrWords(props.mr);
@@ -676,6 +717,12 @@ function MergeRequestDetails(props: { mr: MrDetails; reviewedAt: number }) {
       </Show>
       {/* The URL is on screen and the pane owns the mouse while it is focused, so copying
           it is a press rather than a drag. */}
+      <Show when={props.onOpen !== undefined}>
+        <Button
+          label={`Open ${words().sign}${props.mr.iid}`}
+          onPress={() => props.onOpen?.(mrTarget(props.mr.project, props.mr.iid))}
+        />
+      </Show>
       <Show when={props.mr.url !== ""}>
         <Button label="Copy link" onPress={() => renderer.copyToClipboardOSC52(props.mr.url)} />
         <text fg={C.dim}>{props.mr.url}</text>

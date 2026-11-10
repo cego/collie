@@ -39,7 +39,7 @@ import {
 } from "./herdr";
 import { isOpen, readTask, removeTask, withTaskLock, writeTask, type TaskRecord } from "./task";
 import { appendJournal, readJournal } from "./journal";
-import { shell } from "./mr";
+import { mrIdIn, shell } from "./mr";
 import type { AgentEntry } from "./registry";
 import { settled, type RunFacts } from "./runs";
 import { epochMs, nowIso, took } from "./time";
@@ -407,8 +407,9 @@ export const settlingOf = (opts: {
         yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => [])),
       );
       const label = run.mr === null ? null : mrLabel(run.mr);
-      const state = label === null ? undefined : states.get(label);
-      const head = label === null ? null : (forge.get(label)?.head ?? null);
+      const id = run.mr === null ? null : yield* mrIdIn(run.mr, run.cwd, shell);
+      const state = id === null ? undefined : states.get(id);
+      const head = id === null ? null : (forge.get(id)?.head ?? null);
       // Only a merge's head is on the remote: a closed merge request's never landed.
       const heads =
         head !== null && state !== undefined && state !== "open" && state !== "closed"

@@ -1334,7 +1334,9 @@ const followUpRoute = (
     const offers = yield* client
       .offers({ runId: options.runId })
       .pipe(Effect.orElseSucceed((): ReadonlyArray<OfferView> => []));
-    const offered = Option.getOrUndefined(Arr.findFirst(offers, (one) => one.kind === "follow-up"));
+    const offered = Option.getOrUndefined(
+      Arr.findFirst(offers, (one) => one.kind === "follow-up" && one.run === undefined),
+    );
     if (offered !== undefined)
       return `${options.runId} has finished and its agent is gone: carry this on with its follow-up offer "${offered.id}", giving the message as its input.`;
     return `${options.runId} has finished and its agent is gone, and it offers no follow-up: start a new Run on ${view.branch === null ? "its branch" : `its branch ${view.branch}`}.`;
@@ -1446,7 +1448,8 @@ export const describeOffers = (offers: ReadonlyArray<OfferView>): string =>
   Arr.join(
     Arr.map(offers, (offer) => {
       const why = offer.unavailable === null ? "" : ` — unavailable: ${offer.unavailable}`;
-      return `${offer.primary ? "▸" : " "} ${offer.id}  ${offer.title} (${offer.workflow})${why}`;
+      const on = offer.run === undefined ? "" : ` on ${offer.run}`;
+      return `${offer.primary ? "▸" : " "} ${offer.id}  ${offer.title} (${offer.workflow})${on}${why}`;
     }),
     "\n",
   );
@@ -1506,7 +1509,9 @@ export const invokeTypedOffer = (
     const offer =
       "ok" in listed
         ? undefined
-        : Option.getOrUndefined(Arr.findFirst(listed, (one) => one.id === options.offer));
+        : Option.getOrUndefined(
+            Arr.findFirst(listed, (one) => one.id === options.offer && one.run === undefined),
+          );
     return invokeOffer(env, {
       ...options,
       input: givenOfferInput(offer?.arguments ?? null, options.input),

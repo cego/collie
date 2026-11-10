@@ -42,7 +42,7 @@ import type {
 } from "./board-model";
 import { newest, readCards, readCheckpoints } from "./cards";
 import { diffOf, PLAN_DIR, planDirOf } from "./run-detail";
-import { orderedTickets, REPO_LINE } from "./plan";
+import { CHANGE_LINE, orderedTickets, REPO_LINE } from "./plan";
 import { workSourceOf } from "./strategies";
 import { readVerifications } from "./verify";
 import { readMeasurements } from "./measurement";
@@ -315,6 +315,7 @@ const finishedTickets = Effect.fn("Views.finishedTickets")(function* (
       orderedTickets(
         Arr.map(known, (t) => ({ file: t.file, text: t.text ?? "" })),
         one.repo ?? undefined,
+        one.change ?? "",
       ),
       (t) => t.file,
     );
@@ -333,7 +334,10 @@ const finishedTickets = Effect.fn("Views.finishedTickets")(function* (
 });
 
 // ponytail: never evicted; a few bytes per ticket file ever seen.
-const repoLines = new Map<string, { readonly stamp: string; readonly line: string | null }>();
+const repoLines = new Map<
+  string,
+  { readonly stamp: string; readonly line: string | null; readonly change: string }
+>();
 
 /** How far into a ticket its `**Repo:**` line is looked for: past the panel's cap, but bounded. */
 const REPO_SCAN_CAP = 1024 * 1024;
@@ -351,7 +355,7 @@ function repoLineIn(text: string, truncated: boolean): string | null {
   return found && found[1] !== "" ? found[0] : null;
 }
 
-/** Each ticket's `**Repo:**` match, null where it is unknown, read only when the ticket has changed. */
+/** Each ticket's `**Repo:**` and `**Change:**` lines, null where unknown, read only when the ticket has changed. */
 const ticketRepoLines = Effect.fn("Views.ticketRepoLines")(function* (issues: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -366,10 +370,14 @@ const ticketRepoLines = Effect.fn("Views.ticketRepoLines")(function* (issues: st
     let kept = repoLines.get(at);
     if (kept?.stamp !== stamp) {
       const read = yield* capped(at, REPO_SCAN_CAP);
-      kept = { stamp, line: read === null ? "" : repoLineIn(read.text, read.truncated) };
+      kept = {
+        stamp,
+        line: read === null ? "" : repoLineIn(read.text, read.truncated),
+        change: read === null ? "" : (CHANGE_LINE.exec(read.text)?.[0] ?? ""),
+      };
       repoLines.set(at, kept);
     }
-    tickets.push({ file, text: kept.line });
+    tickets.push({ file, text: kept.line === null ? null : `${kept.line}\n${kept.change}` });
   }
   return tickets;
 });

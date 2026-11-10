@@ -2,7 +2,7 @@
 
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import type { MissingFact, RunProgress } from "../src/board-model";
+import type { MissingFact, RunProgress, TaskMr } from "../src/board-model";
 import type { RunView } from "../src/engine";
 import { followEvents, followLine, reached } from "../src/following";
 
@@ -139,4 +139,39 @@ test("a wait that ends by itself is no attention, and is followed as what it awa
       { view: view({ awaiting }), progress: null },
     ),
   ).toEqual([]);
+});
+
+test("a follower hears each of a Task's merge requests as it opens, merges or closes", () => {
+  const entry = (repo: string, iid: number, state: TaskMr["state"]): TaskMr => ({
+    id: `gitlab.cego.dk/cego/${repo}!${iid}`,
+    mr: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`,
+    label: `cego/${repo}!${iid}`,
+    short: `${repo}!${iid}`,
+    url: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`,
+    run: `r-${repo}`,
+    state,
+    checks: null,
+    head: null,
+    ready: false,
+    disposition: null,
+    waitsOn: [],
+  });
+  const look = (...mrs: TaskMr[]) => ({ view: view(), progress: progress({ mrs }) });
+  const app = entry("app", 12, "open");
+  const api = entry("api", 7, "open");
+
+  expect(followEvents(look(app), look(app, api))).toEqual([{ type: "mr", mr: api.mr }]);
+  const merged = look({ ...app, state: "merged" }, api);
+  expect(followEvents(look(app, api), merged)).toEqual([
+    { type: "mr", mr: app.mr, state: "merged" },
+  ]);
+  const closed = look({ ...app, state: "merged" }, { ...api, state: "closed" });
+  expect(followEvents(merged, closed)).toEqual([{ type: "mr", mr: api.mr, state: "closed" }]);
+  // A deploy after the merge is not a merge again.
+  expect(
+    followEvents(closed, look({ ...app, state: "in-prod" }, { ...api, state: "closed" })),
+  ).toEqual([]);
+  expect(followLine("r1", { type: "mr", mr: app.mr, state: "merged" })).toBe(
+    `r1: merge request ${app.mr} merged`,
+  );
 });

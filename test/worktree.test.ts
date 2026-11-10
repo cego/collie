@@ -3183,7 +3183,7 @@ test("a merge the merge watch recorded on GitHub settles a branch still on the r
       yield* fs.makeDirectory(`${rig.stateDir}/board`, { recursive: true });
       yield* fs.writeFileString(
         `${rig.stateDir}/board/mr-states.json`,
-        '{"o/r#5":{"state":"merged","checks":{"state":"passed"},"head":"abc"}}',
+        '{"github.com/o/r#5":{"state":"merged","checks":{"state":"passed"},"head":"abc"}}',
       );
       settling = yield* settlingOf({
         stateDir: rig.stateDir,
@@ -3198,6 +3198,40 @@ test("a merge the merge watch recorded on GitHub settles a branch still on the r
       expect(
         Arr.some(yield* askedIn(), (one) => one.cwd === at && one.command === "status --porcelain"),
       ).toBe(true);
+    }),
+  ));
+
+test("a legacy bare mr: target is settled as the merge request of its checkout's project", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* collieWorktree("wt");
+      recorded = Arr.map(recorded, (run) => ({ ...run, mr: "mr:42" }));
+      // Before `remote`: the fake answers the first pattern a question starts with.
+      yield* fakeGitAnswering({
+        "remote get-url origin": "git@gitlab.example.com:group/app.git",
+        "status --porcelain": "",
+        "rev-parse --abbrev-ref --symbolic-full-name @{u}": "origin/wt",
+        "rev-list HEAD --not": "",
+        remote: "origin",
+        "ls-remote --heads origin": "deadbeef refs/heads/wt",
+        "worktree remove": "",
+        "branch -d": "Deleted branch.",
+      });
+      yield* fs.makeDirectory(`${rig.stateDir}/board`, { recursive: true });
+      yield* fs.writeFileString(
+        `${rig.stateDir}/board/mr-states.json`,
+        '{"gitlab.example.com/group/app!42":{"state":"merged"},"gitlab.example.com/group/web!42":{"state":"open"}}',
+      );
+      settling = yield* settlingOf({
+        stateDir: rig.stateDir,
+        runs: recorded,
+        tasks: [],
+        sessions: [new Herdr(rig.pluginEnv())],
+        protect: [],
+      });
+
+      expect(yield* prune()).toEqual(["♻ removed wt · merged in 42"]);
     }),
   ));
 

@@ -400,6 +400,44 @@ export type Reopened = typeof Reopened.Type;
 export const RunRevision = Schema.Struct({ epoch: Schema.String, seq: Schema.Finite });
 export type RunRevision = typeof RunRevision.Type;
 
+/** One merge request of a Task, with its own facts. */
+export const TaskMr = Schema.Struct({
+  /** Its MR id (`mrId`). */
+  id: Schema.String,
+  /** The reference as a Run recorded it. */
+  mr: Schema.String,
+  label: Schema.String,
+  short: Schema.String,
+  url: Schema.NullOr(Schema.String),
+  /** The Run that opened it, else the newest given it. */
+  run: Schema.String,
+  state: Schema.NullOr(MrState),
+  checks: Schema.NullOr(Checks),
+  /** The revision its checks and readiness were judged at, where one is known. */
+  head: Schema.NullOr(Schema.String),
+  ready: Schema.Boolean,
+  /** Its latest Disposition, as `kind` or `kind ref`. */
+  disposition: Schema.NullOr(Schema.String),
+  /** The MR ids of the Task's merge requests whose source branch it targets. */
+  waitsOn: Schema.Array(Schema.String),
+});
+export type TaskMr = typeof TaskMr.Type;
+
+/** One of a Task's merge requests: its state, whether it is ready to release at which head, and what it waits on. */
+export const mrReadiness = (one: TaskMr, mrs: ReadonlyArray<TaskMr>): string => {
+  const shortOf = new Map(Arr.map(mrs, (other) => [other.id, other.short]));
+  const waits = Arr.map(one.waitsOn, (id) => shortOf.get(id) ?? id);
+  const head = one.head === null ? "" : ` at ${pipe(one.head, Str.slice(0, 8))}`;
+  return Arr.join(
+    [
+      one.state ?? "not watched",
+      one.ready ? `ready to release${head}` : "not ready to release",
+      ...(waits.length === 0 ? [] : [`waits on ${Arr.join(waits, ", ")}`]),
+    ],
+    ", ",
+  );
+};
+
 /** One Task as the board draws it. */
 export const TaskView = Schema.Struct({
   /** The Task's id, or the Run's own where it belongs to no Task. */
@@ -423,7 +461,10 @@ export const TaskView = Schema.Struct({
   questions: Schema.optionalKey(Schema.Array(Question)),
   agents: Schema.Array(BoardAgent),
   children: Schema.Array(BoardChild),
+  /** The first of `mrs`, for a reader older than the list. */
   mr: Schema.NullOr(Schema.String),
+  /** Every merge request its Runs opened or were given, by wave; absent from an older host. */
+  mrs: Schema.optionalKey(Schema.Array(TaskMr)),
   branch: Schema.NullOr(Schema.String),
   /** What became of the work, where someone recorded it. */
   disposition: Schema.NullOr(Schema.String),
@@ -895,6 +936,12 @@ export const Flow = Schema.Struct({
   current: Schema.NullOr(Schema.Struct({ run: Schema.String, node: Schema.String })),
   /** The merge request's way through CI, the merge and deploys, once the Task has one. */
   release: Schema.NullOr(Schema.Array(FlowNode)),
+  /** Each of a Task's several merge requests' way out, by MR id and wave; `release` is the first. */
+  releases: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({ mr: Schema.String, short: Schema.String, nodes: Schema.Array(FlowNode) }),
+    ),
+  ),
 });
 export type Flow = typeof Flow.Type;
 
@@ -985,6 +1032,12 @@ export const RunDetail = Schema.Struct({
   finishedAt: Schema.Finite,
   /** What the host's merge watch last read, for a Run that has a merge request. */
   mr: Schema.NullOr(MrPanel),
+  /** Where it owns none of its Task's several merge requests, each one's, by wave; `mr` is the first. */
+  mrs: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({ id: Schema.String, mr: Schema.String, panel: Schema.NullOr(MrPanel) }),
+    ),
+  ),
   findings: Schema.Array(ReviewFinding),
   verifications: Schema.Array(VerificationView),
   steering: Schema.Array(SteeringCard),
@@ -1024,6 +1077,8 @@ export const OfferView = Schema.Struct({
   primary: Schema.Boolean,
   /** Why it cannot be made now, or null when it can. */
   unavailable: Schema.NullOr(Schema.String),
+  /** The Run that makes it, where that is not the Run asked: one owning a merge request of its Task. */
+  run: Schema.optionalKey(Schema.String),
 });
 export type OfferView = typeof OfferView.Type;
 
@@ -1057,6 +1112,8 @@ export const RunProgress = Schema.Struct({
   /** The forge's pipeline at its merge request's head; null where it has not been asked. */
   ci: Schema.NullOr(ForgeChecks),
   steps: Schema.Array(RunStep),
+  /** Every merge request of its Task, by wave; absent from an older host. */
+  mrs: Schema.optional(Schema.Array(TaskMr)),
 });
 export type RunProgress = typeof RunProgress.Type;
 
@@ -1503,6 +1560,8 @@ export const RunDetailRpc = Rpc.make("runDetail", {
     tail: Schema.Boolean,
     pages: Schema.Int,
     refreshMr: Schema.Boolean,
+    /** The MR id `refreshMr` asks again about; absent, the first merge request shown. */
+    refreshMrId: Schema.optionalKey(Schema.String),
     /** The Flow first, then each part as it comes; absent, every value is the whole record. */
     parts: Schema.optionalKey(Schema.Boolean),
     /** The revision of a record already held, answered `Unchanged` while it is current. */
@@ -2014,7 +2073,7 @@ export function forgeOfRef(ref: MrRef): MrForge {
     : "gitlab";
 }
 
-const MR_TARGET = /^mr:(?:(.*)([!#]))?(\d+)$/;
+const MR_TARGET = /^mr:(?:([^\s,]*)([!#]))?(\d+)$/;
 const MR_URL =
   /^(?:https?:\/\/)?(?:(github\.com\/[^/\s]+\/[^/\s]+)\/pull|([^/\s]+\/.+?)\/-\/merge_requests)\/(\d+)(?:[/?#]|$)/i;
 
@@ -2079,6 +2138,87 @@ export function mrWords(ref: MrRef) {
     sign,
   };
 }
+
+/**
+ * A merge request's one identity, compared wherever two references might be the same one:
+ * host, project path and number in lower case, as `gitlab.cego.dk/spilnu/app!42`. Read from
+ * anything `readMrRef` reads or an MR id itself. A bare or hostless reference (`mr:42`,
+ * `spilnu/app!42`, `app!42`) is resolved only against the project `typedIn` names. Null
+ * where no host can be told.
+ */
+export function mrId(text: string, typedIn?: { readonly project: string | null }): string | null {
+  const said = Str.trim(text);
+  const ref =
+    readMrRef(said, typedIn) ??
+    (pipe(said, Str.startsWith("mr:")) ? null : readMrRef(`mr:${said}`));
+  if (ref === null) return null;
+  const here = typedIn?.project ?? null;
+  const named = ref.project;
+  const project = named === null || (!hosted(named) && endsIn(here, named)) ? here : named;
+  if (project === null || !hosted(project)) return null;
+  return Str.toLowerCase(`${project}${mrWords({ project, iid: ref.iid }).sign}${ref.iid}`);
+}
+
+/** `host/group/project` of an MR id. */
+export const mrIdProject = (id: string) => pipe(id, Str.replace(/[!#]\d+$/, ""));
+
+/** The references a set is named by, separated by spaces or commas. */
+export const mrRefsIn = (text: string): ReadonlyArray<string> =>
+  Arr.filter(Str.split(Str.trim(text), /[\s,]+/), Str.isNonEmpty);
+
+/**
+ * The merge requests a set names, each once by MR id, or the first reference naming none.
+ * Null where it names one or none, which is no set.
+ */
+export function mrSet(text: string):
+  | {
+      readonly mrs: ReadonlyArray<{
+        readonly id: string;
+        readonly target: string;
+        readonly url: string;
+      }>;
+    }
+  | { readonly unresolved: string }
+  | null {
+  const said = mrRefsIn(text);
+  if (said.length < 2) return null;
+  const named = new Map<
+    string,
+    { readonly id: string; readonly target: string; readonly url: string }
+  >();
+  for (const one of said) {
+    const id = mrId(one);
+    const ref = readMrRef(one);
+    const words = ref === null ? null : mrWords(ref);
+    if (id === null || words === null || words.url === null) return { unresolved: one };
+    if (!named.has(id)) named.set(id, { id, target: words.target, url: words.url });
+  }
+  return { mrs: [...named.values()] };
+}
+
+/**
+ * The MR ids among `ids` whose source branch is `id`'s target branch, those in its own
+ * project where any are: a fan-out's repositories share their branch's name.
+ */
+export function waitsOnOf(
+  id: string,
+  ids: ReadonlyArray<string>,
+  branches: ReadonlyMap<string, { readonly source?: string; readonly target?: string }>,
+): string[] {
+  const target = branches.get(id)?.target ?? "";
+  if (target === "") return [];
+  const sources = Arr.filter(
+    ids,
+    (other) => other !== id && branches.get(other)?.source === target,
+  );
+  const here = Arr.filter(sources, (other) => mrIdProject(other) === mrIdProject(id));
+  return here.length > 0 ? here : sources;
+}
+
+const hosted = (project: string) => mrPath({ project, iid: "" }) !== project;
+
+const endsIn = (project: string | null, path: string) =>
+  project !== null && pipe(Str.toLowerCase(project), Str.endsWith(`/${Str.toLowerCase(path)}`));
 
 export function mrTarget(project: string | null, iid: string): string {
   return mrWords({ project: project || null, iid }).target;
@@ -2276,14 +2416,17 @@ export function flowActions(
     };
   });
   const leading = Option.getOrUndefined(Arr.findFirst(lanes, (lane) => lane.run === view.run));
-  const release =
-    flow.release === null || leading === undefined
-      ? flow.release
-      : Arr.map(flow.release, (node): FlowNode => ({
+  const releaseOf = (nodes: ReadonlyArray<FlowNode>) =>
+    leading === undefined
+      ? nodes
+      : Arr.map(nodes, (node): FlowNode => ({
           ...offered(node, leading, factsOf(leading)),
           runs: node.runs,
         }));
-  return { ...flow, lanes, release };
+  const release = flow.release === null ? null : releaseOf(flow.release);
+  if (flow.releases === undefined) return { ...flow, lanes, release };
+  const releases = Arr.map(flow.releases, (row) => ({ ...row, nodes: releaseOf(row.nodes) }));
+  return { ...flow, lanes, release, releases };
 }
 
 /** However the Task names its merge request: the URL one opened, or the target one was pointed at. */
@@ -2303,7 +2446,7 @@ export type CardAction =
   | { readonly kind: "go-to-tab" }
   | { readonly kind: "steer" }
   | { readonly kind: "attach" }
-  | { readonly kind: "open-mr"; readonly mr: MrRef }
+  | { readonly kind: "open-mr"; readonly mr: MrRef; readonly named?: string }
   | { readonly kind: "offer"; readonly offer: BoardOffer }
   | { readonly kind: "check-output" }
   | { readonly kind: "offers" }
@@ -2311,15 +2454,40 @@ export type CardAction =
   | { readonly kind: "follow-up" }
   | { readonly kind: "hold"; readonly set: boolean }
   | { readonly kind: "stop" }
-  | { readonly kind: "dispose"; readonly disposition: DispositionKind; readonly ref: string }
+  | {
+      readonly kind: "dispose";
+      readonly disposition: DispositionKind;
+      readonly ref: string;
+      /** The merge request's short words, where its Task has several. */
+      readonly named?: string;
+    }
   | { readonly kind: "acknowledge" };
 
+type DisposeAction = Extract<CardAction, { kind: "dispose" }>;
+
 /** `collie!151` or `collie#30` rather than the whole URL: a disposition's ref ends up in the card's sentence. */
-const dispose = (view: TaskView, disposition: DispositionKind): CardAction => {
+const dispose = (view: TaskView, disposition: DispositionKind): DisposeAction => {
   const mr = mrRefOf(view.mr);
   const ref = disposition === "abandoned" || mr === null ? "" : mrWords(mr).short;
   return { kind: "dispose", disposition, ref };
 };
+
+/** A Task's merge requests where it has several, each acted on by itself; none otherwise. */
+const severalOf = (view: TaskView): ReadonlyArray<TaskMr> =>
+  view.mrs !== undefined && view.mrs.length > 1 ? view.mrs : [];
+
+const openEach = (one: TaskMr): CardAction => {
+  const recorded = readMrRef(one.mr);
+  const mr = recorded?.project ? recorded : readMrRef(`mr:${one.id}`)!;
+  return { kind: "open-mr", mr, named: one.short };
+};
+
+const disposeEach = (one: TaskMr, disposition: DispositionKind): DisposeAction => ({
+  kind: "dispose",
+  disposition,
+  ref: one.id,
+  named: one.short,
+});
 
 /** "merge request", or "pull request" for one on GitHub, however it is named. */
 export function mrNounOf(mr: string): string {
@@ -2328,10 +2496,17 @@ export function mrNounOf(mr: string): string {
 }
 
 /** The Open action's label, in the merge request's own forge's words. */
-export function openMrLabel(mr: MrRef, primary: boolean): string {
+export function openMrLabel(mr: MrRef, primary: boolean, named?: string): string {
   const github = forgeOfRef(mr) === "github";
+  if (named !== undefined) return `${github ? "Open PR" : "Open MR"} ${named}`;
   if (primary) return github ? "Open PR" : "Open MR";
   return github ? "Open pull request" : "Open merge request";
+}
+
+export function disposeLabel(action: DisposeAction): string {
+  return action.named === undefined
+    ? `Mark ${action.disposition}`
+    : `Mark ${action.disposition} ${action.named}`;
 }
 
 /**
@@ -2341,8 +2516,10 @@ export function openMrLabel(mr: MrRef, primary: boolean): string {
 export function cardActions(view: TaskView): CardAction[] {
   const actions: CardAction[] = [{ kind: "go-to-tab" }];
   if (!isSettled(view.state)) actions.push({ kind: "steer" }, { kind: "attach" });
+  const several = severalOf(view);
   const mr = mrRefOf(view.mr);
-  if (mr !== null) actions.push({ kind: "open-mr", mr });
+  if (several.length > 0) actions.push(...Arr.map(several, openEach));
+  else if (mr !== null) actions.push({ kind: "open-mr", mr });
   if (view.offer !== null) actions.push({ kind: "offer", offer: view.offer });
   if (view.check !== null) actions.push({ kind: "check-output" });
   actions.push({ kind: "offers" });
@@ -2369,6 +2546,20 @@ export function primaryAction(view: TaskView): CardAction | null {
   // Whatever the plan's module offers first, under its own title; none, no button.
   if (view.planReady) return view.offer === null ? null : { kind: "offer", offer: view.offer };
   if (canResume(view.state)) return { kind: "resume" };
+  const several = severalOf(view);
+  if (several.length > 0) {
+    const closed = Arr.findFirst(
+      several,
+      (one) => one.state === "closed" && one.disposition === null,
+    );
+    if (Option.isSome(closed)) return disposeEach(closed.value, "superseded");
+    return openEach(
+      Option.getOrElse(
+        Arr.findFirst(several, (one) => one.ready),
+        () => several[0]!,
+      ),
+    );
+  }
   if (view.mrState === "closed") return dispose(view, "superseded");
   const mr = mrRefOf(view.mr);
   return mr === null ? null : { kind: "open-mr", mr };
@@ -2378,8 +2569,18 @@ export function primaryAction(view: TaskView): CardAction | null {
  * What became of the work, for any settled Task: a Run that failed and was finished by
  * hand is what a disposition is for. Superseded where its merge request was closed.
  */
-export function dispositionActions(view: TaskView): CardAction[] {
+export function dispositionActions(view: TaskView): DisposeAction[] {
   if (!isSettled(view.state)) return [];
+  const several = severalOf(view);
+  if (several.length > 0)
+    return Arr.flatMap(several, (one) =>
+      Arr.map(
+        one.state === "closed"
+          ? (["merged", "abandoned", "superseded"] as const)
+          : (["merged", "abandoned"] as const),
+        (kind) => disposeEach(one, kind),
+      ),
+    );
   const kinds: DispositionKind[] = ["merged", "abandoned"];
   if (view.mrState === "closed") kinds.push("superseded");
   return Arr.map(kinds, (kind) => dispose(view, kind));

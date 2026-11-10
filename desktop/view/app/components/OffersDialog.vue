@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import * as Effect from "effect/Effect";
-import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 import { type OfferView, offerFields, offerInput } from "../../../../src/board-model";
+import { chosenOffer, invokeOf, offerKey } from "../../../src/shared/actions";
 import { refusal } from "../../../src/shared/kept-records";
 
 const props = defineProps<{
   installation: string;
   runId: string;
+  /** The offer picked already, by its `offerKey`. */
   chosen: string | null;
   /** When the record was last confirmed; asked again on every try, after the dialog closes too. */
   asOf: () => number | null;
@@ -31,12 +31,7 @@ const make = (offer: OfferView) => {
         Promise.resolve(
           run(
             props.installation,
-            {
-              _tag: "Invoke",
-              runId: props.runId,
-              offer: offer.id,
-              input: offerInput(offer.arguments, typed.value),
-            },
+            invokeOf(props.runId, offer, offerInput(offer.arguments, typed.value)),
             undefined,
             undefined,
             () => refusal(null, asOf()) ?? undefined,
@@ -62,9 +57,7 @@ onMounted(() => {
         Promise.resolve(offersOf(props.installation, props.runId)),
       );
       if (offers.value === null) return emit("close");
-      const named = Option.getOrUndefined(
-        Arr.findFirst(offers.value, (offer) => offer.id === props.chosen),
-      );
+      const named = chosenOffer(offers.value, props.chosen);
       if (named !== undefined) pick(named);
     }),
   );
@@ -83,8 +76,8 @@ onMounted(() => {
         <p v-if="offers.length === 0" class="text-muted">It offers nothing now.</p>
         <UButton
           v-for="offer in offers"
-          :key="offer.id"
-          :data-testid="`offer-${offer.id}`"
+          :key="offerKey(offer)"
+          :data-testid="`offer-${offerKey(offer)}`"
           color="neutral"
           variant="outline"
           :disabled="refused(offer) !== null"

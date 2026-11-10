@@ -12,6 +12,7 @@ import {
   type ToMain,
   type ToView,
 } from "../../src/shared/channel";
+import { flockMrs } from "../../src/shared/card-mrs";
 import {
   applyItem,
   DesktopRpcs,
@@ -103,6 +104,8 @@ export const flockCardsAtom = Atom.make((get) => {
   );
   return (cardsBefore = flockCards(flock, cardsBefore));
 }).pipe(Atom.keepAlive);
+
+export const flockMrsAtom = Atom.make((get) => flockMrs(get(flockCardsAtom))).pipe(Atom.keepAlive);
 
 /** Desktop's own settings, told again after every saved change, wherever it was made. */
 export const desktopSettingsAtom = FlockClient.runtime

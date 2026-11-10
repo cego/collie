@@ -72,13 +72,7 @@ import { isSettled } from "../src/lifecycle";
 import { appendLog } from "../src/oversight";
 import { readAudit, trimAudit } from "../src/audit";
 import { writeMrStates } from "../src/merges";
-import {
-  Flow,
-  FrontDoorRpcs,
-  mrLabel,
-  type Declaration,
-  type FLOCK_READS,
-} from "../src/board-model";
+import { Flow, FrontDoorRpcs, type Declaration, type FLOCK_READS } from "../src/board-model";
 
 const encodeJson = Schemaflow(
   Schema.encodeUnknownResult(Schema.fromJsonString(Schema.Any)),
@@ -1289,6 +1283,42 @@ test("an offer's argument that is not text is taken from the text chat gives it"
     }),
   ));
 
+test("an owning Run's own offer in a Task of several merge requests reads its arguments as it declares them", () =>
+  inWorld(
+    Effect.gen(function* () {
+      yield* save(world.user, ["owns-mr.workflow.ts", "echo.workflow.ts"]);
+      const done = (view: RunView) => view.status.status === "complete";
+      const [app] = yield* Effect.forEach(["app", "api"], (repo) =>
+        startedRun(
+          "owns-mr",
+          { mr: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/7` },
+          done,
+          undefined,
+          "task-several",
+        ),
+      );
+
+      const said = yield* call("collie_do", {
+        actions: [
+          {
+            kind: "take_offer",
+            run: app!.id,
+            offer: "echo-louder",
+            inputs: { text: "again", times: "2" },
+          },
+        ],
+      });
+      expect(said).toContain("take_offer: applied");
+      const started = /Started run (\S+) from/.exec(said)?.[1] ?? "";
+      const client = yield* connect(stateDir).pipe(Effect.orDie);
+      const child = yield* until(
+        () => client.run({ runId: started }).pipe(Effect.orDie),
+        (view) => view !== null && view.waiting.length > 0,
+      );
+      expect(child?.input).toEqual({ text: "again", times: 2 });
+    }),
+  ));
+
 test("an offer the Run does not make, or cannot make now, starts nothing and says why", () =>
   inWorld(
     Effect.gen(function* () {
@@ -1802,8 +1832,8 @@ test("a Run's row for a Run it started shows that Run's merge request as the mer
 
       yield* writeMrStates(
         stateDir,
-        new Map([["mk/api!4", "open"]]),
-        new Map([["mk/api!4", { checks: { state: "passed" }, head: null }]]),
+        new Map([["gitlab.cego.dk/mk/api!4", "open"]]),
+        new Map([["gitlab.cego.dk/mk/api!4", { checks: { state: "passed" }, head: null }]]),
       );
       expect(yield* call("collie_run", { run: parent.id })).toContain(
         `- run ${child.id}: hello, succeeded; mk/api!4 open, checks passed`,
@@ -1822,11 +1852,11 @@ test("a Run's own merge request is shown as recorded, with what the merge watch 
         `Pull request: ${pull} — not watched`,
       );
 
-      const label = mrLabel(pull);
+      const id = "github.com/cego/collie#61";
       yield* writeMrStates(
         stateDir,
-        new Map([[label, "open"]]),
-        new Map([[label, { checks: { state: "failed", name: "test" }, head: null }]]),
+        new Map([[id, "open"]]),
+        new Map([[id, { checks: { state: "failed", name: "test" }, head: null }]]),
       );
       expect(yield* call("collie_run", { run: run.id })).toContain(
         `Pull request: ${pull} — open, checks failed (test)`,
@@ -2133,5 +2163,43 @@ test("collie_installation gives the Standing direction as it is now, with its ed
       expect(second).toContain("Ask before renovating.");
       expect(second).toContain("2026-10-03");
       expect(second).not.toContain("Stage only");
+    }),
+  ));
+
+test("collie_do disposes of a merge request of several on the Run that owns it, and of none outside the Task", () =>
+  inWorld(
+    Effect.gen(function* () {
+      yield* save(world.user, ["fans-out.workflow.ts", "records-mr.workflow.ts"]);
+      const mrOf = (repo: string, iid: number) =>
+        `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`;
+      const fan = yield* startedRun(
+        "fans-out",
+        { mrs: `${mrOf("api", 3)} ${mrOf("web", 8)}` },
+        (view) => view.status.status === "complete",
+        undefined,
+        "task-fan",
+      );
+      const client = yield* connect(stateDir).pipe(Effect.orDie);
+      const web = Option.getOrThrow(
+        Arr.findFirst(
+          yield* client.runs({ task: "task-fan" }).pipe(Effect.orDie),
+          (one) => one.mr === mrOf("web", 8),
+        ),
+      );
+
+      const marked = yield* call("collie_do", {
+        actions: [{ kind: "disposition", run: fan.id, became: "abandoned", ref: "web!8" }],
+      });
+      expect(marked).toContain("disposition: applied");
+      expect(yield* readDispositions(runDir(stateDir, web.runId))).toMatchObject([
+        { kind: "abandoned", ref: "gitlab.cego.dk/cego/web!8" },
+      ]);
+      expect(yield* readDispositions(fan.dir)).toEqual([]);
+
+      const refused = yield* call("collie_do", {
+        actions: [{ kind: "disposition", run: fan.id, became: "merged", ref: mrOf("cli", 9) }],
+      });
+      expect(refused).toContain("disposition: failed");
+      expect(refused).toMatch(/cego\/api!3.*cego\/web!8/);
     }),
   ));

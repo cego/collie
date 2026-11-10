@@ -4,6 +4,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
+import * as Order from "effect/Order";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema, Stream } from "effect";
 import {
@@ -25,6 +26,9 @@ import { collieCommand } from "./support/world";
 import { runDir } from "../src/engine";
 import { BUILD, connect, ownerOf } from "../src/host";
 import { stopHost, until } from "./support/host";
+import { applyItem, EMPTY_FLOCK, flockCards, type FlockItem } from "../desktop/src/shared/flock";
+import { flockMrs } from "../desktop/src/shared/card-mrs";
+import { task, taskMr } from "./support/task";
 
 const SECOND = {
   id: "second",
@@ -396,3 +400,58 @@ test(
     ),
   180_000,
 );
+
+test("a merge request two Machines' Tasks hold is shown once, with a link to each, and each link's actions go to its own Machine", () => {
+  const boardOf = (
+    machine: { installation: string; profile: string; name: string },
+    tasks: ReadonlyArray<ReturnType<typeof task>>,
+  ): FlockItem => ({
+    machine,
+    message: {
+      _tag: "Snapshot",
+      installation: machine.installation,
+      build: "0.31.0",
+      protocol: 5,
+      herds: [{ id: "default" }],
+      tasks,
+      seq: 0,
+    },
+  });
+  const app = taskMr("spilnu/app", 12, { run: "r-pc" });
+  const api = taskMr("spilnu/api", 7, { run: "r-pc", waitsOn: [app.id] });
+  const cards = flockCards(
+    Arr.reduce(
+      [
+        boardOf({ installation: "inst-pc", profile: "local", name: "mk-pc" }, [
+          task({ id: "t-pc", run: "r-pc", runs: ["r-pc"], mr: app.mr, mrs: [app, api] }),
+        ]),
+        boardOf({ installation: "inst-vm", profile: "p-vm", name: "vm-mk" }, [
+          task({
+            id: "t-vm",
+            run: "r-vm",
+            runs: ["r-vm"],
+            mr: "https://gitlab.cego.dk/Spilnu/App/-/merge_requests/12",
+            mrState: "open",
+          }),
+        ]),
+      ],
+      EMPTY_FLOCK,
+      applyItem,
+    ),
+  );
+  const shown = Arr.flatten([...flockMrs(cards).values()]);
+  const apps = Arr.filter(shown, (one) => one.id === app.id);
+  expect(apps).toHaveLength(1);
+  expect(
+    Arr.sort(
+      Arr.map(apps[0]!.links, ({ machine }) => machine),
+      Order.String,
+    ),
+  ).toEqual(["mk-pc", "vm-mk"]);
+  expect(Arr.filter(shown, (one) => one.id === api.id)).toHaveLength(1);
+  for (const link of apps[0]!.links) {
+    const opened = cards.byKey.get(link.key)!;
+    expect([opened.installation, opened.machine]).toEqual([link.installation, link.machine]);
+    expect(opened.task.run).toBe(link.machine === "mk-pc" ? "r-pc" : "r-vm");
+  }
+});

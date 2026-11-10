@@ -76,6 +76,7 @@ const seed = Effect.fn("viewsTest.seed")(function* (opts: {
   findings?: number;
   settled?: RunFacts["settled"];
   repo?: string;
+  change?: string;
 }) {
   const env = rig.pluginEnv();
   const fs = yield* FileSystem.FileSystem;
@@ -89,6 +90,7 @@ const seed = Effect.fn("viewsTest.seed")(function* (opts: {
     created: `2026-09-0${runs.length + 1}T10:00:00.000Z`,
     finished: opts.state === "running" ? null : `2026-09-0${runs.length + 1}T11:00:00.000Z`,
     repo: opts.repo ?? null,
+    change: opts.change ?? null,
     settled: opts.settled ?? {
       inputs: opts.target ? { target: opts.target } : {},
       strategies: { target: "diff-target" },
@@ -616,6 +618,28 @@ effectTest("a repository's build finishes only that repository's tickets", funct
   expect((yield* hostDetailOf(planner))!.plan!.tickets).toMatchObject([
     { file: "01-api.md", done: true },
     { file: "02-web.md", done: false },
+  ]);
+});
+
+effectTest("a Change's build finishes only that Change's tickets", function* () {
+  const path = yield* Path.Path;
+  const planner = yield* seed({ workflow: "plan" });
+  const dir = path.join(planner.dir, "plan");
+  yield* planned(dir, {
+    "01-api.md": "# Api\n\n**Repo:** .\n",
+    "02-schema.md": "# Schema\n\n**Repo:** .\n**Change:** schema\n",
+  });
+  const schema = yield* seed({
+    workflow: "implement",
+    repo: ".",
+    change: "schema",
+    settled: { inputs: { plan: dir, plan_kind: "plan-dir" }, strategies: { plan: "work-source" } },
+  });
+  yield* stepped(schema, "build");
+
+  expect((yield* hostDetailOf(planner))!.plan!.tickets).toMatchObject([
+    { file: "01-api.md", done: false },
+    { file: "02-schema.md", done: true },
   ]);
 });
 

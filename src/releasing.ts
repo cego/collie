@@ -5,7 +5,7 @@ import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Effect, Schema } from "effect";
-import type { MrRef } from "./board-model";
+import { waitsOnOf, type MrRef } from "./board-model";
 import { forgeOf, forgeOfUrl, type DeployTier } from "./forge/forge";
 import { whatItSaid, type Ran, type Runner } from "./mr";
 import { appendLog } from "./oversight";
@@ -157,6 +157,95 @@ export const RollbackReadSchema = Schema.Union([
   Schema.TaggedStruct("Unshown", { why: Schema.String }),
 ]);
 export type RollbackRead = typeof RollbackReadSchema.Type;
+
+/** Where a Change run's merge request falls in its fan-out's plan: that Run, and the wave. */
+const PlanWaveSchema = Schema.Struct({ plan: Schema.String, at: Schema.Finite });
+type PlanWave = typeof PlanWaveSchema.Type;
+
+/**
+ * A merge request as its forge reads it now: its state and the branches it merges, and its
+ * plan's wave where a fan-out's Change run opened it.
+ */
+export const MergeRequestReadSchema = Schema.Union([
+  Schema.TaggedStruct("Read", {
+    state: Schema.String,
+    source: Schema.String,
+    target: Schema.String,
+    wave: Schema.optionalKey(PlanWaveSchema),
+  }),
+  Schema.TaggedStruct("Unreadable", { why: Schema.String }),
+]);
+export type MergeRequestRead = typeof MergeRequestReadSchema.Type;
+
+export const readMergeRequest = Effect.fn("Releasing.readMergeRequest")(function* <R>(opts: {
+  readonly ref: MrRef;
+  readonly cwd: string;
+  readonly run: Runner<R>;
+}) {
+  const panel = yield* forgeOf(opts.ref).details(opts.ref, opts.cwd, opts.run);
+  if (panel._tag !== "Details")
+    return { _tag: "Unreadable", why: panel.reason } satisfies MergeRequestRead;
+  return {
+    _tag: "Read",
+    state: panel.state,
+    source: panel.sourceBranch,
+    target: panel.targetBranch,
+  } satisfies MergeRequestRead;
+});
+
+/**
+ * A set's merge requests, blockers first, each with those of the set it waits on: one whose
+ * target branch is another's source branch, and those of its plan's earlier waves. A `Cycle`
+ * names those that wait on each other.
+ */
+export function stackOrder(
+  mrs: ReadonlyArray<{
+    readonly id: string;
+    readonly source: string;
+    readonly target: string;
+    readonly wave?: PlanWave;
+  }>,
+):
+  | {
+      readonly _tag: "Ordered";
+      readonly order: ReadonlyArray<{
+        readonly id: string;
+        readonly waitsOn: ReadonlyArray<string>;
+      }>;
+    }
+  | { readonly _tag: "Cycle"; readonly ids: ReadonlyArray<string> } {
+  const ids = Arr.map(mrs, (one) => one.id);
+  const branches = new Map(Arr.map(mrs, (one) => [one.id, one] as const));
+  const earlier = (one: (typeof mrs)[number]) =>
+    Arr.filter(
+      mrs,
+      (other) =>
+        one.wave !== undefined && other.wave?.plan === one.wave.plan && other.wave.at < one.wave.at,
+    );
+  const waits = new Map(
+    Arr.map(
+      mrs,
+      (one) =>
+        [
+          one.id,
+          Arr.union(
+            waitsOnOf(one.id, ids, branches),
+            Arr.map(earlier(one), (other) => other.id),
+          ),
+        ] as const,
+    ),
+  );
+  const order: Array<{ readonly id: string; readonly waitsOn: ReadonlyArray<string> }> = [];
+  let left = ids;
+  while (left.length > 0) {
+    const placed = new Set(Arr.map(order, (one) => one.id));
+    const ready = Arr.filter(left, (id) => Arr.every(waits.get(id) ?? [], (on) => placed.has(on)));
+    if (ready.length === 0) return { _tag: "Cycle", ids: left };
+    for (const id of ready) order.push({ id, waitsOn: waits.get(id) ?? [] });
+    left = Arr.filter(left, (id) => !ready.includes(id));
+  }
+  return { _tag: "Ordered", order };
+}
 
 const failing = new Set(["failed", "cancelled"]);
 const unfinished = new Set(["pending", "running"]);

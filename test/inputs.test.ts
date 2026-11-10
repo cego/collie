@@ -7,6 +7,7 @@ import { Effect, FileSystem } from "effect";
 import { runOnPath } from "./support/forge";
 import { runEffect } from "./support/effect";
 import {
+  classifyGivenSet,
   classifyGivenTarget,
   reviewedTargets,
   targetKind,
@@ -737,6 +738,26 @@ test("a diff-target given on the command line is normalised, not just shaped", (
       // A shape nothing recognises is refused by whoever admits it, never read as `worktree`.
       expect(targetKind("https://gitlab.cego.dk/cego/collie/-/merge_requests/2")).toBe("");
       expect(targetKind("mr:group/app")).toBe("");
+    }),
+  ));
+
+test("a diff-target naming several merge requests is each normalised, or refused naming the one that is none", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* bin.add("git", gitOn("add-picker"));
+      expect(
+        yield* classifyGivenSet(
+          "https://gitlab.cego.dk/cego/collie/-/merge_requests/2, !7 cego/collie#9",
+          ctx(),
+        ),
+      ).toEqual({
+        value:
+          "mr:gitlab.cego.dk/cego/collie!2 mr:gitlab.example.com/g/p!7 mr:github.com/cego/collie#9",
+      });
+      expect(yield* classifyGivenSet("!7 add-picker", ctx())).toEqual({ unresolved: "add-picker" });
+      // One reference, or words none of which is a merge request, are what they were.
+      expect(yield* classifyGivenSet("!7", ctx())).toBeNull();
+      expect(yield* classifyGivenSet("main...add-picker other", ctx())).toBeNull();
     }),
   ));
 

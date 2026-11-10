@@ -102,6 +102,14 @@ is itself a repository. It is a path under that root: never absolute, and never 
 ticket without one, or one naming a path that is not checked out under the root, stops the
 whole hand-off.
 
+A ticket that belongs in a merge request of its own, one a reviewer should read apart from
+the rest of its repository's work, also carries `**Change:** <name>` beside its `Repo:`
+line. Every ticket naming the same repository and Change is built on one branch and lands in
+one merge request; tickets without the line are their repository's default Change. Name a
+Change with a short plain word, like `schema`: it becomes part of a branch name, so no spaces,
+no `..`, and none of `~ ^ : ? * [ \`. Leave the line out unless the split is worth a second
+review.
+
 Number every ticket of a plan once: a "Blocked by" line names a number, so two tickets
 wearing one cannot say which an edge points at.
 
@@ -111,11 +119,11 @@ of a word, as in "the v2 rollout", is read as part of that word rather than as a
 The waves are built from those lines, so one naming something that is not a ticket here
 stops the hand-off too rather than quietly losing the edge.
 
-Where the work spans several repositories, one rule holds: taken repository by
-repository, the blocking edges must not form a cycle — once a repository's tickets are
-blocked by another's, none of that other one's may be blocked by this one. Put the
-repository that defines the contract first, and prefer one ticket per repository per
-wave.
+Where the work spans several repositories or Changes, one rule holds: taken Change by
+Change, the blocking edges must not form a cycle — once a Change's tickets are blocked by
+another's, none of that other one's may be blocked by this one. Put the Change that defines
+the contract first, and prefer one ticket per Change per wave. A Change blocked by another
+in its own repository is stacked on it: its merge request builds on the blocker's branch.
 
 Then write your Output, naming the directory you wrote them to.
 

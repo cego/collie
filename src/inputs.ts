@@ -18,7 +18,7 @@ import { ago } from "./time";
 import { type Runner, forgeHere, projectHere, shell as shellRun } from "./mr";
 import type { Forge } from "./forge/forge";
 import type { ForgeHttp } from "./forge/http";
-import { mrWords, readMrRef } from "./board-model";
+import { mrRefsIn, mrWords, readMrRef } from "./board-model";
 
 /**
  * One thing a human may pick, whoever is drawing the list: a workflow, a candidate for
@@ -504,6 +504,35 @@ export function classifyGivenTarget(
     const project = yield* projectHere(ctx.cwd, run);
     // Null for a shape nothing here recognises: the caller refuses it rather than guess.
     return classifyTarget(typed, baseRef, project);
+  });
+}
+
+/**
+ * A `diff-target` naming several merge requests, as `release` and `stage` take a set: each
+ * normalised as one given alone is, joined by a space, or `unresolved`, the first that is no
+ * merge request. Null where it names one, or none of its words is a merge request.
+ */
+export function classifyGivenSet(
+  typed: string,
+  ctx: InferContext,
+): Effect.Effect<
+  { readonly value: string } | { readonly unresolved: string } | null,
+  never,
+  ChildProcessSpawner.ChildProcessSpawner
+> {
+  return Effect.gen(function* () {
+    const said = mrRefsIn(typed);
+    if (said.length < 2) return null;
+    const each = yield* Effect.forEach(said, (one) => classifyGivenTarget(one, ctx));
+    if (!Arr.some(each, (one) => one?.kind === "mr")) return null;
+    const at = Arr.findFirstIndex(each, (one) => one?.kind !== "mr");
+    if (Option.isSome(at)) return { unresolved: said[at.value]! };
+    return {
+      value: Arr.join(
+        Arr.map(each, (one) => one!.value),
+        " ",
+      ),
+    };
   });
 }
 

@@ -16,7 +16,13 @@ import { task } from "../support/task";
 import { App } from "../../src/ui/App";
 import type { AppState, Command } from "../../src/ui/state";
 import type { Ask, Pending } from "../../src/ui/prompts";
-import { SECTIONS, type RunDetail, type TaskView } from "../../src/board-model";
+import {
+  mrTarget,
+  SECTIONS,
+  type RunDetail,
+  type TaskMr,
+  type TaskView,
+} from "../../src/board-model";
 import { NO_RUN_OUTCOME } from "../../src/views";
 import type { Live } from "../../src/live";
 import type { Card } from "../../src/cards";
@@ -1269,6 +1275,70 @@ test("the record opens on Summary, with the merge request's own state in it", ()
       expect(said).toContain("unresolved");
       // The other tabs' content is behind them.
       expect(said).not.toContain("the brand loop reads the whole file per brand");
+    }),
+  ));
+
+test("a record of several merge requests has a section for each, and Open opens the one it is in", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const panelOf = (repo: string, iid: string, title: string) => ({
+        ...MR_PANEL,
+        iid,
+        project: `cego/${repo}`,
+        title,
+        url: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`,
+      });
+      const entry = (repo: string, iid: number, over: Partial<TaskMr>): TaskMr => ({
+        id: `gitlab.cego.dk/cego/${repo}!${iid}`,
+        mr: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`,
+        label: `cego/${repo}!${iid}`,
+        short: `${repo}!${iid}`,
+        url: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`,
+        run: `r-${repo}`,
+        state: "open",
+        checks: null,
+        head: null,
+        ready: false,
+        disposition: null,
+        waitsOn: [],
+        ...over,
+      });
+      const api = panelOf("api", "7", "The api's half");
+      const web = panelOf("web", "8", "The web's half");
+      const app = yield* mount(
+        appState({
+          tasks: [
+            task({
+              mrs: [
+                entry("api", 7, { ready: true, head: "abc1234def" }),
+                entry("web", 8, { waitsOn: ["gitlab.cego.dk/cego/api!7"] }),
+              ],
+            }),
+          ],
+          detail: record({
+            mr: api,
+            mrs: [
+              { id: "gitlab.cego.dk/cego/api!7", mr: api.url, panel: api },
+              { id: "gitlab.cego.dk/cego/web!8", mr: web.url, panel: web },
+            ],
+          }),
+          live: liveOf(),
+        }),
+        120,
+        90,
+      );
+      yield* app.clickOn("Strapi prod seeder");
+
+      const said = app.said();
+      expect(said).toContain("!7 · The api's half");
+      expect(said).toContain("!8 · The web's half");
+      expect(said).toContain("open, ready to release at abc1234d");
+      expect(said).toContain("open, not ready to release, waits on api!7");
+
+      yield* app.clickOn("Open !8");
+      expect(app.acted()).toEqual([
+        { _tag: "OpenMr", target: mrTarget("cego/web", "8"), runId: "r1" },
+      ]);
     }),
   ));
 

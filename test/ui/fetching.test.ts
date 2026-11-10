@@ -22,8 +22,7 @@ import { scopeFor } from "../../src/registry";
 import type { RunFacts } from "../../src/runs";
 import { madeRun } from "../support/records";
 import { recordDisposition } from "../../src/disposition";
-import { mrOf } from "../../src/board";
-import { MERGE_POLL_MS, watchedMr, writeMrStates, type MrPanels } from "../../src/merges";
+import { MERGE_POLL_MS, mrOf, watchedMr, writeMrStates, type MrPanels } from "../../src/merges";
 import { focus } from "../support/focus";
 
 let rig: Rig;

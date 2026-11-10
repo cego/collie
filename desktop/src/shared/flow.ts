@@ -301,25 +301,29 @@ export const inspectorOf = (
     open: openIn(node, owningRun(flow, selection)),
   };
 };
+const releaseRows = (flow: Flow) =>
+  flow.releases !== undefined && flow.releases.length > 1
+    ? Arr.map(flow.releases, (one) => ({
+        run: `release:${one.mr}`,
+        title: `Release ${one.short}`,
+        nodes: one.nodes,
+      }))
+    : flow.release === null
+      ? []
+      : [{ run: "release", title: "Release", nodes: flow.release }];
 export const flowRows = (flow: Flow) => [
   ...Arr.map(flow.lanes, (lane) => ({
     ...lane,
     name: `${lane.title}, ${lane.run}, on ${lane.machine}, ${lane.execution}`,
   })),
-  ...(flow.release === null
-    ? []
-    : [
-        {
-          run: "release",
-          title: "Release",
-          machine: flow.lanes.at(-1)?.machine ?? "",
-          execution: "",
-          requestedBy: null,
-          startedBy: undefined,
-          name: "Release",
-          nodes: flow.release,
-        },
-      ]),
+  ...Arr.map(releaseRows(flow), (row) => ({
+    ...row,
+    machine: flow.lanes.at(-1)?.machine ?? "",
+    execution: "",
+    requestedBy: null,
+    startedBy: undefined,
+    name: row.title,
+  })),
 ];
 export const nodeAt = (flow: Flow, spot: FlowSpot): FlowNode | null =>
   Option.getOrUndefined(
@@ -331,8 +335,10 @@ export const nodeAt = (flow: Flow, spot: FlowSpot): FlowNode | null =>
         Option.getOrUndefined(Arr.findFirst(present_.nodes, (node) => node.id === spot.node)),
     ),
   ) ?? null;
+export const isReleaseRow = (run: string) =>
+  run === "release" || pipe(run, Str.startsWith("release:"));
 export const owningRun = (flow: Flow, spot: FlowSpot) =>
-  spot.run === "release" ? (flow.lanes.at(-1)?.run ?? spot.run) : spot.run;
+  isReleaseRow(spot.run) ? (flow.lanes.at(-1)?.run ?? spot.run) : spot.run;
 const sameSpot = (one: FlowSpot | null, other: FlowSpot | null) =>
   one?.run === other?.run && one?.node === other?.node;
 const sameRuns = Arr.makeEquivalence<string>((one, other) => one === other);
