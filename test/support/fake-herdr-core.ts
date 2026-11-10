@@ -388,8 +388,6 @@ export function fakeHerdr(
 ): Effect.Effect<FakeResult, never, FileSystem.FileSystem | Path.Path> {
   return turn.withPermits(1)(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
       const log =
         environment.FAKE_HERDR_LOG ??
         (yield* Config.String("FAKE_HERDR_LOG").pipe(
@@ -397,24 +395,47 @@ export function fakeHerdr(
           Effect.orElseSucceed(() => ""),
         ));
       if (log === "") return yield* handle(argv, environment, processEnv);
-      // The same turn across processes: the host and the test each spawn this, and two
-      // edits of the state file at once lose one of them — an agent just started, say.
-      // ponytail: a lock left by a killed call is waited out for ~2 s, then taken over.
-      const lock = `${log}.lock`;
-      return yield* Effect.acquireUseRelease(
-        fs
-          .makeDirectory(path.dirname(log), { recursive: true })
-          .pipe(
-            Effect.andThen(fs.makeDirectory(lock)),
-            Effect.retry({ times: 1_000, schedule: Schedule.spaced("2 millis") }),
-            Effect.ignore,
-          ),
-        () => handle(argv, environment, processEnv),
-        () => fs.remove(lock, { recursive: true }).pipe(Effect.ignore),
-      );
+      return yield* stateTurn(log, handle(argv, environment, processEnv));
     }),
   );
 }
+
+/**
+ * The same turn across processes: the host and the test each spawn the fake, and two
+ * edits of the state file at once lose one of them — an agent just started, say.
+ */
+const stateTurn = <A, E, R>(log: string, use: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    // ponytail: a lock left by a killed call is waited out for ~2 s, then taken over.
+    const lock = `${log}.lock`;
+    return yield* Effect.acquireUseRelease(
+      fs
+        .makeDirectory(path.dirname(log), { recursive: true })
+        .pipe(
+          Effect.andThen(fs.makeDirectory(lock)),
+          Effect.retry({ times: 1_000, schedule: Schedule.spaced("2 millis") }),
+          Effect.ignore,
+        ),
+      () => use,
+      () => fs.remove(lock, { recursive: true }).pipe(Effect.ignore),
+    );
+  });
+
+/** A test's edit of the fake's state, in turn with the calls a running host makes. */
+export const editState = <E, R>(
+  log: string,
+  edit: (state: string) => Effect.Effect<string, E, R>,
+) =>
+  stateTurn(
+    log,
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const state = `${log}.state.json`;
+      yield* fs.writeFileString(state, yield* edit(yield* fs.readFileString(state)));
+    }),
+  );
 
 /**
  * A prompt a fake core's terminal took, answered from the same Output queue as herdr's
