@@ -8633,7 +8633,6 @@ const UNDELIVERED = {
   findings: [{ severity: "major", title: "push denied" }],
 };
 
-/** A Run started, and run until it suspends or ends: its status and why it parked. */
 const stoppedAt = (options: ShippedRun) =>
   Effect.gen(function* () {
     const status = yield* running(options, (reading) =>
@@ -8856,7 +8855,6 @@ const skippedHead = (pushed: boolean, over: Partial<ForgeModel> = {}) =>
       ...over,
     });
     const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
-    /** The pipelines the forge was asked to start on the head. */
     const started = Effect.map(forge.model(), (model) =>
       Arr.filter(model.pipelinesOn?.[head] ?? [], (one) => one.source !== undefined),
     );
@@ -9008,6 +9006,43 @@ scenario(
         expect(yield* started).toHaveLength(1);
         // The mr agent was asked once: the resume tried the start again, not delivery.
         expect(yield* prompts()).toHaveLength(3);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a delivery whose origin cannot be read before its agent parks at Merge request, and a resume once it can starts the head's pipeline",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, plan, started } = yield* skippedHead(true);
+        const reachable = `${bin.dir}/origin-reachable`;
+        yield* bin.add(
+          "git",
+          `[ "$1" = ls-remote ] && [ ! -e "${reachable}" ] && echo "fatal: unable to access origin" >&2 && exit 128\nexec "${Bun.which("git")}" "$@"`,
+        );
+        const runId = "r-impl-remote-unread";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED_CI]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              const [, why] = yield* until(
+                () => Effect.zip(run.status, parkedWhy(runId)),
+                ([got, why]) => why !== "" || got.status !== "pending",
+              );
+              expect(why).toContain("unable to access origin");
+              expect(why).toEndWith(`resume ${runId}.`);
+              yield* (yield* FileSystem.FileSystem).writeFileString(reachable, "");
+              yield* run.resume;
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+        expect(status.status).toBe("complete");
+        expect(yield* started).toHaveLength(1);
       }),
     ),
   120_000,

@@ -47,7 +47,7 @@ import {
   type Verification,
   type VerifySpec,
 } from "collie";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schema, Stream } from "effect";
 import { connection } from "./connections.ts";
 import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
 import * as Workflow from "effect/workflow/Workflow";
@@ -100,16 +100,31 @@ type Needs =
   | FileSystem.FileSystem
   | ChildProcessSpawner.ChildProcessSpawner;
 
-/** `branch`'s head on origin, null where origin has no such branch or cannot say. */
+/** `branch`'s head on origin, null where origin has no such branch, or why origin could not say. */
 const remoteHead = (cwd: string, branch: string) =>
   Effect.gen(function* () {
-    if (branch === "") return null;
+    if (branch === "") return { ok: true, head: null } as const;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const listed = yield* spawner.string(
-      ChildProcess.make("git", ["ls-remote", "origin", `refs/heads/${branch}`], { cwd }),
+    const handle = yield* spawner.spawn(
+      ChildProcess.make("git", ["ls-remote", "--exit-code", "origin", `refs/heads/${branch}`], {
+        cwd,
+        extendEnv: true,
+      }),
     );
-    return Str.split(Str.trim(listed), "\t")[0] || null;
-  }).pipe(Effect.orElseSucceed(() => null));
+    const text = (stream: typeof handle.stdout) => Stream.mkString(Stream.decodeText(stream));
+    const [listed, said, code] = yield* Effect.all(
+      [text(handle.stdout), text(handle.stderr), handle.exitCode],
+      { concurrency: "unbounded" },
+    );
+    // --exit-code: 2 is "no such ref", anything else but 0 is origin not answering.
+    if (code === 2) return { ok: true, head: null } as const;
+    if (code !== 0)
+      return { ok: false, reason: Str.trim(said) || `git ls-remote exited ${code}` } as const;
+    return { ok: true, head: Str.split(Str.trim(listed), "\t")[0] || null } as const;
+  }).pipe(
+    Effect.scoped,
+    Effect.catch((cause) => Effect.succeed({ ok: false, reason: String(cause) } as const)),
+  );
 
 /** What every prompt here is given beside its own fields. */
 type Told = Readonly<Record<string, Schema.Json>> & {
@@ -639,7 +654,15 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         const remoteBefore = yield* Activity.make({
           name: attempt === 1 ? "mr-remote-head" : `mr-remote-head-${attempt}`,
           success: Schema.NullOr(Schema.String),
-          execute: remoteHead(cwd, ready.branch ?? ""),
+          execute: Effect.gen(function* () {
+            const read = yield* remoteHead(cwd, ready.branch ?? "");
+            if (read.ok) return read.head;
+            const reason = `Cannot read ${ready.branch}'s head on origin: ${read.reason}. Repair it, then resume ${runId}.`;
+            yield* host.record(runId, reason);
+            yield* stepFailed(reason);
+            yield* host.parked(runId, reason);
+            return yield* Workflow.suspend(yield* WorkflowInstance);
+          }),
         });
         const opened = yield* agentWork({
           operation: attempt === 1 ? "mr" : `mr-${attempt}`,

@@ -1141,7 +1141,6 @@ export interface Answered {
   readonly assumptions: ReadonlyArray<string>;
 }
 
-/** What every review this Run starts holds the change to beside its spec. */
 const reviewerCriteria = (all: ReadonlyArray<Answered>) =>
   Arr.join(
     Arr.filter(
