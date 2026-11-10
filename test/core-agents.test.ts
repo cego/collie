@@ -389,9 +389,21 @@ test(
                 {
                   question: "Which database?",
                   header: "Database",
-                  options: [{ label: "Postgres" }],
+                  options: [
+                    { label: "Postgres (Recommended)" },
+                    { label: "SQLite" },
+                    { label: "JSONL" },
+                  ],
                 },
-                { question: "Which checks?", header: "Checks", options: [{ label: "lint" }] },
+                {
+                  question: "Which checks?",
+                  header: "Checks",
+                  options: [
+                    { label: "lint (Recommended)" },
+                    { label: "typecheck" },
+                    { label: "none" },
+                  ],
+                },
               ],
               launched.agentSession.value,
             );

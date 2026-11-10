@@ -44,7 +44,9 @@ for (const over of [{}, { closed: [] }]) {
           control: "stop",
           set: true,
         }).pipe(Effect.flip);
-        expect(failed).toEqual(new ActionFailed({ request: "stop-1", reason: said }));
+        expect(failed).toEqual(
+          new ActionFailed({ request: "stop-1", reason: said, refused: true }),
+        );
       }),
     ));
 }

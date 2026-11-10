@@ -1313,12 +1313,20 @@ Every Decision and action the TUI board has is on Desktop's cards, and goes to t
 the card is on. A question card shows the first two lines of the question and one button,
 **Answer…**, or **Answer 3 questions…** where the Task's Runs have three open. It opens a
 dialog that takes you through them one at a time: "Question 1 of 3" with the Workflow and
-Run that asks, the whole question in a body that scrolls, then its options as a list, one
-click sending, or a field Enter sends. Back and Next move between them without answering. A
-question that arrives while it is open joins it, and one answered elsewhere stays, marked
-"No longer open". It closes by itself once everything is answered and every answer has
-reached its host; Esc closes it at any time, and a half-typed answer is kept until its
-question is answered or gone. A proposal is read in a drawer whose Confirm stays off until all of it has been on
+Run that asks, the whole question in a body that scrolls, then its solutions in the order
+the host gives them, the recommended one marked **Recommended** and each with what it leads
+to, and **Hold the Run** where the host offers it. Nothing is picked for you: the arrow
+keys, Home and End move the choice, Space or a click picks, and **Submit answer** or
+Ctrl/Cmd+Enter sends it. A question answered in words has a field instead. Below them,
+**Send to <agent>** tells the agent the host names something else instead, which sets the
+question aside; Enter in that field sends nothing, its button or Ctrl/Cmd+Enter does. The
+line under the solutions says `Sending…`, then `Answered: <title>`, `Run held · question
+still open`, or the host's reason for refusing, with your pick still shown and nothing sent
+again; trying again after a lost connection sends the same request, which the host takes
+once. Back and Next move between them without answering. A question that arrives while it
+is open joins it, and one answered elsewhere stays, marked "No longer open". Esc closes it
+at any time and keeps your pick and your words. The record's Flow shows its open question
+the same way. A proposal is read in a drawer whose Confirm stays off until all of it has been on
 screen, then sent with its id
 and content hash. Each card's `⋯` menu offers what the TUI menu does, by the same rules —
 Steer…, the Run's offers (asked of its host when opened, with a field for each argument),

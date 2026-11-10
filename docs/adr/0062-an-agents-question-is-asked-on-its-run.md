@@ -2,6 +2,8 @@
 
 Amended by [ADR-draft-collie-runs-its-agents-in-herdr-core](draft-collie-runs-its-agents-in-herdr-core.md): a Codex agent's question, and a pi agent's asked with Collie's own question tool, are asked on its Run, as a Claude agent's is.
 
+Amended by [ADR-draft-a-runs-question-is-a-questionnaire](draft-a-runs-question-is-a-questionnaire.md): a question with options takes one of them, never the human's own words, and one short of standard is repaired once before it is posted.
+
 renovate run-8dc1f7bf parked at 13:58:51Z on "has written nothing to batch.json yet"
 (investigation run-556cba08). Its two-hour Output budget ran out while the agent was still
 working: it had committed at 13:55 and was running the repository's suite. Part of those two

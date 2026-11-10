@@ -10,7 +10,7 @@ export const failureOf = (cause: Cause.Cause<Failed>) => {
   const found = Cause.findError(cause);
   return Result.isSuccess(found) && found.success._tag === "ActionFailed"
     ? found.success
-    : { reason: saidOf(cause), request: undefined, step: undefined };
+    : { reason: saidOf(cause), request: undefined, step: undefined, refused: undefined };
 };
 
 /** A gesture's request, sent again on every Try again. */

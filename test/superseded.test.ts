@@ -110,7 +110,11 @@ test(
               task: null,
             });
             const before = yield* suspended(runId);
-            expect(describeWaiting(before)).toHaveLength(1);
+            expect(describeWaiting(before)).toEqual([
+              'waiting on "q1": Answer q1? (yes | no)',
+              `  Hold the Run: collie run hold ${runId} --reason "held at question q1"`,
+              "  ⚠ this workflow recommended none",
+            ]);
 
             const superseded = yield* registry.supersede({
               runId,

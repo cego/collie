@@ -58,7 +58,13 @@ import { readLanding, takeOver, writeLanding } from "../../src/landing";
 import { shell } from "../../src/mr";
 import { forgeHttpLayer, type ForgeHttp } from "../../src/forge/http";
 import { readCheckpoints } from "../../src/cards";
-import { mrLabel, mrTarget, type FlowLane, type MrForge } from "../../src/board-model";
+import {
+  RecordedSolution,
+  mrLabel,
+  mrTarget,
+  type FlowLane,
+  type MrForge,
+} from "../../src/board-model";
 import { CONFLICTS } from "../../src/review-wait";
 import { laneFor } from "../../src/flow-read";
 import type { RunState } from "../../src/runs";
@@ -592,17 +598,40 @@ const answeredThen = (options: {
     }),
   );
 
-/** What a question takes, as the store keeps it: the options are JSON on the row. */
-const optionsOf = (
+const solutionsOf = (
   rows: ReadonlyArray<{ readonly decision: string; readonly options: string }>,
   decision: string,
-): ReadonlyArray<string> =>
+) =>
   flow(
-    Schema.decodeResult(Schema.fromJsonString(Schema.Array(Schema.String))),
+    Schema.decodeResult(Schema.fromJsonString(Schema.Array(RecordedSolution))),
     Result.getOrThrow,
   )(
     Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === decision))?.options ?? "[]",
   );
+
+/** The ids a question takes, as the store keeps them: the options are JSON on the row. */
+const optionsOf = (
+  rows: ReadonlyArray<{ readonly decision: string; readonly options: string }>,
+  decision: string,
+): ReadonlyArray<string> => Arr.map(solutionsOf(rows, decision), (one) => one.id);
+
+/** The id a question recommends, and what keeps it short of standard; null for none. */
+const recommendedOf = (
+  rows: ReadonlyArray<{
+    readonly decision: string;
+    readonly options: string;
+    readonly shortfall?: string | null;
+  }>,
+  decision: string,
+) => ({
+  recommended:
+    Option.getOrUndefined(
+      Arr.findFirst(solutionsOf(rows, decision), (one) => one.recommended === true),
+    )?.id ?? null,
+  shortfall:
+    Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === decision))?.shortfall ??
+    null,
+});
 
 const said = (result: { readonly _tag: string; readonly success?: unknown }) =>
   result._tag === "Success" ? String(result.success) : "";
@@ -688,11 +717,15 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         yield* rig.queueOutputs([REPORT]);
-        yield* parked({
+        const rows = yield* parked({
           entry: shipped("architecture"),
           runId: "r-architecture-flow",
           input: { goal: "Find the next improvement" },
           decision: "next",
+        });
+        expect(recommendedOf(rows, "next")).toEqual({
+          recommended: "Implement now",
+          shortfall: null,
         });
         const lane = yield* laneNow("r-architecture-flow", "waiting");
         expect(Arr.map(lane.nodes, (node) => [node.title, node.state, node.declared])).toEqual([
@@ -872,7 +905,16 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         yield* rig.queueOutputs([GRILLED, SPEC, TICKETS]);
-        yield* parked({ entry: shipped("plan"), runId: "r-plan", input: GOAL, decision: "next-1" });
+        const rows = yield* parked({
+          entry: shipped("plan"),
+          runId: "r-plan",
+          input: GOAL,
+          decision: "next-1",
+        });
+        expect(recommendedOf(rows, "next-1")).toEqual({
+          recommended: "Implement now",
+          shortfall: null,
+        });
         const planner = Option.getOrUndefined(
           Arr.findFirst(yield* registeredAt(dir), (one) => one.runId === "r-plan"),
         )!;
@@ -2089,6 +2131,10 @@ scenario(
           "Review target: worktree",
         );
         expect(optionsOf(rows, "post-1")).toEqual(["Don't post"]);
+        expect(recommendedOf(rows, "post-1")).toEqual({
+          recommended: "Don't post",
+          shortfall: null,
+        });
         expect(forge.requests()).toEqual([]);
         expect(
           Arr.filter(yield* forge.calls(), (line) => pipe(line, Str.startsWith("pr "))),
@@ -2146,6 +2192,10 @@ scenario(
           "Fix findings in a full implement run",
           "Don't post",
         ]);
+        expect(recommendedOf(rows, "post-1")).toEqual({
+          recommended: "Fix findings",
+          shortfall: null,
+        });
 
         const result = yield* answered({
           entry: shipped("review"),
@@ -2527,6 +2577,10 @@ scenario(
         });
 
         expect(optionsOf(rows, "post-1")).toEqual(["Post to merge request", "Don't post"]);
+        expect(recommendedOf(rows, "post-1")).toEqual({
+          recommended: "Post to merge request",
+          shortfall: null,
+        });
         expect(
           Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === "post-1"))?.prompt,
         ).toContain(`${rig.projectDir} has no remote, so group/project!42 may not be its own`);
@@ -2698,6 +2752,10 @@ scenario(
         });
         expect(optionsOf(rows, "post-2")).toContain("Review again");
         expect(optionsOf(rows, "post-2")).not.toContain("Fix findings");
+        expect(recommendedOf(rows, "post-2")).toEqual({
+          recommended: "Review again",
+          shortfall: null,
+        });
         yield* answeredThen({
           entry: shipped("review"),
           runId: "r-review-live",
@@ -3986,6 +4044,10 @@ scenario(
                 "Hand back",
                 "Stop",
               ]);
+              expect(recommendedOf(rows, "01-first.md.criteria-unmet-1")).toEqual({
+                recommended: "Hand back",
+                shortfall: null,
+              });
               expect(Arr.join(yield* prompts(), "\n")).not.toContain("review-1");
               yield* run.answer("01-first.md.criteria-unmet-1", "Stop");
               return yield* ended(run.status);
@@ -4122,6 +4184,10 @@ scenario(
                 "Hand back",
                 "Stop",
               ]);
+              expect(recommendedOf(rows, "01-first.md.criteria-stalled-1")).toEqual({
+                recommended: "Hand back",
+                shortfall: null,
+              });
               expect(Arr.join(yield* prompts(), "\n")).not.toContain(
                 "01-first.md.criteria-2.prompt.md",
               );
@@ -4870,6 +4936,7 @@ scenario(
         const runId = "r-impl-next";
         const { bin, plan, rows } = yield* deliveredAsking(runId);
         expect(optionsOf(rows, "next")).toEqual(["Release", "Stage", "Finish"]);
+        expect(recommendedOf(rows, "next")).toEqual({ recommended: "Release", shortfall: null });
         expect(
           Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === "next"))?.prompt,
         ).toContain(OPENED.mr_url);
@@ -4884,6 +4951,27 @@ scenario(
         yield* bin.restore();
 
         expect(said(result)).toBe(OPENED.mr_url);
+        expect(started).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "implement told at launch to finish takes Finish over the recommended Release, and never asks what next",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-impl-decided";
+        const { bin, plan } = yield* delivering(runId);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+        });
+        yield* bin.restore();
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(Arr.map(yield* questions(runId), (row) => row.decision)).toEqual([]);
         expect(started).toEqual([]);
       }),
     ),
@@ -9048,6 +9136,63 @@ for (const name of ["gitlab", "github"] as const) {
 }
 
 scenario(
+  "renovate takes over a claim already the operator's own only on their say, and No is recommended",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* renovatable();
+        yield* forgeOnPath(bin, "gitlab", {
+          installed: true,
+          loggedIn: [FORGE_HOST.gitlab],
+          login: "tester",
+          mrs: [],
+        });
+        yield* exec(["git", "remote", "set-url", "origin", RENOVATING.gitlab.origin], {
+          cwd: rig.projectDir,
+        });
+        yield* rig.queueOutputs([
+          TRACKED,
+          { verdict: "clean", up_to_date: false, is_package: false, merge_requests: BUMPS },
+        ]);
+        const adopting: HostOverride = Layer.effect(Host)(
+          Effect.gen(function* () {
+            const host = yield* Host;
+            return Host.of({
+              ...host,
+              claim: (options) =>
+                Effect.flatMap(options.adopting, (adopt) =>
+                  adopt
+                    ? Effect.succeed({ slugs: ["project"] })
+                    : Effect.fail(new WorkflowError({ reason: "the claim was not taken over" })),
+                ),
+            });
+          }),
+        );
+        const status = yield* driven(
+          { entry: shipped("renovate"), runId: "r-ren-adopt", input: {}, host: adopting },
+          (run) =>
+            Effect.gen(function* () {
+              const adopt = yield* goAsked(run.asked, "adopt-claim");
+              expect(optionsOf([adopt], "adopt-claim")).toEqual(["yes", "no"]);
+              expect(recommendedOf([adopt], "adopt-claim")).toEqual({
+                recommended: "no",
+                shortfall: null,
+              });
+              yield* run.answer("adopt-claim", "no");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+        expect(status).toMatchObject({ status: "failed" });
+        expect(status.status === "failed" ? status.reason : "").toContain(
+          "the claim was not taken over",
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "a fork's landing reads its forge, and gets the GitHub content on a GitHub checkout",
   () =>
     runEffect(
@@ -9910,6 +10055,8 @@ type Ends = Readonly<Record<string, { succeeded: boolean; failure: string } | nu
 interface HelleSays {
   readonly said?: ReadonlyArray<string>;
   readonly waits?: Effect.Effect<void>;
+  /** The claim is already the operator's own: it is taken only once they adopt it. */
+  readonly adopts?: true;
   readonly held: Claimed;
 }
 /** What each release's claim was asked to cover, in order. */
@@ -9948,6 +10095,10 @@ const releaseHost = <E = never>(
             ? Effect.gen(function* () {
                 claimedFor.push(options.deploys ?? { applications: [], jobs: [] });
                 const says = helle();
+                if (says.adopts === true && !(yield* options.adopting))
+                  return yield* new WorkflowError({
+                    reason: "the Helle claim on project was already yours and was not taken over",
+                  });
                 for (const line of says.said ?? []) yield* options.say(line);
                 yield* says.waits ?? Effect.void;
                 if ("slugs" in says.held && says.held.slugs.length > 0)
@@ -10483,6 +10634,10 @@ for (const name of ["gitlab", "github"] as const) {
                 expect(go.prompt).toContain(pipe(head, Str.slice(0, 8)));
                 expect(go.prompt).toContain("alice");
                 expect(optionsOf([go], "go-1")).toEqual(["Release", "Finish"]);
+                expect(recommendedOf([go], "go-1")).toEqual({
+                  recommended: "Release",
+                  shortfall: null,
+                });
                 // Nothing shared is touched before the go.
                 expect(claimed).toEqual([]);
                 yield* run.answer("go-1", "Release");
@@ -12006,6 +12161,10 @@ for (const name of ["gitlab", "github"] as const) {
                   "Post for approval",
                   "Wait for changes",
                 ]);
+                expect(recommendedOf([share], "share-for-approval")).toEqual({
+                  recommended: "Post for approval",
+                  shortfall: null,
+                });
                 yield* run.answer("share-for-approval", "Post for approval");
                 yield* until(
                   () => runLog(runId),
@@ -12091,6 +12250,10 @@ for (const name of ["gitlab", "github"] as const) {
                 "I shared it",
                 "Wait for changes",
               ]);
+              expect(recommendedOf([share], "share-for-approval")).toEqual({
+                recommended: "I shared it",
+                shortfall: null,
+              });
               yield* run.answer("share-for-approval", "I shared it");
               yield* changed(approvedBy("gitlab", "dave"));
               yield* goAsked(run.asked, "go-1");
@@ -12742,6 +12905,10 @@ const MONOREPO_ASSESSED = { ...APP_ASSESSED, applications: ["spilnu", "happytige
                   "Release without a Helle claim",
                   "Finish",
                 ]);
+                expect(recommendedOf([unclaimed], "go-1.claim.unclaimed")).toEqual({
+                  recommended: "Try again",
+                  shortfall: null,
+                });
                 expect((yield* forge.model()).merges ?? []).toEqual([]);
                 yield* run.answer("go-1.claim.unclaimed", "Finish");
                 return yield* ended(run.status);
@@ -12754,6 +12921,42 @@ const MONOREPO_ASSESSED = { ...APP_ASSESSED, applications: ["spilnu", "happytige
           expect(model.mrs[0]?.state).toBe("open");
           // Anything a failed claim took is given back.
           expect(claimed).toEqual([`release ${runId}`]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    "release: a claim already the operator's own is taken over only on their say, and No is recommended",
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge } = yield* stageable("gitlab");
+          claimed.length = 0;
+          const runId = "r-helle-adopt";
+          yield* rig.queueOutputs([MONOREPO_ASSESSED]);
+          const status = yield* driven(
+            helleRun(runId, () => ({ adopts: true, held: { slugs: ["project"] } })),
+            (run) =>
+              Effect.gen(function* () {
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Merge, tag and stage");
+                const adopt = yield* goAsked(run.asked, "adopt-claim");
+                expect(optionsOf([adopt], "adopt-claim")).toEqual(["yes", "no"]);
+                expect(recommendedOf([adopt], "adopt-claim")).toEqual({
+                  recommended: "no",
+                  shortfall: null,
+                });
+                yield* run.answer("adopt-claim", "no");
+                const unclaimed = yield* goAsked(run.asked, "go-1.claim.unclaimed");
+                expect(unclaimed.prompt).toContain("was already yours and was not taken over");
+                yield* run.answer("go-1.claim.unclaimed", "Finish");
+                return yield* ended(run.status);
+              }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was left open`);
+          expect((yield* forge.model()).merges ?? []).toEqual([]);
         }),
       ),
     120_000,
@@ -13006,6 +13209,10 @@ for (const name of ["gitlab", "github"] as const) {
             Effect.gen(function* () {
               const go = yield* goAsked(run.asked, "go-1");
               expect(optionsOf([go], "go-1")).toEqual(["Merge, tag and stage", "Finish"]);
+              expect(recommendedOf([go], "go-1")).toEqual({
+                recommended: "Merge, tag and stage",
+                shortfall: null,
+              });
               expect(go.prompt).toContain(pipe(head, Str.slice(0, 8)));
               expect(go.prompt).toContain("stage gets the tag; production waits for a second go");
               expect(claimed).toEqual([]);
@@ -13015,6 +13222,10 @@ for (const name of ["gitlab", "github"] as const) {
                 "Send to production",
                 "Leave production to me",
               ]);
+              expect(recommendedOf([production], "production")).toEqual({
+                recommended: "Send to production",
+                shortfall: null,
+              });
               expect(production.prompt).toContain("v1.2.0");
               expect(production.prompt).toContain(
                 `stage carries \`${pipe(merged, Str.slice(0, 8))}\``,
@@ -13493,6 +13704,10 @@ for (const name of ["gitlab", "github"] as const) {
             Effect.gen(function* () {
               const go = yield* goAsked(run.asked, "go-1");
               expect(optionsOf([go], "go-1")).toEqual(["Stage the merge request", "Finish"]);
+              expect(recommendedOf([go], "go-1")).toEqual({
+                recommended: "Stage the merge request",
+                shortfall: null,
+              });
               expect(go.prompt).toContain("deploys that head to stage for you to test, unmerged");
               yield* run.answer("go-1", "Stage the merge request");
               const production = yield* goAsked(run.asked, "production");
@@ -13501,6 +13716,10 @@ for (const name of ["gitlab", "github"] as const) {
                 "Leave production to me",
                 "Finish",
               ]);
+              expect(recommendedOf([production], "production")).toEqual({
+                recommended: "Send to production",
+                shortfall: null,
+              });
               expect(production.prompt).toContain(mr);
               expect(production.prompt).toContain(pipe(head, Str.slice(0, 8)));
               expect(production.prompt).toContain(stageJobs);
@@ -14204,6 +14423,10 @@ for (const name of ["gitlab", "github"] as const) {
                 "Stage again",
                 "Leave it on stage",
               ]);
+              expect(recommendedOf([question], "staged-1")).toEqual({
+                recommended: "Done",
+                shortfall: null,
+              });
               expect(question.prompt).toContain(mr);
               expect(question.prompt).toContain(pipe(head, Str.slice(0, 8)));
               expect(question.prompt).toContain(stageJobs);
@@ -14567,6 +14790,10 @@ for (const name of ["gitlab", "github"] as const) {
                   "Stage without a Helle claim",
                   "Finish",
                 ]);
+                expect(recommendedOf([unclaimed], "claim.unclaimed")).toEqual({
+                  recommended: "Try again",
+                  shortfall: null,
+                });
                 yield* run.answer("claim.unclaimed", "Finish");
                 return yield* ended(run.status);
               }),
@@ -14940,6 +15167,10 @@ for (const name of ["gitlab", "github"] as const) {
                 "Stage what is free",
                 "Finish",
               ]);
+              expect(recommendedOf([claims], "claims-1")).toEqual({
+                recommended: "Stage what is free",
+                shortfall: null,
+              });
               for (const app of DANNS) expect(claims.prompt).toContain(`${app} (Dann)`);
               expect(claims.prompt).not.toContain("playground (");
               expect(yield* wasAsked(runId, "stage")).toBe(false);
@@ -15214,6 +15445,10 @@ for (const name of ["gitlab", "github"] as const) {
             Effect.gen(function* () {
               const claims = yield* goAsked(run.asked, "claims-1");
               expect(optionsOf([claims], "claims-1")).toEqual(["Wait for all", "Finish"]);
+              expect(recommendedOf([claims], "claims-1")).toEqual({
+                recommended: "Wait for all",
+                shortfall: null,
+              });
               yield* run.answer("claims-1", "Finish");
               return yield* ended(run.status);
             }),
@@ -18087,10 +18322,18 @@ scenario(
               ).toEqual([pooling.decision]);
               expect(pooling.prompt).toContain(POOLING.title);
               expect(optionsOf([pooling], pooling.decision)).toEqual(["Ignore", "Post"]);
+              expect(recommendedOf([pooling], pooling.decision)).toEqual({
+                recommended: "Post",
+                shortfall: null,
+              });
               yield* run.answer(pooling.decision, "Post");
               const team = yield* nextAsked(run.asked, [happy.decision, pooling.decision]);
               expect(team.prompt).toContain(FTS.title);
               expect(optionsOf([team], team.decision)).toEqual([]);
+              expect(recommendedOf([team], team.decision)).toEqual({
+                recommended: null,
+                shortfall: null,
+              });
               yield* run.answer(team.decision, "Platform");
               const fts = yield* nextAsked(run.asked, [
                 happy.decision,

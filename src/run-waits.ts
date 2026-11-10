@@ -3,12 +3,16 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Effect } from "effect";
+import type * as Types from "effect/Types";
 import type { Awaiting } from "./awaiting";
-import type { BoardAgent, Question } from "./board-model";
+import { boardOption, type BoardAgent, type Question } from "./board-model";
 import type { UsageWait } from "./flow";
 import { memoryWaitOf, type MemoryWait } from "./memory-wait";
 import { pendingFor, type ProposalLine, type ProposalRecord } from "./proposals";
 import { settled, type RunFacts } from "./runs";
+
+const NO_AGENT_TO_STEER =
+  "no agent of this Run is live to redirect: pick a solution or stop the Run";
 
 export interface RunWaits {
   /** In asked order. */
@@ -31,15 +35,23 @@ export const runWaits = Effect.fn("RunWaits.of")(function* (
   now: number,
 ) {
   const waits: RunWaits = {
-    questions: Arr.map(run.asking, (asked) => ({
-      kind: "question",
-      run: run.id,
-      id: asked.name,
-      step: run.workflow,
-      topic: asked.name,
-      text: asked.prompt,
-      options: Arr.map(asked.options, (option) => ({ id: option, title: option, subtitle: null })),
-    })),
+    questions: Arr.map(run.asking, (asked) => {
+      const question: Types.Mutable<Question> = {
+        kind: "question",
+        run: run.id,
+        id: asked.name,
+        step: run.workflow,
+        topic: asked.name,
+        text: asked.prompt,
+        options: Arr.map(asked.options, boardOption),
+      };
+      if (asked.hold !== undefined) question.hold = asked.hold;
+      if (asked.shortfall !== undefined) question.shortfall = asked.shortfall;
+      question.steer = Arr.some(agents, (agent) => agent.name === asked.steer)
+        ? { agent: asked.steer ?? null, why: null }
+        : { agent: null, why: NO_AGENT_TO_STEER };
+      return question;
+    }),
     proposals: pendingFor(proposals, run.id, now),
     blocked:
       Option.getOrUndefined(
