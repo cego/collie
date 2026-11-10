@@ -5,7 +5,6 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
-import * as Hash from "effect/Hash";
 import {
   Children,
   ClaimedSchema,
@@ -281,9 +280,12 @@ export interface SetMember {
   readonly url: string;
 }
 
-// ponytail: the hash keeps ids that slug alike apart; 32 bits, ample for one set.
+// Each other character is `-<its code in base 36>-`, so no two MR ids share a name.
 export const invocationFor = (workflow: "release" | "stage", member: SetMember) =>
-  `${workflow}-${pipe_(member.id, Str.replace(/[^a-z0-9]+/g, "-"))}-${(Hash.string(member.id) >>> 0).toString(36)}`;
+  `${workflow}-${pipe_(
+    member.id,
+    Str.replace(/[^a-z0-9]/g, (char) => `-${char.codePointAt(0)!.toString(36)}-`),
+  )}`;
 
 /** Whether a Run was started with one merge request: a set is never offered again whole. */
 export const startedWithOne = (facts: ActionFacts) => {

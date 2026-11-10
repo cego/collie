@@ -106,10 +106,13 @@ test("two merge requests whose ids differ only in punctuation are two children o
     url: `https://gitlab.example.com/${project}/-/merge_requests/1`,
   });
   for (const workflow of ["release", "stage"] as const) {
-    const names = Arr.map([member("group/foo-bar"), member("group-foo/bar")], (one) =>
-      invocationFor(workflow, one),
-    );
-    expect(names[0]).not.toBe(names[1]);
-    for (const name of names) expect(name).toMatch(/^[a-z0-9-]+$/);
+    for (const pair of [
+      ["group/foo-bar", "group-foo/bar"],
+      ["group/a.a.a-a.a.a/a/a-a/a/a", "group/a/a_a/a.a.a-a_a-a/a/a"],
+    ]) {
+      const names = Arr.map(pair, (project) => invocationFor(workflow, member(project)));
+      expect(names[0]).not.toBe(names[1]);
+      for (const name of names) expect(name).toMatch(/^[a-z0-9-]+$/);
+    }
   }
 });
