@@ -3,7 +3,18 @@
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { Context, Effect, FileSystem, Layer, PubSub, Result, Schema, Stream, flow } from "effect";
+import {
+  Context,
+  Effect,
+  FileSystem,
+  Layer,
+  PubSub,
+  Result,
+  Schema,
+  Stream,
+  flow,
+  pipe,
+} from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as PlatformError from "effect/PlatformError";
 import type { ChildProcessSpawner } from "effect/process";
@@ -261,18 +272,46 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
         ? fs.open(path, options)
         : disable.pipe(Effect.andThen(fs.open(path, options))),
   };
+  /** What was read outside every Run's own directories: each path, and each directory listed. */
+  const sharedRead = new Set<string>();
+  const sharedListed = new Set<string>();
+  const sharedTrees = new Set<string>();
+  const noted = (path: string, into: Set<string>) => {
+    if (groupOf(path) === "shared") into.add(path);
+  };
+  /** Whether a write to `path` may change what a read through `reading` found. */
+  const wasRead = (path: string) => {
+    if (!enabled || groupOf(path) !== "shared") return true;
+    const parent = pipe(path, Str.split("/"), Arr.dropRight(1), Arr.join("/"));
+    return (
+      sharedRead.has(path) ||
+      sharedRead.has(parent) ||
+      sharedListed.has(parent) ||
+      Arr.some([...sharedTrees], (tree) => Str.startsWith(`${tree}/`)(path))
+    );
+  };
   const reading: FileSystem.FileSystem = {
     ...writing,
-    readFileString: (path, encoding) =>
-      encoding === undefined
+    readFileString: (path, encoding) => {
+      noted(path, sharedRead);
+      return encoding === undefined
         ? read(path, fs.readFileString(path), (group) => group.text(path))
-        : fs.readFileString(path, encoding),
+        : fs.readFileString(path, encoding);
+    },
     readDirectory: (path, options) => {
-      const key = options?.recursive === true ? `${path}${RECURSIVE}` : path;
+      const recursive = options?.recursive === true;
+      noted(path, recursive ? sharedTrees : sharedListed);
+      const key = recursive ? `${path}${RECURSIVE}` : path;
       return read(path, fs.readDirectory(path, options), (group) => group.names(key));
     },
-    exists: (path) => read(path, fs.exists(path), (group) => group.exists(path)),
-    stat: (path) => read(path, fs.stat(path), (group) => group.stat(path)),
+    exists: (path) => {
+      noted(path, sharedRead);
+      return read(path, fs.exists(path), (group) => group.exists(path));
+    },
+    stat: (path) => {
+      noted(path, sharedRead);
+      return read(path, fs.stat(path), (group) => group.stat(path));
+    },
   };
 
   const index = (run: string, next: ReturnType<typeof keysOf> | undefined) => {
@@ -397,6 +436,8 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   const heads = new Map<string, string | null>();
   /** Each watched checkout, and the Runs whose heads were read in it. */
   const readers = new Map<string, Set<string>>();
+  /** The checkouts whose every watch is in place, so a head read in one stands until it moves. */
+  const watching = new Set<string>();
   const moves = yield* PubSub.unbounded<void>();
   /** How often each watched checkout has moved. */
   const checkouts = new Map<string, number>();
@@ -419,13 +460,26 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       const [own, common] = Str.split(Str.trim(said.stdout), "\n");
       if (said.code !== 0 || own === undefined || common === undefined) return;
       const shared = Str.startsWith("/")(common) ? common : `${cwd}/${common}`;
+      let ready = 0;
+      const onReady = () => {
+        if (++ready === 3) watching.add(cwd);
+      };
       yield* Stream.mergeAll(
-        [fs.watch(own), fs.watch(shared), fs.watch(`${shared}/refs`, { recursive: true })],
+        [
+          fs.watch(own, { onReady }),
+          fs.watch(shared, { onReady }),
+          fs.watch(`${shared}/refs`, { recursive: true, onReady }),
+        ],
         { concurrency: "unbounded" },
       ).pipe(Stream.runForEach(() => moved(cwd)));
     }).pipe(
       Effect.ignore,
-      Effect.ensuring(Effect.sync(() => readers.delete(cwd))),
+      Effect.ensuring(
+        Effect.sync(() => {
+          readers.delete(cwd);
+          watching.delete(cwd);
+        }),
+      ),
       Effect.provideContext(spawning),
     );
   const watch = (run: RunFacts) =>
@@ -444,8 +498,9 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       const key = `${run.cwd}\0${run.branch}`;
       yield* watch(run);
       if (heads.has(key)) return heads.get(key) ?? null;
+      const watched = watching.has(run.cwd);
       const read = yield* readBranchHead(run).pipe(Effect.orElseSucceed(() => null));
-      heads.set(key, read);
+      if (watched) heads.set(key, read);
       return read;
     }).pipe(Effect.provideContext(spawning));
 
@@ -454,6 +509,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     reading,
     writing,
     invalidate,
+    wasRead,
     forget,
     heard,
     wrote,

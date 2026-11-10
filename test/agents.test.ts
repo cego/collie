@@ -1,3 +1,4 @@
+import { launchesAt, agentsAt, launchedAt } from "./support/records";
 import * as Cause from "effect/Cause";
 // What a workflow does with a coding agent: one launch, one collection, one repair.
 //
@@ -62,7 +63,7 @@ import {
 } from "../src/engine";
 import { readStepLines } from "../src/steps";
 import { readMetrics } from "../src/metrics";
-import { Launched, runAgents } from "../src/launches";
+import { recordLaunch } from "../src/launches";
 import { Collected } from "../src/agents";
 import { Collecting } from "../src/collecting";
 import { holdsBudgetOf, memoryWaitOf, waitForMemory } from "../src/memory-wait";
@@ -74,8 +75,7 @@ import { Triage } from "../workflows/retrospective";
 import { seedIntent, writeIntent } from "../src/intent";
 import { appendLine, herdOf, reconcile } from "../src/steering";
 import { deliveredTo, ledgerOf, recordsAt, registeredAt } from "./support/records";
-import { readLaunches } from "../src/launches";
-import { Store } from "../src/store";
+import { Store, type DecisionRow } from "../src/store";
 import type { AuditLine } from "../src/audit";
 import { listTasks, readTask, taskKeptIn, withTaskLock, writeTask } from "../src/task";
 import { taskFor } from "../src/operations";
@@ -1700,7 +1700,7 @@ const ANSWERED = "Your questions are answered:";
 /** Once `r1`'s agent has its work, it calls `AskUserQuestion` with two questions. */
 const asksTwo = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
-  while (!(yield* fs.exists(`${dir}/agents/r1/review.launch.json`)))
+  while (Arr.every(yield* launchesAt(dir, "r1"), (one) => one.operation !== "review"))
     yield* TestClock.withLive(Effect.sleep("10 millis"));
   // The host runs in this process; the hook puts a question on a Run only while one lives.
   yield* fs.writeFileString(
@@ -1886,27 +1886,40 @@ test(
   120_000,
 );
 
-/** `r1`'s questions as the host tends them, read from and written to its Store. */
-const tendR1 = Effect.gen(function* () {
-  const store = yield* Store;
-  yield* (yield* Agents).tendQuestions((run) => ({
-    ask: (question, asker) =>
-      store.asking({
-        run,
-        decision: question.name,
-        prompt: question.prompt,
-        options: question.options,
-        asker,
+const askedOfRows = (rows: ReadonlyArray<DecisionRow>) =>
+  Arr.map(rows, (row) => ({ name: row.decision, answer: row.answer }));
+
+const tendR1Reading = (reads: Array<string>) =>
+  Effect.gen(function* () {
+    const store = yield* Store;
+    yield* (yield* Agents).tendQuestions(
+      (run) => ({
+        ask: (question, asker) =>
+          store.asking({
+            run,
+            decision: question.name,
+            prompt: question.prompt,
+            options: question.options,
+            asker,
+          }),
+        asked: Effect.suspend(() => {
+          reads.push(`asked ${run}`);
+          return Effect.map(store.asked(run), askedOfRows);
+        }),
+        close: (decision, value) =>
+          store.settle({ run, decision, value, request: `closed-${decision}` }).pipe(Effect.asVoid),
       }),
-    asked: store
-      .asked(run)
-      .pipe(
-        Effect.map((rows) => Arr.map(rows, (row) => ({ name: row.decision, answer: row.answer }))),
-      ),
-    close: (decision, value) =>
-      store.settle({ run, decision, value, request: `closed-${decision}` }).pipe(Effect.asVoid),
-  }));
-});
+      (runs) =>
+        Effect.suspend(() => {
+          reads.push(`askedOf ${Arr.join(runs, ",")}`);
+          return Effect.map(
+            store.askedOf(runs),
+            (byRun) => new Map(Arr.map([...byRun], ([run, rows]) => [run, askedOfRows(rows)])),
+          );
+        }),
+    );
+  });
+const tendR1 = tendR1Reading([]);
 
 /** `r1` finished, and its agent asked two questions after. */
 const finishedThenAsked = Effect.gen(function* () {
@@ -1961,6 +1974,28 @@ test("a question whose agent is live in another Herd, or whose Herds cannot be l
     }),
   ));
 
+test("a pass of question tending reads its Runs' questions once, and closes what it asked when the agent is gone", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* finishedThenAsked;
+      const sessions = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))([
+        { name: "desk", socket_path: `${rig.root}/first.sock` },
+      ]).pipe(Effect.orDie);
+      const reads: Array<string> = [];
+      yield* session(tendR1Reading(reads));
+      yield* session(tendR1Reading(reads), {
+        herdr: new FakeHerdr(
+          rig.pluginEnv({ FAKE_HERDR_SESSIONS: sessions, FAKE_HERDR_AGENTS_GONE: agentFor("r1") }),
+        ),
+      });
+      expect(reads).toEqual(["askedOf r1", "askedOf r1"]);
+      expect(yield* answersOfR1).toEqual([
+        `closed: ${agentFor("r1")} is gone`,
+        `closed: ${agentFor("r1")} is gone`,
+      ]);
+    }),
+  ));
+
 test("an answer to an agent live only in another Herd is sent to it there", () =>
   runEffect(
     Effect.gen(function* () {
@@ -1994,23 +2029,17 @@ test("a question asked before the agent's next launch is answered while that lau
   runEffect(
     Effect.gen(function* () {
       yield* finishedThenAsked;
-      const fs = yield* FileSystem.FileSystem;
       const asked = yield* questionsSince(
         yield* controlDir(rig.pluginEnv().stateDir, agentFor("r1")),
         0,
       );
-      const first = yield* Schema.decodeEffect(Schema.fromJsonString(Launched))(
-        yield* fs.readFileString(`${dir}/agents/r1/review.launch.json`),
-      ).pipe(Effect.orDie);
+      const first = yield* launchedAt(dir, "r1", "review");
       const next = {
         ...first,
         operation: "fix",
         at: Math.max(...Arr.map(asked, (one) => one.at)) + 1,
       };
-      yield* fs.writeFileString(
-        `${dir}/agents/r1/fix.launch.json`,
-        yield* Schema.encodeEffect(Schema.fromJsonString(Launched))(next).pipe(Effect.orDie),
-      );
+      yield* recordLaunch(next).pipe(Effect.provide(recordsAt(dir)));
       yield* session(
         Effect.gen(function* () {
           const collecting = yield* Collecting;
@@ -2455,11 +2484,7 @@ const claudeOut = {
     },
   ] satisfies ReadonlyArray<UsageReading>),
 };
-const launchOf = (runId: string) =>
-  read(`${dir}/agents/${runId}/review.launch.json`).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Launched))),
-    Effect.orDie,
-  );
+const launchOf = (runId: string) => launchedAt(dir, runId, "review");
 test("an agent's launch record keeps the harness session herdr reports for it", () =>
   runEffect(
     Effect.gen(function* () {
@@ -2612,7 +2637,7 @@ test("a waiting agent switches when a fallback is configured after it ran out", 
       const calls = yield* rig.calls();
       expect(closedPanes(calls)).toHaveLength(1);
       expect(harnessesStarted(calls)).toEqual(["claude", "codex"]);
-      expect((yield* runAgents(dir, "r1"))[1]?.model).toBe("gpt-6.1-sol");
+      expect((yield* agentsAt(dir, "r1"))[1]?.model).toBe("gpt-6.1-sol");
     }).pipe(Effect.scoped),
   ));
 
@@ -2895,7 +2920,7 @@ test("an agent that runs out mid-work is closed and replaced by one on the next 
       expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
         `review: claude/opus ran out (rate_limit) — continuing on codex/default as ${successor}`,
       );
-      const records = yield* runAgents(dir, "r1");
+      const records = yield* agentsAt(dir, "r1");
       expect(Arr.map(records, ({ agent, harness }) => [agent, harness])).toEqual([
         [agentFor("r1"), "claude"],
         [successor, "codex"],
@@ -3071,7 +3096,7 @@ test(
         expect(
           Arr.filter(harnessesStarted(yield* rig.calls()), (one) => one === "codex"),
         ).toHaveLength(2);
-        expect(Arr.map(yield* runAgents(dir, "r1"), ({ agent }) => agent)).toEqual([
+        expect(Arr.map(yield* agentsAt(dir, "r1"), ({ agent }) => agent)).toEqual([
           agentFor("r1"),
           agentName("r1", "review", null, 2),
         ]);
@@ -4056,11 +4081,14 @@ test("an unsupported busy delivery survives restart and reaches the idle agent o
 
 const tendIdle = Agents.pipe(
   Effect.flatMap((agents) =>
-    agents.tendQuestions(() => ({
-      ask: () => Effect.void,
-      asked: Effect.succeed([]),
-      close: () => Effect.void,
-    })),
+    agents.tendQuestions(
+      () => ({
+        ask: () => Effect.void,
+        asked: Effect.succeed([]),
+        close: () => Effect.void,
+      }),
+      () => Effect.succeed(new Map()),
+    ),
   ),
 );
 
@@ -4673,7 +4701,7 @@ const reviewedBody = reviewed.toLayer((payload) =>
 /** The builder at work again, its Output not yet written, with the reviewer idle. */
 const builderBusy = Effect.gen(function* () {
   yield* reviewed.execute({ runId: "r1", input: {} });
-  const launches = yield* readLaunches(dir, "r1");
+  const launches = yield* launchesAt(dir, "r1");
   const build = Option.getOrUndefined(Arr.findFirst(launches, (one) => one.operation === "build"))!;
   yield* (yield* FileSystem.FileSystem).remove(build.output);
   return build.agent;
@@ -6349,7 +6377,7 @@ test("subagent policy fields follow workflow, role, scope and call preferences w
         ),
         Effect.scoped,
       );
-      const launches = yield* readLaunches(dir, "r1");
+      const launches = yield* launchesAt(dir, "r1");
       expect(
         Option.getOrUndefined(Arr.findFirst(launches, (one) => one.operation === "research"))
           ?.claudeSubagents,

@@ -1,10 +1,11 @@
 import * as Order from "effect/Order";
+import { recordsAt } from "./support/records";
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
 import type { Records } from "../src/records";
-import { Effect, FileSystem, Layer, Schema, type Scope, flow, Result } from "effect";
+import { Effect, FileSystem, Layer, Schema, type Scope } from "effect";
 import type { FetchLike } from "forges";
 import { forgeHttpTest, type ForgeHttp } from "../src/forge/http";
 import { recordAudit } from "../src/audit";
@@ -21,7 +22,7 @@ import {
 } from "../src/merges";
 import { foundationLayer, runDir } from "../src/engine";
 import { Agents, agentsLayer } from "../src/agents";
-import { Launched } from "../src/launches";
+import { recordLaunch } from "../src/launches";
 import { FakeHerdr, Rig } from "./support/recorder";
 import type { RunFacts } from "../src/runs";
 import { sinceReview } from "../src/mr";
@@ -36,7 +37,6 @@ import { readLanding, writeLanding, type Landing } from "../src/landing";
 import { fakeForge, type Check, type FakeMr, type ForgeModel } from "./support/forge";
 
 const GITLAB = "gitlab.cego.dk/mk/collie";
-const asLaunch = flow(Schema.encodeResult(Schema.fromJsonString(Launched)), Result.getOrThrow);
 
 /** The fake of each forge `forge` made last, which ForgeHttp asks. */
 const latest = new Map<"gitlab" | "github", { readonly run: Runner; readonly fetch: FetchLike }>();
@@ -747,20 +747,17 @@ test("a merge's stop ends the Run's agents through the one end, and its log name
       const fs = yield* FileSystem.FileSystem;
       const agents = `${stateDir}/agents/r-plan.implement`;
       yield* fs.makeDirectory(agents, { recursive: true });
-      yield* fs.writeFileString(
-        `${agents}/build.launch.json`,
-        asLaunch({
-          agent: "impl",
-          output: `${agents}/build.json`,
-          reused: false,
-          runId: "r-plan.implement",
-          operation: "build",
-          role: "implementer",
-          workflow: "implement",
-          harness: "claude",
-          terminalId: "term-impl",
-        }),
-      );
+      yield* recordLaunch({
+        agent: "impl",
+        output: `${agents}/build.json`,
+        reused: false,
+        runId: "r-plan.implement",
+        operation: "build",
+        role: "implementer",
+        workflow: "implement",
+        harness: "claude",
+        terminalId: "term-impl",
+      }).pipe(Effect.provide(recordsAt(stateDir)));
       yield* round(TEN);
       const closed = Arr.filter(yield* rig.calls(), (call) => call.cmd === "pane close");
       expect(Arr.map(closed, (call) => call.argv?.at(2))).toEqual(["p1"]);

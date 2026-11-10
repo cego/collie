@@ -1214,22 +1214,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
       for (const kind of definitionKinds)
         if (!(yield* fs.exists(`${link.userDir}/${kind}`)))
           yield* fs.makeDirectory(`${link.userDir}/${kind}`);
-      yield* Stream.mergeAll(
-        [
-          ...Arr.map(definitionKinds, (kind) =>
-            fs.watch(`${link.userDir}/${kind}`).pipe(Stream.as(false)),
-          ),
-          // A watch stays on the directory it was given, so one replaced is watched again.
-          fs.watch(link.userDir).pipe(
-            Stream.filter((event) => definitionKinds.includes(event.path)),
-            Stream.as(true),
-          ),
-          // The catch-up starts behind the watches, so a save during it is still seen.
-          Stream.make(false),
-        ],
-        { concurrency: "unbounded" },
-      ).pipe(
-        Stream.takeWhile((replaced) => !replaced),
+      yield* definitionChanges(link.userDir, definitionKinds).pipe(
         Stream.runForEach(() => syncHeldDefinitions),
       );
     }).pipe(
@@ -1444,3 +1429,36 @@ export const pairWith = Effect.fn("Peers.pairWith")(
       ),
     ),
 );
+
+/**
+ * Each time a definition under `userDir` may have changed, until a kind's directory is
+ * replaced, since a watch stays on the directory it was given. The first is a catch-up, once
+ * every watch is in place, so a save made before then is still seen.
+ */
+export const definitionChanges = (userDir: string, kinds: ReadonlyArray<string>) =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const watched = yield* Deferred.make<void>();
+      let ready = 0;
+      const onReady = () => {
+        if (++ready === kinds.length + 1) Deferred.doneUnsafe(watched, Exit.void);
+      };
+      return Stream.mergeAll(
+        [
+          ...Arr.map(kinds, (kind) =>
+            fs.watch(`${userDir}/${kind}`, { onReady }).pipe(Stream.as(false)),
+          ),
+          fs.watch(userDir, { onReady }).pipe(
+            Stream.filter((event) => kinds.includes(event.path)),
+            Stream.as(true),
+          ),
+          Stream.fromEffect(Effect.as(Deferred.await(watched), false)),
+        ],
+        { concurrency: "unbounded" },
+      ).pipe(
+        Stream.takeWhile((replaced) => !replaced),
+        Stream.map(() => undefined),
+      );
+    }),
+  );

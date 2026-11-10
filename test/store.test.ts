@@ -304,6 +304,34 @@ test("only questions a human's message can still set aside or extend are superse
     }),
   ));
 
+test("the questions of several Runs are read together, each Run's in the order they were asked", () =>
+  onStore(
+    "collie-store-asked-of-",
+    Effect.gen(function* () {
+      const store = yield* Store;
+      yield* store.admit(admission("req-1", "run-a", { note: "a" }));
+      yield* store.admit(admission("req-2", "run-b", { note: "b" }));
+      yield* store.admit(admission("req-3", "run-c", { note: "c" }));
+      const ask = (run: string, decision: string) =>
+        store.asking({ run, decision, prompt: "Go?", options: ["yes"] });
+      yield* ask("run-a", "first");
+      yield* ask("run-b", "other");
+      yield* ask("run-a", "second");
+      yield* ask("run-c", "unread");
+      yield* store.settle({ run: "run-a", decision: "first", value: "yes", request: "a-1" });
+
+      const asked = yield* store.askedOf(["run-a", "run-b", "run-never"]);
+      expect(
+        Arr.map([...asked], ([run, rows]) => [run, Arr.map(rows, (one) => one.decision)]),
+      ).toEqual([
+        ["run-a", ["first", "second"]],
+        ["run-b", ["other"]],
+      ]);
+      expect(asked.get("run-a")).toEqual(yield* store.asked("run-a"));
+      expect((yield* store.askedOf([])).size).toBe(0);
+    }),
+  ));
+
 test("two requests with the same input are two runs", () =>
   onStore(
     "collie-store-separate-",

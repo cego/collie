@@ -325,7 +325,7 @@ import {
   type RelayHeader,
 } from "./peers-model";
 import { latest, readDispositions } from "./disposition";
-import { operationsOf, readLaunches, runAgents } from "./launches";
+import { Launched, LAUNCHES, operationsOf, readLaunches, runAgents } from "./launches";
 import { factsOfView, newestFirst, settled, type RunFacts } from "./runs";
 import { Store } from "./store";
 import { SESSIONS_EVERY, agentsIn, focusPane, herdChanges, liveHerds } from "./herds";
@@ -550,6 +550,8 @@ export const HostRpcs = RpcGroup.make(
   Rpc.make("proposal", { payload: { id: Schema.String }, success: Schema.NullOr(RecordSchema) }),
   /** Every agent this Machine's host has registered, oldest registration first. */
   Rpc.make("registered", { success: Schema.Array(AgentEntrySchema) }),
+  /** The Run's launches, oldest first. */
+  Rpc.make("launches", { payload: { run: Schema.String }, success: Schema.Array(Launched) }),
   Rpc.make("runs", {
     payload: { task: Schema.NullOr(Schema.String) },
     success: Schema.Array(RunView),
@@ -735,7 +737,7 @@ const handlers = (
               return yield* new HostRefused({ reason: `No Run "${runId}".` });
             const launch = Option.getOrUndefined(
               Arr.findLast(
-                yield* readLaunches(dir, runId),
+                yield* readLaunches(runId),
                 (one) => one.agent === notice.requestedBy.agent,
               ),
             );
@@ -870,6 +872,7 @@ const handlers = (
         overridden: () => Effect.map(overriddenRuns, (runs) => [...runs]),
         tasks: () => listTasks,
         registered: () => everyRegistered,
+        launches: ({ run }) => readLaunches(run),
         proposals: ({ herd }) => readProposals(herd),
         runProposals: ({ run }) => proposalsOf(run),
         proposal: ({ id }) =>
@@ -898,7 +901,7 @@ const handlers = (
             const hosted = yield* Effect.context<HostServices>();
             return {
               view,
-              agents: yield* runAgents(dir, runId),
+              agents: yield* runAgents(runId),
               disposition: latest(
                 yield* readDispositions(runDir(dir, runId)).pipe(Effect.orElseSucceed(() => [])),
               ),
@@ -1399,13 +1402,29 @@ const isBookkeeping = ({ _tag, path }: FileSystem.WatchEvent) => {
   );
 };
 
-/** Each write under the state directory that may move the board, by its path inside it. */
+/**
+ * Each write under the state directory that may move the board, by its path inside it: one
+ * outside every Run's own directories only where the Run model's reads read it.
+ */
 export const boardWrites = (dir: string, model?: RunModelApi) =>
   watched(dir, model?.disable).pipe(
     Stream.tap((event) => model?.invalidate(`${dir}/${event.path}`) ?? Effect.void),
     Stream.filter((event) => !isBookkeeping(event)),
+    // An agent's question is tended to however the board reads it.
+    Stream.filter(
+      (event) =>
+        model === undefined ||
+        pipe(event.path, Str.endsWith(`/${QUESTIONS}`)) ||
+        model.wasRead(`${dir}/${event.path}`),
+    ),
     Stream.map((event) => event.path),
   );
+
+export const boardTableWrites = Stream.unwrap(
+  Effect.map(Reactivity.Reactivity, (reactivity) =>
+    reactivity.stream([DELIVERIES, LAUNCHES, PROPOSALS, REGISTERED, TASKS], Effect.void),
+  ),
+);
 
 /**
  * A write under the state directory, by this host or anyone else, to a file the board reads,
@@ -1433,7 +1452,7 @@ const sharedBoardLayer = (dir: string) =>
           ),
           // A signal alone: the rows are read by the build, not once more per write.
           store.watching(Effect.void),
-          reactivity.stream([DELIVERIES, PROPOSALS, REGISTERED, TASKS], Effect.void),
+          boardTableWrites.pipe(Stream.provideService(Reactivity.Reactivity, reactivity)),
         ],
         { concurrency: "unbounded" },
       ).pipe(Stream.share({ capacity: 1, strategy: "sliding" }));
@@ -2118,7 +2137,7 @@ const frontDoorHandlers = (
               view.status.status === "complete" || view.status.status === "failed",
             ),
             ci: forged?.checks ?? null,
-            steps: yield* operationsOf(env.stateDir, runId),
+            steps: yield* operationsOf(runId),
             mrs: card?.mrs,
           };
         }).pipe(Effect.provideContext(bun));
@@ -2936,7 +2955,7 @@ const frontDoorHandlers = (
                       from?.run === runId
                         ? Option.getOrUndefined(
                             Arr.findLast(
-                              yield* readLaunches(env.stateDir, runId),
+                              yield* readLaunches(runId),
                               (one) => one.agent === from.agent,
                             ),
                           )?.step
@@ -3627,6 +3646,11 @@ const frontDoorHandlers = (
                       Effect.catch((cause) => Effect.succeed(refusal(cause).error.message)),
                     ),
                   progress: (id) => progressFor(id).pipe(Effect.provideContext(bun)),
+                  launches: (id) =>
+                    readLaunches(id).pipe(
+                      Effect.orElseSucceed(() => []),
+                      Effect.provideContext(bun),
+                    ),
                   flow: (id) =>
                     record !== undefined
                       ? recordFlow(record, id).pipe(

@@ -7,7 +7,7 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Clock, DateTime, Effect, FileSystem, Schema, flow, Result } from "effect";
+import { Clock, DateTime, Effect, FileSystem, Schema, flow, Result, type Types } from "effect";
 import {
   forgetGone,
   idleAgentsSweeper,
@@ -18,7 +18,7 @@ import {
   type IdleSince,
 } from "../src/cleanup";
 import { appendCard } from "../src/cards";
-import { Launched } from "../src/launches";
+import { readLaunches, recordLaunch, type Launched } from "../src/launches";
 import { keepQueued } from "../src/delivery-queue";
 import { Herdr, type AgentInfo } from "../src/herdr";
 import { agentsIn } from "../src/herds";
@@ -62,26 +62,21 @@ const launched = (
   terminalId: string,
   harness = "claude",
   agentSession?: { kind: string; value: string },
-) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    yield* fs.makeDirectory(`${rig.stateDir}/agents/${runId}`, { recursive: true });
-    yield* fs.writeFileString(
-      `${rig.stateDir}/agents/${runId}/build.launch.json`,
-      asJson({
-        agent,
-        output: "out.json",
-        reused: false,
-        runId,
-        operation: "build",
-        role: "implementer",
-        workflow: "implement",
-        harness,
-        terminalId,
-        agentSession,
-      }),
-    );
-  });
+) => {
+  const launch: Types.Mutable<Launched> = {
+    agent,
+    output: "out.json",
+    reused: false,
+    runId,
+    operation: "build",
+    role: "implementer",
+    workflow: "implement",
+    harness,
+    terminalId,
+  };
+  if (agentSession !== undefined) launch.agentSession = agentSession;
+  return recordLaunch(launch);
+};
 
 const ago = (ms: number) => Effect.map(Clock.currentTimeMillis, (now) => now - ms);
 const isoAgo = (ms: number) =>
@@ -775,8 +770,8 @@ test("a restored pane is proved after the registry dropped its agent and the hos
     Effect.gen(function* () {
       yield* restored({ session: SESSION });
       const fs = yield* FileSystem.FileSystem;
-      const registry = `${rig.stateDir}/agents/wT-dropped.json`;
-      yield* fs.writeFileString(registry, "[]");
+      yield* fs.makeDirectory(`${rig.stateDir}/agents`, { recursive: true });
+      yield* fs.writeFileString(`${rig.stateDir}/agents/wT-dropped.json`, "[]");
       const idle: IdleSince = new Map();
       const first = yield* sweep(
         [sweeper([yield* finished(30 * HOUR_MS)], idle)],
@@ -822,12 +817,7 @@ test("the sweep records the session of an agent still on its launch's terminal",
       });
       yield* launched("impl", "r1", TERMINAL, "pi");
       yield* sweep([sweeper([yield* finished(0)], new Map())], rig.stateDir, "host");
-      const fs = yield* FileSystem.FileSystem;
-      const record = yield* fs.readFileString(`${rig.stateDir}/agents/r1/build.launch.json`);
-      expect(
-        (yield* Schema.decodeEffect(Schema.fromJsonString(Launched))(record).pipe(Effect.orDie))
-          .agentSession,
-      ).toEqual(SESSION);
+      expect((yield* readLaunches("r1"))[0]?.agentSession).toEqual(SESSION);
     }),
   ));
 
@@ -849,12 +839,7 @@ test("a live Run's agent has the session herdr reports recorded, and is not judg
         "host",
       );
       expect([judged.remove, judged.keep]).toEqual([[], []]);
-      const fs = yield* FileSystem.FileSystem;
-      const record = yield* fs.readFileString(`${rig.stateDir}/agents/r1/build.launch.json`);
-      expect(
-        (yield* Schema.decodeEffect(Schema.fromJsonString(Launched))(record).pipe(Effect.orDie))
-          .agentSession,
-      ).toEqual(SESSION);
+      expect((yield* readLaunches("r1"))[0]?.agentSession).toEqual(SESSION);
     }),
   ));
 
@@ -875,12 +860,7 @@ test("with idle_close_ms at 0 the sweep still records the session herdr reports"
         rig.stateDir,
         "host",
       );
-      const fs = yield* FileSystem.FileSystem;
-      const record = yield* fs.readFileString(`${rig.stateDir}/agents/r1/build.launch.json`);
-      expect(
-        (yield* Schema.decodeEffect(Schema.fromJsonString(Launched))(record).pipe(Effect.orDie))
-          .agentSession,
-      ).toEqual(SESSION);
+      expect((yield* readLaunches("r1"))[0]?.agentSession).toEqual(SESSION);
     }),
   ));
 

@@ -36,7 +36,13 @@ import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 import { AuditLine, whoActed } from "./audit";
-import { importLedgers, importProposals, importRegisters, importTasks } from "./records-import";
+import {
+  importLaunches,
+  importLedgers,
+  importProposals,
+  importRegisters,
+  importTasks,
+} from "./records-import";
 import { StoreWrites } from "./store-writes";
 import { RequestConflict, type Solution } from "./board-model";
 import { nowIso } from "./time";
@@ -237,6 +243,10 @@ export interface StoreApi {
   }) => Effect.Effect<void>;
   /** Every question this run has been asked, answered or not, in the order they were. */
   readonly asked: (run: string) => Effect.Effect<ReadonlyArray<DecisionRow>>;
+  /** `asked` for each of these Runs that was asked anything, in one read. */
+  readonly askedOf: (
+    runs: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<DecisionRow>>>;
   /**
    * Settles one open question, or says why this answer is not the one that settles it.
    * The write is the decision: one UPDATE over the unanswered row, so two answers racing
@@ -278,13 +288,14 @@ export interface StoreApi {
   readonly supersedable: Effect.Effect<ReadonlyArray<DecisionRow>>;
   /**
    * Adds `agent` to the agents a set-aside workflow question waits for, or restarts its
-   * wait where it is already one, while no revision has opened. True where it did.
+   * wait where it is already one, while no revision has opened. The question as written
+   * where it did.
    */
   readonly alsoMessaged: (messaging: {
     readonly run: string;
     readonly decision: string;
     readonly agent: string;
-  }) => Effect.Effect<boolean>;
+  }) => Effect.Effect<DecisionRow | undefined>;
   readonly generations: Effect.Effect<ReadonlyArray<GenerationRow>>;
   /**
    * Claims a request id for a run, or hands back the run that already has it. `fresh` is
@@ -353,7 +364,11 @@ const field = (name: string) =>
 
 type ImportError = Effect.Error<
   ReturnType<
-    typeof importLedgers | typeof importTasks | typeof importRegisters | typeof importProposals
+    | typeof importLedgers
+    | typeof importTasks
+    | typeof importRegisters
+    | typeof importProposals
+    | typeof importLaunches
   >
 >;
 
@@ -362,6 +377,7 @@ const migrations = (imports: {
   readonly tasks: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
   readonly registers: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
   readonly proposals: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
+  readonly launches: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
 }) => ({
   "1_runs": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -524,6 +540,22 @@ const migrations = (imports: {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`ALTER TABLE collie_decisions ADD COLUMN shortfall TEXT`;
   }),
+  "17_launches": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      CREATE TABLE collie_launches (
+        run TEXT NOT NULL,
+        stem TEXT NOT NULL,
+        record TEXT NOT NULL,
+        ordered INTEGER,
+        ordered_at INTEGER,
+        agent TEXT AS (json_extract(record, '$.agent')),
+        PRIMARY KEY (run, stem)
+      )
+    `;
+    yield* sql`CREATE INDEX collie_launches_agent ON collie_launches (agent)`;
+    yield* imports.launches;
+  }),
 });
 
 /** How often a commit by another connection, another process's, is looked for. */
@@ -558,6 +590,7 @@ function makeStore(
           tasks: imported(importTasks),
           registers: imported(importRegisters),
           proposals: imported(importProposals),
+          launches: imported(importLaunches),
         }),
       ),
       table: "collie_migrations",
@@ -636,6 +669,15 @@ function makeStore(
       execute: (run) =>
         sql`SELECT ${decisionColumns} FROM collie_decisions WHERE run = ${run} ORDER BY asked, decision`,
     });
+
+    const decisionsOfRuns = SqlSchema.findAll({
+      Request: Schema.Array(Schema.String),
+      Result: Decision,
+      execute: (runs) =>
+        sql`SELECT ${decisionColumns} FROM collie_decisions WHERE run IN ${sql.in(runs)} ORDER BY run, asked, decision`,
+    });
+
+    const decodeDecisions = Schema.decodeUnknownEffect(Schema.Array(Decision));
 
     const decisionRow = SqlSchema.findAll({
       Request: Schema.Struct({ run: Schema.String, decision: Schema.String }),
@@ -773,6 +815,17 @@ function makeStore(
         }).pipe(Effect.orDie),
 
       asked: (run: string) => decisionsOf(run).pipe(Effect.orDie),
+      askedOf: (runs) =>
+        runs.length === 0
+          ? Effect.succeed(new Map())
+          : decisionsOfRuns(runs).pipe(
+              Effect.map((rows) => {
+                const byRun = new Map<string, DecisionRow[]>();
+                for (const row of rows) byRun.set(row.run, [...(byRun.get(row.run) ?? []), row]);
+                return byRun;
+              }),
+              Effect.orDie,
+            ),
 
       settle: Effect.fn("Store.settle")(function* (answer) {
         const at = yield* nowIso;
@@ -894,10 +947,10 @@ function makeStore(
                 SELECT 1 FROM collie_decisions revision
                 WHERE revision.run = ${messaging.run} AND revision.revises = ${messaging.decision}
               )
-            RETURNING decision
+            RETURNING ${decisionColumns}
           `,
-        ).pipe(Effect.orDie);
-        return written.length > 0;
+        ).pipe(Effect.flatMap(decodeDecisions), Effect.orDie);
+        return written[0];
       }),
 
       admit: Effect.fn("Store.admit")(function* (admission: Admission) {
@@ -993,6 +1046,7 @@ function makeStore(
                 yield* clear(row);
                 yield* decide(run);
                 yield* sql`DELETE FROM collie_decisions WHERE run = ${run}`.pipe(Effect.orDie);
+                yield* sql`DELETE FROM collie_launches WHERE run = ${run}`.pipe(Effect.orDie);
                 yield* sql`DELETE FROM collie_runs WHERE run = ${run}`.pipe(Effect.orDie);
                 gone.push(run);
               }

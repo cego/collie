@@ -19,6 +19,7 @@ import { taskCardOf } from "./board";
 import type { PluginEnv } from "./env";
 import { timedFlow, timeless } from "./flow-timing";
 import type { AgentInfo } from "./herdr";
+import type { Launches } from "./launches";
 import { diffOf } from "./run-detail";
 import { Foreground } from "./foreground";
 import type { RunModelApi } from "./run-model";
@@ -56,7 +57,7 @@ const fingerprint = flow(
   Result.getOrThrow,
 );
 
-type Needs = FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner;
+type Needs = FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | Launches;
 
 /** A part of the record, and the fields it fills when it comes. */
 interface Part {
@@ -188,7 +189,9 @@ export const recordFrames = (
             };
           return kept.diff;
         });
-      const context = yield* Effect.context<Path.Path | ChildProcessSpawner.ChildProcessSpawner>();
+      const context = yield* Effect.context<
+        Path.Path | ChildProcessSpawner.ChildProcessSpawner | Launches
+      >();
       // A part that fails ends the stream, as a whole record that failed always has.
       const part = <E>(
         name: RecordPart,

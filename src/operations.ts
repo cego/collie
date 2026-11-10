@@ -19,7 +19,8 @@ import { nowIso } from "./time";
 import { attentionFor } from "./attention";
 import type { PluginEnv } from "./env";
 import { Answered, mrLabel, mrNounOf, ranOn, solutionTitle, type FrontDoor } from "./board-model";
-import { runAgents } from "./launches";
+import { agentOfLaunch, type Launched } from "./launches";
+import { hostLaunches } from "./lifecycle";
 import { readAudit, type AuditLine } from "./audit";
 import { readForge, readMrStates } from "./merges";
 import { findingsIn } from "./output";
@@ -1401,11 +1402,15 @@ export const runFacts = Effect.fn("operations.runFacts")(function* (
   env: PluginEnv,
   run: RunFacts,
   listed?: ReadonlyArray<RunFacts>,
+  launched?: Effect.Effect<ReadonlyArray<Launched>>,
 ) {
   const intent = yield* readIntent(run.dir).pipe(Effect.orElseSucceed(() => null));
   const attention = yield* attentionFor(run);
   const started = Arr.filter(listed ?? (yield* listRuns(env)), (one) => one.parent === run.id);
-  const agents = yield* runAgents(env.stateDir, run.id);
+  const agents = Arr.map(
+    yield* launched ?? hostLaunches(env, run.id).pipe(Effect.orElseSucceed(() => [])),
+    agentOfLaunch,
+  );
   const watched = yield* watchedOf(env);
   const lines = [
     `Status: ${run.state}`,

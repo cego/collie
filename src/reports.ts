@@ -75,7 +75,6 @@ export const reportsLayer = (opts: {
                 return { done: true, note: "The workspace is kept: it is the Home." };
               const panes = yield* herdr.paneList();
               const siblings = yield* launchedPanes(
-                env.stateDir,
                 Arr.map(
                   Arr.filter(runs, (one) => one.runId !== view.runId),
                   (one) => one.runId,
@@ -88,11 +87,7 @@ export const reportsLayer = (opts: {
                 )
               )
                 return { done: true, note: "The workspace is kept: another Run has a live agent." };
-              const foreign = paneNotOwned(
-                task,
-                panes,
-                yield* launchedPanes(env.stateDir, [view.runId]),
-              );
+              const foreign = paneNotOwned(task, panes, yield* launchedPanes([view.runId]));
               if (foreign !== undefined)
                 return {
                   done: true,
@@ -128,7 +123,7 @@ export const reportsLayer = (opts: {
                 );
           if (peer === undefined)
             return undelivered(`The requesting Machine ${who.machine.name} is no longer paired.`);
-          const launches = yield* readLaunches(env.stateDir, view.runId);
+          const launches = yield* readLaunches(view.runId);
           const agent = launches.at(-1)?.agent;
           const actor: Asker = {
             origin: agent === undefined ? "host" : "agent",

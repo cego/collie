@@ -46,7 +46,7 @@ export const outcomeRecordsOf = Effect.fn("Outcomes.records")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const rounds: Array<{ round: number; of: number }> = [];
-  for (const launch of yield* readLaunches(stateDir, runId)) {
+  for (const launch of yield* readLaunches(runId)) {
     if (launch.role !== "reviewer") continue;
     const prompt = yield* fs
       .readFileString(`${launchDir(stateDir, runId)}/${stemOf(launch)}.prompt.md`)

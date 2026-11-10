@@ -16,6 +16,7 @@ import {
   type AgentEntry,
   type RegistryScope,
 } from "../src/registry";
+import { StoreWrites } from "../src/store-writes";
 import { runEffect } from "./support/effect";
 import { stopHost } from "./support/host";
 import { recordsAt } from "./support/records";
@@ -67,6 +68,25 @@ const live = (of: AgentEntry): AgentInfo => ({
 });
 
 const agents = (entries: ReadonlyArray<AgentEntry>) => Arr.map(entries, (one) => one.agent);
+
+test("a registration tells the Run model the Runs of the agents it registered and dropped", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const moved: string[] = [];
+      yield* Effect.gen(function* () {
+        yield* registerAgent(here, entry({ agent: "impl-gone", paneId: "1-8", runId: "r0" }));
+        moved.length = 0;
+        yield* registerAgent(here, entry(), {
+          agents: [],
+          listedAt: "2026-09-09T10:00:00Z",
+        });
+      }).pipe(
+        Effect.provide(recordsAt(stateDir)),
+        Effect.provideService(StoreWrites, (runs) => moved.push(...runs)),
+      );
+      expect(moved.sort()).toEqual(["r0", "r1"]);
+    }),
+  ));
 
 test("an agent registered again is one entry, the newest; one herdr no longer lists is dropped from its register only", () =>
   runEffect(

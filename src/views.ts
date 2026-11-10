@@ -290,7 +290,6 @@ const stampOf = (file: string) =>
 const finishedTickets = Effect.fn("Views.finishedTickets")(function* (
   run: RunFacts,
   runs: ReadonlyArray<RunFacts>,
-  stateDir: string,
 ) {
   const path = yield* Path.Path;
   const finished = new Set<string>();
@@ -308,7 +307,7 @@ const finishedTickets = Effect.fn("Views.finishedTickets")(function* (
       continue;
     for (const { checkpoint } of yield* readCheckpoints(one.dir))
       if (checkpoint.status === "done") finished.add(checkpoint.ticket);
-    const launches = yield* readLaunches(stateDir, one.id);
+    const launches = yield* readLaunches(one.id);
     if (launches.length === 0) continue;
     tickets ??= yield* ticketRepoLines(issues);
     const known = one.repo ? Arr.filter(tickets, (t) => t.text !== null) : tickets;
@@ -418,9 +417,8 @@ const plannedFor = Effect.fn("Views.plannedFor")(function* (
   cap: number,
   plans: PlanCache | undefined,
   runs: ReadonlyArray<RunFacts>,
-  stateDir: string,
 ) {
-  const finished = yield* finishedTickets(run, runs, stateDir);
+  const finished = yield* finishedTickets(run, runs);
   if (!plans || !settled(run)) return yield* buildPlan(run, cap, finished);
   const key = `${run.id}:${cap}`;
   const stamps = `${yield* planStamps(run)}\nfinished=${Arr.join([...finished].sort(), ",")}`;
@@ -486,7 +484,7 @@ export const textsOf = Effect.fn("Views.textsOf")(function* (opts: {
     review:
       (yield* capped(path.join(opts.run.dir, REVIEW_FILE), cap)) ??
       ({ _tag: "None", reason: `this run wrote no ${REVIEW_FILE}` } satisfies Panel),
-    plan: yield* plannedFor(opts.run, cap, opts.plans, opts.runs, opts.env.stateDir),
+    plan: yield* plannedFor(opts.run, cap, opts.plans, opts.runs),
   };
 });
 
@@ -624,7 +622,7 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
       yield* listAttachments(attachmentsDir(run.dir)),
       ({ name, size, mediaType }) => ({ name, size, mediaType }),
     ),
-    agents: yield* runAgents(opts.env.stateDir, run.id),
+    agents: yield* runAgents(run.id),
     diff: parts ? yield* diffOf(run) : null,
     flow: opts.flow ?? undefined,
   } satisfies RunDetail;

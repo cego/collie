@@ -11,7 +11,7 @@ import { Agents, agentsLayer } from "../src/agents";
 import { foundationLayer } from "../src/engine";
 import { sweep, taskWorkspacesSweeper } from "../src/cleanup";
 import { Herdr } from "../src/herdr";
-import { Launched } from "../src/launches";
+import { Launched, recordLaunch } from "../src/launches";
 import { runFacts } from "./support/records";
 import { task as view } from "./support/task";
 import type { CompactionPorts, Stopped } from "../src/compaction";
@@ -20,7 +20,6 @@ import { FakeHerdr, Rig } from "./support/recorder";
 import * as Layer from "effect/Layer";
 
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
-const asLaunch = flow(Schema.encodeResult(Schema.fromJsonString(Launched)), Result.getOrThrow);
 
 let rig: Rig;
 beforeEach(() =>
@@ -413,14 +412,7 @@ test("a Fallback's close parks on an agent it cannot prove is this Run's, and cl
     }),
   ));
 
-/** The launch record of `launched` in its Run's directory. */
-const recorded = (launched: Launched) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const dir = `${rig.stateDir}/agents/${launched.runId}`;
-    yield* fs.makeDirectory(dir, { recursive: true });
-    yield* fs.writeFileString(`${dir}/${launched.operation}.launch.json`, asLaunch(launched));
-  });
+const recorded = (launched: Launched) => recordLaunch(launched);
 
 const runLog = (runId: string) =>
   FileSystem.FileSystem.pipe(

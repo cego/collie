@@ -1462,6 +1462,14 @@ with the Herd's directory as its cwd, and that is what places it
 
 A herdr restart cannot take the Home away, because none of it is herdr's.
 
+A launch record is a row of `collie_launches` in `host.db`, keyed by Run and operation
+(`<operation>.r<n>` past an agent's first), with its place in the Run's launch order, and
+written only by the host: by the launch, by the session its harness reports, by a restart on
+core, and by the Cleanup sweep. Every reader asks the table, or the host's `launches` request
+from another process; the first host imports every `agents/<run>/*.launch.json` and
+`agents/<run>/launches` once and leaves the files in place
+([ADR-draft-collies-own-records-live-in-the-hosts-database](adr/draft-collies-own-records-live-in-the-hosts-database.md)).
+
 A Run's agents on herdr come back when herdr restores its session, each resumed in its harness session on a new
 terminal, and sometimes without its name. A launch record keeps the terminal and the
 harness session herdr reported for its agent, and the Cleanup sweep fills the session in

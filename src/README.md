@@ -111,7 +111,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `sdk.ts`               | `collie`: what a module exports, declares, waits on, and starts as a child, and what it refuses                             |
 | `agents.ts`            | What a workflow does with an agent: one launch, one collection, one repair                                                  |
 | `automode.ts`          | The `autoMode` block a Claude agent is launched with: what its Run authorises                                               |
-| `launches.ts`          | What each of a Run's agents was launched on, read back in launch order                                                      |
+| `launches.ts`          | What each of a Run's agents was launched on, kept in `host.db` and read back in launch order                                |
 | `proactive.ts`         | What is worth Collie starting a turn about, and what it has already said                                                    |
 | `news.ts`              | What it noticed, per conversation: deduped, batched, superseded; sent is never read                                         |
 | `live.ts`              | The board's Live region and every row's marks, from one pass. Read-only                                                     |
