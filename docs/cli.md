@@ -2797,12 +2797,16 @@ fresh snapshot. The host builds one board, from when it starts, for every client
 its own merge watch and News. A client that subscribes is told the latest board that
 covers every change seen before it subscribed, so it reads its own writes: at once when no
 build is owed, or once the build under way or owed is done. It builds again when a Run is recorded, from any door, when
-a file under its state directory that the board reads is written, when herdr pushes an
+one of its records in `host.db` is written, when a file under one of a Run's own directories is
+written (`runs/<id>`, `agents/<id>`, `evidence/<id>`, or a control file named for it), when a
+file anywhere else under its state directory is written that a build or a Run's record read,
+or that is in a directory one listed, when herdr pushes an
 event from any of its sessions (a pane opening or closing, or an agent's status changing),
 and every five seconds: one build at a time, with what changes meanwhile folded into the
-next. The host's own bookkeeping builds nothing: lock and temporary files, `host.log`,
-`host.out` and their rotations, the database's WAL and journal, `ssh/`, and `compaction/`
-except each agent's `questions.jsonl`. Nor does a file growing in a Run's `handoffs/` or in
+next. Only the cards of the Runs and Tasks a write names are derived again. The host's own
+bookkeeping builds nothing: lock and temporary files, `host.log`, `host.out` and their
+rotations, the database's WAL and journal, `ssh/`, `compaction/` except each agent's
+`questions.jsonl`, and the trails no build reads, such as `usage/`'s. Nor does a file growing in a Run's `handoffs/` or in
 its evidence's `verify/` logs, though one created or removed there does; a Run's open
 detail follows every write under its own `handoffs/` and evidence. The other operations,
 `runs` and `run` among them, read fresh. The

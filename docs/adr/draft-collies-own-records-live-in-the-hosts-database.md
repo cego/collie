@@ -48,8 +48,13 @@ host's to change. The door Worker runs in the host's process, from the same buil
 reads with a read-only connection of its own.
 
 **D4. A write says what it changed.** Each table's writes invalidate their own Reactivity
-key, as the Run store's already do. The board learns which Tasks moved from the rows that
-changed, not from a write somewhere under the state directory.
+key, as the Run store's already do, and name the Runs or Tasks they moved to the Run model,
+so only those Runs' cards are derived again. The board learns which Tasks moved from the rows
+that changed, not from a write somewhere under the state directory. A write under the state
+directory outside every Run's own directories builds the board only where a build read that
+file or listed its directory: the board no longer reads the files these tables replaced, nor
+the audit trails the host appends for itself, and a write it does not read is no reason to
+build. A Run's own files still move only that Run's card.
 
 **D5. Existing files are imported once.** The first host to run the migration imports every
 file of each kind into its table, in one transaction, and records that it did. It

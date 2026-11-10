@@ -1395,11 +1395,21 @@ const isBookkeeping = ({ _tag, path }: FileSystem.WatchEvent) => {
   );
 };
 
-/** Each write under the state directory that may move the board, by its path inside it. */
+/**
+ * Each write under the state directory that may move the board, by its path inside it: one
+ * outside every Run's own directories only where the Run model's reads read it.
+ */
 export const boardWrites = (dir: string, model?: RunModelApi) =>
   watched(dir, model?.disable).pipe(
     Stream.tap((event) => model?.invalidate(`${dir}/${event.path}`) ?? Effect.void),
     Stream.filter((event) => !isBookkeeping(event)),
+    // An agent's question is tended to however the board reads it.
+    Stream.filter(
+      (event) =>
+        model === undefined ||
+        pipe(event.path, Str.endsWith(`/${QUESTIONS}`)) ||
+        model.wasRead(`${dir}/${event.path}`),
+    ),
     Stream.map((event) => event.path),
   );
 

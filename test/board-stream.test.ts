@@ -37,6 +37,7 @@ import { currentEnv } from "../src/env";
 import { Herdr } from "../src/herdr";
 import { BUILD, boardWrites, connect, frontDoor, socketOf } from "../src/host";
 import { drawerWrites } from "../src/record";
+import { makeRunModel } from "../src/run-model";
 import { handoffsIn } from "../src/handoffs";
 import { followDetail } from "../src/run-detail";
 import { foundationLayer } from "../src/engine";
@@ -875,6 +876,52 @@ test("a log growing in a Run's handoffs or verify logs reaches no board, and a f
       const created = ["evidence/run-a/verify/w.log", "runs/run-a/handoffs/new.log"];
       for (const file of created) yield* write(file);
       expect(yield* through(created)).toEqual(Option.some(created));
+    }),
+  ));
+
+test("a write outside every Run's directories reaches the board only where a read of the Run model read it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-board-reads-" });
+      const write = (file: string) =>
+        fs
+          .makeDirectory(`${dir}/${pipe_(file, Str.split("/"), Arr.dropRight(1), Arr.join("/"))}`, {
+            recursive: true,
+          })
+          .pipe(Effect.andThen(fs.writeFileString(`${dir}/${file}`, "x\n")), Effect.orDie);
+      yield* write("merges/states.json");
+      yield* write("herd/h1/news/old.json");
+      yield* write("agents/run-a/old.json");
+      yield* write("usage/old.jsonl");
+      const model = yield* makeRunModel(dir, "installation");
+      yield* model.reading.readFileString(`${dir}/merges/states.json`).pipe(Effect.orDie);
+      yield* model.reading.readDirectory(`${dir}/herd/h1/news`).pipe(Effect.orDie);
+      const seen = yield* Queue.unbounded<string>();
+      yield* Effect.forkScoped(
+        Stream.runForEach(boardWrites(dir, model), (path) => Queue.offer(seen, path)),
+      );
+      yield* until(
+        () => write("runs/run-a/ready").pipe(Effect.andThen(Queue.poll(seen))),
+        Option.isSome,
+      );
+      yield* write("usage/operations.jsonl");
+      yield* write("herd/h1/budget.jsonl");
+      const wanted = [
+        "agents/run-a/build.prompt.md",
+        "herd/h1/news/new.json",
+        "merges/states.json",
+      ];
+      for (const file of wanted) yield* write(file);
+      const paths = new Set<string>();
+      const all = Effect.gen(function* () {
+        while (!Arr.every(wanted, (one) => paths.has(one))) {
+          const path = yield* Queue.take(seen);
+          if (!pipe_(path, Str.endsWith("ready"))) paths.add(path);
+        }
+      });
+      expect(Option.isSome(yield* Effect.timeoutOption(all, "2 seconds"))).toBe(true);
+      expect([...paths].sort()).toEqual(wanted);
     }),
   ));
 
