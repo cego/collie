@@ -3981,10 +3981,15 @@ scenario(
 );
 
 /** implement delivering a ticket with an after-merge outcome, to park on its merge request: `gh` is missing. */
+/** A git whose origin, a GitLab URL no test can reach, answers that it has no such branch. */
+const branchlessOrigin = (bin: FakeBin) =>
+  bin.add("git", `[ "$1" = ls-remote ] && exit 2\nexec "${Bun.which("git")}" "$@"`);
+
 const afterMergeParking = (runId: string) =>
   Effect.gen(function* () {
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
     yield* noGitlabMrs(bin);
+    yield* branchlessOrigin(bin);
     yield* bin.add(
       "gh",
       `case "$1 $2" in
@@ -9142,6 +9147,7 @@ scenario(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
         yield* noGitlabMrs(bin);
+        yield* branchlessOrigin(bin);
         // The HTTP login works, but the CLI needed to deliver is missing.
         yield* bin.add(
           "gh",
