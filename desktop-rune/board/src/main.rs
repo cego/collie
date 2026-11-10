@@ -3,7 +3,6 @@
 
 use collie_desktop_board::notify::deliver;
 use collie_desktop_board::{Board, run_diff, view};
-use collie_desktop_chat::view::DiffTab;
 use collie_desktop_protocol::client::Client;
 use collie_desktop_protocol::core::Core;
 use collie_desktop_protocol::generated::{
@@ -59,20 +58,14 @@ fn go_to_panes(handle: &AppHandle<Board>, client: &Client) {
 fn chat(handle: &AppHandle<Board>, client: &Client) {
     let (sayer, shows) = (client.clone(), handle.clone());
     handle.update(move |board, _| {
-        board.chat.say = Some(Box::new(move |payload| {
+        board.chat.say = Some(Box::new(move |payload, turn| {
             let events = sayer.stream::<_, AguiEvent, Value>("say", payload);
             let release = events.release();
             let shows = shows.clone();
-            // ponytail: a cancelled turn's late events land in the next; tag turns if that shows.
             std::thread::spawn(move || {
                 for event in events {
-                    shows.update(move |board, _| match event {
-                        Ok(event) => board.chat.transcript.apply(event),
-                        Err(error) => {
-                            board.chat.transcript.error = Some(error.to_string());
-                            board.chat.transcript.running = false;
-                        }
-                    });
+                    let event = event.map_err(|error| error.to_string());
+                    shows.update(move |board, _| board.chat.heard(turn, event));
                 }
             });
             Box::new(move || release.interrupt())

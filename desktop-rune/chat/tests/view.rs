@@ -3,7 +3,7 @@
 
 use collie_desktop_chat::review::{Anchor, Draft, compose};
 use collie_desktop_chat::view::{Chat, DiffTab, chat, diff_tab};
-use collie_desktop_protocol::generated::SayPayload;
+use collie_desktop_protocol::generated::{AguiEvent, SayPayload};
 use rune::edit::TextEdit;
 use rune::{ClipboardContent, Cx, El, Env, Runtime};
 use rune_kit::Kit;
@@ -88,6 +88,48 @@ fn played(name: &str) -> Chat {
     chat
 }
 
+fn events(name: &str) -> Vec<AguiEvent> {
+    std::fs::read_to_string(format!("{FIXTURES}/{name}.ndjson"))
+        .unwrap()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).unwrap().get("event").cloned())
+        .map(|event| serde_json::from_value(event).unwrap())
+        .collect()
+}
+
+#[test]
+fn a_cancelled_turns_late_events_and_error_do_not_reach_the_next_turn() {
+    let turns: Arc<Mutex<Vec<u64>>> = Arc::default();
+    let mut chat = Chat::default();
+    let sent = turns.clone();
+    chat.say = Some(Box::new(move |_, turn| {
+        sent.lock().unwrap().push(turn);
+        Box::new(|| {})
+    }));
+    chat.composer = TextEdit::new("one");
+    chat.send();
+    chat.cancel();
+    chat.composer = TextEdit::new("two");
+    chat.send();
+    let [first, second] = turns.lock().unwrap()[..] else {
+        panic!("two turns: {:?}", turns.lock().unwrap());
+    };
+    assert_ne!(first, second);
+
+    for event in events("say-text") {
+        chat.heard(first, Ok(event));
+    }
+    chat.heard(first, Err("interrupted".into()));
+    assert_eq!(chat.transcript.messages.len(), 2, "only the two said");
+    assert_eq!(chat.transcript.error, None);
+    assert!(chat.transcript.running, "the second turn still runs");
+
+    for event in events("say-text") {
+        chat.heard(second, Ok(event));
+    }
+    assert_eq!(chat.transcript.messages.len(), 3, "the second turn's reply");
+}
+
 #[test]
 fn a_played_turn_shows_what_was_said_the_tool_it_called_and_the_reply() {
     let runtime = runtime(played("say-tool"), chat_view);
@@ -117,7 +159,7 @@ fn send_says_the_composers_text_and_stop_cancels_the_turn() {
     let mut chat = Chat::default();
     chat.composer = TextEdit::new("what is 3 + 4?");
     let (sent, stopped) = (asked.clone(), cancelled.clone());
-    chat.say = Some(Box::new(move |payload: SayPayload| {
+    chat.say = Some(Box::new(move |payload: SayPayload, _| {
         sent.lock().unwrap().push(payload.text);
         let stopped = stopped.clone();
         Box::new(move || *stopped.lock().unwrap() += 1)

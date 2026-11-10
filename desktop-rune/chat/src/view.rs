@@ -4,7 +4,7 @@ use crate::agui::{Part, Role, Transcript};
 use crate::highlight::syntect;
 use crate::policy::{Opened, confined, opened};
 use crate::review::{Draft, add_draft, compose, diff_anchor, remove_draft};
-use collie_desktop_protocol::generated::SayPayload;
+use collie_desktop_protocol::generated::{AguiEvent, SayPayload};
 use rune::edit::TextEdit;
 use rune::{ClipboardContent, El, FileDialogOptions, col, row, text, text_input};
 use rune_kit::diff::{DiffMode, DiffState, DiffView, FileDiff};
@@ -13,8 +13,8 @@ use rune_kit::syntax::Highlighter;
 use rune_kit::{Button, ButtonVariant, Kit, SegmentedControl, TextInput};
 use std::path::PathBuf;
 
-/// Sends a turn to the core, and gives back what cancels it.
-pub type Say = Box<dyn Fn(SayPayload) -> Box<dyn FnOnce()>>;
+/// Sends the `n`th turn to the core, and gives back what cancels it.
+pub type Say = Box<dyn Fn(SayPayload, u64) -> Box<dyn FnOnce()>>;
 
 #[derive(Default)]
 pub struct Chat {
@@ -32,6 +32,9 @@ pub struct Chat {
     /// What `stagePaths` copied in, for the next turn.
     pub attached: Vec<String>,
     turn: Option<Box<dyn FnOnce()>>,
+    turns: u64,
+    /// The turn whose events are still heard; none once it is cancelled.
+    live: Option<u64>,
 }
 
 impl Chat {
@@ -43,12 +46,14 @@ impl Chat {
         self.transcript.say(&said);
         self.composer.clear();
         if let Some(say) = &self.say {
+            self.turns += 1;
+            self.live = Some(self.turns);
             self.turn = Some(say(SayPayload {
                 text: said,
                 about: None,
                 now: None,
                 attachments: Some(std::mem::take(&mut self.attached)).filter(|a| !a.is_empty()),
-            }));
+            }, self.turns));
         }
     }
 
@@ -58,10 +63,25 @@ impl Chat {
         }
     }
 
+    /// Applies an event of the `turn`th turn, unless that turn was cancelled or replaced.
+    pub fn heard(&mut self, turn: u64, event: Result<AguiEvent, String>) {
+        if self.live != Some(turn) {
+            return;
+        }
+        match event {
+            Ok(event) => self.transcript.apply(event),
+            Err(error) => {
+                self.transcript.error = Some(error);
+                self.transcript.running = false;
+            }
+        }
+    }
+
     pub fn cancel(&mut self) {
         if let Some(cancel) = self.turn.take() {
             cancel();
         }
+        self.live = None;
         self.transcript.stop();
     }
 }
