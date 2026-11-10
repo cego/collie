@@ -21,6 +21,7 @@ import {
   questionsSince,
   ranOutSince,
   recordClaudeEvent,
+  stoppedSince,
   submittedDelivery,
   VERIFIED_VERSIONS,
 } from "../src/compactors";
@@ -567,11 +568,12 @@ test("rate_limits Collie cannot read leave the context line alone", () =>
   ));
 
 const encodeStop = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
-const stopFailure = (error: string) =>
+const stopFailure = (error: string, details?: string) =>
   encodeStop({
     session_id: "s-1",
     hook_event_name: "StopFailure",
     error,
+    ...(details !== undefined && { error_details: details }),
     transcript_path: "/home/mk/.claude/projects/p/s-1.jsonl",
   });
 
@@ -584,6 +586,22 @@ test("a StopFailure on a spent subscription is the agent running out, with its t
         why: "rate_limit",
         transcript: "/home/mk/.claude/projects/p/s-1.jsonl",
       });
+      expect(yield* stoppedSince(dir, 0)).toBeNull();
+    }),
+  ));
+
+test("a StopFailure on any other error is its harness stopping, saying its details", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* recordClaudeEvent(
+        dir,
+        stopFailure("authentication_failed", "OAuth token has expired. Please run /login."),
+      );
+      expect(yield* stoppedSince(dir, 0)).toEqual({
+        why: "OAuth token has expired. Please run /login.",
+        transcript: "/home/mk/.claude/projects/p/s-1.jsonl",
+      });
+      expect(yield* ranOutSince(dir, 0)).toBeNull();
     }),
   ));
 
@@ -593,6 +611,7 @@ test("a transient overload is not running out", () =>
       yield* recordClaudeEvent(dir, limited({}));
       yield* recordClaudeEvent(dir, stopFailure("overloaded"));
       expect(yield* ranOutSince(dir, 0)).toBeNull();
+      expect(yield* stoppedSince(dir, 0)).toBeNull();
     }),
   ));
 
@@ -615,8 +634,9 @@ test("a status line's full window whose reset has passed is not the agent runnin
     }).pipe(Effect.provide(TestClock.layer())),
   ));
 
-test("the StopFailure hook is installed only on a Claude known to have it", () => {
-  expect(claudeSettings(dir, true)).toContain(`"StopFailure"`);
-  expect(claudeSettings(dir, true)).toContain(`"rate_limit|billing_error"`);
+test("the StopFailure hook is installed only on a Claude known to have it, for every error", () => {
+  const [hook] = JSON.parse(claudeSettings(dir, true)).hooks.StopFailure;
+  expect(hook.matcher).toBeUndefined();
+  expect(hook.hooks[0].command).toContain(`herdr compaction ${dir}`);
   expect(claudeSettings(dir, false)).not.toContain("StopFailure");
 });
