@@ -280,14 +280,9 @@ export interface SetMember {
   readonly url: string;
 }
 
-// Each other character is `-<its code in base 36>-`, so no two MR ids share a name.
-const escaped = (char: string) =>
-  /[a-z0-9]/.test(char)
-    ? char
-    : `-${Option.getOrElse(Str.charCodeAt(char, 0), () => 0).toString(36)}-`;
-
+// The id's SHA-256 keeps two MR ids apart, and the capped slug a child's Run directory short.
 export const invocationFor = (workflow: "release" | "stage", member: SetMember) =>
-  `${workflow}-${Arr.join(Arr.map(Str.split(member.id, ""), escaped), "")}`;
+  `${workflow}-${pipe_(member.id, Str.replace(/[^a-z0-9]+/g, "-"), Str.slice(0, 40))}-${new Bun.CryptoHasher("sha256").update(member.id).digest("hex")}`;
 
 /** Whether a Run was started with one merge request: a set is never offered again whole. */
 export const startedWithOne = (facts: ActionFacts) => {
