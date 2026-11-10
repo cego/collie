@@ -253,11 +253,10 @@ export function taskOffers<
   const listed: Array<O & { readonly run?: string }> = [
     ...(Arr.some(owned, (one) => one.run === asked) ? [] : own),
     ...Arr.flatMap(owned, ({ run, named, offers }) =>
-      Arr.map(offers, (offer) => ({
-        ...offer,
-        title: `${offer.title} ${named}`,
-        ...(run === asked ? {} : { run }),
-      })),
+      Arr.map(offers, (offer) => {
+        const titled = { ...offer, title: `${offer.title} ${named}` };
+        return run === asked ? titled : { ...titled, run };
+      }),
     ),
   ];
   const first = Arr.findFirstIndex(listed, (one) => one.unavailable === null);
