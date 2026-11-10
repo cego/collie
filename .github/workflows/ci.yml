@@ -139,4 +139,4 @@ jobs:
         with:
           bun-version: "1.4"
       - run: bun install --frozen-lockfile
-      - run: bun test test/rune-contract.test.ts test/rune-types.test.ts
+      - run: bun test test/rune-contract.test.ts test/rune-types.test.ts test/rune-shell.test.ts

@@ -46,6 +46,18 @@ pub enum FromCore {
     ClientProtocolError {
         error: Value,
     },
+    /// Not Effect's: the stdio stand-in's `Utils.showNotification`, for the shell to post.
+    Notify(Notice),
+}
+
+/// A notification the main process asks the shell to post, as Electrobun's `showNotification`
+/// takes it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Notice {
+    pub title: String,
+    pub body: String,
+    #[serde(default)]
+    pub silent: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -3,6 +3,7 @@
 //   bun run tools/rune-fixtures.ts
 //
 // - `fixtures/flock.ndjson`: the test Flock, one encoded `flock` item a line;
+// - `fixtures/flows.json`: Desktop's Flow test case as it moves on, by name;
 // - `fixtures/transcripts/*.ndjson`: Effect's own RPC client and server speaking over
 //   Desktop's channel, every frame each way as `{"from":"shell"|"core","frame":…}`.
 
@@ -24,7 +25,9 @@ import {
   type ToView,
 } from "../desktop/src/shared/channel";
 import { ActionFailed, DesktopRpcs, FlockItem } from "../desktop/src/shared/flock";
+import { Flow } from "../src/board-model";
 import { FLOCK } from "../test/support/rune-fixtures";
+import { mainFlow } from "../test/support/flow";
 
 const FIXTURES = new URL("../desktop-rune/fixtures/", import.meta.url).pathname;
 
@@ -135,7 +138,27 @@ const TRANSCRIPTS = {
   ),
 };
 
+/** `test/desktop-flow.test.ts`'s Flow: as it starts, once Review is current, once it asks. */
+const before = mainFlow();
+const after: Flow = { ...before, current: { run: "build-run", node: "review" } };
+const asking: Flow = {
+  ...after,
+  lanes: Arr.map(after.lanes, (lane) => ({
+    ...lane,
+    nodes: Arr.map(lane.nodes, (node) =>
+      node.id === "review"
+        ? { ...node, state: "needs-you" as const, said: "Asked 1 min ago" }
+        : node,
+    ),
+  })),
+};
+const FLOWS = { before, after, asking };
+
+const Flows = Schema.Struct({ before: Flow, after: Flow, asking: Flow });
+
 const written = Effect.gen(function* () {
+  const flows = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.toCodecJson(Flows)))(FLOWS);
+  yield* Effect.promise(() => Bun.write(`${FIXTURES}flows.json`, `${flows}\n`));
   const flock = yield* Effect.forEach(FLOCK, (item) =>
     Schema.encodeEffect(Schema.toCodecJson(FlockItem))(item),
   );

@@ -31,6 +31,15 @@ const listen = async () => {
 
 const on = () => {};
 
+/** Asks the shell to post it: a line of its own beside Effect's frames. */
+const showNotification = ({ title, body = "", silent = false }: Notification) =>
+  void process.stdout.write(`${JSON.stringify({ _tag: "Notify", title, body, silent })}\n`);
+interface Notification {
+  readonly title: string;
+  readonly body?: string;
+  readonly silent?: boolean;
+}
+
 export const BrowserView = { defineRPC: (rpc: Rpc) => rpc };
 
 export class BrowserWindow {
@@ -58,7 +67,7 @@ export const Screen = { getAllDisplays: () => [DISPLAY], getPrimaryDisplay: () =
 export const Utils = {
   paths: { userData },
   openExternal: on,
-  showNotification: on,
+  showNotification,
   clipboardReadText: () => "",
   clipboardWriteText: on,
   clipboardAvailableFormats: () => [],

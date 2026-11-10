@@ -56,7 +56,7 @@ point Vulkan at lavapipe: `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json
 Linux, building needs `libxkbcommon-dev` and `libwayland-dev`, and lavapipe is in
 `mesa-vulkan-drivers`. libghostty-vt needs Zig 0.16.0 (`zig` on `PATH`, or `ZIG` naming it)
 and bindgen needs libclang; its first build takes about four minutes. CI's `desktop-rune` job runs `cargo fmt --check`, `cargo clippy -D
-warnings`, `cargo test` and the contract test.
+warnings`, `cargo test`, and the contract, drift and shell tests.
 
 ## Spike notes
 
@@ -258,3 +258,49 @@ blocks drew. No message had footnotes, math, GFM alerts or a block over 32 KiB; 
 syntect runs on fancy-regex here (no C dependency); its TypeScript grammar is the slow part.
 rune-kit caches each block's colours, but the first draw of a 32 KiB block would hold the view's
 thread for about a second. This is evidence for the gate, not a claim of speed.
+
+### Notifications, files in, scale and accessibility
+
+**Notifications.** The main process still decides when to notify. The stdio stand-in's
+`Utils.showNotification` writes a `Notify` line beside Effect's frames, and the client hands
+each one to `Client::notices()`. `board/src/notify.rs` posts it: on Linux through
+`org.freedesktop.Notifications` on the session bus (zbus), on macOS through rune-mac's
+Notification Center, which posts only from a bundled, signed app. A click brings the window
+forward, with the activation token the notification server sent where there is one, which
+a Wayland compositor asks for before it lets a window take focus. `test/rune-shell.test.ts` checks a notification reaches the Rust
+side once; `board/tests/notify.rs` checks it is posted and a click raises the window.
+
+**Files in.** The chat's Attach button, a paste into the composer and a drop on the chat each
+call `stagePaths` with the same paths, and what it copies in rides on the next turn. A paste
+takes the clipboard's file list, or text that is only `file://` URIs. Rune's dialog chooses
+one file, where Desktop's chooses several. winit 0.30 reports no file drops on Wayland, so
+there the chat says "Dropping files isn't available here. Attach or paste them instead."
+
+**Scale.** Rune draws at `winit::Window::scale_factor()`, read when the window opens and at
+every resize or scale change. On a Wayland session the spike is a native Wayland client, and
+winit 0.30.13 implements `wp_fractional_scale_v1`, so that is each monitor's own scale,
+fractions included. `desktop/src/shared/scale.ts` and ADR-0047's hyprctl correction exist
+because Electrobun's CEF is an XWayland client that Hyprland leaves unscaled. Neither applies
+here, so the rule is not ported. Each case of `test/desktop-scale.test.ts`:
+
+| Case                                                                           | In the spike                                                                      |
+| ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| on one monitor, Desktop's window is on it                                      | the compositor gives the surface its monitor's scale                              |
+| two monitors at different scales                                               | the preferred scale changes as the window moves, and Rune lays out again          |
+| an XWayland client Desktop does not know, found by pid                         | no XWayland client to find                                                        |
+| no client, or not Hyprland: the scale is unknown and says why                  | any compositor with `wp_fractional_scale_v1` gives it; without it, a whole number |
+| zoom = Zoom × monitor scale ÷ rendered scale, 25 % to 400 %                    | the second factor is always 1; Zoom has no Rune API (below)                       |
+| Settings says how Desktop is drawn, or why the scale is unknown, or a mismatch | nothing to correct, so nothing to explain; Settings is not ported                 |
+
+Zoom has no counterpart: Rune has no app-level UI scale, and `El::scale` draws larger without
+laying out larger. The draft upstream issue is in the Run's handoffs (`rune-platform-issues.md`).
+
+**Accessibility.** `board/tests/a11y.rs` builds the board, the Flow map from
+`fixtures/flows.json` (Desktop's Flow test case) and the chat headless, and reads Rune's
+AccessKit tree. A card is a button named for its task. A Flow node is a button named as
+`nodeName` names it ("Build, running, Slice 4 of 6"), in a group named for its row, in a group
+named "Flow". The chat's messages are a log named "Flock chat". The Flow map is one Tab stop,
+on the current Step; arrows, Home and End move as `flowKey` does, Enter chooses. The changes
+`flowAnnouncements` names are said through a polite live region. `board/src/flow.rs` ports
+`flowRows`, `nodeName`, `flowAnnouncements` and `flowKey` for this. Rune has no
+`aria-current`, so the current Step is only drawn differently.

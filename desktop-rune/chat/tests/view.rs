@@ -5,10 +5,11 @@ use collie_desktop_chat::review::{Anchor, Draft, compose};
 use collie_desktop_chat::view::{Chat, DiffTab, chat, diff_tab};
 use collie_desktop_protocol::generated::SayPayload;
 use rune::edit::TextEdit;
-use rune::{Cx, El, Env, Runtime};
+use rune::{ClipboardContent, Cx, El, Env, Runtime};
 use rune_kit::Kit;
 use rune_kit::diff::{DiffMode, LineRange, LineRef, Side, parse};
 use serde_json::Value;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/chat");
@@ -187,4 +188,87 @@ fn the_diff_shows_unified_or_split() {
     assert_eq!(mode(&mut runtime), DiffMode::Split);
     tap(&mut runtime, "segment0", 1000.0);
     assert_eq!(mode(&mut runtime), DiffMode::Unified);
+}
+
+type Staged = Arc<Mutex<Vec<Vec<PathBuf>>>>;
+
+fn staging(chat: &mut Chat) -> Staged {
+    let staged: Staged = Arc::default();
+    let into = staged.clone();
+    chat.stage = Some(Box::new(move |paths| into.lock().unwrap().push(paths)));
+    staged
+}
+
+#[test]
+fn a_file_chosen_in_the_dialog_reaches_stage_paths() {
+    let mut chat = Chat::default();
+    let staged = staging(&mut chat);
+    let mut runtime = runtime(chat, chat_view);
+    tap(&mut runtime, "attach", 100.0);
+    assert!(runtime.file_dialog().is_some(), "the dialog opens");
+    runtime
+        .resolve_file_dialog(Some(PathBuf::from("/tmp/shot.png")))
+        .unwrap();
+    runtime.frame(1000.0);
+    assert_eq!(
+        *staged.lock().unwrap(),
+        [vec![PathBuf::from("/tmp/shot.png")]]
+    );
+}
+
+#[test]
+fn pasted_files_and_pasted_file_uris_reach_stage_paths_and_other_text_is_typed() {
+    let mut chat = Chat::default();
+    let staged = staging(&mut chat);
+    let mut runtime = runtime(chat, chat_view);
+    tap(&mut runtime, "composer", 100.0);
+    runtime.paste_content(
+        ClipboardContent::new("")
+            .with_files([PathBuf::from("/tmp/a.txt"), PathBuf::from("/tmp/b.png")]),
+    );
+    runtime.frame(1000.0);
+    runtime.paste_content(ClipboardContent::new(
+        "file:///tmp/a%20b.txt\nfile:///tmp/c.png\n",
+    ));
+    runtime.frame(1100.0);
+    runtime.paste_content(ClipboardContent::new("just words"));
+    runtime.frame(1200.0);
+    assert_eq!(
+        *staged.lock().unwrap(),
+        [
+            vec![PathBuf::from("/tmp/a.txt"), PathBuf::from("/tmp/b.png")],
+            vec![PathBuf::from("/tmp/a b.txt"), PathBuf::from("/tmp/c.png")],
+        ]
+    );
+    let mut typed = String::new();
+    runtime.update(|chat, _| typed = chat.composer.text.clone());
+    assert_eq!(typed, "just words");
+}
+
+#[test]
+fn files_dropped_on_the_chat_reach_stage_paths() {
+    let mut chat = Chat::default();
+    let staged = staging(&mut chat);
+    let mut runtime = runtime(chat, chat_view);
+    let at = runtime.find("chat").unwrap();
+    runtime.drop_files(vec![PathBuf::from("/tmp/log.txt")], Some(at));
+    runtime.frame(100.0);
+    assert_eq!(
+        *staged.lock().unwrap(),
+        [vec![PathBuf::from("/tmp/log.txt")]]
+    );
+}
+
+#[test]
+fn where_the_platform_reports_no_drops_the_chat_says_so() {
+    let mut chat = Chat::default();
+    chat.drops_unavailable = true;
+    let runtime = runtime(chat, chat_view);
+    let said = keyed(&runtime, "drops-unavailable").expect("a message");
+    assert_eq!(
+        said["name"],
+        "Dropping files isn't available here. Attach or paste them instead."
+    );
+    let runtime = self::runtime(Chat::default(), chat_view);
+    assert!(keyed(&runtime, "drops-unavailable").is_none());
 }

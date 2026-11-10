@@ -4,6 +4,9 @@
 //! draw; the TypeScript stays its owner.
 
 use base64::Engine;
+pub mod flow;
+pub mod notify;
+
 use collie_desktop_chat::view::{Chat, DiffTab, chat, diff_tab};
 use collie_desktop_protocol::client::Client;
 use collie_desktop_protocol::generated::{
@@ -68,6 +71,7 @@ pub struct Board {
     /// Reads a Run's diff from the core, and sets `diff` once it has it.
     pub load_diff: Option<Box<dyn Fn(String, String)>>,
     pub diff: Option<DiffTab>,
+    pub flow: Option<flow::FlowMap>,
 }
 
 /// The cols and rows a terminal opens at, until its layout says otherwise.
@@ -253,7 +257,7 @@ fn card(k: &Kit, shown: &Shown, task: &Task) -> El {
         .child(sentence)
         .build(k)
         .key(format!("card-{}", task.id))
-        .role("article")
+        .role("button")
         .label(task.name.clone())
         .w(280.0);
     match shown.installation.clone() {
@@ -299,6 +303,10 @@ fn tab_of(board: &mut Board) -> Option<&mut Tab> {
 
 fn chat_of(board: &mut Board) -> &mut Chat {
     &mut board.chat
+}
+
+fn flow_of(board: &mut Board) -> &mut flow::FlowMap {
+    board.flow.as_mut().expect("a Flow map")
 }
 
 fn diff_of(board: &Board) -> &DiffTab {
@@ -362,6 +370,12 @@ pub fn view(board: &Board, cx: &mut Cx<Board>) -> El {
         .gap(12.0)
         .fill(k.c.bg_base)
         .child(open_chat)
+        .children(
+            board
+                .flow
+                .as_ref()
+                .map(|map| flow::flow_map(map, flow_of, &k)),
+        )
         .child(
             row()
                 .gap(16.0)

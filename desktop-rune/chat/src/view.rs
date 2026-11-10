@@ -6,11 +6,12 @@ use crate::policy::{Opened, confined, opened};
 use crate::review::{Draft, add_draft, compose, diff_anchor, remove_draft};
 use collie_desktop_protocol::generated::SayPayload;
 use rune::edit::TextEdit;
-use rune::{El, col, row, text};
+use rune::{ClipboardContent, El, FileDialogOptions, col, row, text, text_input};
 use rune_kit::diff::{DiffMode, DiffState, DiffView, FileDiff};
 use rune_kit::markdown::Markdown;
 use rune_kit::syntax::Highlighter;
 use rune_kit::{Button, ButtonVariant, Kit, SegmentedControl, TextInput};
+use std::path::PathBuf;
 
 /// Sends a turn to the core, and gives back what cancels it.
 pub type Say = Box<dyn Fn(SayPayload) -> Box<dyn FnOnce()>>;
@@ -24,6 +25,12 @@ pub struct Chat {
     pub say: Option<Say>,
     /// The last link pressed that agent markdown may open.
     pub opened: Option<Opened>,
+    /// Hands files to the main process's `stagePaths`.
+    pub stage: Option<Box<dyn Fn(Vec<PathBuf>)>>,
+    /// The platform reports no file drops (Wayland in winit 0.30).
+    pub drops_unavailable: bool,
+    /// What `stagePaths` copied in, for the next turn.
+    pub attached: Vec<String>,
     turn: Option<Box<dyn FnOnce()>>,
 }
 
@@ -40,8 +47,14 @@ impl Chat {
                 text: said,
                 about: None,
                 now: None,
-                attachments: None,
+                attachments: Some(std::mem::take(&mut self.attached)).filter(|a| !a.is_empty()),
             }));
+        }
+    }
+
+    pub fn stage(&self, paths: Vec<PathBuf>) {
+        if let (Some(stage), false) = (&self.stage, paths.is_empty()) {
+            stage(paths);
         }
     }
 
@@ -145,12 +158,45 @@ pub fn chat<S: 'static>(chat: &Chat, lens: fn(&mut S) -> &mut Chat, k: &Kit) -> 
             .wrap()
             .w_full()
     });
-    let composer = TextInput::new(&chat.composer)
-        .placeholder("Ask the Flock")
+    let attach = Button::new("Attach files")
+        .variant(ButtonVariant::Ghost)
+        .on_press_tx(move |_: &mut S, tx| {
+            tx.open_file(FileDialogOptions::default(), move |s: &mut S, chosen, _| {
+                if let Ok(Some(path)) = chosen {
+                    lens(s).stage(vec![path]);
+                }
+            })
+        })
+        .build(k)
+        .key("attach");
+    let drops_unavailable = chat.drops_unavailable.then(|| {
+        let said = "Dropping files isn't available here. Attach or paste them instead.";
+        text(said)
+            .key("drops-unavailable")
+            .role("status")
+            .label(said)
+            .font(k.ty.small)
+            .color(k.c.text_muted)
+    });
+    // rune-kit's TextInput hides its field, so `on_input_paste` needs Rune's own.
+    let composer = text_input(&chat.composer, k.ty.ui_compact)
+        .single_line()
+        .placeholder("Ask the Flock", k.c.text_faint)
+        .label("Ask the Flock")
+        .color(k.c.text_base)
+        .caret(k.c.text_base, k.selection())
         .on_edit(move |s: &mut S| &mut lens(s).composer)
         .on_submit(move |s: &mut S, _| lens(s).send())
-        .build(k)
+        .on_input_paste(move |s: &mut S, pasted, _| {
+            let paths = pasted_paths(pasted);
+            let staged = !paths.is_empty();
+            lens(s).stage(paths);
+            staged
+        })
         .key("composer")
+        .padding(6.0)
+        .radius(6.0)
+        .fill(k.c.layer_01)
         .grow(1.0);
     let action = if chat.transcript.running {
         Button::new("Stop")
@@ -171,12 +217,16 @@ pub fn chat<S: 'static>(chat: &Chat, lens: fn(&mut S) -> &mut Chat, k: &Kit) -> 
         .key("highlighter");
     col()
         .key("chat")
+        .on_drop_files(move |s: &mut S, files, _| lens(s).stage(files.to_vec()))
         .gap(12.0)
         .w_full()
         .grow(1.0)
         .min_h(0.0)
         .child(
             col()
+                .key("chat-log")
+                .role("log")
+                .label("Flock chat")
                 .gap(8.0)
                 .w_full()
                 .grow(1.0)
@@ -190,10 +240,56 @@ pub fn chat<S: 'static>(chat: &Chat, lens: fn(&mut S) -> &mut Chat, k: &Kit) -> 
                 .gap(8.0)
                 .center_y()
                 .w_full()
+                .child(attach)
                 .child(composer)
                 .child(action)
                 .child(colours),
         )
+        .children(drops_unavailable)
+}
+
+/// The files a paste carries: the clipboard's own list, or text that is only `file://` URIs.
+pub fn pasted_paths(pasted: &ClipboardContent) -> Vec<PathBuf> {
+    if !pasted.files().is_empty() {
+        return pasted.files().to_vec();
+    }
+    let uris: Vec<&str> = pasted
+        .text()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    let paths: Vec<PathBuf> = uris
+        .iter()
+        .filter_map(|uri| uri.trim().strip_prefix("file://"))
+        .map(|path| PathBuf::from(percent_decoded(path)))
+        .collect();
+    if paths.len() == uris.len() {
+        paths
+    } else {
+        Vec::new()
+    }
+}
+
+fn percent_decoded(path: &str) -> String {
+    let bytes = path.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        let hex = bytes
+            .get(at + 1..at + 3)
+            .and_then(|h| std::str::from_utf8(h).ok());
+        match (bytes[at], hex.and_then(|h| u8::from_str_radix(h, 16).ok())) {
+            (b'%', Some(byte)) => {
+                out.push(byte);
+                at += 3;
+            }
+            (byte, _) => {
+                out.push(byte);
+                at += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 pub struct DiffTab {

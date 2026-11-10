@@ -1,7 +1,7 @@
 //! A blocking `DesktopRpcs` client over the core's stdio: one reader thread routes each
 //! frame to the call it answers, and the core's stdout ending ends every open call.
 
-use crate::rpc::{Exit, FromCore, Reason, ToCore};
+use crate::rpc::{Exit, FromCore, Notice, Reason, ToCore};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
@@ -52,6 +52,7 @@ pub struct Client {
     out: Arc<Mutex<Box<dyn Write + Send>>>,
     open: Open,
     next: Arc<AtomicU64>,
+    notices: Arc<Mutex<Option<Receiver<Notice>>>>,
 }
 
 impl Client {
@@ -64,7 +65,10 @@ impl Client {
             out: Arc::new(Mutex::new(Box::new(output))),
             open: Arc::new(Mutex::new(Some(HashMap::new()))),
             next: Arc::new(AtomicU64::new(0)),
+            notices: Arc::new(Mutex::new(None)),
         };
+        let (notify, notices) = channel();
+        *client.notices.lock().unwrap() = Some(notices);
         client.send(&ToCore::Hello)?;
         let open = client.open.clone();
         std::thread::spawn(move || {
@@ -95,12 +99,20 @@ impl Client {
                             let _ = inbox.send(Reply::Broken(error.to_string()));
                         })
                     }
+                    Ok(FromCore::Notify(notice)) => {
+                        let _ = notify.send(notice);
+                    }
                     Ok(FromCore::Pong) | Err(_) => {}
                 }
             }
             open.lock().unwrap().take();
         });
         Ok(client)
+    }
+
+    /// The notifications the core asks for, once; they end with the core.
+    pub fn notices(&self) -> Option<Receiver<Notice>> {
+        self.notices.lock().unwrap().take()
     }
 
     fn send(&self, frame: &ToCore) -> io::Result<()> {

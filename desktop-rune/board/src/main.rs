@@ -1,11 +1,14 @@
 //! The spike app: starts Desktop's main process as its core, speaks `DesktopRpcs` to it over
 //! stdio, draws the board `flock` streams, and a pressed card's pane on the `terminal` stream.
 
+use collie_desktop_board::notify::deliver;
 use collie_desktop_board::{Board, run_diff, view};
 use collie_desktop_chat::view::DiffTab;
 use collie_desktop_protocol::client::Client;
 use collie_desktop_protocol::core::Core;
-use collie_desktop_protocol::generated::{AguiEvent, FlockItem};
+use collie_desktop_protocol::generated::{
+    AguiEvent, FlockItem, StagePathsPayload, StagedOrRefusedItem,
+};
 use collie_desktop_terminal::pane::Pane;
 use collie_desktop_terminal::view::Tab;
 use rune::{App, AppHandle, AppSpec};
@@ -94,6 +97,57 @@ fn diffs(handle: &AppHandle<Board>, client: &Client) {
     });
 }
 
+/// Hands the chat's files to `stagePaths`; what it copied in rides on the next turn.
+fn files_in(handle: &AppHandle<Board>, client: &Client) {
+    let (stager, shows) = (client.clone(), handle.clone());
+    handle.update(move |board, _| {
+        // winit 0.30 reports no file drags on Wayland.
+        board.chat.drops_unavailable =
+            cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some();
+        board.chat.stage = Some(Box::new(move |paths| {
+            let (client, shows) = (stager.clone(), shows.clone());
+            let paths = paths
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect();
+            std::thread::spawn(move || {
+                let staged = client.request::<_, Vec<StagedOrRefusedItem>, Value>(
+                    "stagePaths",
+                    StagePathsPayload { paths },
+                );
+                shows.update(move |board, _| match staged {
+                    Ok(staged) => staged.into_iter().for_each(|item| match item {
+                        StagedOrRefusedItem::StagedOrRefusedItem0(file) => {
+                            board.chat.attached.push(file.id)
+                        }
+                        StagedOrRefusedItem::StagedOrRefusedItem1(no) => {
+                            board.chat.transcript.error = Some(no.refused)
+                        }
+                    }),
+                    Err(error) => board.chat.transcript.error = Some(error.to_string()),
+                });
+            });
+        }));
+    });
+}
+
+/// Posts what the main process asks to notify; a click brings the window forward.
+fn notifications(handle: &AppHandle<Board>, client: &Client) {
+    let Some(notices) = client.notices() else {
+        return;
+    };
+    let window = handle.clone();
+    let raise = move |token: Option<String>| match token {
+        Some(token) => window.activate(token),
+        None => window.focus(),
+    };
+    #[cfg(target_os = "linux")]
+    let notifier = collie_desktop_board::notify::freedesktop::Freedesktop::start();
+    #[cfg(not(target_os = "linux"))]
+    let notifier = collie_desktop_board::notify::mac::Mac::start();
+    std::thread::spawn(move || deliver(notices, &notifier, raise));
+}
+
 fn main() {
     let core = Core::start();
     let client = core.client.clone();
@@ -108,6 +162,8 @@ fn main() {
     go_to_panes(&handle, &client);
     chat(&handle, &client);
     diffs(&handle, &client);
+    files_in(&handle, &client);
+    notifications(&handle, &client);
     let (live, first_live) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         for item in client.stream::<_, FlockItem, Value>("flock", ()) {
