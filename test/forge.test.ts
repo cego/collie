@@ -3461,8 +3461,10 @@ describe("GitLab's start of a merge request head's pipeline", () => {
             mrs: [mr("gitlab", { head: MOVED, sourceBranch: "feature" })],
           });
           expect(answer).toMatchObject({ _tag: "Failed" });
-          expect(answer._tag === "Failed" && answer.reason).toContain(MOVED.slice(0, 12));
-          expect(answer._tag === "Failed" && answer.reason).toContain(HEAD.slice(0, 12));
+          expect(answer._tag === "Failed" && answer.reason).toContain(
+            pipe(MOVED, Str.slice(0, 12)),
+          );
+          expect(answer._tag === "Failed" && answer.reason).toContain(pipe(HEAD, Str.slice(0, 12)));
         }
       }),
     ));
