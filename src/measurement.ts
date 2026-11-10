@@ -29,6 +29,7 @@ import { judge, MeasurementRefused } from "./measurement-verdict";
 import {
   BenchmarkPlan,
   decodeBenchmarkPlan,
+  limitsOf,
   MeasurementJson,
   PASS_LABEL,
   type Measurement,
@@ -740,7 +741,7 @@ const taking = Effect.fn("Measurement.taking")(function* (
           base: of("base"),
           candidate: of("candidate"),
         },
-        plan,
+        limitsOf(plan, metric),
       );
     }).pipe(Effect.result);
     return yield* record(

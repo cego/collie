@@ -5,21 +5,27 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
-import { Effect, FileSystem, Path, Schema } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Result, Schema, Stream, flow } from "effect";
+import * as Reactivity from "effect/reactivity/Reactivity";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
   appendLine,
+  DELIVERIES,
   blocked,
   budgetPath,
   causalKey,
+  deliveriesAbout,
+  deliveriesOf,
   herdKey,
   humanSubmits,
-  ledgerPath,
+  incarnationKey,
   newestById,
+  overriddenRuns,
   overrideActive,
   planReservation,
   readBudget,
   readLedger,
+  readLedgerWhole,
   reconcile,
   reserve,
   settle,
@@ -31,13 +37,15 @@ import {
 } from "../src/steering";
 import {
   deliverable,
+  everyRegistered,
   registerAgent,
-  readRegistry,
   verifyIncarnation,
   type AgentEntry,
 } from "../src/registry";
 import type { AgentInfo } from "../src/herdr";
 import { runEffect } from "./support/effect";
+import { recordsAt } from "./support/records";
+import { StoreWrites } from "../src/store-writes";
 import { epochMs } from "../src/time";
 
 let stateDir: string;
@@ -88,6 +96,8 @@ const live = (over: Partial<AgentInfo> = {}): AgentInfo => ({
   ...over,
 });
 
+const scope = { session: null, workspaceId: "w1", cwd: "/project" };
+
 const entry = (over: Partial<AgentEntry> = {}): AgentEntry => ({
   role: "implementer",
   agent: "impl-1",
@@ -103,13 +113,11 @@ const entry = (over: Partial<AgentEntry> = {}): AgentEntry => ({
 test("an entry written before incarnations still decodes, and is never a delivery target", () =>
   runEffect(
     Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const file = path.join(stateDir, "register.json");
       const legacy = entry();
       delete legacy.incarnation;
-      yield* registerAgent(file, legacy);
+      yield* registerAgent(scope, legacy);
 
-      const [back] = yield* readRegistry(file);
+      const [back] = yield* everyRegistered;
       expect(back).toBeDefined();
       expect(deliverable(back!)).toBe(false);
       expect(verifyIncarnation(back!, [live()])).toEqual({ ok: false, reason: "no_incarnation" });
@@ -122,17 +130,15 @@ test("an entry with no incarnation is not an answer either, so a later read can 
       // herdr had not named a `terminal_id` when the agent started. Treating that as the
       // final word would make one listing's gap an unsteerable Run for ever, so the entry
       // is not deliverable and a later read is free to replace it with what herdr has now.
-      const path = yield* Path.Path;
-      const file = path.join(stateDir, "register.json");
       const early = entry();
       delete early.incarnation;
-      yield* registerAgent(file, early);
-      expect(deliverable((yield* readRegistry(file))[0]!)).toBe(false);
+      yield* registerAgent(scope, early);
+      expect(deliverable((yield* everyRegistered)[0]!)).toBe(false);
 
       // Registering the same agent again replaces it rather than adding a second row,
       // which is what makes healing on read a write of one line and not a duplicate.
-      yield* registerAgent(file, entry());
-      const healed = yield* readRegistry(file);
+      yield* registerAgent(scope, entry());
+      const healed = yield* everyRegistered;
       expect(healed).toHaveLength(1);
       expect(deliverable(healed[0]!)).toBe(true);
       expect(verifyIncarnation(healed[0]!, [live()])).toMatchObject({ ok: true });
@@ -164,19 +170,137 @@ test("a recorded harness session must still match, and an unrecorded one is not 
   ).toMatchObject({ ok: true });
 });
 
-test("the ledger round trips, and a torn last line does not cost the rest", () =>
+/** A ledger file as a host of an older build left it. */
+const oldLedger = (incarnation: string, lines: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const dir = `${stateDir}/agents/${incarnationKey(incarnation)}`;
+    yield* fs.makeDirectory(dir, { recursive: true });
+    yield* fs.writeFileString(`${dir}/deliveries.jsonl`, Arr.join(lines, "\n"));
+    return `${dir}/deliveries.jsonl`;
+  });
+
+const encodeLine = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
+
+test("the ledger round trips through the host's database", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* appendLine(delivery());
+      yield* appendLine(delivery({ at: "2026-09-09T10:00:01Z", state: "submitted" }));
+      yield* appendLine(delivery({ id: "d9", incarnation: "term-2" }));
+
+      const lines = yield* readLedger("term-1");
+      expect(lines).toHaveLength(2);
+      expect(newestById(lines).get("d1")?.state).toBe("submitted");
+    }).pipe(Effect.provide(recordsAt(stateDir))),
+  ));
+
+test("what an incarnation's ledger holds about one piece of work is each delivery's newest state", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const other = causalKey("r1", { kind: "correction", ref: "c2" }, 3);
+      yield* appendLine(delivery());
+      yield* appendLine(delivery({ id: "d2", causal_key: other }));
+      yield* appendLine(delivery({ id: "d3", at: "2026-09-09T10:00:01Z" }));
+      yield* appendLine(delivery({ id: "d4", incarnation: "term-2" }));
+      yield* appendLine(delivery({ at: "2026-09-09T10:00:02Z", state: "submitted" }));
+
+      const about = yield* deliveriesAbout("term-1", delivery().causal_key);
+      expect(Arr.map(about, (one) => `${one.id}:${one.state}`)).toEqual([
+        "d1:submitted",
+        "d3:reserved",
+      ]);
+      expect(yield* deliveriesAbout("term-2", other)).toEqual([]);
+    }).pipe(Effect.provide(recordsAt(stateDir))),
+  ));
+
+test("the first host imports each ledger file once, still blocking on a line it cannot read", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const file = yield* ledgerPath(stateDir, "term-1");
-      yield* appendLine(file, delivery());
-      yield* appendLine(file, delivery({ at: "2026-09-09T10:00:01Z", state: "submitted" }));
-      yield* fs.writeFileString(file, `{"id":"d2","at":"2026`, { flag: "a" });
-
-      const lines = yield* readLedger(file);
-      expect(lines).toHaveLength(2);
-      expect(newestById(lines).get("d1")?.state).toBe("submitted");
+      const file = yield* oldLedger("term-1", [
+        encodeLine(delivery()),
+        "{not a line",
+        encodeLine(delivery({ at: "2026-09-09T10:00:01Z", state: "submitted" })),
+        `{"id":"d2","at":"2026`,
+      ]);
+      const read = Effect.gen(function* () {
+        const ledger = yield* readLedgerWhole("term-1");
+        expect(ledger.corrupt).toBe(1);
+        expect(ledger.lines).toHaveLength(2);
+        expect(Arr.map(yield* deliveriesOf("r1"), (one) => [one.id, one.state])).toEqual([
+          ["d1", "submitted"],
+        ]);
+      });
+      yield* read.pipe(Effect.provide(recordsAt(stateDir)));
+      expect(yield* fs.exists(file)).toBe(true);
+      // A second host finds the import made, and does not make it again.
+      yield* read.pipe(Effect.provide(recordsAt(stateDir)));
     }),
+  ));
+
+test("a human's words herdr took are found once, at the first line saying so", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const human = { origin: "desktop" } as const;
+      yield* appendLine(delivery({ id: "d1", human }));
+      yield* appendLine(
+        delivery({ id: "d1", state: "submitted", at: "2026-09-09T10:00:01Z", human }),
+      );
+      yield* appendLine(
+        delivery({ id: "d1", state: "acknowledged", at: "2026-09-09T10:00:02Z", human }),
+      );
+      yield* appendLine(delivery({ id: "d2", state: "submitted" }));
+      yield* appendLine(delivery({ id: "d3", state: "failed", human }));
+      expect(Arr.map(yield* humanSubmits, (one) => [one.id, one.state])).toEqual([
+        ["d1", "submitted"],
+      ]);
+    }).pipe(Effect.provide(recordsAt(stateDir))),
+  ));
+
+test("a Run is under override while an incarnation it was delivered through last said so", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* appendLine(delivery());
+      yield* appendLine(delivery({ id: "d2", run: "r2", incarnation: "term-2" }));
+      const override = { at: "2026-09-09T10:01:00Z", incarnation: "term-1", by: "mk" };
+      yield* appendLine({ kind: "manual_override", ...override });
+      expect([...(yield* overriddenRuns)]).toEqual(["r1"]);
+      yield* appendLine({ kind: "override_cleared", ...override });
+      expect([...(yield* overriddenRuns)]).toEqual([]);
+    }).pipe(Effect.provide(recordsAt(stateDir))),
+  ));
+
+test("a delivery written tells the Run model which Run it moved", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const moved: string[] = [];
+      yield* appendLine(delivery({ run: "r7" })).pipe(
+        Effect.provide(recordsAt(stateDir)),
+        Effect.provideService(StoreWrites, (runs) => moved.push(...runs)),
+      );
+      expect(moved).toEqual(["r7"]);
+    }),
+  ));
+
+test("a delivery written moves whatever follows the ledgers, as the board does", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const reactivity = yield* Reactivity.Reactivity;
+      const following = yield* Deferred.make<void>();
+      const reads = yield* reactivity
+        .stream(
+          [DELIVERIES],
+          Deferred.succeed(following, undefined).pipe(Effect.andThen(Effect.void)),
+        )
+        .pipe(Stream.take(2), Stream.runCount, Effect.forkScoped);
+      yield* Deferred.await(following);
+      yield* appendLine(delivery({ run: "r7" }));
+      expect(yield* Fiber.join(reads).pipe(Effect.timeout("2 seconds"))).toBe(2);
+    }).pipe(Effect.provide(recordsAt(stateDir))),
   ));
 
 test("a reservation nobody settled becomes unknown, not a guess in either direction", () => {
@@ -328,62 +452,10 @@ test("with no socket there is no Herd, and nothing falls back to a directory", (
     }),
   ));
 
-test("the delivery schema is what is on disk, and an unknown state is refused", () =>
+test("the delivery schema is what is imported, and an unknown state is refused", () =>
   runEffect(
     Effect.gen(function* () {
-      const file = yield* ledgerPath(stateDir, "term-1");
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      yield* fs.makeDirectory(path.dirname(file), { recursive: true });
-      yield* fs.writeFileString(
-        file,
-        `${yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({ ...delivery(), state: "sent-ish" }).pipe(Effect.orDie)}\n`,
-      );
-      expect(yield* readLedger(file)).toEqual([]);
-    }),
-  ));
-
-test("a ledger that has not grown since the last scan is not read again; one that grew is", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const file = yield* ledgerPath(stateDir, "term-1");
-      const sent = (id: string) =>
-        delivery({ id, state: "submitted", human: { origin: "desktop" } });
-      yield* appendLine(file, sent("d1"));
-      const scanned = new Map();
-      const ids = Effect.map(
-        humanSubmits(stateDir, scanned),
-        Arr.map((one) => one.id),
-      );
-      expect(yield* ids).toEqual(["d1"]);
-
-      // Same size, different words: only a reread could see "d2".
-      yield* fs.writeFileString(file, Str.replace('"d1"', '"d2"')(yield* fs.readFileString(file)));
-      expect(yield* ids).toEqual(["d1"]);
-
-      yield* appendLine(file, sent("d3"));
-      expect(yield* ids).toEqual(["d2", "d3"]);
-    }),
-  ));
-
-test("a ledger that could not be read is read again on the next scan", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const file = yield* ledgerPath(stateDir, "term-1");
-      yield* appendLine(
-        file,
-        delivery({ id: "d1", state: "submitted", human: { origin: "desktop" } }),
-      );
-      const scanned = new Map();
-      const ids = Effect.map(
-        humanSubmits(stateDir, scanned),
-        Arr.map((one) => one.id),
-      );
-      yield* fs.chmod(file, 0o000);
-      expect(yield* ids).toEqual([]);
-      yield* fs.chmod(file, 0o644);
-      expect(yield* ids).toEqual(["d1"]);
+      yield* oldLedger("term-1", [encodeLine({ ...delivery(), state: "sent-ish" })]);
+      expect(yield* readLedger("term-1").pipe(Effect.provide(recordsAt(stateDir)))).toEqual([]);
     }),
   ));

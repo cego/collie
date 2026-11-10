@@ -20,6 +20,7 @@ import { Effect, FileSystem, Schema } from "effect";
 import { connect } from "../src/host";
 import { readTask } from "../src/task";
 import { events, root, stopHost, until } from "./support/host";
+import { hostRecords } from "./support/records";
 import { proves, save, type World } from "./support/world";
 
 /** The parent, the child, the contract they share, and which house provides it. */
@@ -249,9 +250,10 @@ test(
           expect(child?.parent).toBe(started.runId);
           expect(child?.task).not.toBeNull();
           expect(child?.task).not.toBe("task-9");
-          expect((yield* readTask(world.state, child?.task ?? ""))?.label).toBe(
-            "One project | One",
-          );
+          expect(
+            (yield* hostRecords(world.state, readTask(child?.task ?? "")).pipe(Effect.orDie))
+              ?.label,
+          ).toBe("One project | One");
 
           yield* client
             .answer({ runId: started.runId, decision: "sign-off", value: "ok", request: "a-1" })

@@ -52,7 +52,7 @@ proved. In the Flock chat it is also what the model is shown — an image, a PDF
 a name, size and path — and Desktop keeps a copy, so the conversation still shows it after a
 restart ([ADR-0046](docs/adr/0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md)).
 
-**Output** — A structured JSON file an agent writes to the Run directory for one operation (e.g. a review verdict + findings). It is decoded against the Workflow's schema before anything believes it, and one that does not decode buys one repair. Workflows read Outputs, never terminal text. Collie waits for it against the agent's idle time only: while herdr reports the agent working or blocked, a question it asked is open on the Run, or a `collie verify` it asked for waits while its Machine is **Short of memory**, the budget does not run (ADR-0062). When the budget runs out, the Run is parked and keeps waiting: an Output written later is collected without a resume (ADR-0062, amended 2026-10-19).
+**Output** — A structured JSON file an agent writes to the Run directory for one operation (e.g. a review verdict + findings). It is decoded against the Workflow's schema before anything believes it, and one that does not decode buys one repair. One still unusable after its repair parks the Run at its Step, and a resume reads the file again before giving one more repair. Workflows read Outputs, never terminal text. Collie waits for it against the agent's idle time only: while herdr reports the agent working or blocked, a question it asked is open on the Run, or a `collie verify` it asked for waits while its Machine is **Short of memory**, the budget does not run (ADR-0062). When the budget runs out, the Run is parked and keeps waiting: an Output written later is collected without a resume (ADR-0062, amended 2026-10-19).
 
 **Herd** — One herdr session: every workspace in it. On a Machine whose
 `terminal_backend` is `core`, one herdr-core session instead: every terminal in it. The
@@ -291,7 +291,7 @@ Output. Collie types it after the step's pointer, so a harness reviewing the age
 reads it as the user's request for exactly that. Not a permission rule, which would skip
 that review. Not **Authority**, which is what Collie may do to a Run.
 
-**Dispatcher** — The only code that sends text to an agent. Holds that agent's ledger lock
+**Dispatcher** — The only code that sends text to an agent. Holds that agent's ledger
 across the compaction decision, the composition and the send.
 
 **Incarnation** — An agent as one live process, identified by herdr's own `terminal_id` and
@@ -507,7 +507,7 @@ until it is seen (ADR-draft-a-finished-run-is-seen-once-for-the-flock).
 and lifted by a human.
 
 **Session** — One herdr session and one workspace, taken together. It is the
-scope of a register file of live agents, which holds one entry
+scope of a register of live agents, which holds one entry
 per agent for every Run started there. An agent on core is in no herdr workspace, but
 its entry is kept in the same register, its Incarnation marked as core's. One workspace, always: a mutating Run's checkout
 does not take it out of the Session it was started in.

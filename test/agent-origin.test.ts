@@ -8,8 +8,8 @@ import { machineName } from "../src/peers";
 import { connect } from "../src/host";
 import { readAudit } from "../src/audit";
 import { runDir } from "../src/engine";
-import { deliveriesOf, appendLine } from "../src/steering";
-import { everyRegistered } from "../src/registry";
+import { appendLine } from "../src/steering";
+import { deliveredTo, recordsAt, registeredAt } from "./support/records";
 import { runEffect } from "./support/effect";
 import { stopHost, until } from "./support/host";
 import { type Side, twoMachines } from "./support/peers";
@@ -36,7 +36,7 @@ const attendedAgent = Effect.fn("attendedAgent")(function* (side: Side) {
     (view) => Arr.some(view?.waiting ?? [], (one) => one.answer === null),
   );
   const agent = Option.getOrUndefined(
-    Arr.findFirst(yield* everyRegistered(side.world.state), (entry) => entry.runId === runId),
+    Arr.findFirst(yield* registeredAt(side.world.state), (entry) => entry.runId === runId),
   )!;
   return { runId, agent };
 });
@@ -222,7 +222,7 @@ test(
                 );
                 const entry = Option.getOrUndefined(
                   Arr.findFirst(
-                    yield* everyRegistered(side.world.state),
+                    yield* registeredAt(side.world.state),
                     (one) => one.runId === runId,
                   ),
                 )!;
@@ -306,14 +306,13 @@ test(
                 listedReceipts.envelope.data,
               ).pipe(Effect.orDie)).deliveries;
               expect(Arr.map(rows, (one) => one.id)).toEqual(
-                Arr.map(
-                  yield* deliveriesOf(second.world.state, there.runId),
-                  (one) => one.delivery.id,
-                ),
+                Arr.map(yield* deliveredTo(second.world.state, there.runId), (one) => one.id),
               );
-              const source = (yield* deliveriesOf(second.world.state, there.runId)).at(-1)!;
+              const source = (yield* deliveredTo(second.world.state, there.runId)).at(-1)!;
               const id = `unknown-${prefix.length}`;
-              yield* appendLine(source.file, { ...source.delivery, id, state: "unknown" });
+              yield* appendLine({ ...source, id, state: "unknown" }).pipe(
+                Effect.provide(recordsAt(second.world.state)),
+              );
               const settled = yield* first.cli([
                 ...prefix,
                 "run",
@@ -328,10 +327,10 @@ test(
               expect(
                 Option.getOrUndefined(
                   Arr.findFirst(
-                    yield* deliveriesOf(second.world.state, there.runId),
-                    (one) => one.delivery.id === id,
+                    yield* deliveredTo(second.world.state, there.runId),
+                    (one) => one.id === id,
                   ),
-                )?.delivery.note,
+                )?.note,
               ).toContain("reconciled as sent");
             }
             const listed = yield* first.cli(["run", "list"]);

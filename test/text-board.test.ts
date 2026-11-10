@@ -12,6 +12,7 @@ import { currentEnv } from "../src/env";
 import { workspaceFlow } from "../src/flows";
 import { Herdr } from "../src/herdr";
 import { connect } from "../src/host";
+import { PRUNE_FILE } from "../src/worktree";
 import { until } from "./support/host";
 import { proves } from "./support/world";
 
@@ -107,16 +108,15 @@ test(
           const env = yield* currentEnv.pipe(Effect.orDie);
           const stdin = yield* terminalStdin;
           const written = yield* capturedStdout;
-          // One registry file, so every rebuild of the board asks whether it is there.
-          yield* fs.makeDirectory(`${world.state}/agents`, { recursive: true });
-          yield* fs.writeFileString(`${world.state}/agents/stray.json`, "[]\n");
+          // Every rebuild of the board reads the reported worktrees.
+          const reported = `${world.state}/${PRUNE_FILE}`;
           let failing = false;
           const failingFs: FileSystem.FileSystem = {
             ...fs,
-            exists: (path) =>
-              failing && pipe_(path, Str.startsWith(`${world.state}/agents/`))
-                ? Effect.die(new Error("the registry went away"))
-                : fs.exists(path),
+            readFileString: (path, encoding) =>
+              failing && path === reported
+                ? Effect.die(new Error("the reported worktrees went away"))
+                : fs.readFileString(path, encoding),
           };
 
           const board = yield* Effect.forkChild(

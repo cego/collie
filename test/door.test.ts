@@ -17,7 +17,7 @@ import { frontDoor } from "../src/host";
 import type { RunFacts } from "../src/runs";
 import { encodeStepLine, STEPS_FILE, type StepLine } from "../src/steps";
 import { runEffect } from "./support/effect";
-import { madeRun } from "./support/records";
+import { madeRun, recordsAt } from "./support/records";
 
 const identity = { build: "test", pid: 1, dir: "/state", protocol: 1, installation: "i" };
 
@@ -29,6 +29,8 @@ const silentEngine = (
   offers: ReadonlyArray<readonly [string, ReadonlyArray<OfferView>]> = [],
 ) =>
   Effect.gen(function* () {
+    // The engine lists its Runs only once it has migrated `host.db`.
+    yield* Layer.build(recordsAt(dir));
     const heard: Array<FromDoor> = [];
     const listening = yield* Deferred.make<void>();
     let tell: (message: ToDoor) => void = () => {};

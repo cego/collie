@@ -42,11 +42,12 @@ import { editState } from "./support/fake-herdr-core";
 import { followDetail } from "../src/run-detail";
 import { foundationLayer } from "../src/engine";
 import { Store } from "../src/store";
-import { readTask, writeTask } from "../src/task";
+import { writeTask } from "../src/task";
 import { TestClock } from "effect/testing";
 import { fastForward, runEffect } from "./support/effect";
 import { stopHost, until } from "./support/host";
 import { task } from "./support/task";
+import { recordsAt } from "./support/records";
 import { collie, proves } from "./support/world";
 
 const asSessions = Schemaflow(
@@ -75,13 +76,13 @@ test(
       (world) =>
         Effect.gen(function* () {
           // A specific title keeps startup's generic-task renamer out of this fixture.
-          yield* writeTask(world.state, {
+          yield* writeTask({
             id: "task-1",
             workspace: "w1",
             label: "project | Stream changes",
             cwd: world.project,
             created_at: "2026-10-01T09:00:00Z",
-          }).pipe(Effect.orDie);
+          }).pipe(Effect.provide(recordsAt(world.state)), Effect.orDie);
           const started = yield* collie(world, [
             "run",
             "start",
@@ -93,22 +94,23 @@ test(
           ]);
           expect(started.envelope.ok).toBe(true);
 
-          const renamed = (message: BoardMessage) =>
-            message._tag === "Upsert" && message.task.name === "Renamed";
+          const disposed = (kind: string) => (message: BoardMessage) =>
+            message._tag === "Upsert" && message.task.disposition === kind;
+          const merged = disposed("merged");
           const door = yield* frontDoor(socketOf(world.state)).pipe(Effect.orDie);
           const opened = yield* Deferred.make<BoardSnapshot>();
           const reading = yield* door.board().pipe(
             Stream.tap((message) =>
               message._tag === "Snapshot" ? Deferred.succeed(opened, message) : Effect.void,
             ),
-            Stream.takeUntil(renamed),
+            Stream.takeUntil(merged),
             Stream.runCollect,
             Effect.forkScoped,
           );
           // A second subscriber rides the same change stream and is told too.
           const alongside = yield* (yield* frontDoor(socketOf(world.state)).pipe(Effect.orDie))
             .board()
-            .pipe(Stream.filter(renamed), Stream.runHead, Effect.forkScoped);
+            .pipe(Stream.filter(merged), Stream.runHead, Effect.forkScoped);
           const snapshot = yield* Deferred.await(opened);
           expect(snapshot.protocol).toBe(PROTOCOL);
           expect(snapshot.build).toBe(BUILD);
@@ -123,10 +125,6 @@ test(
             by: "human",
             note: null,
           }).pipe(Effect.orDie);
-          const record = yield* readTask(world.state, "task-1").pipe(Effect.orDie);
-          yield* writeTask(world.state, { ...record!, label: "project | Renamed" }).pipe(
-            Effect.orDie,
-          );
 
           const messages = yield* Fiber.join(reading).pipe(Effect.timeout("20 seconds"));
           expect((yield* Fiber.join(alongside).pipe(Effect.timeout("20 seconds")))._tag).toBe(
@@ -144,7 +142,6 @@ test(
           const again = yield* firstSnapshot(world.state);
           expect(again?._tag).toBe("Snapshot");
           expect(again?.tasks[0]?.disposition).toBe("merged");
-          expect(again?.tasks[0]?.name).toBe("Renamed");
 
           // The CLI prints that same snapshot.
           const printed = yield* collie(world, ["board"]);
@@ -156,19 +153,22 @@ test(
           );
 
           // Every subscriber has left; one that reconnects is still told what changes.
-          const retitled = (message: BoardMessage) =>
-            message._tag === "Upsert" && message.task.name === "Retitled";
+          const abandoned = disposed("abandoned");
           const back = yield* (yield* frontDoor(socketOf(world.state)).pipe(Effect.orDie))
             .board()
             .pipe(
               Stream.tap((message) =>
                 message._tag === "Snapshot"
-                  ? writeTask(world.state, { ...record!, label: "project | Retitled" }).pipe(
-                      Effect.orDie,
-                    )
+                  ? recordDisposition(`${world.state}/runs/${runId}`, {
+                      kind: "abandoned",
+                      ref: "",
+                      at: "2026-10-01T13:00:00Z",
+                      by: "human",
+                      note: null,
+                    }).pipe(Effect.orDie)
                   : Effect.void,
               ),
-              Stream.filter(retitled),
+              Stream.filter(abandoned),
               Stream.runHead,
               Effect.forkScoped,
             );
@@ -225,13 +225,13 @@ const readsOnlyOnTicks = (drawer: boolean) =>
     "collie-board-reading-",
     (world) =>
       Effect.gen(function* () {
-        yield* writeTask(world.state, {
+        yield* writeTask({
           id: "task-1",
           workspace: "w1",
           label: "project | Plain",
           cwd: world.project,
           created_at: "2026-10-01T09:00:00Z",
-        }).pipe(Effect.orDie);
+        }).pipe(Effect.provide(recordsAt(world.state)), Effect.orDie);
         const started = yield* collie(world, [
           "run",
           "start",
@@ -249,7 +249,6 @@ const readsOnlyOnTicks = (drawer: boolean) =>
           () => firstSnapshot(world.state),
           (snapshot) => snapshot?.tasks[0]?.state === "done",
         );
-        const record = (yield* readTask(world.state, "task-1").pipe(Effect.orDie))!;
         const door = yield* frontDoor(socketOf(world.state)).pipe(Effect.orDie);
         if (drawer) {
           const opened = yield* Deferred.make<void>();
@@ -271,19 +270,30 @@ const readsOnlyOnTicks = (drawer: boolean) =>
         ).pipe(Effect.orDie);
         const before = yield* lists;
         const since = yield* Clock.currentTimeMillis;
-        for (const name of ["One", "Two", "Three", "Four", "Five", "Six"]) {
+        for (const kind of [
+          "merged",
+          "abandoned",
+          "merged",
+          "abandoned",
+          "merged",
+          "abandoned",
+        ] as const) {
           const shown = yield* door.board().pipe(
             Stream.filter((message) =>
               message._tag === "Snapshot"
-                ? Arr.some(message.tasks, (one) => one.name === name)
-                : message._tag === "Upsert" && message.task.name === name,
+                ? Arr.some(message.tasks, (one) => one.disposition === kind)
+                : message._tag === "Upsert" && message.task.disposition === kind,
             ),
             Stream.runHead,
             Effect.forkScoped,
           );
-          yield* writeTask(world.state, { ...record, label: `project | ${name}` }).pipe(
-            Effect.orDie,
-          );
+          yield* recordDisposition(`${world.state}/runs/${runId}`, {
+            kind,
+            ref: "",
+            at: "2026-10-01T12:00:00Z",
+            by: "human",
+            note: null,
+          }).pipe(Effect.orDie);
           expect((yield* Fiber.join(shown).pipe(Effect.timeout("20 seconds")))._tag).toBe("Some");
         }
         const ticks = Math.ceil(((yield* Clock.currentTimeMillis) - since) / 5000);

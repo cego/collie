@@ -4,6 +4,7 @@
 // is asserted is what a human could see: whether its checkout stops changing, what the
 // stop says, what it was sent, and whether anything started beside it.
 
+import { recordsAt } from "./support/records";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -920,7 +921,7 @@ test("the sweep keeps an unlisted agent's record while its server is not Quiet, 
       expect(yield* recorded()).toBeNull();
       // Told to the Run that launched it, with the turn it stopped.
       expect(yield* agentsLog()).toContain(`${agent}: quiet — thread ${THREAD} turn ${TURN}`);
-    }),
+    }).pipe(Effect.provide(recordsAt(`${rig.root}/state`))),
   ));
 
 test("a sweep stops again a record whose earlier stop failed before it signalled anything", () =>
@@ -962,7 +963,7 @@ test("a sweep stops again a record whose earlier stop failed before it signalled
         `${rig.root}/state/compaction/${agent}`,
       ]);
       expect(alive(pid)).toBe(false);
-    }),
+    }).pipe(Effect.provide(recordsAt(`${rig.root}/state`))),
   ));
 
 test("a launch beside an unlisted agent whose server is not Quiet keeps that record, and goes on", () =>

@@ -166,7 +166,6 @@ import { ownCodexReading } from "./usage";
 import {
   lineageAgent,
   registerAgent,
-  registryPath,
   scopeFor,
   verifyIncarnation,
   type AgentEntry,
@@ -182,6 +181,7 @@ import {
   Template,
   WorkflowError,
   panelOf,
+  stepFailed,
   type AskedQuestion,
   type DecisionSpec,
   type HostApi,
@@ -202,7 +202,8 @@ import { isString, type JsonObject } from "./schema";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
 import { Collecting, collectingLayer, type CollectingApi } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
-import { causalKey, deliveriesOf, SENT_STATES, toldLine } from "./steering";
+import { causalKey, deliveriesAbout, deliveriesOf, SENT_STATES, toldLine } from "./steering";
+import type { Records } from "./records";
 import { readTask, withTaskLock, writeTask } from "./task";
 import { malformedIn, mentionedSkills, renderTemplate, skillMention, skillsIn } from "./template";
 import {
@@ -462,7 +463,14 @@ export interface AgentsApi {
     launched: Launched,
     problem: string,
     unusable: string,
+    /** Which repair of this Output; each is a delivery of its own. */
+    round?: number,
   ) => Effect.Effect<boolean, AgentUncertain | AgentParked>;
+  /**
+   * The Output as its file holds it now, where this park of it is being resumed; null where
+   * it is parking for the first time, which marks it parked.
+   */
+  readonly resumedOutput: (launched: Launched, round: number) => Effect.Effect<string | null>;
   /**
    * Says something of a human's to the agent this run has. The request is the claim on
    * the delivery: the same one twice is one message, which is what the ledger refuses a
@@ -653,8 +661,8 @@ const untilPushable = (operation: string, cwd: string) =>
  * Launch and collection are separate Activities on purpose: replaying a collection must
  * never start a second agent, and only a recorded launch makes that true. The repair is a
  * third, which is what stops a restart from handing out another one — a workflow that
- * comes back to an Output it has already had repaired finds the repair recorded and is
- * left with the failure, not with a fresh allowance.
+ * comes back to an Output it has already had repaired finds the repair recorded, not a
+ * fresh allowance. Only a resume of the park that follows gives one more.
  */
 export const agentWork = <
   Output extends OutputContract = typeof Schema.String,
@@ -1026,52 +1034,26 @@ export const agentWork = <
     }
     const first = isRanOut(collected) ? null : collected;
     if (first === null) {
-      return yield* unusable(current, `wrote nothing to ${output}`);
+      return yield* new WorkflowError({
+        reason: `${current.agent} wrote nothing to ${output}`,
+      });
     }
     const read = decodeOutput(work.output, first, plain);
     if (read.ok) return yield* carded(read.value);
 
-    // The repair is its own Activity, so what a restart finds is a repair that happened
+    // Each repair is its own Activity, so what a restart finds is a repair that happened
     // rather than an allowance that has come back.
-    const asked = yield* Activity.make({
-      name: `${work.operation}.repair`,
-      success: Schema.Boolean,
-      error: AgentUncertain,
-      execute: stoppable(
-        parkedWhenStuck(
-          reviving(currentAsk, first).pipe(
-            Effect.andThen(agents.repair(current, read.problem, first)),
-          ),
-          host,
-          work.runId,
-        ),
-        host,
-        work.runId,
-        agents.pollMs,
-      ),
-    });
-    const again = !asked
-      ? null
-      : yield* Activity.make({
-          name: `${work.operation}.recollect`,
-          success: Schema.NullOr(Schema.String),
+    const repairing = (round: number, unusable: string, problem: string) =>
+      Effect.gen(function* () {
+        const suffix = round === 1 ? "" : `-${round}`;
+        const asked = yield* Activity.make({
+          name: `${work.operation}.repair${suffix}`,
+          success: Schema.Boolean,
           error: AgentUncertain,
           execute: stoppable(
-            // Null here is also the same unusable Output written again, which a repair
-            // has had its one chance at, so it ends the work rather than parking it.
             parkedWhenStuck(
-              reviving(currentAsk, first).pipe(
-                Effect.andThen(
-                  watching(
-                    agents.collect(
-                      current,
-                      first,
-                      questions,
-                      undefined,
-                      (text) => decodeOutput(work.output, text, plain).ok,
-                    ),
-                  ),
-                ),
+              reviving(currentAsk, unusable).pipe(
+                Effect.andThen(agents.repair(current, problem, unusable, round)),
               ),
               host,
               work.runId,
@@ -1081,12 +1063,61 @@ export const agentWork = <
             agents.pollMs,
           ),
         });
-    if (again === null) {
-      return yield* unusable(current, `did not write ${output} again: ${read.problem}`);
+        const again = !asked
+          ? null
+          : yield* Activity.make({
+              name: `${work.operation}.recollect${suffix}`,
+              success: Schema.NullOr(Schema.String),
+              error: AgentUncertain,
+              execute: stoppable(
+                parkedWhenStuck(
+                  reviving(currentAsk, unusable).pipe(
+                    Effect.andThen(
+                      watching(
+                        agents.collect(
+                          current,
+                          unusable,
+                          questions,
+                          undefined,
+                          (text) => decodeOutput(work.output, text, plain).ok,
+                        ),
+                      ),
+                    ),
+                  ),
+                  host,
+                  work.runId,
+                ),
+                host,
+                work.runId,
+                agents.pollMs,
+              ),
+            });
+        if (again === null)
+          return { ok: false as const, problem: `did not write ${output} again: ${problem}` };
+        const repaired = decodeOutput(work.output, again, plain);
+        return repaired.ok
+          ? repaired
+          : { ok: false as const, problem: `${output} is still unusable: ${repaired.problem}` };
+      });
+    // Unusable after its repair parks the Step (ADR-draft-a-fixable-failure-parks-its-step D2).
+    let repaired = yield* repairing(1, first, read.problem);
+    for (let round = 1; !repaired.ok; round++) {
+      const why = `${current.agent} ${repaired.problem}. Correct it, then resume ${runId}.`;
+      const now = yield* Activity.make({
+        name: `${work.operation}.parked-${round}`,
+        success: Schema.String,
+        execute: Effect.gen(function* () {
+          const resumed = yield* agents.resumedOutput(current, round);
+          if (resumed !== null) return resumed;
+          yield* stepFailed(why);
+          yield* host.parked(runId, why);
+          return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
+        }),
+      });
+      const reread = decodeOutput(work.output, now, plain);
+      repaired = reread.ok ? reread : yield* repairing(round + 1, now, reread.problem);
     }
-    const repaired = decodeOutput(work.output, again, plain);
-    if (repaired.ok) return yield* carded(repaired.value);
-    return yield* unusable(current, `${output} is still unusable: ${repaired.problem}`);
+    return yield* carded(repaired.value);
   }).pipe(
     Effect.catchTag("AgentUncertain", (cause) =>
       Effect.fail(
@@ -1241,9 +1272,6 @@ const untilStopped = (host: HostApi, runId: string, pollMs: number) =>
       Effect.asVoid,
       Effect.orDie,
     );
-
-const unusable = (launched: Launched, what: string) =>
-  Effect.fail(new WorkflowError({ reason: `output-unusable: ${launched.agent} ${what}` }));
 
 /** What an Output decoded to, or every reason it could not be used. */
 type Read<T> =
@@ -1439,7 +1467,7 @@ export interface AgentHost {
   readonly self?: ReadonlyArray<string>;
 }
 
-type AgentServices = FileSystem.FileSystem | Path.Path | PlatformServices | ForgeHttp;
+type AgentServices = FileSystem.FileSystem | Path.Path | PlatformServices | ForgeHttp | Records;
 
 const DEFAULT_POLL_MS = 2000;
 const READING_EVERY_MS = 60_000;
@@ -1801,12 +1829,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   const taskWorkspace = Effect.fn("Agents.taskWorkspace")(function* (ask: AgentAsk) {
     const id = ask.task;
     if (id === null) return null;
-    const stateDir = host.env.stateDir;
     return yield* withTaskLock(
-      stateDir,
       id,
       Effect.gen(function* () {
-        const task = yield* readTask(stateDir, id);
+        const task = yield* readTask(id);
         if (task === null) return null;
         const open = yield* host.herdr.workspaceList();
         if (Arr.some(open, (one) => one.workspaceId === task.workspace)) return task.workspace;
@@ -1821,7 +1847,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           cwd: ask.cwd,
           label: task.label,
         });
-        yield* writeTask(stateDir, {
+        yield* writeTask({
           ...task,
           workspace: reopened.workspaceId,
           root_pane: reopened.rootTab?.paneId ?? null,
@@ -1843,15 +1869,13 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   const rootPane = Effect.fn("Agents.rootPane")(function* (ask: AgentAsk) {
     const id = ask.task;
     if (id === null) return null;
-    const stateDir = host.env.stateDir;
     const taken = yield* withTaskLock(
-      stateDir,
       id,
       Effect.gen(function* () {
-        const task = yield* readTask(stateDir, id);
+        const task = yield* readTask(id);
         const pane = task?.root_pane ?? null;
         if (task === null || pane === null) return null;
-        yield* writeTask(stateDir, { ...task, root_pane: null });
+        yield* writeTask({ ...task, root_pane: null });
         return pane;
       }),
     );
@@ -2264,11 +2288,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           );
           const found = yield* entryFor(ask, agent, { paneId: terminal, workspaceId: null });
           if (found.entry === null) return undefined;
-          yield* registerAgent(
-            yield* registryPath(host.env.stateDir, scopeFor(host.env, ask.cwd)),
-            found.entry,
-            alive,
-          );
+          yield* registerAgent(scopeFor(host.env, ask.cwd), found.entry, alive);
           return found.entry.incarnation;
         }
         const workspace = ask.workspace ?? (yield* taskWorkspace(ask));
@@ -2317,11 +2337,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           workspaceId: workspace,
         });
         if (found.entry === null) return undefined;
-        yield* registerAgent(
-          yield* registryPath(host.env.stateDir, scopeFor(host.env, ask.cwd)),
-          found.entry,
-          alive,
-        );
+        yield* registerAgent(scopeFor(host.env, ask.cwd), found.entry, alive);
         return found.entry.incarnation;
       }),
     );
@@ -2596,12 +2612,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       const kind = unless === null ? "step" : "repair";
       const key = causalKey(launched.runId, { kind, ref: stemOf(launched) }, 0);
       // Only this agent's own ledger: another incarnation's is listed in no time order.
-      const last = Arr.filter(
-        yield* deliveriesOf(host.env.stateDir, launched.runId),
-        ({ delivery }) =>
-          delivery.causal_key === key &&
-          delivery.incarnation === found.entry?.incarnation?.terminalId,
-      ).at(-1)?.delivery;
+      const incarnation = found.entry.incarnation?.terminalId;
+      const last =
+        incarnation === undefined ? undefined : (yield* deliveriesAbout(incarnation, key)).at(-1);
       // Settled as not sent, or refused by herdr on the last resend: not delivered either way.
       const resend =
         Option.getOrUndefined(
@@ -2929,7 +2942,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       ),
     );
 
-  const repair = (launched: Launched, problem: string, unusable: string) =>
+  const repair = (launched: Launched, problem: string, unusable: string, round = 1) =>
     under(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -2941,7 +2954,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         yield* write(file, text);
         const sent = yield* deliver(launched, text, {
           kind: "repair",
-          ref: stemOf(launched),
+          ref: round === 1 ? stemOf(launched) : `${stemOf(launched)}.${round}`,
         });
         yield* log(
           launched.runId,
@@ -3225,18 +3238,17 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       Effect.gen(function* () {
         const alive = yield* host.herdr.agentList();
         const others = Arr.filter(options.lineage, (runId) => runId !== options.runId);
-        const entry = yield* lineageAgent(host.env.stateDir, alive, options.role, others);
+        const entry = yield* lineageAgent(alive, options.role, others);
         // Without a proven incarnation the entry names a pane, not the agent now in it.
         if (entry === null) return null;
         if (!verifyIncarnation(entry, alive).ok) return null;
         const handed = { agent: entry.agent, delivered: true, detail: "" };
         const earlier = Arr.filter(
-          yield* deliveriesOf(host.env.stateDir, entry.runId),
-          ({ delivery }) =>
-            delivery.cause.kind === "handoff" && delivery.cause.ref === options.runId,
+          yield* deliveriesOf(entry.runId),
+          (delivery) => delivery.cause.kind === "handoff" && delivery.cause.ref === options.runId,
         );
         if (
-          Arr.some(earlier, ({ delivery }) =>
+          Arr.some(earlier, (delivery) =>
             Boolean(
               Option.getOrUndefined(
                 Option.map(Option.fromNullishOr(delivery.note), (present____) =>
@@ -3530,13 +3542,13 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             };
           const previous = Option.getOrUndefined(
             Arr.findFirst(
-              yield* deliveriesOf(host.env.stateDir, options.runId),
+              yield* deliveriesOf(options.runId),
               (one) =>
-                one.delivery.cause.kind === "steer" &&
-                one.delivery.cause.ref === options.request &&
-                !Arr.contains(["failed", "superseded"], one.delivery.state),
+                one.cause.kind === "steer" &&
+                one.cause.ref === options.request &&
+                !Arr.contains(["failed", "superseded"], one.state),
             ),
-          )?.delivery;
+          );
           if (previous !== undefined) {
             const result = SENT_STATES.has(previous.state)
               ? receipt(previous.agent, {
@@ -3613,7 +3625,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       under(
         Effect.gen(function* () {
           const alive = yield* host.herdr.agentList();
-          const entry = yield* lineageAgent(host.env.stateDir, alive, role, lineage);
+          const entry = yield* lineageAgent(alive, role, lineage);
           // A register entry with no incarnation names a pane, and whatever is in that
           // pane now is not the agent it was written about.
           return askRouteTo(entry !== null && verifyIncarnation(entry, alive).ok ? entry : null);
@@ -3717,6 +3729,17 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     collectedDuring: (launched, waiting) =>
       collecting.during(launched.runId, launched.agent, waiting),
     repair,
+    resumedOutput: (launched, round) =>
+      under(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const marker = `${dirFor(launched.runId)}/${stemOf(launched)}.parked-${round}`;
+          if (yield* fs.exists(marker))
+            return yield* fs.readFileString(launched.output).pipe(Effect.orElseSucceed(() => ""));
+          yield* fs.writeFileString(marker, "");
+          return null;
+        }),
+      ).pipe(Effect.orDie),
     steer,
     tendQuestions,
     statusOf: (agent) =>

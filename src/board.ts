@@ -20,7 +20,7 @@ import { readSeen, seenSince } from "./seen";
 import { runTitle } from "./naming";
 import { planIssuesIn, planReposOf } from "./plan";
 import { diffTargetOf } from "./strategies";
-import { everyJournal, pendingFor, type ProposalLine } from "./proposals";
+import { everyProposal, pendingFor, type ProposalLine } from "./proposals";
 import { everyRegistered, type AgentEntry } from "./registry";
 import { listRuns, newestFirst, settled as ended, type RunFacts, type RunState } from "./runs";
 import type { PluginEnv } from "./env";
@@ -59,7 +59,7 @@ import { laneWaitOf, stripOf } from "./flow";
 import { Foreground } from "./foreground";
 import { flowInputsFor, taskFlowFor } from "./flow-read";
 import { machineName } from "./peers";
-import { everyDelivery, SENT_STATES, toldIn, type Delivery } from "./steering";
+import { deliveriesOf, SENT_STATES, toldIn } from "./steering";
 import { readCards } from "./cards";
 import { owedLocally } from "./check-proof";
 import {
@@ -151,18 +151,13 @@ const toldBy = Effect.fn("Board.toldBy")(function* (
 const reopenedOf = Effect.fn("Board.reopenedOf")(function* (
   stateDir: string,
   run: RunFacts,
-  deliveries: Effect.Effect<ReadonlyArray<Delivery>, never, FileSystem.FileSystem | Path.Path>,
   live: ReadonlyMap<string, AgentInfo>,
 ) {
   const ended = yield* finishedAt(run);
   if (ended === null) return null;
   const steer = Arr.filter(
-    yield* deliveries,
-    (one) =>
-      one.run === run.id &&
-      one.cause.kind === "steer" &&
-      SENT_STATES.has(one.state) &&
-      epochMs(one.at) > ended,
+    yield* deliveriesOf(run.id),
+    (one) => one.cause.kind === "steer" && SENT_STATES.has(one.state) && epochMs(one.at) > ended,
   )
     .sort((a, b) => pipe(a.at, Str.localeCompare(b.at)))
     .at(-1);
@@ -694,6 +689,21 @@ function basename(path: string): string {
   return Str.split(pipe(path, Str.replace(/\/+$/, "")), "/").at(-1) ?? path;
 }
 
+/** Each Run's registered agents, grouped once for every card a build asks about. */
+const groupedRegistered = new WeakMap<ReadonlyArray<AgentEntry>, Map<string, AgentEntry[]>>();
+const registeredByRun = (registered: ReadonlyArray<AgentEntry>) => {
+  const kept = groupedRegistered.get(registered);
+  if (kept !== undefined) return kept;
+  const byRun = new Map<string, AgentEntry[]>();
+  for (const entry of registered) {
+    const known = byRun.get(entry.runId);
+    if (known === undefined) byRun.set(entry.runId, [entry]);
+    else known.push(entry);
+  }
+  groupedRegistered.set(registered, byRun);
+  return byRun;
+};
+
 /**
  * The Task's agents herdr still has. One entry per live agent, however many Runs it
  * worked for: a card counts agents, not the work they took.
@@ -703,10 +713,11 @@ function agentsOf(
   registered: ReadonlyArray<AgentEntry>,
   live: ReadonlyMap<string, AgentInfo>,
 ): BoardAgent[] {
+  const byRun = registeredByRun(registered);
   const found = new Map<string, BoardAgent>();
   for (const run of runs) {
-    for (const entry of registered) {
-      const agent = entry.runId === run.id ? live.get(entry.agent) : undefined;
+    for (const entry of byRun.get(run.id) ?? []) {
+      const agent = live.get(entry.agent);
       if (agent === undefined || found.has(agent.name)) continue;
       found.set(agent.name, {
         name: agent.name,
@@ -940,10 +951,6 @@ function asProposal(line: Extract<ProposalLine, { kind: "proposal" }>): Proposal
 }
 
 /** Every Herd's proposals: the host serves every Herd on its Machine, not the one it came from. */
-const proposalsOf = (stateDir: string) =>
-  everyJournal(stateDir).pipe(
-    Effect.map((journals) => Arr.flatMap(journals, ({ lines }) => lines)),
-  );
 
 /** How many Tasks a build reads at once. */
 const READS_AT_ONCE = 8;
@@ -1011,8 +1018,6 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   mrStates?: ReadonlyMap<string, MrState>;
   /** What the forge last said about each merge request's checks, by its label. */
   forge?: ReadonlyMap<string, ForgeFacts>;
-  /** Every steer and step Delivery the ledgers hold; read from them where not given. */
-  deliveries?: ReadonlyArray<Delivery>;
   /** What a Run offers now; the host is asked where this is not given. */
   offers?: (runId: string) => Effect.Effect<ReadonlyArray<OfferView>>;
   /** Only the Task this Run belongs to, however long ago it finished. */
@@ -1030,11 +1035,9 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   const now = opts.now ?? wall;
   const quietMs = opts.quietMs ?? DEFAULT_QUIET_MS;
   const all = newestFirst(opts.runs ?? (yield* listRuns(opts.env)));
-  const tasks = new Map(
-    Arr.map(opts.tasks ?? (yield* listTasks(stateDir)), (task) => [task.id, task]),
-  );
-  const registered = opts.registered ?? (yield* everyRegistered(stateDir));
-  const proposals = opts.proposals ?? (yield* proposalsOf(stateDir));
+  const tasks = new Map(Arr.map(opts.tasks ?? (yield* listTasks), (task) => [task.id, task]));
+  const registered = opts.registered ?? (yield* everyRegistered);
+  const proposals = opts.proposals ?? (yield* everyProposal);
   const mrStates = opts.mrStates ?? (yield* readMrStates(stateDir));
   const forge = opts.forge ?? (yield* readForge(stateDir));
   const since = yield* seenSince(stateDir);
@@ -1047,11 +1050,6 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
     keptCards && { revision: (run) => keptCards.revision([run]), markers: keptCards.markers },
   );
   const checked = new Set(Arr.map(records, (record) => record.run));
-  // Every agent's ledger, read only once a card has a finished Run to look for a steer to.
-  const deliveries =
-    opts.deliveries === undefined
-      ? yield* Effect.cached(everyDelivery(stateDir))
-      : Effect.succeed(opts.deliveries);
   const offersOfRun =
     opts.offers ??
     ((runId: string) =>
@@ -1236,9 +1234,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         // Decision outranks it, because answering is still what moves the work.
         const abandoned =
           decision === null && going && leader.undriven && !Arr.some(agents, ownsAgent);
-        const reopened = ended(leader)
-          ? yield* reopenedOf(stateDir, leader, deliveries, live)
-          : null;
+        const reopened = ended(leader) ? yield* reopenedOf(stateDir, leader, live) : null;
         const toldNow = reopened ?? (going ? yield* supersedingOf(stateDir, leader, live) : null);
         // A Reopened Run is the work its agent is doing now, while it does it; then its facts.
         const state = abandoned

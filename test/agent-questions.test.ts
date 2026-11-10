@@ -2,6 +2,7 @@
 // answered the way a Workflow's question is: from `collie run answer` and from the card,
 // in any words. The host here is a real one over a fake herdr.
 
+import { recordsAt } from "./support/records";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -186,7 +187,7 @@ test(
             (one) => one !== null && isSettled(one),
           );
           expect(view?.status.status).toBe("complete");
-        }).pipe(Effect.ensuring(stopHost(world.state))),
+        }).pipe(Effect.provide(recordsAt(world.state)), Effect.ensuring(stopHost(world.state))),
       ["told.workflow.ts"],
     ),
   120_000,
@@ -251,7 +252,7 @@ test(
               fs.readFileString(Bun.env.FAKE_HERDR_LOG ?? "").pipe(Effect.orElseSucceed(() => "")),
             (all) => pipe_(all, Str.includes("Your question Region is answered: eu-west")),
           );
-        }).pipe(Effect.ensuring(stopHost(world.state))),
+        }).pipe(Effect.provide(recordsAt(world.state)), Effect.ensuring(stopHost(world.state))),
       ["told.workflow.ts"],
     ),
   120_000,

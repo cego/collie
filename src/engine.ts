@@ -190,7 +190,8 @@ import {
   type Watched,
 } from "./oversight";
 import { evaluationDeps } from "./evaluator";
-import { budgetPath, herdOf, humanSubmits, machineHerd, type LedgerScan } from "./steering";
+import { budgetPath, herdOf, humanSubmits, machineHerd } from "./steering";
+import { recordsLayer, type Records } from "./records";
 import { Steered } from "./delivery-queue";
 import type { JudgementDeps } from "./drift";
 import { finishedOnRecord, type Card } from "./cards";
@@ -518,7 +519,20 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     /** Each sample runs every one, in order, in the tree's root, with no shell between. */
     readonly commands: Schema.NonEmptyArray<Schema.Struct<{ readonly name: Schema.String; readonly executable: Schema.String; readonly argv: Schema.$Array<Schema.String> }>>;
     /** \`<command>.wall_ms\`, \`<command>.cpu_ms\`, \`<command>.peak_kb\`, which the host reads, or \`<command>.<key>\` of its last stdout line's JSON. */
-    readonly metrics: Schema.NonEmptyArray<Schema.Struct<{ readonly name: Schema.String; readonly direction: Schema.Literals<readonly ["lower", "higher"]>; readonly role: Schema.Literals<readonly ["primary", "guardrail"]> }>>;
+    readonly metrics: Schema.NonEmptyArray<Schema.Struct<{
+      readonly name: Schema.String;
+      readonly direction: Schema.Literals<readonly ["lower", "higher"]>;
+      readonly role: Schema.Literals<readonly ["primary", "guardrail"]>;
+      /** The plan's own, for this metric alone. */
+      readonly threshold: Schema.optionalKey<Schema.Finite>;
+      readonly tolerance: Schema.optionalKey<Schema.Finite>;
+      /** In the metric's units: a difference this small is neither a gain nor a regression. */
+      readonly absolute: Schema.optionalKey<Schema.Finite>;
+      /** A deterministic count, such as a correctness check's mismatches: judged by value. */
+      readonly exact: Schema.optionalKey<Schema.Boolean>;
+      /** Why its limits are these, written before anything is measured by them. */
+      readonly why: Schema.optionalKey<Schema.String>;
+    }>>;
     readonly warmup: Schema.withDecodingDefaultKey<Schema.Int>;
     readonly samples: Schema.withDecodingDefaultKey<Schema.Int>;
     /** Seconds one sample, all its commands, or one tree's prepare may take. */
@@ -584,6 +598,21 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   }
   /** Keeps an infinite ratio, which plain JSON writes as null: journal a Measurement with it. */
   export const MeasurementSchema: Schema.Codec<Measurement, unknown, never, never>;
+  /** A metric's own limits, and the plan's where it declares none. */
+  export function limitsOf(
+    plan: Pick<typeof BenchmarkPlan.Type, "threshold" | "tolerance">,
+    metric: (typeof BenchmarkPlan.Type)["metrics"][number],
+  ): { readonly threshold: number; readonly tolerance: number; readonly absolute: number; readonly exact: boolean };
+  /**
+   * What a Measurement of the base against itself says of its plan. A harness that ran nothing
+   * to judge, or whose exact count differs on identical trees, is broken; a metric too noisy for
+   * its limits leaves proof unavailable.
+   */
+  export type Calibration =
+    | { readonly _tag: "Calibrated" }
+    | { readonly _tag: "HarnessBroken"; readonly why: ReadonlyArray<string> }
+    | { readonly _tag: "ProofUnavailable"; readonly lost: ReadonlyArray<{ readonly metric: string; readonly why: string }> };
+  export function calibrationOf(measured: Pick<Measurement, "plan" | "result">): Calibration;
 
   /** What a merge at a head came to: \`MergedOutside\` is a merge this Run did not make. */
   export type MergeOutcome =
@@ -2572,11 +2601,7 @@ const told = (runId: string, status: typeof RunStatus.Type) =>
         );
       }
       if (status.status !== "failed") return Effect.void;
-      return found.value.notify(
-        runId,
-        pipe(status.reason, Str.startsWith("output-unusable:")) ? "output-unusable" : "run-failed",
-        status.reason,
-      );
+      return found.value.notify(runId, "run-failed", status.reason);
     }),
   );
 
@@ -3482,7 +3507,7 @@ export const hostLayer = (options: {
 }): Layer.Layer<
   Host | Notifier | Oversight | Reliance,
   never,
-  Store | PlatformServices | ForgeHttp
+  Store | Records | PlatformServices | ForgeHttp
 > =>
   Layer.effectContext(
     Effect.gen(function* () {
@@ -3494,9 +3519,10 @@ export const hostLayer = (options: {
         | FileSystem.FileSystem
         | Path.Path
         | ChildProcessSpawner.ChildProcessSpawner
-        | ForgeHttp;
+        | ForgeHttp
+        | Records;
       const services = yield* Effect.context<Collecting>();
-      const bun = yield* Effect.context<PlatformServices>();
+      const bun = yield* Effect.context<PlatformServices | Records>();
       const under = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
         Effect.provideContext(effect, services);
       const anySet = (runId: string, ...controls: ReadonlyArray<string>) =>
@@ -3542,7 +3568,7 @@ export const hostLayer = (options: {
             const task =
               row?.task == null
                 ? null
-                : yield* readTask(dir, row.task).pipe(Effect.orElseSucceed(() => null));
+                : yield* readTask(row.task).pipe(Effect.orElseSucceed(() => null));
             const title = notificationTitle(
               kind,
               cwd,
@@ -4996,7 +5022,7 @@ export const hostLayer = (options: {
           const task =
             row?.task == null
               ? null
-              : yield* readTask(dir, row.task).pipe(
+              : yield* readTask(row.task).pipe(
                   Effect.provideContext(bun),
                   Effect.orElseSucceed(() => null),
                 );
@@ -5992,6 +6018,7 @@ export type HostServices =
   | WorkflowEngine.WorkflowEngine
   | Host
   | Agents
+  | Records
   | FileSystem.FileSystem
   | Path.Path
   | ChildProcessSpawner.ChildProcessSpawner
@@ -6255,6 +6282,13 @@ export interface RegistryOptions {
   readonly namesTasks?: boolean;
   /** How long a messaged agent may take to start a turn before its work counts as ended. */
   readonly supersedeGraceMs?: number | undefined;
+  /**
+   * The host's Run model, which every listing reads through and keeps settled Runs' views
+   * by: without it each one reads every Run from disk again.
+   */
+  readonly keep?:
+    | { readonly revision: (run: string) => number; readonly reading: FileSystem.FileSystem }
+    | undefined;
 }
 
 export const registryLayer = (
@@ -6298,6 +6332,7 @@ export const foundationLayer = (options: {
   | Oversight
   | Reliance
   | Store
+  | Records
   | WorkflowEngine.WorkflowEngine
   | MessageStorage.MessageStorage
   | SqlClient.SqlClient
@@ -6307,7 +6342,11 @@ export const foundationLayer = (options: {
   PlatformServices
 > =>
   hostLayer(options).pipe(
-    Layer.provideMerge(storeLayer.pipe(Layer.provideMerge(engineLayer(options)))),
+    Layer.provideMerge(
+      recordsLayer.pipe(
+        Layer.provideMerge(storeLayer(options.dir).pipe(Layer.provideMerge(engineLayer(options)))),
+      ),
+    ),
     Layer.provideMerge(forgeHttpLayer),
   );
 
@@ -6342,7 +6381,7 @@ const makeRegistry: (
       Effect.orDie,
     ));
   // Captured, so placing a Run asks git and herdr without its callers providing either.
-  const bun = yield* Effect.context<PlatformServices | SecureRandom.SecureRandom>();
+  const bun = yield* Effect.context<PlatformServices | SecureRandom.SecureRandom | Records>();
 
   /**
    * Every `diff-target` as `mr:`, `branch:` or `worktree`, since every reader decides from
@@ -6901,9 +6940,7 @@ const makeRegistry: (
             : yield* openWorkspace;
     // A workspace an earlier attempt recorded may already have its Task.
     const known =
-      ask.workspace === undefined
-        ? null
-        : yield* taskOfWorkspace(placing.env.stateDir, workspace).pipe(Effect.orDie);
+      ask.workspace === undefined ? null : yield* taskOfWorkspace(workspace).pipe(Effect.orDie);
     const task =
       known ??
       (yield* newTask({
@@ -6913,7 +6950,7 @@ const makeRegistry: (
         rootPane,
         herd: yield* machineHerd(placing.env).pipe(Effect.orElseSucceed(() => null)),
       }).pipe(
-        Effect.flatMap((made) => writeTask(placing.env.stateDir, made)),
+        Effect.flatMap((made) => writeTask(made)),
         Effect.orDie,
       ));
     return { placed, task: task.id };
@@ -6958,7 +6995,7 @@ const makeRegistry: (
     );
     const tasks = new Map(
       Arr.map(
-        yield* listTasks(placing.env.stateDir).pipe(Effect.orElseSucceed(() => [])),
+        yield* listTasks.pipe(Effect.orElseSucceed(() => [])),
         (task) => [task.id, task] as const,
       ),
     );
@@ -7402,6 +7439,9 @@ const makeRegistry: (
 
   /** A finished execution's status: it is never resumed, so it cannot change. */
   const finished = new Map<string, typeof RunStatus.Type>();
+  /** Settled Runs' views every listing that brings none of its own shares. */
+  const shared: KeptViews | undefined =
+    options?.keep === undefined ? undefined : { revision: options.keep.revision, views: new Map() };
   const polled = Effect.fn("Engine.polled")(function* (generation: Generation, execution: string) {
     const workflow = generation.registration.workflow;
     const status = pollStatus(
@@ -7873,11 +7913,10 @@ const makeRegistry: (
    * agent's pane, which its hook records as `external`, and a Delivery herdr took before
    * the host that sent it could set the question aside.
    */
-  const scannedLedgers: LedgerScan = new Map();
   const missedMessages = Effect.gen(function* () {
     const runs = Arr.dedupe(Arr.map(yield* store.supersedable, (row) => row.run));
     if (runs.length === 0) return;
-    const delivered = yield* humanSubmits(placing.env.stateDir, scannedLedgers);
+    const delivered = yield* humanSubmits;
     for (const runId of runs) {
       const rows = yield* store.asked(runId);
       const launches = yield* readLaunches(dir, runId).pipe(Effect.orElseSucceed(() => []));
@@ -8586,26 +8625,29 @@ const makeRegistry: (
         }
         return dropped;
       }).pipe(Effect.orDie, Effect.provideContext(bun)),
-    views: (task: string | null, read?: FileSystem.FileSystem, kept?: KeptViews) =>
-      store.runs.pipe(
+    views: (task: string | null, read?: FileSystem.FileSystem, kept?: KeptViews) => {
+      const keeping = kept ?? shared;
+      return store.runs.pipe(
         Effect.flatMap((rows) =>
           keptViews(
             task === null ? rows : Arr.filter(rows, (row) => row.task === task),
             // The host's own background read goes one Run at a time, so the loop stays free.
             kept === undefined ? VIEW_CONCURRENCY : 1,
-            read,
-            kept,
+            read ?? (keeping === undefined ? undefined : options?.keep?.reading),
+            keeping,
           ).pipe(
             Effect.tap(() =>
               Effect.sync(() => {
-                if (kept === undefined || task !== null) return;
+                if (keeping === undefined || task !== null) return;
                 const present = new Set(Arr.map(rows, (row) => row.run));
-                for (const run of kept.views.keys()) if (!present.has(run)) kept.views.delete(run);
+                for (const run of keeping.views.keys())
+                  if (!present.has(run)) keeping.views.delete(run);
               }),
             ),
           ),
         ),
-      ),
+      );
+    },
     related: (
       runId: string,
       also: ReadonlyArray<string>,
