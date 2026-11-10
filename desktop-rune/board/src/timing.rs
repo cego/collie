@@ -35,8 +35,6 @@ pub struct Timing {
     chat: Answered,
     scroll: Option<(String, f64)>,
     scrolls: u64,
-    /// The last key and diff position the frames have seen.
-    pub(crate) key_seen: f64,
     pub(crate) rows_at: Option<f32>,
 }
 

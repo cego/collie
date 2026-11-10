@@ -39,8 +39,8 @@ pub struct Tab {
     laid_out: [f32; 2],
     /// Wheel travel not yet a whole line.
     wheel: f32,
-    /// When a key was last sent to the pane, and its output last shown, for Desktop's marks.
-    pub keyed_at: Option<f64>,
+    /// The first key awaiting its drawn echo, and output last shown, for Desktop's marks.
+    pub keyed_at: std::cell::Cell<Option<f64>>,
     pub shown_at: Option<f64>,
 }
 
@@ -59,7 +59,7 @@ impl Tab {
             clock: Instant::now(),
             laid_out: [0.0, 0.0],
             wheel: 0.0,
-            keyed_at: None,
+            keyed_at: std::cell::Cell::new(None),
             shown_at: None,
         }
     }
@@ -157,7 +157,9 @@ impl Tab {
             Some(bytes) => {
                 self.vt.scroll_to_bottom();
                 self.input(&bytes);
-                self.keyed_at = Some(collie_desktop_protocol::epoch_ms());
+                if self.keyed_at.get().is_none() {
+                    self.keyed_at.set(Some(collie_desktop_protocol::epoch_ms()));
+                }
                 true
             }
             None => false,

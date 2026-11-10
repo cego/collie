@@ -128,7 +128,7 @@ fn a_key_sent_to_the_pane_and_the_frame_after_its_output_mark_the_echo() {
     let mut runtime = runtime();
     frame_drawn(&runtime, 10.0);
     tap(&mut runtime, "card-b2", 100.0);
-    runtime.update(|board, _| board.terminal.as_mut().unwrap().keyed_at = Some(600.0));
+    runtime.update(|board, _| board.terminal.as_ref().unwrap().keyed_at.set(Some(600.0)));
     assert_eq!(
         frame_drawn(&runtime, 605.0),
         [mark("terminal-key", 600.0, "r1")]
@@ -137,6 +137,61 @@ fn a_key_sent_to_the_pane_and_the_frame_after_its_output_mark_the_echo() {
     assert_eq!(
         frame_drawn(&runtime, 612.0),
         [mark("terminal-drawn", 612.0, "r1")]
+    );
+}
+
+#[test]
+fn keys_before_presentation_keep_the_first_timestamp_until_its_echo_is_drawn() {
+    let mut runtime = runtime();
+    frame_drawn(&runtime, 10.0);
+    tap(&mut runtime, "card-b2", 100.0);
+    tap(&mut runtime, "terminal-grid", 200.0);
+    let key = || rune::KeyEvent {
+        key: rune::Key::Text("a".into()),
+        mods: rune::Mods::default(),
+    };
+    runtime.key(key());
+    runtime.frame(0.0);
+    let first = runtime
+        .state
+        .terminal
+        .as_ref()
+        .unwrap()
+        .keyed_at
+        .get()
+        .unwrap();
+    runtime.key(key());
+    runtime.frame(0.0);
+    assert_eq!(
+        frame_drawn(&runtime, first + 20.0),
+        [mark("terminal-key", first, "r1")]
+    );
+    runtime.key(key());
+    runtime.frame(0.0);
+    assert_eq!(frame_drawn(&runtime, first + 25.0), []);
+    runtime.update(|board, _| {
+        board.terminal.as_mut().unwrap().shown_at = Some(collie_desktop_protocol::epoch_ms());
+    });
+    runtime.frame(0.0);
+    assert_eq!(
+        frame_drawn(&runtime, first + 40.0),
+        [mark("terminal-drawn", first + 40.0, "r1")]
+    );
+    assert_eq!(frame_drawn(&runtime, first + 45.0), []);
+    runtime.key(key());
+    runtime.frame(0.0);
+    let next = runtime
+        .state
+        .terminal
+        .as_ref()
+        .unwrap()
+        .keyed_at
+        .get()
+        .unwrap();
+    assert!(next > first);
+    assert_eq!(
+        frame_drawn(&runtime, next + 20.0),
+        [mark("terminal-key", next, "r1")]
     );
 }
 

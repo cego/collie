@@ -291,12 +291,12 @@ pub fn frame_drawn(drawn: &rune::Runtime<Board>, at: f64) -> Vec<timing::Mark> {
         timing.board_usable(at);
     }
     if let (Some(tab), Some((_, run))) = (&board.terminal, &board.open_run) {
-        if let Some(keyed) = tab.keyed_at.filter(|keyed| *keyed > timing.key_seen) {
-            timing.key_seen = keyed;
+        if let Some(keyed) = tab.keyed_at.get() {
             timing.key(run, keyed);
         }
         let since = timing.key_waiting();
         if since.is_some_and(|since| tab.shown_at.is_some_and(|shown| shown > since)) {
+            tab.keyed_at.take();
             timing.echoed(at);
         }
     }
