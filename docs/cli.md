@@ -399,10 +399,22 @@ collie --json run steer <run-id> "check the migration too" [--to builder] [--req
   `--request-id` again is the same answer rather than another.
 - **An agent's question is answered the same way.** A Claude agent Collie launched that
   calls `AskUserQuestion` is told its question is on its Run and ends its turn. Each
-  question is a decision named `ask-<operation>-<n>`, numbered from 1 in the order asked,
-  whose prompt lists its options. It takes any words, an option's label among them. Once
+  question is a decision named `ask-<operation>-<n>`, numbered from 1 in the order asked.
+  Its options are solutions with ids `1`, `2`, … and the option label as the title; the one
+  whose label ends ` (Recommended)` (Claude's own marker, which Codex and pi agents are told)
+  comes first, without the marker, and each option's description is its detail. It takes an
+  id or a title, and refuses other words with the titles: free words go to the agent as a
+  steer instead. A question with no options takes any words. Once
   every question of that one call is answered, from here, the card or chat, the answers
-  go to the agent together as its next message. While one is open, the step's Output
+  go to the agent together as its next message, each as the title picked:
+  `Your question <header> is answered: <title>`.
+- **A question short of standard is repaired once.** To standard is exactly one recommended
+  option among at least three, single-select, no two titles alike. A call with a question
+  that falls short is not posted: Claude's hook denies it and pi's tool returns, each with
+  what is missing and how to offer distinct paths (proceed, defer, change approach); a
+  Codex agent, whose tool has already returned, is sent the same text as a `repair`
+  Delivery. The call after a repair is posted as asked, and a question in it still short
+  carries a `shortfall` saying what it lacks. While one is open, the step's Output
   budget is paused. One still open when the step's Output comes is closed with
   `closed: <operation> finished before it was answered`, and nothing is sent
   ([ADR-0062](adr/0062-an-agents-question-is-asked-on-its-run.md)). A human's message to
@@ -469,8 +481,9 @@ collie --json run steer <run-id> "check the migration too" [--to builder] [--req
   or `Sent to <agent>, not observed.` with how to go to its pane, and `data.observed` and
   `data.how` say the same. An unproven `now` mode keeps the message durably until the agent
   is idle, returning `data.queued: true, data.delivered: false` with an explicit queued
-  receipt. The host submits it automatically without answering any Run Choice.
-  Other messages not sent are `operation_failed`, with why. The agent sees who sent it on its
+  receipt. The host submits it automatically without answering any Run Choice. A message
+  with no words, once credentials are taken out, and no attachment is refused and
+  supersedes nothing. Other messages not sent are `operation_failed`, with why. The agent sees who sent it on its
   first line. A message whose typed form would pass 3 lines or 700 characters is kept whole
   as a file in the Run's `attachments/`, the agent is told where to read it, and the
   receipt says to ask for an action auto mode must clear in a shorter message
@@ -800,7 +813,7 @@ Its `run` object carries:
 | `cwd`, `branch`, `workspace`, `worktree` | Where it works: its own worktree on `branch`, or the checkout it started from; a workspace of its own, or its Task's.                                                                                |
 | `outcome`                                | What it has to prove.                                                                                                                                                                                |
 | `created`, `status`                      | When it was admitted, and where the engine says it is: `pending`, `suspended`, `complete` with its `value` — the result as the workflow's success schema encodes it — or `failed` with its `reason`. |
-| `waiting`                                | Every question it has been asked, oldest first: `name`, `prompt`, `options`, and `answer`, `null` while it is open.                                                                                  |
+| `waiting`                                | Every question asked, oldest first: `name`, `prompt`, `answer` (`null` while open), `shortfall?`, and `options`, recommended first, each `id`, `title`, `detail?`, `recommended?`.                   |
 | `controls`                               | A `hold` or a `stop` someone set over it.                                                                                                                                                            |
 | `parked`                                 | Why it parked its own work and what picks it up again, or `null`.                                                                                                                                    |
 | `awaiting`                               | What it waits for that comes without anyone repairing anything: `on`, `who` acts (`null` for nobody) and `since`, or `null`. It is not attention, and `run wait` waits through it.                   |
@@ -903,10 +916,17 @@ collie --json run show <run-id>                            # confirm it took
 `--decision` names the question you are answering, so an answer that arrives after the run
 has moved on cannot land on another one: a question already answered is refused with what
 the run already has. Leave it out and the one open question is answered; with more than one
-open, that is refused. The answer is one of the question's options, in any case — `Yes`,
-`yes` and `YES` are the same answer — and one it does not take is refused with the ones it
-does. A refusal is `invalid_input` where your answer was the reason, and otherwise
-`operation_failed` with the host's own sentence.
+open, that is refused. The answer names one of the question's options by its `id` or its
+`title`, ids first, in any case — `Yes`, `yes` and `YES` are the same answer — and is
+recorded as that option's `id`. One it does not take is refused with the titles it does. A
+second, different answer is refused naming who answered. `run show` lists the options
+recommended first, with `(Recommended)` after that one's title and each option's detail on a
+line of its own. A workflow's Choice of fewer than three options adds `Hold the Run` and the
+command that does it, `collie run hold <run> --reason "held at question <name>"`: the Run is
+held, nothing is answered, and the question stays open; on a Run already held it reads
+`unavailable, Run already held`. A Choice that recommends none, or more than one, has a
+`shortfall` saying so, shown as a `⚠` line. A refusal is `invalid_input` where your answer was
+the reason, and otherwise `operation_failed` with the host's own sentence.
 
 A message a human sends one of the run's agents while it waits — from the board, Desktop,
 a terminal, chat with the human's own words, or typed into a Claude agent's pane —
@@ -916,7 +936,10 @@ Only an agent that was messaged since may still answer it, as a planner told "go
 every messaged agent's work ends, and the run is neither stopped nor moved on, the question
 is asked again under a new name with `revises` naming the old one; answer that one. A
 further message supersedes that one in turn. A message is never read as an answer, even one
-that is exactly an option.
+that is exactly an option. The board's question names the agent its steering entry reaches as `steer`: the agent
+that asked it, or for a workflow's Choice the one `run steer` reaches with no `--to`; with
+no such agent live, `steer.agent` is null and `steer.why` says to pick a solution or stop
+the Run.
 
 A run shows its question a moment before it stops to wait on it. An answer given in that
 moment is recorded at once and handed to the run once it has stopped, so it cannot wake the
@@ -1407,7 +1430,9 @@ outside the run, is not a reviewer's to change.
 A text search proves none of the rows above: a pass of `grep`, `egrep`, `fgrep`, `rg`, `ag`,
 `ack` or `git grep`, also as the first word of a `sh -c` or `bash -c` script, shows the text
 is there, not that anything works. A promised check, `regression`, documented command or
-migration step whose only pass on the tree is a text search is a gap that says so. The record
+migration step whose only pass on the tree is a text search is a gap that says so. A promised
+check or `regression` that passed on an earlier tree and has not run on this one, as after a
+fix moved the head, is a gap naming that tree and the command to run again, not a failure. The record
 stays in the journal, an agent may still run one for its own use, and the run's own checks,
 which are the project's configured commands, are left alone. A bug reproduced by one command
 and fixed by another is a gap naming both, each with the path its executable resolved to, so
@@ -1797,8 +1822,11 @@ Machine on many samples
 ([ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement](adr/draft-a-performance-gain-is-proved-by-the-hosts-measurement.md)).
 The host makes the **base tree** as a detached worktree at `--base` with the plan's harness
 commits applied, under `measurements/trees/<run>/` in its state directory, and keeps it for
-the Run's later Measurements of the same base. The **candidate** is the Run's checkout, or
-`--cwd` inside it. A candidate that holds every harness path is sampled where it is. One
+the Run's later Measurements of the same base. It also keeps every such tree, whatever its
+Run's state, while a Measurement is running on this Machine, so `--run` may name a Run that
+has ended; once none is running, an ended Run's trees are removed. The **candidate** is the
+Run's checkout, or `--cwd` inside it. A candidate that holds every harness path is sampled
+where it is. One
 that holds none, such as a branch cleaned up for release, is sampled in a scratch worktree
 the host makes at its head with the harness commits applied, kept and removed as a base tree
 is. The checkout is left as it was, and the record names the commits applied as
@@ -2180,8 +2208,9 @@ it running, because a check's result is thrown away
 A check this host is collecting is kept, with "this host is collecting it".
 
 The `measurement-tree` kind is a base tree [`collie measure`](#measure) made, whose target
-is its directory. It is kept while its Run has not ended, and a sweep removes it with git's
-record of the worktree.
+is its directory. It is kept while its Run has not ended, and, whatever its Run's state,
+while a Measurement is running on this Machine. Once neither holds, a sweep removes it with
+git's record of the worktree.
 
 ## Usage
 

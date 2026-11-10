@@ -657,7 +657,16 @@ test("a question the host holds is the card's Decision, and it is Needs you", ()
       const run = yield* madeRun(dir, {
         task: "task-1",
         state: "waiting",
-        asking: [{ name: "scope", prompt: "Which repository?", options: ["core", "tiger"] }],
+        asking: [
+          {
+            name: "scope",
+            prompt: "Which repository?",
+            options: [
+              { id: "core", title: "core" },
+              { id: "tiger", title: "tiger" },
+            ],
+          },
+        ],
       });
 
       const [view] = yield* board(env, [run]);
@@ -687,7 +696,14 @@ test("a Task's card lists every question its Runs have open, in the order it ask
         state: "waiting",
         created: "2026-09-14T09:00:00Z",
         asking: [
-          { name: "scope", prompt: "Which repository?", options: ["core", "tiger"] },
+          {
+            name: "scope",
+            prompt: "Which repository?",
+            options: [
+              { id: "core", title: "core" },
+              { id: "tiger", title: "tiger" },
+            ],
+          },
           { name: "team", prompt: "Which Linear team?", options: [] },
         ],
       });
@@ -721,6 +737,10 @@ test("a Task's card lists every question its Runs have open, in the order it ask
         topic: "team",
         text: "Which Linear team?",
         options: [],
+        steer: {
+          agent: null,
+          why: "no agent of this Run is live to redirect: pick a solution or stop the Run",
+        },
       });
       expect(view!.decision).toEqual(view!.questions![0]!);
     }),
@@ -1544,7 +1564,9 @@ test("a waiting proposal stays the decision, and the card still lists the questi
       const run = yield* madeRun(dir, {
         task: "task-1",
         state: "waiting",
-        asking: [{ name: "scope", prompt: "Which repository?", options: ["core"] }],
+        asking: [
+          { name: "scope", prompt: "Which repository?", options: [{ id: "core", title: "core" }] },
+        ],
       });
       const proposal: ProposalLine = {
         kind: "proposal",
@@ -3616,7 +3638,14 @@ test("a Task whose Runs were stopped is not waiting on you, though an earlier on
   runEffect(
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
-      const next = { name: "next", prompt: "What next?", options: ["Finish", "Release"] };
+      const next = {
+        name: "next",
+        prompt: "What next?",
+        options: [
+          { id: "Finish", title: "Finish" },
+          { id: "Release", title: "Release" },
+        ],
+      };
       const engineView = (runId: string, over: Partial<RunView>): RunView => ({
         runId,
         workflow: "implement",

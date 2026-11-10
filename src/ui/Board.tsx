@@ -11,6 +11,7 @@ import {
   foldFinished,
   foldWaiting,
   sectionOf,
+  solutionTitle,
   type Decision,
   type HeaderSentence,
   type Proposal,
@@ -606,13 +607,20 @@ function Asked(props: { question: Question; decide: Decide }) {
           <For each={props.question.options}>
             {(option, at) => (
               <Button
-                label={option.title}
+                label={solutionTitle(option)}
                 primary={at() === 0}
                 onPress={() => props.decide.answer(props.question, option.id)}
               />
             )}
           </For>
         </box>
+        <For each={props.question.options}>
+          {(option) => (
+            <Show when={option.detail !== undefined}>
+              <text fg={C.dim}>{`${option.title}: ${option.detail}`}</text>
+            </Show>
+          )}
+        </For>
       </Show>
       <Show when={props.question.options.length === 0}>
         <box style={{ flexDirection: "row" }}>

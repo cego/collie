@@ -357,8 +357,10 @@ export default defineWorkflow({
               ask({
                 name: `next-${round}`,
                 prompt: "What next?",
-                options:
+                options: Arr.map(
                   opinions < OPINIONS ? choices : Arr.filter(choices, (one) => one !== OPINION),
+                  (id) => ({ id, recommended: id === IMPLEMENT }),
+                ),
               }),
               { round },
             );

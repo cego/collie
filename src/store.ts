@@ -35,10 +35,10 @@ import * as Migrator from "effect/sql/Migrator";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
-import { AuditLine } from "./audit";
+import { AuditLine, whoActed } from "./audit";
 import { importLedgers, importProposals, importRegisters, importTasks } from "./records-import";
 import { StoreWrites } from "./store-writes";
-import { RequestConflict } from "./board-model";
+import { RequestConflict, type Solution } from "./board-model";
 import { nowIso } from "./time";
 
 /** A run as it was admitted: the claim, the arguments and the execution it became. */
@@ -133,6 +133,8 @@ const Decision = Schema.Struct({
   revises: Schema.NullOr(Schema.String),
   /** When its Workflow last reached it, which every replay renews; null for an agent's. */
   reached: Schema.NullOr(Schema.String),
+  /** What keeps it short of standard; null for one that is not, or an older host's. */
+  shortfall: Schema.NullOr(Schema.String),
 });
 export type DecisionRow = typeof Decision.Type;
 
@@ -228,9 +230,10 @@ export interface StoreApi {
     readonly run: string;
     readonly decision: string;
     readonly prompt: string;
-    readonly options: ReadonlyArray<string>;
+    readonly options: ReadonlyArray<string | Solution>;
     readonly asker?: string;
     readonly revises?: string;
+    readonly shortfall?: string;
   }) => Effect.Effect<void>;
   /** Every question this run has been asked, answered or not, in the order they were. */
   readonly asked: (run: string) => Effect.Effect<ReadonlyArray<DecisionRow>>;
@@ -517,6 +520,10 @@ const migrations = (imports: {
     `;
     yield* imports.proposals;
   }),
+  "16_shortfall": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`ALTER TABLE collie_decisions ADD COLUMN shortfall TEXT`;
+  }),
 });
 
 /** How often a commit by another connection, another process's, is looked for. */
@@ -621,7 +628,7 @@ function makeStore(
         sql`SELECT ${columns} FROM collie_runs WHERE accepted IS NULL ORDER BY admitted, run`,
     });
 
-    const decisionColumns = sql`run, decision, prompt, options, answer, request, asker, answerer, asked, answered, superseded, cause, superseder, messaged, revises, reached`;
+    const decisionColumns = sql`run, decision, prompt, options, answer, request, asker, answerer, asked, answered, superseded, cause, superseder, messaged, revises, reached, shortfall`;
 
     const decisionsOf = SqlSchema.findAll({
       Request: Schema.String,
@@ -664,7 +671,8 @@ function makeStore(
 
     /** Why `row` takes no answer now, naming the question asked in its place. */
     const whyClosed = Effect.fn("Store.whyClosed")(function* (row: DecisionRow) {
-      if (row.answer !== null) return `"${row.decision}" was already answered "${row.answer}"`;
+      if (row.answer !== null)
+        return `"${row.decision}" was already answered "${row.answer}"${row.answerer === null ? "" : ` by ${whoActed(row.answerer)}`}`;
       const rows = yield* decisionsOf(row.run).pipe(Effect.orDie);
       let newest: DecisionRow | undefined;
       let next = Arr.findFirst(rows, (one) => one.revises === row.decision);
@@ -749,11 +757,12 @@ function makeStore(
         Effect.gen(function* () {
           const at = yield* nowIso;
           yield* sql`
-              INSERT INTO collie_decisions (run, decision, prompt, options, asked, asker, revises, reached)
+              INSERT INTO collie_decisions (run, decision, prompt, options, asked, asker, revises, reached, shortfall)
               VALUES (
                 ${question.run}, ${question.decision}, ${question.prompt},
                 ${asJsonText([...question.options])}, ${at}, ${question.asker ?? null},
-                ${question.revises ?? null}, ${question.asker === undefined ? at : null}
+                ${question.revises ?? null}, ${question.asker === undefined ? at : null},
+                ${question.shortfall ?? null}
               )
               ON CONFLICT(run, decision) DO UPDATE SET reached = excluded.reached
                 WHERE excluded.reached IS NOT NULL
@@ -846,8 +855,8 @@ function makeStore(
         const opened = yield* mutation(
           [revising.run],
           sql`
-            INSERT INTO collie_decisions (run, decision, prompt, options, asked, revises)
-            SELECT run, ${revising.name}, prompt, options, ${at}, decision
+            INSERT INTO collie_decisions (run, decision, prompt, options, asked, revises, shortfall)
+            SELECT run, ${revising.name}, prompt, options, ${at}, decision, shortfall
             FROM collie_decisions
             WHERE run = ${revising.run} AND decision = ${revising.decision}
               AND asker IS NULL AND answer IS NULL AND superseded IS NOT NULL

@@ -1,46 +1,18 @@
 <script setup lang="ts">
-import * as Str from "effect/String";
-import type { DesktopAction } from "../../../src/shared/flock";
 import type { FlowEffect } from "../../../src/shared/flow-actions";
-import { answerKey, cardQuestion, draftOf } from "../../../src/shared/pending-answer";
+import type { Act } from "../composables/useAnswering";
 const props = defineProps<{
   effect: Extract<FlowEffect, { kind: "answer" | "proposal" }>;
   machine: string;
   perform: (
     installation: string,
-    action: DesktopAction,
-    tried?: (done: boolean | null) => void,
+    action: Parameters<Act>[0],
+    tried?: Parameters<Act>[2],
+    request?: string,
   ) => Promise<boolean>;
 }>();
-const answering = useAnswering();
-const typed = ref(false);
-const question = computed(() => (props.effect.kind === "answer" ? props.effect.question : null));
-const key = computed(() =>
-  question.value === null
-    ? null
-    : answerKey(props.effect.installation, question.value.run, question.value.id),
-);
-const draft = computed({
-  get: () => (key.value === null ? "" : draftOf(answering.state.value, key.value)),
-  set: (value: string) => key.value !== null && answering.type(key.value, value),
-});
-const status = computed(() =>
-  question.value === null
-    ? null
-    : cardQuestion({ decision: question.value }, props.effect.installation, answering.state.value),
-);
-const send = (value: string, shown: string) => {
-  const asked = question.value;
-  if (asked !== null)
-    return answering.answer(
-      props.effect.installation,
-      props.machine,
-      asked,
-      value,
-      shown,
-      (action, tried) => props.perform(props.effect.installation, action, tried),
-    );
-};
+const act: Act = (action, request, tried) =>
+  props.perform(props.effect.installation, action, tried, request);
 </script>
 
 <template>
@@ -48,34 +20,14 @@ const send = (value: string, shown: string) => {
     class="flex flex-col gap-2 rounded border border-warning/50 bg-warning/5 p-3 text-sm"
     aria-label="Decision"
   >
-    <template v-if="effect.kind === 'answer'">
-      <p>{{ effect.question.text }}</p>
-      <p v-if="status?.pending" class="text-muted">{{ status.pending }}</p>
-      <template v-else>
-        <template v-if="effect.question.options.length > 0 && !typed">
-          <UButton
-            v-for="option in effect.question.options"
-            :key="option.id"
-            color="neutral"
-            variant="outline"
-            :label="option.title"
-            @click="send(option.id, option.title)"
-          />
-          <UButton variant="link" class="self-start" label="Type it…" @click="typed = true" />
-        </template>
-        <form
-          v-else
-          class="flex gap-2"
-          @submit.prevent="Str.trim(draft) !== '' && send(Str.trim(draft), Str.trim(draft))"
-        >
-          <UInput v-model="draft" autofocus class="flex-1" aria-label="Your answer" /><UButton
-            type="submit"
-            label="Send"
-            :disabled="Str.trim(draft) === ''"
-          />
-        </form>
-      </template>
-    </template>
+    <QuestionnaireForm
+      v-if="effect.kind === 'answer'"
+      :key="`${effect.question.run}/${effect.question.id}`"
+      :installation="effect.installation"
+      :machine="machine"
+      :question="effect.question"
+      :act="act"
+    />
     <template v-else>
       <p>{{ effect.proposal.text }}</p>
       <p v-for="(action, at) in effect.proposal.actions" :key="at" class="text-xs text-muted">

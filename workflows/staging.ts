@@ -154,7 +154,10 @@ export const claiming =
           const adopt = yield* ask({
             name: nth("adopt-claim", n),
             prompt: words.adopt,
-            options: ["yes", "no"],
+            options: [
+              "yes",
+              { id: "no", detail: "Leaves the other holder's work untouched.", recommended: true },
+            ],
           });
           return yield* take(`${at}.adopt`, Effect.succeed(adopt === "yes")).pipe(
             Effect.catch((failed) => Effect.succeed({ unresolved: failed.reason })),
@@ -174,7 +177,7 @@ export const claiming =
         const answer = yield* ask({
           name: `${at}.unclaimed`,
           prompt: words.unclaimed(held.unresolved, how.retaining ?? false),
-          options: [words.again, words.without, words.finish],
+          options: [{ id: words.again, recommended: true }, words.without, words.finish],
         });
         if (answer === words.again) continue;
         if (how.retaining !== true)

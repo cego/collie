@@ -113,7 +113,16 @@ test("a Run waiting with no question open is parked, and one with a question is 
           workflow: "plan",
           state: "waiting",
           parked: reason,
-          asking: [{ name: "scope", prompt: "Which repo?", options: ["api", "web"] }],
+          asking: [
+            {
+              name: "scope",
+              prompt: "Which repo?",
+              options: [
+                { id: "api", title: "api" },
+                { id: "web", title: "web" },
+              ],
+            },
+          ],
         }),
         [],
         [],
@@ -135,6 +144,10 @@ test("a Run waiting with no question open is parked, and one with a question is 
             { id: "api", title: "api", subtitle: null },
             { id: "web", title: "web", subtitle: null },
           ],
+          steer: {
+            agent: null,
+            why: "no agent of this Run is live to redirect: pick a solution or stop the Run",
+          },
         },
       ]);
     }),

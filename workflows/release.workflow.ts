@@ -857,7 +857,10 @@ export default defineWorkflow({
                     ? `${mr} at ${short(proved)} waits for a teammate's approval. Share it in ${channel} yourself: ${slack.detail}. Fix: ${slack.fix}. Confirm when shared, or wait for changes.`
                     : `${mr} at ${short(proved)} waits for a teammate's approval. Check it first. ${SHARE.post} posts it in ${channel} as its title, linked, and nothing else; ${SHARE.wait} posts nothing and asks again once its head moves.`,
                 options: [
-                  slack !== null && slack.state !== "ok" ? "I shared it" : SHARE.post,
+                  {
+                    id: slack !== null && slack.state !== "ok" ? "I shared it" : SHARE.post,
+                    recommended: true,
+                  },
                   SHARE.wait,
                 ],
               }),
@@ -980,7 +983,7 @@ export default defineWorkflow({
             ask({
               name: `go-${gos}`,
               prompt: `Release ${mr} at ${short(head)}, approved by ${approvers}? ${offered} Finish leaves it open.`,
-              options: [...goes, GO.finish],
+              options: Arr.map([...goes, GO.finish], (id, at) => ({ id, recommended: at === 0 })),
             }),
             { round: gos },
           );
@@ -1104,7 +1107,11 @@ export default defineWorkflow({
                 const go = yield* ask({
                   name: nth("production", n),
                   prompt: `Stage carries ${mr} at \`${short(head)}\` for testing, unmerged: ${plays(tested.jobs)}. Test it there, then: ${PRODUCTION.send} merges it at that head, tags it and plays production with no further question; ${PRODUCTION.leave} merges and tags it, and waits until production carries it, whoever plays it; ${GO.finish} merges nothing and rolls stage back.`,
-                  options: [PRODUCTION.send, PRODUCTION.leave, GO.finish],
+                  options: [
+                    { id: PRODUCTION.send, recommended: true },
+                    PRODUCTION.leave,
+                    GO.finish,
+                  ],
                 });
                 if (go === GO.finish) {
                   yield* unstage(
@@ -1291,7 +1298,7 @@ export default defineWorkflow({
               ask({
                 name: "production",
                 prompt: `${staged.tag} of ${mr} is on stage: stage carries \`${short(landed.sha)}\`. Verify stage, then: ${PRODUCTION.send} plays ${plays(jobs)}; ${PRODUCTION.leave} waits until production carries it, whoever plays it.`,
-                options: [PRODUCTION.send, PRODUCTION.leave],
+                options: [{ id: PRODUCTION.send, recommended: true }, PRODUCTION.leave],
               }),
             )));
       yield* playProduction(

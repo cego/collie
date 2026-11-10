@@ -101,6 +101,7 @@ export { mrForgeFacts } from "./forge/forge";
 /** How much of a Subscription is used, as the host reads it (ADR-0049). */
 export { subscriptionOf, usedFor, type UsageReading } from "./usage-model";
 export { forgeOfRef, mrUrlOf, parseMrTarget, readMrRef, type MrRef } from "./board-model";
+import { AuthoredSolution, type Solution } from "./board-model";
 /** What merging the default branch into a Run's branch did (`HostApi.integrate`). */
 export { IntegrationSchema, type Integration } from "./integrate";
 /** A Measurement as the host recorded it (`HostApi.measure`), an infinite ratio kept as JSON. */
@@ -1290,6 +1291,7 @@ export interface AskedQuestion {
   readonly name: string;
   readonly answer: string | null;
   readonly superseded?: string | null;
+  readonly options?: ReadonlyArray<Solution>;
   /** Who answered it, where the Run's audit says. */
   readonly by?: Asker;
 }
@@ -1297,9 +1299,25 @@ export interface AskedQuestion {
 export interface DecisionSpec {
   readonly name: string;
   readonly prompt: string;
-  /** The answers it takes. Empty is a question answered in the operator's own words. */
-  readonly options: ReadonlyArray<string>;
+  /**
+   * The answers it takes: a plain title, or a solution. Empty is a question answered in the
+   * operator's own words.
+   */
+  readonly options: ReadonlyArray<string | Solution>;
+  /** What keeps it short of standard, flagged wherever it is shown. */
+  readonly shortfall?: string;
 }
+
+/** One answer an `ask` takes: a bare string is its id and title. */
+export type AskOption = typeof AuthoredSolution.Encoded;
+
+const recommendationShortfall = (solutions: ReadonlyArray<Solution>): string | null => {
+  const recommended = Arr.filter(solutions, (one) => one.recommended === true).length;
+  if (solutions.length === 0 || recommended === 1) return null;
+  return recommended === 0
+    ? "this workflow recommended none"
+    : "this workflow recommended more than one";
+};
 
 /**
  * Waits for this question to be answered, having told the host it is open. It is asked
@@ -1314,8 +1332,11 @@ export const ask = (question: {
   /** Its identity: the same name is the same question, however often the work replays. */
   readonly name: string;
   readonly prompt?: string;
-  /** The answers it takes; none is a question answered in the operator's own words. */
-  readonly options?: ReadonlyArray<string>;
+  /**
+   * The answers it takes, exactly one of them recommended; none is a question answered in
+   * the operator's own words.
+   */
+  readonly options?: ReadonlyArray<AskOption>;
 }): Effect.Effect<string, never, Run | Host | WorkflowEngine | WorkflowInstance> =>
   Effect.gen(function* () {
     const host = yield* Host;
@@ -1326,10 +1347,20 @@ export const ask = (question: {
         name: `ask.${question.name}.step`,
         execute: host.step(runId, { kind: "question", key: at.key, name: question.name }),
       });
+    const solutions = yield* Schema.decodeEffect(Schema.Array(AuthoredSolution))(
+      question.options ?? [],
+    ).pipe(Effect.orDie);
+    const shortfall = recommendationShortfall(solutions);
+    if (shortfall !== null)
+      yield* Activity.make({
+        name: `ask.${question.name}.shortfall`,
+        execute: host.record(runId, `"${question.name}": ${shortfall}`),
+      });
     yield* host.asking(runId, {
       name: question.name,
       prompt: question.prompt ?? question.name,
-      options: question.options ?? [],
+      options: shortfall === null ? solutions : Arr.map(solutions, Struct.omit(["recommended"])),
+      shortfall: shortfall ?? undefined,
     });
     return yield* DurableDeferred.await(
       DurableDeferred.make(question.name, { success: Schema.String }),

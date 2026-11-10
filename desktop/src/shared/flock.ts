@@ -277,6 +277,7 @@ export const DesktopAction = Schema.Union([
     runId: Schema.String,
     control: Schema.Literals(["hold", "stop"]),
     set: Schema.Boolean,
+    reason: Schema.optionalKey(Schema.String),
     before: Schema.optional(Schema.String),
     /** The record revision it was shown at, from a record. */
     shown: Schema.optionalKey(RunRevision),
@@ -323,6 +324,8 @@ export class ActionFailed extends Schema.TaggedError<
   request: Schema.optional(Schema.String),
   /** The Step an act was refused over because it finished since it was shown. */
   step: Schema.optional(Schema.String),
+  /** The host said no, so sending the same request again changes nothing. */
+  refused: Schema.optional(Schema.Boolean),
 }) {}
 
 /** `command` is the herdr client that shows the pane, to copy where no terminal opened it. */

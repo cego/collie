@@ -76,9 +76,20 @@ import {
   type NewsReceipt,
   type Metrics,
   givenOfferInput,
+  holdPath,
+  holdReason,
+  solutionTitle,
 } from "./board-model";
 import type { Action } from "./actions";
-import { NEEDS_INPUT, REFUSED_INPUT, runDir, type Given, type RunView } from "./engine";
+import {
+  HOLD,
+  NEEDS_INPUT,
+  REFUSED_INPUT,
+  runDir,
+  type Given,
+  type OpenDecision,
+  type RunView,
+} from "./engine";
 import type { OfferView } from "./board-model";
 import { err, ExpectedError, HostUnread, taskFor, type Failure, type OpResult } from "./operations";
 import { voiceOf, type Asker, type ProposalLine } from "./proposals";
@@ -1353,13 +1364,25 @@ export const describeRun = (view: RunView): ReadonlyArray<string> => [
   ...(view.awaiting === null ? [] : [awaitingLine(view.awaiting)]),
 ];
 
-/** The questions a Run is still waiting on, with what each will take. */
+/** The questions a Run is still waiting on, with what each will take and why. */
 export const describeWaiting = (view: RunView): ReadonlyArray<string> =>
-  Arr.map(
-    Arr.filter(view.waiting, isUnanswered),
-    (one) =>
-      `waiting on "${one.name}": ${one.prompt}${one.options.length === 0 ? "" : ` (${Arr.join(one.options, " | ")})`}`,
-  );
+  Arr.flatMap(Arr.filter(view.waiting, isUnanswered), (one: OpenDecision) => {
+    const hold = holdPath(one, view.controls.includes(HOLD));
+    return [
+      `waiting on "${one.name}": ${one.prompt}${one.options.length === 0 ? "" : ` (${Arr.join(Arr.map(one.options, solutionTitle), " | ")})`}`,
+      ...Arr.flatMap(one.options, (option) =>
+        option.detail === undefined ? [] : [`  ${solutionTitle(option)}: ${option.detail}`],
+      ),
+      ...(hold === undefined
+        ? []
+        : [
+            hold.offered
+              ? `  Hold the Run: collie run hold ${view.runId} --reason "${holdReason(one.name)}"`
+              : `  Hold the Run: unavailable, ${hold.why}`,
+          ]),
+      ...(one.shortfall == null ? [] : [`  ⚠ ${one.shortfall}`]),
+    ];
+  });
 
 /** The question an answer would settle next: the oldest still open. */
 export const nextAction = (view: RunView): string | null =>
