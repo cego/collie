@@ -542,9 +542,8 @@ function targetBranch(target: string): string | null {
   return head;
 }
 
-/** Every merge or pull request URL in prose, wherever the next one starts. */
 const MR_URLS =
-  /(?:https?:\/\/)?(?:github\.com\/[\w.-]+\/[\w.-]+\/pull|[\w.:-]+(?:\/[\w.-]+)+?\/-\/merge_requests)\/\d+/gi;
+  /(?<![\w.-])(?:https?:\/\/)?(?:github\.com\/[\w.-]+\/[\w.-]+\/pull|[\w.:-]+(?:\/[\w.-]+)+?\/-\/merge_requests)\/\d+(?![\w-])/gi;
 
 /**
  * The one merge request work names: the only merge or pull request URL in it, else its
