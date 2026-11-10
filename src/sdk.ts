@@ -81,7 +81,14 @@ import type { Integration } from "./integrate";
 import type { BenchmarkPlan, Measurement } from "./measurement-model";
 import type { MergeOutcome, Takeover } from "./landing";
 import type { ReviewHead, ReviewStanding } from "./review-wait";
-import type { FastForward, ProductionRead, RollbackRead, StageRead, TagRead } from "./releasing";
+import type {
+  FastForward,
+  MergeRequestRead,
+  ProductionRead,
+  RollbackRead,
+  StageRead,
+  TagRead,
+} from "./releasing";
 import type { Holders } from "./helle";
 import { ConnectionId, type ConnectionReading } from "./connection-model";
 export { ConnectionId, ConnectionReading } from "./connection-model";
@@ -100,7 +107,7 @@ export { repoArgs } from "./forge/gitlab";
 export { mrForgeFacts } from "./forge/forge";
 /** How much of a Subscription is used, as the host reads it (ADR-0049). */
 export { subscriptionOf, usedFor, type UsageReading } from "./usage-model";
-export { forgeOfRef, mrUrlOf, parseMrTarget, readMrRef, type MrRef } from "./board-model";
+export { forgeOfRef, mrSet, mrUrlOf, parseMrTarget, readMrRef, type MrRef } from "./board-model";
 import { AuthoredSolution, type Solution } from "./board-model";
 /** What merging the default branch into a Run's branch did (`HostApi.integrate`). */
 export { IntegrationSchema, type Integration } from "./integrate";
@@ -130,18 +137,22 @@ export {
   type SettledAnswers,
 } from "./review-wait";
 /**
- * A checkout brought to a head, and a tag, production and stage read back
- * (`HostApi.fastForward`, `readTag`, `readProduction`, `readStage`, `readRollback`).
+ * A checkout brought to a head, a tag, production and stage read back, and a merge request
+ * read and a set of them ordered (`HostApi.fastForward`, `readTag`, `readProduction`,
+ * `readStage`, `readRollback`, `readMergeRequest`).
  */
 export {
   FastForwardSchema,
   JobLinkSchema,
+  MergeRequestReadSchema,
   ProductionReadSchema,
   RollbackReadSchema,
   StageReadSchema,
   TagReadSchema,
+  stackOrder,
   type FastForward,
   type JobLink,
+  type MergeRequestRead,
   type ProductionRead,
   type RollbackRead,
   type StageRead,
@@ -272,6 +283,7 @@ export {
   benchmarkFile,
   benchmarkIn,
   benchmarkRefusalOf,
+  changeKey,
   checksIn,
   criteriaIn,
   isSingleRepo,
@@ -279,6 +291,7 @@ export {
   orderedTicketsOf,
   planReposOf,
   readPlanRepos,
+  stackedBranch,
   type PlanRefusal,
   type PlanRepo,
   type PlanRepos,
@@ -885,6 +898,8 @@ export interface HostApi {
     readonly target?: string;
     /** The work it is building, so the issues it answers can be found. */
     readonly source?: { readonly value: string; readonly kind: string };
+    /** The branch a new merge request targets, where it is not the default branch. */
+    readonly onto?: string | undefined;
   }) => Effect.Effect<MrReady>;
   /**
    * The URL of the checkout's branch's open merge request where it merges itself once
@@ -1154,6 +1169,14 @@ export interface HostApi {
     readonly jobs: ReadonlyArray<string>;
   }) => Effect.Effect<StageRead>;
   /**
+   * A merge request as its forge reads it now, from `cwd`: its state and the branches it
+   * merges, or why it cannot be read. Take it inside an Activity.
+   */
+  readonly readMergeRequest: (options: {
+    readonly cwd: string;
+    readonly mr: string;
+  }) => Effect.Effect<MergeRequestRead>;
+  /**
    * Whether the forge shows stage rolled back: the newest successful deployment of each of
    * `environments` carries none of `off` and carries what production's has. Where
    * `environments` is not given, stage's newest successful deployment is read instead. Take
@@ -1217,6 +1240,8 @@ export interface HostApi {
 /** A Run as the host admitted it: where it works, where its work belongs, and what it was given. */
 export interface Place {
   readonly cwd: string;
+  /** The branch its checkout is on, where it was given one. */
+  readonly branch: string | null;
   readonly dir: string;
   /**
    * The host's own launch options, plus agent preferences inherited from a parent Run.
@@ -1714,6 +1739,10 @@ export const RESERVED_INPUTS = {
   workspace:
     "Where the checkout comes from: `new` for a worktree workspace of its own, an existing checkout's absolute path, or `projects-root` for the Projects root; distinct from the CLI's workspace scope",
   repo: "One repository's share of a multi-repository work source",
+  change:
+    "One Change of that repository's share: its tickets, on the plan's branch with `--<change>` appended",
+  stacked:
+    "The Change of the same repository this one is cut from, whose branch its merge request targets",
   outcome: "The selectable outcome, where the workflow does not fix one",
   risks: "Additional review axes, passed as declared context",
   previous: "Previous review context attached to the selected work",

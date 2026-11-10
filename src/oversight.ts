@@ -61,7 +61,7 @@ import {
   writeIntentHeld,
   type Intent,
 } from "./intent";
-import { mrPath, parseMrUrl, type RunReply } from "./board-model";
+import { mrId, mrPath, parseMrUrl, type RunReply } from "./board-model";
 import type { Ref } from "./evaluator";
 import { readReplies } from "./replies";
 import { reason } from "./naming";
@@ -617,11 +617,6 @@ const committedWork = Effect.fn("Oversight.committedWork")(function* (
 /** Where a Run keeps the merge request it opened or was given. */
 export const mergeRequestFile = (runDir: string) => `${runDir}/merge-request`;
 
-const mrKey = (url: string) => {
-  const ref = parseMrUrl(url);
-  return ref?.project == null ? null : `${Str.toLowerCase(ref.project)}!${ref.iid}`;
-};
-
 const namedIn = (goal: string | null) =>
   Arr.flatMap(
     Option.getOrUndefined(
@@ -630,7 +625,7 @@ const namedIn = (goal: string | null) =>
       ),
     ) ?? [],
     (url) => {
-      const key = mrKey(pipe_(url, Str.replace(/[.,;:!?)\]'"]+$/, "")));
+      const key = mrId(pipe_(url, Str.replace(/[.,;:!?)\]'"]+$/, "")));
       return key === null ? [] : [key];
     },
   );
@@ -654,7 +649,7 @@ export const familyOf = Effect.fn("Oversight.familyOf")(function* (
   const fs = yield* FileSystem.FileSystem;
   const recordedBy = (runId: string) =>
     fs.readFileString(mergeRequestFile(dirOf(runId))).pipe(
-      Effect.map((url) => mrKey(Str.trim(url))),
+      Effect.map((url) => mrId(url)),
       Effect.orElseSucceed(() => null),
     );
   const namedBy = (runId: string) =>

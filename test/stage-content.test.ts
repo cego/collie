@@ -5,6 +5,7 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { STAGE_CLEARS } from "../workflows/stage.workflow";
+import { invocationFor } from "../workflows/staging";
 import { contentOf } from "../src/sdk";
 import onGitlab from "../workflows/stage.gitlab.md" with { type: "text" };
 import onGithub from "../workflows/stage.github.md" with { type: "text" };
@@ -95,5 +96,42 @@ test("staging deploys the head's own pipeline and rolls back only what it staged
     const unstage = flat(one.sections.get("unstage") ?? "");
     for (const said of ["{{failure}}", "{{head}}", "{{stage_jobs}}", "only in the"])
       expect(unstage).toContain(said);
+  }
+});
+
+test("a set child's name ends in the SHA-256 of its MR id, so no two merge requests share one", () => {
+  const id = "gitlab.example.com/group/a.a.a-a.a.a/a/a-a/a/a!1";
+  const digest = new Bun.CryptoHasher("sha256")
+    .update(Buffer.from(id, "utf16le").swap16())
+    .digest("hex");
+  for (const workflow of ["release", "stage"] as const)
+    expect(invocationFor(workflow, { id, target: `mr:${id}`, url: `https://${id}` })).toEndWith(
+      `-${digest}`,
+    );
+});
+
+test("a set child's Run id stays one directory's length however long its merge request's path", () => {
+  const id = `github.com/cego/${Str.repeat(49)("a-")}a#1`;
+  for (const workflow of ["release", "stage"] as const) {
+    const name = invocationFor(workflow, { id, target: `mr:${id}`, url: `https://${id}` });
+    expect(Buffer.byteLength(`run-be824389.${name}`)).toBeLessThanOrEqual(255);
+  }
+});
+
+test("two merge requests whose ids differ only in punctuation are two children of a set", () => {
+  const member = (project: string) => ({
+    id: `gitlab.example.com/${project}!1`,
+    target: `mr:gitlab.example.com/${project}!1`,
+    url: `https://gitlab.example.com/${project}/-/merge_requests/1`,
+  });
+  for (const workflow of ["release", "stage"] as const) {
+    for (const pair of [
+      ["group/foo-bar", "group-foo/bar"],
+      ["group/a.a.a-a.a.a/a/a-a/a/a", "group/a/a_a/a.a.a-a_a-a/a/a"],
+    ]) {
+      const names = Arr.map(pair, (project) => invocationFor(workflow, member(project)));
+      expect(names[0]).not.toBe(names[1]);
+      for (const name of names) expect(name).toMatch(/^[a-z0-9-]+$/);
+    }
   }
 });

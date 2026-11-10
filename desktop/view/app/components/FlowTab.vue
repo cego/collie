@@ -13,6 +13,7 @@ import {
   flowAnnouncements,
   flowKey,
   flowRows,
+  isReleaseRow,
   inspectorOf,
   linkedCards,
   nodeAt,
@@ -91,7 +92,10 @@ const lane = computed(
             Option.map(Option.fromNullishOr(selected.value), (present) => present.run),
           ),
       ),
-    ) ?? (selected.value?.run === "release" ? props.flow.lanes.at(-1) : undefined),
+    ) ??
+    (selected.value !== null && isReleaseRow(selected.value.run)
+      ? props.flow.lanes.at(-1)
+      : undefined),
 );
 const move = computed(() => nextMove(props.flow));
 const moveAction = computed(() =>

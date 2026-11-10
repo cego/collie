@@ -137,10 +137,12 @@ import { land, LandingSchema, readLanding, takeOver } from "./landing";
 import {
   carried,
   fastForward,
+  readMergeRequest,
   readProduction,
   readRollback,
   readStage,
   readTag,
+  type MergeRequestRead,
   type ProductionRead,
   type RollbackRead,
   type StageRead,
@@ -157,6 +159,7 @@ import { AwaitingJson, AwaitingSchema, overdueLine } from "./awaiting";
 import {
   autoMergingHere,
   forgeHere,
+  mrIdIn,
   prepareMergeRequest,
   postNote,
   productionCarries,
@@ -169,8 +172,9 @@ import { outcomeRecordsOf, type OutcomeRecords } from "./outcomes";
 import type { Metrics, Solution } from "./board-model";
 import {
   forgeOfRef,
-  mrLabel,
+  mrId,
   mrRefOf,
+  mrRefsIn,
   mrWords,
   parseMrTarget,
   readMrRef,
@@ -218,7 +222,7 @@ import {
 } from "./intent";
 import { latest, readDispositions } from "./disposition";
 import { openFindingsIn } from "./output";
-import { isSingleRepo, planIssuesIn, planReposOf } from "./plan";
+import { changeKey, changeOfKey, isSingleRepo, planIssuesIn, planReposOf } from "./plan";
 import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
 import { isOutcome, REQUESTABLE } from "./outcome";
 import { Foreground } from "./foreground";
@@ -288,7 +292,7 @@ import {
   type StepLine,
   type StepNote,
 } from "./steps";
-import { classifyGivenTarget, classifyWorkSource, defaultBase } from "./inputs";
+import { classifyGivenSet, classifyGivenTarget, classifyWorkSource, defaultBase } from "./inputs";
 import type { PlatformServices } from "./platform";
 import {
   approvedFile,
@@ -485,6 +489,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** A Run as the host admitted it: where it works, where its work belongs, what it was given. */
   export interface Place {
     readonly cwd: string;
+    /** The branch its checkout is on, where it was given one. */
+    readonly branch: string | null;
     readonly dir: string;
     /** The host's own launch options — the RESERVED_INPUTS names — as a caller gave them. */
     readonly options: Readonly<Record<string, string>>;
@@ -739,6 +745,17 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly _tag: "Moved"; readonly head: string; readonly environments?: ReadonlyArray<string> }
     | { readonly _tag: "Failed"; readonly why: string; readonly environments?: ReadonlyArray<string> };
   export const StageReadSchema: Schema.Codec<StageRead, unknown, never, never>;
+  /** A merge request as its forge reads it now: its state and the branches it merges, and its plan's wave where a fan-out's Change run opened it. */
+  export type MergeRequestRead =
+    | { readonly _tag: "Read"; readonly state: string; readonly source: string; readonly target: string; readonly wave?: { readonly plan: string; readonly at: number } }
+    | { readonly _tag: "Unreadable"; readonly why: string };
+  export const MergeRequestReadSchema: Schema.Codec<MergeRequestRead, unknown, never, never>;
+  /** A set's merge requests, blockers first, each with those of the set it waits on, by branch and by its plan's earlier waves; or those waiting on each other. */
+  export function stackOrder(
+    mrs: ReadonlyArray<{ readonly id: string; readonly source: string; readonly target: string; readonly wave?: { readonly plan: string; readonly at: number } }>,
+  ):
+    | { readonly _tag: "Ordered"; readonly order: ReadonlyArray<{ readonly id: string; readonly waitsOn: ReadonlyArray<string> }> }
+    | { readonly _tag: "Cycle"; readonly ids: ReadonlyArray<string> };
 
   /** A landing taken over from the Run that made it, or why there was none to take. */
   export type Takeover =
@@ -923,6 +940,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly cwd: string;
       readonly target?: string;
       readonly source?: { readonly value: string; readonly kind: string };
+      /** The branch a new merge request targets, where it is not the default branch. */
+      readonly onto?: string | undefined;
     }) => Effect.Effect<MrReady>;
     /**
      * The checkout's branch's open merge request where it merges itself once green, else null.
@@ -1096,6 +1115,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly head: string;
       readonly jobs: ReadonlyArray<string>;
     }) => Effect.Effect<StageRead>;
+    /** A merge request as its forge reads it now, from \`cwd\`. Take it inside an Activity. */
+    readonly readMergeRequest: (options: {
+      readonly cwd: string;
+      readonly mr: string;
+    }) => Effect.Effect<MergeRequestRead>;
     /** Whether stage is shown back on what production carries, and off \`off\`, in \`environments\` where named. Take it inside an Activity. */
     readonly readRollback: (options: {
       readonly runId: string;
@@ -1967,6 +1991,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function mrUrlOf(ref: MrRef): string | null;
   /** The forge a merge request is on. */
   export function forgeOfRef(ref: MrRef): "gitlab" | "github";
+  /** The merge requests a set names, each once by MR id, or the first reference naming none; null for one or none. */
+  export function mrSet(text: string):
+    | { readonly mrs: ReadonlyArray<{ readonly id: string; readonly target: string; readonly url: string }> }
+    | { readonly unresolved: string }
+    | null;
 
   /** Which of the three kinds of change a settled diff target names. */
   export function targetKind(target: string): "mr" | "branch" | "worktree" | "";
@@ -2124,23 +2153,41 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** What only CI, a merge or a deploy can show: the items under a ticket's ## After merge. */
   export function afterMergeIn(text: string): string[];
 
-  /** A plan's tickets in an order they can be built in, narrowed to one repository. */
+  /** A plan's tickets in an order they can be built in, narrowed to one repository's Change. */
   export function orderedTickets(
     tickets: ReadonlyArray<{ readonly file: string; readonly text: string }>,
     repo?: string,
+    change?: string,
   ): Slice[];
 
   /** The same reading, against a plan directory on disk. */
   export function orderedTicketsOf(
     planDir: string,
     repo?: string,
+    change?: string,
   ): Effect.Effect<Slice[], never, FileSystem.FileSystem | Path.Path>;
 
-  /** One repository a plan changes, and the tickets that change it, in plan order. */
+  /** One Change of a plan: its repository, its name, and its tickets in plan order. */
   export interface PlanRepo {
     readonly path: string;
+    /** Absent for the repository's default Change. */
+    readonly change?: string;
+    /** The key of the Change in the same repository this one is cut from. */
+    readonly stacked?: string;
     readonly tickets: ReadonlyArray<string>;
   }
+
+  /**
+   * The branch a stacked Change run builds on and opens its merge request against, named
+   * from its own branch; null where its own is not the one its Change is given.
+   */
+  export function stackedBranch(
+    own: string,
+    run: { readonly repo: string; readonly change?: string; readonly stacked: string },
+  ): string | null;
+
+  /** How a Change is named in waves, refusals and invocations: api, or api--schema. */
+  export function changeKey(one: { readonly path: string; readonly change?: string | undefined }): string;
 
   /** Why this plan cannot be fanned out. The message is what the human is shown. */
   export interface PlanRefusal {
@@ -2150,13 +2197,14 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       | "missing-checkout"
       | "outside-root"
       | "unknown-blocker"
-      | "duplicate-ticket";
+      | "duplicate-ticket"
+      | "bad-change";
     readonly message: string;
   }
 
   export interface PlanRepos {
     readonly repos: ReadonlyArray<PlanRepo>;
-    /** Repo paths in the order their runs may start; each wave waits on the one before. */
+    /** Change keys in the order their runs may start; each wave waits on the one before. */
     readonly waves: ReadonlyArray<ReadonlyArray<string>>;
     readonly refusal: PlanRefusal | null;
   }
@@ -4219,6 +4267,7 @@ export const hostLayer = (options: {
                 ),
                 Effect.map((admitted) => ({
                   cwd: admitted?.placed.cwd ?? dir,
+                  branch: admitted?.placed.branch ?? null,
                   dir: runDir(dir, runId),
                   options: admitted?.options ?? {},
                   task: admitted?.task ?? null,
@@ -4227,6 +4276,7 @@ export const hostLayer = (options: {
                 })),
                 Effect.orElseSucceed(() => ({
                   cwd: dir,
+                  branch: null,
                   dir: runDir(dir, runId),
                   options: {},
                   task: null,
@@ -4933,6 +4983,21 @@ export const hostLayer = (options: {
               }),
             );
           }),
+        readMergeRequest: (asked) => {
+          const ref = readMrRef(asked.mr);
+          return ref === null
+            ? Effect.succeed({
+                _tag: "Unreadable",
+                why: `${asked.mr} is not a merge request`,
+              } satisfies MergeRequestRead)
+            : Effect.gen(function* () {
+                const read = yield* under(readMergeRequest({ ref, cwd: asked.cwd, run: runShell }));
+                const id = mrId(asked.mr);
+                const wave =
+                  read._tag === "Read" && id !== null ? yield* planWaveOf(id) : undefined;
+                return wave === undefined ? read : { ...read, wave };
+              });
+        },
         readProduction: (asked) =>
           Effect.gen(function* () {
             const ref = yield* recordedRef(asked.runId);
@@ -5062,6 +5127,45 @@ export const hostLayer = (options: {
           const worktree = placed?.worktree?.path ?? null;
           return { worktree, cwd: worktree ?? placed?.cwd ?? dir };
         });
+      /** The wave of its fan-out's plan the Change run that opened `id` is in; none for no such Run. */
+      const planWaveOf = (id: string) =>
+        Effect.gen(function* () {
+          const rows = yield* store.runs;
+          for (const row of rows) {
+            if (row.parent === null) continue;
+            const opened = yield* mergeRequestOf(fs, dir, row.run);
+            if (opened === null || mrId(opened) !== id) continue;
+            const options = yield* decodeStrings(row.options ?? "{}").pipe(
+              Effect.orElseSucceed((): Record<string, string> => ({})),
+            );
+            const parent = Arr.findFirst(rows, (one) => one.run === row.parent);
+            if ((options.repo ?? "") === "" || Option.isNone(parent)) return undefined;
+            const given = yield* decodeInput(parent.value.input).pipe(
+              Effect.orElseSucceed((): Readonly<Record<string, Schema.Json>> => ({})),
+            );
+            const root = (yield* checkoutOf(parent.value)).cwd;
+            for (const value of Rec.values(given)) {
+              if (!isText(value)) continue;
+              const source = yield* classifyWorkSource(value).pipe(
+                Effect.orElseSucceed(() => null),
+              );
+              if (source?.kind !== "plan-dir") continue;
+              const plan = yield* planReposOf(source.value, root).pipe(
+                Effect.orElseSucceed(() => null),
+              );
+              const key = changeKey({ path: options.repo!, change: options.change });
+              const at =
+                plan === null || plan.refusal !== null
+                  ? -1
+                  : Arr.findFirstIndex(plan.waves, (wave) => wave.includes(key)).pipe(
+                      Option.getOrElse(() => -1),
+                    );
+              return at < 0 ? undefined : { plan: parent.value.run, at };
+            }
+            return undefined;
+          }
+          return undefined;
+        }).pipe(Effect.provideContext(bun));
       /** A Run as a card sees it: where it works, and where its records are. */
       const watched = (runId: string): Effect.Effect<Watched> =>
         Effect.gen(function* () {
@@ -5408,11 +5512,9 @@ const pointedAt = (
 
 const isText = Schema.is(Schema.String);
 
-/** A merge request as the forge names it, or null for anything that names no project's. */
-const mrKeyOf = (said: string | null) => {
-  const ref = mrRefOf(said);
-  return ref === null || ref.project === null ? null : `${ref.project}!${ref.iid}`;
-};
+/** A set's first merge request stands for it; a bare or hostless one is read in `cwd`. */
+const mrIdOf = (said: string | null, cwd: string) =>
+  said === null ? Effect.succeed(null) : mrIdIn(mrRefsIn(said)[0] ?? "", cwd, runShell);
 
 /** The field a module gives this strategy, if it gives it to one. */
 const fieldWith = (hints: Readonly<Record<string, InputStrategy>>, strategy: InputStrategy) =>
@@ -6473,6 +6575,12 @@ const makeRegistry: (
     const field = fieldWith(generation.hints, "diff-target");
     const value = field === undefined ? undefined : settled.input[field];
     if (field === undefined || !isText(value) || Str.trim(value) === "") return settled;
+    const set = yield* classifyGivenSet(value, { cwd }).pipe(Effect.provideContext(bun));
+    if (set !== null && "unresolved" in set)
+      return yield* refusedInput(
+        `"${field}" names ${set.unresolved}, which is not a merge request`,
+      );
+    if (set !== null) return { ...settled, input: { ...settled.input, [field]: set.value } };
     const target = yield* classifyGivenTarget(value, { cwd }).pipe(Effect.provideContext(bun));
     if (target === null) {
       return yield* refusedInput(
@@ -6753,7 +6861,8 @@ const makeRegistry: (
       if (!(yield* lineageIn(store)(row.run)).includes(planRun)) continue;
       branch = on;
       const mr = yield* mergeRequestOf(fs, dir, row.run);
-      const state = mr === null ? undefined : states.get(mrLabel(mr));
+      const id = mr === null ? null : yield* mrIdIn(mr, placedOf(row, {}).cwd, runShell);
+      const state = id === null ? undefined : states.get(id);
       if (state !== undefined && state !== "open") return null;
     }
     return branch;
@@ -6790,6 +6899,11 @@ const makeRegistry: (
       sources: ask.provenance,
       explicit: ask.options.branch ?? null,
       taskBranch,
+      change: ask.options.change,
+      stackedOn:
+        ask.options.stacked === undefined
+          ? undefined
+          : changeOfKey(ask.options.repo ?? ".", ask.options.stacked),
       login: placing.env.gitlabLogin,
       githubLogin: placing.env.githubLogin,
       gitlabHost: yield* gitlabHostOf(placing.env).pipe(Effect.orElseSucceed(() => undefined)),
@@ -7032,7 +7146,7 @@ const makeRegistry: (
       strategies: generation.hints,
       sources: ask.provenance,
     });
-    const mr = mrKeyOf(pointedAt(generation, ask.input));
+    const mr = yield* mrIdOf(pointedAt(generation, ask.input), placed.cwd);
     if (branch === null && mr === null) return null;
     const open = new Set(
       branch === null || (yield* terminalBackend(placing.env.userDir)) === "core"
@@ -7056,12 +7170,13 @@ const makeRegistry: (
       if (mr !== null) {
         const recorded = live.get(row.generation);
         const given = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
-        const mrs = Arr.map(
+        const cwd = placedOf(row, {}).cwd;
+        const mrs = yield* Effect.forEach(
           [
             yield* mergeRequestOf(fs, dir, row.run),
             recorded === undefined ? null : pointedAt(recorded, given),
           ],
-          mrKeyOf,
+          (said) => mrIdOf(said, cwd),
         );
         if (mrs.includes(mr)) return task;
       }
@@ -8349,7 +8464,7 @@ const makeRegistry: (
           offer.id,
           read.success.refusal?.message ??
             `its plan spans repositories (${Arr.join(
-              Arr.map(read.success.repos, (one) => one.path),
+              Arr.map(read.success.repos, changeKey),
               ", ",
             )}), which a card does not fan out. \`collie run start ${offer.workflow === SELF ? row.workflow : offer.workflow} --input ${field}=${where}/plan\` does, one Run per repository.`,
         );

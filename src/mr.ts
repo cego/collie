@@ -15,6 +15,7 @@ import {
   type MrDetails,
   type MrForge,
   type MrRef,
+  mrId,
   mrPath,
   mrTarget,
   parseMrTarget,
@@ -243,6 +244,28 @@ export function projectHere<R>(
     return null;
   });
 }
+/**
+ * `mr`'s MR id, where a bare or hostless one is resolved against the checkout at `cwd`;
+ * null where it names no merge request a host can be told for.
+ */
+export function mrIdIn<R>(
+  mr: string,
+  cwd: string,
+  run: Runner<R>,
+): Effect.Effect<string | null, never, R> {
+  return Effect.gen(function* () {
+    const id = mrId(mr);
+    if (id !== null) return id;
+    const known = checkouts.get(cwd);
+    const project = known ?? (yield* projectHere(cwd, run));
+    if (project !== null) checkouts.set(cwd, project);
+    return mrId(mr, { project });
+  });
+}
+
+// ponytail: a checkout's project for the process's life, read only for legacy references.
+const checkouts = new Map<string, string>();
+
 /** A checkout's forge and the project it pushes to, or why it has none. */
 export type ForgeHere =
   | { readonly ok: true; readonly forge: Forge; readonly project: string }
@@ -363,6 +386,8 @@ export function prepareMergeRequest<R>(
     readonly cwd: string;
     readonly target?: string;
     readonly source?: { readonly value: string; readonly kind: string };
+    /** The branch a new merge request targets, where it is not the default branch. */
+    readonly onto?: string | undefined;
     /** `<forge>.assignee` from the user's config, by forge: one forge's never answers for another. */
     readonly assignees?: Partial<Record<MrForge, YamlValue>>;
     /** The Flock's GitLab, which is GitLab whatever its name. */
@@ -431,6 +456,7 @@ export function prepareMergeRequest<R>(
         branch,
         assignee: assignee ?? "",
         existing: found.open?.iid ?? null,
+        onto: opts.onto,
       }),
     };
   });

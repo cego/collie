@@ -1238,7 +1238,7 @@ export const gitlab: Forge = {
   template,
   // `glab mr create` and `glab mr note` take text only, so a file goes through the API,
   // which reads `@<file>` itself: no command substitution (CrowdStrike flags it).
-  commands: ({ project, assignee, existing }) => {
+  commands: ({ project, assignee, existing, onto }) => {
     const api = (method: string, path: string) =>
       Result.getOrThrow(
         CommandLine.join([
@@ -1255,7 +1255,7 @@ export const gitlab: Forge = {
     return {
       create: Arr.join(
         [
-          `${Result.getOrThrow(CommandLine.join(["glab", "mr", "create", "--assignee", assignee]))} --title "<title>" --description "<title>" --yes`,
+          `${Result.getOrThrow(CommandLine.join(["glab", "mr", "create", "--assignee", assignee, ...(onto ? ["--target-branch", onto] : [])]))} --title "<title>" --description "<title>" --yes`,
           `${api("PUT", `${route}/<iid>`)} -F description=@<file>`,
         ],
         "\n",

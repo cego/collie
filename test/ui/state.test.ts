@@ -7,6 +7,7 @@ import {
   actionsFor,
   dispositionsFor,
   menuFor,
+  mrChoices,
   primaryFor,
   olderFinished,
   ALL_KEYS,
@@ -32,6 +33,7 @@ import {
   viewRows,
   wideRows,
   type KeyContext,
+  type MenuItem,
   type Keypress,
   type AppState,
   type Row,
@@ -43,7 +45,7 @@ import type { PendingChoice } from "../../src/board";
 import type { WideGroup, WideView, WorkspaceView } from "../../src/workspace";
 import { NO_OUTCOME } from "../../src/workspace";
 import { focus } from "../support/focus";
-import { task } from "../support/task";
+import { task, taskMr } from "../support/task";
 
 /** A fixed clock: relative times are the point, so they must not depend on the wall. */
 const NOW = epochMs("2026-09-02T12:00:00.000Z");
@@ -1054,7 +1056,7 @@ function keys(over: Partial<KeyContext> = {}): KeyContext {
     row: null,
     rows: [],
     cutShort: false,
-    mrUrl: null,
+    mrs: [],
     ...over,
   };
 }
@@ -1240,7 +1242,13 @@ test("a key with nothing to act on does nothing, rather than acting on something
     _tag: "Do",
     command: { _tag: "MoreReview" },
   });
-  expect(keyIntent(keys({ mrUrl: "https://host/g/p/-/merge_requests/42" }), press("c"))).toEqual({
+  const url = "https://host/g/p/-/merge_requests/42";
+  expect(
+    keyIntent(
+      keys({ mrs: [{ short: "p!42", target: "mr:host/g/p!42", url, runId: null }] }),
+      press("c"),
+    ),
+  ).toEqual({
     _tag: "Copy",
     text: "https://host/g/p/-/merge_requests/42",
   });
@@ -1297,6 +1305,97 @@ test("a Task pointed at a merge request can open it, however it got there", () =
     _tag: "OpenMr",
     target: "mr:gitlab.cego.dk/mk/collie!151",
   });
+});
+
+test("on a card of several merge requests, w and y ask which one, and each answer acts on its own", () => {
+  const app = taskMr("spilnu/app", 12, { run: "r-app" });
+  const api = taskMr("spilnu/api", 7, { run: "r-api" });
+  const menu = menuFor(task({ mr: app.mr, mrs: [app, api] }));
+  const chooser = (key: string) => {
+    const command = Option.getOrUndefined(Arr.findFirst(menu, (one) => one.key === key))?.command;
+    return command?._tag === "ChooseMr" ? mrChoices(command) : [];
+  };
+
+  expect(Arr.map(chooser("w"), (one) => [one.key, one.label, one.command])).toEqual([
+    [
+      "1",
+      "Open MR app!12",
+      { _tag: "OpenMr", target: "mr:gitlab.cego.dk/spilnu/app!12", runId: "r1" },
+    ],
+    [
+      "2",
+      "Open MR api!7",
+      { _tag: "OpenMr", target: "mr:gitlab.cego.dk/spilnu/api!7", runId: "r1" },
+    ],
+  ]);
+  expect(Arr.map(chooser("y"), (one) => [one.key, one.command])).toEqual([
+    ["1", { _tag: "CopyLink", url: app.url ?? "" }],
+    ["2", { _tag: "CopyLink", url: api.url ?? "" }],
+  ]);
+  const choice = (one: typeof app) => ({
+    short: one.short,
+    target: `mr:${one.id}`,
+    url: one.url,
+    runId: one.run,
+  });
+  expect(keyIntent(keys({ mrs: [choice(app)] }), press("c"))).toEqual({
+    _tag: "Copy",
+    text: app.url ?? "",
+  });
+  expect(keyIntent(keys({ mrs: [choice(app), choice(api)] }), press("c"))).toEqual({
+    _tag: "Do",
+    command: { _tag: "ChooseMr", copy: true, mrs: [choice(app), choice(api)] },
+  });
+});
+
+test("a card of several merge requests with a check running gives each menu item a key of its own", () => {
+  const app = taskMr("spilnu/app", 12, { run: "r-app" });
+  const api = taskMr("spilnu/api", 7, { run: "r-api" });
+  const check = {
+    name: "test",
+    pass: "gate",
+    round: null,
+    revision: "abc",
+    base: null,
+    elapsedMs: null,
+    usualMs: null,
+    others: 0,
+    sentence: "Running test on the branch.",
+    log: null,
+    lastLines: [],
+  } as const;
+  const keyed = Arr.filter(
+    Arr.map(menuFor(task({ mr: app.mr, mrs: [app, api], check })), (one) => one.key),
+    (key) => key !== "",
+  );
+  expect(keyed).toContain("c");
+  expect(new Set(keyed).size).toBe(keyed.length);
+});
+
+test("every one of more than nine merge requests is reachable from the chooser by its keys", () => {
+  const mrs = Arr.map(Arr.range(1, 11), (iid) => ({
+    short: `app!${iid}`,
+    target: `mr:gitlab.cego.dk/spilnu/app!${iid}`,
+    url: `https://gitlab.cego.dk/spilnu/app/-/merge_requests/${iid}`,
+    runId: `r${iid}`,
+  }));
+  for (const copy of [false, true]) {
+    const reached: Array<string> = [];
+    let page: ReadonlyArray<MenuItem> = mrChoices({ _tag: "ChooseMr", copy, mrs });
+    while (page.length > 0) {
+      const keys = Arr.map(page, (one) => one.key);
+      expect(Arr.every(keys, (key) => /^[1-9]$/.test(key))).toBe(true);
+      expect(new Set(keys).size).toBe(keys.length);
+      let next: ReadonlyArray<MenuItem> = [];
+      for (const { command } of page) {
+        if (command._tag === "ChooseMr") next = mrChoices(command);
+        if (command._tag === "OpenMr") reached.push(command.target);
+        if (command._tag === "CopyLink") reached.push(command.url);
+      }
+      page = next;
+    }
+    expect(reached).toEqual(Arr.map(mrs, (one) => (copy ? one.url : one.target)));
+  }
 });
 
 test("every key a card's menu offers is one the overlay advertises", () => {

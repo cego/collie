@@ -688,7 +688,7 @@ function undeclaredNodes(
       node: {
         ...base,
         id: "repo-runs",
-        title: "Repo runs",
+        title: "Change runs",
         kind: "workflow",
         state: fanState(runs, ended),
         said: null,

@@ -612,6 +612,8 @@ test(
           "task",
           "workspace",
           "repo",
+          "change",
+          "stacked",
           "outcome",
           "risks",
           "previous",

@@ -2,7 +2,8 @@
 
 import { expect, test } from "bun:test";
 import { Effect, Exit } from "effect";
-import { actionRunner } from "../desktop/src/shared/actions";
+import { actionRunner, chosenOffer, invokeOf, offerKey } from "../desktop/src/shared/actions";
+import type { OfferView } from "../src/board-model";
 import { ActionFailed } from "../desktop/src/shared/flock";
 import { runEffect } from "./support/effect";
 
@@ -36,3 +37,30 @@ test("a try refused over a Step that finished since tells its caller which Step"
       ]);
     }),
   ));
+
+test("an offer a Task's other merge request makes is chosen apart from the Run's own, and invoked on its owner", () => {
+  const offer = (over: Partial<OfferView>): OfferView => ({
+    id: "release",
+    title: "Release",
+    workflow: "release",
+    arguments: null,
+    kind: "follow-up",
+    primary: false,
+    unavailable: null,
+    ...over,
+  });
+  const own = offer({ title: "Release app!12" });
+  const api = offer({ title: "Release api!7", run: "r-api" });
+  const offers = [own, api];
+
+  expect(chosenOffer(offers, offerKey(api))).toBe(api);
+  expect(chosenOffer(offers, offerKey(own))).toBe(own);
+  expect(offerKey(own)).not.toBe(offerKey(api));
+  expect(invokeOf("r-app", api, {})).toEqual({
+    _tag: "Invoke",
+    runId: "r-api",
+    offer: "release",
+    input: {},
+  });
+  expect(invokeOf("r-app", own, {}).runId).toBe("r-app");
+});

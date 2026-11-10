@@ -949,6 +949,17 @@ released, or merged at another commit. Each of these calls takes its place insid
 Activity. `readMrRef`, `mrUrlOf` and `forgeOfRef` turn a merge request input into its
 reference, its URL and its forge.
 
+`mrSet(text)` reads an input naming several merge requests, separated by spaces or commas:
+each once by its MR `id`, with its `mr:` `target` and `url`, or `unresolved`, the first
+reference that names none; null where the text names one or none.
+`host.readMergeRequest({ cwd, mr })` reads one from its forge now: `Read` with its `state`
+and its `source` and `target` branches, and the `wave` it is `at` in its fan-out's `plan`
+where one of its Change runs opened it, or `Unreadable` with `why`. `stackOrder` puts a
+set's merge requests, given their branches and waves, blockers first, each with the ones of
+the set it `waitsOn`: those whose source branch is its target branch, in its own project
+where any are, and those of an earlier wave of the same plan. `Cycle` names those that wait
+on each other.
+
 ## Markdown as content
 
 A workflow's Markdown is what its agents are told, and nothing else: what it takes, what it
@@ -1081,10 +1092,12 @@ for (const wave of plan.waves) {
 }
 ```
 
-`readPlanRepos` (and `planReposOf`, against a directory) says which repositories a plan
-changes and in what order their Runs may start — a wave waits on the one before it — or
-refuses the whole plan: a cycle, a ticket number claimed twice, a repository with no
-checkout to work in. Refuse at the parent, where no child exists yet and there is nothing
+`readPlanRepos` (and `planReposOf`, against a directory) says which Changes a plan names —
+each a repository, its `change` where a `Change:` line named one, and the Change it is
+`stacked` on — and in what order their Runs may start, by `changeKey`: a wave waits on the
+one before it. It refuses the whole plan instead for a cycle, a ticket number claimed twice,
+a Change name git would refuse, or a repository with no checkout to work in. A plan with no
+`Change:` lines reads exactly as one repository per Change. Refuse at the parent, where no child exists yet and there is nothing
 to clean up. A Run whose work source is such a plan, and which was given no `repo`, is
 placed as that parent: the host cuts it no checkout, since each repository's Run cuts its
 own, and refuses to start it at all where the plan cannot fan out.

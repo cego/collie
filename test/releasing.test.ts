@@ -7,7 +7,7 @@ import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import type { Runner } from "../src/mr";
-import { fastForward, readProduction, readTag } from "../src/releasing";
+import { fastForward, readProduction, readTag, stackOrder } from "../src/releasing";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { FORGE_HOST, PROJECT, fakeForge, type ForgeModel } from "./support/forge";
@@ -300,3 +300,58 @@ test("a tag moved after its proof plays nothing in production, even onto a desce
       expect((yield* read(later))._tag).toBe("Unproved");
     }).pipe(Effect.scoped),
   ));
+
+test("a set is released blockers first: one targeting another's branch waits on it, the rest keep their order", () => {
+  const app = "gitlab.example.com/group/app!12";
+  const api = "gitlab.example.com/group/api!7";
+  const web = "gitlab.example.com/group/web!3";
+  expect(
+    stackOrder([
+      { id: api, source: "api-schema", target: "app-schema" },
+      { id: app, source: "app-schema", target: "main" },
+      { id: web, source: "web-page", target: "main" },
+    ]),
+  ).toEqual({
+    _tag: "Ordered",
+    order: [
+      { id: app, waitsOn: [] },
+      { id: web, waitsOn: [] },
+      { id: api, waitsOn: [app] },
+    ],
+  });
+});
+
+test("a set follows its plan's waves too: a Change of a later wave waits on the set's Changes of earlier ones", () => {
+  const app = "gitlab.example.com/group/app!12";
+  const api = "gitlab.example.com/group/api!7";
+  const web = "gitlab.example.com/group/web!3";
+  const other = "gitlab.example.com/group/cli!4";
+  expect(
+    stackOrder([
+      { id: api, source: "plan", target: "main", wave: { plan: "r-fan", at: 1 } },
+      { id: app, source: "plan", target: "main", wave: { plan: "r-fan", at: 0 } },
+      { id: web, source: "plan", target: "main", wave: { plan: "r-fan", at: 1 } },
+      { id: other, source: "cli-fix", target: "main", wave: { plan: "r-other", at: 3 } },
+    ]),
+  ).toEqual({
+    _tag: "Ordered",
+    order: [
+      { id: app, waitsOn: [] },
+      { id: other, waitsOn: [] },
+      { id: api, waitsOn: [app] },
+      { id: web, waitsOn: [app] },
+    ],
+  });
+});
+
+test("a set whose merge requests target each other's branches is a cycle, naming each", () => {
+  const app = "gitlab.example.com/group/app!12";
+  const api = "gitlab.example.com/group/app!7";
+  expect(
+    stackOrder([
+      { id: app, source: "one", target: "two" },
+      { id: api, source: "two", target: "one" },
+      { id: "gitlab.example.com/group/web!3", source: "three", target: "main" },
+    ]),
+  ).toEqual({ _tag: "Cycle", ids: [app, api] });
+});
