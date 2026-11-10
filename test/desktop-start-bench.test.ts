@@ -58,6 +58,33 @@ await child.exited;
       }),
     ));
 
+  test("reads an app that keeps its state elsewhere, as the Rune shell keeps its core's", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped();
+        const app = `${dir}/app.ts`;
+        yield* fs.writeFileString(
+          app,
+          `import { appendFileSync, readFileSync } from "node:fs";
+const own = process.env.XDG_STATE_HOME + "/collie-desktop-rune-spike/state/collie-desktop";
+if (JSON.parse(readFileSync(own + "/settings.json", "utf8")).recordTiming === true)
+  appendFileSync(own + "/record-timing.log", JSON.stringify({ name: "board-usable", at: performance.timeOrigin + performance.now(), card: "" }) + "\\n");
+await Bun.sleep(30_000);
+`,
+        );
+        const line = yield* measureStart({
+          argv: [process.execPath, app],
+          env: { PATH: Bun.env.PATH },
+          desktopState: `${dir}/state`,
+          own: `${dir}/state/collie-desktop-rune-spike/state/collie-desktop`,
+          idle: "0 millis",
+        });
+        const printed = yield* Schema.decodeEffect(Started)(line);
+        expect(printed.board_usable_ms).toBeGreaterThanOrEqual(0);
+      }),
+    ));
+
   test("kills a process of the app's tree that ignores SIGTERM, though the app itself ended", () =>
     runEffect(
       Effect.gen(function* () {

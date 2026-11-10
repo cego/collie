@@ -11,6 +11,13 @@ pub mod generated {
 pub mod rpc;
 pub mod spoken;
 
+/// Now, in milliseconds since the epoch, as `recordMark`'s marks count time.
+pub fn epoch_ms() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |since| since.as_secs_f64() * 1000.0)
+}
+
 /// A field both optional and nullable: absent is `None`, `null` is `Some(None)`.
 pub(crate) mod double_option {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};

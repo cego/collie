@@ -2,11 +2,14 @@
 //! stdio, draws the board `flock` streams, and a pressed card's pane on the `terminal` stream.
 
 use collie_desktop_board::notify::deliver;
-use collie_desktop_board::{Board, run_diff, view};
+use collie_desktop_board::timing::Mark;
+use collie_desktop_board::{Board, frame_drawn, run_diff, view};
 use collie_desktop_protocol::client::Client;
 use collie_desktop_protocol::core::Core;
+use collie_desktop_protocol::epoch_ms;
 use collie_desktop_protocol::generated::{
-    AguiEvent, FlockItem, KeptRecord, RunDetailPayload, StagePathsPayload, StagedOrRefusedItem,
+    AguiEvent, FlockItem, KeptRecord, RecordMarkPayload, RunDetailPayload, StagePathsPayload,
+    StagedOrRefusedItem,
 };
 use collie_desktop_terminal::pane::Pane;
 use collie_desktop_terminal::view::Tab;
@@ -65,7 +68,8 @@ fn chat(handle: &AppHandle<Board>, client: &Client) {
             std::thread::spawn(move || {
                 for event in events {
                     let event = event.map_err(|error| error.to_string());
-                    shows.update(move |board, _| board.chat.heard(turn, event));
+                    let at = epoch_ms();
+                    shows.update(move |board, _| board.chat_heard(turn, event, at));
                 }
             });
             Box::new(move || release.interrupt())
@@ -82,9 +86,7 @@ fn diffs(handle: &AppHandle<Board>, client: &Client) {
             std::thread::spawn(move || {
                 let patch = run_diff(&client, &installation, &run).unwrap_or_default();
                 // FileDiff holds an Rc, so the patch is parsed on the view's thread.
-                shows.update(move |board, _| {
-                    board.diff_read(opened, &patch)
-                });
+                shows.update(move |board, _| board.diff_read(opened, &patch));
             });
         }));
     });
@@ -167,6 +169,30 @@ fn notifications(handle: &AppHandle<Board>, client: &Client) {
     std::thread::spawn(move || deliver(notices, &notifier, raise));
 }
 
+/// Hands each frame's marks to the main process's `recordMark`, which logs them while Record
+/// timing is on.
+fn marks(client: &Client) -> impl FnMut(&rune::Runtime<Board>) + 'static {
+    let (marked, marks) = std::sync::mpsc::channel::<Mark>();
+    let client = client.clone();
+    std::thread::spawn(move || {
+        for mark in marks {
+            let _ = client.request::<_, Value, Value>(
+                "recordMark",
+                RecordMarkPayload {
+                    name: mark.name.into(),
+                    at: mark.at,
+                    card: mark.card,
+                },
+            );
+        }
+    });
+    move |drawn| {
+        for mark in frame_drawn(drawn, epoch_ms()) {
+            let _ = marked.send(mark);
+        }
+    }
+}
+
 /// Installs a staged update before anything starts, and runs the new shell where it did.
 /// For a bundled shell, says where the core stages the next one and where the bundle's
 /// version is.
@@ -216,7 +242,8 @@ fn main() {
         (1280.0, 900.0),
         Board::default,
         view,
-    ));
+    ))
+    .on_frame_drawn(marks(&client));
     let handle = app.handle();
     go_to_panes(&handle, &client);
     chat(&handle, &client);

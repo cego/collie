@@ -41,6 +41,7 @@ const SPOKEN = [
   ["runFile", "error", "ActionFailed"],
   ["stagePaths", "payload", "StagePathsPayload"],
   ["stagePaths", "success", "StagedOrRefused"],
+  ["recordMark", "payload", "RecordMarkPayload"],
 ] as const;
 
 /** The JSON Schema keywords `Schema.toJsonSchemaDocument` writes for these RPCs. */

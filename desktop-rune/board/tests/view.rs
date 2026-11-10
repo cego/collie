@@ -276,7 +276,10 @@ fn a_panes_run_record_gives_its_flow_map_and_one_since_left_does_not() {
     assert!(shown.iter().any(|k| k == "terminal-grid"), "{shown:?}");
 
     tap(&mut runtime, "back", 2000.0);
-    assert!(keys(&runtime).iter().any(|k| k == "flow"), "the board keeps it");
+    assert!(
+        keys(&runtime).iter().any(|k| k == "flow"),
+        "the board keeps it"
+    );
     tap(&mut runtime, "card-b1", 3000.0);
     runtime.update(|board, _| board.flow_read(1, flow("before")));
     runtime.frame(4000.0);

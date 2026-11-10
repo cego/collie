@@ -48,12 +48,15 @@ impl Chat {
         if let Some(say) = &self.say {
             self.turns += 1;
             self.live = Some(self.turns);
-            self.turn = Some(say(SayPayload {
-                text: said,
-                about: None,
-                now: None,
-                attachments: Some(std::mem::take(&mut self.attached)).filter(|a| !a.is_empty()),
-            }, self.turns));
+            self.turn = Some(say(
+                SayPayload {
+                    text: said,
+                    about: None,
+                    now: None,
+                    attachments: Some(std::mem::take(&mut self.attached)).filter(|a| !a.is_empty()),
+                },
+                self.turns,
+            ));
         }
     }
 
@@ -63,10 +66,11 @@ impl Chat {
         }
     }
 
-    /// Applies an event of the `turn`th turn, unless that turn was cancelled or replaced.
-    pub fn heard(&mut self, turn: u64, event: Result<AguiEvent, String>) {
+    /// Applies an event of the `turn`th turn, unless that turn was cancelled or replaced;
+    /// says whether it did.
+    pub fn heard(&mut self, turn: u64, event: Result<AguiEvent, String>) -> bool {
         if self.live != Some(turn) {
-            return;
+            return false;
         }
         match event {
             Ok(event) => self.transcript.apply(event),
@@ -75,6 +79,7 @@ impl Chat {
                 self.transcript.running = false;
             }
         }
+        true
     }
 
     pub fn cancel(&mut self) {

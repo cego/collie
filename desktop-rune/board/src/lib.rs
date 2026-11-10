@@ -6,12 +6,13 @@
 use base64::Engine;
 pub mod flow;
 pub mod notify;
+pub mod timing;
 
 use collie_desktop_chat::view::{Chat, DiffTab, chat, diff_tab};
 use collie_desktop_protocol::client::Client;
 use collie_desktop_protocol::generated::{
-    DetailFlow, Encoding, FlockItem, KeptRecord, LostState, Message, RunDetailPayload, RunFile, RunFilePayload,
-    Task, TerminalPayload,
+    AguiEvent, DetailFlow, Encoding, FlockItem, KeptRecord, LostState, Message, RunDetailPayload,
+    RunFile, RunFilePayload, Task, TerminalPayload,
 };
 use collie_desktop_terminal::view::{Tab, terminal};
 use rune::{Cx, El, col, row, text};
@@ -76,6 +77,7 @@ pub struct Board {
     /// back what stops reading it.
     pub read_record: Option<ReadRecord>,
     stop_record: Option<Box<dyn FnOnce()>>,
+    pub timing: std::cell::RefCell<timing::Timing>,
 }
 
 pub type LoadDiff = Box<dyn Fn(String, String, u64)>;
@@ -121,6 +123,13 @@ impl Board {
     pub fn show_diff(&mut self) {
         if let (Some(load), Some((installation, run))) = (&self.load_diff, &self.open_run) {
             load(installation.clone(), run.clone(), self.opened);
+        }
+    }
+
+    /// A `say` event heard at `at`; one of the live turn starts a chat mark.
+    pub fn chat_heard(&mut self, turn: u64, event: Result<AguiEvent, String>, at: f64) {
+        if self.chat.heard(turn, event) {
+            self.timing.get_mut().chunk(&format!("turn-{turn}"), at);
         }
     }
 
@@ -271,6 +280,40 @@ pub fn run_diff(client: &Client, installation: &str, run: &str) -> Result<String
         .iter()
         .filter_map(|file| run_file(client, installation, run, &format!("diff:{}", file.path)))
         .collect())
+}
+
+/// The marks a frame drawn at `at` ends or starts, read from the board it drew.
+pub fn frame_drawn(drawn: &rune::Runtime<Board>, at: f64) -> Vec<timing::Mark> {
+    let board = &drawn.state;
+    let mut timing = board.timing.borrow_mut();
+    if board.machines.iter().any(|m| !m.cards.is_empty()) {
+        timing.board_usable(at);
+    }
+    if let (Some(tab), Some((_, run))) = (&board.terminal, &board.open_run) {
+        if let Some(keyed) = tab.keyed_at.filter(|keyed| *keyed > timing.key_seen) {
+            timing.key_seen = keyed;
+            timing.key(run, keyed);
+        }
+        let since = timing.key_waiting();
+        if since.is_some_and(|since| tab.shown_at.is_some_and(|shown| shown > since)) {
+            timing.echoed(at);
+        }
+    }
+    timing.chat_drawn(at);
+    // rune-kit's Diff says nothing of its scrolling, so a move of its rows is read as one.
+    let rows_at = board.diff.as_ref().and_then(|_| {
+        let rows = drawn
+            .elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some("rows") && e.label.as_deref() == Some("Diff"))?;
+        Some(rows.rect[1])
+    });
+    if rows_at.is_some() && timing.rows_at.is_some() && rows_at != timing.rows_at {
+        timing.scrolled("diff", at);
+    }
+    timing.rows_at = rows_at;
+    timing.frame(at);
+    std::mem::take(&mut timing.marks)
 }
 
 fn card(k: &Kit, shown: &Shown, task: &Task) -> El {

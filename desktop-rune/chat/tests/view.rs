@@ -92,7 +92,12 @@ fn events(name: &str) -> Vec<AguiEvent> {
     std::fs::read_to_string(format!("{FIXTURES}/{name}.ndjson"))
         .unwrap()
         .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).unwrap().get("event").cloned())
+        .filter_map(|line| {
+            serde_json::from_str::<Value>(line)
+                .unwrap()
+                .get("event")
+                .cloned()
+        })
         .map(|event| serde_json::from_value(event).unwrap())
         .collect()
 }

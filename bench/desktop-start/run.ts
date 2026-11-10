@@ -19,6 +19,8 @@ const { values: flags } = parseArgs({
   options: {
     app: { type: "string" },
     install: { type: "boolean", default: false },
+    // The Rune spike's bundled shell (desktop-rune/README.md), which needs no install.
+    rune: { type: "string" },
     home: { type: "string", default: `${root}.scratch/desktop-start/home` },
   },
 });
@@ -52,7 +54,7 @@ const app = () => {
 const linux = process.platform === "linux";
 const dataHome = `${flags.home}/.local/share`;
 const installed = `${dataHome}/dk.cego.collie.desktop/stable/app/bin/launcher`;
-if (linux && flags.install) {
+if (linux && flags.install && flags.rune === undefined) {
   const build = app();
   console.error(`installing ${build} under ${flags.home}`);
   const ran = Bun.spawnSync([build], {
@@ -65,13 +67,13 @@ if (linux && flags.install) {
   }
   process.exit(0);
 }
-if (linux && !(await Bun.file(installed).exists())) {
+if (linux && flags.rune === undefined && !(await Bun.file(installed).exists())) {
   console.error(
     `no Desktop installed under ${flags.home}; run \`bun bench/desktop-start/run.ts --install\` first`,
   );
   process.exit(2);
 }
-const launcher = linux ? installed : app();
+const launcher = flags.rune ?? (linux ? installed : app());
 
 const line = await runEffect(
   measuring(
@@ -94,6 +96,11 @@ const line = await runEffect(
           COLLIE_DESKTOP_COLLIE: JSON.stringify([process.execPath, `${root}src/main.ts`]),
         },
         desktopState: `${world.desktop}/state`,
+        // The shell keeps its core's state apart, as desktop-rune/protocol/src/core.rs says.
+        own:
+          flags.rune === undefined
+            ? undefined
+            : `${world.desktop}/state/collie-desktop-rune-spike/state/collie-desktop`,
         idle: "60 seconds",
       });
     }).pipe(Effect.scoped, Effect.orDie),

@@ -39,6 +39,9 @@ pub struct Tab {
     laid_out: [f32; 2],
     /// Wheel travel not yet a whole line.
     wheel: f32,
+    /// When a key was last sent to the pane, and its output last shown, for Desktop's marks.
+    pub keyed_at: Option<f64>,
+    pub shown_at: Option<f64>,
 }
 
 impl Tab {
@@ -56,6 +59,8 @@ impl Tab {
             clock: Instant::now(),
             laid_out: [0.0, 0.0],
             wheel: 0.0,
+            keyed_at: None,
+            shown_at: None,
         }
     }
 
@@ -87,6 +92,7 @@ impl Tab {
             TerminalEvent::Frame(frame) => {
                 if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(frame.bytes) {
                     self.vt.write(&bytes);
+                    self.shown_at = Some(collie_desktop_protocol::epoch_ms());
                     // What the program asked the terminal, such as where its cursor is.
                     let replies = self.vt.take_replies();
                     if !replies.is_empty() {
@@ -151,6 +157,7 @@ impl Tab {
             Some(bytes) => {
                 self.vt.scroll_to_bottom();
                 self.input(&bytes);
+                self.keyed_at = Some(collie_desktop_protocol::epoch_ms());
                 true
             }
             None => false,
