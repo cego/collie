@@ -18,6 +18,7 @@ import {
   mrLabel,
   mrRefOf,
   parseMrTarget,
+  readMrRef,
   type MrPanel,
   type MrState,
   type TaskView,
@@ -230,7 +231,7 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
         epochMs(run.created) < merged,
     );
     if (going.length === 0) continue;
-    const spared = yield* sparedBy(mr, id, working, opts);
+    const spared = yield* sparedBy(id, working, opts);
     // An attempt the forge cannot settle yet spares nothing and stops nothing.
     if (spared === null) continue;
     for (const run of going) if (!spared.has(run.id)) yield* opts.stop(run.id, `${label} merged`);
@@ -290,12 +291,11 @@ function withWaitingParents(ids: ReadonlyArray<string>, runs: ReadonlyArray<RunF
 }
 
 /**
- * The Runs a merge of `mr` leaves running: each whose landing of it is landed, being made
+ * The Runs a merge of the merge request `id` leaves running: each whose landing of it is landed, being made
  * by this process, or settled as landed now, and every Run up its parent chain. Null where
  * an attempt an earlier process left cannot be settled yet.
  */
 const sparedBy = Effect.fn("Merges.sparedBy")(function* <R>(
-  mr: string,
   id: string,
   /** The ids of the Runs that land it. */
   ids: ReadonlyArray<string>,
@@ -305,7 +305,7 @@ const sparedBy = Effect.fn("Merges.sparedBy")(function* <R>(
     readonly making: ReadonlySet<string>;
   },
 ) {
-  const ref = mrRefOf(mr);
+  const ref = readMrRef(`mr:${id}`);
   const landers: Array<string> = [];
   let read: ReviewRead | undefined;
   for (const run of Arr.filter(opts.runs, (one) => ids.includes(one.id))) {

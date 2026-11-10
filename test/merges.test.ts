@@ -610,8 +610,16 @@ const merging = Effect.fn("merges.merging")(function* (
   /** What the host does with a stop, beside recording it. */
   stopping: (stateDir: string, run: string, reason: string) => Effect.Effect<void> = () =>
     Effect.void,
-  /** More of the merged merge request, and the Run directories whose attempt is being made. */
-  over: { readonly mr?: Partial<FakeMr>; readonly making?: ReadonlySet<string> } = {},
+  /**
+   * More of the merged merge request, the Run directories whose attempt is being made, how
+   * the builder names its merge request, and more of the forge.
+   */
+  over: {
+    readonly mr?: Partial<FakeMr>;
+    readonly making?: ReadonlySet<string>;
+    readonly named?: string;
+    readonly forge?: Partial<ForgeModel>;
+  } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
   const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-settle-" });
@@ -627,13 +635,14 @@ const merging = Effect.fn("merges.merging")(function* (
       state: "waiting",
       parked: "Cannot open the merge request",
       branch: BRANCH,
-      mr: MR,
+      mr: over.named ?? MR,
       created: "2026-10-15T08:10:00Z",
     }),
   ];
   for (const over of others) runs.push(yield* of(over));
   const stops: Array<readonly [string, string]> = [];
   const runner = forge("gitlab", {
+    ...over.forge,
     mrs: [
       mr65({
         ...(mergedAt === null ? { state: "merged" } : { state: "merged", mergedAt }),
@@ -1087,6 +1096,32 @@ test("an interrupted attempt merged by Collie's login at its head after it was w
       expect(yield* fs.readFileString(`${runDir(stateDir, "r-release")}/log.txt`)).toContain(
         `landing: merged ${MR} at ${LANDED_HEAD} as m1`,
       );
+    }),
+  ));
+
+test("an interrupted attempt on a legacy bare merge request is settled as the MR id it resolved to", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const bare = "mr:65";
+      const { stateDir, stops, round } = yield* merging(
+        Arr.map(RELEASE, (run) => ({
+          ...run,
+          settled: { ...ON_65.settled, inputs: { target: bare } },
+        })),
+        "2026-10-15T08:54:30Z",
+        undefined,
+        {
+          mr: { mergedBy: "mk", head: LANDED_HEAD, mergedSha: "m1" },
+          named: bare,
+          forge: { origin: "git@gitlab.cego.dk:mk/collie.git" },
+        },
+      );
+      yield* writeLanding(runDir(stateDir, "r-release"), attempt({ mr: bare }));
+      yield* round(TEN);
+      expect(yield* readLanding(runDir(stateDir, "r-release"))).toEqual(
+        attempt({ mr: bare, state: "landed", sha: "m1" }),
+      );
+      expect(stoppedIds(stops)).toEqual(["r-review"]);
     }),
   ));
 
