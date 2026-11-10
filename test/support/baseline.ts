@@ -8794,6 +8794,43 @@ scenario(
   120_000,
 );
 
+scenario(
+  "a delivery whose unsettled note GitLab refuses parks at Merge request, and a resume once it is repaired posts it once",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, forge } = yield* deliveringOn("gitlab", OPEN_MR);
+        yield* forge.set({ ...(yield* forge.model()), refusesNote: 500 });
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-impl-delivery-note-refused";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, DELIVERED_WITH_MINOR]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              const [, why] = yield* until(
+                () => Effect.zip(run.status, parkedWhy(runId)),
+                ([got, why]) => why !== "" || got.status !== "pending",
+              );
+              expect(why).toContain("500");
+              expect(why).toEndWith(`resume ${runId}.`);
+              const { refusesNote: _, ...repaired } = yield* forge.model();
+              yield* forge.set(repaired);
+              yield* run.resume;
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+        expect(status.status).toBe("complete");
+        expect(yield* unsettledOf(runId)).toHaveLength(MINOR_FINDINGS.length);
+        expect(yield* ciNotes(forge)).toHaveLength(1);
+        expect(yield* prompts()).toHaveLength(3);
+      }),
+    ),
+  120_000,
+);
+
 /**
  * A GitLab delivery from a branch of its own, open as merge request !31, whose head's only
  * pipeline was skipped. The build's push carried that head to origin; where `pushed` is

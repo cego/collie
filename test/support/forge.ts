@@ -274,6 +274,8 @@ export const ForgeModel = Schema.Struct({
       branch: Schema.optionalKey(Schema.Finite),
     }),
   ),
+  /** The status GitLab refuses a note on a merge request with. */
+  refusesNote: Schema.optionalKey(Schema.Finite),
   /** The shas each sha descends from. */
   ancestry: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String))),
   /** Repositories gh cannot read, by `owner/repo`. */
@@ -1152,6 +1154,8 @@ function glabOnMr(
   args: ReadonlyArray<string>,
 ): Answer {
   const method = flag(args, "-X") ?? "GET";
+  if (rest === "notes" && method === "POST" && model.refusesNote !== undefined)
+    return refused(`${model.refusesNote} Internal Server Error`);
   if (rest === "notes" && method === "POST")
     return {
       ...json({ id: 1, body: field(args, "body") ?? "" }),

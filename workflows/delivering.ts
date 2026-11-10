@@ -696,12 +696,17 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           return yield* Workflow.suspend(yield* WorkflowInstance);
         }
         yield* host.mergeRequest(runId, opened.mr_url);
-        if (minor.length > 0)
+        if (minor.length > 0) {
           yield* Activity.make({
             name: "mr-unsettled",
+            execute: Effect.forEach(minor, (one) => host.record(runId, `unsettled: ${one.title}`), {
+              discard: true,
+            }),
+          });
+          yield* Activity.make({
+            name: "mr-unsettled-note",
             execute: Effect.gen(function* () {
-              for (const one of minor) yield* host.record(runId, `unsettled: ${one.title}`);
-              yield* host.note({
+              const posted = yield* host.note({
                 runId,
                 cwd,
                 body: `Delivery left these unsettled:\n\n${Arr.join(
@@ -709,8 +714,15 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
                   "\n",
                 )}`,
               });
+              if (posted.ok) return yield* host.parked(runId, null);
+              const reason = `Cannot note what delivery left unsettled on ${opened.mr_url}: ${posted.message}. Repair it, then resume ${runId}.`;
+              yield* host.record(runId, reason);
+              yield* stepFailed(reason);
+              yield* host.parked(runId, reason);
+              return yield* Workflow.suspend(yield* WorkflowInstance);
             }),
           });
+        }
         yield* Activity.make({
           name: "mr-pipeline",
           execute: Effect.gen(function* () {
