@@ -20,6 +20,9 @@ import { runWaits } from "../src/run-waits";
 import { buildBoard } from "../src/board";
 import { describeWaiting, nextAction } from "../src/lifecycle";
 import { reached } from "../src/following";
+import { recordLaunch } from "../src/launches";
+import { recordClaudeEvent } from "../src/compactors";
+import { controlDir } from "../src/compaction";
 
 const ROOT = new URL("../", import.meta.url).pathname;
 
@@ -45,13 +48,35 @@ const dir = () => env().stateDir;
 const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
   runLive(fastForward(effect));
 
+const readsCounted = (reads: Array<string>) =>
+  Layer.effect(Store)(
+    Effect.gen(function* () {
+      const store = yield* Store;
+      return {
+        ...store,
+        asked: (run: string) =>
+          Effect.suspend(() => {
+            reads.push(`asked ${run}`);
+            return store.asked(run);
+          }),
+        askedOf: (runs: ReadonlyArray<string>) =>
+          Effect.suspend(() => {
+            reads.push(`askedOf ${Arr.join(runs, ",")}`);
+            return store.askedOf(runs);
+          }),
+      };
+    }),
+  );
+
 /** One host over the state directory; a second call is that host restarted. */
 const hosted = <A, E>(
   run: Effect.Effect<A, E, Registry | Store | HostServices | PlatformServices | Scope.Scope>,
+  reads: Array<string> = [],
 ) =>
   run.pipe(
     Effect.provide(
       registryLayer(dir(), { placing: { herdr: new FakeHerdr(env()), env: env() } }).pipe(
+        Layer.provide(readsCounted(reads)),
         Layer.provideMerge(
           agentsLayer({
             dir: dir(),
@@ -224,6 +249,61 @@ test(
           expect(states).toContainEqual(["q1.r2", "done"]);
         }),
       ),
+    ),
+  120_000,
+);
+
+test(
+  "one pass over the human's messages reads its Runs' questions once, however many of them it acts on",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const reads: Array<string> = [];
+        yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const store = yield* Store;
+            const asks = yield* registry.load(`${fixtures}/asks.workflow.ts`);
+            const { runId } = yield* registry.start({
+              generation: asks,
+              request: "r1",
+              project: rig.projectDir,
+              input: { goal: "pick" },
+              text: {},
+              task: null,
+            });
+            yield* suspended(runId);
+            for (const agent of ["planner", "reviewer"]) {
+              yield* recordLaunch({
+                agent,
+                output: `${agent}.json`,
+                reused: false,
+                runId,
+                operation: agent,
+                role: agent,
+                workflow: "asks",
+                harness: "claude",
+              });
+              yield* recordClaudeEvent(
+                yield* controlDir(dir(), agent),
+                JSON.stringify({
+                  session_id: agent,
+                  hook_event_name: "UserPromptSubmit",
+                  prompt: `Over to you, ${agent}`,
+                }),
+              );
+            }
+            reads.length = 0;
+            yield* registry.tendQuestions;
+
+            const [q1] = yield* store.asked(runId);
+            expect(q1?.superseded ?? null).not.toBeNull();
+            expect(Arr.map(q1?.messaged ?? [], (one) => one.agent)).toEqual(["planner", "reviewer"]);
+            expect(Arr.filter(reads, (one) => one.startsWith("asked "))).toEqual([]);
+          }),
+          reads,
+        );
+      }),
     ),
   120_000,
 );

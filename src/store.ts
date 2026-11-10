@@ -288,13 +288,14 @@ export interface StoreApi {
   readonly supersedable: Effect.Effect<ReadonlyArray<DecisionRow>>;
   /**
    * Adds `agent` to the agents a set-aside workflow question waits for, or restarts its
-   * wait where it is already one, while no revision has opened. True where it did.
+   * wait where it is already one, while no revision has opened. The question as written
+   * where it did.
    */
   readonly alsoMessaged: (messaging: {
     readonly run: string;
     readonly decision: string;
     readonly agent: string;
-  }) => Effect.Effect<boolean>;
+  }) => Effect.Effect<DecisionRow | undefined>;
   readonly generations: Effect.Effect<ReadonlyArray<GenerationRow>>;
   /**
    * Claims a request id for a run, or hands back the run that already has it. `fresh` is
@@ -676,6 +677,8 @@ function makeStore(
         sql`SELECT ${decisionColumns} FROM collie_decisions WHERE run IN ${sql.in(runs)} ORDER BY run, asked, decision`,
     });
 
+    const decodeDecisions = Schema.decodeUnknownEffect(Schema.Array(Decision));
+
     const decisionRow = SqlSchema.findAll({
       Request: Schema.Struct({ run: Schema.String, decision: Schema.String }),
       Result: Decision,
@@ -944,10 +947,10 @@ function makeStore(
                 SELECT 1 FROM collie_decisions revision
                 WHERE revision.run = ${messaging.run} AND revision.revises = ${messaging.decision}
               )
-            RETURNING decision
+            RETURNING ${decisionColumns}
           `,
-        ).pipe(Effect.orDie);
-        return written.length > 0;
+        ).pipe(Effect.flatMap(decodeDecisions), Effect.orDie);
+        return written[0];
       }),
 
       admit: Effect.fn("Store.admit")(function* (admission: Admission) {

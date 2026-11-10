@@ -7966,12 +7966,23 @@ const makeRegistry: (
       read?.launches ?? (yield* readLaunches(runId).pipe(Effect.orElseSucceed(() => [])));
     const rows = read?.rows ?? (yield* store.asked(runId));
     const { aside, extended } = touchedBy(rows, launches, agent, submitted);
-    for (const one of aside)
-      yield* supersedeQuestion({ runId, decision: one.decision, cause, by: actor, agent });
+    const written = new Map(Arr.map(rows, (one) => [one.decision, one] as const));
+    for (const one of aside) {
+      const superseded = yield* supersedeQuestion({
+        runId,
+        decision: one.decision,
+        cause,
+        by: actor,
+        agent,
+      });
+      if (superseded._tag === "accepted") written.set(one.decision, superseded.row);
+    }
     for (const one of extended) {
       seenWorking.delete(`${runId}/${one.decision}/${agent}`);
-      yield* store.alsoMessaged({ run: runId, decision: one.decision, agent });
+      const messaged = yield* store.alsoMessaged({ run: runId, decision: one.decision, agent });
+      if (messaged !== undefined) written.set(one.decision, messaged);
     }
+    return [...written.values()];
   });
 
   const superseding = (runId: string, actor: Asker | undefined, sent: typeof Steered.Type) =>
@@ -8016,8 +8027,10 @@ const makeRegistry: (
       for (const one of [...sent, ...Arr.flatten(typed)]) {
         const touched = touchedBy(rows, launches, one.agent, one.at);
         if (touched.aside.length + touched.extended.length === 0) continue;
-        yield* supersedeFor(runId, one.cause, one.actor, one.agent, one.at, { rows, launches });
-        rows = yield* store.asked(runId);
+        rows = yield* supersedeFor(runId, one.cause, one.actor, one.agent, one.at, {
+          rows,
+          launches,
+        });
       }
     }
   });
