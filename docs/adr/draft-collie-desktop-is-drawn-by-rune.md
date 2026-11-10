@@ -59,7 +59,9 @@ Then the gate asks for go or no-go.
 time, a Rust and Zig toolchain on every build Machine, and `collie verify` running cargo
 checks.
 
-**D4. mk owns the Rune pin, and Collie never forks Rune.** The pin moves only by ticket.
+**D4. mk owns the Rune pin, and Collie never forks Rune.** The pin is `rune`, `rune-kit`
+and `rune-mac` at rev `781e2b6d87cd5f32d6f4365956fad4baaf24ee50` (`desktop-rune/Cargo.toml`),
+the revision every spike and this gate assessed. It moves only by ticket.
 Upstream defects are worked around in Collie's own code. A defect that blocks a ticket and
 has no work-around stops that ticket until upstream fixes it.
 
