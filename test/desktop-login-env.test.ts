@@ -4,11 +4,14 @@ import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
 import { ConfigProvider, Effect, FileSystem } from "effect";
 import {
+  type AgentState,
+  agentState,
   childEnv,
   localShell,
   parseLoginEnv,
   readLoginEnv,
   takeLoginEnv,
+  takesLoginAgent,
   which,
 } from "../desktop/src/bun/login-env";
 import { localRoute } from "../desktop/src/bun/machine";
@@ -175,6 +178,90 @@ test("Desktop adopts the interactive PATH and preserves it in local scripts", ()
       expect(yield* Effect.promise(() => new Response(child.stdout).text())).toBe(
         "/interactive/bin",
       );
+    }),
+  ));
+
+const states =
+  (known: Record<string, AgentState>) =>
+  (socket: string): Effect.Effect<AgentState> =>
+    Effect.succeed(known[socket] ?? "gone");
+
+test("the login shell's SSH agent is taken where it holds keys, or Desktop's holds none", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const takes = (login: AgentState, session: AgentState) =>
+        takesLoginAgent("/session", "/login", states({ "/login": login, "/session": session }));
+      expect(yield* takes("holds", "holds")).toBe(true);
+      expect(yield* takes("holds", "gone")).toBe(true);
+      expect(yield* takes("empty", "empty")).toBe(true);
+      expect(yield* takes("empty", "gone")).toBe(true);
+      expect(yield* takes("unknown", "unknown")).toBe(true);
+      expect(yield* takes("gone", "gone")).toBe(true);
+    }),
+  ));
+
+test("Desktop keeps its own SSH agent where the login shell's holds no keys and it does", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const takes = (login: AgentState, session: AgentState) =>
+        takesLoginAgent("/session", "/login", states({ "/login": login, "/session": session }));
+      // keychain's agent before a terminal has asked for the passphrase, beside the desktop's.
+      expect(yield* takes("empty", "holds")).toBe(false);
+      expect(yield* takes("gone", "holds")).toBe(false);
+      expect(yield* takes("gone", "empty")).toBe(false);
+    }),
+  ));
+
+test("with one agent named, or the same one, nothing is asked", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const never = () => Effect.die("asked");
+      expect(yield* takesLoginAgent(undefined, "/login", never)).toBe(true);
+      expect(yield* takesLoginAgent("/session", undefined, never)).toBe(true);
+      expect(yield* takesLoginAgent("/same", "/same", never)).toBe(true);
+    }),
+  ));
+
+test("an agent's state is read from ssh-add's exit, and a hung one is unknown", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const exits = (body: string) => fakeShell(body);
+      expect(yield* agentState("/x", yield* exits("exit 0"))).toBe("holds");
+      expect(yield* agentState("/x", yield* exits("exit 1"))).toBe("empty");
+      expect(yield* agentState("/x", yield* exits("exit 2"))).toBe("gone");
+      expect(yield* agentState("/x", yield* exits("exec sleep 5"), "200 millis")).toBe("unknown");
+      expect(yield* agentState("/x", "/nonexistent/ssh-add")).toBe("unknown");
+      expect(
+        yield* agentState("/the/socket", yield* exits('[ "$SSH_AUTH_SOCK" = /the/socket ]')),
+      ).toBe("holds");
+    }),
+  ));
+
+test("Desktop keeps its SSH agent over a login shell's that holds no keys", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-agent-" });
+      // An ssh-add on PATH that finds keys only in the session's agent.
+      yield* fs.writeFileString(
+        `${dir}/ssh-add`,
+        `#!/bin/sh\n[ "$SSH_AUTH_SOCK" = /session/agent ] && exit 0; exit 1\n`,
+        { mode: 0o755 },
+      );
+      yield* setFor("PATH", `${dir}:${Bun.env.PATH ?? ""}`);
+      yield* setFor("SSH_AUTH_SOCK", "/session/agent");
+      yield* setFor("SSH_AGENT_PID", "1");
+      const shell = yield* fakeShell(
+        `printf '${BEGIN}PATH=${dir}:${Bun.env.PATH ?? ""}\\0SSH_AUTH_SOCK=/keychain/agent\\0SSH_AGENT_PID=2\\0OTHER=taken\\0${END}'`,
+      );
+      yield* setFor("OTHER", "");
+      const taken = yield* takeLoginEnv.pipe(
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ SHELL: shell }))),
+      );
+      expect(taken).toBe(true);
+      expect(childEnv().SSH_AUTH_SOCK).toBe("/session/agent");
+      expect(childEnv().SSH_AGENT_PID).toBe("1");
+      expect(childEnv().OTHER).toBe("taken");
     }),
   ));
 

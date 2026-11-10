@@ -291,7 +291,7 @@ Output. Collie types it after the step's pointer, so a harness reviewing the age
 reads it as the user's request for exactly that. Not a permission rule, which would skip
 that review. Not **Authority**, which is what Collie may do to a Run.
 
-**Dispatcher** — The only code that sends text to an agent. Holds that agent's ledger lock
+**Dispatcher** — The only code that sends text to an agent. Holds that agent's ledger
 across the compaction decision, the composition and the send.
 
 **Incarnation** — An agent as one live process, identified by herdr's own `terminal_id` and
@@ -509,7 +509,7 @@ until it is seen (ADR-draft-a-finished-run-is-seen-once-for-the-flock).
 and lifted by a human.
 
 **Session** — One herdr session and one workspace, taken together. It is the
-scope of a register file of live agents, which holds one entry
+scope of a register of live agents, which holds one entry
 per agent for every Run started there. An agent on core is in no herdr workspace, but
 its entry is kept in the same register, its Incarnation marked as core's. One workspace, always: a mutating Run's checkout
 does not take it out of the Session it was started in.

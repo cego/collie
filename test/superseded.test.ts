@@ -140,7 +140,6 @@ test(
                 registered: [],
                 proposals: [],
                 alive: [],
-                deliveries: [],
                 mrStates: new Map(),
                 forge: new Map(),
                 offers: () => Effect.succeed([]),

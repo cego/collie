@@ -3,6 +3,7 @@
 // (ADR-draft-a-humans-message-supersedes-a-runs-open-question D1, D3, D6–D8). The host is a
 // real one over a fake herdr, running `stepped`: an agent, a question, then an agent.
 
+import type { Records } from "../src/records";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -15,14 +16,10 @@ import { readEnv, type PluginEnv } from "../src/env";
 import { resetExecutors } from "../src/executors";
 import { connect } from "../src/host";
 import { carryOutAsked } from "../src/run-actions";
-import { SENT_STATES, appendLine, deliveriesOf } from "../src/steering";
+import { SENT_STATES, appendLine } from "../src/steering";
+import { deliveredTo, recordsAt } from "./support/records";
 import { TaskView } from "../src/board-model";
-import {
-  proposalsPath,
-  read as readProposals,
-  record as recordProposal,
-  type Actor,
-} from "../src/proposals";
+import { read as readProposals, record as recordProposal, type Actor } from "../src/proposals";
 import { agentName } from "../src/naming";
 import { controlDir } from "../src/compaction";
 import { recordClaudeEvent } from "../src/compactors";
@@ -103,7 +100,7 @@ const waitingRun = Effect.fn("test.waitingRun")(function* (
 /** A `stepped` Run waiting on `go` after its first agent's step, and its idle agent. */
 const atQuestion = <A, E>(
   prefix: string,
-  body: (at: AtQuestion) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
+  body: (at: AtQuestion) => Effect.Effect<A, E, PlatformServices | Records | Scope.Scope>,
   setup: Setup = { mode: "declared" },
 ) =>
   proves(
@@ -154,6 +151,7 @@ const atQuestion = <A, E>(
         const client = yield* startHost(world);
         const { runId, agent, agents } = yield* waitingRun(world, client, "start", setup);
         return yield* body({ world, env, client, runId, agent, agents, status }).pipe(
+          Effect.provide(recordsAt(world.state)),
           Effect.ensuring(stopHost(world.state)),
         );
       }),
@@ -213,12 +211,12 @@ const supersededBy = (at: AtQuestion, text: string, request: string, agent = at.
     expect(rowOf(yield* waitingOf(at), "go")).toMatchObject({ answer: null });
     expect(rowOf(yield* waitingOf(at), "go")?.superseded ?? null).not.toBeNull();
     const sent = Arr.filter(
-      yield* deliveriesOf(at.world.state, at.runId),
-      (one) => one.delivery.cause.kind === "steer" && SENT_STATES.has(one.delivery.state),
+      yield* deliveredTo(at.world.state, at.runId),
+      (one) => one.cause.kind === "steer" && SENT_STATES.has(one.state),
     );
     const cause = rowOf(yield* waitingOf(at), "go")?.cause;
-    expect(Arr.filter(sent, (one) => one.delivery.id === cause)).toMatchObject([
-      { delivery: { human: { origin: "desktop" } } },
+    expect(Arr.filter(sent, (one) => one.id === cause)).toMatchObject([
+      { human: { origin: "desktop" } },
     ]);
   });
 
@@ -228,11 +226,11 @@ test(
     atQuestion("collie-supersede-missed-", (at) =>
       Effect.gen(function* () {
         const [step] = Arr.filter(
-          yield* deliveriesOf(at.world.state, at.runId),
-          (one) => one.delivery.agent === at.agent,
+          yield* deliveredTo(at.world.state, at.runId),
+          (one) => one.agent === at.agent,
         );
-        yield* appendLine(step!.file, {
-          ...step!.delivery,
+        yield* appendLine({
+          ...step!,
           id: "missed-steer-1",
           at: yield* nowIso,
           cause: { kind: "steer", ref: "missed" },
@@ -345,12 +343,9 @@ test(
           text: "Call it the chooser",
         }).pipe(Effect.orDie);
         yield* until(
-          () => deliveriesOf(at.world.state, at.runId),
+          () => deliveredTo(at.world.state, at.runId),
           (lines) =>
-            Arr.some(
-              lines,
-              (one) => one.delivery.cause.kind === "steer" && SENT_STATES.has(one.delivery.state),
-            ),
+            Arr.some(lines, (one) => one.cause.kind === "steer" && SENT_STATES.has(one.state)),
         );
         yield* at.status("working");
 
@@ -515,8 +510,8 @@ test(
           }),
         ).toMatchObject({ state: "applied" });
         const steered = Arr.filter(
-          yield* deliveriesOf(at.world.state, at.runId),
-          (one) => one.delivery.cause.kind === "steer" && SENT_STATES.has(one.delivery.state),
+          yield* deliveredTo(at.world.state, at.runId),
+          (one) => one.cause.kind === "steer" && SENT_STATES.has(one.state),
         );
         expect(steered).toHaveLength(2);
 
@@ -587,7 +582,7 @@ test(
   () =>
     atQuestion("collie-supersede-held-", (at) =>
       Effect.gen(function* () {
-        const proposals = yield* proposalsPath(at.world.state, "some-herd");
+        const proposals = "some-herd";
         yield* recordProposal(proposals, {
           interpretation: "stop it",
           targets: [{ run: at.runId }],

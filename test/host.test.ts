@@ -37,6 +37,7 @@ import {
 } from "../src/check-processes";
 import { evidenceDir } from "../src/engine";
 import { restartHostAt } from "../src/lifecycle";
+import { registerAgent } from "../src/registry";
 import { signalProcess } from "../src/lock";
 import { groupOf, startedOf, stillRunning } from "../src/processes";
 import { readVerifications, verifyingIn } from "../src/verify";
@@ -44,6 +45,7 @@ import { VerifySpecSchema } from "../src/verify-spec";
 import { exec, startDetached } from "./support/command";
 import { fastForward, runEffect, suiteEnv } from "./support/effect";
 import { stopHost, until } from "./support/host";
+import { recordsAt } from "./support/records";
 import { Rig } from "./support/recorder";
 
 const root = new URL("../", import.meta.url).pathname;
@@ -836,21 +838,18 @@ test.skipIf(process.platform !== "linux")(
         const { runId } = yield* client
           .start({ project, id: "stubborn", request: "req-1", input: { marker: `${notes}/m` } })
           .pipe(Effect.orDie);
-        yield* fs.makeDirectory(`${state}/agents`, { recursive: true });
-        yield* fs.writeFileString(
-          `${state}/agents/test.json`,
-          yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))([
-            {
-              role: "implementer",
-              agent: "build-1",
-              paneId: "p-1",
-              workspaceId: null,
-              runId,
-              workflow: "stubborn",
-              at: "2026-10-26T00:00:00.000Z",
-            },
-          ]).pipe(Effect.orDie),
-        );
+        yield* registerAgent(
+          { session: null, workspaceId: null, cwd: project },
+          {
+            role: "implementer",
+            agent: "build-1",
+            paneId: "p-1",
+            workspaceId: null,
+            runId,
+            workflow: "stubborn",
+            at: "2026-10-26T00:00:00.000Z",
+          },
+        ).pipe(Effect.provide(recordsAt(state)));
         const agent = yield* connect(state).pipe(Effect.orDie);
         yield* agent.declare({ frontDoor: "agent", from: { agent: "build-1" } }).pipe(Effect.orDie);
         const verifying = yield* agent

@@ -1,5 +1,5 @@
 // A record builds its Task's Flow on every change while it is open, so the Flow reads
-// only what its Task needs: every agent's delivery ledger only where a Run may be Reopened.
+// only what its Task needs: a Run's deliveries only where it may be Reopened.
 
 import { expect, test } from "bun:test";
 import * as Arr from "effect/Array";
@@ -34,14 +34,14 @@ const spansOfFlow = (over: Partial<RunFacts>) =>
     }),
   );
 
-test("a running Run's Flow reads no agent's delivery ledger", () =>
+test("a running Run's Flow reads none of its deliveries", () =>
   spansOfFlow({ state: "running" }).then((names) =>
-    expect(names).not.toContain("Steering.everyDelivery"),
+    expect(names).not.toContain("Steering.deliveriesOf"),
   ));
 
-test("a finished Run's Flow reads the ledgers that say whether it was Reopened", () =>
+test("a finished Run's Flow reads the deliveries that say whether it was Reopened", () =>
   spansOfFlow({ state: "succeeded", finished: "2026-09-14T10:00:00Z" }).then((names) =>
-    expect(names).toContain("Steering.everyDelivery"),
+    expect(names).toContain("Steering.deliveriesOf"),
   ));
 
 test("two Tasks share one reading of the installation and step duration index", () =>

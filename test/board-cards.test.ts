@@ -26,7 +26,7 @@ const planners = (count: number, finished = "2026-10-27T10:00:00Z") =>
     const runs = yield* Effect.forEach(Arr.range(1, count), (n) =>
       Effect.gen(function* () {
         const task = `task-${n}`;
-        yield* writeTask(dir, {
+        yield* writeTask({
           id: task,
           workspace: "w1",
           label: `project | Plan ${n}`,

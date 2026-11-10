@@ -12,7 +12,7 @@ import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
 import type { PlatformServices } from "./platform";
 import { repositoryCheckout } from "./projects";
-import { Effect, FileSystem, Path, Schema, flow, Result } from "effect";
+import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { ChildProcessSpawner } from "effect/process";
 import { nowIso } from "./time";
@@ -47,13 +47,13 @@ import hcPin from "../hc-pin.json";
 import manifest from "../herdr-plugin.toml";
 import { everyRegistered, type AgentEntry } from "./registry";
 import { listRuns, liveCheckouts, type Asked, type RunFacts } from "./runs";
-import { newTask, taskOfWorkspace, writeTask, type TaskChoice, type TaskRecord } from "./task";
+import type { TaskChoice, TaskRecord } from "./task";
+import type { KeptHere } from "./board-model";
 import { freshTaskLabel, workNamedIn, type StartAbout } from "./tasknames";
 import { readIntent, type Authority } from "./intent";
 import {
   appendLine,
   budgetPath,
-  ledgerPath,
   overrideActive,
   readLedger,
   reserve,
@@ -71,7 +71,6 @@ import {
 import { ActionSchema, type Action } from "./actions";
 import {
   actorName,
-  proposalsPath,
   record as recordProposal,
   type Recorded,
   type Actor,
@@ -116,6 +115,12 @@ export const ExpectedError = Schema.Struct({
 export interface ExpectedError extends Schema.Schema.Type<typeof ExpectedError> {}
 
 export type Failure = { ok: false; error: ExpectedError };
+
+/** This Machine's host could not be asked, which is not the same as it having nothing. */
+export class HostUnread extends Data.TaggedError("HostUnread")<{
+  readonly error: ExpectedError;
+  readonly message: string;
+}> {}
 export type OpResult =
   | {
       ok: true;
@@ -769,6 +774,8 @@ export const taskFor = Effect.fn("operations.taskFor")(function* (
     task,
     /** What a fresh Task's workspace is to be called, where this start opens one. */
     label,
+    /** The workspace whose Task the host keeps the Run in, where it is started here. */
+    here: null,
   });
   if (choice.mode === "here") return yield* taskHere(env, about);
   if (
@@ -784,7 +791,7 @@ export const taskFor = Effect.fn("operations.taskFor")(function* (
 });
 
 /**
- * The workspace this was started from, as the Task the Run belongs to: the Task already
+ * The workspace this was started from, whose Task the host keeps the Run in: the Task already
  * kept there, or a new one kept there. Its checkout is still cut; only the workspace a new
  * Task would have opened is not, so the Run's agents open beside whoever started it.
  */
@@ -797,12 +804,10 @@ const taskHere = Effect.fn("operations.taskHere")(function* (env: PluginEnv, abo
         "--here keeps the Run in the herdr workspace it was started from, and this was started outside one.",
       ),
     };
-  const kept = yield* taskOfWorkspace(env.stateDir, env.workspaceId);
-  if (kept !== null) return { _tag: "Ok" as const, task: kept, label: null };
   const open = yield* new Herdr(env)
     .workspaceList()
     .pipe(Effect.orElseSucceed((): WorkspaceInfo[] => []));
-  const task = yield* newTask({
+  const here: KeptHere = {
     herd: yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null)),
     workspace: env.workspaceId,
     label:
@@ -810,9 +815,8 @@ const taskHere = Effect.fn("operations.taskHere")(function* (env: PluginEnv, abo
         ?.label ??
       (workNamedIn(about.inputs) || about.workflow),
     cwd: env.cwd,
-  });
-  yield* writeTask(env.stateDir, task);
-  return { _tag: "Ok" as const, task, label: null };
+  };
+  return { _tag: "Ok" as const, task: null, label: null, here };
 });
 
 export const clearOverride = Effect.fn("operations.clearOverride")(function* (
@@ -829,10 +833,9 @@ export const clearOverride = Effect.fn("operations.clearOverride")(function* (
     Option.getOrUndefined(Arr.findFirst(live, (a) => a.name === agent))?.terminalId ?? null;
   if (terminalId === null)
     return err("invalid_state", `herdr has no live agent "${agent}" to clear an override on.`);
-  const file = yield* ledgerPath(stateDir, terminalId);
-  if (!overrideActive(yield* readLedger(file)))
+  if (!overrideActive(yield* readLedger(terminalId)))
     return err("invalid_state", `"${agent}" is not under a manual override.`);
-  yield* appendLine(file, {
+  yield* appendLine({
     kind: "override_cleared",
     at: yield* nowIso,
     incarnation: terminalId,
@@ -897,7 +900,7 @@ export const request = Effect.fn("operations.request")(function* (
     if (intent !== null) intents.set(id, { version: intent.version, authority: intent.authority });
   }
 
-  const registered = yield* everyRegistered(env.stateDir);
+  const registered = yield* everyRegistered;
   const checked = validate(
     {
       interpretation: options.interpretation,
@@ -914,7 +917,7 @@ export const request = Effect.fn("operations.request")(function* (
     },
   );
 
-  const file = yield* proposalsPath(env.stateDir, herdKey);
+  const file = herdKey;
   const addressed = yield* incarnationsFor(env, checked);
   const proposal: Recorded = {
     interpretation: options.interpretation,
@@ -1020,10 +1023,7 @@ export const steer = Effect.fn("operations.steer")(function* (
   if (run === null) return err("run_not_found", `No Run "${target}".`, { run: target });
   // A retry asks nobody again: a second answer could order the same actions differently.
   if (options.dryRun !== true && options.asked !== "event") {
-    const before = yield* carriedBefore(
-      yield* proposalsPath(env.stateDir, deps.herdKey),
-      options.requestId,
-    );
+    const before = yield* carriedBefore(deps.herdKey, options.requestId);
     if (before !== null) return before;
   }
 
@@ -1067,7 +1067,7 @@ export const steer = Effect.fn("operations.steer")(function* (
 
   const checked = validate(proposed, {
     runs: new Set([run.id]),
-    agents: new Map([[run.id, agentsOf(yield* everyRegistered(env.stateDir), run.id)]]),
+    agents: new Map([[run.id, agentsOf(yield* everyRegistered, run.id)]]),
     intents: new Map(
       intent === null ? [] : [[run.id, { version: intent.version, authority: intent.authority }]],
     ),
@@ -1084,7 +1084,7 @@ export const steer = Effect.fn("operations.steer")(function* (
       previewOf(proposed.interpretation, checked),
     );
 
-  const file = yield* proposalsPath(env.stateDir, deps.herdKey);
+  const file = deps.herdKey;
   const bound = yield* cardRevision(run, from);
   if (bound === "unknown")
     return err("invalid_input", `Run ${run.id} has no card "${from}".`, { card: from ?? "" });
@@ -1191,7 +1191,7 @@ const CARDS_IN_CONTEXT = 3;
  */
 export const herdFacts = Effect.fn("operations.herdFacts")(function* (env: PluginEnv) {
   const runs = yield* listRuns(env);
-  const registered = yield* everyRegistered(env.stateDir);
+  const registered = yield* everyRegistered;
   const listed = runs.slice(0, HERD_LINES);
   const lines: string[] = [];
   for (const item of listed) {

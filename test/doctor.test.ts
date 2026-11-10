@@ -22,7 +22,9 @@ import { writeConfigValue } from "../src/config";
 import { withGitlabHost } from "../src/commands/shared";
 import manifest from "../herdr-plugin.toml";
 import hcPin from "../hc-pin.json";
-import { registerAgent, registryPath, type AgentEntry } from "../src/registry";
+import { registerAgent, type AgentEntry } from "../src/registry";
+import { openHost } from "./support/host";
+import { recordsAt } from "./support/records";
 import { slackApi } from "../src/slack";
 import { fakeSlack } from "./support/slack";
 
@@ -106,9 +108,8 @@ const registered = (agent: string, paneId: string, backend?: "core" | "legacy") 
         },
       }),
     };
-    yield* registerAgent(
-      yield* registryPath(rig.stateDir, { session: null, workspaceId: "1", cwd: rig.root }),
-      entry,
+    yield* registerAgent({ session: null, workspaceId: "1", cwd: rig.root }, entry).pipe(
+      Effect.provide(recordsAt(rig.stateDir)),
     );
   });
 
@@ -418,92 +419,138 @@ test("this Machine set to herdr is reported, with the setting that moves it", ()
     }),
   ));
 
-test("a live agent on Herdr 1 is reported; one on core, or whose pane is gone, is not", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* healthy();
-      yield* rig.addPane("1-7", "1:1", rig.root, "builder");
-      yield* rig.addPane("1-8", "1:1", rig.root, "reviewer");
-      yield* registered("builder-a", "1-7");
-      yield* registered("reviewer-a", "1-8", "core");
-      yield* registered("builder-b", "1-9");
+test(
+  "a live agent on Herdr 1 is reported; one on core, or whose pane is gone, is not",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* healthy();
+        yield* rig.addPane("1-7", "1:1", rig.root, "builder");
+        yield* rig.addPane("1-8", "1:1", rig.root, "reviewer");
+        yield* registered("builder-a", "1-7");
+        yield* registered("reviewer-a", "1-8", "core");
+        yield* registered("builder-b", "1-9");
 
-      const result = yield* report();
+        // Doctor reads the register through the host.
+        yield* openHost(rig.stateDir);
+        const result = yield* report();
 
-      expect(check(result, "herdr 1")).toMatchObject({
-        ok: true,
-        detail: "live on Herdr 1: builder-a (run run-builder-a, pane 1-7)",
-      });
-    }),
-  ));
+        expect(check(result, "herdr 1")).toMatchObject({
+          ok: true,
+          detail: "live on Herdr 1: builder-a (run run-builder-a, pane 1-7)",
+        });
+      }),
+    ),
+  30_000,
+);
 
-test("a live agent on Herdr 1 in another running session, or registered before incarnations, is reported", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* healthy();
-      const other = `${rig.root}/other.sock`;
-      yield* rig.addPane("2-3", "2:1", rig.root, "builder", null, null, null, other);
-      yield* rig.addPane("1-4", "1:1", rig.root, "builder");
-      yield* registered("builder-other", "2-3");
-      yield* registered("builder-legacy", "1-4", "legacy");
+test(
+  "a live agent on Herdr 1 in another running session, or registered before incarnations, is reported",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* healthy();
+        const other = `${rig.root}/other.sock`;
+        yield* rig.addPane("2-3", "2:1", rig.root, "builder", null, null, null, other);
+        yield* rig.addPane("1-4", "1:1", rig.root, "builder");
+        yield* registered("builder-other", "2-3");
+        yield* registered("builder-legacy", "1-4", "legacy");
 
-      const result = yield* report({
-        FAKE_HERDR_SESSIONS: asSessions([
-          { name: "default", socket_path: rig.socketPath },
-          { name: "other", socket_path: other },
-        ]),
-      });
+        yield* openHost(rig.stateDir);
+        const result = yield* report({
+          FAKE_HERDR_SESSIONS: asSessions([
+            { name: "default", socket_path: rig.socketPath },
+            { name: "other", socket_path: other },
+          ]),
+        });
 
-      expect(check(result, "herdr 1").detail).toBe(
-        "live on Herdr 1: builder-other (run run-builder-other, pane 2-3), builder-legacy (run run-builder-legacy, pane 1-4)",
-      );
-    }),
-  ));
+        expect(check(result, "herdr 1").detail).toBe(
+          "live on Herdr 1: builder-other (run run-builder-other, pane 2-3), builder-legacy (run run-builder-legacy, pane 1-4)",
+        );
+      }),
+    ),
+  30_000,
+);
 
-test("a herdr whose panes cannot be read is a warning, never reported as nothing on Herdr 1", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* healthy();
-      yield* registered("builder-a", "1-7");
+test(
+  "a herdr whose panes cannot be read is a warning, never reported as nothing on Herdr 1",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* healthy();
+        yield* registered("builder-a", "1-7");
 
-      const result = yield* report({ FAKE_HERDR_FAIL: '{"pane list":"herdr is restarting"}' });
+        yield* openHost(rig.stateDir);
+        const result = yield* report({ FAKE_HERDR_FAIL: '{"pane list":"herdr is restarting"}' });
 
-      expect(check(result, "herdr 1")).toMatchObject({ ok: true, warn: true });
-      expect(check(result, "herdr 1").detail).toContain("could not read Herdr 1's open panes");
-    }),
-  ));
+        expect(check(result, "herdr 1")).toMatchObject({ ok: true, warn: true });
+        expect(check(result, "herdr 1").detail).toContain("could not read Herdr 1's open panes");
+      }),
+    ),
+  30_000,
+);
 
-test("a herdr that cannot list its sessions is a warning, though this session's panes read", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* healthy();
-      const other = `${rig.root}/other.sock`;
-      yield* rig.addPane("2-3", "2:1", rig.root, "builder", null, null, null, other);
-      yield* registered("builder-other", "2-3");
+test(
+  "a herdr that cannot list its sessions is a warning, though this session's panes read",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* healthy();
+        const other = `${rig.root}/other.sock`;
+        yield* rig.addPane("2-3", "2:1", rig.root, "builder", null, null, null, other);
+        yield* registered("builder-other", "2-3");
 
-      const result = yield* report({ FAKE_HERDR_FAIL: '{"session list":"herdr is restarting"}' });
+        yield* openHost(rig.stateDir);
+        const result = yield* report({ FAKE_HERDR_FAIL: '{"session list":"herdr is restarting"}' });
 
-      expect(check(result, "herdr 1")).toMatchObject({ ok: true, warn: true });
-      expect(check(result, "herdr 1").detail).toContain("could not read Herdr 1's open panes");
-    }),
-  ));
+        expect(check(result, "herdr 1")).toMatchObject({ ok: true, warn: true });
+        expect(check(result, "herdr 1").detail).toContain("could not read Herdr 1's open panes");
+      }),
+    ),
+  30_000,
+);
 
-test("with no Herdr 1 setting and no live agent on it, doctor reports none", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* healthy();
-      yield* registered("reviewer-a", "1-8", "core");
+test(
+  "a host doctor cannot ask is a warning, never reported as nothing on Herdr 1",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* healthy();
+        yield* rig.addPane("1-7", "1:1", rig.root, "builder");
+        yield* registered("builder-a", "1-7");
 
-      const result = yield* report();
+        const result = yield* report();
 
-      expect(check(result, "herdr 1")).toEqual({
-        name: "herdr 1",
-        ok: true,
-        detail: "nothing on this Machine uses Herdr 1",
-        fix: "",
-      });
-    }),
-  ));
+        expect(check(result, "herdr 1")).toMatchObject({ ok: true, warn: true });
+        expect(check(result, "herdr 1").detail).toContain(
+          "could not ask this Machine's host which agents it registered",
+        );
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "with no Herdr 1 setting and no live agent on it, doctor reports none",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* healthy();
+        yield* registered("reviewer-a", "1-8", "core");
+
+        yield* openHost(rig.stateDir);
+        const result = yield* report();
+
+        expect(check(result, "herdr 1")).toEqual({
+          name: "herdr 1",
+          ok: true,
+          detail: "nothing on this Machine uses Herdr 1",
+          fix: "",
+        });
+      }),
+    ),
+  30_000,
+);
 
 test("a filesystem Collie writes to with under a tenth free is a warning, with the fix", () =>
   runEffect(

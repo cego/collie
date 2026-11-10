@@ -76,7 +76,7 @@ export const recordBase = (sources: RecordSources, runId: string, pages: number)
     yield* model.note(runs);
     const tasks = yield* Effect.forEach(
       [...new Set(Arr.flatMap(runs, (one) => (one.task === null ? [] : [one.task])))],
-      (task) => readTask(env.stateDir, task),
+      (task) => readTask(task),
     );
     const found = yield* taskFlowOf(
       {

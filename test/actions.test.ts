@@ -6,6 +6,7 @@
 // away, one whose facts no longer hold, and arguments the child will not take. None of
 // those may leave a Run behind.
 
+import { recordsAt } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -164,7 +165,7 @@ test(
             note: "the other half",
           });
           yield* stopHost(world.state);
-        }),
+        }).pipe(Effect.provide(recordsAt(world.state))),
       [],
     ),
   300_000,

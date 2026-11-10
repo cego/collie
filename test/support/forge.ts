@@ -8,6 +8,7 @@ import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import { type PlatformServices } from "../../src/platform";
+import type { Records } from "../../src/records";
 import {
   Clock,
   Config,
@@ -2089,7 +2090,7 @@ export const forgeHttpOnPath = Layer.unwrap(
 
 /** `runEffect`, with a ForgeHttp of its own asking the forge CLIs on PATH. */
 export const runOnPath = <A, E>(
-  effect: Effect.Effect<A, E, ForgeHttp | Scope.Scope | PlatformServices>,
+  effect: Effect.Effect<A, E, ForgeHttp | Scope.Scope | PlatformServices | Records>,
 ) => runEffect(effect.pipe(Effect.provide(Layer.fresh(forgeHttpOnPath))));
 
 /**

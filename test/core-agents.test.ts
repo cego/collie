@@ -22,7 +22,8 @@ import { asRun, enveloped } from "./support/enveloped";
 import { forgeHttpOnPath } from "./support/forge";
 import type { FakeHc } from "./support/fake-hc";
 import { until } from "./support/host";
-import { deliveriesOf, herdOf, machineHerd } from "../src/steering";
+import { herdOf, machineHerd } from "../src/steering";
+import { deliveredTo } from "./support/records";
 import { focusPane, liveHerds } from "../src/herds";
 import { connect } from "../src/hc";
 import { askWith, piTools } from "./support/pi";
@@ -529,13 +530,13 @@ test("a send core refuses because its agent is blocked is held as herdr's agent_
         session(work.execute({ runId: "r1", input: {} }).pipe(Effect.result), coreOnly(core)),
       );
       const held = yield* until(
-        () => deliveriesOf(rig.stateDir, "r1"),
-        (found) => Arr.some(found, ({ delivery }) => delivery.state === "deferred"),
+        () => deliveredTo(dir, "r1"),
+        (found) => Arr.some(found, (delivery) => delivery.state === "deferred"),
       );
       expect(
         Arr.map(
-          Arr.filter(held, ({ delivery }) => delivery.state === "deferred"),
-          ({ delivery }) => delivery.code,
+          Arr.filter(held, (delivery) => delivery.state === "deferred"),
+          (delivery) => delivery.code,
         ),
       ).toEqual(["agent_blocked"]);
       yield* core.report(agentName("r1", "review", null, 1), "idle");

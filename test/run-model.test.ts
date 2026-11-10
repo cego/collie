@@ -3,15 +3,15 @@ import * as Str from "effect/String";
 import * as Struct from "effect/Struct";
 import { heapStats } from "bun:jsc";
 import { expect, test } from "bun:test";
-import { Deferred, Effect, Fiber, FileSystem, Schema } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Layer, Schema } from "effect";
 import { TaskView } from "../src/board-model";
 import { buildBoard } from "../src/board";
 import { readEnv } from "../src/env";
-import { makeRunModel } from "../src/run-model";
+import { makeRunModel, RunModel, runModelLayer } from "../src/run-model";
 import { writeTask } from "../src/task";
 import { epochMs } from "../src/time";
 import { runEffect } from "./support/effect";
-import { madeRun, runFacts } from "./support/records";
+import { madeRun, recordsAt, runFacts } from "./support/records";
 
 const RUNS = 500;
 
@@ -55,7 +55,7 @@ test(
         const runs = yield* Effect.forEach(Arr.range(1, RUNS), (n) =>
           Effect.gen(function* () {
             const task = `task-${n}`;
-            yield* writeTask(dir, {
+            yield* writeTask({
               id: task,
               workspace: "w1",
               label: `project | Work ${n}`,
@@ -115,6 +115,34 @@ test(
     ),
   60_000,
 );
+
+test("a Task written moves the Revision of its Runs, and no other Run's", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({
+        prefix: "collie-run-model-",
+      });
+      yield* Effect.gen(function* () {
+        const model = yield* RunModel;
+        yield* model.observe([
+          runFacts({ id: "r1", task: "t1", dir: `${dir}/runs/r1` }),
+          runFacts({ id: "r2", task: "t2", dir: `${dir}/runs/r2` }),
+        ]);
+        const before = [model.revision("r1").seq, model.revision("r2").seq];
+        yield* writeTask({
+          id: "t1",
+          workspace: "w1",
+          label: "project | Work",
+          cwd: "/project",
+          created_at: "2026-10-30T09:00:00Z",
+        });
+        expect(model.revision("r1").seq).toBeGreaterThan(before[0]!);
+        expect(model.revision("r2").seq).toBe(before[1]!);
+      }).pipe(
+        Effect.provide(recordsAt(dir).pipe(Layer.provideMerge(runModelLayer(dir, "installation")))),
+      );
+    }),
+  ));
 
 test("files the model keeps as missing read as missing, and keep no Error alive", () =>
   runEffect(

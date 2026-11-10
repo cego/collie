@@ -3,6 +3,8 @@
 // has aged out, a Run whose Intent moved, a caller that is not a person, and an action
 // nobody can say whether it already happened.
 
+import type { Records } from "../src/records";
+import { recordsAt } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Effect, FileSystem, Path, type Scope } from "effect";
@@ -15,7 +17,6 @@ import {
   contentHash,
   decline,
   judgeConfirmation,
-  proposalsPath,
   read,
   pendingFor,
   pendingHerdWide,
@@ -62,7 +63,7 @@ beforeEach(() =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       stateDir = yield* fs.makeTempDirectory({ prefix: "hw-proposals-" });
-      file = yield* proposalsPath(stateDir, "herd-1");
+      file = "herd-1";
       resetExecutors();
     }),
   ),
@@ -398,7 +399,7 @@ const inHerd = <A, E>(
     world: World;
     env: PluginEnv;
     herdFile: string;
-  }) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
+  }) => Effect.Effect<A, E, PlatformServices | Records | Scope.Scope>,
 ) =>
   hosted("hw-proposals-", ({ world, env }) =>
     Effect.gen(function* () {
@@ -406,8 +407,8 @@ const inHerd = <A, E>(
       // this env resolves to rather than under a key the test picked.
       const fs = yield* FileSystem.FileSystem;
       yield* fs.writeFileString(env.socketPath!, "");
-      const herdFile = yield* proposalsPath(world.state, yield* herdOf(env.socketPath));
-      return yield* body({ world, env, herdFile });
+      const herdFile = yield* herdOf(env.socketPath);
+      return yield* body({ world, env, herdFile }).pipe(Effect.provide(recordsAt(world.state)));
     }),
   );
 

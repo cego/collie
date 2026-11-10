@@ -7,11 +7,11 @@ import { readEnv } from "../src/env";
 import { asksRun } from "../src/lifecycle";
 import { peersOf } from "../src/peers";
 import { RunLinkNotice } from "../src/run-links";
-import { everyRegistered } from "../src/registry";
 import { connect } from "../src/host";
 import { runEffect } from "./support/effect";
 import { stopHost, until } from "./support/host";
 import { type Side, twoMachines } from "./support/peers";
+import { registeredAt } from "./support/records";
 
 const encode = Schemaflow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
@@ -63,7 +63,7 @@ const requesterOn = (side: Side) =>
         ) === true,
     );
     const agent = Option.getOrUndefined(
-      Arr.findFirst(yield* everyRegistered(side.world.state), (one) => one.runId === runId),
+      Arr.findFirst(yield* registeredAt(side.world.state), (one) => one.runId === runId),
     )!;
     return { runId, agent };
   });
@@ -161,7 +161,7 @@ test(
             const target = yield* flowOf(second, b);
             expect(target.lanes[0]?.requestedBy).toMatchObject({ run: a, agent: agent.agent });
             yield* until(
-              () => everyRegistered(second.world.state),
+              () => registeredAt(second.world.state),
               (rows) => Arr.some(rows, (one) => one.runId === b),
             );
             yield* fs.writeFileString(
@@ -191,7 +191,7 @@ test(
             const who = target.lanes[0]!.requestedBy!;
             const identity = yield* host.identity();
             const sourceAgent = Option.getOrUndefined(
-              Arr.findFirst(yield* everyRegistered(second.world.state), (one) => one.runId === b),
+              Arr.findFirst(yield* registeredAt(second.world.state), (one) => one.runId === b),
             )!;
             const peer = Option.getOrUndefined(
               Arr.findFirst(
@@ -270,7 +270,7 @@ test(
             expect(failing.envelope).toMatchObject({ ok: true });
             const { runId: c } = runIdOf(failing.envelope.data);
             yield* until(
-              () => everyRegistered(second.world.state),
+              () => registeredAt(second.world.state),
               (rows) => Arr.some(rows, (one) => one.runId === c),
             );
             yield* fs.writeFileString(
@@ -364,7 +364,7 @@ test(
               ),
             );
             yield* until(
-              () => everyRegistered(second.world.state),
+              () => registeredAt(second.world.state),
               (rows) => Arr.some(rows, (one) => one.runId === d),
             );
             yield* stopHost(first.world.state);
@@ -476,7 +476,7 @@ test(
             expect(linked).toMatchObject([{ state: "running", link: { run: b, asOf: null } }]);
             expect(linked?.[0]?.link?.asOf).toBeNull();
             yield* until(
-              () => everyRegistered(first.world.state),
+              () => registeredAt(first.world.state),
               (rows) => Arr.some(rows, (one) => one.runId === b),
             );
             yield* fs.writeFileString(

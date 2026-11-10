@@ -50,7 +50,7 @@ test(
             cwd: "/project",
             created_at: "2026-09-01T00:00:00.000Z",
           };
-          yield* writeTask(dir, record);
+          yield* writeTask(record);
           const run = yield* madeRun(dir, { id: `r${n}`, task: record.id, state: "succeeded" });
           const agents = `${dir}/agents/${run.id}`;
           yield* fs.makeDirectory(agents, { recursive: true });
