@@ -37,7 +37,7 @@ import {
   whatItSaid,
   type Runner,
 } from "./mr";
-import { mrWords, parseMrTarget } from "./board-model";
+import { mrWords, parseMrTarget, readMrRef, type MrRef } from "./board-model";
 import { FORGES, forgeOf, forgeOfHost } from "./forge/forge";
 import { withLock } from "./lock";
 import { terminalBackend, worktreesDirectory } from "./config";
@@ -182,6 +182,7 @@ export type BranchSource =
   | "explicit"
   | "from target"
   | "from the reviewed branch"
+  | "from the merge request"
   | "from the task"
   | "from plan"
   | "from the work"
@@ -243,21 +244,23 @@ const SLUG_MAX = 40;
  *
  * 1. `--input branch=<name>`, which beats everything below.
  * 2. The branch the reviewed work is already on, for a Run fixing a review.
- * 3. The `<name>` of a `branch:<base>...<name>` target *a human gave*.
- * 4. `<login>/<task>`, from the `task` Input a handoff carried.
- * 5. The branch the Task of the Run whose plan this builds was placed on.
- * 6. `<login>/<plan directory's own name>`, never for a Run's own plan directory.
- * 7. `<login>/<slug of the work itself>` — the description, or the issue id.
- * 8. `<login>/<slug of the Run's own name>`.
+ * 3. The source branch of the one open merge request of this project that work *someone
+ *    said* names: its whole text as one reference, or the only merge request URL in it.
+ * 4. The `<name>` of a `branch:<base>...<name>` target *a human gave*.
+ * 5. `<login>/<task>`, from the `task` Input a handoff carried.
+ * 6. The branch the Task of the Run whose plan this builds was placed on.
+ * 7. `<login>/<plan directory's own name>`, never for a Run's own plan directory.
+ * 8. `<login>/<slug of the work itself>` — the description, or the issue id.
+ * 9. `<login>/<slug of the Run's own name>`.
  *
- * The first three and the fifth are branches that already exist, or that a human named,
+ * The first four and the sixth are branches that already exist, or that a human named,
  * and are taken verbatim. The rest name work that does not exist yet, and are namespaced under the
  * operator's GitLab login — which is what keeps two people's new work apart.
  *
- * One refusal rather than a guess. A review whose branch cannot be established gets no
- * new one: a fix round exists to update what was reviewed, and putting those commits on
- * a fresh branch named after the Run would leave the merge request untouched and the
- * fixes somewhere nobody is looking.
+ * One refusal rather than a guess. A review, or work naming a merge request of this
+ * project, whose branch cannot be established gets no new one: the work exists to update
+ * that merge request, and putting those commits on a fresh branch named after the Run
+ * would leave it untouched and the fixes somewhere nobody is looking.
  */
 export const branchFor = Effect.fn("worktree.branchFor")(function* (opts: BranchAsk) {
   const run = opts.run ?? shell;
@@ -368,11 +371,20 @@ const branchName = Effect.fn("worktree.branchName")(function* (
   // branch — so the target rule after this one is for Runs starting fresh work.
   const work = workSourceOf(opts);
   if (work?.kind === "review") {
-    const reviewed = yield* reviewedBranch(opts.cwd, opts, run);
+    const reviewed = yield* reviewedBranch(opts.cwd, diffTargetOf(opts)?.value ?? "", run);
     // Nothing the caller could say settles a review with no branch to fix: the work
     // being fixed is on a branch or it is not.
     if (reviewed.refused !== undefined) return refusedName(reviewed.refused);
     return verbatim(reviewed.branch, "from the reviewed branch", reviewed.reviewed);
+  }
+  const mr =
+    work !== null && said(opts, work.name) ? yield* mrNamedBy(work.value, opts.cwd, run) : null;
+  if (mr) {
+    const named = yield* reviewedBranch(opts.cwd, mrWords(mr).target, run);
+    if (!named.context) {
+      if (named.refused !== undefined) return refusedName(named.refused);
+      return verbatim(named.branch, "from the merge request", true);
+    }
   }
   const target = diffTargetOf(opts);
   const fromTarget = target && said(opts, target.name) ? targetBranch(target.value) : null;
@@ -531,16 +543,43 @@ function targetBranch(target: string): string | null {
 }
 
 /**
+ * The one merge request work names: its whole text as one reference, read in this
+ * checkout's project, else the only merge or pull request URL in it. A bare `!42` inside
+ * prose is not read: `#1` and issue numbers make it a guess.
+ */
+const mrNamedBy = Effect.fn("worktree.mrNamedBy")(function* (
+  text: string,
+  cwd: string,
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
+) {
+  const whole = readMrRef(text, { project: null });
+  if (whole) {
+    return whole.project === null ? { ...whole, project: yield* projectHere(cwd, run) } : whole;
+  }
+  const named = new Map<string, MrRef>();
+  const urls = pipe_(
+    text,
+    Str.match(/https?:\/\/\S+/g),
+    Option.getOrElse(() => []),
+  );
+  for (const url of urls) {
+    const ref = readMrRef(pipe_(url, Str.replace(/[.,;:!?)\]>'"]+$/, "")));
+    if (ref) named.set(mrWords(ref).target, ref);
+  }
+  return named.size === 1 ? [...named.values()][0]! : null;
+});
+
+/**
  * The branch the reviewed target lives on. Anything this cannot establish is a
  * refusal, not a guess: `glab` that would not answer, a merge request with no source
- * branch, a diff of two shas, a detached HEAD.
+ * branch, a diff of two shas, a detached HEAD. `context` marks a merge request work only
+ * mentions rather than is about: one of another project, or merged or closed.
  */
 const reviewedBranch = Effect.fn("worktree.reviewedBranch")(function* (
   cwd: string,
-  opts: BranchAsk,
+  target: string,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
-  const target = diffTargetOf(opts)?.value ?? "";
   const mr = parseMrTarget(target);
   if (mr) {
     // A merge request in another project cannot be fixed from this checkout at all:
@@ -554,20 +593,27 @@ const reviewedBranch = Effect.fn("worktree.reviewedBranch")(function* (
     if (mr.project) {
       const here = yield* projectHere(cwd, run);
       if (here === null) {
-        return { refused: `${cwd} has no remote, so ${named} may not be its own` };
+        return { refused: `${cwd} has no remote, so ${named} may not be its own`, context: true };
       }
       if (mr.project !== here) {
-        return { refused: `${named} is in ${mr.project}, and this is a checkout of ${here}` };
+        return {
+          refused: `${named} is in ${mr.project}, and this is a checkout of ${here}`,
+          context: true,
+        };
       }
     }
     const panel = yield* forgeOf(mr).details(mr, cwd, run);
     if (panel._tag !== "Details") return { refused: panel.reason };
+    const context = panel.state === "merged" || panel.state === "closed";
     if (panel.fork === true)
-      return { refused: `${named} comes from a fork, so its branch is not in this checkout` };
+      return {
+        refused: `${named} comes from a fork, so its branch is not in this checkout`,
+        context,
+      };
     const source = Str.trim(panel.sourceBranch);
     return source
-      ? { branch: source, reviewed: true }
-      : { refused: `${named} names no source branch` };
+      ? { branch: source, reviewed: true, context }
+      : { refused: `${named} names no source branch`, context };
   }
   const head = branchTargetHead(target);
   if (head !== null) {
@@ -608,7 +654,7 @@ export const workOf = Effect.fn("worktree.workOf")(function* (
   if (listing === null) return null;
   const reviewed =
     opts.branch === null && diffTargetOf(opts) != null
-      ? yield* reviewedBranch(opts.cwd, opts, run)
+      ? yield* reviewedBranch(opts.cwd, diffTargetOf(opts)?.value ?? "", run)
       : null;
   if (reviewed !== null && !("branch" in reviewed)) return null;
   const branch = opts.branch ?? reviewed?.branch ?? null;
