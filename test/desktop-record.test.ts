@@ -15,6 +15,7 @@ import {
   landingOf,
   logPlaceOf,
   logScrollTop,
+  mrTabsOf,
   recordTabs,
   rememberScroll,
   scrollToRestore,
@@ -108,6 +109,37 @@ describe("the record's tabs", () => {
     ]);
     expect(Arr.some(came, (tab) => tab.loading === true)).toBe(false);
   });
+  test("give each of several merge requests a tab of its own, in place of the one", () => {
+    const panel = (reason: string) => ({ _tag: "Unavailable" as const, reason });
+    const mrs = mrTabsOf([
+      {
+        id: "gitlab.cego.dk/spilnu/api!7",
+        mr: "https://gitlab.cego.dk/spilnu/api/-/merge_requests/7",
+        panel: panel("api's"),
+      },
+      {
+        id: "github.com/cego/web#8",
+        mr: "https://github.com/cego/web/pull/8",
+        panel: panel("web's"),
+      },
+    ]);
+    expect(
+      Arr.map(recordTabs({ ...everything, mrs }), ({ label, value }) => [label, value]),
+    ).toEqual([
+      ["Summary", "summary"],
+      ["Plan", "plan"],
+      ["Review", "review"],
+      ["Diff", "diff"],
+      ["Evidence", "evidence"],
+      ["Log", "log"],
+      ["Terminal", "terminal"],
+      ["Merge request api!7", "mr:gitlab.cego.dk/spilnu/api!7"],
+      ["Pull request web#8", "mr:github.com/cego/web#8"],
+      ["Facts", "facts"],
+    ]);
+    expect(mrTabsOf(undefined)).toEqual([]);
+  });
+
   test("are only Log, Terminal and Facts without the Run's details", () => {
     expect(
       values({

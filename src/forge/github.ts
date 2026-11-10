@@ -1318,10 +1318,10 @@ export const github: Forge = {
   retryJob,
   jobLog,
   template,
-  commands: ({ project, branch, assignee, existing }) => {
+  commands: ({ project, branch, assignee, existing, onto }) => {
     const repo = mrPath({ project, iid: "" });
     return {
-      create: `${Result.getOrThrow(CommandLine.join(["gh", "pr", "create", "--repo", repo, "--head", branch, "--assignee", assignee]))} --title "<title>" --body-file <file>`,
+      create: `${Result.getOrThrow(CommandLine.join(["gh", "pr", "create", "--repo", repo, "--head", branch, ...(onto ? ["--base", onto] : []), "--assignee", assignee]))} --title "<title>" --body-file <file>`,
       comment:
         existing === null
           ? ""

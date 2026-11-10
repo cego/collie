@@ -21,7 +21,7 @@ import { startedBy, type AuditLine } from "../src/audit";
 import type { RunDetail } from "../src/board-model";
 import { recordIn } from "../src/board-model";
 import { evidenceDir, runDir } from "../src/engine";
-import { currentEnv } from "../src/env";
+import { currentEnv, readEnv } from "../src/env";
 import { appState } from "../src/flows";
 import { forgeHttpLayer } from "../src/forge/http";
 import { Herdr } from "../src/herdr";
@@ -30,6 +30,8 @@ import { followRunDetail } from "../src/lifecycle";
 import { scopeFor } from "../src/registry";
 import { recordReply } from "../src/replies";
 import { diffOf, fetchRef, keepDiffs, runDiff } from "../src/run-detail";
+import { recordFrames, type RecordSources } from "../src/record";
+import { makeRunModel } from "../src/run-model";
 import { buildRunDetail, type PlanCache } from "../src/views";
 import { madeRun } from "./support/records";
 import { runRowId } from "../src/ui/state";
@@ -744,3 +746,77 @@ test(
     ),
   120_000,
 );
+
+const GITLAB = (repo: string, iid: number) =>
+  `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`;
+const MR_ID = (repo: string, iid: number) => `gitlab.cego.dk/cego/${repo}!${iid}`;
+
+test("a fan-out's record has a panel per merge request by wave, and refreshes only the one named", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-detail-mrs-" });
+      const root = `${dir}/root`;
+      const parent = yield* madeRun(dir, {
+        id: "r-fan",
+        task: "task-1",
+        cwd: root,
+        state: "succeeded",
+        created: "2026-09-14T09:00:00Z",
+      });
+      yield* fs.makeDirectory(`${parent.dir}/plan/issues`, { recursive: true });
+      const repos = [
+        ["api", 7],
+        ["web", 8],
+      ] as const;
+      for (const [at, [repo]] of repos.entries()) {
+        yield* fs.makeDirectory(`${root}/${repo}/.git`, { recursive: true });
+        yield* fs.writeFileString(
+          `${parent.dir}/plan/issues/0${at + 1}-${repo}.md`,
+          `# ${repo}\n\n**Blocked by:** ${at === 0 ? "None" : `0${at}`}\n\n**Repo:** ${repo}\n`,
+        );
+      }
+      // The later wave started first, so wave order is not start order.
+      const children = yield* Effect.forEach(repos, ([repo, iid], at) =>
+        madeRun(dir, {
+          id: `r-${repo}`,
+          task: "task-1",
+          parent: "r-fan",
+          repo,
+          state: "succeeded",
+          mr: GITLAB(repo, iid),
+          created: `2026-09-14T09:0${repos.length - at}:00Z`,
+        }),
+      );
+      const runs = [...children, parent];
+      const sources: RecordSources = {
+        env: readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: root }),
+        model: yield* makeRunModel(dir, "installation"),
+        related: () => Effect.succeed(runs),
+        alive: Effect.succeed([]),
+        offers: () => Effect.succeed([]),
+        mr: (run, fresh) =>
+          Effect.succeed({ _tag: "Unavailable", reason: `${run.id} fresh ${fresh}` }),
+        plans: new Map(),
+      };
+      const recordOf = (key: { refreshMr: boolean; refreshMrId?: string }) =>
+        recordFrames(sources, { runId: "r-fan", tail: false, pages: 1, ...key }, Stream.never).pipe(
+          Stream.map(recordIn),
+          Stream.runHead,
+          Effect.map(Option.getOrNull),
+        );
+
+      const opened = yield* recordOf({ refreshMr: false });
+      expect(Arr.map(opened?.mrs ?? [], (one) => [one.id, one.panel])).toEqual([
+        [MR_ID("api", 7), { _tag: "Unavailable", reason: "r-api fresh false" }],
+        [MR_ID("web", 8), { _tag: "Unavailable", reason: "r-web fresh false" }],
+      ]);
+      expect(opened?.mr).toEqual(opened?.mrs?.[0]?.panel);
+
+      const refreshed = yield* recordOf({ refreshMr: true, refreshMrId: MR_ID("web", 8) });
+      expect(Arr.map(refreshed?.mrs ?? [], (one) => one.panel)).toEqual([
+        { _tag: "Unavailable", reason: "r-api fresh false" },
+        { _tag: "Unavailable", reason: "r-web fresh true" },
+      ]);
+    }),
+  ));

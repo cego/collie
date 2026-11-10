@@ -29,7 +29,7 @@ import { tailed } from "./views";
 import { Herdr, type AgentInfo, type PaneInfo, type WorkspaceInfo } from "./herdr";
 import { carriedBefore, carryOutProposal } from "./run-actions";
 export { carryOutProposal, registerRunExecutors } from "./run-actions";
-import { shell, whatItSaid, type Runner } from "./mr";
+import { mrIdIn, shell, whatItSaid, type Runner } from "./mr";
 import { ensureLockDir, withLock } from "./lock";
 import { checkoutsUnder, projectsRoot } from "./projects";
 import { newestRelease, ownPlatform, releasesOf, verifiedRunner } from "./releases";
@@ -1307,22 +1307,23 @@ const mergeLines = Effect.fn("operations.mergeLines")(function* (env: PluginEnv,
   const watched = yield* watchedOf(env);
   const noun = mrNounOf(run.mr);
   return [
-    `${Str.toUpperCase(noun[0]!)}${pipe(noun, Str.slice(1))}: ${run.mr} — ${watched(mrLabel(run.mr))}`,
+    `${Str.toUpperCase(noun[0]!)}${pipe(noun, Str.slice(1))}: ${run.mr} — ${yield* watched(run.mr, run.cwd)}`,
     ...lines,
   ];
 });
 
-/** What the host's merge watch last recorded of a merge request, by its label. */
+/** What the host's merge watch last recorded of a merge request, by its MR id. */
 const watchedOf = Effect.fn("operations.watchedOf")(function* (env: PluginEnv) {
   const states = yield* readMrStates(env.stateDir);
   const forge = yield* readForge(env.stateDir);
-  return (label: string) => {
-    const state = states.get(label);
-    const checks = forge.get(label)?.checks;
-    return state === undefined
-      ? "not watched"
-      : `${state}, checks ${checks === undefined ? "not recorded" : checks.state === "failed" ? `failed (${checks.name})` : checks.state}`;
-  };
+  return (mr: string, cwd: string) =>
+    Effect.map(mrIdIn(mr, cwd, shell), (id) => {
+      const state = id === null ? undefined : states.get(id);
+      const checks = id === null ? undefined : forge.get(id)?.checks;
+      return state === undefined
+        ? "not watched"
+        : `${state}, checks ${checks === undefined ? "not recorded" : checks.state === "failed" ? `failed (${checks.name})` : checks.state}`;
+    });
 });
 
 /** The Run's own plan directory and how many tickets it holds. */
@@ -1428,11 +1429,12 @@ export const runFacts = Effect.fn("operations.runFacts")(function* (
           "",
           "### Runs it started",
           "",
-          ...Arr.map(
+          ...(yield* Effect.forEach(
             started,
-            (one) =>
-              `- run ${one.id}: ${one.workflow}, ${one.state}${one.mr === null ? "" : `; ${mrLabel(one.mr)} ${watched(mrLabel(one.mr))}`}`,
-          ),
+            Effect.fnUntraced(function* (one) {
+              return `- run ${one.id}: ${one.workflow}, ${one.state}${one.mr === null ? "" : `; ${mrLabel(one.mr)} ${yield* watched(one.mr, one.cwd)}`}`;
+            }),
+          )),
         ]),
     ...(agents.length === 0
       ? []

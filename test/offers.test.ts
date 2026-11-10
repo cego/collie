@@ -6,7 +6,7 @@
 
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { SELF, inputsFor, offersFrom, type Declared } from "../src/offers";
+import { SELF, inputsFor, offersFrom, taskOffers, type Declared } from "../src/offers";
 import type { ActionFacts } from "../src/sdk";
 
 const facts = (over: Partial<ActionFacts> = {}): ActionFacts => ({
@@ -88,4 +88,47 @@ test("a value the Run was started with is passed on as it was, null included", (
   );
   // An explicit null is a value; a field nobody gave, and a fact the Run lacks, are not.
   expect(passed).toEqual({ value: null });
+});
+
+test("a Task of several merge requests offers each owning Run's own, by its merge request, and none acts on both", () => {
+  const release = offer({
+    id: "release",
+    title: "Release",
+    workflow: "release",
+    inputs: { release: "merge-request" },
+    eligible: (one) => one.mrUrl !== null,
+  });
+  const ownedBy = (run: string, named: string) => ({
+    run,
+    named,
+    offers: offersFrom([release], facts({ mrUrl: `https://gitlab.cego.dk/cego/${run}` })),
+  });
+  // The fan-out parent opened no merge request, so its own release is not on offer.
+  const own = offersFrom([release], facts(), { keepUnavailable: true });
+
+  const listed = taskOffers("r-fan", own, [ownedBy("app", "app!12"), ownedBy("api", "api!7")]);
+
+  expect(
+    Arr.map(
+      Arr.filter(listed, (one) => one.unavailable === null),
+      (one) => [one.title, one.run],
+    ),
+  ).toEqual([
+    ["Release app!12", "app"],
+    ["Release api!7", "api"],
+  ]);
+  expect(Arr.filter(listed, (one) => one.primary)).toHaveLength(1);
+  expect(Arr.map(listed, (one) => one.run)).toEqual([undefined, "app", "api"]);
+});
+
+test("an owning Run asked for a Task's offers lists its own once, by its merge request", () => {
+  const own = offersFrom([offer()], facts());
+  const listed = taskOffers("app", own, [
+    { run: "app", named: "app!12", offers: own },
+    { run: "api", named: "api!7", offers: own },
+  ]);
+  expect(Arr.map(listed, (one) => [one.title, one.run])).toEqual([
+    ["Fix what is open app!12", undefined],
+    ["Fix what is open api!7", "api"],
+  ]);
 });

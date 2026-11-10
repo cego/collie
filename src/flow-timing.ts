@@ -67,11 +67,14 @@ const eachSaid = (flow: Flow, run: <A extends Said>(one: A) => A): Flow => {
     runs: Arr.map(node.runs, ofRun),
     links: node.links === undefined ? undefined : Arr.map(node.links, ofRun),
   });
-  return {
+  const each = {
     ...flow,
     lanes: Arr.map(flow.lanes, (lane) => ({ ...lane, nodes: Arr.map(lane.nodes, ofNode) })),
     release: flow.release === null ? null : Arr.map(flow.release, ofNode),
   };
+  if (flow.releases === undefined) return each;
+  const releases = Arr.map(flow.releases, (row) => ({ ...row, nodes: Arr.map(row.nodes, ofNode) }));
+  return { ...each, releases };
 };
 
 /** The Flow as built, its minutes said at `now` and each one's clock kept beside it. */

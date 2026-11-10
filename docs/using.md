@@ -710,24 +710,38 @@ it, however old: it does not go behind `older…` until it is seen. Its sentence
 button, records it seen once for the whole Flock, on every board and Desktop, and it goes back
 behind the line.
 
+A Task whose Runs opened or were given several merge requests — a fan-out across
+repositories, or a Follow-up Run that opened its own — lists each on its card, by wave, with
+its own state, checks and head. Each is judged Ready to release at its own head, and the
+Task is when any one of them is. It has landed only once each is merged, abandoned or
+superseded and none of its Runs is still going. Its sentence says where each stands:
+`1 of 3 merged; app!12 ready to release; api!7 waits on app!12.` A merge request waits on
+another of the Task's when the forge says it targets that one's source branch. One closed
+without merging that nobody has disposed of keeps the Task waiting on you, by name:
+`web!8 closed without merging`. A Task with one merge request reads as it always has.
+
 Collie learns a merge by itself, whether or not a pane is open: the host asks the merge
 request's own forge, through that forge's adapter — GitLab with `glab`, GitHub with `gh` —
-about each Task's merge request every 5 minutes, whatever section its card is in, so a
+about each of a Task's merge requests every 5 minutes, whatever section its card is in, so a
 merge while a Run is busy or parked is noticed too; one
 that merged gets its `merged` disposition recorded as that forge's word and its card moves
-to Finished. A Task whose Runs recorded no merge request takes the one opened from its
-branch, whoever opened it — you on the forge, or a builder you told to in its pane — and
+to Finished. Each branch of a Task's Runs on which none recorded a merge request takes the
+one opened from it, even where another Change run's is already recorded, whoever opened it — you on the forge, or a builder you told to in its pane — and
 it is recorded as the newest Run on that branch's own, so the drawer, offers, Ready to
 release and Cleanup all see it. The forge is the one the branch's checkout pushes to, and
 it is asked about each branch at most once every 5 minutes. A merge request that merged or
 closed before the Task's first Run began is an older branch's and is ignored; of several,
-the newest is the Task's. A merge also settles its Task: whatever in it is still going —
-running, waiting, parked or asking, a plan waiting on its builder included — and began
-before the forge says it merged, is stopped by the host, with `<label> merged` as the
-reason in its trail, and the card reads `Merged as cego/collie#114.`, never "Stopped by
+the newest is the Task's. A merge also settles the work on that merge request: what is
+still going on it — running, waiting, parked or asking — and began before the forge says it
+merged, is stopped by the host. That is the Run that opened it, any Run given it as its
+target, such as its review or Release Run, and any Follow-up Run on its branch, and a Run
+whose every child still going is among those, such as a plan waiting on its builder. A fan-out of Changes is not one of them, since a
+Change of a later wave may not have started yet. A Run
+working on another merge request, or on a Change that has none yet, keeps going.
+Each carries `<label> merged` as the reason in its trail, and the card reads `Merged as cego/collie#114.`, never "Stopped by
 you". A stop that did not take is asked again on the next round. A Run started after
 the merge, such as a follow-up on the same branch, is left alone, and so is a child the
-stopped Run started in a Task of its own. One that was closed without merging only changes its card's sentence: closing
+stopped Run started in a Task of its own, unless its work is that merge request too. One that was closed without merging only changes its card's sentence: closing
 can mean superseded as easily as abandoned, and only you know which. The same answer
 carries the forge's own checks — GitLab's head pipeline, GitHub's check rollup — and the
 revision they ran at, which is the one Collie's own checks are counted at too: a failing
@@ -850,13 +864,16 @@ closes it, as does Esc, and the key beside each item does it from the keyboard:
 | `g`     | Go to its tab      | always                                                   |
 | `s`     | Steer…             | while something is still driving it                      |
 | `a`     | Attach files…      | while something is still driving it                      |
-| `w`     | Open merge request | when there is one                                        |
+| `w`     | Open merge request | when there is one; with several, asks which, keyed 1–9   |
+| `y`     | Copy its link…     | with several merge requests: asks which, keyed 1–9       |
 | `i`     | its first offer    | a plan that is ready, by its title                       |
-| `o`     | What it offers…    | always: the workflow's own offers                        |
+| `o`     | What it offers…    | always: the workflow's own offers, each MR's own too     |
 | `u`     | Resume run         | failed or stopped                                        |
 | `x`     | Follow-up run      | finished                                                 |
 | `h`     | Hold run           | working, quiet or waiting on you; Release hold once held |
 | `k`     | Stop run           | working, quiet or waiting on you                         |
+
+Past nine merge requests, `9` is More…, which asks the same of the rest.
 
 Only what that Task can be asked for is listed: an item that would come back "this run has
 already finished" is not offered at all. Nothing is offered on one board and withheld on
@@ -872,8 +889,13 @@ See [Stop and resume](cli.md#stop-and-resume) for recovery and delivery reconcil
 The drawer's header carries the same as buttons, without the one that opens what is already
 open, and adds **Mark merged** and **Mark abandoned** once the work is over — recorded
 [beside the run's status, never over it](cli.md#what-became-of-the-work), with its merge request
-as the reference where the board knows one. A Task with a decision open shows **Answer
-above** instead, which closes the drawer to the card whose buttons answer it.
+as the reference where the board knows one. A Task with several merge requests has one of
+each per merge request, `Mark merged app!12`, and `Open MR app!12`, with no key of their
+own; **What it offers…** lists each owning Run's offers, `Release app!12`, made by that Run.
+Its first button is about the first one waiting on you: one closed with nobody saying why,
+then one ready to release. Nothing on the card acts on all of them at once. A Task with a
+decision open shows **Answer above** instead, which closes the drawer to the card whose
+buttons answer it.
 
 **Steer…** opens the record with the keyboard in the field at its foot; type and press
 Enter, and Collie answers with a proposal on that Task's card. The field is not there for a
@@ -1102,6 +1124,16 @@ Each card's **Flow** strip sits under its sentence: the leading Run's Steps, a g
 then the release. The glyphs show their states and the label names the current Step.
 With more than ten Steps, done Steps fold into one counted glyph; release glyphs stay
 separate. Press the strip to open the Task's record on **Flow**. Older hosts show no strip.
+
+A card of a Task with several merge requests has a line for each under its sentence: its
+state, whether it is ready to release at which head, and what it waits on, with an **Open**
+of its own. Its record has a tab for each, in place of the one **Merge request** tab, and
+its **Flow** a **Release** row for each, named by its merge request. A
+merge request that Tasks on more than one Machine hold is drawn once, on the first of those
+cards, with an **on <Machine>** link to each Machine's Task. A link only opens that Task's
+record: what is done there goes to that Machine's host, never to another. A card with one
+merge request on one Machine, and every card from a host older than the list, is drawn as
+before.
 
 The record opens on **Flow**, with one row per Run, oldest first, then Release. A row
 wraps its Steps to the record's width under a line naming the Run, its Machine and who

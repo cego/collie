@@ -3,7 +3,8 @@
 
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import type { RecordPart, RunDetail } from "../../../src/board-model";
+import { mrWords, readMrRef, type RecordPart, type RunDetail } from "../../../src/board-model";
+import { mrTab } from "./links";
 import type { Target } from "./board-clicks";
 
 export interface TabFacts {
@@ -19,6 +20,8 @@ export interface TabFacts {
   readonly terminal: boolean;
   /** The merge request's tab label, where there is one. */
   readonly mr: string | null;
+  /** A tab for each of several merge requests, in place of `mr`'s. */
+  readonly mrs?: ReadonlyArray<Tab>;
   /** The parts the host is still sending: each one's tab is shown loading until it comes. */
   readonly pending?: ReadonlyArray<RecordPart>;
 }
@@ -45,13 +48,27 @@ export const recordTabs = (facts: TabFacts): Array<Tab> => {
     [loaded, { label: "Evidence", value: "evidence" }],
     [true, { label: "Log", value: "log" }, "tail"],
     [facts.terminal, { label: "Terminal", value: "terminal" }],
-    [loaded && facts.mr !== null, { label: facts.mr ?? "", value: "mr" }, "mr"],
+    ...(facts.mrs !== undefined && facts.mrs.length > 0
+      ? Arr.map(facts.mrs, (tab) => [loaded, tab] as const)
+      : [[loaded && facts.mr !== null, { label: facts.mr ?? "", value: "mr" }, "mr"] as const]),
     [true, { label: "Facts", value: "facts" }],
   ];
   return Arr.flatMap(present, ([shown, tab, part]) =>
     part !== undefined && coming(part) ? [{ ...tab, loading: true as const }] : shown ? [tab] : [],
   );
 };
+
+/** A tab per merge request where the record has several, by its MR id; none otherwise. */
+export const mrTabsOf = (mrs: RunDetail["mrs"]): ReadonlyArray<Tab> =>
+  mrs === undefined || mrs.length < 2
+    ? []
+    : Arr.map(mrs, ({ id, mr }) => {
+        const ref = readMrRef(mr) ?? readMrRef(`mr:${id}`);
+        return {
+          label: ref === null ? mrTab(mr) : `${mrTab(mr)} ${mrWords(ref).short}`,
+          value: `mr:${id}`,
+        };
+      });
 
 /** The chosen tab while it is present, else the first. */
 export const tabShown = (tabs: ReadonlyArray<Tab>, chosen: string | undefined): string =>

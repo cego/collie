@@ -145,6 +145,8 @@ export interface Reviewed {
 export interface Delivery<I extends Told, O extends Opened> {
   readonly cwd: string;
   readonly source: { readonly value: string; readonly kind: string };
+  /** The branch a new merge request targets, where it is not the default branch. */
+  readonly onto?: string | undefined;
   /** The agent that fixes and opens the merge request, and its role. */
   readonly agent: string;
   readonly role: string;
@@ -587,7 +589,11 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
     const leftToCi = Arr.filter(checks, (spec) => spec.ci !== undefined);
     const mrUrl = yield* mergeRequest(
       Effect.gen(function* () {
-        const ready = yield* host.mr({ cwd, source: ask.source });
+        const ready = yield* host.mr({
+          cwd,
+          source: ask.source,
+          onto: ask.onto,
+        });
         if (!ready.ok) {
           const head = pipe_((yield* host.evidence(runId, cwd)).final.head_sha, Str.slice(0, 12));
           const unproved = Arr.map(

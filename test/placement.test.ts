@@ -55,7 +55,7 @@ import { SqlClient } from "effect/sql";
 import { VerifySpecSchema } from "../src/verify-spec";
 import { readTask, writeTask, type TaskRecord } from "../src/task";
 import { writeMrStates } from "../src/merges";
-import { mrLabel, type MrState } from "../src/board-model";
+import { type MrState } from "../src/board-model";
 import { HELLE_URL } from "../src/helle-url";
 import type { Call } from "./support/recorder";
 
@@ -968,6 +968,79 @@ test(
         expect(seen.approved).toContain('"api-unit"');
         // The web waits on the api, so nothing has started it yet.
         expect(seen.web).toBeNull();
+      }),
+    ),
+  120_000,
+);
+
+/** One repository's plan in two Changes, the schema one waiting on the default one. */
+const twoChangePlan = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const plan = `${rig.root}/plan`;
+  yield* fs.makeDirectory(`${plan}/issues`, { recursive: true });
+  yield* fs.writeFileString(`${plan}/SPEC.md`, "# The spec\n");
+  yield* fs.writeFileString(`${plan}/issues/01-api.md`, "# The api\n\n**Repo:** .\n");
+  yield* fs.writeFileString(
+    `${plan}/issues/02-schema.md`,
+    "# The schema\n\n**Repo:** .\n\n**Change:** schema\n\n**Blocked by:** 01\n",
+  );
+  return plan;
+});
+
+test(
+  "implement on a plan of two Changes in one repository builds the first on the plan's branch, and cuts the stacked one from its pushed branch",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const plan = yield* twoChangePlan;
+        yield* withOrigin;
+        const head = (cwd: string, ref = "HEAD") =>
+          committing(cwd, "rev-parse", ref).pipe(Effect.map((done) => Str.trim(done.stdout)));
+        const seen = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [implement] = yield* loaded(registry, [shipped("implement")]);
+            const started = yield* start(implement!, { request: "r1", text: { plan } });
+            if (started._tag === "Failure") return yield* Effect.die(started.failure);
+            const runId = started.success.runId;
+            const first = yield* until(
+              () => registry.view(`${runId}.implement-.`),
+              (view) => view?.branch != null,
+            );
+            const waiting = yield* registry.view(`${runId}.implement-.--schema`);
+            // The first Change's work, pushed, and a later commit of it that is not.
+            const at = first!.worktree!.path;
+            yield* committing(at, "commit", "--quiet", "--allow-empty", "-m", "the api");
+            yield* committing(at, "push", "--quiet", "origin", first!.branch!);
+            const pushed = yield* head(at);
+            yield* committing(at, "commit", "--quiet", "--allow-empty", "-m", "not pushed");
+            // Started as the fan-out starts a stacked Change once the first has ended.
+            const stacking = yield* start(implement!, {
+              request: "r2",
+              // oxlint-disable-next-line unicorn/no-thenable -- implement's Input is named `then`
+              text: { plan, then: "finish" },
+              options: {
+                task: runId,
+                repo: ".",
+                change: "schema",
+                stacked: ".",
+                workspace: rig.projectDir,
+              },
+            });
+            if (stacking._tag === "Failure") return yield* Effect.die(stacking.failure);
+            const stacked = yield* until(
+              () => registry.view(stacking.success.runId),
+              (view) => view?.branch != null,
+            );
+            return { runId, first, waiting, pushed, stacked };
+          }),
+        );
+        expect(seen.first?.branch).toBe(`${LOGIN}/${seen.runId}`);
+        expect(seen.first?.options).toMatchObject({ repo: "." });
+        // The stacked Change waits on the first, so nothing has started it yet.
+        expect(seen.waiting).toBeNull();
+        expect(seen.stacked?.branch).toBe(`${LOGIN}/${seen.runId}--schema`);
+        expect(yield* head(seen.stacked!.worktree!.path)).toBe(seen.pushed);
       }),
     ),
   120_000,
@@ -2739,7 +2812,8 @@ const builtFromItsPlan = (mrState: MrState | null) =>
         const plan = `${runDir(dir(), planner)}/plan`;
         yield* fs.makeDirectory(plan, { recursive: true });
         yield* fs.writeFileString(`${plan}/SPEC.md`, "# Add a picker\n");
-        if (mrState !== null) yield* writeMrStates(dir(), new Map([[mrLabel(MR_URL), mrState]]));
+        if (mrState !== null)
+          yield* writeMrStates(dir(), new Map([["gitlab.example.com/group/app!355", mrState]]));
         const started = yield* start(builds!, {
           request: "r-by-hand",
           text: { work: plan },
@@ -2865,6 +2939,95 @@ test(
         );
 
         expect(fresh?.task).toBe("task-new");
+      }).pipe(Effect.provide(recordsAt(dir()))),
+    ),
+  120_000,
+);
+
+test(
+  "a fresh start joins the Task whose merge request it names in any case, and only on its host",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* writeTask({
+          id: "task-1",
+          workspace: "w-task-1",
+          label: "Project | task-1",
+          cwd: rig.projectDir,
+          created_at: "2026-09-01T00:00:00.000Z",
+        });
+        const [shouted, elsewhere] = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [targeted] = yield* loaded(registry, [`${fixtures}/targeted.workflow.ts`]);
+            const named = yield* start(targeted!, {
+              request: "r-task",
+              text: { target: MR_TARGET },
+              task: "task-1",
+            });
+            if (named._tag === "Failure") return yield* Effect.die(named.failure);
+            yield* finished(named.success.runId);
+            return yield* Effect.forEach(
+              ["mr:GitLab.example.com/Group/App!355", "mr:gitlab.other.com/group/app!355"],
+              (target, at) =>
+                Effect.gen(function* () {
+                  const started = yield* start(targeted!, {
+                    request: `r-fresh-${at}`,
+                    text: { target },
+                    taskLabel: "Project | Release",
+                  });
+                  if (started._tag === "Failure") return yield* Effect.die(started.failure);
+                  return yield* finished(started.success.runId);
+                }),
+            );
+          }),
+        );
+
+        expect(shouted?.task).toBe("task-1");
+        expect(elsewhere?.task).not.toBe("task-1");
+      }).pipe(Effect.provide(recordsAt(dir()))),
+    ),
+  120_000,
+);
+
+test(
+  "a legacy bare merge request target joins the Task given it in full in its checkout, and the reverse",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        for (const [id, first, fresh] of [
+          ["task-full", MR_TARGET, "mr:355"],
+          ["task-bare", "mr:356", "mr:gitlab.example.com/group/app!356"],
+        ] as const) {
+          yield* writeTask({
+            id,
+            workspace: `w-${id}`,
+            label: `Project | ${id}`,
+            cwd: rig.projectDir,
+            created_at: "2026-09-01T00:00:00.000Z",
+          });
+          const joined = yield* hosted(
+            Effect.gen(function* () {
+              const registry = yield* Registry;
+              const [targeted] = yield* loaded(registry, [`${fixtures}/targeted.workflow.ts`]);
+              const named = yield* start(targeted!, {
+                request: `r-${id}`,
+                text: { target: first },
+                task: id,
+              });
+              if (named._tag === "Failure") return yield* Effect.die(named.failure);
+              yield* finished(named.success.runId);
+              const started = yield* start(targeted!, {
+                request: `r-${id}-fresh`,
+                text: { target: fresh },
+                taskLabel: "Project | Release",
+              });
+              if (started._tag === "Failure") return yield* Effect.die(started.failure);
+              return yield* finished(started.success.runId);
+            }),
+          );
+          expect(joined?.task).toBe(id);
+        }
       }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,

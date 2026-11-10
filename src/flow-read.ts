@@ -7,6 +7,7 @@ import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Clock, Effect, FileSystem } from "effect";
+import type { ChildProcessSpawner } from "effect/process";
 import type { Flow, FlowLane, FlowNode, FlowRun, MrState } from "./board-model";
 import { mrRefOf, mrUrlOf } from "./board-model";
 import { readAudit, whoActed } from "./audit";
@@ -32,6 +33,7 @@ import { readRunLinks } from "./run-links";
 import { settleFlow } from "./flow-timing";
 import { epochMs } from "./time";
 import { readVerifications } from "./verify";
+import { changeKey } from "./plan";
 
 const executionOfState = (state: RunState): Execution => {
   switch (state) {
@@ -178,10 +180,23 @@ export interface TaskFacts {
   readonly mrState: MrState | null;
   readonly mrStates: ReadonlyMap<string, MrState>;
   readonly ci: Parameters<typeof releaseRow>[0]["ci"];
+  /** Each of the Task's merge requests where it has several, by wave. */
+  readonly releases?:
+    | ReadonlyArray<{
+        readonly id: string;
+        readonly short: string;
+        readonly mrState: MrState | null;
+        readonly ci: Parameters<typeof releaseRow>[0]["ci"];
+        readonly url: string | null;
+      }>
+    | undefined;
   /** Ready to release's first missing fact, or its word that it is ready, while the MR is open. */
   readonly readiness: string | null;
   readonly mrOf: (run: RunFacts) => string | null;
-  readonly mrLabel: (mr: string) => string;
+  /** The MR id of the merge request `run` opened or was pointed at, keying `mrStates`. */
+  readonly mrIdOf: (
+    run: RunFacts,
+  ) => Effect.Effect<string | null, never, ChildProcessSpawner.ChildProcessSpawner>;
 }
 
 export const flowInputsFor = Effect.fn("Flow.inputs")(function* (
@@ -230,6 +245,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
     const linked = yield* lane(child);
     const at = currentOf(linked);
     const mr = task.mrOf(child);
+    const mrId = yield* task.mrIdOf(child);
     return {
       run: child.id,
       machine,
@@ -244,7 +260,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
         finished: child.finished,
         note: child.note,
         mr,
-        mrState: mr === null ? null : (task.mrStates.get(task.mrLabel(mr)) ?? null),
+        mrState: mrId === null ? null : (task.mrStates.get(mrId) ?? null),
         current:
           at === null
             ? null
@@ -283,7 +299,10 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
     for (const repo of [...repos].sort((one, other) => planned(one) - planned(other)))
       children.push({
         id: repo.id,
-        title: repo.repo ?? repo.id,
+        title:
+          repo.repo === null
+            ? repo.id
+            : changeKey({ path: repo.repo, change: repo.change ?? undefined }),
         created: repo.created,
         link: yield* linkOf(repo),
         wave: Option.getOrUndefined(Arr.findFirst(waves, (one) => one.run === repo.id))?.wave ?? 1,
@@ -361,5 +380,12 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
             mrUrl: mrRefOf(task.mr) === null ? null : mrUrlOf(mrRefOf(task.mr)!),
           }),
   } satisfies Flow;
-  return settleFlow(flow, yield* Clock.currentTimeMillis);
+  const now = yield* Clock.currentTimeMillis;
+  if (task.releases === undefined) return settleFlow(flow, now);
+  const releases = Arr.map(task.releases, (one) => ({
+    mr: one.id,
+    short: one.short,
+    nodes: releaseRow({ mrState: one.mrState, ci: one.ci, mrUrl: one.url }),
+  }));
+  return settleFlow({ ...flow, release: releases[0]?.nodes ?? flow.release, releases }, now);
 });

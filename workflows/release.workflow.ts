@@ -23,10 +23,13 @@ import {
   forecast,
   forgeOfRef,
   formatFindings,
+  MergeRequestReadSchema,
+  mrSet,
   mrUrlOf,
   readMrRef,
   renderApproved,
   settleAnswers,
+  stackOrder,
   step,
   stepFailed,
   waitsOnApproval,
@@ -35,7 +38,7 @@ import {
   type OpenComment,
   type ReviewStanding,
 } from "collie";
-import { Effect, Schema } from "effect";
+import { Deferred, Effect, Option, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import { connection } from "./connections.ts";
 import * as Workflow from "effect/workflow/Workflow";
@@ -47,11 +50,15 @@ import {
   StagedMergeRequest,
   claiming,
   fitting,
+  invocationFor,
   nth,
   plays,
   quoted,
+  runOn,
   short,
   staging,
+  startedWithOne,
+  type SetMember,
 } from "./staging.ts";
 import onGitlab from "./release.gitlab.md" with { type: "text" };
 import onGithub from "./release.github.md" with { type: "text" };
@@ -366,6 +373,118 @@ const commentLines = (comments: ReadonlyArray<OpenComment>) =>
     "\n",
   );
 
+const releaseRuns = step({
+  id: "release-runs",
+  title: "Release Runs",
+  description:
+    "One Release Run per merge request of the set, a blocker's before those waiting on it.",
+  kind: "workflow",
+});
+
+type SetEnd =
+  | { readonly _tag: "Released" | "LeftOpen" | "Failed"; readonly said: string }
+  | { readonly _tag: "NotStarted"; readonly on: SetMember; readonly blocker: SetEnd };
+
+const endLine = (member: SetMember, end: SetEnd) => {
+  switch (end._tag) {
+    case "Released":
+      return `${member.url} released: ${end.said}`;
+    case "LeftOpen":
+      return `${member.url} left open: ${end.said}`;
+    case "Failed":
+      return `${member.url} failed: ${end.said}`;
+    case "NotStarted":
+      return `${member.url} was not started: it waits on ${end.on.url}, ${
+        end.blocker._tag === "Failed"
+          ? "whose release failed"
+          : end.blocker._tag === "LeftOpen"
+            ? "which was left open"
+            : "which was not started"
+      }`;
+  }
+};
+
+/**
+ * Each merge request of a set released by a Release Run of its own. One waiting on another
+ * of the set starts only once that one's Run has merged it, and never after it failed.
+ */
+const releaseEach = (members: ReadonlyArray<SetMember>) =>
+  Effect.gen(function* () {
+    const host = yield* Host;
+    const runId = (yield* Run).id;
+    const fail = (reason: string) => new WorkflowError({ reason });
+    const { cwd } = yield* host.place(runId);
+    const read = (name: string, member: SetMember) =>
+      Activity.make({
+        name,
+        success: MergeRequestReadSchema,
+        execute: host.readMergeRequest({ cwd, mr: member.target }),
+      });
+    const branches = [];
+    for (const member of members) {
+      const now = yield* read(`read-${invocationFor("release", member)}`, member);
+      if (now._tag === "Unreadable")
+        return yield* fail(`${member.url} could not be read: ${now.why}, so nothing was released`);
+      branches.push({ id: member.id, source: now.source, target: now.target, wave: now.wave });
+    }
+    const stacked = stackOrder(branches);
+    const byId = new Map(Arr.map(members, (member) => [member.id, member] as const));
+    if (stacked._tag === "Cycle")
+      return yield* fail(
+        `${Arr.join(
+          Arr.map(stacked.ids, (id) => byId.get(id)!.url),
+          ", ",
+        )} each wait on another, so nothing was released`,
+      );
+    yield* forecast([releaseRuns]);
+    const items = Arr.map(stacked.order, (one) => invocationFor("release", byId.get(one.id)!));
+    const ends = new Map(
+      Arr.map(stacked.order, (one) => [one.id, Deferred.makeUnsafe<SetEnd>()] as const),
+    );
+    const releaseOne = (member: SetMember) =>
+      Effect.gen(function* () {
+        const ran = yield* runOn("release", member);
+        if (!ran.ok) return { _tag: "Failed", said: ran.said } satisfies SetEnd;
+        // A Run that ended without merging, as on Finish, leaves nothing to stack on.
+        const now = yield* read(`${invocationFor("release", member)}.merged`, member);
+        return {
+          _tag: now._tag === "Read" && now.state === "merged" ? "Released" : "LeftOpen",
+          said: ran.said,
+        } satisfies SetEnd;
+      });
+    const ended = yield* Effect.forEach(
+      stacked.order,
+      (one) =>
+        Effect.gen(function* () {
+          const member = byId.get(one.id)!;
+          const before = yield* Effect.forEach(one.waitsOn, (id) =>
+            Effect.map(Deferred.await(ends.get(id)!), (end) => ({ on: byId.get(id)!, end })),
+          );
+          const blocked = Arr.findFirst(before, ({ end }) => end._tag !== "Released");
+          const end: SetEnd = Option.isSome(blocked)
+            ? { _tag: "NotStarted", on: blocked.value.on, blocker: blocked.value.end }
+            : yield* releaseRuns(releaseOne(member), {
+                item: invocationFor("release", member),
+                items,
+              });
+          yield* Deferred.succeed(ends.get(one.id)!, end);
+          yield* host.record(runId, endLine(member, end));
+          return { member, end };
+        }),
+      { concurrency: "unbounded" },
+    );
+    const count = (tag: SetEnd["_tag"]) => Arr.filter(ended, ({ end }) => end._tag === tag).length;
+    const open = count("LeftOpen");
+    const said = `${count("Released")} released, ${count("Failed")} failed, ${count("NotStarted")} not started${
+      open > 0 ? `, ${open} left open` : ""
+    }: ${Arr.join(
+      Arr.map(ended, ({ member, end }) => endLine(member, end)),
+      "; ",
+    )}`;
+    if (count("Failed") > 0) return yield* fail(said);
+    return said;
+  });
+
 /** What a Release Run goes on from once its merge request is merged. */
 interface Landed {
   readonly sha: string;
@@ -406,9 +525,12 @@ export default defineWorkflow({
   },
   title: "release — merge and tag a merge request on a human's go",
   description:
-    "Takes one merge request the rest of the way: it waits, at no model cost, until the merge request is approved, answered, green and mergeable at a head the Run's checks proved, asks the human for the go, then claims the repository, merges at that head, tags the release and reads the tag back on origin. An application is staged, from its merge request before the merge or from its tag after it, and goes to production on the human's go.",
+    "Takes one merge request the rest of the way: it waits, at no model cost, until the merge request is approved, answered, green and mergeable at a head the Run's checks proved, asks the human for the go, then claims the repository, merges at that head, tags the release and reads the tag back on origin. An application is staged, from its merge request before the merge or from its tag after it, and goes to production on the human's go. Given several, it releases each by a Release Run of its own, a blocker's before those waiting on it.",
   input: Schema.Struct({
-    mr: Schema.String.annotate({ description: "The merge request or pull request to release" }),
+    mr: Schema.String.annotate({
+      description:
+        "The merge request or pull request to release, or several, separated by spaces or commas",
+    }),
   }),
   output: Schema.String,
   agents: { roles: { implementer: IMPLEMENTER } },
@@ -434,6 +556,7 @@ export default defineWorkflow({
       workflow: "self",
       when: "failed",
       inputs: { mr: "started-with" },
+      eligible: startedWithOne,
     },
   ],
   run: ({ input: asked }) =>
@@ -450,10 +573,17 @@ export default defineWorkflow({
           return yield* Workflow.suspend(yield* WorkflowInstance);
         });
 
-      const ref = readMrRef(asked.mr);
+      const set = mrSet(asked.mr);
+      if (set !== null && "unresolved" in set)
+        return yield* fail(
+          `${set.unresolved} is not a merge request this Run can find, so nothing was released`,
+        );
+      if (set !== null && set.mrs.length > 1) return yield* releaseEach(set.mrs);
+      const said = set === null ? asked.mr : set.mrs[0]!.target;
+      const ref = readMrRef(said);
       const mr = ref === null ? null : mrUrlOf(ref);
       if (ref === null || mr === null)
-        return yield* fail(`${asked.mr || "an empty mr"} is not a merge request this Run can find`);
+        return yield* fail(`${said || "an empty mr"} is not a merge request this Run can find`);
       yield* host.mergeRequest(runId, mr);
       const { cwd } = yield* checkingOut(
         Effect.gen(function* () {

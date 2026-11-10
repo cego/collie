@@ -1,11 +1,12 @@
 // Holding a merge request's Helle claims and putting its head on stage, shared by `release`
-// and `stage` so a merge request is claimed, staged and rolled back the same way either way.
-// Each caller asks in its own words.
+// and `stage` so a merge request is claimed, staged and rolled back the same way either way,
+// and a set of merge requests taken one Run each. Each caller asks in its own words.
 
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import {
+  Children,
   ClaimedSchema,
   FindingSchema,
   Host,
@@ -13,6 +14,8 @@ import {
   StageReadSchema,
   WorkflowError,
   ask,
+  mrSet,
+  type ActionFacts,
   type JobLink,
 } from "collie";
 import { Effect, Schema, Option } from "effect";
@@ -270,3 +273,94 @@ export const staging = <R1, R2>(options: {
       }),
   };
 };
+
+export interface SetMember {
+  readonly id: string;
+  readonly target: string;
+  readonly url: string;
+}
+
+const PRIMES: Array<number> = [];
+for (let n = 2; PRIMES.length < 64; n++)
+  if (Arr.every(PRIMES, (prime) => n % prime !== 0)) PRIMES.push(n);
+const fraction32 = (x: number) => ((x - Math.floor(x)) * 2 ** 32) >>> 0;
+const ROUND = Arr.map(PRIMES, (prime) => fraction32(Math.cbrt(prime)));
+const START = Arr.map(Arr.take(PRIMES, 8), (prime) => fraction32(Math.sqrt(prime)));
+const rotr = (x: number, n: number) => (x >>> n) | (x << (32 - n));
+
+/** FIPS 180-4 SHA-256, in hex, of `text` as UTF-16BE: a module an author writes has no crypto. */
+const sha256 = (text: string) => {
+  const bytes: Array<number> = [];
+  for (let at = 0; at < text.length; at++) {
+    const unit = Option.getOrElse(Str.charCodeAt(text, at), () => 0);
+    bytes.push(unit >>> 8, unit & 0xff);
+  }
+  const bits = bytes.length * 8;
+  bytes.push(0x80);
+  while (bytes.length % 64 !== 56) bytes.push(0);
+  for (let shift = 56; shift >= 0; shift -= 8) bytes.push(Math.floor(bits / 2 ** shift) & 0xff);
+  const hash = [...START];
+  for (let block = 0; block < bytes.length; block += 64) {
+    const w: Array<number> = [];
+    for (let i = 0; i < 64; i++) {
+      const word = (k: number) => w[i - k]!;
+      w.push(
+        i < 16
+          ? (bytes[block + 4 * i]! << 24) |
+              (bytes[block + 4 * i + 1]! << 16) |
+              (bytes[block + 4 * i + 2]! << 8) |
+              bytes[block + 4 * i + 3]!
+          : (word(16) +
+              (rotr(word(15), 7) ^ rotr(word(15), 18) ^ (word(15) >>> 3)) +
+              word(7) +
+              (rotr(word(2), 17) ^ rotr(word(2), 19) ^ (word(2) >>> 10))) |
+              0,
+      );
+    }
+    const v = [...hash];
+    for (let i = 0; i < 64; i++) {
+      const [a = 0, b = 0, c = 0, d = 0, e = 0, f = 0, g = 0, h = 0] = v;
+      const t1 =
+        (h + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + ROUND[i]! + w[i]!) |
+        0;
+      const t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+      v.splice(0, 8, (t1 + t2) | 0, a, b, c, (d + t1) | 0, e, f, g);
+    }
+    for (let i = 0; i < 8; i++) hash[i] = (hash[i]! + v[i]!) | 0;
+  }
+  return Arr.join(
+    Arr.map(hash, (word) => pipe_((word >>> 0).toString(16), Str.padStart(8, "0"))),
+    "",
+  );
+};
+
+// The id's SHA-256 keeps two MR ids apart, and the capped slug a child's Run directory short.
+export const invocationFor = (workflow: "release" | "stage", member: SetMember) =>
+  `${workflow}-${pipe_(member.id, Str.replace(/[^a-z0-9]+/g, "-"), Str.slice(0, 40))}-${sha256(member.id)}`;
+
+/** Whether a Run was started with one merge request: a set is never offered again whole. */
+export const startedWithOne = (facts: ActionFacts) => {
+  const set = mrSet(facts.diffTarget ?? "");
+  return set === null || ("mrs" in set && set.mrs.length === 1);
+};
+
+/** A Run of this workflow on `member` alone, waited on: its result, or why it failed. */
+export const runOn = (workflow: "release" | "stage", member: SetMember) =>
+  Effect.gen(function* () {
+    const children = yield* Children;
+    const child = yield* children
+      .start({
+        invocation: invocationFor(workflow, member),
+        workflow: "self",
+        input: { mr: member.target },
+      })
+      .pipe(Effect.result);
+    if (child._tag === "Failure")
+      return { ok: false, said: `not started: ${child.failure.reason}` };
+    return yield* children.result(child.success).pipe(
+      Effect.match({
+        onSuccess: (value) => ({ ok: true, said: String(value) }),
+        onFailure: (failure) => ({ ok: false, said: failure.reason }),
+      }),
+    );
+  });

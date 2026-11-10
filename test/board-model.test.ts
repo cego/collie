@@ -8,12 +8,16 @@ import { runInNewContext } from "node:vm";
 import { Effect, Schema, flow as Schemaflow, Result } from "effect";
 import {
   cardActions,
+  disposeLabel,
+  dispositionActions,
   flowActions,
   givenOfferInput,
+  mrId,
   mrUrlOf,
   mrWords,
   openMrLabel,
   primaryAction,
+  PROTOCOL,
   Question,
   readMrRef,
   readinessOfRun,
@@ -23,7 +27,7 @@ import {
 } from "../src/board-model";
 import { task } from "./support/task";
 import { flowNode, mainFlow } from "./support/flow";
-import type { FlowNode, TaskView as Task } from "../src/board-model";
+import type { FlowNode, TaskMr, TaskView as Task } from "../src/board-model";
 
 const acting = (node: Partial<FlowNode>, over: Partial<Task> = {}) => {
   const base = mainFlow();
@@ -318,6 +322,63 @@ test("a TaskView carries its open questions, and one from an older host without 
   expect(decode({ ...older, unseen: true }).unseen).toBe(true);
 });
 
+test("a TaskView from v0.118.0 has no merge request list and still decodes; a newer one keeps its list beside the scalar, on protocol 5", () => {
+  const api = "https://gitlab.cego.dk/cego/api/-/merge_requests/7";
+  const older = {
+    id: "task-1",
+    name: "Pure board module",
+    project: "/work/collie",
+    state: "done",
+    steps: [],
+    sentence: "api!7 is open; nothing has checked it.",
+    age: "2m",
+    drift: null,
+    held: null,
+    heldBy: null,
+    decision: null,
+    agents: [],
+    children: [],
+    mr: api,
+    branch: null,
+    disposition: null,
+    landed: false,
+    ended: null,
+    mrState: "open",
+    planReady: false,
+    offer: null,
+    run: "run-1",
+    runs: ["run-1"],
+    at: 1_700_000_000_000,
+  };
+  const entry = (repo: string, iid: number) => ({
+    id: `gitlab.cego.dk/cego/${repo}!${iid}`,
+    mr: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`,
+    label: `cego/${repo}!${iid}`,
+    short: `${repo}!${iid}`,
+    url: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`,
+    run: `r-${repo}`,
+    state: "open",
+    checks: null,
+    head: null,
+    ready: false,
+    disposition: null,
+    waitsOn: [],
+  });
+  const decode = Schemaflow(
+    Schema.decodeUnknownResult(Schema.toCodecJson(TaskView)),
+    Result.getOrThrow,
+  );
+
+  expect(decode(older).mrs).toBeUndefined();
+  expect(decode(older).mr).toBe(api);
+  const newer = decode({ ...older, mrs: [entry("api", 7), entry("web", 8)] });
+  expect(Arr.map(newer.mrs ?? [], (one) => one.id)).toEqual([
+    "gitlab.cego.dk/cego/api!7",
+    "gitlab.cego.dk/cego/web!8",
+  ]);
+  expect(PROTOCOL).toBe(5);
+});
+
 test("a TaskView and a RunDetail survive a round trip through JSON", () => {
   const view: TaskView = {
     id: "task-1",
@@ -486,6 +547,39 @@ test.each([
   expect(readMrRef(text)).toBeNull();
 });
 
+const SPILNU = "gitlab.cego.dk/spilnu/app";
+
+test.each([
+  [
+    "a GitLab URL",
+    "https://GitLab.cego.dk/Spilnu/App/-/merge_requests/42",
+    undefined,
+    `${SPILNU}!42`,
+  ],
+  [
+    "a GitHub URL",
+    "https://github.com/Cego/Collie/pull/300/files",
+    undefined,
+    "github.com/cego/collie#300",
+  ],
+  ["an mr: target", "mr:gitlab.cego.dk/SPILNU/app!42", undefined, `${SPILNU}!42`],
+  ["GitHub's owner/repo#n", "Cego/Collie#300", undefined, "github.com/cego/collie#300"],
+  ["a typed !n", "!42", { project: "gitlab.cego.dk/Spilnu/App" }, `${SPILNU}!42`],
+  ["an MR id", `${SPILNU}!42`, undefined, `${SPILNU}!42`],
+  ["a legacy bare mr: target in its checkout", "mr:42", { project: SPILNU }, `${SPILNU}!42`],
+  ["a hostless label in its checkout", "Spilnu/App!42", { project: SPILNU }, `${SPILNU}!42`],
+  ["a short label in its checkout", "app!42", { project: SPILNU }, `${SPILNU}!42`],
+  ["a bare !n with no project", "!42", undefined, null],
+  ["a bare !n typed nowhere", "!42", { project: null }, null],
+  ["a legacy bare mr: target read anywhere", "mr:42", undefined, null],
+  ["a hostless label read anywhere", "spilnu/app!42", undefined, null],
+  ["a hostless label of another checkout", "spilnu/web!42", { project: SPILNU }, null],
+  ["a label that only ends like its checkout", "pnu/app!42", { project: SPILNU }, null],
+  ["anything else", "branch:main...x", undefined, null],
+])("%s has the MR id it names", (_, text, typedIn, id) => {
+  expect(mrId(text, typedIn)).toBe(id);
+});
+
 test.each([
   {
     mr: "https://github.com/cego/collie/pull/30",
@@ -512,6 +606,118 @@ test.each([
     disposition: "superseded",
     ref,
   });
+});
+
+/** A merge request of a Task on gitlab.cego.dk, open and with nothing said of it. */
+const entryOf = (repo: string, iid: number, over: Partial<TaskMr> = {}): TaskMr => ({
+  id: `gitlab.cego.dk/cego/${repo}!${iid}`,
+  mr: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`,
+  label: `cego/${repo}!${iid}`,
+  short: `${repo}!${iid}`,
+  url: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`,
+  run: `r-${repo}`,
+  state: "open",
+  checks: null,
+  head: null,
+  ready: false,
+  disposition: null,
+  waitsOn: [],
+  ...over,
+});
+const APP12 = entryOf("app", 12);
+const API7 = entryOf("api", 7);
+const appRef = { project: "gitlab.cego.dk/cego/app", iid: "12" };
+const apiRef = { project: "gitlab.cego.dk/cego/api", iid: "7" };
+
+test("a card of several merge requests opens and disposes of each by its own MR id", () => {
+  const view = task({ state: "done", landed: false, mr: APP12.mr, mrs: [APP12, API7] });
+
+  const opens = Arr.filter(cardActions(view), (one) => one.kind === "open-mr");
+  expect(opens).toEqual([
+    { kind: "open-mr", mr: appRef, named: "app!12" },
+    { kind: "open-mr", mr: apiRef, named: "api!7" },
+  ]);
+  expect(Arr.map(opens, (one) => openMrLabel(one.mr, false, one.named))).toEqual([
+    "Open MR app!12",
+    "Open MR api!7",
+  ]);
+
+  const disposals = dispositionActions(view);
+  expect(disposals).toEqual([
+    { kind: "dispose", disposition: "merged", ref: APP12.id, named: "app!12" },
+    { kind: "dispose", disposition: "abandoned", ref: APP12.id, named: "app!12" },
+    { kind: "dispose", disposition: "merged", ref: API7.id, named: "api!7" },
+    { kind: "dispose", disposition: "abandoned", ref: API7.id, named: "api!7" },
+  ]);
+  expect(disposeLabel(disposals[2]!)).toBe("Mark merged api!7");
+});
+
+test("the primary action of several merge requests is about the first one waiting on the human", () => {
+  const closed = task({
+    state: "done",
+    landed: false,
+    mr: APP12.mr,
+    mrState: "open",
+    mrs: [APP12, { ...API7, state: "closed" }],
+  });
+  expect(primaryAction(closed)).toEqual({
+    kind: "dispose",
+    disposition: "superseded",
+    ref: API7.id,
+    named: "api!7",
+  });
+  expect(
+    Arr.filter(dispositionActions(closed), (one) => one.kind === "dispose" && one.ref === API7.id),
+  ).toHaveLength(3);
+
+  // Once someone said what became of it, the one ready to release is what waits.
+  const said = task({
+    ...closed,
+    mrs: [
+      APP12,
+      { ...API7, state: "closed", disposition: "abandoned" },
+      entryOf("web", 8, { ready: true }),
+    ],
+  });
+  expect(primaryAction(said)).toEqual({
+    kind: "open-mr",
+    mr: { project: "gitlab.cego.dk/cego/web", iid: "8" },
+    named: "web!8",
+  });
+});
+
+test("a card of one merge request has the actions and labels it always had", () => {
+  const view = task({ state: "done", landed: false, mr: APP12.mr, mrs: [APP12] });
+  expect(cardActions(view)).toEqual([
+    { kind: "go-to-tab" },
+    { kind: "open-mr", mr: appRef },
+    { kind: "offers" },
+    { kind: "follow-up" },
+  ]);
+  expect(primaryAction(view)).toEqual({ kind: "open-mr", mr: appRef });
+  expect(openMrLabel(appRef, true)).toBe("Open MR");
+  expect(openMrLabel(appRef, false)).toBe("Open merge request");
+  const closed = {
+    ...view,
+    mrState: "closed" as const,
+    mrs: [{ ...APP12, state: "closed" as const }],
+  };
+  expect(primaryAction(closed)).toEqual({
+    kind: "dispose",
+    disposition: "superseded",
+    ref: "app!12",
+  });
+  const disposals = dispositionActions(closed);
+  expect(disposals).toEqual([
+    { kind: "dispose", disposition: "merged", ref: "app!12" },
+    { kind: "dispose", disposition: "abandoned", ref: "" },
+    { kind: "dispose", disposition: "superseded", ref: "app!12" },
+  ]);
+  expect(Arr.map(disposals, disposeLabel)).toEqual([
+    "Mark merged",
+    "Mark abandoned",
+    "Mark superseded",
+  ]);
 });
 
 const MR = "mr:gitlab.example.com/mk/project!7";

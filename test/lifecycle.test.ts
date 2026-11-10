@@ -22,6 +22,7 @@ import { connect } from "../src/host";
 import { runView, runViews } from "../src/lifecycle";
 import { runDir, type RunView } from "../src/engine";
 import { readAudit } from "../src/audit";
+import { readDispositions } from "../src/disposition";
 import { events, stopHost, until } from "./support/host";
 import { collie, proves as provesWith, save, type World } from "./support/world";
 
@@ -1116,4 +1117,69 @@ test(
       ["proved.workflow.ts"],
     ),
   240_000,
+);
+
+const mrUrl = (repo: string, iid: number) =>
+  `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`;
+
+test(
+  "a Disposition of one merge request of several is kept by the Run that owns it, and one outside the Task is refused",
+  () =>
+    provesWith(
+      "collie-lifecycle-dispose-",
+      (world) =>
+        Effect.gen(function* () {
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const fan = yield* client
+            .start({
+              project: world.project,
+              id: "fans-out",
+              request: "req-fan",
+              input: { mrs: `${mrUrl("api", 3)} ${mrUrl("web", 8)}` },
+              task: "task-1",
+            })
+            .pipe(Effect.orDie);
+          yield* until(
+            () => client.run({ runId: fan.runId }).pipe(Effect.orDie),
+            (view) => view?.status.status === "complete",
+          );
+          const web = Option.getOrThrow(
+            Arr.findFirst(
+              yield* client.runs({ task: "task-1" }).pipe(Effect.orDie),
+              (one) => one.mr === mrUrl("web", 8),
+            ),
+          );
+
+          const line = yield* client
+            .dispose({
+              runId: fan.runId,
+              kind: "abandoned",
+              ref: "web!8",
+              note: null,
+              request: "d-1",
+            })
+            .pipe(Effect.orDie);
+          expect(line).toMatchObject({ kind: "abandoned", ref: "gitlab.cego.dk/cego/web!8" });
+          expect(yield* readDispositions(runDir(world.state, web.runId))).toMatchObject([
+            { kind: "abandoned", ref: "gitlab.cego.dk/cego/web!8" },
+          ]);
+          expect(yield* readDispositions(runDir(world.state, fan.runId))).toEqual([]);
+
+          const refused = yield* client
+            .dispose({
+              runId: fan.runId,
+              kind: "merged",
+              ref: mrUrl("cli", 9),
+              note: null,
+              request: "d-2",
+            })
+            .pipe(Effect.flip);
+          expect(refused).toMatchObject({
+            reason: expect.stringMatching(/cego\/api!3.*cego\/web!8/),
+          });
+          yield* stopHost(world.state);
+        }),
+      ["fans-out.workflow.ts", "records-mr.workflow.ts"],
+    ),
+  180_000,
 );

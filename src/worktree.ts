@@ -47,6 +47,7 @@ import type { WorktreeRecord } from "./run";
 // Type-only: the host imports this module, and `runs.ts` reads through the host.
 import type { RunFacts } from "./runs";
 import { slugify } from "./template";
+import { changeBranch } from "./plan";
 import { unlistedServers, type CompactionPorts } from "./compaction";
 import { COMPACTION_PORTS } from "./compactors";
 import { endAgent, endedLine, runLog } from "./agent-end";
@@ -118,6 +119,10 @@ export interface BranchAsk {
   explicit?: string | null | undefined;
   /** The branch the Task whose plan this Run builds was placed on, which it continues. */
   taskBranch?: string | null | undefined;
+  /** The Change this Run builds, whose name its branch carries; absent for a default Change. */
+  change?: string | undefined;
+  /** The Change of the same repository its branch is cut from: "" for the default one. */
+  stackedOn?: string | undefined;
   /**
    * The GitLab login a generated branch is namespaced under, from the environment
    * (`PluginEnv.gitlabLogin`). Null or absent leaves it to glab.
@@ -260,7 +265,7 @@ export const branchFor = Effect.fn("worktree.branchFor")(function* (opts: Branch
     ({ branch: "", task: "", base: "", refused: why, source: null }) satisfies BranchPlan;
   const asked = yield* branchName(opts, run);
   if (asked.refused !== null) return refuse(asked.refused);
-  let branch = asked.branch;
+  let plan = asked.branch;
   if (asked.generated) {
     const identity = yield* whoami(opts, run);
     if (!identity.ok) return refuse(identity.reason);
@@ -271,20 +276,24 @@ export const branchFor = Effect.fn("worktree.branchFor")(function* (opts: Branch
         `no ${forge.display} login to name a branch under: ${variable} is unset and ${forge.cli} could not say who you are. Log in with \`${forge.cli} auth login\`, or set ${variable}.`,
       );
     }
-    branch = `${who}/${asked.branch}`;
+    plan = `${who}/${asked.branch}`;
+  }
+  const branch = changeBranch(plan, opts.change);
+  if (asked.generated) {
     // git's own rules, on the one name Collie made up rather than was given: an
     // illegal ref would otherwise fail at `worktree add`, after the Run had started.
     const legal = yield* run("git", ["check-ref-format", `refs/heads/${branch}`], opts.cwd);
     if (legal.code !== 0) return refuse(`${branch} is not a branch name git will accept`);
   }
-  const base = yield* baseFor(branch, opts.cwd, run, {
-    reviewed: asked.reviewed,
-    fetches: opts.fetches !== false,
-  });
+  const fetches = opts.fetches !== false;
+  const base =
+    opts.stackedOn === undefined
+      ? yield* baseFor(branch, opts.cwd, run, { reviewed: asked.reviewed, fetches })
+      : yield* stackedBase(branch, changeBranch(plan, opts.stackedOn), opts.cwd, run, fetches);
   if (base.refused !== undefined) return refuse(base.refused);
   return {
     branch,
-    task: asked.branch,
+    task: changeBranch(asked.branch, opts.change),
     base: base.base,
     refused: null,
     source: asked.source,
@@ -470,6 +479,21 @@ const baseFor = Effect.fn("worktree.baseFor")(function* (
     return { refused: `${branch} is not on the remote, so there is no reviewed work to fix` };
   }
   return { base: yield* defaultStart(cwd, run) };
+});
+
+const stackedBase = Effect.fn("worktree.stackedBase")(function* (
+  branch: string,
+  blocker: string,
+  cwd: string,
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
+  fetches: boolean,
+) {
+  const exists = (ref: string) => run("git", ["rev-parse", "--verify", ref], cwd);
+  if ((yield* exists(`origin/${branch}`)).code === 0) return { base: `origin/${branch}` };
+  if (fetches) yield* run("git", ["fetch", "origin", blocker], cwd);
+  if ((yield* exists(`origin/${blocker}`)).code === 0) return { base: `origin/${blocker}` };
+  if ((yield* exists(`refs/heads/${blocker}`)).code === 0) return { base: blocker };
+  return { refused: `${blocker}, the branch ${branch} is stacked on, is neither pushed nor here` };
 });
 
 /** Where new work starts, as `baseFor` says. */
