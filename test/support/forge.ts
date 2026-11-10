@@ -1127,7 +1127,7 @@ function pipelineStart(
     return refused(
       `${refusing} ${refusing === 400 ? "No stages / jobs for this pipeline." : "Internal Server Error"}`,
     );
-  const sha = mr.head ?? "";
+  const sha = (how.source === "merge_request_event" ? mr.pipelineAt : undefined) ?? mr.head ?? "";
   const id =
     1 +
     Math.max(

@@ -1091,7 +1091,7 @@ function retryJob(ref: MrRef, id: string, cwd: string): Effect.Effect<Readiness,
 
 const ShaPipelines = Schema.Array(Schema.Struct({ status: Schema.String, web_url: optionalText }));
 const SourceBranch = Schema.Struct({ source_branch: optionalText });
-const StartedPipeline = Schema.Struct({ web_url: optionalText });
+const StartedPipeline = Schema.Struct({ web_url: optionalText, sha: optionalText });
 
 /**
  * The merge request's pipeline on `head`, else its source branch's where GitLab refuses that
@@ -1112,22 +1112,35 @@ function startPipeline(
       return { _tag: "Failed", reason: `could not list the pipelines on ${head}: ${on.reason}` };
     const running = Arr.findFirst(on.value, (one) => one.status !== "skipped");
     if (Option.isSome(running)) return { _tag: "Has", url: running.value.web_url ?? "" };
-    const started = (answer: Answered<unknown>): PipelineStart =>
-      answer.ok
-        ? {
-            _tag: "Started",
-            url:
-              Option.getOrUndefined(Schema.decodeUnknownOption(StartedPipeline)(answer.value))
-                ?.web_url ?? "",
-          }
-        : { _tag: "Failed", reason: `could not start a pipeline for ${where}: ${answer.reason}` };
+    // GitLab builds the ref's head at the time, which a later push may have moved past `head`.
+    const started = (answer: Answered<unknown>) =>
+      Effect.gen(function* () {
+        if (!answer.ok)
+          return {
+            _tag: "Failed",
+            reason: `could not start a pipeline for ${where}: ${answer.reason}`,
+          } as const;
+        const pipeline = Option.getOrUndefined(
+          Schema.decodeUnknownOption(StartedPipeline)(answer.value),
+        );
+        const url = pipeline?.web_url ?? "";
+        const sha = pipeline?.sha ?? "";
+        if (sha === head) return { _tag: "Started", url } as const;
+        const commit = sha === "" ? null : yield* rest(Commit, `repository/commits/${sha}`);
+        if (commit?.ok === true && commit.value.parent_ids.includes(head))
+          return { _tag: "Started", url } as const;
+        return {
+          _tag: "Failed",
+          reason: `GitLab started ${url || "a pipeline"} for ${where} on ${sha === "" ? "a revision it did not name" : pipe(sha, Str.slice(0, 12))}, not on ${pipe(head, Str.slice(0, 12))}`,
+        } as const;
+      });
     const asMr = yield* request(
       login,
       cwd,
       "POST",
       `${project}/merge_requests/${ref.iid}/pipelines`,
     );
-    if (asMr.ok || asMr.status !== 400) return started(asMr);
+    if (asMr.ok || asMr.status !== 400) return yield* started(asMr);
     const mr = yield* rest(SourceBranch, `merge_requests/${ref.iid}`);
     if (!mr.ok || !mr.value.source_branch)
       return {
@@ -1142,7 +1155,7 @@ function startPipeline(
     );
     if (!asBranch.ok && asBranch.status === 400)
       return { _tag: "NoneByRules", message: asBranch.reason };
-    return started(asBranch);
+    return yield* started(asBranch);
   });
 }
 

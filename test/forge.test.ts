@@ -3450,6 +3450,39 @@ describe("GitLab's start of a merge request head's pipeline", () => {
       }),
     ));
 
+  test("a pipeline GitLab built on another revision than the head is a failure naming both, on either route", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const MOVED = "9999999999999999999999999999999999999999";
+        for (const refusing of [{}, { refusesPipeline: { mr: 400 } }]) {
+          const { answer } = yield* started({
+            ...SKIPPED,
+            ...refusing,
+            mrs: [mr("gitlab", { head: MOVED, sourceBranch: "feature" })],
+          });
+          expect(answer).toMatchObject({ _tag: "Failed" });
+          expect(answer._tag === "Failed" && answer.reason).toContain(MOVED.slice(0, 12));
+          expect(answer._tag === "Failed" && answer.reason).toContain(HEAD.slice(0, 12));
+        }
+      }),
+    ));
+
+  test("a merged-results pipeline starts for the head only where GitLab shows its merge commit's parent is it", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const MERGE = "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432";
+        const TARGET = "0000000000000000000000000000000000000001";
+        const at = (parents: ReadonlyArray<string>) =>
+          started({
+            ...SKIPPED,
+            mrs: [mr("gitlab", { pipelineAt: MERGE, sourceBranch: "feature" })],
+            ancestry: { [MERGE]: parents },
+          });
+        expect((yield* at([TARGET, HEAD])).answer).toMatchObject({ _tag: "Started" });
+        expect((yield* at([TARGET, "an-older-head"])).answer).toMatchObject({ _tag: "Failed" });
+      }),
+    ));
+
   test("a head with a pipeline that was not skipped gets none", () =>
     runEffect(
       Effect.gen(function* () {
