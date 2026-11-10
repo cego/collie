@@ -17,7 +17,7 @@
     "contract:check": "bun run tools/herdr-schema.ts pinned --check",
     "contract:regen": "bun run tools/herdr-schema.ts pinned --write",
     "probe:hc": "bun run tools/hc-probe.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsrs --noEmit --fast",
     "check:static": "bun run --parallel --no-exit-on-error format:check lint typecheck",
     "check": "bun run check:static && bun run test",
     "build": "bun run tools/build.ts",
@@ -42,6 +42,7 @@
     "oxfmt": "0.72.0",
     "oxlint": "1.90.0",
     "oxlint-tsgolint": "7.0.2005",
+    "tsrs": "0.23.0-ts7.1.0-beta",
     "typescript": "7.0.2"
   },
   "engines": {
