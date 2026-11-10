@@ -126,9 +126,10 @@ impl Board {
         }
     }
 
-    /// A `say` event heard at `at`; one of the live turn starts a chat mark.
+    /// A `say` event heard at `at`; text content of the live turn starts a chat mark.
     pub fn chat_heard(&mut self, turn: u64, event: Result<AguiEvent, String>, at: f64) {
-        if self.chat.heard(turn, event) {
+        let content = matches!(&event, Ok(AguiEvent::TextMessageContent(_)));
+        if self.chat.heard(turn, event) && content {
             self.timing.get_mut().chunk(&format!("turn-{turn}"), at);
         }
     }

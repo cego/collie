@@ -143,7 +143,7 @@ fn a_key_sent_to_the_pane_and_the_frame_after_its_output_mark_the_echo() {
 fn event() -> AguiEvent {
     let line = include_str!("../../fixtures/chat/say-text.ndjson")
         .lines()
-        .nth(2)
+        .nth(3)
         .unwrap();
     let line: serde_json::Value = serde_json::from_str(line).unwrap();
     serde_json::from_value(line["event"].clone()).unwrap()
@@ -168,6 +168,26 @@ fn a_heard_chunk_of_the_live_turn_and_the_frame_that_draws_it_are_marked() {
             mark("chat-drawn", 729.0, "turn-1")
         ]
     );
+}
+
+#[test]
+fn non_text_events_and_transport_errors_do_not_start_chat_timing() {
+    let mut board = Board::default();
+    board.chat.say = Some(Box::new(|_, _| Box::new(|| {})));
+    board.chat.composer = rune::edit::TextEdit::new("hi");
+    board.chat.send();
+    for event in [
+        serde_json::json!({"type": "RUN_STARTED", "threadId": "t1", "runId": "r1"}),
+        serde_json::json!({"type": "TEXT_MESSAGE_START", "messageId": "m1", "role": "assistant"}),
+        serde_json::json!({"type": "TOOL_CALL_START", "toolCallId": "c1", "toolCallName": "read", "parentMessageId": "m1"}),
+        serde_json::json!({"type": "RUN_ERROR", "message": "failed", "runId": "r1"}),
+    ] {
+        board.chat_heard(1, Ok(serde_json::from_value(event).unwrap()), 700.0);
+        assert_eq!(board.timing.borrow().marks, []);
+    }
+    board.chat_heard(1, Err("disconnected".into()), 710.0);
+    assert_eq!(board.timing.borrow().marks, []);
+    assert_eq!(board.chat.transcript.error.as_deref(), Some("disconnected"));
 }
 
 #[test]
