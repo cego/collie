@@ -587,7 +587,8 @@ const notThere = (source: OwnSource, where: string): OwnStore => ({
 /** Each store, read for messages said `since` where it is given, or only counted where not. */
 const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since: number | null) {
   const fs = yield* FileSystem.FileSystem;
-  const recorded = since === null ? new Set<string>() : yield* recordedAgentSessions(places.stateDir);
+  const recorded =
+    since === null ? new Set<string>() : yield* recordedAgentSessions(places.stateDir);
   const stores: Array<OwnStore> = [];
   const messages: Array<OwnMessage> = [];
   let skipped = 0;

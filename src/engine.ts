@@ -7960,7 +7960,10 @@ const makeRegistry: (
     actor: Asker,
     agent: string,
     submitted = Infinity,
-    read?: { readonly rows: ReadonlyArray<DecisionRow>; readonly launches: ReadonlyArray<Launched> },
+    read?: {
+      readonly rows: ReadonlyArray<DecisionRow>;
+      readonly launches: ReadonlyArray<Launched>;
+    },
   ) {
     const launches =
       read?.launches ?? (yield* readLaunches(runId).pipe(Effect.orElseSucceed(() => [])));

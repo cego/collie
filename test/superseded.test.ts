@@ -299,7 +299,10 @@ test(
 
             const [q1] = yield* store.asked(runId);
             expect(q1?.superseded ?? null).not.toBeNull();
-            expect(Arr.map(q1?.messaged ?? [], (one) => one.agent)).toEqual(["planner", "reviewer"]);
+            expect(Arr.map(q1?.messaged ?? [], (one) => one.agent)).toEqual([
+              "planner",
+              "reviewer",
+            ]);
             expect(Arr.filter(reads, Str.startsWith("asked "))).toEqual([]);
           }),
           reads,
