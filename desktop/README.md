@@ -113,13 +113,15 @@ The Toolkit both chats share is the root's `src/toolkit.ts`.
 ## Writes to a host
 
 Done only on the host's reply, and kept in `actions.log`. Tested in
-`test/desktop-confirm.test.ts` and `test/desktop-pending-answer.test.ts`.
+`test/desktop-confirm.test.ts`, `test/desktop-pending-answer.test.ts` and
+`test/desktop-questionnaire.test.ts`, whose tables the Rune view's reducer is checked against.
 
 | File                           | What it owns                                                                                                                                               |
 | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/bun/sent.ts`              | The 30 s wait, 3 tries under one request, and `actions.log`; a Cleanup sweep alone is resent only over a renewed connection, within 10 minutes (`sweepOn`) |
 | `src/shared/actions.ts`        | One request per gesture, which **Try again** sends again                                                                                                   |
 | `src/shared/pending-answer.ts` | What a card shows of an answer until the board no longer asks                                                                                              |
+| `src/shared/questionnaire.ts`  | One question's selection, keys, Submit, Hold, steering, status and the request a retry sends again; the dialog and the Flow decision only draw it          |
 
 ## Review comments and the Diff tab
 

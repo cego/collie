@@ -243,6 +243,14 @@ const CHECK_STAGE = "Check Stage again";
 const FINISH = "Finish";
 const HAND_BACK = "Hand back";
 const STOP = "Stop";
+const CRITERIA_OPTIONS = [
+  {
+    id: HAND_BACK,
+    detail: "Re-runs the criteria check after you amend the ticket.",
+    recommended: true,
+  },
+  { id: STOP, detail: "Ends the Run; no review starts." },
+];
 
 const building = step({
   id: "build",
@@ -707,7 +715,7 @@ export default defineWorkflow({
                 const chosen = yield* ask({
                   name: `${item}.criteria-stalled-${stalls}`,
                   prompt: `${item}: a criteria hand-back reported a blocker and changed nothing.\n\nIts blockers:\n${formatFindings(blockers)}\n\nStill unmet:\n${formatFindings(unmet)}\n\nAmend the ticket or clear the blocker, then hand it back, or stop the Run.`,
-                  options: [HAND_BACK, STOP],
+                  options: CRITERIA_OPTIONS,
                 });
                 if (chosen !== HAND_BACK) {
                   stopped = `${item}: a criteria hand-back reported a blocker and changed nothing, so no review starts: ${Arr.join(
@@ -727,7 +735,7 @@ export default defineWorkflow({
                 const chosen = yield* ask({
                   name,
                   prompt: `${still}.\n\nStill unmet:\n${formatFindings(unmet)}\n\nAmend the ticket, then hand it back, or stop the Run.`,
-                  options: [HAND_BACK, STOP],
+                  options: CRITERIA_OPTIONS,
                 });
                 if (chosen !== HAND_BACK) {
                   stopped = `${still}, so no review starts: ${Arr.join(
@@ -939,7 +947,11 @@ const releasing = (delivered: {
               refused === null ? "" : ` Stage is not offered: ${refused}.`
             } What next?`,
             // A question's options are fixed once asked, so a freed path is noticed on a pick.
-            options: [RELEASE, refused === null ? STAGE : CHECK_STAGE, FINISH],
+            options: [
+              { id: RELEASE, recommended: true },
+              refused === null ? STAGE : CHECK_STAGE,
+              FINISH,
+            ],
           }),
           { round: n },
         );

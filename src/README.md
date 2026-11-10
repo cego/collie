@@ -147,6 +147,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `skill-overrides.ts`   | Which unnamed Claude skills are listed by name only, preserving operator choices and invocation restrictions                |
 | `compaction.ts`        | One threshold, one work-boundary policy, each agent's controls for its lifetime, and its one stop                           |
 | `compactors.ts`        | Each harness's official compaction interface, generated per agent and bundled in Collie                                     |
+| `question-standard.ts` | Whether an agent's question is to standard, its repair and shortfall, and its solutions (pure)                              |
 | `codex.ts`             | Codex's App Server as a client: thread identity, its context, its compactions and its turns                                 |
 | `collecting.ts`        | Which agents Collie is collecting an Output from now, by Run and agent                                                      |
 | `controls.ts`          | The Hold and Stop an operator sets over a Run, one file each, and whether one is set                                        |

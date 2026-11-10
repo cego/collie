@@ -395,7 +395,9 @@ export default defineWorkflow({
             const answer = yield* ask({
               name: "claims-1",
               prompt: `${mr}'s stage needs Helle projects someone else holds: ${named(others)}. ${CLAIMS.wait} queues for every project and stages everything once all are handed over${offered ? `; ${CLAIMS.free} takes only what is free and stages only ${Arr.join(freeNow.applications, ", ")}, leaving every other application's stage as it is` : ""}; ${CLAIMS.finish} stops here, claiming nothing.`,
-              options: [CLAIMS.wait, ...(offered ? [CLAIMS.free] : []), CLAIMS.finish],
+              options: offered
+                ? [CLAIMS.wait, { id: CLAIMS.free, recommended: true }, CLAIMS.finish]
+                : [{ id: CLAIMS.wait, recommended: true }, CLAIMS.finish],
             });
             if (answer === CLAIMS.finish) return null;
             free = answer === CLAIMS.free;
@@ -503,7 +505,7 @@ export default defineWorkflow({
             const answer = yield* ask({
               name: `staged-${asks}`,
               prompt: `Stage carries ${mr} at \`${short(head)}\` for testing, unmerged: ${plays(onStage.jobs)}.${leftOff} ${holds} Test it there, then: ${STAGED.done} rolls stage back and gives the claims back; ${STAGED.again} stages the merge request's head as it is then, keeping the claims${leftApps.length === 0 ? "" : " and taking any left-off project that is free by then"}; ${STAGED.leave} gives the claims back and leaves stage as it is.`,
-              options: [STAGED.done, STAGED.again, STAGED.leave],
+              options: [{ id: STAGED.done, recommended: true }, STAGED.again, STAGED.leave],
             });
             if (answer === STAGED.again && leftApps.length > 0 && read !== null) {
               const more = yield* claimed(`staged-${asks}.claim`, {

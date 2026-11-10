@@ -12,11 +12,11 @@ import {
   openMrLabel,
   type Proposal,
   primaryAction,
-  type Question,
   type TaskView,
 } from "../../../../src/board-model";
 import { DateTime } from "effect";
 import type { DesktopAction } from "../../../src/shared/flock";
+import type { Act } from "../composables/useAnswering";
 import { type Gesture, seenBy } from "../../../src/shared/board-clicks";
 import { offerKey } from "../../../src/shared/actions";
 import { cardQuestion, openQuestions } from "../../../src/shared/pending-answer";
@@ -43,22 +43,21 @@ const toast = useToast();
 const gesture =
   inject<(done: Gesture, tab?: string | null, clickedAt?: number) => void>("gesture")!;
 // A dialog opened before its Machine dropped is outside the card's disabled controls.
-const act = (action: DesktopAction, tried?: (done: boolean | null) => void) =>
+const act = (action: DesktopAction, tried?: Parameters<Act>[2], request?: string) =>
   run(
     props.installation,
     action,
-    undefined,
+    request,
     undefined,
     () => (props.asOf === null ? undefined : `its board is a saved one, ${asOfLabel.value}`),
     tried,
   );
+const answerAct: Act = (action, request, tried) => act(action, tried, request);
 
 const answering = useAnswering();
 const open = computed(() => openQuestions(props.task));
 const asked = computed(() => cardQuestion(props.task, props.installation, answering.state.value));
 const answeringOpen = ref(false);
-const answer = (question: Question, value: string, shown: string) =>
-  answering.answer(props.installation, props.machine, question, value, shown, act);
 
 const asOfLabel = computed(() => {
   if (props.asOf === null) return null;
@@ -419,8 +418,9 @@ const menu = computed(() =>
     v-if="answeringOpen"
     :title="task.name"
     :installation="installation"
+    :machine="machine"
     :open="open"
-    @answer="answer"
+    :act="answerAct"
     @close="answeringOpen = false"
   />
   <OffersDialog

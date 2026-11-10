@@ -111,6 +111,7 @@ const submitCompaction = Effect.fn("Compactors.submitCompaction")(function* (
 import { selfCommand } from "./env";
 import { shell } from "./mr";
 import { reason } from "./naming";
+import { isToStandard, questionRepair } from "./question-standard";
 import type { JsonObject } from "./schema";
 
 /**
@@ -738,7 +739,7 @@ export const piQuestionTool = (self: ReadonlyArray<string>, dir: string) => {
     name: "ask_user_question",
     label: "Ask the human",
     description:
-      "Ask the human one or more questions, each with options to choose from; they can also answer in their own words. The questions go on your Run, and the answers arrive as your next message.",
+      'Ask the human one or more questions. Give each at least three options, each with a description of what it leads to, and end exactly one option\'s label with " (Recommended)". The questions go on your Run, and the answers arrive as your next message.',
     // SAFETY: a JSON Schema document is JSON.
     parameters: { ...document.schema, $defs: document.definitions } as JsonObject,
     helper: [...self, "herdr", "compaction", dir],
@@ -752,8 +753,16 @@ export const AskedCall = Schema.Struct({
   /** The call's `tool_use_id`, or the time where the payload had none. */
   id: Schema.String,
   questions: Schema.Array(AgentQuestion),
+  /**
+   * Where it fell short and was not posted: repaired in the tool's own reply, or to be
+   * repaired by a Delivery for a harness whose question tool has already returned.
+   */
+  repair: Schema.optionalKey(Schema.Literals(["in-reply", "by-delivery"])),
 });
 export type AskedCall = typeof AskedCall.Type;
+
+const repairs = (last: AskedCall | undefined, questions: ReadonlyArray<AgentQuestion>) =>
+  last?.repair === undefined && !Arr.every(questions, isToStandard);
 const encodeAskedCall = flow(
   Schema.encodeResult(Schema.fromJsonString(AskedCall)),
   Result.getOrThrow,
@@ -763,13 +772,42 @@ const decodeAskedCall = Schema.decodeUnknownOption(Schema.fromJsonString(AskedCa
 /** Apart from the telemetry, whose cap trims lines: a question must not be trimmed away. */
 export const QUESTIONS = "questions.jsonl";
 
-const DENIED_QUESTION = JSON.stringify({
-  hookSpecificOutput: {
-    hookEventName: "PreToolUse",
-    permissionDecision: "deny",
-    permissionDecisionReason:
-      "Collie has put your question on your Run for a human to answer. End your turn now: the answer will be your next message.",
-  },
+const deniedWith = (reason: string) =>
+  JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: reason,
+    },
+  });
+
+const DENIED_QUESTION = deniedWith(
+  "Collie has put your question on your Run for a human to answer. End your turn now: the answer will be your next message.",
+);
+
+/** Marks the copy of a call whose repair could not be sent, recorded to be posted as asked. */
+export const UNREPAIRED = "#unrepaired";
+
+/**
+ * Records `call` again to be posted as asked, its repair having failed. Appended, so the
+ * questions already posted keep their numbers.
+ */
+export const postUnrepaired = Effect.fn("Compactors.postUnrepaired")(function* (
+  dir: string,
+  call: AskedCall,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const asked: AskedCall = {
+    at: call.at,
+    session: call.session,
+    id: `${call.id}${UNREPAIRED}`,
+    questions: call.questions,
+  };
+  yield* fs.writeFileString(path.join(dir, QUESTIONS), `${encodeAskedCall(asked)}\n`, {
+    flag: "a",
+  });
+  return asked;
 });
 
 /** The `AskUserQuestion` calls this agent made at or after `since`, oldest first. */
@@ -801,15 +839,21 @@ export const takeHarnessQuestions = Effect.fn("Compactors.takeHarnessQuestions")
   const read = record === null ? undefined : ports[record.harness]?.questions;
   if (record === null || read === undefined) return;
   const asked = yield* read(record).pipe(Effect.orElseSucceed(() => []));
-  const known = new Set(Arr.map(yield* questionsSince(record.dir, 0), (call) => call.id));
+  const recorded = yield* questionsSince(record.dir, 0);
+  const known = new Set(Arr.map(recorded, (call) => call.id));
   const fresh = Arr.filter(asked, (call) => !known.has(call.id));
   if (fresh.length === 0) return;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const at = yield* Clock.currentTimeMillis;
-  const lines = Arr.map(fresh, (call) =>
-    encodeAskedCall({ at, session: null, id: call.id, questions: call.questions }),
-  );
+  let last = recorded.at(-1);
+  const lines = Arr.map(fresh, (call) => {
+    const line: AskedCall = repairs(last, call.questions)
+      ? { at, session: null, id: call.id, questions: call.questions, repair: "by-delivery" }
+      : { at, session: null, id: call.id, questions: call.questions };
+    last = line;
+    return encodeAskedCall(line);
+  });
   yield* fs.writeFileString(path.join(record.dir, QUESTIONS), `${Arr.join(lines, "\n")}\n`, {
     flag: "a",
   });
@@ -910,15 +954,13 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     const owner = yield* lockHolder(hostLockOf(path.dirname(path.dirname(dir))));
     if (owner === null || !(yield* holderLives(owner))) return "";
     const at = yield* Clock.currentTimeMillis;
-    const line = encodeAskedCall({
-      at,
-      session,
-      id: payload.tool_use_id ?? String(at),
-      questions: asked.value.questions,
-    });
+    const { questions } = asked.value;
+    const repairing = repairs((yield* questionsSince(dir, 0)).at(-1), questions);
+    const call: AskedCall = { at, session, id: payload.tool_use_id ?? String(at), questions };
+    const line = encodeAskedCall(repairing ? { ...call, repair: "in-reply" } : call);
     yield* fs.makeDirectory(dir, { recursive: true });
     yield* fs.writeFileString(path.join(dir, QUESTIONS), `${line}\n`, { flag: "a" });
-    return DENIED_QUESTION;
+    return repairing ? deniedWith(questionRepair(questions)) : DENIED_QUESTION;
   }
   const transcript = payload.transcript_path;
   if (event === "StopFailure") {

@@ -7,7 +7,14 @@ import { pipe as pipe_ } from "effect/Function";
 import { Effect, Option, Schema } from "effect";
 import type { FileSystem } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
-import type { RequestedBy, RunReport } from "./board-model";
+import type * as Types from "effect/Types";
+import {
+  boardOption,
+  holdPath,
+  type RequestedBy,
+  type RunReport,
+  type Solution,
+} from "./board-model";
 import type { PluginEnv } from "./env";
 import { resultText, runView, runViews } from "./lifecycle";
 import { HOLD, STOP, evidenceDir, runDir, type RunView } from "./engine";
@@ -25,7 +32,11 @@ export type RunState = "running" | "waiting" | "succeeded" | "failed" | "stopped
 export interface Asked {
   readonly name: string;
   readonly prompt: string;
-  readonly options: ReadonlyArray<string>;
+  readonly options: ReadonlyArray<Solution>;
+  readonly hold?: { readonly offered: boolean; readonly why: string | null };
+  readonly shortfall?: string;
+  /** The agent a human's words about it would reach. */
+  readonly steer?: string;
 }
 
 export interface RunFacts {
@@ -142,7 +153,18 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
   evidence: evidenceDir(stateDir, view.runId),
   asking: Arr.map(
     Arr.filter(view.waiting, (one) => isAsking(view, one)),
-    (one) => ({ name: one.name, prompt: one.prompt, options: one.options }),
+    (one) => {
+      const asked: Types.Mutable<Asked> = {
+        name: one.name,
+        prompt: one.prompt,
+        options: one.options,
+      };
+      const hold = holdPath(one, view.controls.includes(HOLD));
+      if (hold !== undefined) asked.hold = hold;
+      if (one.shortfall != null) asked.shortfall = one.shortfall;
+      if (one.steer != null) asked.steer = one.steer;
+      return asked;
+    },
   ),
   superseding:
     Option.getOrUndefined(Arr.findLast(view.waiting, (one) => isSetAside(view.waiting, one)))
@@ -176,7 +198,7 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
       open: isAsking(view, one),
       superseded: isSetAside(view.waiting, one),
       text: one.prompt,
-      options: Arr.map(one.options, (value) => ({ id: value, title: value, subtitle: null })),
+      options: Arr.map(one.options, boardOption),
     })),
     wakes: view.wakes ?? null,
     execution: executionOf(view),

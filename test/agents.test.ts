@@ -1675,16 +1675,21 @@ const askedTwo = flow(
         question: "Which database?",
         header: "Database",
         options: [
-          { label: "Postgres", description: "the one ops runs" },
+          { label: "Postgres (Recommended)", description: "the one ops runs" },
           { label: "SQLite", description: "a file beside the app" },
+          { label: "JSONL", description: "no migration" },
         ],
         multiSelect: false,
       },
       {
         question: "Which checks?",
         header: "Checks",
-        options: [{ label: "lint", description: "oxlint" }],
-        multiSelect: true,
+        options: [
+          { label: "lint (Recommended)", description: "oxlint" },
+          { label: "typecheck", description: "tsgo" },
+          { label: "none", description: "CI runs them" },
+        ],
+        multiSelect: false,
       },
     ],
   },
@@ -1746,18 +1751,14 @@ test(
               ["ask-review-1", null],
               ["ask-review-2", null],
             ]);
-            expect(asked[0]?.prompt).toBe(
-              "Database: Which database?\nPostgres — the one ops runs\nSQLite — a file beside the app\nAnswer with an option or in your own words.",
-            );
-            expect(asked[1]?.prompt).toBe(
-              "Checks: Which checks?\nlint — oxlint\n(choose any)\nAnswer with an option or in your own words.",
-            );
+            expect(asked[0]?.prompt).toBe("Database: Which database?");
+            expect(asked[1]?.prompt).toBe("Checks: Which checks?");
 
-            yield* answer("ask-review-1", "SQLite, it is a demo");
+            yield* answer("ask-review-1", "2");
             yield* spend(5_000);
             expect(sent(yield* rig.calls(), ANSWERED)).toBe(0);
 
-            yield* answer("ask-review-2", "lint");
+            yield* answer("ask-review-2", "1");
             while (!(yield* prompted(ANSWERED)))
               yield* TestClock.withLive(Effect.sleep("10 millis"));
             yield* spend(5_000);
@@ -1767,7 +1768,7 @@ test(
               Arr.findFirst(calls, (call) => pipe(call.argv?.[3] ?? "", Str.includes(ANSWERED))),
             );
             expect(delivered?.argv?.[3]).toEndWith(
-              "\nYour questions are answered: Database: SQLite, it is a demo; Checks: lint",
+              "\nYour questions are answered: Database: SQLite; Checks: lint",
             );
           }),
           { collectMs: 120_000, pollMs: 1_000 },

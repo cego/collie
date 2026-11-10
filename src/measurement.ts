@@ -77,6 +77,8 @@ const HOST_READINGS = ["wall_ms", "cpu_ms", "peak_kb"];
 const MEASURING = "measure: ";
 
 export const measurementsDir = (stateDir: string) => `${stateDir}/measurements`;
+/** Held for a whole Measurement, so one runs on a Machine at a time. */
+export const machineLockOf = (stateDir: string) => `${measurementsDir(stateDir)}/machine.lock`;
 /** Every base tree a Run's Measurements were taken on, Cleanup's to remove. */
 export const baseTreesDir = (stateDir: string, runId: string) =>
   `${measurementsDir(stateDir)}/trees/${runId}`;
@@ -462,7 +464,7 @@ export const measure = Effect.fn("Measurement.measure")(function* (
 
   const waited: Waited = { memory: false, machine: [] };
   const id = `${ask.runId}-measurement-${yield* Clock.currentTimeMillis}`;
-  const lock = `${measurementsDir(opts.stateDir)}/machine.lock`;
+  const lock = machineLockOf(opts.stateDir);
   const holderFile = `${measurementsDir(opts.stateDir)}/holder.json`;
   const Holder = Schema.fromJsonString(Schema.Struct({ id: Schema.String, run: Schema.String }));
 

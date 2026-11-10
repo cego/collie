@@ -124,6 +124,30 @@ const typedCount = (about: string) =>
 
 const STEP = "Your task for this step";
 
+/** The recorded question, asked to standard: Blue recommended among three. */
+const standard = {
+  ...question,
+  item: {
+    ...question.item,
+    questions: [
+      {
+        title: "Which colour should the file be, red or blue?",
+        options: ["Red", "Blue (Recommended)", "Green"],
+      },
+    ],
+  },
+};
+
+/** The agent's next question after a repair, still two options and no recommendation. */
+const stillShort = {
+  ...question,
+  item: {
+    ...question.item,
+    id: "call_again",
+    questions: [{ title: "Red or blue, then?", options: ["Red", "Blue"] }],
+  },
+};
+
 test(
   "a Codex agent's question is a Decision on its Run, its next step waits while it is open, and the answer reaches it first",
   () =>
@@ -132,7 +156,7 @@ test(
         const fs = yield* FileSystem.FileSystem;
         const standIn: StandIn = {
           events: `${rig.root}/codex-server.events`,
-          threads: [{ id: "thread-1", cwd: rig.projectDir, items: [question] }],
+          threads: [{ id: "thread-1", cwd: rig.projectDir, items: [standard] }],
         };
         yield* fs.writeFileString(config(), asJson(standIn)).pipe(Effect.orDie);
         yield* rig.queueOutputs([null, null]);
@@ -144,9 +168,7 @@ test(
             const [asked] = yield* store.asked("r1");
             expect(asked?.decision).toBe("ask-review-1");
             expect(asked?.answer).toBeNull();
-            expect(asked?.prompt).toBe(
-              "Which colour should the file be, red or blue?\nRed\nBlue\nAnswer with an option or in your own words.",
-            );
+            expect(asked?.prompt).toBe("Which colour should the file be, red or blue?");
 
             yield* Effect.forkChild(
               (yield* Agents).launch({
@@ -175,7 +197,7 @@ test(
             yield* store.settle({
               run: "r1",
               decision: "ask-review-1",
-              value: "Blue",
+              value: "1",
               request: "a",
             });
             yield* waitFor(Effect.map(typedCount(STEP), (count) => count === 2));
@@ -202,7 +224,7 @@ test(
         const fs = yield* FileSystem.FileSystem;
         const standIn: StandIn = {
           events: `${rig.root}/codex-server.events`,
-          threads: [{ id: "thread-1", cwd: rig.projectDir, items: [question] }],
+          threads: [{ id: "thread-1", cwd: rig.projectDir, items: [standard] }],
         };
         yield* fs.writeFileString(config(), asJson(standIn)).pipe(Effect.orDie);
         yield* rig.queueOutputs([null, null]);
@@ -256,7 +278,7 @@ test(
       Effect.gen(function* () {
         const standIn: StandIn = {
           events: `${rig.root}/codex-server.events`,
-          threads: [{ id: "thread-1", cwd: rig.projectDir, items: [question] }],
+          threads: [{ id: "thread-1", cwd: rig.projectDir, items: [standard] }],
         };
         yield* (yield* FileSystem.FileSystem)
           .writeFileString(config(), asJson(standIn))
@@ -270,6 +292,94 @@ test(
             expect((yield* store.asked("r1"))[0]?.decision).toBe("ask-review-1");
           }).pipe(Effect.timeout("60 seconds")),
           hostOf(0),
+        );
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a Codex agent's short question is repaired by a Delivery and not posted, and its next one is posted flagged",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const standIn: StandIn = {
+          events: `${rig.root}/codex-server.events`,
+          threads: [{ id: "thread-1", cwd: rig.projectDir, items: [stillShort, question] }],
+        };
+        yield* fs.writeFileString(config(), asJson(standIn)).pipe(Effect.orDie);
+        yield* rig.queueOutputs([null]);
+        yield* session(
+          Effect.gen(function* () {
+            yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+            const store = yield* Store;
+            yield* waitFor(Effect.map(store.asked("r1"), (asked) => asked.length > 0));
+            expect(
+              Arr.map(yield* store.asked("r1"), (one) => [one.decision, one.prompt, one.shortfall]),
+            ).toEqual([
+              [
+                "ask-review-1",
+                "Red or blue, then?",
+                "The agent gave 2 options and no recommendation; Collie asked for at least three options and exactly one recommended option.",
+              ],
+            ]);
+            yield* waitFor(
+              Effect.map(typedCount("at least three options"), (count) => count === 1),
+            );
+            expect(yield* fs.readFileString(`${dir}/agents/r1/review.prompt.md`)).toContain(
+              'end exactly one option\'s label with " (Recommended)"',
+            );
+          }).pipe(Effect.timeout("60 seconds")),
+        );
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a Codex agent's short question whose repair cannot be sent is posted as asked",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const long = `${Str.repeat(9 * 1024)("Which colour? ")}Red or blue?`;
+        const standIn: StandIn = {
+          events: `${rig.root}/codex-server.events`,
+          threads: [
+            {
+              id: "thread-1",
+              cwd: rig.projectDir,
+              items: [
+                {
+                  ...stillShort,
+                  item: {
+                    ...stillShort.item,
+                    questions: [{ title: long, options: ["Red", "Blue"] }],
+                  },
+                },
+              ],
+            },
+          ],
+        };
+        yield* fs.writeFileString(config(), asJson(standIn)).pipe(Effect.orDie);
+        yield* rig.queueOutputs([null]);
+        yield* session(
+          Effect.gen(function* () {
+            yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+            const store = yield* Store;
+            yield* waitFor(Effect.map(store.asked("r1"), (asked) => asked.length > 0));
+            expect(
+              Arr.map(yield* store.asked("r1"), (one) => [one.decision, one.prompt, one.shortfall]),
+            ).toEqual([
+              [
+                "ask-review-1",
+                long,
+                "The agent gave 2 options and no recommendation; Collie asked for at least three options and exactly one recommended option.",
+              ],
+            ]);
+            expect(yield* typedCount("at least three options")).toBe(0);
+          }).pipe(Effect.timeout("60 seconds")),
         );
       }),
     ),

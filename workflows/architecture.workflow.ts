@@ -113,7 +113,11 @@ export default defineWorkflow({
         }),
       );
       const next = yield* menu(
-        ask({ name: "next", prompt: "What next?", options: [IMPLEMENT, STOP] }),
+        ask({
+          name: "next",
+          prompt: "What next?",
+          options: [{ id: IMPLEMENT, recommended: true }, STOP],
+        }),
       );
       if (next === STOP) return `${report.report}: stopped there`;
 

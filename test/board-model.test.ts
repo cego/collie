@@ -18,6 +18,7 @@ import {
   openMrLabel,
   primaryAction,
   PROTOCOL,
+  Question,
   readMrRef,
   readinessOfRun,
   readyToRelease,
@@ -810,4 +811,35 @@ test("an offer's text arguments are read as it declares them, null included, and
     count: null,
   });
   expect(givenOfferInput(drawn, { count: "2", extra: "7" })).toEqual({ count: 2, extra: "7" });
+});
+
+test("a Question decodes with every questionnaire key kept, and without any of them", () => {
+  const decode = Schemaflow(Schema.decodeUnknownResult(Question), Result.getOrThrow);
+  const asked = {
+    kind: "question" as const,
+    run: "run-1",
+    id: "next",
+    step: "implement",
+    topic: "next",
+    text: "A criteria hand-back reported a blocker",
+    options: [{ id: "hand-back", title: "Hand back", subtitle: null }],
+  };
+  expect(decode(asked)).toEqual(asked);
+  const questionnaire = {
+    ...asked,
+    options: [
+      {
+        id: "hand-back",
+        title: "Hand back",
+        subtitle: "Re-run the criteria check after you amend the ticket.",
+        detail: "Re-run the criteria check after you amend the ticket.",
+        recommended: true,
+      },
+      { id: "stop", title: "Stop", subtitle: null, recommended: false },
+    ],
+    hold: { offered: false, why: "Run already held" },
+    steer: { agent: null, why: "no agent of this Run is live to redirect" },
+    shortfall: "this workflow recommended none",
+  };
+  expect(decode(questionnaire)).toEqual(questionnaire);
 });
