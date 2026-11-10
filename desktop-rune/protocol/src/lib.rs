@@ -2,6 +2,7 @@
 //! Effect RPC's envelope, and an NDJSON client over the core's stdio.
 
 pub mod client;
+pub mod core;
 /// Included, not a module file, so `cargo fmt` leaves the generator's output as it wrote it.
 #[allow(clippy::large_enum_variant)]
 pub mod generated {

@@ -10,13 +10,15 @@ import { Effect, Exit, Schema } from "effect";
 import * as Rpc from "effect/rpc/Rpc";
 import { ActionFailed, DesktopRpcs, FlockItem } from "../desktop/src/shared/flock";
 import { runEffect } from "./support/effect";
-import { FLOCK } from "./support/rune-fixtures";
+import { AguiEvent } from "../desktop/src/shared/agui";
+import { FLOCK, SAID } from "./support/rune-fixtures";
 
 const WORKSPACE = new URL("../desktop-rune/", import.meta.url).pathname;
 const cargo = Bun.which("cargo");
 
 const flock = DesktopRpcs.requests.get("flock")!;
 const syncNow = DesktopRpcs.requests.get("syncNow")!;
+const say = DesktopRpcs.requests.get("say")!;
 /** Each request of the group, typed as all of them. */
 type DesktopRpc = typeof flock;
 
@@ -49,6 +51,7 @@ const frames = Effect.gen(function* () {
   const syncNowPayload = encoder(syncNow.payloadSchema);
   const flockExit = encoder(Rpc.exitSchema(flock));
   const syncNowExit = encoder(Rpc.exitSchema(syncNow));
+  const sayExit = encoder(Rpc.exitSchema(say));
   const sent: ReadonlyArray<Frame> = [
     { _tag: "Hello" },
     {
@@ -73,10 +76,28 @@ const frames = Effect.gen(function* () {
       headers: [],
     },
     {
+      _tag: "Request",
+      id: 3,
+      tag: "say",
+      payload: yield* encoder(say.payloadSchema)({
+        text: "What is blocked?",
+        about: { machine: "Local", task: "t2", run: "r2", name: "Fix the login redirect" },
+        now: true,
+        attachments: ["a1"],
+      }),
+      headers: [],
+    },
+    {
       _tag: "Chunk",
       requestId: 0,
       values: yield* Effect.forEach(FLOCK, (item) => encoder(FlockItem)(item)),
     },
+    {
+      _tag: "Chunk",
+      requestId: 3,
+      values: yield* Effect.forEach(SAID, (event) => encoder(AguiEvent)(event)),
+    },
+    { _tag: "Exit", requestId: 3, exit: yield* sayExit(Exit.void) },
     { _tag: "Exit", requestId: 1, exit: yield* syncNowExit(Exit.succeed(SYNCED)) },
     { _tag: "Exit", requestId: 2, exit: yield* syncNowExit(Exit.fail(REFUSED)) },
     { _tag: "Exit", requestId: 0, exit: yield* flockExit(Exit.void) },
@@ -98,7 +119,9 @@ const typed = (frame: Frame, tags: ReadonlyMap<number, DesktopRpc>) =>
       case "Chunk":
         return {
           ...frame,
-          values: yield* Effect.forEach(frame.values, (value) => decoder(FlockItem)(value)),
+          values: yield* Effect.forEach(frame.values, (value) =>
+            decoder(frame.requestId === 3 ? AguiEvent : FlockItem)(value),
+          ),
         };
       case "Exit":
         return {
@@ -122,6 +145,10 @@ describe.skipIf(cargo === null)("DesktopRpcs between the main process and the Ru
     roundtrip = `${WORKSPACE}target/debug/roundtrip`;
   }, 600_000);
 
+  test("the chat's turn carries an event of every AG-UI kind", () => {
+    expect(new Set(Arr.map(SAID, (event) => event.type)).size).toBe(AguiEvent.members.length);
+  });
+
   test("Hello, a flock chunk, an answer and a failure come back from Rust as they went", () =>
     runEffect(
       Effect.gen(function* () {
@@ -143,6 +170,7 @@ describe.skipIf(cargo === null)("DesktopRpcs between the main process and the Ru
           [0, flock],
           [1, syncNow],
           [2, syncNow],
+          [3, say],
         ]);
         const want = yield* Effect.forEach(sent, (frame) => typed(frame, tags));
         const got = yield* Effect.forEach(back, (frame) => typed(frame, tags));

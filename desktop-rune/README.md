@@ -7,20 +7,25 @@ shell can draw Desktop's board with today's main process as its core. The app st
 as Effect RPC over NDJSON on the core's stdio, subscribes to `flock`, and draws each Machine and
 its cards. Pressing a card goes to its Run's pane: Rune draws the pane's terminal from the
 `terminal` stream, through libghostty-vt, and sends what the human does back on `terminalSend`.
+The pane's Diff button opens its Run's diff in rune-kit's Diff, where selected lines become
+review comments. The board's Chat button opens the Flock chat, which streams turns on `say`.
 
-| Crate or file                | What it owns                                                                                                        |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `protocol/src/generated.rs`  | The Rust types of the RPCs spoken (`flock`, `syncNow`, `terminal`, `terminalSend`), generated; never edited by hand |
-| `protocol/src/rpc.rs`        | Effect RPC's envelope (Request, Chunk, Exit, Ack, Interrupt) and Desktop's `Hello`, written by hand                 |
-| `protocol/src/client.rs`     | The NDJSON client: requests, streams acked chunk by chunk, interrupts, the core gone                                |
-| `protocol/src/bin/roundtrip` | Decodes and re-encodes frames through the Rust types, for `test/rune-contract.test.ts`                              |
-| `board/`                     | The board view and its fold of `flock` items (a narrow copy of `applyItem`), and the app                            |
-| `terminal/`                  | Go to pane's terminal: the VT state, its Rune view, input as `terminal-input` maps it, settled resizes              |
-| `ghostty-sys/`               | Builds libghostty-vt from `vendor/ghostty` with Zig and binds its C API with bindgen                                |
-| `vendor/ghostty`             | Ghostty, a submodule at one pinned commit                                                                           |
-| `core/`                      | The stdio stand-in for `electrobun/bun`, and the tsconfig that points Desktop's imports at it                       |
-| `fixtures/`                  | The test Flock and NDJSON transcripts of Effect's own client and server, written by `tools/rune-fixtures.ts`        |
-| `fixtures/terminal/`         | `terminal` streams recorded by `core/record-terminal.ts`                                                            |
+| Crate or file                | What it owns                                                                                                                                       |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `protocol/src/generated.rs`  | The Rust types of the RPCs spoken (`flock`, `syncNow`, `terminal`, `terminalSend`, `say`, `runDetail`, `runFile`), generated; never edited by hand |
+| `protocol/src/rpc.rs`        | Effect RPC's envelope (Request, Chunk, Exit, Ack, Interrupt) and Desktop's `Hello`, written by hand                                                |
+| `protocol/src/client.rs`     | The NDJSON client: requests, streams acked chunk by chunk, interrupts, the core gone                                                               |
+| `protocol/src/bin/roundtrip` | Decodes and re-encodes frames through the Rust types, for `test/rune-contract.test.ts`                                                             |
+| `board/`                     | The board view and its fold of `flock` items (a narrow copy of `applyItem`), and the app                                                           |
+| `protocol/src/core.rs`       | Starts Desktop's main process as the core, for the app and the recorders                                                                           |
+| `chat/`                      | The Flock chat (AG-UI reducer, markdown policy, syntect highlighter) and the Diff tab's review comments                                            |
+| `terminal/`                  | Go to pane's terminal: the VT state, its Rune view, input as `terminal-input` maps it, settled resizes                                             |
+| `ghostty-sys/`               | Builds libghostty-vt from `vendor/ghostty` with Zig and binds its C API with bindgen                                                               |
+| `vendor/ghostty`             | Ghostty, a submodule at one pinned commit                                                                                                          |
+| `core/`                      | The stdio stand-in for `electrobun/bun`, and the tsconfig that points Desktop's imports at it                                                      |
+| `fixtures/`                  | The test Flock and NDJSON transcripts of Effect's own client and server, written by `tools/rune-fixtures.ts`                                       |
+| `fixtures/terminal/`         | `terminal` streams recorded by `core/record-terminal.ts`                                                                                           |
+| `fixtures/chat/`             | `say` streams recorded by `chat/src/bin/record-say.rs`                                                                                             |
 
 ## Commands
 
@@ -38,6 +43,10 @@ cargo test --workspace                 # client against the transcripts, the boa
 cargo run --release -p collie-desktop-terminal --example throughput   # VT bytes per second
 cargo run -p collie-desktop-board      # the window, with the live board of this Machine
 cargo run -p collie-desktop-board -- --snap board.png --tree board.json   # headless
+cargo run -p collie-desktop-chat --bin record-say -- --out x.ndjson --say 'hello'   # record a turn
+cargo run -p collie-desktop-chat --bin corpus -- <dir of .md> [--png <dir>]  # the corpus table
+cargo run --release -p collie-desktop-chat --example highlight-cost -- <dir of .md>
+cargo run -p collie-desktop-board --example read-diff -- <installation> <run>
 ```
 
 Run `bun install` at the root first, since the core is Desktop's source run by `bun`
@@ -160,3 +169,71 @@ This is evidence for the gate, not a claim of speed: the recordings are small an
 
 The `terminal-ended` alert, the `terminal-where` label and the grid's cursor label stand in
 for the screen-reader text xterm.js gives.
+
+### Flock chat, agent markdown and the Diff tab
+
+The chat keeps today's transport: `say` streams AG-UI events, and Stop interrupts the stream.
+`chat/src/agui.rs` folds them as TanStack AI's client does: one assistant message a turn, its
+parts (text, reasoning, tool calls with their arguments and output) in the order said, and a
+`RUN_ERROR` shown under the transcript. Text is drawn by rune-kit's Markdown, streaming while
+the turn runs, after `policy::confined` has applied Desktop's markdown policy to its source.
+The composer sends a turn and becomes Stop while it runs. A switch picks the code highlighter:
+rune-kit's built-in scanners or `chat/src/highlight.rs`, syntect with two-face's grammars.
+
+The Diff tab reads `runDetail` until a record carries the diff, then each file's patch from
+`runFile` (`diff:<path>`, paged as Desktop's view does), and parses it with rune-kit's
+`diff::parse`. It shows unified or split. Selected lines plus a comment become a draft, and
+Compose shows the Delivery text `review-comments.ts` composes (ADR-0051).
+
+**Recordings.** `record-say` asks the spike core's `say` and writes each event as NDJSON. The
+fixtures are a plain reply with a table and code, a tool call, a run error (an attachment the
+core no longer has), a turn cancelled after five deltas, and two turns. They came from vm-mk
+with mk's Claude login.
+
+```sh
+cargo run -p collie-desktop-chat --bin record-say -- --out fixtures/chat/say-cancel.ndjson --cancel-after 5 --say 'Use no tools. Write about 400 words on the history of herding dogs.'
+cargo run -p collie-desktop-chat --bin record-say -- --out x.ndjson --attach missing-attachment --say 'Read it'
+```
+
+**What rune-kit's Markdown cannot hold.** Every case in `desktop/test/markdown.test.ts`,
+`review-comments.test.ts` and the AG-UI reducer has a cargo test in `chat/tests/`. Where a
+case cannot mean the same:
+
+- **Raw HTML.** rune-kit drops HTML events, so no element can keep a style, a popover or a
+  command; the four element cases hold for that reason, not by a filter. An HTML block is
+  dropped with its text: `<details><summary>` loses its summary and shows its body open.
+- **Components.** comark's `::name{…}` components are literal text, so the "no attribute keeps
+  a script URL" case is shown on such text.
+- **A diff range with no side.** rune-kit's `LineRef` always has a side, so that case is
+  "nothing selected is no anchor".
+- **Code over 32 KiB.** rune-kit's `Highlighter` cuts every block to 32 KiB and 8,192 tokens,
+  whichever function is plugged in. `syntect` colours a 64 KiB block to its end when called
+  directly (`chat/tests/highlight.rs`); in Markdown the rest is plain.
+- **Images** draw their alt text.
+
+**Corpus.** 37 agent-written messages from Run artefacts on vm-mk (plans, handoffs, reviews,
+MR descriptions), secrets scrubbed, rendered under both highlighters to PNG at 960 by 2400.
+They describe internal repositories, so they stay in the Run's evidence, not in this public
+repository. What draws otherwise than today (`corpus`):
+
+| Construct         | rune-kit highlighter           | syntect + two-face | Occurrences | Messages |
+| ----------------- | ------------------------------ | ------------------ | ----------- | -------- |
+| raw HTML          | dropped, block content with it | same               | 13          | 4        |
+| image             | its alt text only              | same               | 8           | 2        |
+| code `markdown`   | plain                          | coloured           | 2           | 1        |
+| code `powershell` | plain                          | plain              | 2           | 2        |
+| code `vue`        | plain                          | coloured           | 1           | 1        |
+
+Tables, task lists, the four Mermaid diagrams and the TypeScript, shell and JSON blocks drew.
+No message had footnotes, math, GFM alerts or a block over 32 KiB; the largest was 1,332 bytes.
+
+**Highlighter cost.** On vm-mk, release build, best of five, the whole block:
+
+| Highlighter        | Largest corpus block (`ts`, 1,332 B) | 10,000 lines (`ts`, 735,560 B) | Its first 32 KiB |
+| ------------------ | ------------------------------------ | ------------------------------ | ---------------- |
+| rune-kit built-in  | 0.02 ms                              | 0.60 ms (stops at 32 KiB)      | 0.67 ms          |
+| syntect + two-face | 67 ms                                | 25.0 s                         | 1.2 s            |
+
+syntect runs on fancy-regex here (no C dependency); its TypeScript grammar is the slow part.
+rune-kit caches each block's colours, but the first draw of a 32 KiB block would hold the view's
+thread for about a second. This is evidence for the gate, not a claim of speed.

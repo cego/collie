@@ -1,29 +1,16 @@
 //! The spike app: starts Desktop's main process as its core, speaks `DesktopRpcs` to it over
 //! stdio, draws the board `flock` streams, and a pressed card's pane on the `terminal` stream.
 
-use collie_desktop_board::{Board, view};
+use collie_desktop_board::{Board, run_diff, view};
+use collie_desktop_chat::view::DiffTab;
 use collie_desktop_protocol::client::Client;
-use collie_desktop_protocol::generated::FlockItem;
+use collie_desktop_protocol::core::Core;
+use collie_desktop_protocol::generated::{AguiEvent, FlockItem};
 use collie_desktop_terminal::pane::Pane;
 use collie_desktop_terminal::view::Tab;
 use rune::{App, AppHandle, AppSpec};
 use serde_json::Value;
-use std::io::BufReader;
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::time::Duration;
-
-const DESKTOP: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../desktop");
-
-/// The spike's own state, apart from a Desktop that may be running beside it.
-fn spike_state() -> PathBuf {
-    let base = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/state")
-        });
-    base.join("collie-desktop-rune-spike")
-}
 
 /// Opens a pressed card's pane: its frames are read off the view's thread into the open Tab,
 /// and a tick sends each size once it has settled.
@@ -65,27 +52,51 @@ fn go_to_panes(handle: &AppHandle<Board>, client: &Client) {
     });
 }
 
+/// Sends the chat's turns on `say`, its events read off the view's thread into the transcript.
+fn chat(handle: &AppHandle<Board>, client: &Client) {
+    let (sayer, shows) = (client.clone(), handle.clone());
+    handle.update(move |board, _| {
+        board.chat.say = Some(Box::new(move |payload| {
+            let events = sayer.stream::<_, AguiEvent, Value>("say", payload);
+            let release = events.release();
+            let shows = shows.clone();
+            // ponytail: a cancelled turn's late events land in the next; tag turns if that shows.
+            std::thread::spawn(move || {
+                for event in events {
+                    shows.update(move |board, _| match event {
+                        Ok(event) => board.chat.transcript.apply(event),
+                        Err(error) => {
+                            board.chat.transcript.error = Some(error.to_string());
+                            board.chat.transcript.running = false;
+                        }
+                    });
+                }
+            });
+            Box::new(move || release.interrupt())
+        }));
+    });
+}
+
+/// Reads the open Run's diff: its files from `runDetail`, each file's patch from `runFile`.
+fn diffs(handle: &AppHandle<Board>, client: &Client) {
+    let (reader, shows) = (client.clone(), handle.clone());
+    handle.update(move |board, _| {
+        board.load_diff = Some(Box::new(move |installation, run| {
+            let (client, shows) = (reader.clone(), shows.clone());
+            std::thread::spawn(move || {
+                let patch = run_diff(&client, &installation, &run).unwrap_or_default();
+                // FileDiff holds an Rc, so the patch is parsed on the view's thread.
+                shows.update(move |board, _| {
+                    board.diff = Some(DiffTab::new(rune_kit::diff::parse(&patch)))
+                });
+            });
+        }));
+    });
+}
+
 fn main() {
-    let state = spike_state();
-    let mut core = Command::new(std::env::var("COLLIE_RUNE_BUN").unwrap_or("bun".into()))
-        .args([
-            "--tsconfig-override",
-            "../desktop-rune/core/tsconfig.json",
-            "src/bun/index.ts",
-        ])
-        .current_dir(DESKTOP)
-        .env("XDG_STATE_HOME", state.join("state"))
-        .env("COLLIE_RUNE_USER_DATA", state.join("data"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .expect("bun starts Desktop's main process");
-    let client = Client::new(
-        BufReader::new(core.stdout.take().expect("the core's stdout")),
-        core.stdin.take().expect("the core's stdin"),
-    )
-    .expect("the core hears Hello");
+    let core = Core::start();
+    let client = core.client.clone();
 
     let app = App::new(AppSpec::new(
         "Collie (Rune spike)",
@@ -95,6 +106,8 @@ fn main() {
     ));
     let handle = app.handle();
     go_to_panes(&handle, &client);
+    chat(&handle, &client);
+    diffs(&handle, &client);
     let (live, first_live) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         for item in client.stream::<_, FlockItem, Value>("flock", ()) {
@@ -119,11 +132,7 @@ fn main() {
     }
 
     let ran = app.try_run();
-    // SIGTERM, not SIGKILL: the core's own exit ends the bridges it started.
-    let _ = Command::new("kill")
-        .args(["-TERM", &core.id().to_string()])
-        .status();
-    let _ = core.wait();
+    core.stop();
     if let Err(error) = ran {
         eprintln!("{error}");
         std::process::exit(1);

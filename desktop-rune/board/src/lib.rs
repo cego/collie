@@ -3,10 +3,17 @@
 //! The fold is a narrow copy of `applyItem` in `desktop/src/shared/flock.ts`, enough to
 //! draw; the TypeScript stays its owner.
 
-use collie_desktop_protocol::generated::{FlockItem, LostState, Message, Task, TerminalPayload};
+use base64::Engine;
+use collie_desktop_chat::view::{Chat, DiffTab, chat, diff_tab};
+use collie_desktop_protocol::client::Client;
+use collie_desktop_protocol::generated::{
+    Encoding, FlockItem, KeptRecord, LostState, Message, RunDetailPayload, RunFile, RunFilePayload,
+    Task, TerminalPayload,
+};
 use collie_desktop_terminal::view::{Tab, terminal};
 use rune::{Cx, El, col, row, text};
 use rune_kit::{Badge, Button, Card, Kit};
+use serde_json::Value;
 
 /// A Machine as the board shows it, by herdr profile.
 #[derive(Debug, Clone, PartialEq)]
@@ -54,6 +61,13 @@ pub struct Board {
     /// Counts the terminals opened, so a closed one's late frames are dropped.
     pub opened: u64,
     pub go_to: Option<GoTo>,
+    pub chat: Chat,
+    pub chatting: bool,
+    /// The open pane's Run, by installation and id.
+    pub open_run: Option<(String, String)>,
+    /// Reads a Run's diff from the core, and sets `diff` once it has it.
+    pub load_diff: Option<Box<dyn Fn(String, String)>>,
+    pub diff: Option<DiffTab>,
 }
 
 /// The cols and rows a terminal opens at, until its layout says otherwise.
@@ -73,12 +87,20 @@ impl Board {
             rows: OPEN_AT.1,
         };
         self.opened += 1;
+        self.open_run = Some((payload.installation.clone(), payload.run_id.clone()));
         self.terminal = Some(go_to(payload, machine, self.opened));
     }
 
     pub fn back(&mut self) {
         if let Some(open) = self.terminal.take() {
             open.leave();
+        }
+        self.open_run = None;
+    }
+
+    pub fn show_diff(&mut self) {
+        if let (Some(load), Some((installation, run))) = (&self.load_diff, &self.open_run) {
+            load(installation.clone(), run.clone());
         }
     }
 
@@ -159,6 +181,60 @@ impl Board {
     }
 }
 
+/// A large item of a Run's whole, its parts read from `offset` on as Desktop's view does.
+pub fn run_file(client: &Client, installation: &str, run: &str, item: &str) -> Option<String> {
+    let mut bytes = Vec::new();
+    loop {
+        let part: RunFile = client
+            .request::<_, RunFile, Value>(
+                "runFile",
+                RunFilePayload {
+                    installation: installation.into(),
+                    run_id: run.into(),
+                    r#ref: item.into(),
+                    offset: Some(Some(bytes.len() as i64)),
+                },
+            )
+            .ok()?;
+        if matches!(part.encoding, Encoding::Utf8) && bytes.is_empty() {
+            return Some(part.content);
+        }
+        let read = base64::engine::general_purpose::STANDARD
+            .decode(part.content)
+            .ok()?;
+        let done = read.is_empty();
+        bytes.extend(read);
+        if done || bytes.len() as i64 >= part.size {
+            return String::from_utf8(bytes).ok();
+        }
+    }
+}
+
+/// A Run's diff as one patch: its files from `runDetail`, each file's patch from `runFile`;
+/// or why there is none.
+pub fn run_diff(client: &Client, installation: &str, run: &str) -> Result<String, String> {
+    let payload = RunDetailPayload {
+        installation: installation.into(),
+        run_id: run.into(),
+    };
+    // The record comes again as the host reads more of it; the diff comes after its detail.
+    // ponytail: a Run with no branch waits until its record ends; show "no diff" if that bites.
+    let mut records = client.stream::<_, KeptRecord, Value>("runDetail", payload);
+    let files = loop {
+        let kept = records
+            .next()
+            .ok_or("runDetail ended")?
+            .map_err(|e| e.to_string())?;
+        if let Some(diff) = kept.detail.and_then(|d| d.diff) {
+            break diff.files;
+        }
+    };
+    Ok(files
+        .iter()
+        .filter_map(|file| run_file(client, installation, run, &format!("diff:{}", file.path)))
+        .collect())
+}
+
 fn card(k: &Kit, shown: &Shown, task: &Task) -> El {
     // Card's own title neither wraps nor truncates, so the name is body text that wraps.
     let name = text(task.name.clone())
@@ -221,18 +297,47 @@ fn tab_of(board: &mut Board) -> Option<&mut Tab> {
     board.terminal.as_mut()
 }
 
+fn chat_of(board: &mut Board) -> &mut Chat {
+    &mut board.chat
+}
+
+fn diff_of(board: &Board) -> &DiffTab {
+    board.diff.as_ref().expect("an open diff")
+}
+
+fn diff_of_mut(board: &mut Board) -> &mut DiffTab {
+    board.diff.as_mut().expect("an open diff")
+}
+
 pub fn view(board: &Board, cx: &mut Cx<Board>) -> El {
     let k = Kit::neutral(cx.system_dark());
-    if let Some(tab) = &board.terminal {
-        let back = Button::new("Back to the board")
-            .on_press(Board::back)
+    if board.diff.is_some() {
+        let back = Button::new("Back to the pane")
+            .on_press(|board: &mut Board| board.diff = None)
             .build(&k)
-            .key("back");
+            .key("close-diff");
         let body = col()
             .padding(16.0)
             .gap(8.0)
             .fill(k.c.bg_base)
             .child(back)
+            .child(diff_tab(board, diff_of, diff_of_mut, &k));
+        return rune_kit::root(body, []);
+    }
+    if let Some(tab) = &board.terminal {
+        let back = Button::new("Back to the board")
+            .on_press(Board::back)
+            .build(&k)
+            .key("back");
+        let diff = Button::new("Diff")
+            .on_press(Board::show_diff)
+            .build(&k)
+            .key("open-diff");
+        let body = col()
+            .padding(16.0)
+            .gap(8.0)
+            .fill(k.c.bg_base)
+            .child(row().gap(8.0).child(back).child(diff))
             .child(terminal(tab, tab_of));
         return rune_kit::root(body, []);
     }
@@ -241,11 +346,30 @@ pub fn view(board: &Board, cx: &mut Cx<Board>) -> El {
         .ended
         .iter()
         .map(|why| text(why.clone()).color(k.c.text_strong).role("alert"));
+    let open_chat = Button::new(if board.chatting { "Close chat" } else { "Chat" })
+        .on_press(|board: &mut Board| board.chatting = !board.chatting)
+        .build(&k)
+        .key("open-chat");
+    let machines = col().gap(20.0).grow(1.0).children(ended).children(machines);
+    let chat_panel = board.chatting.then(|| {
+        col()
+            .w(440.0)
+            .self_stretch()
+            .child(chat(&board.chat, chat_of, &k))
+    });
     let body = col()
         .padding(16.0)
-        .gap(20.0)
+        .gap(12.0)
         .fill(k.c.bg_base)
-        .children(ended)
-        .children(machines);
+        .child(open_chat)
+        .child(
+            row()
+                .gap(16.0)
+                .items_start()
+                .grow(1.0)
+                .min_h(0.0)
+                .child(machines)
+                .children(chat_panel),
+        );
     rune_kit::root(body, [])
 }

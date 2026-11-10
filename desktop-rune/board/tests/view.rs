@@ -152,3 +152,63 @@ fn pressing_a_card_goes_to_its_runs_pane_and_back_leaves_it_for_the_board() {
     assert!(!shown.iter().any(|k| k == "terminal-grid"), "{shown:?}");
     assert!(shown.iter().any(|k| k == "card-b2"), "{shown:?}");
 }
+
+#[test]
+fn the_chat_opens_beside_the_board_and_closes() {
+    let mut runtime = Runtime::new(
+        board(),
+        view,
+        (1280.0, 900.0),
+        Env {
+            system_dark: true,
+            scale: 1.0,
+        },
+    );
+    runtime.frame(0.0);
+    assert!(!keys(&runtime).iter().any(|k| k == "chat"));
+    tap(&mut runtime, "open-chat", 100.0);
+    let shown = keys(&runtime);
+    assert!(shown.iter().any(|k| k == "chat"), "{shown:?}");
+    assert!(shown.iter().any(|k| k == "card-b2"), "{shown:?}");
+    tap(&mut runtime, "open-chat", 1000.0);
+    assert!(!keys(&runtime).iter().any(|k| k == "chat"));
+}
+
+#[test]
+fn a_panes_diff_button_asks_for_its_runs_diff_and_shows_it_once_read() {
+    let asked: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+    let mut board = board();
+    board.go_to = Some(Box::new(|_, machine, _| Tab::new(None, machine, 100, 30)));
+    let said = asked.clone();
+    board.load_diff = Some(Box::new(move |installation, run| {
+        said.lock().unwrap().push((installation, run));
+    }));
+    let mut runtime = Runtime::new(
+        board,
+        view,
+        (1280.0, 900.0),
+        Env {
+            system_dark: true,
+            scale: 1.0,
+        },
+    );
+    runtime.frame(0.0);
+    tap(&mut runtime, "card-b2", 100.0);
+    tap(&mut runtime, "open-diff", 1000.0);
+    assert_eq!(
+        *asked.lock().unwrap(),
+        [("inst-build".to_string(), "r1".to_string())]
+    );
+    runtime.update(|board, _| {
+        board.diff = Some(collie_desktop_chat::view::DiffTab::new(
+            rune_kit::diff::parse("diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-x\n+y\n"),
+        ))
+    });
+    runtime.frame(2000.0);
+    let shown = keys(&runtime);
+    assert!(shown.iter().any(|k| k == "diff"), "{shown:?}");
+    tap(&mut runtime, "close-diff", 3000.0);
+    let shown = keys(&runtime);
+    assert!(!shown.iter().any(|k| k == "diff"), "{shown:?}");
+    assert!(shown.iter().any(|k| k == "terminal-grid"), "{shown:?}");
+}

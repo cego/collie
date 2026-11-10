@@ -31,6 +31,14 @@ const SPOKEN = [
   ["terminal", "error", "ActionFailed"],
   ["terminalSend", "payload", "TerminalSendPayload"],
   ["terminalSend", "error", "ActionFailed"],
+  ["say", "payload", "SayPayload"],
+  ["say", "success", "AguiEvent"],
+  ["runDetail", "payload", "RunDetailPayload"],
+  ["runDetail", "success", "KeptRecord"],
+  ["runDetail", "error", "ActionFailed"],
+  ["runFile", "payload", "RunFilePayload"],
+  ["runFile", "success", "RunFile"],
+  ["runFile", "error", "ActionFailed"],
 ] as const;
 
 /** The JSON Schema keywords `Schema.toJsonSchemaDocument` writes for these RPCs. */
@@ -66,10 +74,18 @@ const Json: Schema.Codec<Json> = Schema.Struct({
 const Document = Schema.Struct({ schema: Json, definitions: Schema.Record(Schema.String, Json) });
 type Document = typeof Document.Type;
 
-const KEYWORDS = new Set(["type", "ref", "move", "match", "fn", "mod", "use", "loop", "self"]);
+/** Rust's keywords, which a field takes raw (`r#type`). */
+const KEYWORDS = new Set([
+  ...["as", "async", "await", "break", "const", "continue", "dyn", "else", "enum", "extern"],
+  ...["false", "fn", "for", "gen", "if", "impl", "in", "let", "loop", "match", "mod", "move"],
+  ...["mut", "pub", "ref", "return", "static", "struct", "trait", "true", "type", "unsafe"],
+  ...["use", "where", "while", "abstract", "become", "box", "do", "final", "macro", "override"],
+  ...["priv", "try", "typeof", "unsized", "virtual", "yield", "self"],
+]);
 /** Names the prelude has, which a generated type must not shadow. */
 const PRELUDE = new Set(["Option", "Result", "String", "Vec", "Box", "Some", "None", "Ok", "Err"]);
 
+/** `RUN_STARTED` and `runStarted` are both `RunStarted`. */
 const pascal = (words: string) =>
   Arr.join(
     Arr.map(
@@ -77,7 +93,7 @@ const pascal = (words: string) =>
         Str.split(pipe(words, Str.replace(/([a-z0-9])([A-Z])/g, "$1 $2")), /[^A-Za-z0-9]+/),
         Str.isNonEmpty,
       ),
-      Str.capitalize,
+      (word) => Str.capitalize(/^[A-Z0-9]+$/.test(word) ? Str.toLowerCase(word) : word),
     ),
     "",
   );

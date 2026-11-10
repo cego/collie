@@ -1,6 +1,7 @@
 // What the Rune spike is tested against: a Flock of two live Machines with five cards between
 // them, one Machine out of reach and one only saved, as `flock` streams it.
 
+import type { AguiEvent } from "../../desktop/src/shared/agui";
 import type { FlockItem } from "../../desktop/src/shared/flock";
 import { task } from "./task";
 
@@ -104,4 +105,29 @@ export const FLOCK: ReadonlyArray<FlockItem> = [
     machine: { profile: "build", name: "Build box" },
     text: "Upgraded Build box to 0.118.0",
   },
+];
+
+/** One turn of the Flock chat, as `say` streams it, with an event of every AG-UI kind. */
+export const SAID: ReadonlyArray<AguiEvent> = [
+  { type: "RUN_STARTED", threadId: "conv-1", runId: "turn-1" },
+  { type: "REASONING_START", messageId: "r1" },
+  { type: "REASONING_MESSAGE_START", messageId: "r1", role: "reasoning" },
+  { type: "REASONING_MESSAGE_CONTENT", messageId: "r1", delta: "Look at the board first." },
+  { type: "REASONING_MESSAGE_END", messageId: "r1" },
+  { type: "REASONING_END", messageId: "r1" },
+  { type: "TEXT_MESSAGE_START", messageId: "m1", role: "assistant" },
+  { type: "TEXT_MESSAGE_CONTENT", messageId: "m1", delta: "Two cards are **blocked**." },
+  { type: "TOOL_CALL_START", toolCallId: "c1", toolCallName: "board", parentMessageId: "m1" },
+  { type: "TOOL_CALL_ARGS", toolCallId: "c1", delta: '{"machine":"local"}' },
+  { type: "TOOL_CALL_END", toolCallId: "c1" },
+  {
+    type: "TOOL_CALL_RESULT",
+    toolCallId: "c1",
+    messageId: "c1-result",
+    content: "t2 blocked",
+    role: "tool",
+  },
+  { type: "TEXT_MESSAGE_END", messageId: "m1" },
+  { type: "RUN_FINISHED", threadId: "conv-1", runId: "turn-1" },
+  { type: "RUN_ERROR", runId: "", message: "The chat's model is not set" },
 ];
