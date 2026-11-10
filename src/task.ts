@@ -10,13 +10,15 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
+import { Context, Effect, Layer, Schema, Semaphore, flow, Result } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import { ensureLockDir, withLock } from "./lock";
+import * as Reactivity from "effect/reactivity/Reactivity";
+import * as SqlClient from "effect/sql/SqlClient";
+import type { KeptHere } from "./board-model";
+import { TaskWrites } from "./store-writes";
 import { nowIso } from "./time";
-import { unsafePathComponent } from "./naming";
 
-const TaskSchema = Schema.Struct({
+export const TaskSchema = Schema.Struct({
   id: Schema.String,
   /** The herdr workspace this Task's Runs and agents live in; null on core, which has none. */
   workspace: Schema.NullOr(Schema.String),
@@ -44,7 +46,7 @@ export type TaskRecord = Schema.Schema.Type<typeof TaskSchema>;
 
 const TaskJson = Schema.fromJsonString(TaskSchema);
 const encodeTask = flow(Schema.encodeResult(TaskJson), Result.getOrThrow);
-const decodeTask = Schema.decodeUnknownEffect(TaskJson);
+export const decodeTaskOption = Schema.decodeOption(TaskJson);
 
 /**
  * Which Task a start belongs to: a new one with a workspace of its own, one the caller
@@ -56,103 +58,103 @@ export type TaskChoice =
   | { readonly mode: "continue"; readonly task: TaskRecord }
   | { readonly mode: "here" };
 
-const tasksDir = Effect.fn("task.tasksDir")(function* (stateDir: string) {
-  return (yield* Path.Path).join(stateDir, "tasks");
-});
+/** The Tasks, in the host's database (ADR-draft-collies-own-records-live-in-the-hosts-database). */
+export interface TasksApi {
+  readonly get: (id: string) => Effect.Effect<TaskRecord | null>;
+  /** Newest first. */
+  readonly list: Effect.Effect<ReadonlyArray<TaskRecord>>;
+  readonly ofWorkspace: (workspace: string) => Effect.Effect<TaskRecord | null>;
+  readonly put: (task: TaskRecord) => Effect.Effect<TaskRecord>;
+  readonly remove: (id: string) => Effect.Effect<void>;
+  /** Held from reading a Task to writing it back, so two Runs cannot both replace its workspace. */
+  readonly locked: <A, E, R>(id: string, effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  /** `locked`, or nothing where another holds it now. */
+  readonly lockedIfFree: <A, E, R>(
+    id: string,
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<Option.Option<A>, E, R>;
+}
 
-const taskFile = Effect.fn("task.taskFile")(function* (stateDir: string, id: string) {
-  return (yield* Path.Path).join(yield* tasksDir(stateDir), `${id}.json`);
-});
+export class Tasks extends Context.Service<Tasks, TasksApi>()("collie/Tasks") {}
 
-/**
- * The Task by that id, or null. Ids reach here from a command line, so the same guard
- * the Run store applies to a Run id applies here: a `../` id must not read a file
- * outside the state directory.
- */
-export const readTask = Effect.fn("task.readTask")(function* (stateDir: string, id: string) {
-  const fs = yield* FileSystem.FileSystem;
-  if (unsafePathComponent(id)) return null;
-  const file = yield* taskFile(stateDir, id);
-  if (!(yield* fs.exists(file))) return null;
-  return yield* fs.readFileString(file).pipe(
-    Effect.flatMap(decodeTask),
-    Effect.orElseSucceed(() => null),
-  );
-});
+/** What a write to the Tasks invalidates. */
+export const TASKS = "collie/tasks";
 
-export const listTasks = Effect.fn("task.listTasks")(function* (stateDir: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const dir = yield* tasksDir(stateDir);
-  if (!(yield* fs.exists(dir))) return [];
-  const tasks: TaskRecord[] = [];
-  for (const name of yield* fs.readDirectory(dir)) {
-    if (!pipe_(name, Str.endsWith(".json"))) continue;
-    const task = yield* fs.readFileString(path.join(dir, name)).pipe(
-      Effect.flatMap(decodeTask),
-      Effect.orElseSucceed(() => null),
-    );
-    if (task) tasks.push(task);
-  }
-  return tasks.sort((a, b) => pipe_(b.created_at, Str.localeCompare(a.created_at)));
-});
+const decoded = (rows: ReadonlyArray<{ readonly record: string }>) =>
+  Arr.flatMap(rows, (row) => Option.toArray(decodeTaskOption(row.record)));
+
+export const tasksLayer = Layer.effect(Tasks)(
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const reactivity = yield* Reactivity.Reactivity;
+    const told = Option.getOrUndefined(yield* Effect.serviceOption(TaskWrites));
+    const locks = new Map<string, Semaphore.Semaphore>();
+    const lockOf = (id: string) => {
+      const lock = locks.get(id) ?? Semaphore.makeUnsafe(1);
+      locks.set(id, lock);
+      return lock;
+    };
+    const changed = (id: string) =>
+      Effect.andThen(
+        Effect.sync(() => told?.([id])),
+        reactivity.invalidate([TASKS]),
+      );
+    return {
+      get: (id) =>
+        sql<{ readonly record: string }>`SELECT record FROM collie_tasks WHERE id = ${id}`.pipe(
+          Effect.map((rows) => decoded(rows)[0] ?? null),
+          Effect.orDie,
+        ),
+      list: sql<{ readonly record: string }>`
+        SELECT record FROM collie_tasks ORDER BY created_at DESC
+      `.pipe(Effect.map(decoded), Effect.orDie),
+      ofWorkspace: (workspace) =>
+        sql<{ readonly record: string }>`
+          SELECT record FROM collie_tasks WHERE workspace = ${workspace} ORDER BY created_at DESC
+        `.pipe(
+          Effect.map((rows) => decoded(rows)[0] ?? null),
+          Effect.orDie,
+        ),
+      put: (task) =>
+        sql`
+          INSERT INTO collie_tasks (id, record) VALUES (${task.id}, ${encodeTask(task)})
+          ON CONFLICT (id) DO UPDATE SET record = excluded.record
+        `.pipe(Effect.andThen(changed(task.id)), Effect.as(task), Effect.orDie),
+      remove: (id) =>
+        sql`DELETE FROM collie_tasks WHERE id = ${id}`.pipe(
+          Effect.andThen(changed(id)),
+          Effect.orDie,
+        ),
+      locked: (id, effect) => Effect.suspend(() => lockOf(id).withPermits(1)(effect)),
+      lockedIfFree: (id, effect) =>
+        Effect.suspend(() => lockOf(id).withPermitsIfAvailable(1)(effect)),
+    } satisfies TasksApi;
+  }),
+);
+
+/** The Task by that id, or null. */
+export const readTask = (id: string) => Tasks.use((tasks) => tasks.get(id));
+
+export const listTasks = Tasks.use((tasks) => tasks.list);
 
 /** Whether a Task is open: its workspace is, or, having none, Cleanup has not closed it. */
 export const isOpen = (task: TaskRecord, workspaces: ReadonlySet<string>) =>
   task.workspace === null ? task.closed_at === undefined : workspaces.has(task.workspace);
 
 /** The Task whose workspace this is, which is what "the current Task" means. */
-export const taskOfWorkspace = Effect.fn("task.taskOfWorkspace")(function* (
-  stateDir: string,
-  workspaceId: string | null,
-) {
-  if (!workspaceId) return null;
-  return (
-    Option.getOrUndefined(
-      Arr.findFirst(yield* listTasks(stateDir), (task) => task.workspace === workspaceId),
-    ) ?? null
-  );
-});
+export const taskOfWorkspace = (workspaceId: string | null) =>
+  workspaceId ? Tasks.use((tasks) => tasks.ofWorkspace(workspaceId)) : Effect.succeed(null);
 
-let taskWrites = 0;
-
-/** Written aside and renamed in, so a reader never meets a half-written Task. */
-export const writeTask = Effect.fn("task.writeTask")(function* (
-  stateDir: string,
-  task: TaskRecord,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  yield* fs.makeDirectory(yield* tasksDir(stateDir), { recursive: true });
-  const file = yield* taskFile(stateDir, task.id);
-  const tmp = `${file}.${process.pid}.${++taskWrites}.tmp`;
-  yield* fs.writeFileString(tmp, `${encodeTask(task)}\n`);
-  yield* fs.rename(tmp, file);
-  return task;
-});
+export const writeTask = (task: TaskRecord) => Tasks.use((tasks) => tasks.put(task));
 
 /** Forgets the Task; its Runs' records are the store's and are left alone. */
-export const removeTask = Effect.fn("task.removeTask")(function* (stateDir: string, id: string) {
-  const fs = yield* FileSystem.FileSystem;
-  if (unsafePathComponent(id)) return;
-  yield* fs.remove(yield* taskFile(stateDir, id), { force: true });
-});
+export const removeTask = (id: string) => Tasks.use((tasks) => tasks.remove(id));
 
-export class TaskBusy extends Data.TaggedError("TaskBusy")<{ id: string }> {}
+export const withTaskLock = <A, E, R>(id: string, effect: Effect.Effect<A, E, R>) =>
+  Tasks.use((tasks) => tasks.locked(id, effect));
 
-/** Ten seconds: long enough for another Run of the Task to reopen its workspace. */
-const TASK_LOCK_CLAIMS = 400;
-
-/** Held from reading a Task to writing it back, so two Runs cannot both replace its workspace. */
-export const withTaskLock = <A, E, R>(
-  stateDir: string,
-  id: string,
-  effect: Effect.Effect<A, E, R>,
-) =>
-  Effect.gen(function* () {
-    const file = yield* taskFile(stateDir, id);
-    yield* ensureLockDir(file);
-    return yield* withLock(`${file}.lock`, new TaskBusy({ id }), effect, TASK_LOCK_CLAIMS);
-  });
+export const withTaskLockIfFree = <A, E, R>(id: string, effect: Effect.Effect<A, E, R>) =>
+  Tasks.use((tasks) => tasks.lockedIfFree(id, effect));
 
 export const newTask = Effect.fn("task.newTask")(function* (opts: {
   readonly workspace: string | null;
@@ -171,3 +173,21 @@ export const newTask = Effect.fn("task.newTask")(function* (opts: {
     created_at: yield* nowIso,
   } satisfies TaskRecord;
 });
+
+/** The Task kept in that workspace, or a new one kept there. */
+export const taskKeptIn = (here: KeptHere) =>
+  withTaskLock(
+    `workspace:${here.workspace}`,
+    Effect.gen(function* () {
+      const kept = yield* taskOfWorkspace(here.workspace);
+      if (kept !== null) return kept;
+      return yield* writeTask(
+        yield* newTask({
+          workspace: here.workspace,
+          label: here.label,
+          cwd: here.cwd,
+          herd: here.herd,
+        }),
+      );
+    }),
+  );

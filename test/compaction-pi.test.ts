@@ -9,7 +9,13 @@ import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { onMachineWith, removesCache } from "./support/live";
 import { fakeChannel } from "./support/compaction";
-import { atLeast, COMPACTION_PORTS, ranOutSince, VERIFIED_VERSIONS } from "../src/compactors";
+import {
+  atLeast,
+  COMPACTION_PORTS,
+  ranOutSince,
+  stoppedSince,
+  VERIFIED_VERSIONS,
+} from "../src/compactors";
 import type { AgentContext } from "../src/compaction";
 
 let rig: Rig;
@@ -224,6 +230,7 @@ test("install writes the extension and passes it with Pi's own launch flag", () 
 /** The parts of Pi's own surface the extension Collie generates registers against. */
 interface PiEvent {
   reason?: string;
+  aborted?: boolean;
   message?: { stopReason?: string; errorMessage?: string };
 }
 interface PiContext {
@@ -408,5 +415,75 @@ test("an error stop on a usage limit is the agent running out; an overload is no
         why: "You have hit your ChatGPT usage limit. Try again in 3 hours.",
         transcript: "/home/mk/.pi/sessions/one.jsonl",
       });
+    }),
+  ));
+
+const EXPIRED = "CodexApiError: Your authentication token has expired";
+const PI_SESSION = "/home/mk/.pi/sessions/one.jsonl";
+
+const loadedPi = Effect.gen(function* () {
+  yield* pi.install({ agent: "build-r1", harness: "pi", cwd: rig.projectDir, dir });
+  const handlers = new Map<string, (event: PiEvent, ctx: PiContext) => void>();
+  const extension: { default: (host: PiHost) => void } = yield* Effect.promise(
+    () => import(path.join(dir, "collie.ts")),
+  );
+  extension.default({
+    on: (event, handler) => handlers.set(event, handler),
+    registerCommand: () => {},
+  });
+  const piCtx: PiContext = {
+    sessionManager: { getSessionFile: () => PI_SESSION },
+    getContextUsage: () => ({ tokens: 1 }),
+    compact: () => {},
+  };
+  handlers.get("session_start")!({}, piCtx);
+  return {
+    turn: (message: PiEvent["message"]) => handlers.get("turn_end")!({ message }, piCtx),
+    settle: (aborted: boolean) => handlers.get("agent_settled")!({ aborted }, piCtx),
+  };
+});
+
+test("an error turn pi settles on is its harness stopping, with pi's message and session", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const driven = yield* loadedPi;
+      driven.turn({ stopReason: "error", errorMessage: EXPIRED });
+      // pi may still retry it until it settles.
+      expect(yield* stoppedSince(dir, 0)).toBeNull();
+      driven.settle(false);
+      expect(yield* stoppedSince(dir, 0)).toEqual({ why: EXPIRED, transcript: PI_SESSION });
+    }),
+  ));
+
+test("an error turn pi retried into a successful one is no stop", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const driven = yield* loadedPi;
+      driven.turn({ stopReason: "error", errorMessage: EXPIRED });
+      driven.turn({ stopReason: "stop" });
+      driven.settle(false);
+      expect(yield* stoppedSince(dir, 0)).toBeNull();
+    }),
+  ));
+
+test("an error turn settled by an abort is no stop", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const driven = yield* loadedPi;
+      driven.turn({ stopReason: "error", errorMessage: EXPIRED });
+      driven.settle(true);
+      expect(yield* stoppedSince(dir, 0)).toBeNull();
+    }),
+  ));
+
+test("a usage limit is still running out, and no stop", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const driven = yield* loadedPi;
+      const limit = "You have hit your ChatGPT usage limit. Try again in 3 hours.";
+      driven.turn({ stopReason: "error", errorMessage: limit });
+      driven.settle(false);
+      expect(yield* ranOutSince(dir, 0)).toEqual({ why: limit, transcript: PI_SESSION });
+      expect(yield* stoppedSince(dir, 0)).toBeNull();
     }),
   ));

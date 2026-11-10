@@ -12,10 +12,10 @@ import { stopRun } from "../src/flows";
 import { connect, frontDoor, socketOf } from "../src/host";
 import { foundationLayer, runDir } from "../src/engine";
 import { Host } from "../src/sdk";
-import { everyRegistered } from "../src/registry";
 import { readSeen } from "../src/seen";
 import { stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
+import { registeredAt } from "./support/records";
 
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
@@ -357,7 +357,7 @@ test(
             (view) => Arr.some(view?.waiting ?? [], (one) => one.answer === null),
           );
           const agent = Option.getOrUndefined(
-            Arr.findFirst(yield* everyRegistered(world.state), (entry) => entry.runId === byAgent),
+            Arr.findFirst(yield* registeredAt(world.state), (entry) => entry.runId === byAgent),
           )!;
           const { runId: byCli } = yield* host.start({
             project: world.project,

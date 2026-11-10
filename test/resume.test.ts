@@ -6,7 +6,7 @@ import { expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
 import { Duration, Effect, FileSystem, type Scope } from "effect";
 import { connect, ownerOf } from "../src/host";
-import { deliveriesOf } from "../src/steering";
+import { deliveredTo } from "./support/records";
 import { until, stopHost } from "./support/host";
 import { collie, proves, type World } from "./support/world";
 import { settledRun } from "./support/hosted";
@@ -84,10 +84,10 @@ const parkedAgent = Effect.fn("test.parkedAgent")(function* (world: World) {
     () => client.run({ runId }).pipe(Effect.orDie),
     (one) => one?.status.status === "suspended" && one.parked !== null,
   );
-  const found = yield* deliveriesOf(world.state, runId);
+  const found = yield* deliveredTo(world.state, runId);
   if (found.length === 0) throw new Error(`parked before delivery: ${view?.parked}`);
   const [delivery] = found;
-  expect(view?.parked).toContain(delivery!.delivery.id);
+  expect(view?.parked).toContain(delivery!.id);
   return { client, runId, delivery: delivery!, old: view!.parked };
 });
 
@@ -115,13 +115,13 @@ test(
           expect(parked?.status.status).toBe("suspended");
           expect(parked?.parked).toContain("timed out");
           expect(parked?.parked).toContain(`${world.state}/agents/${runId}/build.prompt.md`);
-          expect(yield* deliveriesOf(world.state, runId)).toEqual([]);
+          expect(yield* deliveredTo(world.state, runId)).toEqual([]);
 
           expect(
             (yield* client.resume({ runId, request: "resume" }).pipe(Effect.orDie)).applied,
           ).toBe(true);
           yield* until(
-            () => deliveriesOf(world.state, runId),
+            () => deliveredTo(world.state, runId),
             (one) => one.length === 1,
           );
           yield* (yield* FileSystem.FileSystem)
@@ -147,7 +147,7 @@ test(
         yield* client
           .settleDelivery({
             runId,
-            delivery: delivery.delivery.id,
+            delivery: delivery.id,
             as: "not-sent",
             request: "not-sent",
           })
@@ -166,13 +166,13 @@ test(
         expect(waiting?.status.status).toBe("pending");
         expect(waiting?.parked).toBeNull();
         const sent = yield* until(
-          () => deliveriesOf(world.state, runId),
+          () => deliveredTo(world.state, runId),
           (one) => one.length === 2,
         );
-        expect(Arr.map(sent, (one) => one.delivery.attempt)).toEqual([1, 2]);
-        expect(new Set(Arr.map(sent, (one) => one.delivery.id)).size).toBe(2);
+        expect(Arr.map(sent, (one) => one.attempt)).toEqual([1, 2]);
+        expect(new Set(Arr.map(sent, (one) => one.id)).size).toBe(2);
         expect(yield* client.resume({ runId, request }).pipe(Effect.orDie)).toEqual(first);
-        expect(yield* deliveriesOf(world.state, runId)).toHaveLength(2);
+        expect(yield* deliveredTo(world.state, runId)).toHaveLength(2);
         const noOp = yield* client.resume({ runId, request: "resume-2" }).pipe(Effect.orDie);
         expect(noOp.applied).toBe(false);
         expect(noOp.detail).toContain("already running");
@@ -191,7 +191,7 @@ test(
         expect(finished.applied).toBe(false);
         expect(finished.detail).toContain("finished");
         expect(yield* client.resume({ runId, request }).pipe(Effect.orDie)).toEqual(first);
-        expect(yield* deliveriesOf(world.state, runId)).toHaveLength(2);
+        expect(yield* deliveredTo(world.state, runId)).toHaveLength(2);
       }),
     ),
   120_000,
@@ -212,12 +212,12 @@ test(
             () => client.run({ runId }).pipe(Effect.orDie),
             (one) => one?.status.status === "suspended" && one.parked !== null,
           );
-          expect(uncertain?.parked).toContain(delivery.delivery.id);
-          expect(yield* deliveriesOf(world.state, runId)).toHaveLength(1);
+          expect(uncertain?.parked).toContain(delivery.id);
+          expect(yield* deliveredTo(world.state, runId)).toHaveLength(1);
           yield* client
             .settleDelivery({
               runId,
-              delivery: delivery.delivery.id,
+              delivery: delivery.id,
               as: "not-sent",
               request: "not-sent",
             })
@@ -255,7 +255,7 @@ test(
         yield* client
           .settleDelivery({
             runId,
-            delivery: delivery.delivery.id,
+            delivery: delivery.id,
             as: "sent",
             request: "sent-reconciliation",
           })
@@ -269,7 +269,7 @@ test(
             .pipe(Effect.orDie)).applied,
         ).toBe(true);
         expect((yield* client.run({ runId }).pipe(Effect.orDie))?.parked).toBeNull();
-        expect(yield* deliveriesOf(world.state, runId)).toHaveLength(1);
+        expect(yield* deliveredTo(world.state, runId)).toHaveLength(1);
       }),
     ),
   120_000,

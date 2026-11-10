@@ -2,6 +2,7 @@
 // its kind before the host writes or forwards anything, and the operation still happens.
 // The values here are built at runtime, synthetic, and only shaped like credentials.
 
+import { recordsAt } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -196,7 +197,7 @@ test(
           expect(prompts).toContain("merge it with <github token>");
           for (const value of [GITLAB, GITHUB, AWS]) expect(prompts).not.toContain(value);
           expect(yield* holding(world.state, [GITLAB, GITHUB, AWS])).toEqual([]);
-        }).pipe(Effect.ensuring(stopHost(world.state))),
+        }).pipe(Effect.provide(recordsAt(world.state)), Effect.ensuring(stopHost(world.state))),
       ["told.workflow.ts"],
     ),
   120_000,

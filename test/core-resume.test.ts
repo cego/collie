@@ -28,7 +28,7 @@ import {
 } from "../src/engine";
 import type { Store } from "../src/store";
 import { agentName } from "../src/naming";
-import { deliveriesOf } from "../src/steering";
+import { deliveredTo } from "./support/records";
 import { COMPACT_AT_TOKENS } from "../src/settings";
 import { COMPACTION_PORTS, codexPort } from "../src/compactors";
 import { isString } from "../src/schema";
@@ -212,13 +212,20 @@ const idleAfterItsStep = (agent: string, given: "sent" | "at launch" = "sent") =
 const Recorded = Schema.fromJsonString(
   Schema.Struct({ agentSession: Schema.Struct({ kind: Schema.String, value: Schema.String }) }),
 );
+/** The session an agent's launch recorded, once it has: the launch is written before it. */
 const recordedSession = (runId: string, operation: string) =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) => fs.readFileString(`${dir()}/agents/${runId}/${operation}.launch.json`)),
-    Effect.flatMap(Schema.decodeUnknownEffect(Recorded)),
-    Effect.map((launched) => launched.agentSession),
-    Effect.orDie,
-  );
+  until(
+    () =>
+      FileSystem.FileSystem.pipe(
+        Effect.flatMap((fs) =>
+          fs.readFileString(`${dir()}/agents/${runId}/${operation}.launch.json`),
+        ),
+        Effect.flatMap(Schema.decodeUnknownEffect(Recorded)),
+        Effect.map((launched) => launched.agentSession),
+        Effect.option,
+      ),
+    Option.isSome,
+  ).pipe(Effect.map(Option.getOrThrow));
 
 const Launch = Schema.Struct({
   name: Schema.String,
@@ -315,14 +322,14 @@ test(
         expect(Arr.map(posted, (send) => send.terminal)).toEqual([named("opencode")]);
         expect(posted[0]?.text).toContain("Carry on with your step from where you were");
         expect(posted[0]?.text).toContain(`agents/${runId}/opencode.prompt.md`);
-        const ledger = yield* deliveriesOf(dir(), runId);
+        const ledger = yield* deliveredTo(dir(), runId);
         const carried = Arr.filter(
           ledger,
-          ({ delivery }) =>
+          (delivery) =>
             delivery.agent === named("opencode") &&
             (posted[0]?.text ?? "").includes(`collie-delivery:${delivery.id}`),
         );
-        expect(Arr.map(carried, ({ delivery }) => [delivery.cause.kind, delivery.state])).toEqual([
+        expect(Arr.map(carried, (delivery) => [delivery.cause.kind, delivery.state])).toEqual([
           ["step", "submitted"],
         ]);
       }),
@@ -401,10 +408,7 @@ test(
             );
             yield* fs.writeFileString(`${dir()}/agents/${runId}/opencode.session`, "ses_notes");
             yield* idleAfterItsStep(agent, "at launch");
-            yield* until(
-              () => recordedSession(runId, "opencode").pipe(Effect.option),
-              Option.isSome,
-            );
+            yield* recordedSession(runId, "opencode");
             return { runId, agent };
           }),
         );

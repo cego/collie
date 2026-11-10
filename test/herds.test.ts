@@ -145,12 +145,12 @@ test("a new Task records its Herd, and one recorded before the field still loads
   runEffect(
     Effect.gen(function* () {
       const task = yield* newTask({ workspace: "w1", label: "a | b", cwd: "/p", herd: "herd-1" });
-      yield* writeTask(rig.stateDir, task);
-      expect((yield* readTask(rig.stateDir, task.id))?.herd).toBe("herd-1");
+      yield* writeTask(task);
+      expect((yield* readTask(task.id))?.herd).toBe("herd-1");
 
       const { herd: _, ...older } = { ...task, id: "task-old" };
-      yield* writeTask(rig.stateDir, older);
-      const read = yield* readTask(rig.stateDir, "task-old");
+      yield* writeTask(older);
+      const read = yield* readTask("task-old");
       expect(read?.label).toBe("a | b");
       expect(read?.herd).toBeUndefined();
     }),

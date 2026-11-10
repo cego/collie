@@ -1,15 +1,27 @@
 import { platformLayer, type PlatformServices } from "../../src/platform";
-import { Clock, Config, Effect, ManagedRuntime, Scope } from "effect";
+import { recordsLayer, type Records } from "../../src/records";
+import { storeLayer } from "../../src/store";
+import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
+import * as Reactivity from "effect/reactivity/Reactivity";
+import { Clock, Config, Duration, Effect, Layer, ManagedRuntime, Scope } from "effect";
+import { ConnectionDeadline } from "../../src/connections";
 import { TestClock } from "effect/testing";
 import { GIT_QUIET } from "./git-quiet";
 
 const runtime = ManagedRuntime.make(platformLayer);
 
+/** Records no host shares: a test whose host reads them uses `recordsAt` its state directory. */
+export const memoryRecords = recordsLayer.pipe(
+  Layer.provideMerge(storeLayer()),
+  Layer.provide(Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))),
+  Layer.provide(Reactivity.layer),
+);
+
 /** Runs `effect` in a scope of its own, closed when it ends. */
 export function runEffect<A, E>(
-  effect: Effect.Effect<A, E, PlatformServices | Scope.Scope>,
+  effect: Effect.Effect<A, E, PlatformServices | Records | Scope.Scope>,
 ): Promise<A> {
-  return runtime.runPromise(Effect.scoped(effect));
+  return runtime.runPromise(Effect.scoped(Effect.provide(effect, memoryRecords)));
 }
 
 /**
@@ -38,7 +50,8 @@ export const suiteEnv = Config.all({
  * sleeps, from the wall clock's now: a session on it reads what
  * sessions on the real clock wrote, so a lock or a timestamp of theirs is not in its
  * future. Its timers fire in order and many times faster, finalizers' included, and the
- * file and database IO between them still takes the real time it takes.
+ * file and database IO between them still takes the real time it takes, so a Connection
+ * read has no deadline on it.
  */
 export const fastForward = <A, E, R>(effect: Effect.Effect<A, E, R>, tick = 25) =>
   Effect.gen(function* () {
@@ -47,5 +60,8 @@ export const fastForward = <A, E, R>(effect: Effect.Effect<A, E, R>, tick = 25) 
     yield* Effect.forkScoped(
       Effect.forever(clock.adjust(tick).pipe(Effect.andThen(Effect.sleep(1)))),
     );
-    return yield* effect.pipe(Effect.provideService(Clock.Clock, clock));
+    return yield* effect.pipe(
+      Effect.provideService(Clock.Clock, clock),
+      Effect.provideService(ConnectionDeadline, Duration.infinity),
+    );
   }).pipe(Effect.scoped);

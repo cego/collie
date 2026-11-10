@@ -1,6 +1,7 @@
 // A Machine's files, as its host hands them to the Flock chat over a front door: read in
 // parts, found, written and edited, and never written inside the host's own state.
 
+import { memoryRecords } from "./support/effect";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
@@ -432,5 +433,5 @@ test("a part at the wrong offset clears what arrived, and asking for a held file
       expect(Arr.map((yield* uploadsSweeper(state).judge).remove, (item) => item.target)).toEqual([
         dir,
       ]);
-    }),
+    }).pipe(Effect.provide(memoryRecords)),
   ));

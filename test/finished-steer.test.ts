@@ -2,6 +2,7 @@
 // installation runs: the Dispatcher, the ledger and the receipt a running Run gets, and a
 // status nothing rewrites.
 
+import type { Records } from "../src/records";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -20,7 +21,8 @@ import { DELIVERY_TOKEN } from "../src/dispatcher";
 import { runDir } from "../src/engine";
 import { readAudit } from "../src/audit";
 import { attachFiles, type FlowPrompts } from "../src/flows";
-import { appendLine, deliveriesOf, ledgerPath, readLedger } from "../src/steering";
+import { appendLine, readLedger } from "../src/steering";
+import { deliveredTo, recordsAt } from "./support/records";
 import { capabilitiesOf } from "../src/steering-caps";
 import { Herdr } from "../src/herdr";
 import { suiteEnv } from "./support/effect";
@@ -182,7 +184,7 @@ const chat = () => ({ origin: "chat" as const, requestId: `req-chat-${++asked}` 
 /** A world whose fake agent answers its one prompt with an Output, and is then left alive. */
 const steerable = <A, E>(
   prefix: string,
-  body: (world: World) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
+  body: (world: World) => Effect.Effect<A, E, PlatformServices | Records | Scope.Scope>,
   /** What the fake agent answers its prompts with; none leaves it working for good. */
   answers: ReadonlyArray<{ readonly verdict: string }> = [{ verdict: "built" }],
   modules: ReadonlyArray<string> = ["told.workflow.ts"],
@@ -216,7 +218,10 @@ const steerable = <A, E>(
                 else Bun.env[key] = value;
             }),
         );
-        return yield* body(world).pipe(Effect.ensuring(stopHost(world.state)));
+        return yield* body(world).pipe(
+          Effect.provide(recordsAt(world.state)),
+          Effect.ensuring(stopHost(world.state)),
+        );
       }),
     modules,
   );
@@ -234,8 +239,7 @@ test(
         const terminal = Option.getOrUndefined(
           Arr.findFirst(live, (one) => one.name === agent.name),
         )!.terminalId!;
-        const ledger = yield* ledgerPath(world.state, terminal);
-        yield* appendLine(ledger, {
+        yield* appendLine({
           kind: "manual_override",
           at: "2026-10-05T10:00:00.000Z",
           incarnation: terminal,
@@ -248,7 +252,7 @@ test(
           voiced,
         );
         expect(done).toMatchObject({ kind: "clear_override", state: "applied" });
-        expect((yield* readLedger(ledger)).at(-1)).toMatchObject({
+        expect((yield* readLedger(terminal)).at(-1)).toMatchObject({
           kind: "override_cleared",
           conversation: "native",
           said: "let Collie steer it again",
@@ -269,8 +273,8 @@ test(
         expect(done).toMatchObject({ kind: "deliver", state: "applied" });
 
         const steered = Arr.filter(
-          yield* deliveriesOf(world.state, runId),
-          (one) => one.delivery.cause.kind === "steer",
+          yield* deliveredTo(world.state, runId),
+          (one) => one.cause.kind === "steer",
         );
         expect(steered).toHaveLength(1);
         const fs = yield* FileSystem.FileSystem;
@@ -290,7 +294,7 @@ test(
               Arr.join(present.argv, " "),
             ),
           ),
-        ).toContain(`${DELIVERY_TOKEN}${steered[0]!.delivery.id}`);
+        ).toContain(`${DELIVERY_TOKEN}${steered[0]!.id}`);
         expect(
           Option.getOrUndefined(
             Option.map(Option.fromNullishOr(prompts.at(-1)), (present_) =>
@@ -444,8 +448,8 @@ test(
         yield* act(reached, "desktop-comments-1", comment).pipe(Effect.orDie);
 
         const steered = Arr.filter(
-          yield* deliveriesOf(world.state, runId),
-          (one) => one.delivery.cause.kind === "steer",
+          yield* deliveredTo(world.state, runId),
+          (one) => one.cause.kind === "steer",
         );
         expect(steered).toHaveLength(1);
         const typed = Arr.filter(
@@ -459,7 +463,7 @@ test(
           (call) => call.cmd === "agent prompt" && call.argv[2] === agent.name,
         ).at(-1)?.argv[3];
         const lines = Str.split(typed ?? "", "\n");
-        expect(lines[0]).toStartWith(`${DELIVERY_TOKEN}${steered[0]!.delivery.id}`);
+        expect(lines[0]).toStartWith(`${DELIVERY_TOKEN}${steered[0]!.id}`);
         expect(lines[1]).toMatch(/^From the human, in Desktop, .+\.$/);
         const file = /^Their message is in (\S+)\./.exec(lines[2] ?? "")?.[1];
         expect(yield* fs.readFileString(file!).pipe(Effect.orDie)).toBe(comments);
@@ -579,7 +583,7 @@ test(
         const [done] = yield* carryOutAsked(env, [deliver(run.id, "nobody", "hurry up")], chat());
         expect(done?.state).toBe("failed");
         expect(done?.note).toContain("Nothing was delivered");
-      }),
+      }).pipe(Effect.provide(recordsAt(world.state))),
     ),
   120_000,
 );

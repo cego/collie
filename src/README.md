@@ -38,18 +38,18 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `door.ts`              | The host's door: a Worker that owns `host.sock`, reads records itself, passes the rest to the engine                        |
 | `herds.ts`             | Every running herdr session the host reads, its agents, and the events it pushes                                            |
 | `attention.ts`         | Why a run wants a human, and which actions are safe now                                                                     |
-| `registry.ts`          | Which long-lived agents this Session still has, per workspace + repo                                                        |
+| `registry.ts`          | Which long-lived agents each Session still has, as the host keeps them in `collie_agents`                                   |
 | `handoff.ts`           | Giving one Run's result to another Run's live agent                                                                         |
 | `output.ts`            | The Output and Synthesis schemas, their parsers, `review.md`, and which findings the loop still owns                        |
 | `run.ts`               | The run directory: audit trail and resume state                                                                             |
 | `intent.ts`            | What a Run is for, what bounds it, and what Collie may do about it without asking                                           |
 | `intent-model.ts`      | The Intent's Schemas alone, so a browser bundle of the board can carry a start                                              |
-| `steering.ts`          | The delivery ledger per live agent, and the Herd's model-call budget                                                        |
+| `steering.ts`          | The delivery ledgers in `host.db`, one per live agent, and the Herd's model-call budget                                     |
 | `delivery-queue.ts`    | Durable messages awaiting a supported idle submission, and their receipts                                                   |
 | `dispatcher.ts`        | The only sender: one transaction per agent, reserved before the send, ordered                                               |
 | `steering-caps.ts`     | What each harness has been shown to do about a delivery, and the gate that fails closed                                     |
 | `evaluator.ts`         | The one place a model is asked anything, tool-less and capped, and the closed schemas                                       |
-| `proposals.ts`         | Hash-bound proposals, and the Confirmation rule that a yes names its exact payload                                          |
+| `proposals.ts`         | Hash-bound proposals, kept in `collie_proposals`, and the Confirmation rule that a yes names its exact payload              |
 | `executors.ts`         | Which action kinds this build can carry out; an unregistered one is refused, never faked                                    |
 | `drift.ts`             | Where the work and the Intent disagree: rules, judgement, and the correction loop                                           |
 | `verify.ts`            | A command's result bound to its tree, so a card can say verified; a running check's marker and log                          |
@@ -97,6 +97,9 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `authoring.ts`         | What a module says about itself, how it is checked, and the file an author starts from                                      |
 | `definitions-model.ts` | A host's Workflows and Personas as front doors read them: Schemas shared with Desktop (pure)                                |
 | `store.ts`             | Rows beside Effect's: request claims, run identity, generations, questions                                                  |
+| `store-writes.ts`      | Told the Runs each write to `host.db` names, for the Run model                                                              |
+| `records.ts`           | Collie's own records in `host.db`: the host's layer, a read-only one, one at a directory                                    |
+| `records-import.ts`    | The record files a host's first migration imports once                                                                      |
 | `release.ts`           | Whether an installation is a release or a development checkout, and placing the release a runner carries                    |
 | `releases.ts`          | The newest published release, and a release's runner downloaded and verified against the release key                        |
 | `onboard.ts`           | A Machine from bare to a working host, one streamed step at a time, never with sudo                                         |
@@ -116,7 +119,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `plan.ts`              | A plan directory as repositories and waves, and the refusals that stop a fan-out                                            |
 | `lock.ts`              | The pid-lock discipline every single-owner file takes, the host's own lock among them                                       |
 | `script.ts`            | Literal shell arguments and a login under `script`'s pseudo-terminal on Linux or macOS                                      |
-| `task.ts`              | A Task: the work, its herdr workspace, and which Runs belong to it                                                          |
+| `task.ts`              | A Task, a row of the host's `collie_tasks`: the work, its herdr workspace, which Runs belong to it                          |
 | `tasknames.ts`         | What a task workspace is called, from the work and the session's own live labels                                            |
 | `naming.ts`            | herdr-legal agent names vs readable tab and pane labels, and which labels Collie still owns                                 |
 | `keys.ts`              | Raw keypresses, for the text board a pane falls back to when the renderer will not start                                    |

@@ -4,13 +4,13 @@ import * as Arr from "effect/Array";
 import { Effect } from "effect";
 import { Command } from "effect/cli";
 import { listRuns } from "../runs";
-import { listTasks } from "../task";
+import { hostTasks } from "../lifecycle";
 import { answering } from "./shared";
 
 const list = Command.make("list", {}, () =>
   answering((env) =>
     Effect.gen(function* () {
-      const tasks = yield* listTasks(env.stateDir);
+      const tasks = yield* hostTasks(env);
       const runs = yield* listRuns(env);
       const data = Arr.map(tasks, (task) => ({
         ...task,

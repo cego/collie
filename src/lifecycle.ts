@@ -80,13 +80,13 @@ import {
 import type { Action } from "./actions";
 import { NEEDS_INPUT, REFUSED_INPUT, runDir, type Given, type RunView } from "./engine";
 import type { OfferView } from "./board-model";
-import { err, ExpectedError, taskFor, type Failure, type OpResult } from "./operations";
-import { voiceOf, type Asker } from "./proposals";
-import type { TaskChoice } from "./task";
+import { err, ExpectedError, HostUnread, taskFor, type Failure, type OpResult } from "./operations";
+import { voiceOf, type Asker, type ProposalLine } from "./proposals";
+import type { TaskChoice, TaskRecord } from "./task";
 import { encodeApprovedFile, rememberedFile, renderApproved, type VerifySpec } from "./verify-spec";
 import { projectHere, shell } from "./mr";
 import { defaultsPath, readDefaults, readIntent, type Change, type IntentSeed } from "./intent";
-import { scopeFor, scopeKey } from "./registry";
+import { scopeFor, scopeKey, type AgentEntry } from "./registry";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { reason } from "./naming";
 import { attachmentRefusal } from "./attachments";
@@ -414,6 +414,52 @@ export const asks = <A>(
     ),
   );
 
+const hostRead = <A>(
+  env: PluginEnv,
+  question: (client: HostClient) => Effect.Effect<A, HostFailure>,
+): Effect.Effect<A, HostUnread, Client> =>
+  asks({ ...env, machine: undefined }, question).pipe(
+    Effect.flatMap((answered) =>
+      answered.ok
+        ? Effect.succeed(answered.value)
+        : Effect.fail(new HostUnread({ error: answered.error, message: answered.error.message })),
+    ),
+  );
+
+/** This Machine's Tasks, newest first, as its host keeps them. */
+export const hostTasks = (
+  env: PluginEnv,
+): Effect.Effect<ReadonlyArray<TaskRecord>, HostUnread, Client> =>
+  hostRead(env, (client) => client.tasks());
+
+/** Every agent this Machine's host has registered. */
+export const hostRegistered = (
+  env: PluginEnv,
+): Effect.Effect<ReadonlyArray<AgentEntry>, HostUnread, Client> =>
+  hostRead(env, (client) => client.registered());
+
+/** A Herd's proposals journal, as this Machine's host keeps it. */
+export const hostProposals = (
+  env: PluginEnv,
+  herd: string,
+): Effect.Effect<ReadonlyArray<ProposalLine>, HostUnread, Client> =>
+  hostRead(env, (client) => client.proposals({ herd }));
+
+/** Every line about a proposal that names this Run, as this Machine's host keeps them. */
+export const hostRunProposals = (
+  env: PluginEnv,
+  run: string,
+): Effect.Effect<ReadonlyArray<ProposalLine>, HostUnread, Client> =>
+  hostRead(env, (client) => client.runProposals({ run }));
+
+/** The Task this Machine's host keeps in that workspace, which is what "the current Task" means. */
+export const hostTaskOf = (env: PluginEnv, workspace: string | null) =>
+  workspace === null
+    ? Effect.succeed(null)
+    : Effect.map(hostTasks(env), (tasks) =>
+        Option.getOrNull(Arr.findFirst(tasks, (task) => task.workspace === workspace)),
+      );
+
 /**
  * One question about a Run, asked of the Machine that has it: this host first, then each
  * peer, then each machine herdr lists that is not paired yet, paired on the way. A Run id
@@ -546,6 +592,7 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
         options: options.options,
         task: placed.task?.id,
         taskLabel: placed.label ?? undefined,
+        here: placed.here ?? undefined,
         parent: options.parent ?? undefined,
         intent: defaults === null ? { ...options.intent } : { ...options.intent, defaults },
         verify: options.verify,

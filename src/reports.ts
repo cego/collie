@@ -49,10 +49,9 @@ export const reportsLayer = (opts: {
           if (view.task === null)
             return { done: true, note: "The Run's agents are closed; it has no Task workspace." };
           return yield* withTaskLock(
-            env.stateDir,
             view.task,
             Effect.gen(function* () {
-              const task = yield* readTask(env.stateDir, view.task!);
+              const task = yield* readTask(view.task!);
               if (task === null)
                 return { done: true, note: "The Run's agents are closed; its Task is gone." };
               if (task.workspace === null)
@@ -60,7 +59,7 @@ export const reportsLayer = (opts: {
                   done: true,
                   note: "The Run's agents are closed; its Task has no workspace.",
                 };
-              const tasks = yield* listTasks(env.stateDir);
+              const tasks = yield* listTasks;
               if (Arr.some(tasks, (one) => one.id !== task.id && one.workspace === task.workspace))
                 return { done: true, note: "The workspace is kept: another Task names it." };
               const runs = yield* registry.views(task.id);

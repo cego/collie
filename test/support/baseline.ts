@@ -62,7 +62,7 @@ import { mrLabel, mrTarget, type FlowLane, type MrForge } from "../../src/board-
 import { CONFLICTS } from "../../src/review-wait";
 import { laneFor } from "../../src/flow-read";
 import type { RunState } from "../../src/runs";
-import { runFacts } from "./records";
+import { registeredAt, runFacts } from "./records";
 import { readLaunches } from "../../src/launches";
 import { readReplies } from "../../src/replies";
 import { disputesIn } from "../../src/proactive";
@@ -119,9 +119,10 @@ import { findingsIn } from "../../src/output";
 import { FINGERPRINT_MAX_BYTES, collect, fingerprint, readVerifications } from "../../src/verify";
 import { inputsFor, offersFrom } from "../../src/offers";
 import { Store, storeLayer } from "../../src/store";
+import { recordsAt, type Records } from "../../src/records";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import * as Reactivity from "effect/reactivity/Reactivity";
-import { everyRegistered, registerAgent, registryPath, scopeFor } from "../../src/registry";
+import { registerAgent, scopeFor } from "../../src/registry";
 import { deliveriesOf, SENT_STATES } from "../../src/steering";
 import { fixtures, until } from "./host";
 
@@ -269,6 +270,7 @@ const session = <A, E>(
     | Children
     | Host
     | Store
+    | Records
     | SqlClient.SqlClient
     | FileSystem.FileSystem
     | Path.Path
@@ -352,7 +354,7 @@ const laneNow = (runId: string, state?: RunState) => session(laneIn(runId, state
 const laneRead = (runId: string) =>
   laneIn(runId).pipe(
     Effect.provide(
-      storeLayer.pipe(
+      storeLayer().pipe(
         Layer.provide(
           SqliteClient.layer({ filename: `${dir}/host.db` }).pipe(
             Layer.orDie,
@@ -872,10 +874,7 @@ scenario(
         yield* rig.queueOutputs([GRILLED, SPEC, TICKETS]);
         yield* parked({ entry: shipped("plan"), runId: "r-plan", input: GOAL, decision: "next-1" });
         const planner = Option.getOrUndefined(
-          Arr.findFirst(
-            yield* everyRegistered(hostOf().env.stateDir),
-            (one) => one.runId === "r-plan",
-          ),
+          Arr.findFirst(yield* registeredAt(dir), (one) => one.runId === "r-plan"),
         )!;
         const route = yield* session(
           Agents.pipe(Effect.flatMap((agents) => agents.askRoute("planner", ["r-impl", "r-plan"]))),
@@ -907,9 +906,8 @@ scenario(
         expect((yield* prompts()).at(-1)).toContain("From implementer of r-impl on laptop.");
         expect(
           Arr.some(
-            yield* deliveriesOf(hostOf().env.stateDir, "r-plan"),
-            (one) =>
-              one.delivery.cause.ref === "planner-question" && SENT_STATES.has(one.delivery.state),
+            yield* deliveriesOf("r-plan").pipe(Effect.provide(recordsAt(dir))),
+            (one) => one.cause.ref === "planner-question" && SENT_STATES.has(one.state),
           ),
         ).toBe(true);
       }),
@@ -2654,7 +2652,7 @@ scenario(
         // The implementer of the Run this review was started from, live and registered as it.
         yield* rig.addAgent("impl-live", "9-1");
         const env = hostOf().env;
-        yield* registerAgent(yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)), {
+        yield* registerAgent(scopeFor(env, rig.projectDir), {
           role: "implementer",
           agent: "impl-live",
           paneId: "9-1",
@@ -2663,7 +2661,7 @@ scenario(
           workflow: "implement",
           at: "2026-09-23T10:00:00Z",
           incarnation: { terminalId: "term-impl-live", agentSession: null },
-        }).pipe(Effect.orDie);
+        }).pipe(Effect.provide(recordsAt(dir)), Effect.orDie);
         const target = "branch:main...HEAD";
         yield* parked({
           entry: shipped("review"),
@@ -4423,7 +4421,7 @@ scenario(
         const planner = `planner-${idOf("plan")}`;
         yield* rig.addAgent(planner, "9-1");
         const env = hostOf().env;
-        yield* registerAgent(yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)), {
+        yield* registerAgent(scopeFor(env, rig.projectDir), {
           role: "planner",
           agent: planner,
           paneId: "9-1",
@@ -4432,7 +4430,7 @@ scenario(
           workflow: "plan",
           at: "2026-09-23T10:00:00Z",
           incarnation: { terminalId: `term-${planner}`, agentSession: null },
-        }).pipe(Effect.orDie);
+        }).pipe(Effect.provide(recordsAt(dir)), Effect.orDie);
         yield* approve("r-planned", ["unit"]);
         yield* rig.queueOutputs([null, BUILT, CLEAN_SYNTHESIS, OPENED]);
         const running = yield* Effect.forkChild(
@@ -8893,7 +8891,7 @@ const helleAnswers = (claim: "held" | "none", production: "deployed" | "read"): 
         ...host,
         claim: (options) =>
           claim === "none"
-            ? Effect.succeed({ unresolved: "no Helle project for app" })
+            ? Effect.succeed({ none: "no Helle project for app" })
             : Effect.as(
                 options
                   .say("holding the claim")
@@ -9674,6 +9672,9 @@ scenario(
           "REN-1: renovated 1.2.0; production jobs left to play: `deploy-prod` at https://gitlab.example.com/group/project/-/jobs/9, `deploy-prod-eu`",
         );
         expect(yield* parkedWhy("r-unclaimed")).toBe("");
+        expect(yield* runLog("r-unclaimed")).toContain(
+          "no Helle project for app — carrying on without one",
+        );
       }),
     ),
   120_000,
@@ -10104,6 +10105,23 @@ const goAsked = (
   ).pipe(
     Effect.map((rows) =>
       Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === name))!,
+    ),
+  );
+
+/** The questions open once one other than those `answered` is. */
+const openAfter = (
+  asked: Effect.Effect<ReadonlyArray<{ decision: string; answer: string | null }>>,
+  ...answered: ReadonlyArray<string>
+) =>
+  until(
+    () => asked,
+    (rows) => Arr.some(rows, (row) => row.answer === null && !answered.includes(row.decision)),
+  ).pipe(
+    Effect.map((rows) =>
+      Arr.map(
+        Arr.filter(rows, (row) => row.answer === null && !answered.includes(row.decision)),
+        (row) => row.decision,
+      ),
     ),
   );
 
@@ -12840,7 +12858,7 @@ const MONOREPO_ASSESSED = { ...APP_ASSESSED, applications: ["spilnu", "happytige
           claimed.length = 0;
           const runId = "r-helle-without";
           yield* rig.queueOutputs([MONOREPO_ASSESSED, stagedTag("gitlab")]);
-          const why = "no Helle project for monorepo, its applications or its deploy jobs";
+          const why = "helle has 2 projects matching monorepo: monorepo, monorepo-legacy";
           yield* driven(
             helleRun(runId, () => ({ held: { unresolved: why } })),
             (run) =>
@@ -12863,9 +12881,46 @@ const MONOREPO_ASSESSED = { ...APP_ASSESSED, applications: ["spilnu", "happytige
             ),
           ).toEqual([head]);
           expect(claimed).toEqual([`release ${runId}`]);
-          expect(yield* runLog(runId)).toContain(
-            `released without a Helle claim on the human's say: ${why}`,
+          // The Run replays at its production question; the line is still written once.
+          expect(
+            occurrences(
+              yield* runLog(runId),
+              `released without a Helle claim on the human's say: ${why}`,
+            ),
+          ).toBe(1);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    "release: a repository with no Helle project releases without asking about the claim, and says so once",
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, merged } = yield* stageable("gitlab");
+          claimed.length = 0;
+          const runId = "r-helle-none";
+          yield* rig.queueOutputs([MONOREPO_ASSESSED, stagedTag("gitlab")]);
+          const why = "no Helle project for monorepo, its applications or its deploy jobs";
+          yield* driven(
+            helleRun(runId, () => ({ held: { none: why } })),
+            (run) =>
+              Effect.gen(function* () {
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Merge, tag and stage");
+                expect(yield* openAfter(run.asked, "go-1")).toEqual(["production"]);
+                yield* carried(run, forge, runId, merged);
+                yield* ended(run.status);
+                expect(Arr.map(yield* run.asked, (row) => row.decision)).not.toContain(
+                  "go-1.claim.unclaimed",
+                );
+              }),
           );
+          yield* bin.restore();
+          expect(Arr.map((yield* forge.model()).merges ?? [], (one) => one.sha)).toEqual([head]);
+          expect(claimed).toEqual([]);
+          expect(occurrences(yield* runLog(runId), `no Helle claim to take: ${why}`)).toBe(1);
         }),
       ),
     120_000,
@@ -14520,6 +14575,41 @@ for (const name of ["gitlab", "github"] as const) {
           expect(outcomeText(status)).toBe(`${mr} was not staged`);
           expect(yield* wasAsked(runId, "stage")).toBe(false);
           expect(claimed).toEqual([`release ${runId}`]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `stage on ${name}: a repository with no Helle project stages without asking about the claim, and says so once`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, head, staging, unstaging } = yield* stageOn();
+          claimed.length = 0;
+          const runId = `r-stage-no-helle-${name}`;
+          yield* rig.queueOutputs([MR_STAGED, staging(), unstaging()]);
+          const why = "no Helle project for app";
+          const status = yield* driven(
+            options(
+              runId,
+              releaseHost({}, Effect.void, Infinity, () => ({ held: { none: why } })),
+            ),
+            (run) =>
+              Effect.gen(function* () {
+                expect(yield* openAfter(run.asked)).toEqual(["staged-1"]);
+                yield* run.answer("staged-1", "Done");
+                return yield* ended(run.status);
+              }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(
+            `${mr} was staged at ${pipe(head, Str.slice(0, 8))} for testing; stage is rolled back`,
+          );
+          expect(claimed).toEqual([]);
+          const log = yield* runLog(runId);
+          expect(occurrences(log, `no Helle claim to take: ${why}`)).toBe(1);
+          expect(log).not.toMatch(/\b(release[sd]?|merged?)\b/i);
         }),
       ),
     120_000,

@@ -18,7 +18,7 @@ import { runEffect } from "./support/effect";
 
 /** One store on one file. Opening it again is what a restart does. */
 const opens = (file: string) =>
-  storeLayer.pipe(
+  storeLayer().pipe(
     Layer.provideMerge(
       SqliteClient.layer({ filename: file }).pipe(Layer.provideMerge(Reactivity.layer)),
     ),
@@ -551,7 +551,7 @@ test("a write to a Run's row moves that Run's revision in the host's Run model, 
         expect(model.revision("run-b").seq).toBe(b);
       }).pipe(
         Effect.provide(
-          storeLayer.pipe(
+          storeLayer().pipe(
             Layer.provideMerge(runModelLayer(dir, "installation")),
             Layer.provide(
               SqliteClient.layer({ filename: `${dir}/host.db` }).pipe(

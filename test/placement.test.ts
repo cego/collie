@@ -8,13 +8,25 @@
 // The host here is the real registry, engine and agents over a stand-in herdr, and the
 // repository is a real git one, so the worktree is one git actually made.
 
+import { recordsAt } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
-import { Clock, ConfigProvider, Effect, FileSystem, Layer, Result, Schema, flow } from "effect";
+import {
+  Clock,
+  ConfigProvider,
+  Duration,
+  Effect,
+  FileSystem,
+  Layer,
+  Result,
+  Schema,
+  flow,
+} from "effect";
+import { ConnectionDeadline } from "../src/connections";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { exec } from "./support/command";
@@ -186,7 +198,7 @@ const aTask = Effect.gen(function* () {
     cwd: rig.projectDir,
     created_at: "2026-09-23T00:00:00.000Z",
   };
-  yield* writeTask(env().stateDir, task);
+  yield* writeTask(task);
   return task;
 });
 
@@ -423,8 +435,8 @@ test(
         ]);
         expect(yield* rig.cmds()).not.toContain("workspace create");
         expect(yield* rig.cmds()).not.toContain("worktree create");
-        expect((yield* readTask(env().stateDir, "task-1"))?.workspace).toBe("wT");
-      }),
+        expect((yield* readTask("task-1"))?.workspace).toBe("wT");
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
@@ -455,7 +467,7 @@ test(
         expect(views.parent).toMatchObject({ task: "task-1", status: { status: "complete" } });
         expect(views.child).toMatchObject({ cwd: worktree, parent: views.parent?.runId });
         expect(views.child?.task).not.toBe("task-1");
-        const own = yield* readTask(env().stateDir, views.child?.task ?? "");
+        const own = yield* readTask(views.child?.task ?? "");
         expect(own?.cwd).toBe(worktree);
         expect(own?.label).toBe("Project | Add a picker");
         expect(own?.workspace).not.toBe("wT");
@@ -468,7 +480,7 @@ test(
         expect(agents.at(-1)?.argv).toEqual(
           expect.arrayContaining(["--pane", `${own?.workspace}-p1`]),
         );
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
@@ -514,7 +526,7 @@ test(
         });
         expect(views.child?.task).not.toBe(parentTask.id);
         expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "workspace create")).toHaveLength(1);
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
@@ -546,7 +558,7 @@ test(
         // Nothing exists to clean up: no Run, no Task, no worktree, no workspace, no agent.
         expect(outcome.rows).toEqual([]);
         expect(yield* fs.exists(`${rig.root}/.collie/worktrees`)).toBe(false);
-        expect(yield* fs.exists(`${env().stateDir}/tasks`)).toBe(false);
+        expect(yield* listTasks.pipe(Effect.provide(recordsAt(dir())))).toEqual([]);
         expect(yield* rig.cmds()).toEqual([]);
       }),
     ),
@@ -741,7 +753,7 @@ test(
         const worktree = worktreeOf("add-a-picker");
         expect(view.offers).toEqual(["keep-going"]);
         expect(view).toMatchObject({ cwd: worktree, workspace: null });
-        const task = yield* readTask(env().stateDir, view?.task ?? "");
+        const task = yield* readTask(view?.task ?? "");
         expect(task).toMatchObject({ label: "Project | Picker", cwd: worktree });
         const created = Arr.filter(yield* rig.calls(), (call) => call.cmd === "workspace create");
         expect(Arr.map(created, (call) => call.argv)).toEqual([
@@ -759,7 +771,7 @@ test(
           expect.arrayContaining(["--pane", `${task?.workspace}-p1`]),
         );
         expect(task?.root_pane ?? null).toBeNull();
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
@@ -788,8 +800,7 @@ test(
         expect(outcome.rows).toHaveLength(1);
         const cmds = yield* rig.cmds();
         expect(Arr.filter(cmds, (cmd) => cmd === "workspace create")).toHaveLength(1);
-        const fs = yield* FileSystem.FileSystem;
-        expect(yield* fs.readDirectory(`${env().stateDir}/tasks`)).toHaveLength(1);
+        expect(yield* listTasks.pipe(Effect.provide(recordsAt(dir())))).toHaveLength(1);
       }),
     ),
   120_000,
@@ -825,9 +836,9 @@ test(
 
         const view = yield* hosted(finished("run-cut"));
         expect(view?.status.status).toBe("complete");
-        expect((yield* readTask(env().stateDir, view?.task ?? ""))?.workspace).toBe("wX");
+        expect((yield* readTask(view?.task ?? ""))?.workspace).toBe("wX");
         expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "workspace create")).toEqual([]);
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
@@ -1105,7 +1116,7 @@ test(
         );
         expect(yield* frozen(runId)).toEqual([granted]);
         expect(yield* frozen(`${runId}.build`)).toEqual([granted]);
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
@@ -1508,7 +1519,7 @@ test(
         });
         expect(yield* fs.exists(`${roaming}-2`)).toBe(false);
         expect(yield* fs.readFileString(`${roaming}/left.txt`)).toBe("work");
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
@@ -2097,7 +2108,7 @@ test(
         ).toEqual([]);
         expect(Arr.filter(cmds, (cmd) => cmd === "agent start")).toHaveLength(2);
         expect(Arr.map(tabs(yield* rig.calls()), (tab) => tab.workspace)).toEqual(["wT", "wT"]);
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
@@ -2134,7 +2145,7 @@ test(
         );
 
         expect(view?.status.status).toBe("complete");
-        const task = yield* readTask(env().stateDir, view?.task ?? "");
+        const task = yield* readTask(view?.task ?? "");
         const calls = yield* rig.calls();
         // The agent had the workspace's only pane, and herdr drops a workspace with its
         // last pane: the stop opened a shell there before it closed the agent's.
@@ -2146,7 +2157,7 @@ test(
         expect(Arr.filter(cmds, (cmd) => cmd === "agent start")).toHaveLength(2);
         expect(cmds.lastIndexOf("agent start")).toBeGreaterThan(cmds.indexOf("tab create"));
         expect(task?.root_pane ?? null).toBeNull();
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
@@ -2185,7 +2196,7 @@ test(
           },
         );
         expect(Arr.join(stopped.left, "\n")).toContain("would not close (");
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
@@ -2273,7 +2284,7 @@ test(
         expect(own).not.toBe("wT");
         expect(own).not.toBe("");
         // A fresh Task's workspace is that one: herdr opened it, and no second one is made.
-        const fresh = yield* readTask(env().stateDir, views.fresh?.task ?? "");
+        const fresh = yield* readTask(views.fresh?.task ?? "");
         expect(views.fresh?.workspace).toBeNull();
         expect(fresh).toMatchObject({ label: "Project | Menu", cwd: views.fresh?.cwd });
         expect(yield* rig.cmds()).not.toContain("workspace create");
@@ -2281,7 +2292,7 @@ test(
         expect(Arr.map(tabs(yield* rig.calls()), (tab) => tab.workspace)).toEqual([own]);
         expect(fresh?.root_pane ?? null).toBeNull();
         expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "worktree create")).toHaveLength(2);
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
@@ -2315,7 +2326,7 @@ test(
         expect(yield* rig.cmds()).toContain("worktree open");
         expect(yield* rig.cmds()).not.toContain("worktree create");
         expect(yield* rig.cmds()).not.toContain("workspace create");
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
@@ -2471,7 +2482,7 @@ test(
 
         expect(seen.parent?.status.status === "failed" ? seen.parent.status.reason : "").toBe("");
         expect(seen.child).toMatchObject({ branch: "picker", task: "task-1" });
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   180_000,
 );
@@ -2524,9 +2535,9 @@ for (const chain of CHAINS) {
             { workspace: "wT", cwd: rig.projectDir },
             { workspace: "wT", cwd: worktree },
           ]);
-          expect((yield* readTask(env().stateDir, "task-1"))?.workspace).toBe("wT");
+          expect((yield* readTask("task-1"))?.workspace).toBe("wT");
           expect(yield* rig.cmds()).not.toContain("workspace create");
-        }).pipe(Effect.scoped),
+        }).pipe(Effect.provide(recordsAt(dir())), Effect.scoped),
       ),
     180_000,
   );
@@ -2553,7 +2564,7 @@ for (const chain of CHAINS) {
           expect(status?.status === "failed" ? status.reason : "").toContain(container);
           expect(yield* fs.exists(`${rig.root}/.collie/worktrees`)).toBe(false);
           expect(tabs(yield* rig.calls())).toEqual([{ workspace: "wT", cwd: container }]);
-        }),
+        }).pipe(Effect.provide(recordsAt(dir()))),
       ),
     180_000,
   );
@@ -2669,7 +2680,7 @@ test(
 
         expect(review).toMatchObject({ task: "task-1", parent: null });
         expect(yield* rig.cmds()).not.toContain("workspace create");
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
@@ -2701,7 +2712,7 @@ test(
 
         expect(release).toMatchObject({ task: "task-1", parent: null });
         expect(yield* rig.cmds()).not.toContain("workspace create");
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
@@ -2749,7 +2760,7 @@ test(
 
         expect(view).toMatchObject({ branch: `${LOGIN}/add-a-picker`, task: "task-1" });
         expect(yield* rig.cmds()).not.toContain("workspace create");
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
@@ -2762,7 +2773,7 @@ test(
         const { runId, view } = yield* builtFromItsPlan("merged");
 
         expect(view?.branch).toBe(`${LOGIN}/${runId}`);
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
@@ -2803,11 +2814,11 @@ test(
         expect(Arr.map(created, (call) => call.argv)).toEqual([
           expect.arrayContaining(["--cwd", rig.projectDir, "--label", "Project | Picker"]),
         ]);
-        const reopened = (yield* readTask(env().stateDir, "task-1"))?.workspace;
+        const reopened = (yield* readTask("task-1"))?.workspace;
         expect(reopened).not.toBe("wT");
         const agents = Arr.filter(yield* rig.calls(), (call) => call.cmd === "agent start");
         expect(agents.at(-1)?.argv).toEqual(expect.arrayContaining(["--pane", `${reopened}-p1`]));
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
@@ -2822,7 +2833,7 @@ test(
           ["task-old", "2026-09-01T00:00:00.000Z"],
           ["task-new", "2026-09-20T00:00:00.000Z"],
         ] as const) {
-          yield* writeTask(env().stateDir, {
+          yield* writeTask({
             id,
             workspace: `w-${id}`,
             label: `Project | ${id}`,
@@ -2854,7 +2865,7 @@ test(
         );
 
         expect(fresh?.task).toBe("task-new");
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
@@ -2888,7 +2899,7 @@ test(
 
         expect(review?.task).not.toBe("task-1");
         expect(review?.task).not.toBeNull();
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
@@ -3004,7 +3015,7 @@ test(
         );
         expect(outcome.reason).toContain("the next host start hands it over");
         expect(outcome.pending).toEqual(["r1"]);
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
@@ -3296,6 +3307,44 @@ test.each([
   120_000,
 );
 
+test("a Connection deadline provided around the host is the one its start reads under", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const helle = yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data: () => {} } }),
+        ),
+        (listener) => Effect.sync(() => listener.stop(true)),
+      );
+      helleUrl = `http://127.0.0.1:${helle.port}`;
+      yield* fs.makeDirectory(`${rig.root}/.config/helle`, { recursive: true });
+      yield* fs.writeFileString(`${rig.root}/.config/helle/env`, "HELLE_API_TOKEN=fixture-token\n");
+
+      const reason = yield* hosted(
+        Effect.gen(function* () {
+          const registry = yield* Registry;
+          const [release] = yield* loaded(registry, [shipped("release")]);
+          return refusedWith(
+            yield* registry
+              .start({
+                generation: release!,
+                request: "r1",
+                project: rig.projectDir,
+                input: { mr: MR_TARGET },
+                text: {},
+              })
+              .pipe(Effect.result),
+          );
+        }),
+      ).pipe(Effect.provideService(ConnectionDeadline, Duration.millis(1)));
+
+      expect(reason).toContain("release needs helle");
+      expect(reason).toContain("within 1ms");
+      expect(reason).not.toContain("6s");
+    }).pipe(Effect.scoped),
+  ));
+
 /** This Machine set to core, with no herdr session open and `settings` beside the backend. */
 const aCoreMachine = (settings = "") =>
   Effect.gen(function* () {
@@ -3341,7 +3390,7 @@ test(
         const worktree = `${rig.root}/trees/project/${LOGIN}/add-a-picker`;
         expect(view).toMatchObject({ cwd: worktree, workspace: null });
         expect(view?.status.status).toBe("complete");
-        const task = yield* readTask(env().stateDir, view?.task ?? "");
+        const task = yield* readTask(view?.task ?? "");
         expect(task).toMatchObject({ label: "Project | Picker", cwd: worktree, workspace: null });
         const calls = yield* rig.calls();
         const launched = Arr.filter(
@@ -3355,7 +3404,7 @@ test(
           }),
         ]);
         expect(layoutCalls(calls)).toEqual([]);
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
@@ -3376,7 +3425,7 @@ test(
                 taskWorkspacesSweeper({
                   stateDir: dir(),
                   sessions: [],
-                  tasks: yield* listTasks(dir()),
+                  tasks: yield* listTasks,
                   views: [taskView({ id: first, state: "done", landed: true })],
                   runs: [],
                   seen,
@@ -3413,12 +3462,12 @@ test(
         seen.set(first, seen.get(first)! - 60 * 60_000);
         const closed = yield* cleanup(first);
         expect(Arr.map(closed.remove, (item) => item.target)).toEqual([first]);
-        expect((yield* readTask(dir(), first))?.closed_at).toBeString();
+        expect((yield* readTask(first))?.closed_at).toBeString();
         const after = yield* taskOf("targeted", "r3", review);
         expect(after).not.toBe("");
         expect(after).not.toBe(first);
         expect(layoutCalls(yield* rig.calls())).toEqual([]);
-      }),
+      }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );

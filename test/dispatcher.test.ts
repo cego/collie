@@ -26,8 +26,8 @@ import {
   fitDelivery,
   DELIVERY_TOKEN,
 } from "../src/dispatcher";
-import { causalKey, ledgerPath, readLedger, withLedgerLock, type Delivery } from "../src/steering";
-import { ensureLockDir } from "../src/lock";
+import { causalKey, readLedger, type Delivery } from "../src/steering";
+import type { Records } from "../src/records";
 import { reason } from "../src/naming";
 import type { AgentEntry } from "../src/registry";
 import { fastForward, runEffect } from "./support/effect";
@@ -241,9 +241,8 @@ function fake(
 
 /** The ledger as a list of `<id> <state>`, which is what every assertion here is about. */
 const states = Effect.fn("test.states")(function* () {
-  const file = yield* ledgerPath(stateDir, "term-1");
   return Arr.map(
-    Arr.filter(yield* readLedger(file), (line): line is Delivery => "state" in line),
+    Arr.filter(yield* readLedger("term-1"), (line): line is Delivery => "state" in line),
     (line) => `${line.id} ${line.state}`,
   );
 });
@@ -279,8 +278,7 @@ test("a continuation recovers a lost name using its recorded incarnation", () =>
 test("the record is written before herdr is called, and settled after", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const file = yield* ledgerPath(stateDir, "term-1");
+      const records = yield* Effect.context<Records>();
       // Read from inside the fake send: the only moment that can tell "reserved before
       // the call" from "both written afterwards". Synchronously, because the observation
       // has to happen during the call and not on a later turn of the loop.
@@ -288,7 +286,10 @@ test("the record is written before herdr is called, and settled after", () =>
       const h = fake({
         onPrompt: Effect.gen(function* () {
           atSendTime = Arr.map(
-            Arr.filter(yield* readLedger(file), (line): line is Delivery => "state" in line),
+            Arr.filter(
+              yield* readLedger("term-1").pipe(Effect.provideContext(records)),
+              (line): line is Delivery => "state" in line,
+            ),
             (line) => line.state,
           );
         }),
@@ -306,8 +307,6 @@ test("the record is written before herdr is called, and settled after", () =>
         "req-1-1 submitted",
         "req-1-1 acknowledged",
       ]);
-      // The lock is not left behind.
-      expect(yield* fs.exists(`${file}.lock`)).toBe(false);
     }),
   ));
 
@@ -321,9 +320,8 @@ test("a submission herdr saw no turn come of is submitted, with that as its note
       // Written, so `submitted` — never rounded up to a turn nobody saw start. The note is
       // what a later reader has to tell a lost prompt from an ignored one.
       expect(outcome).toEqual({ ok: true, id: "req-1-1", submission: "unobserved" });
-      const file = yield* ledgerPath(stateDir, "term-1");
       const settled = Arr.filter(
-        yield* readLedger(file),
+        yield* readLedger("term-1"),
         (line): line is Delivery => "state" in line && line.state === "submitted",
       );
       expect(Arr.map(settled, (line) => line.note)).toEqual(["unobserved"]);
@@ -358,7 +356,7 @@ test("a steer to a busy agent is taken once a turn starts after it settles, and 
         [causalKey(steer.run, steer.cause, steer.intentVersion)],
       );
       expect(how).toBe("a turn started");
-      const last = (yield* readLedger(yield* ledgerPath(stateDir, "term-1"))).at(-1);
+      const last = (yield* readLedger("term-1")).at(-1);
       expect(last).toMatchObject({ state: "acknowledged", note: "taken: a turn started" });
     }),
   ));
@@ -400,8 +398,7 @@ const paneBusy = new HerdrError({
 const quick = { firstMs: 1, maxMs: 4, forMs: 60_000 };
 
 const ledgerLines = Effect.fn("test.ledgerLines")(function* () {
-  const file = yield* ledgerPath(stateDir, "term-1");
-  return Arr.filter(yield* readLedger(file), (line): line is Delivery => "state" in line);
+  return Arr.filter(yield* readLedger("term-1"), (line): line is Delivery => "state" in line);
 });
 
 const prompted = (calls: ReadonlyArray<string>) =>
@@ -602,10 +599,6 @@ test("a second transaction for one agent in one process fails at once, saying th
 const holdingTheLedger = {
   "another transaction in this process": (until: Effect.Effect<void>) =>
     transaction(fake().deps, entry, () => until),
-  "a lock another process holds": (until: Effect.Effect<void>) =>
-    Effect.flatMap(ledgerPath(stateDir, "term-1"), (file) =>
-      Effect.andThen(ensureLockDir(file), withLedgerLock(file, until)),
-    ),
 };
 
 for (const [holder, hold] of Rec.toEntries(holdingTheLedger))

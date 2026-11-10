@@ -16,7 +16,8 @@ import { controlDir } from "../src/compaction";
 import { recordClaudeEvent } from "../src/compactors";
 import { Launched } from "../src/launches";
 import { TaskView } from "../src/board-model";
-import { SENT_STATES, deliveriesOf } from "../src/steering";
+import { SENT_STATES } from "../src/steering";
+import { deliveredTo, recordsAt } from "./support/records";
 import { stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
 
@@ -99,12 +100,9 @@ test(
           );
           // It asks once it has its prompt, as an agent does.
           yield* until(
-            () => deliveriesOf(world.state, runId),
+            () => deliveredTo(world.state, runId),
             (lines) =>
-              Arr.some(
-                lines,
-                (one) => one.delivery.cause.kind === "step" && SENT_STATES.has(one.delivery.state),
-              ),
+              Arr.some(lines, (one) => one.cause.kind === "step" && SENT_STATES.has(one.state)),
           );
           yield* recordClaudeEvent(yield* controlDir(world.state, launched.agent), asked).pipe(
             Effect.orDie,
@@ -163,7 +161,7 @@ test(
           expect(Arr.filter(done?.waiting ?? [], (one) => one.revises === name)).toEqual([]);
           const log = yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG ?? "");
           expect(Str.includes("is answered")(log)).toBe(false);
-        }).pipe(Effect.ensuring(stopHost(world.state))),
+        }).pipe(Effect.provide(recordsAt(world.state)), Effect.ensuring(stopHost(world.state))),
       ["reuses.workflow.ts"],
     ),
   120_000,

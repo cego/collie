@@ -28,6 +28,7 @@ import { epochMs } from "../src/time";
 import { runDir } from "../src/engine";
 import { frontDoor, ownerOf, socketOf } from "../src/host";
 import { until } from "./support/host";
+import { recordsAt } from "./support/records";
 import { collie, proves, type World } from "./support/world";
 
 const encode = Schemaflow(
@@ -102,13 +103,13 @@ const parented = (world: World, mode: string, task?: string) =>
 
 /** A Task a Run can be started into, as one a workspace was opened for would be recorded. */
 const recordedTask = (world: World, id: string) =>
-  writeTask(world.state, {
+  writeTask({
     id,
     workspace: `w-${id}`,
     label: `collie | ${id}`,
     cwd: world.project,
     created_at: "2026-10-23T07:00:00.000Z",
-  }).pipe(Effect.orDie);
+  }).pipe(Effect.provide(recordsAt(world.state)), Effect.orDie);
 
 const open = (world: World, name: string) =>
   Effect.gen(function* () {

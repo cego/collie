@@ -31,7 +31,7 @@ const stateOf = (count: number) =>
     const runs = yield* Effect.forEach(Arr.range(1, count), (n) =>
       Effect.gen(function* () {
         const task = `task-${n}`;
-        yield* writeTask(dir, {
+        yield* writeTask({
           id: task,
           workspace: `w${n}`,
           label: `project | Work ${n}`,
