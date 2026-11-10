@@ -632,12 +632,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly _tag: "Refused"; readonly reason: string };
   export const MergeOutcomeSchema: Schema.Codec<MergeOutcome, unknown, never, never>;
 
-  /** What claim holds, with what a free-only claim left to whom, or why the claims a Run needs could not be settled. */
+  /** What claim holds, with what a free-only claim left to whom, why there is nothing to claim, or why the claims a Run needs could not be settled. */
   export type Claimed =
     | {
         readonly slugs: ReadonlyArray<string>;
         readonly left?: ReadonlyArray<{ readonly slug: string; readonly holder: string }>;
       }
+    | { readonly none: string }
     | { readonly unresolved: string };
   export const ClaimedSchema: Schema.Codec<Claimed, unknown, never, never>;
   /** Who else holds each project a claim needs (null: free), what each application needs, and the applications each deploy job names. */
@@ -4671,6 +4672,7 @@ export const hostLayer = (options: {
                 }),
               ended: () => waitOn(asked.runId, null),
             });
+            if (held._tag === "None") return { none: held.why };
             if (held._tag === "Unresolved") return { unresolved: held.why };
             return held.left === undefined
               ? { slugs: held.slugs }

@@ -822,9 +822,10 @@ retrying; the issue might already exist. Workflows call these methods directly a
 never construct forge CLI commands.
 
 `host.claim({ runId, cwd, adopting, say, deploys })` blocks until this Run holds every shared
-claim it needs, each recorded on the Run, and answers `{ slugs }`; `{ unresolved }` says why
-they could not be settled, with nothing claimed, and what to do then is your workflow's
-call. Without `deploys` it needs the repository's own project. With `deploys`
+claim it needs, each recorded on the Run, and answers `{ slugs }`. `{ none }` says why the
+repository has no Helle project, so there is nothing to claim; `{ unresolved }` says why the
+claims could not be settled for any other reason. Either way nothing is claimed, and what
+to do then is your workflow's call. Without `deploys` it needs the repository's own project. With `deploys`
 (`{ applications, jobs }`), it also needs each project of the repository's group that an
 application or a deploy job's name (`stage:spilnu`) names. A repository's
 `.collie/helle.json`, `{"projects": [...]}`, overrides both, and `[]` declares none.

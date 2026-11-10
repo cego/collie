@@ -677,13 +677,17 @@ export const definitionOf = (written: WrittenDefinition): WorkflowDefinition => 
  * operator sets a control between attempts, and an Activity would hand back the answer
  * from the attempt that first ran.
  */
-/** What `claim` holds, or why the claims a Run needs could not be settled. */
+/**
+ * What `claim` holds; `none`, why the repository has no Helle project to claim; or
+ * `unresolved`, why the claims a Run needs could not be settled.
+ */
 export type Claimed =
   | {
       readonly slugs: ReadonlyArray<string>;
       /** What a free-only claim left to whoever holds it. */
       readonly left?: ReadonlyArray<{ readonly slug: string; readonly holder: string }>;
     }
+  | { readonly none: string }
   | { readonly unresolved: string };
 
 const Holding = Schema.Union([
@@ -693,6 +697,7 @@ const Holding = Schema.Union([
       Schema.Array(Schema.Struct({ slug: Schema.String, holder: Schema.String })),
     ),
   }),
+  Schema.Struct({ none: Schema.String }),
   Schema.Struct({ unresolved: Schema.String }),
 ]);
 
@@ -916,9 +921,10 @@ export interface HostApi {
   }) => Effect.Effect<Posted>;
   /**
    * Blocks until this Run holds every shared claim it needs, each recorded on the Run, and
-   * answers which; `unresolved` says why the claims it needs could not be settled, and
-   * nothing is claimed. Without `deploys` that is the repository's own project; with them,
-   * also every project they name. A repository's `.collie/helle.json` overrides both.
+   * answers which; `none` says why the repository has no Helle project, and `unresolved`
+   * why the claims it needs could not be settled, and either way nothing is claimed.
+   * Without `deploys` that is the repository's own project; with them, also every project
+   * they name. A repository's `.collie/helle.json` overrides both.
    * Waiting here costs wall clock and no model tokens, which is the point of claiming
    * before an agent starts rather than after. `adopting` is asked only where a claim was
    * already the operator's own, so the question is the workflow's — durable, and

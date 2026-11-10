@@ -8979,7 +8979,7 @@ const helleAnswers = (claim: "held" | "none", production: "deployed" | "read"): 
         ...host,
         claim: (options) =>
           claim === "none"
-            ? Effect.succeed({ unresolved: "no Helle project for app" })
+            ? Effect.succeed({ none: "no Helle project for app" })
             : Effect.as(
                 options
                   .say("holding the claim")
@@ -9817,6 +9817,9 @@ scenario(
           "REN-1: renovated 1.2.0; production jobs left to play: `deploy-prod` at https://gitlab.example.com/group/project/-/jobs/9, `deploy-prod-eu`",
         );
         expect(yield* parkedWhy("r-unclaimed")).toBe("");
+        expect(yield* runLog("r-unclaimed")).toContain(
+          "no Helle project for app — carrying on without one",
+        );
       }),
     ),
   120_000,
@@ -10253,6 +10256,23 @@ const goAsked = (
   ).pipe(
     Effect.map((rows) =>
       Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === name))!,
+    ),
+  );
+
+/** The questions open once one other than those `answered` is. */
+const openAfter = (
+  asked: Effect.Effect<ReadonlyArray<{ decision: string; answer: string | null }>>,
+  ...answered: ReadonlyArray<string>
+) =>
+  until(
+    () => asked,
+    (rows) => Arr.some(rows, (row) => row.answer === null && !answered.includes(row.decision)),
+  ).pipe(
+    Effect.map((rows) =>
+      Arr.map(
+        Arr.filter(rows, (row) => row.answer === null && !answered.includes(row.decision)),
+        (row) => row.decision,
+      ),
     ),
   );
 
@@ -13041,7 +13061,7 @@ const MONOREPO_ASSESSED = { ...APP_ASSESSED, applications: ["spilnu", "happytige
           claimed.length = 0;
           const runId = "r-helle-without";
           yield* rig.queueOutputs([MONOREPO_ASSESSED, stagedTag("gitlab")]);
-          const why = "no Helle project for monorepo, its applications or its deploy jobs";
+          const why = "helle has 2 projects matching monorepo: monorepo, monorepo-legacy";
           yield* driven(
             helleRun(runId, () => ({ held: { unresolved: why } })),
             (run) =>
@@ -13064,9 +13084,46 @@ const MONOREPO_ASSESSED = { ...APP_ASSESSED, applications: ["spilnu", "happytige
             ),
           ).toEqual([head]);
           expect(claimed).toEqual([`release ${runId}`]);
-          expect(yield* runLog(runId)).toContain(
-            `released without a Helle claim on the human's say: ${why}`,
+          // The Run replays at its production question; the line is still written once.
+          expect(
+            occurrences(
+              yield* runLog(runId),
+              `released without a Helle claim on the human's say: ${why}`,
+            ),
+          ).toBe(1);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    "release: a repository with no Helle project releases without asking about the claim, and says so once",
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, merged } = yield* stageable("gitlab");
+          claimed.length = 0;
+          const runId = "r-helle-none";
+          yield* rig.queueOutputs([MONOREPO_ASSESSED, stagedTag("gitlab")]);
+          const why = "no Helle project for monorepo, its applications or its deploy jobs";
+          yield* driven(
+            helleRun(runId, () => ({ held: { none: why } })),
+            (run) =>
+              Effect.gen(function* () {
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Merge, tag and stage");
+                expect(yield* openAfter(run.asked, "go-1")).toEqual(["production"]);
+                yield* carried(run, forge, runId, merged);
+                yield* ended(run.status);
+                expect(Arr.map(yield* run.asked, (row) => row.decision)).not.toContain(
+                  "go-1.claim.unclaimed",
+                );
+              }),
           );
+          yield* bin.restore();
+          expect(Arr.map((yield* forge.model()).merges ?? [], (one) => one.sha)).toEqual([head]);
+          expect(claimed).toEqual([]);
+          expect(occurrences(yield* runLog(runId), `no Helle claim to take: ${why}`)).toBe(1);
         }),
       ),
     120_000,
@@ -14745,6 +14802,41 @@ for (const name of ["gitlab", "github"] as const) {
           expect(outcomeText(status)).toBe(`${mr} was not staged`);
           expect(yield* wasAsked(runId, "stage")).toBe(false);
           expect(claimed).toEqual([`release ${runId}`]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `stage on ${name}: a repository with no Helle project stages without asking about the claim, and says so once`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, head, staging, unstaging } = yield* stageOn();
+          claimed.length = 0;
+          const runId = `r-stage-no-helle-${name}`;
+          yield* rig.queueOutputs([MR_STAGED, staging(), unstaging()]);
+          const why = "no Helle project for app";
+          const status = yield* driven(
+            options(
+              runId,
+              releaseHost({}, Effect.void, Infinity, () => ({ held: { none: why } })),
+            ),
+            (run) =>
+              Effect.gen(function* () {
+                expect(yield* openAfter(run.asked)).toEqual(["staged-1"]);
+                yield* run.answer("staged-1", "Done");
+                return yield* ended(run.status);
+              }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(
+            `${mr} was staged at ${pipe(head, Str.slice(0, 8))} for testing; stage is rolled back`,
+          );
+          expect(claimed).toEqual([]);
+          const log = yield* runLog(runId);
+          expect(occurrences(log, `no Helle claim to take: ${why}`)).toBe(1);
+          expect(log).not.toMatch(/\b(release[sd]?|merged?)\b/i);
         }),
       ),
     120_000,
