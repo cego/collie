@@ -89,8 +89,11 @@ const UpdateManifest = Schema.fromJsonString(
     platform: Schema.String,
     arch: Schema.String,
     version: Schema.String,
-    hash: Schema.String,
-    artifact: Schema.Struct({ file: Schema.String }),
+    // Both name files on disk, so neither may name a path.
+    hash: Schema.String.check(Schema.isPattern(/^[a-z0-9]{1,13}$/)),
+    artifact: Schema.Struct({
+      file: Schema.String.check(Schema.isPattern(/^rune-stable-[\w.-]+\.tar\.zst$/)),
+    }),
   }),
 );
 

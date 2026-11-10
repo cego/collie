@@ -16,6 +16,7 @@ const KEY = await Bun.file(`${FIXTURES}release-test.pub`).text();
 const TAR = await Bun.file(`${FIXTURES}bundle.tar`).bytes();
 
 let signature = await Bun.file(`${FIXTURES}bundle.tar.sig`).text();
+let hash = "new0131";
 const server = Bun.serve({
   port: 0,
   fetch: (request) => {
@@ -27,7 +28,7 @@ const server = Bun.serve({
         platform: OS,
         arch: process.arch,
         version: "0.131.0",
-        hash: "new0131",
+        hash,
         artifact: { file: ARCHIVE },
       });
     if (path === `/latest/download/${ARCHIVE}`) return new Response(Bun.zstdCompressSync(TAR));
@@ -112,5 +113,18 @@ test("a release whose signature does not match is refused and nothing is staged"
       const { news } = yield* checked;
       expect(news).toMatchObject({ _tag: "Refused", version: "0.131.0" });
       expect(yield* fs.exists(`${install}/.update`)).toBe(false);
+    }),
+  ));
+
+test("a release whose hash names a path is refused before anything is written", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.remove(`${install}/data`, { recursive: true, force: true });
+      hash = "../../victim";
+      const { news } = yield* checked;
+      expect(news).not.toMatchObject({ _tag: "Ready" });
+      expect(yield* fs.exists(`${install}/victim.tar`)).toBe(false);
+      expect(yield* fs.exists(`${install}/data/self-extraction`)).toBe(false);
     }),
   ));
