@@ -303,7 +303,9 @@ AccessKit tree. A card is a button named for its task. A Flow node is a button n
 named "Flow". The chat's messages are a log named "Flock chat". The Flow map is one Tab stop,
 on the current Step; arrows, Home and End move as `flowKey` does, Enter chooses. The changes
 `flowAnnouncements` names are said through a polite live region. `board/src/flow.rs` ports
-`flowRows`, `nodeName`, `flowAnnouncements` and `flowKey` for this. Rune has no
+`flowRows`, `nodeName`, `flowAnnouncements` and `flowKey` for this. In the app, pressing a card reads its Run's
+record (`runDetail`) and the Flow map follows that record's Flow, above the pane and on the board
+after Back, until another card is pressed. Rune has no
 `aria-current`, so the current Step is only drawn differently.
 
 ### Packaging, signing and updates

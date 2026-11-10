@@ -10,7 +10,7 @@ pub mod notify;
 use collie_desktop_chat::view::{Chat, DiffTab, chat, diff_tab};
 use collie_desktop_protocol::client::Client;
 use collie_desktop_protocol::generated::{
-    Encoding, FlockItem, KeptRecord, LostState, Message, RunDetailPayload, RunFile, RunFilePayload,
+    DetailFlow, Encoding, FlockItem, KeptRecord, LostState, Message, RunDetailPayload, RunFile, RunFilePayload,
     Task, TerminalPayload,
 };
 use collie_desktop_terminal::view::{Tab, terminal};
@@ -69,10 +69,17 @@ pub struct Board {
     /// The open pane's Run, by installation and id.
     pub open_run: Option<(String, String)>,
     /// Reads a Run's diff from the core for the `opened`th pane, handing it to `diff_read`.
-    pub load_diff: Option<Box<dyn Fn(String, String, u64)>>,
+    pub load_diff: Option<LoadDiff>,
     pub diff: Option<DiffTab>,
     pub flow: Option<flow::FlowMap>,
+    /// Reads a Run's record for the `opened`th pane, handing its Flow to `flow_read`; gives
+    /// back what stops reading it.
+    pub read_record: Option<ReadRecord>,
+    stop_record: Option<Box<dyn FnOnce()>>,
 }
+
+pub type LoadDiff = Box<dyn Fn(String, String, u64)>;
+pub type ReadRecord = Box<dyn Fn(String, String, u64) -> Box<dyn FnOnce()>>;
 
 /// The cols and rows a terminal opens at, until its layout says otherwise.
 const OPEN_AT: (i64, i64) = (100, 30);
@@ -92,6 +99,14 @@ impl Board {
         };
         self.opened += 1;
         self.open_run = Some((payload.installation.clone(), payload.run_id.clone()));
+        if let Some(stop) = self.stop_record.take() {
+            stop();
+        }
+        self.flow = None;
+        if let Some(read) = &self.read_record {
+            let run = (payload.installation.clone(), payload.run_id.clone());
+            self.stop_record = Some(read(run.0, run.1, self.opened));
+        }
         self.terminal = Some(go_to(payload, machine, self.opened));
     }
 
@@ -110,6 +125,17 @@ impl Board {
     }
 
     /// Shows a diff read for the `opened`th pane, while that pane is still the open one.
+    /// The Flow of the `opened`th pane's Run, kept on the board after Back until another opens.
+    pub fn flow_read(&mut self, opened: u64, read: DetailFlow) {
+        if opened != self.opened {
+            return;
+        }
+        match &mut self.flow {
+            Some(map) => map.set(read),
+            None => self.flow = Some(flow::FlowMap::new(read)),
+        }
+    }
+
     pub fn diff_read(&mut self, opened: u64, patch: &str) {
         if opened == self.opened && self.terminal.is_some() {
             self.diff = Some(DiffTab::new(rune_kit::diff::parse(patch)));
@@ -354,6 +380,12 @@ pub fn view(board: &Board, cx: &mut Cx<Board>) -> El {
             .gap(8.0)
             .fill(k.c.bg_base)
             .child(row().gap(8.0).child(back).child(diff))
+            .children(
+                board
+                    .flow
+                    .as_ref()
+                    .map(|map| flow::flow_map(map, flow_of, &k)),
+            )
             .child(terminal(tab, tab_of));
         return rune_kit::root(body, []);
     }

@@ -6,7 +6,7 @@ use collie_desktop_board::{Board, run_diff, view};
 use collie_desktop_protocol::client::Client;
 use collie_desktop_protocol::core::Core;
 use collie_desktop_protocol::generated::{
-    AguiEvent, FlockItem, StagePathsPayload, StagedOrRefusedItem,
+    AguiEvent, FlockItem, KeptRecord, RunDetailPayload, StagePathsPayload, StagedOrRefusedItem,
 };
 use collie_desktop_terminal::pane::Pane;
 use collie_desktop_terminal::view::Tab;
@@ -86,6 +86,32 @@ fn diffs(handle: &AppHandle<Board>, client: &Client) {
                     board.diff_read(opened, &patch)
                 });
             });
+        }));
+    });
+}
+
+/// Reads the open pane's Run record off the view's thread, its Flow into the Flow map.
+fn records(handle: &AppHandle<Board>, client: &Client) {
+    let (reader, shows) = (client.clone(), handle.clone());
+    handle.update(move |board, _| {
+        board.read_record = Some(Box::new(move |installation, run_id, opened| {
+            let records = reader.stream::<_, KeptRecord, Value>(
+                "runDetail",
+                RunDetailPayload {
+                    installation,
+                    run_id,
+                },
+            );
+            let release = records.release();
+            let shows = shows.clone();
+            std::thread::spawn(move || {
+                for kept in records.flatten() {
+                    if let Some(flow) = kept.detail.and_then(|d| d.flow).flatten() {
+                        shows.update(move |board, _| board.flow_read(opened, flow));
+                    }
+                }
+            });
+            Box::new(move || release.interrupt())
         }));
     });
 }
@@ -195,6 +221,7 @@ fn main() {
     go_to_panes(&handle, &client);
     chat(&handle, &client);
     diffs(&handle, &client);
+    records(&handle, &client);
     files_in(&handle, &client);
     notifications(&handle, &client);
     let (live, first_live) = std::sync::mpsc::channel();
