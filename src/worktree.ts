@@ -542,31 +542,29 @@ function targetBranch(target: string): string | null {
   return head;
 }
 
+/** Every merge or pull request URL in prose, wherever the next one starts. */
+const MR_URLS =
+  /(?:https?:\/\/)?(?:github\.com\/[\w.-]+\/[\w.-]+\/pull|[\w.:-]+(?:\/[\w.-]+)+?\/-\/merge_requests)\/\d+/gi;
+
 /**
- * The one merge request work names: its whole text as one reference, read in this
- * checkout's project, else the only merge or pull request URL in it. A bare `!42` inside
- * prose is not read: `#1` and issue numbers make it a guess.
+ * The one merge request work names: the only merge or pull request URL in it, else its
+ * whole text as one reference, read in this checkout's project. A bare `!42` inside prose
+ * is not read: `#1` and issue numbers make it a guess.
  */
 const mrNamedBy = Effect.fn("worktree.mrNamedBy")(function* (
   text: string,
   cwd: string,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
-  // A URL followed by more words is prose, though `readMrRef` would take its start.
-  const whole = /\s/.test(Str.trim(text)) ? null : readMrRef(text, { project: null });
-  if (whole) {
-    return whole.project === null ? { ...whole, project: yield* projectHere(cwd, run) } : whole;
-  }
   const urls = pipe_(
     text,
-    Str.match(/https?:\/\/\S+/g),
+    Str.match(MR_URLS),
     Option.getOrElse(() => []),
   );
-  const named = Arr.flatMap(urls, (url) => {
-    const ref = readMrRef(pipe_(url, Str.replace(/[.,;:!?)\]>'"]+$/, "")));
-    return ref ? [ref] : [];
-  });
-  return named.length === 1 ? named[0]! : null;
+  if (urls.length > 0) return urls.length === 1 ? readMrRef(urls[0]!) : null;
+  const whole = /\s/.test(Str.trim(text)) ? null : readMrRef(text, { project: null });
+  if (whole?.project === null) return { ...whole, project: yield* projectHere(cwd, run) };
+  return whole;
 });
 
 /**
