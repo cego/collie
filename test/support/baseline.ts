@@ -89,6 +89,7 @@ import { slackApi } from "../../src/slack";
 import { botLeftOver, fakeSlack, signedInToSlack } from "./slack";
 import { INTENT_FILE, IntentSchema, amend, seedIntent } from "../../src/intent";
 import selfImprove from "../../workflows/self-improve.workflow";
+import { invocationFor } from "../../workflows/staging";
 import {
   type Finding,
   type Improvement,
@@ -10509,7 +10510,11 @@ const member = (path: string, iid: string, source: string, target = "main") => {
     ref: `mr:${project}!${iid}`,
     url: `https://${project}/-/merge_requests/${iid}`,
     invocation: (workflow: "release" | "stage") =>
-      `${workflow}-${pipe(`${project}!${iid}`, Str.replace(/[^a-z0-9]+/g, "-"))}`,
+      invocationFor(workflow, {
+        id: `${project}!${iid}`,
+        target: `mr:${project}!${iid}`,
+        url: `https://${project}/-/merge_requests/${iid}`,
+      }),
   };
 };
 type Member = ReturnType<typeof member>;
