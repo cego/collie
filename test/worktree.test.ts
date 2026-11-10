@@ -1666,6 +1666,34 @@ test("work that opens with one merge request's link and names another is about n
     }),
   ));
 
+test("merge request URLs with no space between them are still two URLs", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser", "fix-the-lexer"]);
+      yield* gitlabMrs(
+        {},
+        {
+          project: "gitlab.example.com/acme/app",
+          iid: "43",
+          state: "open",
+          sourceBranch: "fix-the-lexer",
+        },
+      );
+      const MR_43 = "https://gitlab.example.com/acme/app/-/merge_requests/43";
+
+      for (const work of [
+        `Compare <${MR_42}/diffs>,<${MR_43}>`,
+        `${MR_42},${MR_43}`,
+        `${MR_42}?tab=pipelines,${MR_43}`,
+        `See [${MR_42}](${MR_42})`,
+      ]) {
+        expect(yield* plan({ plan: work, plan_kind: "text" })).toMatchObject(
+          fresh("from the work"),
+        );
+      }
+    }),
+  ));
+
 test("work giving one merge request's URL twice holds two URLs, so it gets a fresh branch", () =>
   runOnPath(
     Effect.gen(function* () {
