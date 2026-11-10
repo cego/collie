@@ -37,6 +37,7 @@ export interface Ran {
 
 export interface ExecOptions {
   readonly cwd?: string;
+  readonly stdin?: Uint8Array;
   /** Replaces the test's environment; without it the command inherits that. */
   readonly env?: Readonly<Record<string, string | undefined>>;
 }
@@ -49,7 +50,7 @@ export const exec = Effect.fn("test.exec")(
           cwd: options.cwd,
           env: options.env === undefined ? process.env : { ...options.env },
           detached: process.platform !== "win32",
-          stdin: "ignore",
+          stdin: options.stdin ?? "ignore",
           stdout: "pipe",
           stderr: "pipe",
         }),

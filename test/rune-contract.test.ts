@@ -12,6 +12,7 @@ import { ActionFailed, DesktopRpcs, FlockItem } from "../desktop/src/shared/floc
 import { runEffect } from "./support/effect";
 import { AguiEvent } from "../desktop/src/shared/agui";
 import { FLOCK, SAID } from "./support/rune-fixtures";
+import { exec } from "./support/command";
 
 const WORKSPACE = new URL("../desktop-rune/", import.meta.url).pathname;
 const cargo = Bun.which("cargo");
@@ -133,17 +134,23 @@ const typed = (frame: Frame, tags: ReadonlyMap<number, DesktopRpc>) =>
 
 describe.skipIf(cargo === null)("DesktopRpcs between the main process and the Rune shell", () => {
   let roundtrip = "";
-  beforeAll(() => {
-    const built = Bun.spawnSync(
-      [cargo!, "build", "--quiet", "-p", "collie-desktop-protocol", "--bin", "roundtrip"],
-      {
-        cwd: WORKSPACE,
-        stdio: ["ignore", "inherit", "inherit"],
-      },
-    );
-    if (built.exitCode !== 0) throw new Error("cargo could not build the roundtrip binary");
-    roundtrip = `${WORKSPACE}target/debug/roundtrip`;
-  }, 600_000);
+  beforeAll(
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const built = yield* exec(
+            [cargo!, "build", "--quiet", "-p", "collie-desktop-protocol", "--bin", "roundtrip"],
+            {
+              cwd: WORKSPACE,
+            },
+          );
+          if (built.exitCode !== 0)
+            throw new Error(`cargo could not build the roundtrip binary: ${built.stderr}`);
+          roundtrip = `${WORKSPACE}target/debug/roundtrip`;
+        }),
+      ),
+    600_000,
+  );
 
   test("the chat's turn carries an event of every AG-UI kind", () => {
     expect(new Set(Arr.map(SAID, (event) => event.type)).size).toBe(AguiEvent.members.length);
@@ -153,7 +160,7 @@ describe.skipIf(cargo === null)("DesktopRpcs between the main process and the Ru
     runEffect(
       Effect.gen(function* () {
         const sent = yield* frames;
-        const ran = Bun.spawnSync([roundtrip], {
+        const ran = yield* exec([roundtrip], {
           stdin: Buffer.from(
             Arr.join(
               Arr.map(sent, (frame) => `${JSON.stringify(frame)}\n`),
@@ -161,9 +168,10 @@ describe.skipIf(cargo === null)("DesktopRpcs between the main process and the Ru
             ),
           ),
         });
-        expect(ran.stderr.toString()).toBe("");
+        expect(ran.exitCode).toBe(0);
+        expect(ran.stderr).toBe("");
         const back: ReadonlyArray<Frame> = yield* Effect.forEach(
-          Str.split(Str.trimEnd(ran.stdout.toString()), "\n"),
+          Str.split(Str.trimEnd(ran.stdout), "\n"),
           (line) => fromLine(line, { onExcessProperty: "error" }),
         );
         const tags = new Map<number, DesktopRpc>([

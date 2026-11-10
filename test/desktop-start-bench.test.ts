@@ -4,6 +4,7 @@ import { Effect, Exit, FileSystem, Option, Schedule, Schema } from "effect";
 import { treeRssMib, measureStart } from "../bench/desktop-start/start";
 import { world } from "../bench/record-open/world";
 import { runEffect } from "./support/effect";
+import { exec } from "./support/command";
 
 const repo = new URL("../", import.meta.url).pathname;
 const Started = Schema.fromJsonString(
@@ -187,11 +188,9 @@ touch "$XDG_DATA_HOME/dk.cego.collie.desktop/stable/app/bin/launcher"
         return `${dir}/launcher`;
       });
     const harness = (args: ReadonlyArray<string>) =>
-      Bun.spawnSync([process.execPath, `${repo}bench/desktop-start/run.ts`, ...args], {
+      exec([process.execPath, `${repo}bench/desktop-start/run.ts`, ...args], {
         cwd: repo,
         env: Bun.env,
-        stderr: "pipe",
-        stdout: "pipe",
       });
 
     test("installs Desktop, untimed, under the home it keeps between samples", () =>
@@ -199,9 +198,15 @@ touch "$XDG_DATA_HOME/dk.cego.collie.desktop/stable/app/bin/launcher"
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const dir = yield* fs.makeTempDirectoryScoped();
-          const ran = harness(["--install", "--app", yield* build(dir), "--home", `${dir}/kept`]);
+          const ran = yield* harness([
+            "--install",
+            "--app",
+            yield* build(dir),
+            "--home",
+            `${dir}/kept`,
+          ]);
           expect(ran.exitCode).toBe(0);
-          expect(ran.stdout.toString()).toBe("");
+          expect(ran.stdout).toBe("");
           expect(Str.trim(yield* fs.readFileString(`${dir}/installed-for`))).toBe(`${dir}/kept`);
           expect(
             yield* fs.exists(
@@ -216,23 +221,24 @@ touch "$XDG_DATA_HOME/dk.cego.collie.desktop/stable/app/bin/launcher"
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const dir = yield* fs.makeTempDirectoryScoped();
-          const ran = harness(["--app", yield* build(dir), "--home", `${dir}/kept`]);
+          const ran = yield* harness(["--app", yield* build(dir), "--home", `${dir}/kept`]);
           expect(ran.exitCode).toBe(2);
-          expect(ran.stderr.toString()).toContain("--install");
+          expect(ran.stderr).toContain("--install");
           expect(yield* fs.exists(`${dir}/installed-for`)).toBe(false);
         }),
       ));
   });
 
-  test("refuses to run its host in the user's own state directory", () => {
-    const ran = Bun.spawnSync([process.execPath, `${repo}bench/desktop-start/run.ts`], {
-      cwd: repo,
-      env: { ...Bun.env, HERDR_PLUGIN_STATE_DIR: world.state },
-      stderr: "pipe",
-      stdout: "pipe",
-    });
-    expect(ran.exitCode).toBe(2);
-    expect(ran.stderr.toString()).toContain("is the user's own state directory");
-    expect(ran.stdout.toString()).toBe("");
-  });
+  test("refuses to run its host in the user's own state directory", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const ran = yield* exec([process.execPath, `${repo}bench/desktop-start/run.ts`], {
+          cwd: repo,
+          env: { ...Bun.env, HERDR_PLUGIN_STATE_DIR: world.state },
+        });
+        expect(ran.exitCode).toBe(2);
+        expect(ran.stderr).toContain("is the user's own state directory");
+        expect(ran.stdout).toBe("");
+      }),
+    ));
 });
