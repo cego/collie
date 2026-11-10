@@ -99,6 +99,17 @@ test("staging deploys the head's own pipeline and rolls back only what it staged
   }
 });
 
+test("a set child's name ends in the SHA-256 of its MR id, so no two merge requests share one", () => {
+  const id = "gitlab.example.com/group/a.a.a-a.a.a/a/a-a/a/a!1";
+  const digest = new Bun.CryptoHasher("sha256")
+    .update(Buffer.from(id, "utf16le").swap16())
+    .digest("hex");
+  for (const workflow of ["release", "stage"] as const)
+    expect(invocationFor(workflow, { id, target: `mr:${id}`, url: `https://${id}` })).toEndWith(
+      `-${digest}`,
+    );
+});
+
 test("a set child's Run id stays one directory's length however long its merge request's path", () => {
   const id = `github.com/cego/${Str.repeat(49)("a-")}a#1`;
   for (const workflow of ["release", "stage"] as const) {
