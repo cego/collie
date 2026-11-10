@@ -17,7 +17,7 @@ import { BUILD, socketOf } from "../src/host";
 import { relayOf } from "../src/peers";
 import { RunMetrics } from "../src/run-record";
 import { recordAudit } from "../src/audit";
-import { writeTask } from "../src/task";
+import { TaskSchema, type TaskRecord } from "../src/task";
 import { seedIntent, writeIntent } from "../src/intent";
 import { exec } from "./support/command";
 import { runEffect, suiteEnv } from "./support/effect";
@@ -66,6 +66,7 @@ const Asked = RpcGroup.make(
     payload: { agent: Schema.String },
     success: Schema.NullOr(Schema.String),
   }),
+  Rpc.make("tasks", { success: Schema.Array(TaskSchema) }),
 );
 
 const view = (runId: string, task: string, more: Partial<RunView> = {}): RunView => ({
@@ -102,6 +103,7 @@ const hostOf = (
   dir: string,
   views: ReadonlyArray<RunView>,
   agents: Readonly<Record<string, string>> = {},
+  tasks: ReadonlyArray<TaskRecord> = [],
 ) =>
   Effect.gen(function* () {
     const asked = { run: 0 };
@@ -128,6 +130,7 @@ const hostOf = (
             watch: ({ runId }) => Stream.make(find(runId)),
             runMetrics: () => Effect.succeed([]),
             agentRun: ({ agent }) => Effect.succeed(agents[agent] ?? null),
+            tasks: () => Effect.succeed(tasks),
           }),
         ),
         Layer.provide(RpcServer.layerProtocolSocketServer),
@@ -247,14 +250,13 @@ const world = <A, E>(
     }).pipe(Effect.scoped),
   );
 
-const task = (id: string, workspace: string) =>
-  ({
-    id,
-    workspace,
-    label: id,
-    cwd: "/project",
-    created_at: "2026-10-15T10:00:00Z",
-  }) as const;
+const task = (one: string): TaskRecord => ({
+  id: `task-${one}`,
+  workspace: `ws-${one}`,
+  label: `task-${one}`,
+  cwd: "/project",
+  created_at: "2026-10-15T10:00:00Z",
+});
 
 test(
   "show, wait and metrics refuse a Run of another Task than the selected one, naming its Task and workspace, unless it is on another Machine",
@@ -262,10 +264,11 @@ test(
     world(({ state, collie }) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        yield* writeTask(state, task("task-a", "ws-a"));
-        yield* writeTask(state, task("task-b", "ws-b"));
         yield* fs.writeFileString(`${state}/host.db`, "");
-        const here = yield* hostOf(socketOf(state), state, [view("in-b", "task-b")]);
+        const here = yield* hostOf(socketOf(state), state, [view("in-b", "task-b")], {}, [
+          task("a"),
+          task("b"),
+        ]);
         const peerSocket = `${state}/m2-host.sock`;
         yield* hostOf(peerSocket, "/m2", [view("away", "task-b")]);
         yield* fs.writeFileString(
@@ -328,24 +331,28 @@ test(
     world(({ state, collie, shownRun }) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        for (const one of ["a", "b", "c", "d", "e", "f", "p"])
-          yield* writeTask(state, task(`task-${one}`, `ws-${one}`));
         yield* fs.writeFileString(`${state}/host.db`, "");
-        const here = yield* hostOf(socketOf(state), state, [
-          view("run-a", "task-a", { input: { goal: "Find out why run-c failed" } }),
-          view("run-b", "task-b", {
-            requestedBy: {
-              run: "run-a",
-              agent: "run-a-agent",
-              machine: { installation: "here", name: "here" },
-            },
-          }),
-          view("run-p", "task-p", { parent: "run-a" }),
-          view("run-c", "task-c"),
-          view("run-d", "task-d"),
-          view("run-e", "task-e"),
-          view("run-f", "task-f"),
-        ]);
+        const here = yield* hostOf(
+          socketOf(state),
+          state,
+          [
+            view("run-a", "task-a", { input: { goal: "Find out why run-c failed" } }),
+            view("run-b", "task-b", {
+              requestedBy: {
+                run: "run-a",
+                agent: "run-a-agent",
+                machine: { installation: "here", name: "here" },
+              },
+            }),
+            view("run-p", "task-p", { parent: "run-a" }),
+            view("run-c", "task-c"),
+            view("run-d", "task-d"),
+            view("run-e", "task-e"),
+            view("run-f", "task-f"),
+          ],
+          {},
+          Arr.map(["a", "b", "c", "d", "e", "f", "p"], task),
+        );
         // A goal given with --goal, or amended since, is in the Run's Intent, not its input.
         yield* fs.makeDirectory(`${state}/runs/run-a`, { recursive: true });
         yield* writeIntent(
@@ -417,8 +424,6 @@ test(
     world(({ state, collie }) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        for (const one of ["a", "b", "e"])
-          yield* writeTask(state, task(`task-${one}`, `ws-${one}`));
         yield* fs.writeFileString(`${state}/host.db`, "");
         yield* hostOf(
           socketOf(state),
@@ -435,6 +440,7 @@ test(
             view("run-e", "task-e"),
           ],
           { "run-a-agent": "run-a" },
+          Arr.map(["a", "b", "e"], task),
         );
         const herdr = `${state}/herdr`;
         yield* fs.writeFileString(

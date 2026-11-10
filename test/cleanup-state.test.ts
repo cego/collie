@@ -85,7 +85,6 @@ test(
           (item) => pipe(item.target, Str.slice(state.length + 1)),
         ).sort();
         expect(removable).toEqual([
-          "agents/abc123",
           "events.run-x.log",
           "plans",
           "requests/run-start/old.json",
@@ -117,6 +116,8 @@ test(
           "notes.txt",
           "runs/new-x",
           `stop.${real.id}`,
+          // Imported into host.db and left for a host of an older build.
+          "agents/abc123",
           "agents/def456",
           "requests/run-start/new.json",
           "schedules/daily/schedule.json",

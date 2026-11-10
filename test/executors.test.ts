@@ -263,11 +263,11 @@ test("a cleanup forgets the Tasks whose workspace herdr no longer has, and keeps
   runEffect(
     Effect.gen(function* () {
       const at = { label: "t", cwd: stateDir, created_at: "2026-09-28T00:00:00Z" };
-      yield* writeTask(stateDir, { ...at, id: "kept", workspace: "w1" });
-      yield* writeTask(stateDir, { ...at, id: "gone", workspace: "w-closed" });
+      yield* writeTask({ ...at, id: "kept", workspace: "w1" });
+      yield* writeTask({ ...at, id: "gone", workspace: "w-closed" });
       const done = yield* carry({ kind: "home_cleanup" });
       expect(done.note).toContain("forgot 1 Tasks");
-      expect(Arr.map(yield* listTasks(stateDir), (task) => task.id)).toEqual(["kept"]);
+      expect(Arr.map(yield* listTasks, (task) => task.id)).toEqual(["kept"]);
     }),
   ));
 

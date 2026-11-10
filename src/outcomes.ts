@@ -60,9 +60,7 @@ export const outcomeRecordsOf = Effect.fn("Outcomes.records")(function* (
     for (const kind of STEERING)
       if (line.operation === kind) steering.push({ kind, origin: line.actor.origin });
   const corrections = new Set<string>();
-  for (const { delivery } of yield* deliveriesOf(stateDir, runId).pipe(
-    Effect.orElseSucceed(() => []),
-  ))
+  for (const delivery of yield* deliveriesOf(runId))
     if (delivery.cause.kind === "correction") corrections.add(delivery.causal_key);
   for (const _ of corrections) steering.push({ kind: "correction", origin: "evaluator" });
   const verifications = yield* readVerifications(evidenceDir(stateDir, runId)).pipe(

@@ -1238,6 +1238,14 @@ profile may reset PATH. If the shell fails or does not answer within five second
 keeps the environment it was given, runs them in a login shell as before, and logs why.
 Children never get what Electrobun's launcher sets for Desktop itself.
 
+The SSH agent is the one exception. An rc file may start an agent of its own, such as
+`eval $(keychain --eval id_rsa)`, that holds a key only once a terminal has asked for its
+passphrase, and an SSH connection Desktop opens has no terminal to ask in: it would fail with
+`Permission denied (publickey)` until you next open one. So Desktop asks each agent with
+`ssh-add -l` and takes the login shell's `SSH_AUTH_SOCK` only where it holds keys or the agent
+Desktop was started with — your desktop session's, such as GNOME Keyring's — holds none;
+otherwise it keeps its own, and logs that it did.
+
 It shows up as **Collie**, with the Collie mark — the dog on the white tile the TUI board
 shows, which reads on a dark taskbar too — in your app launcher, on its window, in the
 taskbar and at the top left of the board.
@@ -3925,9 +3933,14 @@ agent changed is in the checkout, and where its conversation is. The Run's log s
 <agent>`, and the Run's record lists both agents, the new one saying what it fell back
 from. The new agent takes the old one's place for later work that names it, such as the
 next slices of a build. A transient rate limit or an overloaded API moves nothing, nor
-does a harness that will not start or is signed out: the Run parks with its reason as
-before. Where nothing has room, the agent is left where it is, and the Run waits for it,
-parking after its collection time with when each Subscription resets.
+does a harness that will not start or is signed out: the Run parks with its reason. A turn
+that dies on an error its harness will not retry — an expired login, a refused account, a
+server error after the harness's own retries — parks the Run at once, quoting the
+harness's message, and leaves the agent open. Fix the harness and tell the agent to carry
+on; Collie keeps collecting its Output, and the Run goes on when it is written. pi and
+Claude Code report such a stop; Codex and OpenCode do not yet. Where nothing has room, the
+agent is left where it is, and the Run waits for it, parking after its collection time with
+when each Subscription resets.
 
 Usage is data: it never refuses, holds or delays work.
 

@@ -201,7 +201,8 @@ import {
   type Watched,
 } from "./oversight";
 import { evaluationDeps } from "./evaluator";
-import { budgetPath, herdOf, humanSubmits, machineHerd, type LedgerScan } from "./steering";
+import { budgetPath, herdOf, humanSubmits, machineHerd } from "./steering";
+import { recordsLayer, type Records } from "./records";
 import { Steered } from "./delivery-queue";
 import type { JudgementDeps } from "./drift";
 import { finishedOnRecord, type Card } from "./cards";
@@ -634,12 +635,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly _tag: "Refused"; readonly reason: string };
   export const MergeOutcomeSchema: Schema.Codec<MergeOutcome, unknown, never, never>;
 
-  /** What claim holds, with what a free-only claim left to whom, or why the claims a Run needs could not be settled. */
+  /** What claim holds, with what a free-only claim left to whom, why there is nothing to claim, or why the claims a Run needs could not be settled. */
   export type Claimed =
     | {
         readonly slugs: ReadonlyArray<string>;
         readonly left?: ReadonlyArray<{ readonly slug: string; readonly holder: string }>;
       }
+    | { readonly none: string }
     | { readonly unresolved: string };
   export const ClaimedSchema: Schema.Codec<Claimed, unknown, never, never>;
   /** Who else holds each project a claim needs (null: free), what each application needs, and the applications each deploy job names. */
@@ -3561,7 +3563,7 @@ export const hostLayer = (options: {
 }): Layer.Layer<
   Host | Notifier | Oversight | Reliance,
   never,
-  Store | PlatformServices | ForgeHttp
+  Store | Records | PlatformServices | ForgeHttp
 > =>
   Layer.effectContext(
     Effect.gen(function* () {
@@ -3573,9 +3575,10 @@ export const hostLayer = (options: {
         | FileSystem.FileSystem
         | Path.Path
         | ChildProcessSpawner.ChildProcessSpawner
-        | ForgeHttp;
+        | ForgeHttp
+        | Records;
       const services = yield* Effect.context<Collecting>();
-      const bun = yield* Effect.context<PlatformServices>();
+      const bun = yield* Effect.context<PlatformServices | Records>();
       const under = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
         Effect.provideContext(effect, services);
       const anySet = (runId: string, ...controls: ReadonlyArray<string>) =>
@@ -3621,7 +3624,7 @@ export const hostLayer = (options: {
             const task =
               row?.task == null
                 ? null
-                : yield* readTask(dir, row.task).pipe(Effect.orElseSucceed(() => null));
+                : yield* readTask(row.task).pipe(Effect.orElseSucceed(() => null));
             const title = notificationTitle(
               kind,
               cwd,
@@ -4681,6 +4684,7 @@ export const hostLayer = (options: {
                 }),
               ended: () => waitOn(asked.runId, null),
             });
+            if (held._tag === "None") return { none: held.why };
             if (held._tag === "Unresolved") return { unresolved: held.why };
             return held.left === undefined
               ? { slugs: held.slugs }
@@ -5131,7 +5135,7 @@ export const hostLayer = (options: {
           const task =
             row?.task == null
               ? null
-              : yield* readTask(dir, row.task).pipe(
+              : yield* readTask(row.task).pipe(
                   Effect.provideContext(bun),
                   Effect.orElseSucceed(() => null),
                 );
@@ -6125,6 +6129,7 @@ export type HostServices =
   | WorkflowEngine.WorkflowEngine
   | Host
   | Agents
+  | Records
   | FileSystem.FileSystem
   | Path.Path
   | ChildProcessSpawner.ChildProcessSpawner
@@ -6438,6 +6443,7 @@ export const foundationLayer = (options: {
   | Oversight
   | Reliance
   | Store
+  | Records
   | WorkflowEngine.WorkflowEngine
   | MessageStorage.MessageStorage
   | SqlClient.SqlClient
@@ -6447,7 +6453,11 @@ export const foundationLayer = (options: {
   PlatformServices
 > =>
   hostLayer(options).pipe(
-    Layer.provideMerge(storeLayer.pipe(Layer.provideMerge(engineLayer(options)))),
+    Layer.provideMerge(
+      recordsLayer.pipe(
+        Layer.provideMerge(storeLayer(options.dir).pipe(Layer.provideMerge(engineLayer(options)))),
+      ),
+    ),
     Layer.provideMerge(forgeHttpLayer),
   );
 
@@ -6482,7 +6492,7 @@ const makeRegistry: (
       Effect.orDie,
     ));
   // Captured, so placing a Run asks git and herdr without its callers providing either.
-  const bun = yield* Effect.context<PlatformServices | SecureRandom.SecureRandom>();
+  const bun = yield* Effect.context<PlatformServices | SecureRandom.SecureRandom | Records>();
 
   /**
    * Every `diff-target` as `mr:`, `branch:` or `worktree`, since every reader decides from
@@ -7053,9 +7063,7 @@ const makeRegistry: (
             : yield* openWorkspace;
     // A workspace an earlier attempt recorded may already have its Task.
     const known =
-      ask.workspace === undefined
-        ? null
-        : yield* taskOfWorkspace(placing.env.stateDir, workspace).pipe(Effect.orDie);
+      ask.workspace === undefined ? null : yield* taskOfWorkspace(workspace).pipe(Effect.orDie);
     const task =
       known ??
       (yield* newTask({
@@ -7065,7 +7073,7 @@ const makeRegistry: (
         rootPane,
         herd: yield* machineHerd(placing.env).pipe(Effect.orElseSucceed(() => null)),
       }).pipe(
-        Effect.flatMap((made) => writeTask(placing.env.stateDir, made)),
+        Effect.flatMap((made) => writeTask(made)),
         Effect.orDie,
       ));
     return { placed, task: task.id };
@@ -7110,7 +7118,7 @@ const makeRegistry: (
     );
     const tasks = new Map(
       Arr.map(
-        yield* listTasks(placing.env.stateDir).pipe(Effect.orElseSucceed(() => [])),
+        yield* listTasks.pipe(Effect.orElseSucceed(() => [])),
         (task) => [task.id, task] as const,
       ),
     );
@@ -8029,11 +8037,10 @@ const makeRegistry: (
    * agent's pane, which its hook records as `external`, and a Delivery herdr took before
    * the host that sent it could set the question aside.
    */
-  const scannedLedgers: LedgerScan = new Map();
   const missedMessages = Effect.gen(function* () {
     const runs = Arr.dedupe(Arr.map(yield* store.supersedable, (row) => row.run));
     if (runs.length === 0) return;
-    const delivered = yield* humanSubmits(placing.env.stateDir, scannedLedgers);
+    const delivered = yield* humanSubmits;
     for (const runId of runs) {
       const rows = yield* store.asked(runId);
       const launches = yield* readLaunches(dir, runId).pipe(Effect.orElseSucceed(() => []));

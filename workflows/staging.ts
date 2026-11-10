@@ -110,9 +110,9 @@ export interface Deploys {
 }
 
 /**
- * Every Helle claim `deploys` needs, taken under the step `name`: none only on the human's
- * say, and null where they finished instead. `free` takes only what nobody else has, and
- * says what it left. `park` stops the Run where Helle would not take back a claim it no
+ * Every Helle claim `deploys` needs, taken under the step `name`: none where the repository
+ * has no Helle project or on the human's say, and null where they finished instead. `free`
+ * takes only what nobody else has, and says what it left. `park` stops the Run where Helle would not take back a claim it no
  * longer wants.
  */
 export const claiming =
@@ -167,6 +167,13 @@ export const claiming =
         const at = nth(name, n);
         const held = yield* attempt(at, n);
         if ("slugs" in held) return held;
+        if ("none" in held) {
+          yield* Activity.make({
+            name: `${at}.none`,
+            execute: host.record(runId, `no Helle claim to take: ${held.none}`),
+          });
+          return { slugs: [] };
+        }
         const answer = yield* ask({
           name: `${at}.unclaimed`,
           prompt: words.unclaimed(held.unresolved, how.retaining ?? false),
@@ -185,7 +192,10 @@ export const claiming =
             ),
           });
         if (answer === words.finish) return null;
-        yield* host.record(runId, words.went(held.unresolved, how.retaining ?? false));
+        yield* Activity.make({
+          name: `${at}.went`,
+          execute: host.record(runId, words.went(held.unresolved, how.retaining ?? false)),
+        });
         return { slugs: [] };
       }
     });

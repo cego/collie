@@ -12,12 +12,23 @@ import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import type { FrontDoor, Where } from "./board-model";
-import { Data, DateTime, Duration, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
+import {
+  Context,
+  DateTime,
+  Duration,
+  Effect,
+  Layer,
+  Random,
+  Schema,
+  Semaphore,
+  flow,
+  Result,
+} from "effect";
+import * as Reactivity from "effect/reactivity/Reactivity";
+import * as SqlClient from "effect/sql/SqlClient";
 import type { Action, ActionKind } from "./actions";
 import { ActionSchema } from "./actions";
-import { appendJournal, readJournal } from "./journal";
-import { READ_WRITE_LOCK_BUDGET, ensureLockDir, withLock } from "./lock";
-import { herdDir, type HumanDoor } from "./steering";
+import type { HumanDoor } from "./steering";
 import { nowIso, epochMs } from "./time";
 
 /** How long a proposal stands. After this the world has moved and it is re-asked. */
@@ -25,7 +36,7 @@ export const EXPIRES_AFTER_MS = 30 * 60 * 1000;
 
 const TargetSchema = Schema.Struct({ run: Schema.String });
 
-const RecordSchema = Schema.Struct({
+export const RecordSchema = Schema.Struct({
   kind: Schema.Literal("proposal"),
   id: Schema.String,
   /** Canonical JSON of targets and actions: what a confirmation has to name exactly. */
@@ -78,10 +89,12 @@ const StepSchema = Schema.Struct({
   note: Schema.optionalKey(Schema.String),
 });
 
-const LineSchema = Schema.Union([RecordSchema, SettledSchema, StepSchema]);
+export const LineSchema = Schema.Union([RecordSchema, SettledSchema, StepSchema]);
 export type ProposalRecord = Schema.Schema.Type<typeof RecordSchema>;
 export type ProposalLine = Schema.Schema.Type<typeof LineSchema>;
 const LineJson = Schema.fromJsonString(LineSchema);
+export const decodeProposalLineOption = Schema.decodeOption(LineJson);
+const encodeLine = flow(Schema.encodeResult(LineJson), Result.getOrThrow);
 
 /**
  * The bytes a confirmation names. Canonical, so the same proposal always hashes the same
@@ -107,59 +120,84 @@ const encodeContent = flow(
   Result.getOrThrow,
 );
 
-export const proposalsPath = Effect.fn("Proposals.path")(function* (
-  stateDir: string,
-  herdKey: string,
-) {
-  const path = yield* Path.Path;
-  return path.join(yield* herdDir(stateDir, herdKey), "proposals.jsonl");
-});
-
-/** Every Herd's proposals journal, with what it holds. */
-export const everyJournal = Effect.fn("Proposals.everyJournal")(function* (stateDir: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const herds = path.join(stateDir, "herd");
-  const journals: Array<{ file: string; lines: ReadonlyArray<ProposalLine> }> = [];
-  for (const herd of yield* fs.readDirectory(herds).pipe(Effect.orElseSucceed(() => []))) {
-    const file = path.join(herds, herd, "proposals.jsonl");
-    journals.push({ file, lines: yield* read(file).pipe(Effect.orElseSucceed(() => [])) });
-  }
-  return journals;
-});
-
-/** The Herd journal this proposal was written to, or null where no Herd has one by that id. */
-export const journalOf = Effect.fn("Proposals.journalOf")(function* (stateDir: string, id: string) {
-  const journals = yield* everyJournal(stateDir);
-  const found = Option.getOrUndefined(
-    Arr.findFirst(journals, ({ lines }) =>
-      Arr.some(lines, (line) => line.kind === "proposal" && line.id === id),
-    ),
-  );
-  return found?.file ?? null;
-});
-
-export const append = (file: string, line: ProposalLine) => appendJournal(file, LineJson, line);
-
-export const read = (file: string) => readJournal(file, LineJson);
-
-export class ProposalsBusy extends Data.TaggedError("ProposalsBusy")<{ file: string }> {}
+/** What a write to the proposals invalidates. */
+export const PROPOSALS = "collie/proposals";
 
 /**
- * The journal's lock, around a whole read-and-append: the check a confirmation makes and
- * the line it writes have to be one act, or two confirmations of one proposal both pass.
+ * Each Herd's proposals journal, by its Herd key, in the host's database
+ * (ADR-draft-collies-own-records-live-in-the-hosts-database).
  */
-function withProposalsLock<A, E, R>(file: string, effect: Effect.Effect<A, E, R>) {
-  return Effect.gen(function* () {
-    yield* ensureLockDir(file);
-    return yield* withLock(
-      `${file}.lock`,
-      Effect.fail(new ProposalsBusy({ file })),
-      effect,
-      READ_WRITE_LOCK_BUDGET,
-    );
-  });
+export interface ProposalsApi {
+  readonly lines: (journal: string) => Effect.Effect<ReadonlyArray<ProposalLine>>;
+  /** Every line about a proposal that names this Run, in any journal, oldest first. */
+  readonly ofRun: (run: string) => Effect.Effect<ReadonlyArray<ProposalLine>>;
+  /** Every journal's lines, oldest first. */
+  readonly all: Effect.Effect<ReadonlyArray<ProposalLine>>;
+  /** The journal a proposal was written to, or null where none has it. */
+  readonly journalOf: (id: string) => Effect.Effect<string | null>;
+  readonly append: (journal: string, line: ProposalLine) => Effect.Effect<void>;
+  /** A read and the append it decides as one act: two confirmations cannot both pass. */
+  readonly atomically: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 }
+
+export class Proposals extends Context.Service<Proposals, ProposalsApi>()("collie/Proposals") {}
+
+const decoded = (rows: ReadonlyArray<{ readonly line: string }>) =>
+  Arr.flatMap(rows, (row) => Option.toArray(decodeProposalLineOption(row.line)));
+
+export const proposalsLayer = Layer.effect(Proposals)(
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const reactivity = yield* Reactivity.Reactivity;
+    // ponytail: one lock for every journal; one per journal if confirmations contend.
+    const lock = Semaphore.makeUnsafe(1);
+    return {
+      lines: (journal) =>
+        sql<{ readonly line: string }>`
+          SELECT line FROM collie_proposals WHERE journal = ${journal} ORDER BY seq
+        `.pipe(Effect.map(decoded), Effect.orDie),
+      ofRun: (run) =>
+        sql<{ readonly line: string }>`
+          SELECT line FROM collie_proposals WHERE proposal IN (
+            SELECT proposal FROM collie_proposal_runs WHERE run = ${run}
+          ) ORDER BY seq
+        `.pipe(Effect.map(decoded), Effect.orDie),
+      all: sql<{ readonly line: string }>`SELECT line FROM collie_proposals ORDER BY seq`.pipe(
+        Effect.map(decoded),
+        Effect.orDie,
+      ),
+      journalOf: (id) =>
+        sql<{ readonly journal: string }>`
+          SELECT journal FROM collie_proposals WHERE proposal = ${id} AND kind = 'proposal' LIMIT 1
+        `.pipe(
+          Effect.map((rows) => rows[0]?.journal ?? null),
+          Effect.orDie,
+        ),
+      append: (journal, line) =>
+        sql`INSERT INTO collie_proposals (journal, line) VALUES (${journal}, ${encodeLine(line)})`.pipe(
+          Effect.andThen(reactivity.invalidate([PROPOSALS])),
+          Effect.orDie,
+        ),
+      atomically: lock.withPermits(1),
+    } satisfies ProposalsApi;
+  }),
+);
+
+export const proposalsOf = (run: string) => Proposals.use((proposals) => proposals.ofRun(run));
+
+/** Every Herd's proposals, oldest first. */
+export const everyProposal = Proposals.use((proposals) => proposals.all);
+
+/** The Herd journal this proposal was written to, or null where no Herd has one by that id. */
+export const journalOf = (id: string) => Proposals.use((proposals) => proposals.journalOf(id));
+
+export const append = (journal: string, line: ProposalLine) =>
+  Proposals.use((proposals) => proposals.append(journal, line));
+
+export const read = (journal: string) => Proposals.use((proposals) => proposals.lines(journal));
+
+const atomically = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Proposals.use((proposals) => proposals.atomically(effect));
 
 export interface Recorded {
   readonly interpretation: string;
@@ -176,12 +214,14 @@ export interface Recorded {
   readonly by: string;
 }
 
-export const record = Effect.fn("Proposals.record")(function* (file: string, what: Recorded) {
+export const record = Effect.fn("Proposals.record")(function* (journal: string, what: Recorded) {
   const now = yield* DateTime.now;
   const at = DateTime.formatIso(now);
+  // The instant alone does not tell two identical proposals apart.
+  const nonce = yield* Random.nextInt;
   const line: ProposalRecord = {
     kind: "proposal",
-    id: `p-${Bun.hash(`${at}${what.by}${contentHash(what.targets, what.actions)}`).toString(16)}`,
+    id: `p-${Bun.hash(`${at}${nonce}${what.by}${contentHash(what.targets, what.actions)}`).toString(16)}`,
     content_hash: contentHash(what.targets, what.actions),
     interpretation: what.interpretation,
     targets: [...what.targets],
@@ -196,7 +236,7 @@ export const record = Effect.fn("Proposals.record")(function* (file: string, wha
   const bound: ProposalRecord = what.card === undefined ? line : { ...line, card: what.card };
   const written: ProposalRecord =
     what.incarnations === undefined ? bound : { ...bound, incarnations: what.incarnations };
-  yield* withProposalsLock(file, append(file, written));
+  yield* atomically(append(journal, written));
   return written;
 });
 
@@ -413,18 +453,17 @@ export function judgeConfirmation(
 }
 
 export const confirm = Effect.fn("Proposals.confirm")(function* (
-  file: string,
+  journal: string,
   id: string,
   hash: string,
   actor: Actor,
   currentVersions: ReadonlyMap<string, number>,
 ) {
   const at = yield* nowIso;
-  return yield* withProposalsLock(
-    file,
+  return yield* atomically(
     Effect.gen(function* () {
       const judged = judgeConfirmation(
-        yield* read(file),
+        yield* read(journal),
         id,
         hash,
         actor,
@@ -432,7 +471,13 @@ export const confirm = Effect.fn("Proposals.confirm")(function* (
         currentVersions,
       );
       if ("refused" in judged) return judged;
-      yield* append(file, { kind: "confirmed", id, at, by: actorName(actor), ...voiceOf(actor) });
+      yield* append(journal, {
+        kind: "confirmed",
+        id,
+        at,
+        by: actorName(actor),
+        ...voiceOf(actor),
+      });
       return judged;
     }),
   );
@@ -454,15 +499,14 @@ function settledAs(refused: ConfirmRefusal | null, detail: string, id: string): 
 }
 
 export const decline = Effect.fn("Proposals.decline")(function* (
-  file: string,
+  journal: string,
   id: string,
   actor: Actor,
 ) {
   const at = yield* nowIso;
-  return yield* withProposalsLock(
-    file,
+  return yield* atomically(
     Effect.gen(function* () {
-      const lines = yield* read(file);
+      const lines = yield* read(journal);
       if (!Arr.some(lines, (line) => line.kind === "proposal" && line.id === id))
         return settledAs("not_found", `no proposal "${id}"`, id);
       // Already answered. Appending a second answer would leave the journal saying a
@@ -474,7 +518,7 @@ export const decline = Effect.fn("Proposals.decline")(function* (
         ),
       );
       if (settled) return settledAs("not_pending", `"${id}" is already ${settled.kind}`, id);
-      yield* append(file, { kind: "declined", id, at, by: actorName(actor), ...voiceOf(actor) });
+      yield* append(journal, { kind: "declined", id, at, by: actorName(actor), ...voiceOf(actor) });
       return settledAs(null, "", id);
     }),
   );
@@ -537,11 +581,11 @@ export function stepResults(lines: ReadonlyArray<ProposalLine>, id: string) {
 
 /** Written before an action runs, so a crash leaves a record that it may have. */
 export const stepStarted = Effect.fn("Proposals.stepStarted")(function* (
-  file: string,
+  journal: string,
   proposal: string,
   index: number,
 ) {
-  yield* append(file, {
+  yield* append(journal, {
     kind: "step",
     proposal,
     index,
@@ -551,7 +595,7 @@ export const stepStarted = Effect.fn("Proposals.stepStarted")(function* (
 });
 
 export const stepSettled = Effect.fn("Proposals.stepSettled")(function* (
-  file: string,
+  journal: string,
   proposal: string,
   index: number,
   state: "applied" | "failed" | "skipped" | "unknown",
@@ -559,7 +603,7 @@ export const stepSettled = Effect.fn("Proposals.stepSettled")(function* (
 ) {
   const at = yield* nowIso;
   const line: ProposalLine = { kind: "step", proposal, index, state, at };
-  yield* append(file, note === undefined ? line : { ...line, note });
+  yield* append(journal, note === undefined ? line : { ...line, note });
 });
 
 /**
@@ -567,16 +611,15 @@ export const stepSettled = Effect.fn("Proposals.stepSettled")(function* (
  * this answer: callers must establish what happened before retrying.
  */
 export const reconcileStep = Effect.fn("Proposals.reconcileStep")(function* (
-  file: string,
+  journal: string,
   proposal: string,
   index: number,
   as: "applied" | "not-applied",
   actor: Actor,
 ) {
-  return yield* withProposalsLock(
-    file,
+  return yield* atomically(
     Effect.gen(function* () {
-      const lines = yield* read(file);
+      const lines = yield* read(journal);
       if (!Arr.some(lines, (line) => line.kind === "proposal" && line.id === proposal))
         return settledAs("not_found", `no proposal "${proposal}"`, proposal);
       // Only a `started` nobody answered. Anything else and this would be recording a
@@ -589,7 +632,7 @@ export const reconcileStep = Effect.fn("Proposals.reconcileStep")(function* (
           proposal,
         );
       yield* stepSettled(
-        file,
+        journal,
         proposal,
         index,
         as === "applied" ? "applied" : "skipped",

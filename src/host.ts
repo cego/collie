@@ -14,6 +14,7 @@
 // machine. `docs/adr/0015-one-local-host-owns-a-state-directory.md` is why each of those
 // is the way it is.
 
+import * as Reactivity from "effect/reactivity/Reactivity";
 import * as Num from "effect/Number";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -64,6 +65,7 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import manifest from "../herdr-plugin.toml";
 import { RunModel, runModelLayer, type RunModelApi } from "./run-model";
+import type { Records } from "./records";
 import {
   FINISHED_STEPS,
   drawerWrites,
@@ -77,7 +79,6 @@ import { doorThread, engineEnd, type EngineEnd, type Listed, type Opened } from 
 import { SLOW_RPC_MS, firstValueTimed } from "./first-value";
 import { TurnScheduler } from "./turns";
 import { Foreground, foregroundLayer, servedNow } from "./foreground";
-import * as References from "effect/References";
 import { tracingLayer } from "./tracing";
 import * as Scheduler from "effect/Scheduler";
 import {
@@ -256,7 +257,9 @@ import { clearOverride, err, request, steer, type OpResult } from "./operations"
 import { REJECTED } from "./envelope";
 import {
   appendLine,
+  DELIVERIES,
   deliveriesOf,
+  overriddenRuns,
   DeliverySchema,
   herdDir,
   readLedger,
@@ -268,7 +271,11 @@ import {
   answeredBy,
   decline,
   journalOf,
+  LineSchema as ProposalLineSchema,
+  PROPOSALS,
+  proposalsOf,
   read as readProposals,
+  RecordSchema,
   reconcileStep,
   stepResults,
   type ProposalLine,
@@ -280,8 +287,8 @@ import {
 import { carryOut, carryOutAsked, followUpField } from "./run-actions";
 import { retitleGenericTasks } from "./tasknames";
 import { VerifySpecSchema } from "./verify-spec";
-import { everyRegistered } from "./registry";
-import { listTasks, readTask } from "./task";
+import { AgentEntrySchema, everyRegistered, REGISTERED } from "./registry";
+import { listTasks, readTask, taskKeptIn, TASKS, TaskSchema } from "./task";
 import { epochMs, nowIso } from "./time";
 import { appendLog } from "./oversight";
 import { VERIFYING_FILE, verifyingIn } from "./verify";
@@ -525,6 +532,24 @@ export const HostRpcs = RpcGroup.make(
     payload: { runId: Schema.String },
     success: Schema.NullOr(Schema.Array(DeliverySchema)),
   }),
+  /** The Runs delivered to through an incarnation a human has taken over. */
+  Rpc.make("overridden", { success: Schema.Array(Schema.String) }),
+  /** This Machine's Tasks, newest first. */
+  Rpc.make("tasks", { success: Schema.Array(TaskSchema) }),
+  /** A Herd's proposals journal, oldest line first. */
+  Rpc.make("proposals", {
+    payload: { herd: Schema.String },
+    success: Schema.Array(ProposalLineSchema),
+  }),
+  /** Every line about a proposal that names this Run, oldest first. */
+  Rpc.make("runProposals", {
+    payload: { run: Schema.String },
+    success: Schema.Array(ProposalLineSchema),
+  }),
+  /** The proposal by that id, in whichever Herd's journal has it. */
+  Rpc.make("proposal", { payload: { id: Schema.String }, success: Schema.NullOr(RecordSchema) }),
+  /** Every agent this Machine's host has registered, oldest registration first. */
+  Rpc.make("registered", { success: Schema.Array(AgentEntrySchema) }),
   Rpc.make("runs", {
     payload: { task: Schema.NullOr(Schema.String) },
     success: Schema.Array(RunView),
@@ -666,7 +691,7 @@ const handlers = (
   HostRpcs.toLayer(
     Effect.gen(function* () {
       const registry = yield* Registry;
-      const bun = yield* Effect.context<PlatformServices>();
+      const bun = yield* Effect.context<PlatformServices | Records>();
       const pid = yield* currentPid;
       const { aliveNow } = yield* SharedBoard;
       const sources = yield* recordSources({ panels: null, plans: new Map() });
@@ -840,8 +865,28 @@ const handlers = (
         deliveries: ({ runId }) =>
           Effect.gen(function* () {
             if ((yield* registry.view(runId)) === null) return null;
-            return Arr.map(yield* deliveriesOf(dir, runId), (one) => one.delivery);
+            return yield* deliveriesOf(runId);
           }),
+        overridden: () => Effect.map(overriddenRuns, (runs) => [...runs]),
+        tasks: () => listTasks,
+        registered: () => everyRegistered,
+        proposals: ({ herd }) => readProposals(herd),
+        runProposals: ({ run }) => proposalsOf(run),
+        proposal: ({ id }) =>
+          journalOf(id).pipe(
+            Effect.flatMap((journal) =>
+              journal === null ? Effect.succeed([]) : readProposals(journal),
+            ),
+            Effect.map(
+              (lines) =>
+                Option.getOrUndefined(
+                  Arr.findFirst(
+                    lines,
+                    (line): line is ProposalRecord => line.kind === "proposal" && line.id === id,
+                  ),
+                ) ?? null,
+            ),
+          ),
         runs: ({ task }) => registry.views(task),
         watch: ({ runId }) => registry.watch(runId),
         recover: () => registry.recover,
@@ -905,7 +950,7 @@ const handlers = (
         wake: ({ machine }) => peers.wake(machine),
         unpair: ({ machine }) => peers.unpair(machine),
         agentRun: ({ agent }) =>
-          everyRegistered(dir).pipe(
+          everyRegistered.pipe(
             Effect.map(
               (entries) =>
                 Option.getOrUndefined(Arr.findLast(entries, (entry) => entry.agent === agent))
@@ -1088,7 +1133,7 @@ const hostBoard = (dir: string) =>
     const model = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
     const registry = yield* Registry;
     const checks = yield* CheckProcesses;
-    const bun = yield* Effect.context<PlatformServices>();
+    const bun = yield* Effect.context<PlatformServices | Records>();
     const hosted = yield* Effect.context<HostServices>();
     const env = yield* servingEnv(dir);
     const herdr = new Herdr(env);
@@ -1193,7 +1238,7 @@ const hostBoard = (dir: string) =>
         const sessions = Arr.map(herds, (session) => session.herdr);
         const build = board.views(herds);
         const all = yield* board.runs;
-        const tasks = yield* listTasks(env.stateDir);
+        const tasks = yield* listTasks;
         return [
           // Before the worktrees: a checkout goes only once its Task's workspace has closed.
           taskWorkspacesSweeper({
@@ -1222,7 +1267,7 @@ const hostBoard = (dir: string) =>
             sessions,
             stateDir: env.stateDir,
             runs: all,
-            registered: yield* everyRegistered(env.stateDir),
+            registered: yield* everyRegistered,
             cwd: env.cwd,
             settling: settlingOf({
               stateDir: env.stateDir,
@@ -1253,7 +1298,7 @@ const hostBoard = (dir: string) =>
             sessions,
             // Every read or none: a Task judged without its Runs would look forgettable.
             facts: Effect.all({
-              tasks: listTasks(env.stateDir),
+              tasks: listTasks,
               views: board.views(herds),
               runs: board.runs,
             }).pipe(
@@ -1364,6 +1409,7 @@ const sharedBoardLayer = (dir: string) =>
   Layer.effect(SharedBoard)(
     Effect.gen(function* () {
       const store = yield* Store;
+      const reactivity = yield* Reactivity.Reactivity;
       const model = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
       const { listing, herdrMoved, ...board } = yield* hostBoard(dir);
       // Debounced apart from the tick, so a burst of writes cannot hold the tick back.
@@ -1381,6 +1427,7 @@ const sharedBoardLayer = (dir: string) =>
           ),
           // A signal alone: the rows are read by the build, not once more per write.
           store.watching(Effect.void),
+          reactivity.stream([DELIVERIES, PROPOSALS, REGISTERED, TASKS], Effect.void),
         ],
         { concurrency: "unbounded" },
       ).pipe(Stream.share({ capacity: 1, strategy: "sliding" }));
@@ -1996,7 +2043,7 @@ const frontDoorHandlers = (
         ) => Effect.Effect<A, E | ProposalRefused | RequestConflict, R>,
       ) =>
         Effect.gen(function* () {
-          const file = yield* journalOf(env.stateDir, proposal);
+          const file = yield* journalOf(proposal);
           if (file === null)
             return yield* new ProposalRefused({
               refused: "not_found",
@@ -2092,7 +2139,7 @@ const frontDoorHandlers = (
             let where = from;
             if (frontDoor === "agent" && from?.machine === undefined) {
               const entry = Option.getOrUndefined(
-                Arr.findLast(yield* everyRegistered(dir), (one) => one.agent === from?.agent),
+                Arr.findLast(yield* everyRegistered, (one) => one.agent === from?.agent),
               );
               if (entry === undefined || (from?.run !== undefined && from.run !== entry.runId))
                 return yield* new HostRefused({
@@ -2128,6 +2175,7 @@ const frontDoorHandlers = (
             root,
             options,
             task,
+            here,
             parent,
             verify,
             attachments,
@@ -2152,8 +2200,16 @@ const frontDoorHandlers = (
                 Effect.flatMap((placed) =>
                   "error" in placed
                     ? Effect.fail(new HostRefused({ reason: `${REFUSED_INPUT}: ${placed.error}` }))
-                    : registry.resolve({ project: placed.project, id }).pipe(
-                        Effect.flatMap((generation) =>
+                    : Effect.all([
+                        registry.resolve({ project: placed.project, id }),
+                        here === undefined
+                          ? Effect.succeed(task)
+                          : taskKeptIn(here).pipe(
+                              Effect.map((kept) => kept.id),
+                              Effect.provideContext(bun),
+                            ),
+                      ]).pipe(
+                        Effect.flatMap(([generation, task]) =>
                           registry.start({
                             generation,
                             started: startedOf(
@@ -2784,7 +2840,7 @@ const frontDoorHandlers = (
         reconcile: ({ proposal, index, as, request }, { client }) =>
           plainly(
             Effect.gen(function* () {
-              const file = yield* journalOf(env.stateDir, proposal);
+              const file = yield* journalOf(proposal);
               if (file === null)
                 return yield* new ProposalRefused({
                   refused: "not_found",
@@ -3279,17 +3335,14 @@ const frontDoorHandlers = (
               },
               Effect.gen(function* () {
                 const found = Option.getOrUndefined(
-                  Arr.findFirst(
-                    yield* deliveriesOf(env.stateDir, runId),
-                    (entry) => entry.delivery.id === delivery,
-                  ),
+                  Arr.findFirst(yield* deliveriesOf(runId), (one) => one.id === delivery),
                 );
                 if (!found)
                   return yield* new HostRefused({
                     reason: `${REFUSED_INPUT}: no delivery "${delivery}" for this Run`,
                   });
                 const settled = reconcileDelivery(
-                  yield* readLedger(found.file),
+                  yield* readLedger(found.incarnation),
                   delivery,
                   as,
                   actorName({ ...whoOf(client), requestId: request }),
@@ -3297,7 +3350,7 @@ const frontDoorHandlers = (
                 );
                 if ("error" in settled)
                   return yield* new HostRefused({ reason: `${REFUSED_INPUT}: ${settled.error}` });
-                yield* appendLine(found.file, settled);
+                yield* appendLine(settled);
                 return fromText(toText(settled));
               }),
             ),
@@ -3398,13 +3451,10 @@ const frontDoorHandlers = (
           plainly(
             Effect.gen(function* () {
               const view = yield* known(runId);
-              const task = view.task === null ? null : yield* readTask(env.stateDir, view.task);
+              const task = view.task === null ? null : yield* readTask(view.task);
               const agents = Arr.filter(
                 Arr.map(
-                  Arr.filter(
-                    yield* everyRegistered(env.stateDir),
-                    (entry) => entry.runId === runId,
-                  ),
+                  Arr.filter(yield* everyRegistered, (entry) => entry.runId === runId),
                   (entry) => entry.agent,
                 ),
                 (name) => agent === undefined || name === agent,
@@ -3446,7 +3496,7 @@ const frontDoorHandlers = (
             const view = yield* registry.view(runId);
             if (view === null)
               return { ok: false, code: "run_not_found", human: `No Run "${runId}".`, data: {} };
-            const task = view.task === null ? null : yield* readTask(env.stateDir, view.task);
+            const task = view.task === null ? null : yield* readTask(view.task);
             // Only an answer is kept against its request: a failure is retried under the same one.
             return yield* once(
               trail(runId),
@@ -3570,10 +3620,13 @@ const frontDoorHandlers = (
                       ),
                       Effect.catch((cause) => Effect.succeed(refusal(cause).error.message)),
                     ),
-                  progress: progressFor,
+                  progress: (id) => progressFor(id).pipe(Effect.provideContext(bun)),
                   flow: (id) =>
                     record !== undefined
-                      ? recordFlow(record, id).pipe(Effect.orElseSucceed(() => null))
+                      ? recordFlow(record, id).pipe(
+                          Effect.orElseSucceed(() => null),
+                          Effect.provideContext(bun),
+                        )
                       : Effect.gen(function* () {
                           return yield* taskFlowOf(
                             {
@@ -3584,7 +3637,10 @@ const frontDoorHandlers = (
                             },
                             id,
                           );
-                        }).pipe(Effect.orElseSucceed(() => null)),
+                        }).pipe(
+                          Effect.orElseSucceed(() => null),
+                          Effect.provideContext(bun),
+                        ),
                 });
               }),
             ),
@@ -4147,17 +4203,20 @@ const own = (
         ),
         Layer.provide(door.protocol),
         Layer.provide(
-          foundationLayer({
-            dir,
-            userDir: env.userDir,
-            toast: (title, body, sound, runId) =>
-              PubSub.publish(toasted, { runId, title, body, sound }).pipe(Effect.asVoid),
-            herd: { socketPath: herdSocket, pluginRoot: env.pluginRoot, locate },
-            readings: usage.readings,
-            messagePoll: seconds ? "1 second" : undefined,
-          }).pipe(Layer.provideMerge(Layer.succeed(CheckProcesses, checks))),
+          (yield* configuredAgents(dir, usage.readings, catalogue)).pipe(
+            Layer.provideMerge(
+              foundationLayer({
+                dir,
+                userDir: env.userDir,
+                toast: (title, body, sound, runId) =>
+                  PubSub.publish(toasted, { runId, title, body, sound }).pipe(Effect.asVoid),
+                herd: { socketPath: herdSocket, pluginRoot: env.pluginRoot, locate },
+                readings: usage.readings,
+                messagePoll: seconds ? "1 second" : undefined,
+              }).pipe(Layer.provideMerge(Layer.succeed(CheckProcesses, checks))),
+            ),
+          ),
         ),
-        Layer.provide(yield* configuredAgents(dir, usage.readings, catalogue)),
         Layer.provide(forgeHttpLayer),
         Layer.tap(() => Effect.forkScoped(onceAnswering)),
       ),

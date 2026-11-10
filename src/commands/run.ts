@@ -48,6 +48,8 @@ import {
   runShown,
   runProgress,
   reportFor,
+  hostTaskOf,
+  hostTasks,
 } from "../lifecycle";
 import { unsafePathComponent } from "../naming";
 import type { RunView } from "../engine";
@@ -67,7 +69,7 @@ import {
   type Intent,
 } from "../intent";
 import { scopeFor, scopeKey } from "../registry";
-import { readTask, taskOfWorkspace, type TaskChoice } from "../task";
+import type { TaskChoice } from "../task";
 import { runDeliveries } from "./steer";
 import { givenVerifications } from "../verify-spec";
 import { agentStartRefusal, CLI_CHECKOUT_FIX, hostOptions, insideCheckout } from "../agent-start";
@@ -166,7 +168,9 @@ const chosenTask = Effect.fn("collie.chosenTask")(function* (
     );
   if (here) return taken({ mode: "here" });
   if (Option.isSome(named)) {
-    const task = yield* readTask(env.stateDir, named.value);
+    const task = Option.getOrNull(
+      Arr.findFirst(yield* hostTasks(env), (one) => one.id === named.value),
+    );
     if (!task)
       return refuse(
         err("task_not_found", `Task "${named.value}" was not found.`, { task: named.value }),
@@ -174,7 +178,7 @@ const chosenTask = Effect.fn("collie.chosenTask")(function* (
     return taken({ mode: "continue", task });
   }
   if (!current) return taken({ mode: "new" });
-  const kept = yield* taskOfWorkspace(env.stateDir, env.workspaceId);
+  const kept = yield* hostTaskOf(env, env.workspaceId);
   if (!kept)
     return refuse(
       err(
@@ -1190,7 +1194,7 @@ const holdTask = Effect.fn("run.holdTask")(function* (
   request: string,
   reason: string | undefined,
 ) {
-  const task = yield* taskOfWorkspace(env.stateDir, workspace);
+  const task = yield* hostTaskOf(env, workspace);
   if (task === null)
     return err("invalid_input", `Workspace "${workspace}" is not a Task's.`, { workspace });
   const runs = Arr.filter((yield* runViews(env, task.id)).runs, (view) => !isSettled(view));

@@ -3,6 +3,7 @@ import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
+import type { Records } from "../src/records";
 import { Effect, FileSystem, Layer, Schema, type Scope, flow, Result } from "effect";
 import type { FetchLike } from "forges";
 import { forgeHttpTest, type ForgeHttp } from "../src/forge/http";
@@ -70,7 +71,7 @@ const forgeHttp = forgeHttpTest(
 
 /** `runEffect`, with ForgeHttp asking the fake of each forge made last. */
 const runWithForge = <A, E>(
-  effect: Effect.Effect<A, E, ForgeHttp | Scope.Scope | PlatformServices>,
+  effect: Effect.Effect<A, E, ForgeHttp | Scope.Scope | PlatformServices | Records>,
 ) => runEffect(effect.pipe(Effect.provide(Layer.fresh(forgeHttp))));
 
 const mr65 = (over: Partial<FakeMr>): FakeMr => ({

@@ -23,7 +23,7 @@ import { keepQueued } from "../src/delivery-queue";
 import { Herdr, type AgentInfo } from "../src/herdr";
 import { agentsIn } from "../src/herds";
 import type { CompactionPorts, Stopped } from "../src/compaction";
-import { appendLine, ledgerPath } from "../src/steering";
+import { appendLine } from "../src/steering";
 import type { RunFacts } from "../src/runs";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
@@ -410,7 +410,7 @@ test("a Delivery queued to it keeps it", () =>
     Effect.gen(function* () {
       yield* arranged();
       const at = yield* isoAgo(0);
-      yield* appendLine(yield* ledgerPath(rig.stateDir, TERMINAL), {
+      yield* appendLine({
         id: "d1",
         at,
         run: "r1",
@@ -470,9 +470,8 @@ test("an agent typed into since it went idle is kept; one typed into before is n
   runEffect(
     Effect.gen(function* () {
       yield* arranged();
-      const ledger = yield* ledgerPath(rig.stateDir, TERMINAL);
       const override = (at: string) =>
-        appendLine(ledger, { kind: "manual_override", at, incarnation: TERMINAL, by: "mk" });
+        appendLine({ kind: "manual_override", at, incarnation: TERMINAL, by: "mk" });
       const run = yield* finished(3 * HOUR_MS);
 
       yield* override(yield* isoAgo(3 * HOUR_MS));

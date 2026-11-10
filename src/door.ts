@@ -30,6 +30,7 @@ import { foregroundLayer } from "./foreground";
 import type { AgentInfo } from "./herdr";
 import { platformLayer, type PlatformServices } from "./platform";
 import { drawerWrites, recordFrames, type RecordSources } from "./record";
+import { recordsReadLayer } from "./records";
 import { firstValueTimed } from "./first-value";
 import { markFirst } from "./record-marks";
 import { RunModel, runModelLayer, type ModelLink } from "./run-model";
@@ -337,6 +338,8 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
     let alive: ReadonlyArray<AgentInfo> = [];
     const writes = yield* PubSub.unbounded<void>();
     const firstListed = yield* Deferred.make<ReadonlyArray<string>>();
+    /** The engine lists its Runs once it has migrated `host.db`. */
+    const migrated = yield* Deferred.make<void>();
     let asked = 0;
     const answers = new Map<number, Deferred.Deferred<unknown>>();
     const ask = (asking: Asked) =>
@@ -396,6 +399,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
             model?.gone(message.gone);
             if (message.order !== null) order = message.order;
             if (order.length > 0) Deferred.doneUnsafe(firstListed, Effect.succeed(order));
+            Deferred.doneUnsafe(migrated, Effect.void);
             alive = message.alive;
             return PubSub.publish(writes, undefined);
           });
@@ -473,27 +477,37 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
           };
     const changes = Stream.fromPubSub(writes);
     const bun = yield* Effect.context<PlatformServices>();
+    /** The door's own read-only connection to `host.db`. */
+    const withRecords = yield* Effect.cached(
+      Deferred.await(migrated).pipe(
+        Effect.andThen(Layer.buildWithScope(recordsReadLayer(env.stateDir), scope)),
+        Effect.map((records) => Context.merge(bun, records)),
+      ),
+    );
     const handlers = DoorRpcs.toLayer({
       identity: () => Effect.succeed(identity),
       runDetail: (key) =>
         sources === undefined
           ? Stream.die("the door reads no record without the Run model")
-          : recordFrames(
-              sources,
-              key,
-              Stream.merge(
-                changes,
-                drawerWrites(env.stateDir, key.runId).pipe(Stream.provideContext(bun)),
-              ),
-            ).pipe(
-              markFirst("host:emit", key.runId),
-              (frames) =>
-                firstValueTimed(frames, (ms) =>
-                  Effect.sync(() => port.post({ _tag: "Slow", rpc: "runDetail", ms })),
+          : Stream.unwrap(
+              Effect.map(withRecords, (context) =>
+                recordFrames(
+                  sources,
+                  key,
+                  Stream.merge(
+                    changes,
+                    drawerWrites(env.stateDir, key.runId).pipe(Stream.provideContext(bun)),
+                  ),
+                ).pipe(
+                  markFirst("host:emit", key.runId),
+                  (frames) =>
+                    firstValueTimed(frames, (ms) =>
+                      Effect.sync(() => port.post({ _tag: "Slow", rpc: "runDetail", ms })),
+                    ),
+                  Stream.provideContext(context),
                 ),
-              Stream.provideContext(bun),
-              Stream.orDie,
-            ),
+              ),
+            ).pipe(Stream.orDie),
     });
     // A new heap runs the record's code slowly until its JIT has compiled it.
     if (sources !== undefined) {
@@ -507,13 +521,14 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
       yield* Effect.forkScoped(
         Effect.gen(function* () {
           const runs = Arr.take(yield* Deferred.await(firstListed), WARMING);
+          const context = yield* withRecords;
           const began = yield* Clock.currentTimeMillis;
           for (const runId of runs)
             yield* recordFrames(
               unheard,
               { runId, tail: true, pages: 1, refreshMr: false, parts: true },
               Stream.never,
-            ).pipe(Stream.runHead, Effect.provideContext(bun), Effect.ignore);
+            ).pipe(Stream.runHead, Effect.provideContext(context), Effect.ignore);
           const ms = (yield* Clock.currentTimeMillis) - began;
           port.post({ _tag: "Warmed", runs: runs.length, ms });
         }),

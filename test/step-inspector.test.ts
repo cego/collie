@@ -4,10 +4,10 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem, Option, Schema, Stream, flow, Result } from "effect";
 import { frontDoor, socketOf } from "../src/host";
 import { readLaunches } from "../src/launches";
-import { everyRegistered } from "../src/registry";
 import { until } from "./support/host";
 import { collie, proves } from "./support/world";
 import { recordIn } from "../src/board-model";
+import { registeredAt } from "./support/records";
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
 test(
@@ -41,7 +41,7 @@ test(
           const entry = Option.getOrUndefined(
             Arr.findFirst(
               yield* until(
-                () => everyRegistered(world.state),
+                () => registeredAt(world.state),
                 (rows) => Arr.some(rows, (one) => one.agent === launch.agent),
               ),
               (one) => one.agent === launch.agent,

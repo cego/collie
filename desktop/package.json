@@ -6,7 +6,7 @@
     "view": "electrobun prepare && nuxi generate view",
     "start": "bun run view && electrobun dev",
     "build": "bun run view && electrobun build --env=stable",
-    "typecheck": "electrobun prepare && tsc --noEmit && nuxi typecheck view",
+    "typecheck": "electrobun prepare && tsrs --noEmit --fast && nuxi typecheck view --checker=golar",
     "test": "bun test"
   },
   "dependencies": {
@@ -33,9 +33,12 @@
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "0.131.0",
+    "@golar/vue": "0.1.11",
     "@types/bun": "1.4.2",
-    "@typescript/native": "npm:typescript@7.0.2",
-    "typescript": "npm:@typescript/typescript6@6.0.2",
-    "vue-tsc": "3.3.12"
+    "@vue/compiler-dom": "3.5.45",
+    "@vue/language-core": "3.3.13",
+    "golar": "0.1.11",
+    "tsrs": "0.23.0-ts7.1.0-beta",
+    "typescript": "npm:@typescript/typescript6@6.0.2"
   }
 }

@@ -100,9 +100,7 @@ const news = Effect.fn("SideJobs.news")(function* (
 ) {
   if (!(yield* loadDefaults(env.userDir)).proactive) return;
   // Unread Tasks would put every Run in the host's own Herd and retire the rest's News.
-  const herdOfTask = new Map(
-    Arr.map(yield* listTasks(env.stateDir), (task) => [task.id, task.herd ?? null]),
-  );
+  const herdOfTask = new Map(Arr.map(yield* listTasks, (task) => [task.id, task.herd ?? null]));
   const own = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   for (const { herd } of sessions) {
     if (herd === null) continue;

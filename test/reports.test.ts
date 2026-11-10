@@ -3,6 +3,7 @@ import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import { createServer } from "node:net";
 import { fakeHerdr } from "./support/fake-herdr-core";
+import { hostRecords, registeredAt } from "./support/records";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Option, Schema, Stream, flow, Result } from "effect";
 import { writeConfigValue } from "../src/config";
@@ -11,7 +12,6 @@ import { runDir } from "../src/engine";
 import { readEnv } from "../src/env";
 import { Herdr } from "../src/herdr";
 import { peersOf } from "../src/peers";
-import { everyRegistered } from "../src/registry";
 import { holderLives } from "../src/lock";
 import { readTask } from "../src/task";
 import { runEffect } from "./support/effect";
@@ -200,7 +200,7 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           );
           const requester = Option.getOrUndefined(
             Arr.findFirst(
-              yield* everyRegistered(second.world.state),
+              yield* registeredAt(second.world.state),
               (one) => one.runId === requesterRun,
             ),
           )!;
@@ -273,7 +273,7 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
             ).toBe(
               (yield* exec(["git", "rev-parse", "HEAD"], { cwd: first.world.project })).stdout,
             );
-            expect(yield* everyRegistered(first.world.state)).toHaveLength(0);
+            expect(yield* registeredAt(first.world.state)).toHaveLength(0);
             return;
           }
           expect(text).toContain("start: applied");
@@ -318,7 +318,7 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           const ready = yield* until(
             () =>
               Effect.all({
-                rows: everyRegistered(first.world.state),
+                rows: registeredAt(first.world.state),
                 view: firstHost.run({ runId }),
               }),
             (read) =>
@@ -340,7 +340,9 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
                 }),
               ),
             );
-          const task = yield* readTask(first.world.state, view!.task!);
+          const task = yield* hostRecords(first.world.state, readTask(view!.task!)).pipe(
+            Effect.orDie,
+          );
           let human: string | undefined;
           let sibling: string | undefined;
           if (mode === "sibling") {
@@ -366,10 +368,7 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
               (row) => row?.status.status === "complete",
             );
             sibling = Option.getOrUndefined(
-              Arr.findFirst(
-                yield* everyRegistered(first.world.state),
-                (one) => one.runId === other,
-              ),
+              Arr.findFirst(yield* registeredAt(first.world.state), (one) => one.runId === other),
             )?.paneId;
             expect(sibling).toBeDefined();
           }

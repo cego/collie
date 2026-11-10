@@ -29,7 +29,7 @@ import { offerFields, offerInput, StepResult, type RunDetail } from "./board-mod
 import { gitlabHostOf, loadDefaults, setSetting } from "./config";
 import { parseSetting, settingText } from "./settings";
 import { herdDir, machineHerd } from "./steering";
-import { liveFor, markedOf } from "./live";
+import { liveFor, markedOf, type Ledgers } from "./live";
 import { isStale, layers, loadDefinitions, type Definitions, type Provenance } from "./definitions";
 import { selfCommand, type PluginEnv } from "./env";
 import { Herdr, type AgentInfo, type WorkspaceInfo } from "./herdr";
@@ -47,6 +47,9 @@ import {
   followUpRun,
   followRunDetail,
   runDetailNow,
+  asks,
+  hostTaskOf,
+  hostTasks,
   type DetailKey,
   invokeOffer,
   type BoardRead,
@@ -57,20 +60,22 @@ import {
   steerAbout,
   steerRun,
   usageReadings,
+  hostProposals,
+  hostRegistered,
 } from "./lifecycle";
 import type { UsageReading } from "./usage-model";
 import { keyboard } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
 import { COLLIE_TAB, reason, runTitle } from "./naming";
 import { listRuns, settled, type RunFacts } from "./runs";
-import { everyRegistered, type AgentEntry } from "./registry";
+import { type AgentEntry } from "./registry";
 import { reportedWorktrees } from "./worktree";
 import { scopeFor, type RegistryScope } from "./registry";
 import type { CompactionSettings } from "./compaction";
 import { statusLine } from "./disposition";
 import { selectionPath, writeSelection } from "./selection";
 import { everyViewerPaints } from "./outer";
-import { listTasks, taskOfWorkspace, type TaskChoice, type TaskRecord } from "./task";
+import type { TaskChoice, TaskRecord } from "./task";
 import { newRequestId } from "./operations";
 import { typedPaths } from "./attachments";
 import {
@@ -125,6 +130,10 @@ export interface ControlSession extends BoardSession {
   releases?: string;
   /** Where the board's Runs come from: the host's, unless a test hands over its own. */
   runsOf?: RunsOf;
+  /** Where the board's Tasks and registered agents come from: the host's, unless a test hands over its own. */
+  recordsOf?: RecordsOf;
+  /** What the live region reads of the host's ledgers: the host's, unless a test hands over its own. */
+  ledgers?: Ledgers;
   /** Where the board's Tasks come from: one read of the host's board, unless followed. */
   tasksOf?: () => Effect.Effect<BoardRead>;
   /** Where the drawer's details come from: one read of the host's, unless followed; null closes it. */
@@ -168,7 +177,7 @@ export const continueFlow = Effect.fn("Flows.continueFlow")(function* (
   env: PluginEnv,
   prompts: FlowPrompts,
 ) {
-  const here = yield* taskOfWorkspace(env.stateDir, env.workspaceId);
+  const here = yield* hostTaskOf(env, env.workspaceId);
   const task =
     here === null ? yield* pickTask(env, prompts) : ({ mode: "continue", task: here } as const);
   if (task === null) return 0;
@@ -183,7 +192,7 @@ const HERE = "here";
  * work's Task rather than given a workspace of its own. Null is the human backing out.
  */
 const pickTask = Effect.fn("Flows.pickTask")(function* (env: PluginEnv, prompts: FlowPrompts) {
-  const tasks = yield* listTasks(env.stateDir);
+  const tasks = yield* hostTasks(env);
   const kept =
     env.workspaceId === null
       ? []
@@ -857,7 +866,7 @@ export function appState(session: ControlSession, env: PluginEnv) {
     const reuse = again.reuse ? last : null;
     // One scan of the run dirs per read, shared by the board and History: they are two
     // Views over the same directory, and reading it twice doubles the cost of a refresh.
-    const scanned = reuse ? undefined : yield* scan(env, runsOf);
+    const scanned = reuse ? undefined : yield* scan(env, session);
     const runs = scanned?.runs;
     // One read of the register and the workspace list for both boards: a wide tick
     // costs the local board's calls plus nothing, and the two boards cannot reconcile
@@ -947,6 +956,7 @@ export function appState(session: ControlSession, env: PluginEnv) {
         : yield* liveFor({
             stateDir: env.stateDir,
             socketPath: env.socketPath,
+            ledgers: session.ledgers ?? ledgersOf(env),
             run: where === null ? null : { id: where.id, dir: where.dir },
             // From the scan this read already made, never a second read per Run: the
             // facts are the only thing the marks need that a row does not carry.
@@ -1046,7 +1056,10 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       // A run is where its newest agent is; one that has started none is only reachable
       // as the workspace it lives in.
       const agent = Option.getOrUndefined(
-        Arr.findLast(yield* everyRegistered(env.stateDir), (entry) => entry.runId === run.id),
+        Arr.findLast(
+          yield* hostRegistered(env).pipe(Effect.orElseSucceed(() => [])),
+          (entry) => entry.runId === run.id,
+        ),
       );
       if (agent) return yield* went(session.herdr.agentFocus(agent.agent));
       const workspace =
@@ -1054,7 +1067,10 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
         (run.task === null
           ? null
           : (Option.getOrUndefined(
-              Arr.findFirst(yield* listTasks(env.stateDir), (task) => task.id === run.task),
+              Arr.findFirst(
+                yield* hostTasks(env).pipe(Effect.orElseSucceed(() => [])),
+                (task) => task.id === run.task,
+              ),
             )?.workspace ?? null));
       if (!workspace) return `${jump.label} has no tab to jump to`;
       return yield* went(session.herdr.workspaceFocus(workspace));
@@ -1099,7 +1115,10 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
         (run.task === null
           ? null
           : (Option.getOrUndefined(
-              Arr.findFirst(yield* listTasks(env.stateDir), (task) => task.id === run.task),
+              Arr.findFirst(
+                yield* hostTasks(env).pipe(Effect.orElseSucceed(() => [])),
+                (task) => task.id === run.task,
+              ),
             )?.workspace ?? null));
       // The same state directory as this board's, whatever the pane's shell would default to.
       const follow = yield* Effect.orDie(
@@ -1395,9 +1414,10 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
     const live = yield* liveFor({
       stateDir: env.stateDir,
       socketPath: env.socketPath,
+      ledgers: session.ledgers ?? ledgersOf(env),
       run: null,
       runs: yield* Effect.gen(function* () {
-        const { runs, registered } = yield* scan(env, session.runsOf);
+        const { runs, registered } = yield* scan(env, session);
         return Arr.map(rows, (row) => {
           const run = Option.getOrUndefined(Arr.findFirst(runs, (one) => one.id === row.id));
           return run === undefined
@@ -1412,14 +1432,14 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
   // Nothing to loop on: with no keyboard the board is a report, so it is printed once
   // and the entrypoint ends rather than spinning on a `takeKey` that can never answer.
   if (!process.stdin.isTTY) {
-    const view = yield* boardOf(session, yield* scan(env, session.runsOf));
+    const view = yield* boardOf(session, yield* scan(env, session));
     const steering = yield* steeringOf(view);
     const once = renderWorkspace(view, unreadable ?? why, undefined, steering);
     process.stdout.write(`${once}\n`);
     return 0;
   }
   const keys = yield* keyboard();
-  let view = yield* boardOf(session, yield* scan(env, session.runsOf));
+  let view = yield* boardOf(session, yield* scan(env, session));
   let note: string | null = why;
   let drawn = "";
   let read = yield* Clock.currentTimeMillis;
@@ -1453,12 +1473,12 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
       } else {
         note = yield* act(session, env, view, key);
       }
-      view = yield* boardOf(session, yield* scan(env, session.runsOf));
+      view = yield* boardOf(session, yield* scan(env, session));
       read = yield* Clock.currentTimeMillis;
       continue;
     }
     if ((yield* Clock.currentTimeMillis) - read >= REFRESH_MS) {
-      view = yield* boardOf(session, yield* scan(env, session.runsOf));
+      view = yield* boardOf(session, yield* scan(env, session));
       read = yield* Clock.currentTimeMillis;
     }
   }
@@ -1550,6 +1570,18 @@ interface SessionNow {
  * the register can disagree — which had the two boards reconciling one tab's label from
  * two different answers about the same agent.
  */
+/** The host's ledgers, asked of it: a board that cannot reach it marks nothing. */
+const ledgersOf = (env: PluginEnv): Ledgers => ({
+  overridden: asks(env, (client) => client.overridden()).pipe(
+    Effect.map((read) => new Set(read.ok ? read.value : [])),
+  ),
+  deliveriesOf: (run) =>
+    asks(env, (client) => client.deliveries({ runId: run })).pipe(
+      Effect.map((read) => (read.ok ? (read.value ?? []) : [])),
+    ),
+  proposals: (herd) => hostProposals(env, herd).pipe(Effect.orElseSucceed(() => [])),
+});
+
 const liveOf = Effect.fn("Flows.liveOf")(function* (session: ControlSession) {
   return yield* Effect.all(
     { alive: session.herdr.agentList(), workspaces: session.herdr.workspaceList() },
@@ -1598,11 +1630,22 @@ type RunsOf = (
   FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
 >;
 
-const scan = Effect.fn("Flows.scan")(function* (env: PluginEnv, runsOf: RunsOf = listRuns) {
+type RecordsOf = (env: PluginEnv) => ReturnType<typeof hostRecordsOf>;
+
+// A host that cannot be asked says so on the board itself.
+const hostRecordsOf = (env: PluginEnv) =>
+  Effect.all({
+    tasks: hostTasks(env).pipe(Effect.orElseSucceed(() => [])),
+    registered: hostRegistered(env).pipe(Effect.orElseSucceed(() => [])),
+  });
+
+const scan = Effect.fn("Flows.scan")(function* (
+  env: PluginEnv,
+  from: Pick<ControlSession, "runsOf" | "recordsOf">,
+) {
   return {
-    runs: yield* runsOf(env),
-    tasks: yield* listTasks(env.stateDir).pipe(Effect.orElseSucceed(() => [])),
-    registered: yield* everyRegistered(env.stateDir),
+    runs: yield* (from.runsOf ?? listRuns)(env),
+    ...(yield* (from.recordsOf ?? hostRecordsOf)(env)),
   } satisfies Scanned;
 });
 

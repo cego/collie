@@ -14,6 +14,7 @@ import { IntentSeedSchema } from "./intent-model";
 import { ScheduleChange, ScheduleChanged, ScheduleListing } from "./schedule-model";
 import { VerifyEvent, Pass, VerificationSchema } from "./verify-model";
 import { MeasureEvent } from "./measurement-model";
+
 export { PASSES, Pass } from "./verify-model";
 import { IntentChangeSchema, ChangedIntent } from "./intent-model";
 import { UsageReading } from "./usage-model";
@@ -22,6 +23,15 @@ import { ConnectionLogin, HostConnections } from "./connection-model";
 import { HostDefinitions, SharedDefinition } from "./definitions-model";
 import { VerifySpecSchema } from "./verify-spec";
 import { OwnInventory, OwnWords } from "./own-words-model";
+
+/** A workspace a start keeps its Run in, as the front door it was started from saw it. */
+export const KeptHere = Schema.Struct({
+  workspace: Schema.String,
+  label: Schema.String,
+  cwd: Schema.String,
+  herd: Schema.NullOr(Schema.String),
+});
+export type KeptHere = Schema.Schema.Type<typeof KeptHere>;
 
 const STATE_ORDER = [
   "blocked",
@@ -1528,6 +1538,8 @@ export const FrontDoorRpcs = RpcGroup.make(
       task: Schema.optional(Schema.String),
       /** A new Task to open for it under this label, once its checkout is known. */
       taskLabel: Schema.optional(Schema.String),
+      /** The workspace to keep it in, in the Task kept there or a new one. */
+      here: Schema.optional(KeptHere),
       parent: Schema.optional(Schema.String),
       intent: Schema.optional(IntentSeedSchema),
       /** The approved set given with the start, over the project's and the user's files. */

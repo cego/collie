@@ -512,8 +512,11 @@ export const renovation = (landing: Landing = shippedLanding) =>
             say: (line) => host.record(runId, line),
           }),
         );
-        if ("unresolved" in held)
-          yield* host.record(runId, `◦ ${held.unresolved} — carrying on without one`);
+        if (!("slugs" in held))
+          yield* host.record(
+            runId,
+            `◦ ${"none" in held ? held.none : held.unresolved} — carrying on without one`,
+          );
         const claim = "slugs" in held && held.slugs.length > 0 ? Arr.join(held.slugs, ", ") : null;
         // Given back once the work is finished, merged or not, and not before: holding it
         // across a consultation is what stops anyone deploying on a half-finished renovation.

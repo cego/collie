@@ -127,6 +127,14 @@ SQLite file. The registry in `engine.ts` loads a module into a generation of its
 value came from, its options, its decisions and its receipts. The request id is the claim:
 the same request twice is one Run, and a Run recorded and not yet handed to the engine is
 handed over when the host starts again ([ADR-0017](adr/0017-one-request-is-one-run.md)).
+A Task is a row of `collie_tasks` in the same file, looked up by id or by workspace and
+written only by the host
+([ADR-draft-collies-own-records-live-in-the-hosts-database](adr/draft-collies-own-records-live-in-the-hosts-database.md)):
+a start with `--here` sends the workspace it was given from, and the host keeps the Run in
+the Task already kept there or makes one. Other processes list Tasks through the host's
+`tasks` request. Each write tells the Run model which Task moved and invalidates the Tasks'
+Reactivity key, which the board follows. The first host on a state directory imports every
+`tasks/<id>.json` once and leaves the files in place.
 A starting host registers every saved generation before a Run it recovers looks one up, so a
 parent resumed in the swap reads a child of any generation.
 
@@ -1267,7 +1275,7 @@ boundary `turnEnded` in `agents.ts` polls herdr's status first, with no budget w
 agent is `working` or `blocked`, and only then samples its context, asks it to compact or
 sends the step. A status herdr cannot give ends the wait, and so does a stop of the Run,
 which sends nothing. The wait is outside the Dispatcher's transaction, because that holds
-the agent's ledger lock and a steer would otherwise wait for the turn to end. The Run log
+the agent's ledger and a steer would otherwise wait for the turn to end. The Run log
 says once that the step waits, and how long it waited.
 
 Only sending the compaction request takes the Dispatcher's transaction. Reading the
@@ -1351,7 +1359,12 @@ A **session** is one herdr session and one workspace, taken together; a Run's ow
 does not move it out of the workspace it was started from.
 `registry.ts` records which long-lived agents a session still has, per workspace and repo:
 one entry per agent, whatever its Run or role, so a panel's seats and every Run started
-from the same place are all there. Registering an agent drops the entries registered before
+from the same place are all there. The register is `collie_agents` in `host.db`, written
+only by the host when it launches an agent
+([ADR-draft-collies-own-records-live-in-the-hosts-database](adr/draft-collies-own-records-live-in-the-hosts-database.md)):
+other processes, `collie doctor` and the board's Enter among them, read it through the
+host's `registered` request, and the first host on a state directory imports every
+`agents/<register>.json` once and leaves the files in place. Registering an agent drops the entries registered before
 its launch listed herdr's agents that the listing did not have; one registered since is kept,
 since it may be a seat that started alongside it. A question or a hand-off looks only at the asking Run's lineage —
 `Place.lineage`, the Run and the Runs it was started from or whose `runs/<id>/plan` it builds — so `handoff.ts` gives one run's
@@ -1387,12 +1400,12 @@ prompt, a repair, a nudge, two hand-offs and a compaction request — none of th
 the others, so a hand-off from the board and a nudge could land in one pane
 in either order.
 
-`Dispatcher.transaction(deps, entry, body)` holds one agent's ledger lock for the whole of
+`Dispatcher.transaction(deps, entry, body)` holds one agent's ledger for the whole of
 what a caller wants to do with it: it revalidates the incarnation against a fresh
-`agent list`, hands `body` a `Channel` bound to that identity, and releases the lock when
-`body` returns. A channel used after its transaction closes, or a second transaction for
-one agent in one process, is a defect rather than a runtime error — the second would
-deadlock on the lock that makes the first safe.
+`agent list`, hands `body` a `Channel` bound to that identity, and lets the ledger go when
+`body` returns. Only the host writes a ledger, so holding one is the host's own: a second
+transaction for that agent fails at once, saying the ledger is already open, and a channel
+used after its transaction closes is a defect.
 
 `channel.submit(text, draft)` writes `reserved` **before** it calls herdr and settles it
 after: `submitted` where herdr took it, `failed` where herdr refused, `unknown` where the
@@ -1425,8 +1438,11 @@ its socket. On a Machine set to core, it is that Machine's core session, keyed b
 socket. Never by a directory: a cwd would key two sessions in one repository to the
 same Herd, and one session across two repositories to different ones. Everything shared
 across a session's workspaces lives under `<state>/herd/<herdKey>/`: the conversation, the
-proposals, the budget and the elections. That directory has no checkout, and it is where
-the Home works.
+budget and the elections. That directory has no checkout, and it is where the Home works.
+The proposals journal is the Herd's rows of `collie_proposals` in the host's `host.db`,
+written only by the host and read by other processes through its `proposals` and
+`proposal` requests; the first host on a state directory imports each
+`herd/<herdKey>/proposals.jsonl` once and leaves the file in place.
 
 The **Home** is two core terminals the Machine's host keeps, whatever its
 `terminal_backend`: `collie-board`, which runs `collie board --draw`, and `collie-chat`,
@@ -1457,11 +1473,16 @@ launch recorded, proves nothing
 
 ## Steering ledgers
 
-Two append-only journals, both written only by `steering.ts`, both read by deriving state
+Two append-only records, both written only by `steering.ts`, both read by deriving state
 from their lines rather than by rewriting them:
 
-- `<state>/agents/<incarnation>/deliveries.jsonl` — one line per state change of one
-  message to one agent, under a lock per incarnation. `reserved` is written **before**
+- `collie_deliveries` in the host's `host.db` — one row per state change of one message to
+  one agent, in one ledger per incarnation, written only by the host
+  ([ADR-draft-collies-own-records-live-in-the-hosts-database](adr/draft-collies-own-records-live-in-the-hosts-database.md)).
+  Other processes read it through the host's `deliveries` and `overridden` requests; the
+  first host on a state directory imports every `agents/<incarnation>/deliveries.jsonl` once
+  and leaves the files in place. When retention forgets a Task, the ledgers that name only
+  its Runs go with it. `reserved` is written **before**
   herdr is called, so a crash leaves a durable record that something may have been sent;
   `submitted` and `acknowledged` are separate facts and are never collapsed.
   A `reserved` line nobody settled becomes `unknown`, which blocks further deliveries
@@ -1636,6 +1657,11 @@ untyped error channels, and resources started outside their Effect context. `lin
 uses `effect-tsgo oxlint` directly so lint cannot silently lose Effect rules when a
 package installation skips the patch hook. Root typechecking also covers `tools/`.
 
+Typechecking runs tsrs, a Rust port of TypeScript 7.1, with `--fast`: it reports what
+`tsc` does in a fifth of the time and under half the memory. The Effect language service's
+diagnostics are off in `tsconfig.json`, so typechecking needs no Effect plugin; lint
+reports them.
+
 `lint:vue` prepares Nuxt's declarations and projects Vue scripts and template expressions
 through Vue's compiler before running the same rules. Diagnostics map back to the Vue
 source. Static attribute and slot names are excluded because their generated JavaScript
@@ -1665,11 +1691,15 @@ dependencies, run `bun install` in `desktop/` first: the root install refuses a 
 Desktop lockfile. CI relies on that one install before its root gate.
 Desktop's full typecheck, including its Vue views, runs separately with
 `cd desktop && bun run typecheck`; CI runs that as a job of its own.
-Desktop installs TypeScript twice. `@typescript/native` is TypeScript 7, the `tsc` that
-checks its `.ts` code, as the CLI's does. `typescript` is an alias for
-`@typescript/typescript6`, because TypeScript 7's package has no JS API and vue-tsc, which
-checks the `.vue` views through `nuxi typecheck`, loads one. The alias goes once
-TypeScript 7.1 ships its API and vue-tsc supports it: then `typescript` is 7 again.
+Desktop's `.ts` code is checked by tsrs, as the CLI's is, and its `.vue` views by golar
+through `nuxi typecheck --checker=golar`. Golar bundles its own TypeScript 7 and reads
+`view/golar.config.ts`. Not `@vue/content-mapper`, TypeScript 7.1's route for `.vue`
+files: it reads `@nuxt/ui`'s compiled `.vue` files instead of their declarations, and
+misses wrong props on Nuxt UI components. `typescript` is an alias for
+`@typescript/typescript6` because `tools/lint-vue.ts` loads TypeScript's JS API, which
+TypeScript 7.0 does not have. That tool also imports `@vue/language-core` and
+`@vue/compiler-dom`, so Desktop declares both at the versions `@golar/vue` uses: with two
+copies of `@vue/compiler-dom` installed, their template AST types do not match.
 
 A test leaves nothing behind. `test/support/hosts.ts`, a preload, gives each test file a
 temporary root of its own, `TMPDIR` inside it, and removes it when the file ends. Every

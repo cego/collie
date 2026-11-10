@@ -648,10 +648,12 @@ project's slug or one of its Helle shorthands, ignoring case — a monorepo, whi
 project of its own, needs several. A name two projects answer to is not guessed
 between: it is unsettled, naming both. A repository's `.collie/helle.json`,
 `{"projects": [...]}`, names them instead, by slug or shorthand, and `[]` declares none.
-Where they cannot be settled — an application with no project, nothing found, Helle
-refusing — nothing is merged or tagged: it asks **`go-<n>.claim.unclaimed`**, saying why,
-with **Try again**, **Release without a Helle claim**, recorded on its log as the human's
-say, and **Finish**. Either of the last two first gives back what it did take; a claim
+A repository with no Helle project — none of its own, and none an application or a deploy
+job names — has nothing to claim: the release goes on without asking, and says so once on
+its log. Where a claim that might exist cannot be settled — an application with no project,
+an ambiguous match, Helle refusing — nothing is merged or tagged: it asks
+**`go-<n>.claim.unclaimed`**, saying why, with **Try again**, **Release without a Helle
+claim**, recorded once on its log as the human's say, and **Finish**. Either of the last two first gives back what it did take; a claim
 Helle will not take back parks the Run, naming it, until a resume gives it back. A Run gives
 back only what is still in its record, and a project you claim through Desktop's
 `collie_helle` leaves every Run's record
@@ -815,9 +817,11 @@ or queues for some of them, it asks **`claims-1`**, naming each such project and
   nothing.
 - **Finish** ends the Run, claiming and staging nothing.
 
-Where the claims cannot be settled it asks **`claim.unclaimed`** with **Try again**, **Stage
-without a Helle claim**, recorded on its log as the human's say, and **Finish**, which
-stages nothing.
+A repository with no Helle project has nothing to claim: it stages without asking, and says
+so once on its log. Where a claim that might exist cannot be settled — an application with
+no project, an ambiguous match, Helle refusing — it asks **`claim.unclaimed`** with **Try
+again**, **Stage without a Helle claim**, recorded once on its log as the human's say, and
+**Finish**, which stages nothing.
 
 Holding them, it reads the head again and fast-forwards to it, as the claims may have
 waited, and the agent's `stage` step plays, retries and watches those jobs of the merge

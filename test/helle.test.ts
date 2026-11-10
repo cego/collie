@@ -304,10 +304,10 @@ test("an application Helle has no project for leaves the release unresolved", ()
   expect(resolved._tag === "Unresolved" && resolved.why).toContain("newapp");
 });
 
-test("a release that resolves to no project at all is unresolved, never carried on without", () => {
+test("a release that resolves to no project at all needs none, which is not unresolved", () => {
   const resolved = resolveProjects(FRONTEND, release({ jobs: ["deploy:stage"] }));
-  expect(resolved._tag).toBe("Unresolved");
-  expect(resolved._tag === "Unresolved" && resolved.why).toContain("monorepo");
+  expect(resolved._tag).toBe("None");
+  expect(resolved._tag === "None" && resolved.why).toContain("monorepo");
 });
 
 test("several projects the repository could be leave it unresolved", () => {
@@ -387,6 +387,12 @@ test("a claim an earlier release journaled reads as what it held, and holding no
   expect(decode({ slug: "spilnu" })).toEqual({ slugs: ["spilnu"] });
   expect("unresolved" in decode(null)).toBe(true);
   expect(decode({ slugs: ["happytiger", "spilnu"] })).toEqual({ slugs: ["happytiger", "spilnu"] });
+  expect(decode({ unresolved: "helle answered 500" })).toEqual({
+    unresolved: "helle answered 500",
+  });
+  expect(decode({ none: "no Helle project for app" })).toEqual({
+    none: "no Helle project for app",
+  });
   expect(
     flow(Schema.encodeResult(ClaimedSchema), Result.getOrThrow)({ slugs: ["spilnu"] }),
   ).toEqual({ slugs: ["spilnu"] });
@@ -450,7 +456,7 @@ function gate(opts: {
   });
 }
 
-test("a repository with no Helle project is unresolved, and nothing is claimed", () =>
+test("a repository with no Helle project needs none, and nothing is claimed", () =>
   runEffect(
     Effect.gen(function* () {
       fake.projects = [{ slug: "spilnu", group: "spilnu/frontend", queue: [] }];
@@ -466,8 +472,8 @@ test("a repository with no Helle project is unresolved, and nothing is claimed",
         ended,
       });
 
-      expect(held._tag).toBe("Unresolved");
-      expect(held._tag === "Unresolved" && held.why).toContain("no Helle project for collie");
+      expect(held._tag).toBe("None");
+      expect(held._tag === "None" && held.why).toContain("no Helle project for collie");
       expect(ended).toEqual(["ended"]);
       expect(recorded).toEqual([]);
       expect(fake.calls).not.toContain("POST /api/v1/projects/spilnu/claim");
@@ -1076,7 +1082,7 @@ test("a later project the operator will not have taken over stops the Run before
     ),
   ));
 
-test("a release whose projects cannot be resolved claims nothing", () =>
+test("a release with an application its group has no project for is unresolved, and claims nothing", () =>
   runEffect(
     Effect.gen(function* () {
       fake.projects = [{ slug: "spilnu", group: "spilnu/frontend", queue: [] }];
@@ -1090,6 +1096,7 @@ test("a release whose projects cannot be resolved claims nothing", () =>
       });
 
       expect(held._tag).toBe("Unresolved");
+      expect(held._tag === "Unresolved" && held.why).toContain("newapp");
       expect(Arr.filter(fake.calls, (call) => pipe_(call, Str.startsWith("POST")))).toEqual([]);
     }),
   ));

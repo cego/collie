@@ -20,6 +20,7 @@ import { newsPath, pending, read as readNews } from "../src/news";
 import { herdOf } from "../src/steering";
 import { writeTask } from "../src/task";
 import { FakeBin } from "./support/bin";
+import { recordsAt } from "./support/records";
 import { exec } from "./support/command";
 import { fastForward } from "./support/effect";
 import { forgeOnPath, runOnPath, serveForges } from "./support/forge";
@@ -68,13 +69,13 @@ test(
       "collie-side-merges-",
       (world) =>
         Effect.gen(function* () {
-          yield* writeTask(world.state, {
+          yield* writeTask({
             id: "task-1",
             workspace: "w1",
             label: "project | Targeted",
             cwd: world.project,
             created_at: "2026-10-01T09:00:00Z",
-          }).pipe(Effect.orDie);
+          }).pipe(Effect.provide(recordsAt(world.state)), Effect.orDie);
           const forge = yield* mergedForge(`${world.home}/bin`);
           const started = yield* collie(
             world,
@@ -104,13 +105,13 @@ test(
       "collie-side-settle-",
       (world) =>
         Effect.gen(function* () {
-          yield* writeTask(world.state, {
+          yield* writeTask({
             id: "task-1",
             workspace: "w1",
             label: "project | Targeted",
             cwd: world.project,
             created_at: "2026-10-01T09:00:00Z",
-          }).pipe(Effect.orDie);
+          }).pipe(Effect.provide(recordsAt(world.state)), Effect.orDie);
           const forge = yield* mergedForge(`${world.home}/bin`);
           const started = yield* collie(
             world,
@@ -143,13 +144,13 @@ test(
       "collie-side-settle-child-",
       (world) =>
         Effect.gen(function* () {
-          yield* writeTask(world.state, {
+          yield* writeTask({
             id: "task-1",
             workspace: "w1",
             label: "project | Targeted",
             cwd: world.project,
             created_at: "2026-10-01T09:00:00Z",
-          }).pipe(Effect.orDie);
+          }).pipe(Effect.provide(recordsAt(world.state)), Effect.orDie);
           const forge = yield* mergedForge(`${world.home}/bin`);
           const started = yield* collie(
             world,
@@ -375,13 +376,13 @@ test(
               cwd: world.project,
             })).stdout,
           );
-          yield* writeTask(world.state, {
+          yield* writeTask({
             id: "task-1",
             workspace: "w1",
             label: "project | Waits on CI",
             cwd: world.project,
             created_at: "2026-10-01T09:00:00Z",
-          }).pipe(Effect.orDie);
+          }).pipe(Effect.provide(recordsAt(world.state)), Effect.orDie);
           const bin = yield* FakeBin.make(`${world.home}/bin`);
           const gitlab = yield* forgeOnPath(bin, "gitlab", {
             installed: true,
