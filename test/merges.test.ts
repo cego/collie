@@ -610,10 +610,6 @@ const merging = Effect.fn("merges.merging")(function* (
   /** What the host does with a stop, beside recording it. */
   stopping: (stateDir: string, run: string, reason: string) => Effect.Effect<void> = () =>
     Effect.void,
-  /**
-   * More of the merged merge request, the Run directories whose attempt is being made, how
-   * the builder names its merge request, and more of the forge.
-   */
   over: {
     readonly mr?: Partial<FakeMr>;
     readonly making?: ReadonlySet<string>;
