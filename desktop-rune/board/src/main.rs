@@ -84,13 +84,13 @@ fn chat(handle: &AppHandle<Board>, client: &Client) {
 fn diffs(handle: &AppHandle<Board>, client: &Client) {
     let (reader, shows) = (client.clone(), handle.clone());
     handle.update(move |board, _| {
-        board.load_diff = Some(Box::new(move |installation, run| {
+        board.load_diff = Some(Box::new(move |installation, run, opened| {
             let (client, shows) = (reader.clone(), shows.clone());
             std::thread::spawn(move || {
                 let patch = run_diff(&client, &installation, &run).unwrap_or_default();
                 // FileDiff holds an Rc, so the patch is parsed on the view's thread.
                 shows.update(move |board, _| {
-                    board.diff = Some(DiffTab::new(rune_kit::diff::parse(&patch)))
+                    board.diff_read(opened, &patch)
                 });
             });
         }));

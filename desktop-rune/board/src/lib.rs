@@ -68,8 +68,8 @@ pub struct Board {
     pub chatting: bool,
     /// The open pane's Run, by installation and id.
     pub open_run: Option<(String, String)>,
-    /// Reads a Run's diff from the core, and sets `diff` once it has it.
-    pub load_diff: Option<Box<dyn Fn(String, String)>>,
+    /// Reads a Run's diff from the core for the `opened`th pane, handing it to `diff_read`.
+    pub load_diff: Option<Box<dyn Fn(String, String, u64)>>,
     pub diff: Option<DiffTab>,
     pub flow: Option<flow::FlowMap>,
 }
@@ -100,11 +100,19 @@ impl Board {
             open.leave();
         }
         self.open_run = None;
+        self.diff = None;
     }
 
     pub fn show_diff(&mut self) {
         if let (Some(load), Some((installation, run))) = (&self.load_diff, &self.open_run) {
-            load(installation.clone(), run.clone());
+            load(installation.clone(), run.clone(), self.opened);
+        }
+    }
+
+    /// Shows a diff read for the `opened`th pane, while that pane is still the open one.
+    pub fn diff_read(&mut self, opened: u64, patch: &str) {
+        if opened == self.opened && self.terminal.is_some() {
+            self.diff = Some(DiffTab::new(rune_kit::diff::parse(patch)));
         }
     }
 

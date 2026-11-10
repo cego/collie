@@ -92,6 +92,8 @@ fn each_machine_says_its_status_and_shows_its_cards_by_name() {
     }
 }
 
+const PATCH: &str = "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-x\n+y\n";
+
 fn tap(runtime: &mut Runtime<Board>, key: &str, at: f64) {
     let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
     runtime.pointer_move(x, y);
@@ -176,12 +178,12 @@ fn the_chat_opens_beside_the_board_and_closes() {
 
 #[test]
 fn a_panes_diff_button_asks_for_its_runs_diff_and_shows_it_once_read() {
-    let asked: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+    let asked: Arc<Mutex<Vec<(String, String, u64)>>> = Arc::default();
     let mut board = board();
     board.go_to = Some(Box::new(|_, machine, _| Tab::new(None, machine, 100, 30)));
     let said = asked.clone();
-    board.load_diff = Some(Box::new(move |installation, run| {
-        said.lock().unwrap().push((installation, run));
+    board.load_diff = Some(Box::new(move |installation, run, opened| {
+        said.lock().unwrap().push((installation, run, opened));
     }));
     let mut runtime = Runtime::new(
         board,
@@ -197,13 +199,9 @@ fn a_panes_diff_button_asks_for_its_runs_diff_and_shows_it_once_read() {
     tap(&mut runtime, "open-diff", 1000.0);
     assert_eq!(
         *asked.lock().unwrap(),
-        [("inst-build".to_string(), "r1".to_string())]
+        [("inst-build".to_string(), "r1".to_string(), 1)]
     );
-    runtime.update(|board, _| {
-        board.diff = Some(collie_desktop_chat::view::DiffTab::new(
-            rune_kit::diff::parse("diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-x\n+y\n"),
-        ))
-    });
+    runtime.update(|board, _| board.diff_read(1, PATCH));
     runtime.frame(2000.0);
     let shown = keys(&runtime);
     assert!(shown.iter().any(|k| k == "diff"), "{shown:?}");
@@ -211,4 +209,32 @@ fn a_panes_diff_button_asks_for_its_runs_diff_and_shows_it_once_read() {
     let shown = keys(&runtime);
     assert!(!shown.iter().any(|k| k == "diff"), "{shown:?}");
     assert!(shown.iter().any(|k| k == "terminal-grid"), "{shown:?}");
+}
+
+#[test]
+fn a_diff_read_for_a_pane_since_left_is_not_shown_over_the_next() {
+    let mut board = board();
+    board.go_to = Some(Box::new(|_, machine, _| Tab::new(None, machine, 100, 30)));
+    board.load_diff = Some(Box::new(|_, _, _| {}));
+    let mut runtime = Runtime::new(
+        board,
+        view,
+        (1280.0, 900.0),
+        Env {
+            system_dark: true,
+            scale: 1.0,
+        },
+    );
+    runtime.frame(0.0);
+    tap(&mut runtime, "card-b2", 100.0);
+    tap(&mut runtime, "open-diff", 1000.0);
+    tap(&mut runtime, "back", 2000.0);
+    tap(&mut runtime, "card-b1", 3000.0);
+    runtime.update(|board, _| board.diff_read(1, PATCH));
+    runtime.frame(4000.0);
+    let shown = keys(&runtime);
+    assert!(!shown.iter().any(|k| k == "diff"), "{shown:?}");
+    runtime.update(|board, _| board.diff_read(2, PATCH));
+    runtime.frame(5000.0);
+    assert!(keys(&runtime).iter().any(|k| k == "diff"));
 }
