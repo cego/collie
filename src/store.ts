@@ -1043,6 +1043,7 @@ function makeStore(
                 yield* clear(row);
                 yield* decide(run);
                 yield* sql`DELETE FROM collie_decisions WHERE run = ${run}`.pipe(Effect.orDie);
+                yield* sql`DELETE FROM collie_launches WHERE run = ${run}`.pipe(Effect.orDie);
                 yield* sql`DELETE FROM collie_runs WHERE run = ${run}`.pipe(Effect.orDie);
                 gone.push(run);
               }
