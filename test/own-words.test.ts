@@ -14,6 +14,7 @@ import { expect, test } from "bun:test";
 import { ownInventory, readOwnWords } from "../src/own-words";
 import type { OwnWords } from "../src/own-words-model";
 import { runEffect } from "./support/effect";
+import { recordsAt } from "./support/records";
 import { epochMs, isoAt } from "../src/time";
 
 type Json = Schema.Json;
@@ -139,7 +140,7 @@ test("from Claude Code, only what the human typed, with its date and directory; 
     }).pipe(Effect.scoped),
   ));
 
-test("a session Collie recorded for an agent is skipped, though it carries no delivery token", () =>
+test("a session the state directory's host recorded for an agent is skipped, though it carries no delivery token", () =>
   runEffect(
     Effect.gen(function* () {
       const at = yield* places({
@@ -147,6 +148,7 @@ test("a session Collie recorded for an agent is skipped, though it carries no de
           claudeUser("5f6a-agent", "2026-10-02T09:00:00.000Z", "A prompt Collie wrote."),
         ]),
       });
+      yield* (yield* FileSystem.FileSystem).makeDirectory(at.stateDir);
       yield* recordLaunch({
         agent: "run-1-build-r1",
         output: "/dev/null",
@@ -157,7 +159,7 @@ test("a session Collie recorded for an agent is skipped, though it carries no de
         workflow: "implement",
         harness: "claude",
         agentSession: { kind: "id", value: "5f6a-agent" },
-      });
+      }).pipe(Effect.provide(recordsAt(at.stateDir)));
       const words = yield* readOwnWords(at, NOW);
       expect(words.messages).toEqual([]);
       expect(words.skipped).toBe(1);

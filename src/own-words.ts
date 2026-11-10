@@ -2,7 +2,6 @@
 // computer, for a chat to draft their Standing direction from. Never a tool: the host answers
 // a Read only on Desktop's own door, after the human's click there.
 
-import { Launches } from "./launches";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
@@ -438,11 +437,32 @@ const fileStores = (home: string): ReadonlyArray<FileStore> => [
 
 const openCodeFile = (home: string) => `${home}/.local/share/opencode/opencode.db`;
 
-/** Every session Collie recorded launching a Run's agent in, by id or path; none without a host's records. */
-const recordedAgentSessions = Effect.gen(function* () {
-  const launches = yield* Effect.serviceOption(Launches);
-  if (Option.isNone(launches)) return new Set<string>();
-  return new Set(Arr.map(yield* launches.value.sessions, (one) => one.value));
+/** Every session the state directory's host recorded launching a Run's agent in, by id or path. */
+const recordedAgentSessions = Effect.fn("OwnWords.recordedAgentSessions")(function* (
+  stateDir: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const file = `${stateDir}/host.db`;
+  if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) return new Set<string>();
+  return yield* Effect.try(() => {
+    const db = new Database(file, { readonly: true });
+    try {
+      return new Set(
+        Arr.map(
+          decodeSessions(
+            db
+              .query(
+                "SELECT json_extract(record, '$.agentSession.value') AS session FROM collie_launches WHERE session IS NOT NULL",
+              )
+              .all(),
+          ),
+          (one) => one.session,
+        ),
+      );
+    } finally {
+      db.close();
+    }
+  }).pipe(Effect.orElseSucceed(() => new Set<string>()));
 });
 
 const HUMAN_DOORS = new Set(["desktop", "cli-tty", "board"]);
@@ -567,7 +587,7 @@ const notThere = (source: OwnSource, where: string): OwnStore => ({
 /** Each store, read for messages said `since` where it is given, or only counted where not. */
 const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since: number | null) {
   const fs = yield* FileSystem.FileSystem;
-  const recorded = since === null ? new Set<string>() : yield* recordedAgentSessions;
+  const recorded = since === null ? new Set<string>() : yield* recordedAgentSessions(places.stateDir);
   const stores: Array<OwnStore> = [];
   const messages: Array<OwnMessage> = [];
   let skipped = 0;
