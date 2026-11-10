@@ -5,7 +5,8 @@
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
-import { Clock, Effect, FileSystem, Layer, type Scope } from "effect";
+import * as Str from "effect/String";
+import { Clock, Effect, FileSystem, Layer, Schema, type Scope } from "effect";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
@@ -286,11 +287,11 @@ test(
               });
               yield* recordClaudeEvent(
                 yield* controlDir(dir(), agent),
-                JSON.stringify({
+                yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
                   session_id: agent,
                   hook_event_name: "UserPromptSubmit",
                   prompt: `Over to you, ${agent}`,
-                }),
+                }).pipe(Effect.orDie),
               );
             }
             reads.length = 0;
@@ -299,7 +300,7 @@ test(
             const [q1] = yield* store.asked(runId);
             expect(q1?.superseded ?? null).not.toBeNull();
             expect(Arr.map(q1?.messaged ?? [], (one) => one.agent)).toEqual(["planner", "reviewer"]);
-            expect(Arr.filter(reads, (one) => one.startsWith("asked "))).toEqual([]);
+            expect(Arr.filter(reads, Str.startsWith("asked "))).toEqual([]);
           }),
           reads,
         );
