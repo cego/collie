@@ -140,10 +140,10 @@ fn a_key_sent_to_the_pane_and_the_frame_after_its_output_mark_the_echo() {
     );
 }
 
-fn event() -> AguiEvent {
+fn event(at: usize) -> AguiEvent {
     let line = include_str!("../../fixtures/chat/say-text.ndjson")
         .lines()
-        .nth(3)
+        .nth(at)
         .unwrap();
     let line: serde_json::Value = serde_json::from_str(line).unwrap();
     serde_json::from_value(line["event"].clone()).unwrap()
@@ -153,14 +153,17 @@ fn event() -> AguiEvent {
 fn a_heard_chunk_of_the_live_turn_and_the_frame_that_draws_it_are_marked() {
     let mut runtime = runtime();
     frame_drawn(&runtime, 10.0);
-    runtime.update(|board, _| board.chat_heard(1, Ok(event()), 700.0));
+    runtime.update(|board, _| board.chat_heard(1, Ok(event(3)), 700.0));
     assert_eq!(frame_drawn(&runtime, 709.0), [], "no turn is live");
     runtime.update(|board, _| {
+        board.chatting = true;
         board.chat.say = Some(Box::new(|_, _| Box::new(|| {})));
         board.chat.composer = rune::edit::TextEdit::new("hi");
         board.chat.send();
-        board.chat_heard(1, Ok(event()), 720.0);
+        board.chat_heard(1, Ok(event(2)), 710.0);
+        board.chat_heard(1, Ok(event(3)), 720.0);
     });
+    runtime.frame(0.0);
     assert_eq!(
         frame_drawn(&runtime, 729.0),
         [
@@ -168,6 +171,49 @@ fn a_heard_chunk_of_the_live_turn_and_the_frame_that_draws_it_are_marked() {
             mark("chat-drawn", 729.0, "turn-1")
         ]
     );
+}
+
+#[test]
+fn a_pending_chunk_waits_for_a_frame_with_the_chat_after_it_is_hidden() {
+    for hidden in ["closed", "terminal", "diff"] {
+        let mut runtime = runtime();
+        frame_drawn(&runtime, 10.0);
+        runtime.update(|board, _| {
+            board.chatting = true;
+            board.chat.say = Some(Box::new(|_, _| Box::new(|| {})));
+            board.chat.composer = rune::edit::TextEdit::new("hi");
+            board.chat.send();
+            board.chat_heard(1, Ok(event(2)), 710.0);
+            board.chat_heard(1, Ok(event(3)), 720.0);
+            if hidden == "closed" {
+                board.chatting = false;
+            } else {
+                board.go_to_pane("i1".into(), "r1".into(), "Local".into());
+                if hidden == "diff" {
+                    board.diff_read(board.opened, "--- a/a\n+++ b/a\n@@ -1 +1 @@\n-old\n+new\n");
+                }
+            }
+        });
+        runtime.frame(0.0);
+        assert_eq!(
+            frame_drawn(&runtime, 729.0),
+            [mark("chat-chunk", 720.0, "turn-1")],
+            "{hidden} hides the chat"
+        );
+        runtime.frame(0.0);
+        assert_eq!(frame_drawn(&runtime, 735.0), []);
+        runtime.update(|board, _| {
+            board.chatting = true;
+            board.back();
+        });
+        runtime.frame(0.0);
+        assert_eq!(
+            frame_drawn(&runtime, 749.0),
+            [mark("chat-drawn", 749.0, "turn-1")],
+            "the chat is visible again after {hidden}"
+        );
+        assert_eq!(frame_drawn(&runtime, 755.0), []);
+    }
 }
 
 #[test]

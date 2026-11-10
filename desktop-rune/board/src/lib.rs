@@ -300,7 +300,9 @@ pub fn frame_drawn(drawn: &rune::Runtime<Board>, at: f64) -> Vec<timing::Mark> {
             timing.echoed(at);
         }
     }
-    timing.chat_drawn(at);
+    if board.chatting && board.terminal.is_none() && board.diff.is_none() {
+        timing.chat_drawn(at);
+    }
     // rune-kit's Diff says nothing of its scrolling, so a move of its rows is read as one.
     let rows_at = board.diff.as_ref().and_then(|_| {
         let rows = drawn
