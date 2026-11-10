@@ -17,8 +17,7 @@ type Status =
   | { readonly kind: "answered"; readonly title: string }
   | { readonly kind: "held" }
   | { readonly kind: "steered" }
-  | { readonly kind: "failed"; readonly reason: string }
-  | { readonly kind: "gone" };
+  | { readonly kind: "failed"; readonly reason: string };
 
 export interface Questionnaire {
   readonly question: Question;
@@ -33,8 +32,8 @@ export interface Questionnaire {
     readonly sends: string;
     readonly answer: string | null;
   } | null;
+  /** What this questionnaire's own sends came to; the board leaving it changes none of it. */
   readonly status: Status;
-  /** Whether the board still asks it; a send in flight is still settled by its reply. */
   readonly onBoard: boolean;
 }
 
@@ -128,8 +127,7 @@ const rowsOf = (question: Question): ReadonlyArray<Row> => [
 ];
 
 const inFlight = (state: Questionnaire) => state.status.kind === "sending";
-const settled = (state: Questionnaire) =>
-  !state.onBoard || state.status.kind === "answered" || state.status.kind === "gone";
+const settled = (state: Questionnaire) => !state.onBoard || state.status.kind === "answered";
 
 const submission = (state: Questionnaire) => {
   if (inFlight(state) || settled(state)) return null;
@@ -272,14 +270,7 @@ const replied = (state: Questionnaire, event: Extract<Event, { kind: "replied" }
 };
 
 const seen = (state: Questionnaire, question: Question | null): Questionnaire => {
-  if (question === null) {
-    // Already off the board: what its send came to stays shown.
-    if (!state.onBoard) return state;
-    const kind = state.status.kind;
-    return kind === "sending" || kind === "answered" || kind === "steered"
-      ? { ...state, onBoard: false }
-      : { ...state, onBoard: false, status: { kind: "gone" } };
-  }
+  if (question === null) return { ...state, onBoard: false };
   if (question.run !== state.question.run || question.id !== state.question.id)
     return questionnaire(question);
   const rows = rowsOf(question);
@@ -357,19 +348,17 @@ const statusSaid = (state: Questionnaire) => {
   const status = state.status;
   switch (status.kind) {
     case "open":
-      return null;
+      return state.onBoard ? null : "No longer open";
     case "sending":
       return "Sending…";
     case "answered":
       return `Answered: ${status.title}`;
     case "held":
-      return "Run held · question still open";
+      return state.onBoard ? "Run held · question still open" : "No longer open";
     case "steered":
       return `Sent to ${target(state).agent ?? "the Run's agent"}; the question is set aside`;
     case "failed":
       return status.reason;
-    case "gone":
-      return "No longer open";
   }
 };
 

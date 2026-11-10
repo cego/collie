@@ -854,6 +854,106 @@ describe("status", () => {
     expect(viewAfter(question, events).status).toBe(status);
   });
 
+  const answers: Event[] = [
+    { kind: "pick", id: "go" },
+    { kind: "submit", request: "r" },
+  ];
+  const holds: Event[] = [
+    { kind: "pick", id: HOLD },
+    { kind: "submit", request: "r" },
+  ];
+  const steers: Event[] = [
+    { kind: "draft", text: "use a schema" },
+    { kind: "steer", request: "r" },
+  ];
+  const refused: Event = {
+    kind: "replied",
+    request: "r",
+    ok: false,
+    refused: true,
+    reason: '"pick" was already answered "stop" by cli',
+  };
+  const dropped: Event = {
+    kind: "replied",
+    request: "r",
+    ok: false,
+    refused: false,
+    reason: "connection renewed",
+  };
+  const confirmed: Event = { kind: "replied", request: "r", ok: true, fresh: true };
+  const gone: Event = { kind: "seen", question: null };
+
+  test.each([
+    {
+      rule: "an answer refused, then the board drops it and refreshes: the host's reason",
+      events: [...answers, refused, gone, gone],
+      status: '"pick" was already answered "stop" by cli',
+    },
+    {
+      rule: "a hold refused, then the board drops it and refreshes: the host's reason",
+      events: [...holds, refused, gone, gone],
+      status: '"pick" was already answered "stop" by cli',
+    },
+    {
+      rule: "a steer refused, then the board drops it and refreshes: the host's reason",
+      events: [...steers, refused, gone, gone],
+      status: '"pick" was already answered "stop" by cli',
+    },
+    {
+      rule: "an answer whose connection failed, then the board drops it: the failure",
+      events: [...answers, dropped, gone, gone],
+      status: "connection renewed",
+    },
+    {
+      rule: "the board drops it, then the connection fails: the failure",
+      events: [...answers, gone, dropped, gone],
+      status: "connection renewed",
+    },
+    {
+      rule: "the board drops it, the connection fails, and Try again is answered",
+      events: [...answers, gone, dropped, gone, { kind: "trying", request: "r" }, confirmed, gone],
+      status: "Answered: Go on",
+    },
+    {
+      rule: "the board drops it, then a stale reply comes: the newer request still sends",
+      events: [
+        ...answers,
+        dropped,
+        { kind: "pick", id: "stop" },
+        { kind: "submit", request: "r-2" },
+        gone,
+        confirmed,
+      ],
+      status: "Sending…",
+    },
+    {
+      rule: "a hold confirmed, then the board drops it: no longer open",
+      events: [...holds, confirmed, gone],
+      status: "No longer open",
+    },
+    {
+      rule: "a steer confirmed, then the board drops it and refreshes: still steered",
+      events: [...steers, confirmed, gone, gone],
+      status: "Sent to r-1-build-r1; the question is set aside",
+    },
+    {
+      rule: "nothing sent, dropped, then back on the board: open again",
+      events: [gone, { kind: "seen", question: TWO }],
+      status: null,
+    },
+  ] satisfies ReadonlyArray<{ rule: string; events: Event[]; status: string | null }>)(
+    "$rule",
+    ({ events, status }) => {
+      expect(viewAfter(TWO, events).status).toBe(status);
+    },
+  );
+
+  test("a refusal heard before the board drops it takes nothing more", () => {
+    const after = run(TWO, [...answers, refused, gone, { kind: "pick", id: "stop" }]);
+    expect(questionnaireView(after.state).submit).toBe(false);
+    expect(stepped(after.state, { kind: "submit", request: "r-2" }).does).toBeNull();
+  });
+
   test("a question off the board takes nothing more once its send settles", () => {
     const events: Event[] = [
       { kind: "pick", id: "pg" },
