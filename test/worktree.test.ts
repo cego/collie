@@ -1694,6 +1694,34 @@ test("merge request URLs with no space between them are still two URLs", () =>
     }),
   ));
 
+test("a URL that only ends like a merge request's names none", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs();
+      for (const work of [`${MR_42}x`, `Fix ${MR_42}-old.`]) {
+        expect(yield* plan({ plan: work, plan_kind: "text" })).toMatchObject(
+          fresh("from the work"),
+        );
+      }
+    }),
+  ));
+
+test("a URL that only starts or ends like a pull request's names none", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* githubPull();
+      for (const work of [
+        "https://github.com/acme/app/pull/30x",
+        "Fix https://notgithub.com/acme/app/pull/30 now",
+      ]) {
+        expect(yield* plan({ plan: work, plan_kind: "text" })).toMatchObject(
+          fresh("from the work"),
+        );
+      }
+    }),
+  ));
+
 test("work giving one merge request's URL twice holds two URLs, so it gets a fresh branch", () =>
   runOnPath(
     Effect.gen(function* () {
