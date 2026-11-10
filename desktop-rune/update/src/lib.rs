@@ -50,30 +50,23 @@ pub fn installed_from(exe: &Path) -> Option<(PathBuf, String)> {
 pub fn apply_staged(install: &Path, bundle: &str, release_key: &str) -> Applied {
     let staged = install.join(".update");
     let installed = install.join(bundle);
-    let aside = staged.join("previous");
-    // A swap cut off between its two renames left the installed bundle aside.
-    if !installed.exists() && aside.exists() {
-        let _ = fs::rename(&aside, &installed);
-    }
     let Ok(tar) = fs::read(staged.join(format!("{bundle}.tar"))) else {
         return Applied::Nothing;
     };
     let signature = fs::read_to_string(staged.join(format!("{bundle}.tar.sig"))).ok();
     let applied = match verify(&tar, signature.as_deref(), release_key) {
         Err(why) => Applied::Refused(why),
-        Ok(()) => match swap(&tar, &staged, &installed, &aside, bundle) {
+        Ok(()) => match swap(&tar, &staged, &installed, bundle) {
             Ok(()) => Applied::Installed,
             Err(e) => Applied::Refused(format!("it could not be installed: {e}")),
         },
     };
-    // Kept where the installed bundle is still aside, for the next launch to put back.
-    if installed.exists() {
-        let _ = fs::remove_dir_all(&staged);
-    }
+    // Holds the bundle the swap replaced, or a refused one.
+    let _ = fs::remove_dir_all(&staged);
     applied
 }
 
-fn swap(tar: &[u8], staged: &Path, installed: &Path, aside: &Path, bundle: &str) -> io::Result<()> {
+fn swap(tar: &[u8], staged: &Path, installed: &Path, bundle: &str) -> io::Result<()> {
     let unpacked = staged.join("unpacked");
     let _ = fs::remove_dir_all(&unpacked);
     tar::Archive::new(tar).unpack(&unpacked)?;
@@ -81,11 +74,32 @@ fn swap(tar: &[u8], staged: &Path, installed: &Path, aside: &Path, bundle: &str)
     if !next.is_dir() {
         return Err(io::Error::other(format!("the update holds no {bundle}")));
     }
-    let _ = fs::remove_dir_all(aside);
-    fs::rename(installed, aside)?;
-    if let Err(e) = fs::rename(&next, installed) {
-        fs::rename(aside, installed)?;
-        return Err(e);
+    exchange(&next, installed)
+}
+
+/// Swaps `a` and `b` in one rename, so neither path is ever missing.
+pub fn exchange(a: &Path, b: &Path) -> io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let path = |p: &Path| CString::new(p.as_os_str().as_bytes()).map_err(io::Error::other);
+    let (a, b) = (path(a)?, path(b)?);
+    // SAFETY: both are NUL-terminated paths that outlive the call.
+    #[cfg(target_os = "linux")]
+    let done = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            a.as_ptr(),
+            libc::AT_FDCWD,
+            b.as_ptr(),
+            libc::RENAME_EXCHANGE,
+        )
+    };
+    // SAFETY: as above.
+    #[cfg(target_os = "macos")]
+    let done = unsafe { libc::renamex_np(a.as_ptr(), b.as_ptr(), libc::RENAME_SWAP) };
+    if done == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
     }
-    Ok(())
 }

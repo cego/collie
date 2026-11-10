@@ -334,9 +334,10 @@ and a timestamp, and with the Apple ID or API key `macSigning` reads, it notaris
 unchanged; the stand-in's `Updater` answers it. Restart to update stages the verified tar
 and its `.tar.sig` at `<install>/.update/<bundle>.tar`, where the shell looks at its next
 launch. `update/` verifies the signature again (Ed25519, as `src/signing.ts`), unpacks beside
-the installed bundle, moves the installed one to `.update/previous`, moves the new one in, and
+the installed bundle, and swaps the two in one rename (`renameat2` with `RENAME_EXCHANGE` on
+Linux, `renamex_np` with `RENAME_SWAP` on macOS), so the bundle's path never stands empty. It then
 re-execs itself. A bad or missing signature is refused and the installed bundle keeps running.
-A launch that finds the bundle gone and `previous` there puts `previous` back. The shell does
+The shell does
 not relaunch itself after Restart to update; the update lands when Collie next opens.
 
 Sizes on vm-mk (Linux x64):

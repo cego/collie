@@ -1,7 +1,7 @@
 //! An update applied at launch, against a fake install directory. The tars and their signatures
 //! are `fixtures/update/`, signed by `src/signing.ts`'s `signRelease` with a test key.
 
-use collie_desktop_update::{Applied, apply_staged};
+use collie_desktop_update::{Applied, apply_staged, exchange};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -161,17 +161,20 @@ fn a_bundle_that_fails_halfway_through_unpacking_leaves_the_installed_one_runnab
 }
 
 #[test]
-fn a_launch_after_a_swap_was_cut_off_puts_the_installed_bundle_back() {
+fn the_installed_and_unpacked_bundles_trade_places_in_one_step() {
     let install = installed();
-    // The installed bundle moved aside, and the process gone before the new one moved in.
-    let aside = install.path().join(".update").join("previous");
-    fs::create_dir_all(aside.parent().unwrap()).unwrap();
-    fs::rename(install.path().join(BUNDLE), &aside).unwrap();
-    assert_eq!(
-        apply_staged(install.path(), BUNDLE, &key()),
-        Applied::Nothing
-    );
-    assert_eq!(launched(install.path()), "0.130.0");
+    let next = install.path().join("next");
+    fs::create_dir(&next).unwrap();
+    fs::write(next.join("collie-desktop"), "#!/bin/sh\necho 0.131.0\n").unwrap();
+    fs::set_permissions(
+        next.join("collie-desktop"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    exchange(&next, &install.path().join(BUNDLE)).unwrap();
+    assert_eq!(launched(install.path()), "0.131.0");
+    let old = fs::read_to_string(next.join("collie-desktop")).unwrap();
+    assert!(old.contains("0.130.0"), "{old}");
 }
 
 #[test]
