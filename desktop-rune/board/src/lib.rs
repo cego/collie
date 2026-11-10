@@ -134,7 +134,6 @@ impl Board {
         }
     }
 
-    /// Shows a diff read for the `opened`th pane, while that pane is still the open one.
     /// The Flow of the `opened`th pane's Run, kept on the board after Back until another opens.
     pub fn flow_read(&mut self, opened: u64, read: DetailFlow) {
         if opened != self.opened {
@@ -146,6 +145,7 @@ impl Board {
         }
     }
 
+    /// Shows a diff read for the `opened`th pane, while that pane is still the open one.
     pub fn diff_read(&mut self, opened: u64, patch: &str) {
         if opened == self.opened && self.terminal.is_some() {
             self.diff = Some(DiffTab::new(rune_kit::diff::parse(patch)));
