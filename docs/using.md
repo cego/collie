@@ -1206,6 +1206,14 @@ profile may reset PATH. If the shell fails or does not answer within five second
 keeps the environment it was given, runs them in a login shell as before, and logs why.
 Children never get what Electrobun's launcher sets for Desktop itself.
 
+The SSH agent is the one exception. An rc file may start an agent of its own, such as
+`eval $(keychain --eval id_rsa)`, that holds a key only once a terminal has asked for its
+passphrase, and an SSH connection Desktop opens has no terminal to ask in: it would fail with
+`Permission denied (publickey)` until you next open one. So Desktop asks each agent with
+`ssh-add -l` and takes the login shell's `SSH_AUTH_SOCK` only where it holds keys or the agent
+Desktop was started with — your desktop session's, such as GNOME Keyring's — holds none;
+otherwise it keeps its own, and logs that it did.
+
 It shows up as **Collie**, with the Collie mark — the dog on the white tile the TUI board
 shows, which reads on a dark taskbar too — in your app launcher, on its window, in the
 taskbar and at the top left of the board.
