@@ -1091,7 +1091,11 @@ function retryJob(ref: MrRef, id: string, cwd: string): Effect.Effect<Readiness,
 
 const ShaPipelines = Schema.Array(Schema.Struct({ status: Schema.String, web_url: optionalText }));
 const SourceBranch = Schema.Struct({ source_branch: optionalText });
-const StartedPipeline = Schema.Struct({ web_url: optionalText, sha: optionalText });
+const StartedPipeline = Schema.Struct({
+  web_url: optionalText,
+  sha: optionalText,
+  ref: optionalText,
+});
 
 /**
  * The merge request's pipeline on `head`, else its source branch's where GitLab refuses that
@@ -1126,8 +1130,12 @@ function startPipeline(
         const url = pipeline?.web_url ?? "";
         const sha = pipeline?.sha ?? "";
         if (sha === head) return { _tag: "Started", url } as const;
-        const commit = sha === "" ? null : yield* rest(Commit, `repository/commits/${sha}`);
-        if (commit?.ok === true && commit.value.parent_ids.includes(head))
+        // A merged-results pipeline runs on a merge of the target (first parent) and the head.
+        const merged =
+          pipeline?.ref === `refs/merge-requests/${ref.iid}/merge`
+            ? yield* rest(Commit, `repository/commits/${sha}`)
+            : null;
+        if (merged?.ok === true && merged.value.parent_ids[1] === head)
           return { _tag: "Started", url } as const;
         return {
           _tag: "Failed",

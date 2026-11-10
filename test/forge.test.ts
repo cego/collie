@@ -3469,6 +3469,22 @@ describe("GitLab's start of a merge request head's pipeline", () => {
       }),
     ));
 
+  test("a pipeline on a later commit whose parent is the head is a failure, on either route", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const CHILD = "8888888888888888888888888888888888888888";
+        for (const refusing of [{}, { refusesPipeline: { mr: 400 } }]) {
+          const { answer } = yield* started({
+            ...SKIPPED,
+            ...refusing,
+            mrs: [mr("gitlab", { head: CHILD, sourceBranch: "feature" })],
+            ancestry: { [CHILD]: [HEAD] },
+          });
+          expect(answer).toMatchObject({ _tag: "Failed" });
+        }
+      }),
+    ));
+
   test("a merged-results pipeline starts for the head only where GitLab shows its merge commit's parent is it", () =>
     runEffect(
       Effect.gen(function* () {

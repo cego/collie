@@ -1141,7 +1141,13 @@ function pipelineStart(
     );
   const pipeline = { id, status: "created", ...how };
   return {
-    ...json({ id, sha, status: "created", web_url: `https://${mr.project}/-/pipelines/${id}` }),
+    ...json({
+      id,
+      sha,
+      ref: how.ref,
+      status: "created",
+      web_url: `https://${mr.project}/-/pipelines/${id}`,
+    }),
     pipelineStarted: { sha, pipeline },
   };
 }
@@ -1208,7 +1214,7 @@ function glabOnMr(
   if (rest === "pipelines" && method === "POST")
     return pipelineStart(model, mr, model.refusesPipeline?.mr, {
       source: "merge_request_event",
-      ref: `refs/merge-requests/${mr.iid}/head`,
+      ref: `refs/merge-requests/${mr.iid}/${mr.pipelineAt === undefined ? "head" : "merge"}`,
     });
   if (rest === "merge" && method === "PUT")
     return model.refusesMerge === true
