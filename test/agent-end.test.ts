@@ -412,7 +412,6 @@ test("a Fallback's close parks on an agent it cannot prove is this Run's, and cl
     }),
   ));
 
-/** The launch record of `launched`. */
 const recorded = (launched: Launched) => recordLaunch(launched);
 
 const runLog = (runId: string) =>

@@ -28,7 +28,6 @@ const launched = (runId: string, over: Partial<Launched>): Launched => ({
   ...over,
 });
 
-/** Records a Run's launches as the agents layer does: each, then its place in the order. */
 const seed = Effect.fn("test.seed")(function* (launches: ReadonlyArray<Launched>) {
   for (const one of launches) {
     yield* recordLaunch(one);

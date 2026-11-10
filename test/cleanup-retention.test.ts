@@ -68,7 +68,6 @@ const sweeper = (
       }),
   });
 
-/** A launch of `runId`'s builder on that terminal. */
 const launchOn = (runId: string, terminalId: string): Launched => ({
   agent: "impl",
   output: "out.json",
