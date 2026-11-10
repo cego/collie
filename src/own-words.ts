@@ -2,6 +2,7 @@
 // computer, for a chat to draft their Standing direction from. Never a tool: the host answers
 // a Read only on Desktop's own door, after the human's click there.
 
+import { Launches } from "./launches";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
@@ -437,25 +438,11 @@ const fileStores = (home: string): ReadonlyArray<FileStore> => [
 
 const openCodeFile = (home: string) => `${home}/.local/share/opencode/opencode.db`;
 
-/** Every session Collie recorded launching a Run's agent in, by id or path. */
-const recordedAgentSessions = Effect.fn("OwnWords.recordedAgentSessions")(function* (
-  stateDir: string,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const dir = `${stateDir}/agents`;
-  const names = yield* fs
-    .readDirectory(dir, { recursive: true })
-    .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-  const sessions = new Set<string>();
-  for (const name of Arr.filter(names, Str.endsWith(".launch.json"))) {
-    const text = yield* fs.readFileString(`${dir}/${name}`).pipe(Effect.orElseSucceed(() => ""));
-    const value = stringAt(
-      objectAt(pipe(decodeLine(text), Option.getOrUndefined), "agentSession"),
-      "value",
-    );
-    if (value !== undefined) sessions.add(value);
-  }
-  return sessions;
+/** Every session Collie recorded launching a Run's agent in, by id or path; none without a host's records. */
+const recordedAgentSessions = Effect.gen(function* () {
+  const launches = yield* Effect.serviceOption(Launches);
+  if (Option.isNone(launches)) return new Set<string>();
+  return new Set(Arr.map(yield* launches.value.sessions, (one) => one.value));
 });
 
 const HUMAN_DOORS = new Set(["desktop", "cli-tty", "board"]);
@@ -580,8 +567,7 @@ const notThere = (source: OwnSource, where: string): OwnStore => ({
 /** Each store, read for messages said `since` where it is given, or only counted where not. */
 const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since: number | null) {
   const fs = yield* FileSystem.FileSystem;
-  const recorded =
-    since === null ? new Set<string>() : yield* recordedAgentSessions(places.stateDir);
+  const recorded = since === null ? new Set<string>() : yield* recordedAgentSessions;
   const stores: Array<OwnStore> = [];
   const messages: Array<OwnMessage> = [];
   let skipped = 0;

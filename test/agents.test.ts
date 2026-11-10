@@ -1,3 +1,4 @@
+import { launchesAt, agentsAt, launchedAt } from "./support/records";
 import * as Cause from "effect/Cause";
 // What a workflow does with a coding agent: one launch, one collection, one repair.
 //
@@ -62,7 +63,7 @@ import {
 } from "../src/engine";
 import { readStepLines } from "../src/steps";
 import { readMetrics } from "../src/metrics";
-import { Launched, runAgents } from "../src/launches";
+import { recordLaunch } from "../src/launches";
 import { Collected } from "../src/agents";
 import { Collecting } from "../src/collecting";
 import { holdsBudgetOf, memoryWaitOf, waitForMemory } from "../src/memory-wait";
@@ -74,7 +75,6 @@ import { Triage } from "../workflows/retrospective";
 import { seedIntent, writeIntent } from "../src/intent";
 import { appendLine, herdOf, reconcile } from "../src/steering";
 import { deliveredTo, ledgerOf, recordsAt, registeredAt } from "./support/records";
-import { readLaunches } from "../src/launches";
 import { Store } from "../src/store";
 import type { AuditLine } from "../src/audit";
 import { listTasks, readTask, taskKeptIn, withTaskLock, writeTask } from "../src/task";
@@ -1695,7 +1695,7 @@ const ANSWERED = "Your questions are answered:";
 /** Once `r1`'s agent has its work, it calls `AskUserQuestion` with two questions. */
 const asksTwo = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
-  while (!(yield* fs.exists(`${dir}/agents/r1/review.launch.json`)))
+  while (Arr.every(yield* launchesAt(dir, "r1"), (one) => one.operation !== "review"))
     yield* TestClock.withLive(Effect.sleep("10 millis"));
   // The host runs in this process; the hook puts a question on a Run only while one lives.
   yield* fs.writeFileString(
@@ -1993,23 +1993,17 @@ test("a question asked before the agent's next launch is answered while that lau
   runEffect(
     Effect.gen(function* () {
       yield* finishedThenAsked;
-      const fs = yield* FileSystem.FileSystem;
       const asked = yield* questionsSince(
         yield* controlDir(rig.pluginEnv().stateDir, agentFor("r1")),
         0,
       );
-      const first = yield* Schema.decodeEffect(Schema.fromJsonString(Launched))(
-        yield* fs.readFileString(`${dir}/agents/r1/review.launch.json`),
-      ).pipe(Effect.orDie);
+      const first = yield* launchedAt(dir, "r1", "review");
       const next = {
         ...first,
         operation: "fix",
         at: Math.max(...Arr.map(asked, (one) => one.at)) + 1,
       };
-      yield* fs.writeFileString(
-        `${dir}/agents/r1/fix.launch.json`,
-        yield* Schema.encodeEffect(Schema.fromJsonString(Launched))(next).pipe(Effect.orDie),
-      );
+      yield* recordLaunch(next).pipe(Effect.provide(recordsAt(dir)));
       yield* session(
         Effect.gen(function* () {
           const collecting = yield* Collecting;
@@ -2454,11 +2448,7 @@ const claudeOut = {
     },
   ] satisfies ReadonlyArray<UsageReading>),
 };
-const launchOf = (runId: string) =>
-  read(`${dir}/agents/${runId}/review.launch.json`).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Launched))),
-    Effect.orDie,
-  );
+const launchOf = (runId: string) => launchedAt(dir, runId, "review");
 test("an agent's launch record keeps the harness session herdr reports for it", () =>
   runEffect(
     Effect.gen(function* () {
@@ -2611,7 +2601,7 @@ test("a waiting agent switches when a fallback is configured after it ran out", 
       const calls = yield* rig.calls();
       expect(closedPanes(calls)).toHaveLength(1);
       expect(harnessesStarted(calls)).toEqual(["claude", "codex"]);
-      expect((yield* runAgents(dir, "r1"))[1]?.model).toBe("gpt-6.1-sol");
+      expect((yield* agentsAt(dir, "r1"))[1]?.model).toBe("gpt-6.1-sol");
     }).pipe(Effect.scoped),
   ));
 
@@ -2694,7 +2684,7 @@ test("an agent that runs out mid-work is closed and replaced by one on the next 
       expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
         `review: claude/opus ran out (rate_limit) — continuing on codex/default as ${successor}`,
       );
-      const records = yield* runAgents(dir, "r1");
+      const records = yield* agentsAt(dir, "r1");
       expect(Arr.map(records, ({ agent, harness }) => [agent, harness])).toEqual([
         [agentFor("r1"), "claude"],
         [successor, "codex"],
@@ -2870,7 +2860,7 @@ test(
         expect(
           Arr.filter(harnessesStarted(yield* rig.calls()), (one) => one === "codex"),
         ).toHaveLength(2);
-        expect(Arr.map(yield* runAgents(dir, "r1"), ({ agent }) => agent)).toEqual([
+        expect(Arr.map(yield* agentsAt(dir, "r1"), ({ agent }) => agent)).toEqual([
           agentFor("r1"),
           agentName("r1", "review", null, 2),
         ]);
@@ -4472,7 +4462,7 @@ const reviewedBody = reviewed.toLayer((payload) =>
 /** The builder at work again, its Output not yet written, with the reviewer idle. */
 const builderBusy = Effect.gen(function* () {
   yield* reviewed.execute({ runId: "r1", input: {} });
-  const launches = yield* readLaunches(dir, "r1");
+  const launches = yield* launchesAt(dir, "r1");
   const build = Option.getOrUndefined(Arr.findFirst(launches, (one) => one.operation === "build"))!;
   yield* (yield* FileSystem.FileSystem).remove(build.output);
   return build.agent;
@@ -6148,7 +6138,7 @@ test("subagent policy fields follow workflow, role, scope and call preferences w
         ),
         Effect.scoped,
       );
-      const launches = yield* readLaunches(dir, "r1");
+      const launches = yield* launchesAt(dir, "r1");
       expect(
         Option.getOrUndefined(Arr.findFirst(launches, (one) => one.operation === "research"))
           ?.claudeSubagents,

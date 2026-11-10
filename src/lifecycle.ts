@@ -8,6 +8,7 @@
 // What a Run is and what became of it stays Collie's; what a workflow has done stays
 // Effect's. Nothing here copies the second into the first.
 
+import type { Launched } from "./launches";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -437,6 +438,13 @@ export const hostRegistered = (
   env: PluginEnv,
 ): Effect.Effect<ReadonlyArray<AgentEntry>, HostUnread, Client> =>
   hostRead(env, (client) => client.registered());
+
+/** A Run's launches, as this Machine's host keeps them. */
+export const hostLaunches = (
+  env: PluginEnv,
+  run: string,
+): Effect.Effect<ReadonlyArray<Launched>, HostUnread, Client> =>
+  hostRead(env, (client) => client.launches({ run }));
 
 /** A Herd's proposals journal, as this Machine's host keeps it. */
 export const hostProposals = (

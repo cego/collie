@@ -89,7 +89,7 @@ export const endAgent = Effect.fn("AgentEnd.end")(function* (
       const stem = operation === undefined ? null : stemOf({ ...launched, operation });
       const now = Option.getOrUndefined(
         Arr.findLast(
-          yield* readLaunches(deps.stateDir, runId).pipe(Effect.orElseSucceed(() => [])),
+          yield* readLaunches(runId).pipe(Effect.orElseSucceed(() => [])),
           (one) => stemOf(one) === stem,
         ),
       );

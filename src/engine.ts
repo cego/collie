@@ -7893,7 +7893,7 @@ const makeRegistry: (
     agent: string,
     submitted = Infinity,
   ) {
-    const launches = yield* readLaunches(dir, runId).pipe(Effect.orElseSucceed(() => []));
+    const launches = yield* readLaunches(runId).pipe(Effect.orElseSucceed(() => []));
     const { aside, extended } = touchedBy(yield* store.asked(runId), launches, agent, submitted);
     for (const one of aside)
       yield* supersedeQuestion({ runId, decision: one.decision, cause, by: actor, agent });
@@ -7919,7 +7919,7 @@ const makeRegistry: (
     const delivered = yield* humanSubmits;
     for (const runId of runs) {
       const rows = yield* store.asked(runId);
-      const launches = yield* readLaunches(dir, runId).pipe(Effect.orElseSucceed(() => []));
+      const launches = yield* readLaunches(runId).pipe(Effect.orElseSucceed(() => []));
       const typed = yield* Effect.forEach(
         Arr.dedupe(Arr.map(launches, (launch) => launch.agent)),
         (agent) =>
@@ -7985,7 +7985,7 @@ const makeRegistry: (
       if (state.status !== "suspended") continue;
       const rows = yield* store.asked(row.run);
       if (!(yield* awaitsRoot(row.run, rows, row.decision))) continue;
-      const launches = yield* readLaunches(dir, row.run).pipe(Effect.orElseSucceed(() => []));
+      const launches = yield* readLaunches(row.run).pipe(Effect.orElseSucceed(() => []));
       const messaged = row.messaged ?? [];
       const keyOf = (agent: string) => `${row.run}/${row.decision}/${agent}`;
       const finished = Effect.fn("Engine.finished")(function* (agent: string, since: string) {
@@ -9063,7 +9063,7 @@ const makeRegistry: (
         });
         const launch = Option.getOrUndefined(
           Arr.findLast(
-            yield* readLaunches(dir, options.runId),
+            yield* readLaunches(options.runId),
             (one) => one.step?.step === options.step,
           ),
         );

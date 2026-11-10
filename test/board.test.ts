@@ -8,17 +8,7 @@ import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
-import {
-  Clock,
-  DateTime,
-  Effect,
-  Fiber,
-  FileSystem,
-  Path,
-  Schema,
-  flow as Schemaflow,
-  Result,
-} from "effect";
+import { Clock, DateTime, Effect, Fiber, FileSystem, Path, Schema } from "effect";
 import {
   boardLines,
   buildBoard,
@@ -77,7 +67,7 @@ import { memoryRecords, runEffect } from "./support/effect";
 import { madeRun } from "./support/records";
 import { collie, proves } from "./support/world";
 import { stopHost, until } from "./support/host";
-import { Launched } from "../src/launches";
+import { Launched, orderLaunch, recordLaunch } from "../src/launches";
 import { epochMs } from "../src/time";
 import { seedIntent, writeIntent } from "../src/intent";
 import { approvedFile, encodeApproved } from "../src/verify-spec";
@@ -816,9 +806,7 @@ test("a working agent leaves the Task working, and its pane title is not the car
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
       const run = yield* madeRun(dir, { task: "task-1" });
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.makeDirectory(`${dir}/agents/${run.id}`, { recursive: true });
-      yield* fs.writeFileString(`${dir}/agents/${run.id}/launches`, "build\nreview-1\n");
+      yield* launched(dir, run.id, ["build", "review-1"]);
 
       for (const title of ["Claude Code", "Review-1.prompt.md", "cego.collie agent review"]) {
         const [view] = yield* board(env, [run], {
@@ -874,12 +862,20 @@ const launched = Effect.fn("board.launched")(function* (
   runId: string,
   operations: ReadonlyArray<string>,
 ) {
-  const fs = yield* FileSystem.FileSystem;
-  yield* fs.makeDirectory(`${stateDir}/agents/${runId}`, { recursive: true });
-  yield* fs.writeFileString(
-    `${stateDir}/agents/${runId}/launches`,
-    `${Arr.join(operations, "\n")}\n`,
-  );
+  for (const operation of operations) {
+    const launch: Launched = {
+      agent: `${runId}-${operation}`,
+      output: `${stateDir}/agents/${runId}/${operation}.json`,
+      reused: false,
+      runId,
+      operation,
+      role: "implementer",
+      workflow: "implement",
+      harness: "claude",
+    };
+    yield* recordLaunch(launch);
+    yield* orderLaunch(launch);
+  }
 });
 
 /** A file last written at this moment, which is what silence is measured from. */
@@ -932,7 +928,6 @@ test("a Run is not quiet while its agent works, a check runs, or its agents writ
   runEffect(
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
-      const fs = yield* FileSystem.FileSystem;
       const old = "2026-09-14T09:00:00Z";
       const working = yield* madeRun(dir, { id: "r-working", task: "task-1" });
       const checking = yield* madeRun(dir, { id: "r-checking" });
@@ -941,8 +936,6 @@ test("a Run is not quiet while its agent works, a check runs, or its agents writ
       for (const run of [working, checking, writing, idle]) {
         yield* launched(dir, run.id, ["build"]);
         yield* writtenAt(`${run.dir}/log`, old);
-        const then = DateTime.toDateUtc(DateTime.makeUnsafe(old));
-        yield* fs.utimes(`${dir}/agents/${run.id}/launches`, then, then);
       }
       yield* writtenAt(`${checking.dir}/verifying`, old);
       yield* writtenAt(`${dir}/agents/${writing.id}/build.prompt.md`, "2026-09-14T10:04:00Z");
@@ -1953,7 +1946,6 @@ test("a fan-out is not quiet while one of its Repo runs works or writes", () =>
       for (const run of [parent, web]) {
         yield* launched(dir, run.id, ["build"]);
         yield* writtenAt(`${run.dir}/log`, old);
-        yield* fs.utimes(`${dir}/agents/${run.id}/launches`, then, then);
       }
       const stateOf = (over: Partial<Parameters<typeof buildBoard>[0]>) =>
         board(env, [web, parent], over).pipe(Effect.map((views) => views[0]!.state));
@@ -2456,9 +2448,7 @@ test("a running check never borrows the round of the agent operation before it",
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
       const run = yield* madeRun(dir, { task: "task-1" });
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.makeDirectory(`${dir}/agents/${run.id}`, { recursive: true });
-      yield* fs.writeFileString(`${dir}/agents/${run.id}/launches`, "fix-1\n");
+      yield* launched(dir, run.id, ["fix-1"]);
       yield* marking(run, { pass: "recheck" });
 
       const [view] = yield* board(env, [run]);
@@ -3093,34 +3083,25 @@ const boardAndFlows = Effect.fn("board.boardAndFlows")(function* (
 const BUILD = declared("build");
 const SHIP = declared("ship", { produces: "merge-request" });
 
-const encodeLaunch = Schemaflow(
-  Schema.encodeResult(Schema.fromJsonString(Launched)),
-  Result.getOrThrow,
-);
-
 test("a launch from before a Run's Steps is drawn as the Step it was, once", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       const { dir, env } = yield* scratch();
       const run = yield* madeRun(dir, { task: "task-1" });
       yield* launched(dir, run.id, ["grill", "spec"]);
       for (const operation of ["grill", "spec"])
-        yield* fs.writeFileString(
-          `${dir}/agents/${run.id}/${operation}.launch.json`,
-          encodeLaunch({
-            agent: `${run.id}-${operation}-r1`,
-            output: `${dir}/agents/${run.id}/${operation}.json`,
-            reused: false,
-            runId: run.id,
-            operation,
-            role: "planner",
-            workflow: "plan",
-            harness: "claude",
-            model: "opus",
-            at: epochMs("2026-09-14T08:00:00Z"),
-          }),
-        );
+        yield* recordLaunch({
+          agent: `${run.id}-${operation}-r1`,
+          output: `${dir}/agents/${run.id}/${operation}.json`,
+          reused: false,
+          runId: run.id,
+          operation,
+          role: "planner",
+          workflow: "plan",
+          harness: "claude",
+          model: "opus",
+          at: epochMs("2026-09-14T08:00:00Z"),
+        });
       const grill = declared("grill", { title: "Grill" });
       yield* stepsRecorded(run, [grill, BUILD], [{ step: grill, left: true }]);
       const { flow } = yield* boardAndFlows(env, [run]);

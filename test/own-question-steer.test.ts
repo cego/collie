@@ -14,18 +14,13 @@ import { isSettled } from "../src/lifecycle";
 import { carryOutAsked } from "../src/run-actions";
 import { controlDir } from "../src/compaction";
 import { recordClaudeEvent } from "../src/compactors";
-import { Launched } from "../src/launches";
 import { TaskView } from "../src/board-model";
 import { SENT_STATES } from "../src/steering";
-import { deliveredTo, recordsAt } from "./support/records";
+import { deliveredTo, recordsAt, launchOf } from "./support/records";
 import { stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
-const decodeLaunched = flow(
-  Schema.decodeUnknownResult(Schema.fromJsonString(Launched)),
-  Result.getOrThrow,
-);
 const Board = Schema.Struct({ tasks: Schema.Array(TaskView) });
 
 const asked = encode({
@@ -89,15 +84,10 @@ test(
               input: { work: "it" },
             })
             .pipe(Effect.orDie);
-          const launched = decodeLaunched(
-            yield* until(
-              () =>
-                fs
-                  .readFileString(`${world.state}/agents/${runId}/first-step.launch.json`)
-                  .pipe(Effect.orElseSucceed(() => "")),
-              (one) => one !== "",
-            ),
-          );
+          const launched = (yield* until(
+            () => launchOf(world.state, runId, "first-step"),
+            (one) => one !== undefined,
+          ))!;
           // It asks once it has its prompt, as an agent does.
           yield* until(
             () => deliveredTo(world.state, runId),

@@ -2,6 +2,7 @@
 // stopped through core's own API on the rig's fake core, which takes a prompt the way a
 // harness does. The rest of the host is real: the dispatcher, its ledger and the engine.
 
+import { launchedAt } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -118,12 +119,6 @@ const OpenCodeLaunch = Schema.Struct({
     ),
   }),
 });
-const LaunchedSession = Schema.fromJsonString(
-  Schema.Struct({
-    at: Schema.Finite,
-    agentSession: Schema.Struct({ kind: Schema.String, value: Schema.String }),
-  }),
-);
 
 /** The part of an OpenCode plugin OpenCode calls, as the reporter exports it. */
 interface OpenCodePlugin {
@@ -320,9 +315,7 @@ test("an OpenCode agent on core is launched with its reporter and its first prom
       ).pipe(Option.getOrElse(() => Infinity));
       expect(position(onCore, "terminal.send")).toBeGreaterThan(firstIdle);
 
-      const launched = yield* Schema.decodeEffect(LaunchedSession)(
-        yield* fs.readFileString(`${dir}/agents/r1/review.launch.json`),
-      );
+      const launched = yield* launchedAt(dir, "r1", "review");
       expect(launched.agentSession).toEqual({ kind: "opencode", value: "ses_review" });
     }),
   ));
@@ -369,9 +362,7 @@ test(
             );
             const { argv } = yield* Schema.decodeUnknownEffect(PiLaunch)(run?.params);
             expect(argv[0]).toBe("pi");
-            const launched = yield* Schema.decodeEffect(LaunchedSession)(
-              yield* fs.readFileString(`${dir}/agents/r1/review.launch.json`),
-            );
+            const launched = yield* launchedAt(dir, "r1", "review");
             const chosen = argv[argv.indexOf("--session-id") + 1];
             expect(chosen).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/));
             expect(launched.agentSession).toEqual({ kind: "pi", value: chosen ?? "" });
@@ -380,7 +371,7 @@ test(
             // The tool's helper stamps its question on the wall clock, which this test's clock
             // runs ahead of: a question stamped before its work was given is not that work's.
             yield* waitFor(
-              Effect.map(TestClock.withLive(Clock.currentTimeMillis), (now) => now > launched.at),
+              Effect.map(TestClock.withLive(Clock.currentTimeMillis), (now) => now > launched.at!),
             );
             const told = yield* askWith(
               tools,
@@ -393,7 +384,7 @@ test(
                 },
                 { question: "Which checks?", header: "Checks", options: [{ label: "lint" }] },
               ],
-              launched.agentSession.value,
+              launched.agentSession!.value,
             );
             expect(told).toContain("End your turn now");
             const store = yield* Store;

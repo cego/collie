@@ -3,6 +3,7 @@
 // its checkout, with its harness's resume of the session recorded at launch. The host is
 // the real registry, engine and agents; the Codex agent's App Server is the stand-in.
 
+import { launchesAt } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -209,20 +210,17 @@ const idleAfterItsStep = (agent: string, given: "sent" | "at launch" = "sent") =
     },
   );
 
-const Recorded = Schema.fromJsonString(
-  Schema.Struct({ agentSession: Schema.Struct({ kind: Schema.String, value: Schema.String }) }),
-);
 /** The session an agent's launch recorded, once it has: the launch is written before it. */
 const recordedSession = (runId: string, operation: string) =>
   until(
     () =>
-      FileSystem.FileSystem.pipe(
-        Effect.flatMap((fs) =>
-          fs.readFileString(`${dir()}/agents/${runId}/${operation}.launch.json`),
+      launchesAt(dir(), runId).pipe(
+        Effect.map((launches) =>
+          Option.flatMapNullishOr(
+            Arr.findFirst(launches, (one) => one.operation === operation),
+            (one) => one.agentSession,
+          ),
         ),
-        Effect.flatMap(Schema.decodeUnknownEffect(Recorded)),
-        Effect.map((launched) => launched.agentSession),
-        Effect.option,
       ),
     Option.isSome,
   ).pipe(Effect.map(Option.getOrThrow));
@@ -454,11 +452,8 @@ test(
             yield* fs.writeFileString(`${dir()}/agents/${runId}/opencode.session`, "ses_notes");
             yield* idleAfterItsStep(agent, "at launch");
             yield* until(
-              () =>
-                fs
-                  .readFileString(`${dir()}/agents/${runId}/opencode.launch.json`)
-                  .pipe(Effect.orElseSucceed(() => "")),
-              Str.includes('"agentSession"'),
+              () => readLaunches(runId),
+              (launches) => Arr.some(launches, (one) => one.agentSession !== undefined),
             );
             return { runId, agent, before: coreCalls(yield* rig.calls()).length };
           }),
@@ -545,7 +540,7 @@ test(
             }
             const herdr = new ExitSeenWhileClosing(env());
             const launched = Option.getOrThrow(
-              Arr.findLast(yield* readLaunches(dir(), runId), (one) => one.agent === agent),
+              Arr.findLast(yield* readLaunches(runId), (one) => one.agent === agent),
             );
             const ended = yield* endAgent(
               { herdr, stateDir: dir(), ports: {}, log: () => Effect.void, cwd: rig.projectDir },
@@ -590,7 +585,7 @@ test(
             const agent = agentName(runId, "pi", null, 1);
             yield* idleAfterItsStep(agent);
             const launched = Option.getOrThrow(
-              Arr.findLast(yield* readLaunches(dir(), runId), (one) => one.agent === agent),
+              Arr.findLast(yield* readLaunches(runId), (one) => one.agent === agent),
             );
             held = true;
             yield* core.lose;

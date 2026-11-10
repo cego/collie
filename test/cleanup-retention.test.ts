@@ -1,6 +1,7 @@
 // A Task and every one of its Runs are forgotten together 30 days after its last Run ended,
 // and only once nothing could still need them (ADR-0045 D5).
 
+import { recordLaunch, type Launched } from "../src/launches";
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Clock, Effect, FileSystem } from "effect";
@@ -66,6 +67,19 @@ const sweeper = (
         return ids;
       }),
   });
+
+/** A launch of `runId`'s builder on that terminal. */
+const launchOn = (runId: string, terminalId: string): Launched => ({
+  agent: "impl",
+  output: "out.json",
+  reused: false,
+  runId,
+  operation: "build",
+  role: "implementer",
+  workflow: "implement",
+  harness: "claude",
+  terminalId,
+});
 
 test("a Task whose last Run ended 31 days ago is forgotten: its rows, then its files", () =>
   runEffect(
@@ -190,13 +204,9 @@ test("a Task with a checkout of its own still on disk is kept", () =>
 test("a Task one of whose agents herdr still has is kept", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       const ended = yield* arranged(400);
       yield* rig.addPane("p7", "t7", "/project", "impl", "wOther");
-      yield* fs.writeFileString(
-        `${rig.stateDir}/agents/r1/build.launch.json`,
-        '{"terminalId":"t-p7"}',
-      );
+      yield* recordLaunch(launchOn("r1", "t-p7"));
       const judged = yield* sweeper([ended]).judge;
       expect(judged.keep).toEqual([
         { kind: "task", target: "task-1", reason: "an agent of it is alive" },
@@ -229,10 +239,7 @@ test("one judgement of three Finished Tasks asks herdr what is open once, and ke
       yield* rig.addWorkspace("w-open", "Project | Open", "/project");
       yield* rig.addPane("p7", "t7", "/project", "impl", "wOther");
       yield* fs.makeDirectory(`${rig.stateDir}/agents/r-alive`, { recursive: true });
-      yield* fs.writeFileString(
-        `${rig.stateDir}/agents/r-alive/build.launch.json`,
-        '{"terminalId":"t-p7"}',
-      );
+      yield* recordLaunch(launchOn("r-alive", "t-p7"));
       const asked = (yield* rig.cmds()).length;
 
       const judged = yield* retentionSweeper({

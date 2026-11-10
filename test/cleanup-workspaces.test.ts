@@ -1,6 +1,7 @@
 // A Finished Task's workspace closes an hour on, unless it is in focus or holds a pane
 // Collie did not open; nothing else of a Task's is closed (ADR-0045 D3).
 
+import { recordLaunch } from "../src/launches";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -47,10 +48,17 @@ const arranged = (opts: { focused?: boolean } = {}) =>
     yield* rig.addPane("wT-p1", "wT-t1", "/project", null, "wT");
     yield* rig.addPane("wT-p2", "wT-t1", "/project", "impl", "wT");
     yield* fs.makeDirectory(`${rig.stateDir}/agents/r1`, { recursive: true });
-    yield* fs.writeFileString(
-      `${rig.stateDir}/agents/r1/build.launch.json`,
-      '{"terminalId":"t-wT-p2"}',
-    );
+    yield* recordLaunch({
+      agent: "impl",
+      output: "out.json",
+      reused: false,
+      runId: "r1",
+      operation: "build",
+      role: "implementer",
+      workflow: "implement",
+      harness: "claude",
+      terminalId: "t-wT-p2",
+    });
   });
 
 const sweeper = (seen: Map<string, number>, views: ReadonlyArray<TaskView> = [finished]) =>
@@ -125,23 +133,19 @@ const SESSION = { kind: "pi", value: "/home/mk/.pi/sessions/fix.jsonl" };
 /** A pane herdr restored in the Task's workspace, resuming `session`, and the launch that recorded SESSION. */
 const restoredFixer = (session: typeof SESSION) =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
     yield* rig.addRestored({ paneId: "wT-p9", workspaceId: "wT", terminalId: "t-new", session });
-    yield* fs.writeFileString(
-      `${rig.stateDir}/agents/r1/fix.launch.json`,
-      yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
-        agent: "fixer",
-        output: "out.json",
-        reused: false,
-        runId: "r1",
-        operation: "fix",
-        role: "implementer",
-        workflow: "implement",
-        harness: "pi",
-        terminalId: "t-old",
-        agentSession: SESSION,
-      }).pipe(Effect.orDie),
-    );
+    yield* recordLaunch({
+      agent: "fixer",
+      output: "out.json",
+      reused: false,
+      runId: "r1",
+      operation: "fix",
+      role: "implementer",
+      workflow: "implement",
+      harness: "pi",
+      terminalId: "t-old",
+      agentSession: SESSION,
+    });
   });
 
 test("a pane herdr restored resuming its agent's recorded session is Collie's, and the workspace closes", () =>
@@ -228,20 +232,17 @@ const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), 
 const servedBy = (state: Stopped["state"]) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    yield* fs.writeFileString(
-      `${rig.stateDir}/agents/r1/build.launch.json`,
-      asJson({
-        agent: "impl",
-        output: "out.json",
-        reused: false,
-        runId: "r1",
-        operation: "build",
-        role: "implementer",
-        workflow: "implement",
-        harness: "served",
-        terminalId: "t-wT-p2",
-      }),
-    );
+    yield* recordLaunch({
+      agent: "impl",
+      output: "out.json",
+      reused: false,
+      runId: "r1",
+      operation: "build",
+      role: "implementer",
+      workflow: "implement",
+      harness: "served",
+      terminalId: "t-wT-p2",
+    });
     const dir = `${rig.stateDir}/compaction/impl`;
     yield* fs.makeDirectory(dir, { recursive: true });
     yield* fs.writeFileString(
@@ -365,20 +366,17 @@ test("an agent moved to another workspace is logged ended only once its pane the
         yield* rig.addPane("wX-p5", "wX-t1", "/project", "claude", "wX");
         yield* rig.addAgent("impl", "wX-p5", "t-wX-p5");
         yield* fs.makeDirectory(`${rig.stateDir}/agents/r1`, { recursive: true });
-        yield* fs.writeFileString(
-          `${rig.stateDir}/agents/r1/build.launch.json`,
-          asJson({
-            agent: "impl",
-            output: "out.json",
-            reused: false,
-            runId: "r1",
-            operation: "build",
-            role: "implementer",
-            workflow: "implement",
-            harness: "claude",
-            terminalId: "t-wX-p5",
-          }),
-        );
+        yield* recordLaunch({
+          agent: "impl",
+          output: "out.json",
+          reused: false,
+          runId: "r1",
+          operation: "build",
+          role: "implementer",
+          workflow: "implement",
+          harness: "claude",
+          terminalId: "t-wX-p5",
+        });
         const herdr = new Herdr(
           rig.pluginEnv(
             fail

@@ -1570,10 +1570,7 @@ const closeDeadTabs = Effect.fn("worktree.closeDeadTabs")(function* (
       if (holder !== undefined && holder.name !== entry?.agent) return null;
       if (pane.agent === null || entry === undefined) return yield* Effect.succeed(Effect.void);
       const launched = Option.getOrUndefined(
-        Arr.findLast(
-          yield* readLaunches(opts.stateDir, entry.runId),
-          (one) => one.agent === entry.agent,
-        ),
+        Arr.findLast(yield* readLaunches(entry.runId), (one) => one.agent === entry.agent),
       );
       const ended = yield* endAgent(
         {

@@ -12,10 +12,9 @@ import { Effect, Fiber, FileSystem, Schema, flow, Result } from "effect";
 import { connect } from "../src/host";
 import { resetExecutors } from "../src/executors";
 import { runDir } from "../src/engine";
-import { Launched } from "../src/launches";
 import { holdsBudgetOf, memoryWaitOf, waitLine } from "../src/memory-wait";
 import { readVerifications } from "../src/verify";
-import { deliveredTo, registeredAt } from "./support/records";
+import { deliveredTo, registeredAt, launchOf } from "./support/records";
 import { evidenceDir } from "../src/engine";
 import { exec } from "./support/command";
 import { stopHost, until } from "./support/host";
@@ -23,10 +22,6 @@ import { collie, proves } from "./support/world";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const Shown = Schema.Struct({ memory: Schema.NullOr(Schema.String) });
-const decodeLaunched = flow(
-  Schema.decodeUnknownResult(Schema.fromJsonString(Launched)),
-  Result.getOrThrow,
-);
 const Ran = Schema.Struct({
   ran: Schema.Boolean,
   verification: Schema.Struct({ exit: Schema.Finite }),
@@ -90,15 +85,10 @@ test(
               input: { work: "it" },
             })
             .pipe(Effect.orDie);
-          const launched = decodeLaunched(
-            yield* until(
-              () =>
-                fs
-                  .readFileString(`${world.state}/agents/${runId}/build.launch.json`)
-                  .pipe(Effect.orElseSucceed(() => "")),
-              (one) => one !== "",
-            ),
-          );
+          const launched = (yield* until(
+            () => launchOf(world.state, runId, "build"),
+            (one) => one !== undefined,
+          ))!;
           const pane = Option.getOrUndefined(
             Arr.findFirst(yield* registeredAt(world.state), (entry) => entry.runId === runId),
           )!.paneId;
@@ -189,7 +179,7 @@ test(
           yield* memory(50);
           yield* Effect.sleep("3 seconds");
           const agentsDir = `${world.state}/agents/${second.runId}`;
-          expect(yield* fs.exists(`${agentsDir}/build.launch.json`)).toBe(false);
+          expect(yield* launchOf(world.state, second.runId, "build")).toBeUndefined();
           expect(yield* fs.readFileString(`${agentsDir}/agents.log`)).toContain(
             "stopped after waiting",
           );

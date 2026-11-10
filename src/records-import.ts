@@ -6,6 +6,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Effect, FileSystem, Option, Path, PlatformError, Schema } from "effect";
 import * as SqlClient from "effect/sql/SqlClient";
+import { decodeLaunchOption, LAUNCH_ORDER, LAUNCH_SUFFIX, stemOf } from "./launches";
 import { decodeProposalLineOption } from "./proposals";
 import { decodeRegisterOption, encodeAgentEntry } from "./registry";
 import { LEDGER_FILE } from "./steering";
@@ -99,5 +100,36 @@ export const importTasks = Effect.fn("RecordsImport.tasks")(function* (stateDir:
     const task = Option.getOrUndefined(decodeTaskOption(raw));
     if (task !== undefined)
       yield* sql`INSERT OR REPLACE INTO collie_tasks (id, record) VALUES (${task.id}, ${raw})`;
+  }
+});
+
+/** Every `agents/<run>/*.launch.json`, each placed where its Run's `launches` order last put it. */
+export const importLaunches = Effect.fn("RecordsImport.launches")(function* (stateDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const sql = yield* SqlClient.SqlClient;
+  const root = path.join(stateDir, "agents");
+  for (const run of yield* fs.readDirectory(root).pipe(orMissing<ReadonlyArray<string>>([]))) {
+    const dir = path.join(root, run);
+    const names = yield* fs.readDirectory(dir).pipe(orMissing<ReadonlyArray<string>>([]));
+    const launched = Arr.filter(names, Str.endsWith(LAUNCH_SUFFIX));
+    if (launched.length === 0) continue;
+    const orderFile = path.join(dir, LAUNCH_ORDER);
+    const order = Str.split(yield* fs.readFileString(orderFile).pipe(orMissing("")), "\n");
+    const orderedAt = yield* fs.stat(orderFile).pipe(
+      Effect.map((info) => Option.getOrNull(info.mtime)?.getTime() ?? null),
+      orMissing<number | null>(null),
+    );
+    for (const name of launched) {
+      const raw = Str.trim(yield* fs.readFileString(path.join(dir, name)).pipe(orMissing("")));
+      const read = decodeLaunchOption(raw);
+      if (Option.isNone(read)) continue;
+      const stem = stemOf(read.value);
+      const at = order.lastIndexOf(stem);
+      yield* sql`
+        INSERT OR REPLACE INTO collie_launches (run, stem, record, ordered, ordered_at)
+        VALUES (${run}, ${stem}, ${raw}, ${at < 0 ? null : at}, ${at < 0 ? null : orderedAt})
+      `;
+    }
   }
 });

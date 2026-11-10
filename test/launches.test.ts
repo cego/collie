@@ -3,10 +3,10 @@
 
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Option, Schema, Stream, flow, Result } from "effect";
+import { Effect, Option, Stream } from "effect";
 import { frontDoor, socketOf } from "../src/host";
 import { agentLines } from "../src/commands/run";
-import { LAUNCH_ORDER, launchDir, runAgents, type Launched } from "../src/launches";
+import { orderLaunch, recordLaunch, runAgents, type Launched } from "../src/launches";
 import { runFacts } from "../src/operations";
 import { findRun } from "../src/runs";
 import { exec } from "./support/command";
@@ -14,6 +14,7 @@ import { runEffect, suiteEnv } from "./support/effect";
 import { hosted, settledRun } from "./support/hosted";
 import { collie, collieCommand } from "./support/world";
 import { recordIn } from "../src/board-model";
+import { recordsAt } from "./support/records";
 
 const launched = (runId: string, over: Partial<Launched>): Launched => ({
   agent: `${runId}-build-r1`,
@@ -27,26 +28,12 @@ const launched = (runId: string, over: Partial<Launched>): Launched => ({
   ...over,
 });
 
-const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
-
-/** Writes a Run's launch records as the agents layer does: one file each, and the order. */
-const seed = Effect.fn("test.seed")(function* (
-  stateDir: string,
-  runId: string,
-  launches: ReadonlyArray<Launched>,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const dir = launchDir(stateDir, runId);
-  yield* fs.makeDirectory(dir, { recursive: true });
-  for (const one of launches)
-    yield* fs.writeFileString(`${dir}/${one.operation}.launch.json`, encode(one));
-  yield* fs.writeFileString(
-    `${dir}/${LAUNCH_ORDER}`,
-    `${Arr.join(
-      Arr.map(launches, (one) => one.operation),
-      "\n",
-    )}\n`,
-  );
+/** Records a Run's launches as the agents layer does: each, then its place in the order. */
+const seed = Effect.fn("test.seed")(function* (launches: ReadonlyArray<Launched>) {
+  for (const one of launches) {
+    yield* recordLaunch(one);
+    yield* orderLaunch(one);
+  }
 });
 
 const twoAgents = (runId: string) => [
@@ -64,11 +51,9 @@ const twoAgents = (runId: string) => [
 test("a Run's agents are its launch records, in launch order, with what each ran on", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-launches-" });
-      yield* seed(state, "r1", twoAgents("r1"));
+      yield* seed(twoAgents("r1"));
 
-      const agents = yield* runAgents(state, "r1");
+      const agents = yield* runAgents("r1");
       expect(agents).toEqual([
         {
           operation: "review",
@@ -106,16 +91,14 @@ test("a Run's agents are its launch records, in launch order, with what each ran
         `  build  ${agents[1]!.agent}  claude/opus xhigh`,
         `  re-review  ${agents[2]!.agent}  claude/default`,
       ]);
-      expect(yield* runAgents(state, "never-ran")).toEqual([]);
+      expect(yield* runAgents("never-ran")).toEqual([]);
     }),
   ));
 
 test("a Fallback's launch says what it fell back from and why, and an earlier one says neither", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-launches-" });
-      yield* seed(state, "r1", [
+      yield* seed([
         launched("r1", {
           operation: "review",
           agent: "r1-review-r1",
@@ -128,12 +111,12 @@ test("a Fallback's launch says what it fell back from and why, and an earlier on
         }),
         launched("r1", {}),
       ]);
-      const agents = yield* runAgents(state, "r1");
+      const agents = yield* runAgents("r1");
       expect(agentLines(agents)).toEqual([
         `  review  ${agents[0]!.agent}  codex/default (fell back from claude/opus: session 100%, resets 15:45)`,
         `  build  ${agents[1]!.agent}  claude/default`,
       ]);
-      expect(Arr.map(yield* runAgents(state, "r1"), ({ at }) => at)).toEqual([
+      expect(Arr.map(yield* runAgents("r1"), ({ at }) => at)).toEqual([
         "2026-10-08T13:45:00.000Z",
         null,
       ]);
@@ -146,7 +129,7 @@ test(
     hosted("collie-launches-", ({ world, env }) =>
       Effect.gen(function* () {
         const run = yield* settledRun(world, "hello");
-        yield* seed(world.state, run.id, twoAgents(run.id));
+        yield* seed(twoAgents(run.id)).pipe(Effect.provide(recordsAt(world.state)));
 
         const detail = yield* (yield* frontDoor(socketOf(world.state)))
           .runDetail({ runId: run.id, tail: false, pages: 1, refreshMr: false })

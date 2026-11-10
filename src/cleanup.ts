@@ -67,8 +67,9 @@ import {
 import {
   AgentSession,
   launchDir,
-  LAUNCH_SUFFIX,
+  launchesOf,
   readLaunches,
+  recordSession,
   sameSession,
   stemOf,
   Launched,
@@ -818,13 +819,6 @@ const SECTION_SAID: Record<Section, string> = {
   finished: "Finished",
 };
 
-const LaunchedPane = Schema.fromJsonString(
-  Schema.Struct({
-    terminalId: Schema.optionalKey(Schema.String),
-    agentSession: Schema.optionalKey(AgentSession),
-  }),
-);
-
 /** What proves a pane is one of some Runs' agents, from their launch records. */
 export interface LaunchedPanes {
   readonly terminals: ReadonlySet<string>;
@@ -832,25 +826,13 @@ export interface LaunchedPanes {
 }
 
 /** The terminal and the harness session of every agent `runs` launched. */
-export const launchedPanes = (stateDir: string, runs: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const terminals = new Set<string>();
-    const sessions: AgentSession[] = [];
-    for (const run of runs) {
-      const dir = `${stateDir}/agents/${run}`;
-      const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
-      for (const name of Arr.filter(names, (one) => pipe(one, Str.endsWith(".launch.json")))) {
-        const text = yield* fs
-          .readFileString(`${dir}/${name}`)
-          .pipe(Effect.orElseSucceed(() => ""));
-        const launched = Schema.decodeOption(LaunchedPane)(text);
-        if (Option.isNone(launched)) continue;
-        if (launched.value.terminalId !== undefined) terminals.add(launched.value.terminalId);
-        if (launched.value.agentSession !== undefined) sessions.push(launched.value.agentSession);
-      }
-    }
-    return { terminals, sessions } satisfies LaunchedPanes;
+export const launchedPanes = (runs: ReadonlyArray<string>) =>
+  Effect.map(launchesOf(runs), (byRun): LaunchedPanes => {
+    const launched = [...byRun.values()].flat();
+    return {
+      terminals: new Set(Arr.flatMap(launched, (one) => Arr.ensure(one.terminalId ?? []))),
+      sessions: Arr.flatMap(launched, (one) => Arr.ensure(one.agentSession ?? [])),
+    };
   });
 
 /** A pane is a launched agent by its terminal, or by the harness session herdr restored in it. */
@@ -898,7 +880,7 @@ export const taskWorkspacesSweeper = (opts: {
   const launchesOf = (task: TaskRecord) =>
     Effect.forEach(
       Arr.filter(opts.runs, (run) => run.task === task.id),
-      (run) => readLaunches(opts.stateDir, run.id),
+      (run) => readLaunches(run.id),
     ).pipe(
       Effect.map((all) => [...new Map(Arr.map(all.flat(), (one) => [one.agent, one])).values()]),
     );
@@ -969,7 +951,7 @@ export const taskWorkspacesSweeper = (opts: {
       }
     | null,
     never,
-    PlatformServices
+    PlatformServices | Records
   > =>
     Effect.gen(function* () {
       const session = sessionOf(task);
@@ -989,7 +971,6 @@ export const taskWorkspacesSweeper = (opts: {
       if (finished.ms < FINISHED_GRACE_MS) return { keep: finished.said };
       if (open.focused) return { keep: "in focus" };
       const launched = yield* launchedPanes(
-        opts.stateDir,
         Arr.map(
           Arr.filter(opts.runs, (run) => run.task === task.id),
           (run) => run.id,
@@ -1161,7 +1142,6 @@ interface Live {
   readonly status: string | null;
 }
 
-const LaunchedJson = Schema.fromJsonString(Launched);
 const QUEUED: ReadonlySet<string> = new Set(["reserved", "deferred"]);
 
 /**
@@ -1198,7 +1178,7 @@ export const idleAgentsSweeper = (opts: {
       if (!FINISHED.has(run.state)) opts.finishedSince.delete(run.id);
       else if (!opts.finishedSince.has(run.id)) opts.finishedSince.set(run.id, now);
     for (const run of opts.runs)
-      for (const launched of yield* readLaunches(opts.stateDir, run.id)) {
+      for (const launched of yield* readLaunches(run.id)) {
         if (FINISHED.has(run.state)) named.push({ run, launched });
         else {
           going.push(launched);
@@ -1247,7 +1227,7 @@ export const idleAgentsSweeper = (opts: {
           ),
         );
         if (own !== undefined && !sameSession(own.agentSession, launched.agentSession))
-          yield* recordSession(launched, own.agentSession);
+          yield* recordSessionSeen(launched, own.agentSession);
         return own;
       });
     for (const launched of going) {
@@ -1285,18 +1265,8 @@ export const idleAgentsSweeper = (opts: {
    * Records the session herdr reports for an agent still on its launch's terminal, so a
    * pane herdr restores later is proved by it.
    */
-  const recordSession = (launched: Launched, agentSession: AgentSession | null) =>
-    Effect.gen(function* () {
-      if (agentSession === null) return;
-      const fs = yield* FileSystem.FileSystem;
-      const file = `${launchDir(opts.stateDir, launched.runId)}/${stemOf(launched)}${LAUNCH_SUFFIX}`;
-      const now = yield* Schema.decodeEffect(LaunchedJson)(yield* fs.readFileString(file));
-      if (now.terminalId !== launched.terminalId) return;
-      yield* fs.writeFileString(
-        file,
-        yield* Schema.encodeEffect(LaunchedJson)({ ...now, agentSession }),
-      );
-    }).pipe(Effect.ignore);
+  const recordSessionSeen = (launched: Launched, agentSession: AgentSession | null) =>
+    agentSession === null ? Effect.void : recordSession(launched, agentSession);
 
   /**
    * The newest of the Run's final card, its stop, and when this host first saw it finished:
@@ -1342,7 +1312,7 @@ export const idleAgentsSweeper = (opts: {
         return { keep: "a Delivery to it is queued" };
       const stems = Arr.map(
         Arr.filter(
-          yield* readLaunches(opts.stateDir, one.run.id),
+          yield* readLaunches(one.run.id),
           (launched) => launched.agent === one.launched.agent,
         ),
         (launched) => `ask-${stemOf(launched)}-`,
@@ -1638,7 +1608,7 @@ export const retentionSweeper = (opts: {
   ): Effect.Effect<
     { keep: string } | { remove: string; ids: ReadonlyArray<string> } | null,
     never,
-    PlatformServices
+    PlatformServices | Records
   > =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -1652,7 +1622,7 @@ export const retentionSweeper = (opts: {
         return { keep: "its workspace is open" };
       const mine = Arr.filter(facts.runs, (run) => run.task === task.id);
       const ids = Arr.map(mine, (run) => run.id);
-      const launched = yield* launchedPanes(opts.stateDir, ids);
+      const launched = yield* launchedPanes(ids);
       if (Arr.some(seen.panes, (pane) => isLaunched(launched, pane)))
         return { keep: "an agent of it is alive" };
       for (const run of mine)

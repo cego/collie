@@ -1,3 +1,4 @@
+import { launchesAt } from "./records";
 // The shipped workflows as modules, run the way a user's own module is run.
 //
 // Nothing here is special-cased for being shipped, and every scenario runs twice: as
@@ -63,7 +64,6 @@ import { CONFLICTS } from "../../src/review-wait";
 import { laneFor } from "../../src/flow-read";
 import type { RunState } from "../../src/runs";
 import { registeredAt, runFacts } from "./records";
-import { readLaunches } from "../../src/launches";
 import { readReplies } from "../../src/replies";
 import { disputesIn } from "../../src/proactive";
 import { AwaitingJson } from "../../src/awaiting";
@@ -9331,7 +9331,7 @@ scenario(
         ]);
         expect(yield* asked("r-renovate-flow", "merge-2")).toContain("request `13`");
         expect(
-          new Set(Arr.map(yield* readLaunches(dir, "r-renovate-flow"), (one) => one.agent)).size,
+          new Set(Arr.map(yield* launchesAt(dir, "r-renovate-flow"), (one) => one.agent)).size,
         ).toBe(1);
       }),
     ),

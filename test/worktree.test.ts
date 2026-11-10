@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import { recordLaunch } from "../src/launches";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Rec from "effect/Record";
@@ -3335,20 +3336,17 @@ const servedLeftover = (worktreePath: string, state: Stopped["state"]) =>
     yield* rig.addAgent("impl-1-5", "1-5", "t-1-5");
     const agents = `${rig.stateDir}/agents/run-wt`;
     yield* fs.makeDirectory(agents, { recursive: true });
-    yield* fs.writeFileString(
-      `${agents}/implement.launch.json`,
-      asRecord({
-        agent: "impl-1-5",
-        output: `${agents}/implement.json`,
-        reused: false,
-        runId: "run-wt",
-        operation: "implement",
-        role: "implementer",
-        workflow: "implement",
-        harness: "served",
-        terminalId: "t-1-5",
-      }),
-    );
+    yield* recordLaunch({
+      agent: "impl-1-5",
+      output: `${agents}/implement.json`,
+      reused: false,
+      runId: "run-wt",
+      operation: "implement",
+      role: "implementer",
+      workflow: "implement",
+      harness: "served",
+      terminalId: "t-1-5",
+    });
     const control = `${rig.stateDir}/compaction/impl-1-5`;
     yield* fs.makeDirectory(control, { recursive: true });
     yield* fs.writeFileString(
@@ -3449,20 +3447,17 @@ test("the worktree sweep keeps the tab of a finished Run's agent's pane another 
       yield* rig.addAgent("other-1", "1-5", "t-other");
       const agents = `${rig.stateDir}/agents/run-wt`;
       yield* fs.makeDirectory(agents, { recursive: true });
-      yield* fs.writeFileString(
-        `${agents}/implement.launch.json`,
-        asRecord({
-          agent: "impl-1-5",
-          output: `${agents}/implement.json`,
-          reused: false,
-          runId: "run-wt",
-          operation: "implement",
-          role: "implementer",
-          workflow: "implement",
-          harness: "claude",
-          terminalId: "t-1-5",
-        }),
-      );
+      yield* recordLaunch({
+        agent: "impl-1-5",
+        output: `${agents}/implement.json`,
+        reused: false,
+        runId: "run-wt",
+        operation: "implement",
+        role: "implementer",
+        workflow: "implement",
+        harness: "claude",
+        terminalId: "t-1-5",
+      });
       yield* settledGit();
       yield* mergedMr();
 

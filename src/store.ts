@@ -36,7 +36,13 @@ import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 import { AuditLine } from "./audit";
-import { importLedgers, importProposals, importRegisters, importTasks } from "./records-import";
+import {
+  importLaunches,
+  importLedgers,
+  importProposals,
+  importRegisters,
+  importTasks,
+} from "./records-import";
 import { StoreWrites } from "./store-writes";
 import { RequestConflict } from "./board-model";
 import { nowIso } from "./time";
@@ -350,7 +356,11 @@ const field = (name: string) =>
 
 type ImportError = Effect.Error<
   ReturnType<
-    typeof importLedgers | typeof importTasks | typeof importRegisters | typeof importProposals
+    | typeof importLedgers
+    | typeof importTasks
+    | typeof importRegisters
+    | typeof importProposals
+    | typeof importLaunches
   >
 >;
 
@@ -359,6 +369,7 @@ const migrations = (imports: {
   readonly tasks: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
   readonly registers: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
   readonly proposals: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
+  readonly launches: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
 }) => ({
   "1_runs": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -517,6 +528,22 @@ const migrations = (imports: {
     `;
     yield* imports.proposals;
   }),
+  "16_launches": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      CREATE TABLE collie_launches (
+        run TEXT NOT NULL,
+        stem TEXT NOT NULL,
+        record TEXT NOT NULL,
+        ordered INTEGER,
+        ordered_at INTEGER,
+        agent TEXT AS (json_extract(record, '$.agent')),
+        PRIMARY KEY (run, stem)
+      )
+    `;
+    yield* sql`CREATE INDEX collie_launches_agent ON collie_launches (agent)`;
+    yield* imports.launches;
+  }),
 });
 
 /** How often a commit by another connection, another process's, is looked for. */
@@ -551,6 +578,7 @@ function makeStore(
           tasks: imported(importTasks),
           registers: imported(importRegisters),
           proposals: imported(importProposals),
+          launches: imported(importLaunches),
         }),
       ),
       table: "collie_migrations",

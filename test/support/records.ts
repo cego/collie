@@ -4,9 +4,11 @@
 // point of these tests, and a cast would let one silently disappear without the test
 // noticing.
 
-import { Data, Effect, FileSystem } from "effect";
+import * as Arr from "effect/Array";
+import { Data, Effect, FileSystem, Option } from "effect";
 import type { RunFacts } from "../../src/runs";
-import { recordsReadLayer, type Records } from "../../src/records";
+import { readLaunches, runAgents } from "../../src/launches";
+import { recordsAt, recordsReadLayer, type Records } from "../../src/records";
 import { everyRegistered } from "../../src/registry";
 import { deliveriesOf, readLedger } from "../../src/steering";
 
@@ -61,7 +63,7 @@ export const madeRun = Effect.fn("test.madeRun")(function* (
   return run;
 });
 
-export { recordsAt } from "../../src/records";
+export { recordsAt };
 
 export class NoHostDb extends Data.TaggedError("NoHostDb")<{ readonly stateDir: string }> {}
 
@@ -88,3 +90,28 @@ export const ledgerOf = (stateDir: string, terminalId: string) =>
 /** The agents a host on `stateDir` registered; none before it has made `host.db`. */
 export const registeredAt = (stateDir: string) =>
   hostRecords(stateDir, everyRegistered).pipe(Effect.orElseSucceed(() => []));
+
+/** A Run's launches as the host on `stateDir` recorded them. */
+export const launchesAt = (stateDir: string, run: string) =>
+  readLaunches(run).pipe(Effect.provide(recordsAt(stateDir)));
+
+/** A Run's agents as the host on `stateDir` recorded their launches. */
+export const agentsAt = (stateDir: string, run: string) =>
+  runAgents(run).pipe(Effect.provide(recordsAt(stateDir)));
+
+/** The launch of `operation` the host on `stateDir` recorded for the Run; none before it has. */
+export const launchOf = (stateDir: string, run: string, operation: string) =>
+  hostRecords(stateDir, readLaunches(run)).pipe(
+    Effect.map((launches) =>
+      Option.getOrUndefined(Arr.findFirst(launches, (one) => one.operation === operation)),
+    ),
+    Effect.orElseSucceed(() => undefined),
+  );
+
+/** The Run's launch of `operation`, as the host on `stateDir` recorded it. */
+export const launchedAt = (stateDir: string, run: string, operation: string) =>
+  launchesAt(stateDir, run).pipe(
+    Effect.map((launches) =>
+      Option.getOrThrow(Arr.findFirst(launches, (one) => one.operation === operation)),
+    ),
+  );

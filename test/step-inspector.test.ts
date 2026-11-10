@@ -1,9 +1,9 @@
+import { launchesAt } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Option, Schema, Stream, flow, Result } from "effect";
 import { frontDoor, socketOf } from "../src/host";
-import { readLaunches } from "../src/launches";
 import { until } from "./support/host";
 import { collie, proves } from "./support/world";
 import { recordIn } from "../src/board-model";
@@ -32,7 +32,7 @@ test(
           const launch = Option.getOrUndefined(
             Arr.findFirst(
               yield* until(
-                () => readLaunches(world.state, runId),
+                () => launchesAt(world.state, runId),
                 (rows) => Arr.some(rows, (one) => one.operation === "second"),
               ),
               (one) => one.operation === "second",
