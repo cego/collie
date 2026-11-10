@@ -179,8 +179,9 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
     if (disposition !== null && !pipe_(disposition, Str.startsWith("merged"))) continue;
     const label = mrLabel(mr);
     if (mrRefOf(mr) === null) continue;
-    const owning = Arr.findFirst(opts.runs, (run) => run.id === owner);
-    const id = yield* mrIdIn(mr, Option.getOrUndefined(owning)?.cwd ?? opts.cwd, opts.run);
+    const at =
+      Option.getOrUndefined(Arr.findFirst(opts.runs, (run) => run.id === owner))?.cwd ?? opts.cwd;
+    const id = yield* mrIdIn(mr, at, opts.run);
     if (id === null) continue;
     const dirs = Arr.map(runs, (run) => runDir(opts.stateDir, run));
     if (
@@ -189,7 +190,7 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
     ) {
       // Stamped before asking: a forge that cannot be asked is not asked again every tick.
       opts.checked.set(id, opts.now);
-      const answered = yield* forgeAnswer(mr, opts.cwd, opts.run, (panel) =>
+      const answered = yield* forgeAnswer(mr, at, opts.run, (panel) =>
         opts.panels.set(id, { at: opts.now, panel }),
       );
       if (answered !== null) {
@@ -299,7 +300,6 @@ const sparedBy = Effect.fn("Merges.sparedBy")(function* <R>(
   /** The ids of the Runs that land it. */
   ids: ReadonlyArray<string>,
   opts: {
-    readonly cwd: string;
     readonly run: Runner<R>;
     readonly runs: ReadonlyArray<RunFacts>;
     readonly making: ReadonlySet<string>;
@@ -321,7 +321,7 @@ const sparedBy = Effect.fn("Merges.sparedBy")(function* <R>(
       continue;
     }
     if (ref === null) return null;
-    read ??= yield* forgeOf(ref).readReview(ref, opts.cwd, opts.run);
+    read ??= yield* forgeOf(ref).readReview(ref, run.cwd, opts.run);
     if (!read.ok) return null;
     const settled = yield* settleLeft(run.dir, landing, read).pipe(Effect.orDie);
     if (settled._tag === "Unmerged") return null;

@@ -1840,3 +1840,57 @@ test("a single-repository fan-out's merge request is not watched once its Repo r
       expect(log).toEqual([]);
     }),
   ));
+
+test("a legacy bare merge request is asked about in its owner's checkout, not the host's", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-legacy-" });
+      const owner = yield* madeRun(stateDir, {
+        id: "r-a",
+        task: "t1",
+        cwd: "/checkout-a",
+        project: "/checkout-a",
+        state: "running",
+        created: "2026-10-15T08:00:00Z",
+        settled: {
+          inputs: { target: "mr:42" },
+          strategies: { target: "diff-target" },
+          sources: {},
+        },
+      });
+      const fake = forge("gitlab", {
+        mrs: [
+          { project: "gitlab.cego.dk/group/a", iid: "42", state: "open", title: "A" },
+          { project: "gitlab.cego.dk/group/b", iid: "42", state: "merged", title: "B" },
+        ],
+      });
+      const run: Runner = (cmd, args, cwd) =>
+        cmd === "git" && args[0] === "remote"
+          ? Effect.succeed({
+              code: 0,
+              stdout: `git@gitlab.cego.dk:group/${cwd === "/checkout-a" ? "a" : "b"}.git\n`,
+              stderr: "",
+            })
+          : fake(cmd, args, cwd);
+      const states = new Map<string, MrState>();
+      const stops: Array<string> = [];
+      yield* settleMerges({
+        stateDir,
+        cwd: "/checkout-b",
+        run,
+        views: [task({ run: "r-a", runs: ["r-a"], mr: "mr:42", branch: null })],
+        runs: [owner],
+        record: () => Effect.void,
+        stop: (id) => Effect.sync(() => void stops.push(id)),
+        now: TEN,
+        checked: new Map(),
+        states,
+        panels: new Map(),
+        making: new Set(),
+      });
+
+      expect(states.get("gitlab.cego.dk/group/a!42")).toBe("open");
+      expect(stops).toEqual([]);
+    }),
+  ));
