@@ -197,6 +197,12 @@ pub struct Question {
     pub topic: String,
     pub text: String,
     pub options: Vec<QuestionOption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold: Option<Hold>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steer: Option<Steer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shortfall: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -210,6 +216,22 @@ pub struct QuestionOption {
     pub id: String,
     pub title: String,
     pub subtitle: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Hold {
+    pub offered: bool,
+    pub why: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Steer {
+    pub agent: Option<String>,
+    pub why: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -878,6 +900,8 @@ pub struct ActionFailed {
     pub request: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
     pub step: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub refused: Option<Option<bool>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

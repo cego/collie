@@ -25,21 +25,40 @@ pub struct Core {
 
 impl Core {
     pub fn start() -> Core {
+        Core::start_with(&[])
+    }
+
+    /// Starts the bundle's own compiled core where there is one beside the shell, else
+    /// Desktop's source under `bun`.
+    pub fn start_with(env: &[(&str, &std::ffi::OsStr)]) -> Core {
         let state = spike_state();
-        let mut child = Command::new(std::env::var("COLLIE_RUNE_BUN").unwrap_or("bun".into()))
-            .args([
-                "--tsconfig-override",
-                "../desktop-rune/core/tsconfig.json",
-                "src/bun/index.ts",
-            ])
-            .current_dir(DESKTOP)
+        let bundled = std::env::current_exe()
+            .ok()
+            .and_then(|exe| Some(exe.parent()?.join("collie-core")))
+            .filter(|core| core.is_file());
+        let mut command = match &bundled {
+            Some(core) => Command::new(core),
+            None => {
+                let mut bun =
+                    Command::new(std::env::var("COLLIE_RUNE_BUN").unwrap_or("bun".into()));
+                bun.args([
+                    "--tsconfig-override",
+                    "../desktop-rune/core/tsconfig.json",
+                    "src/bun/index.ts",
+                ])
+                .current_dir(DESKTOP);
+                bun
+            }
+        };
+        let mut child = command
+            .envs(env.iter().copied())
             .env("XDG_STATE_HOME", state.join("state"))
             .env("COLLIE_RUNE_USER_DATA", state.join("data"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
-            .expect("bun starts Desktop's main process");
+            .expect("Desktop's main process starts");
         let client = Client::new(
             BufReader::new(child.stdout.take().expect("the core's stdout")),
             child.stdin.take().expect("the core's stdin"),

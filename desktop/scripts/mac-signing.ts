@@ -21,3 +21,13 @@ export const macSigning = (env: Record<string, string | undefined>) => {
       ));
   return { codesign, notarize };
 };
+
+/** Electrobun signs with the hardened runtime, which Bun's JIT and an ad hoc identity's
+ * libraries need these to run under. */
+export const MAC_ENTITLEMENTS = {
+  "com.apple.security.cs.allow-jit": true,
+  "com.apple.security.cs.allow-unsigned-executable-memory": true,
+  "com.apple.security.cs.disable-executable-page-protection": true,
+  "com.apple.security.cs.allow-dyld-environment-variables": true,
+  "com.apple.security.cs.disable-library-validation": true,
+};

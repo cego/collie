@@ -1,0 +1,116 @@
+// The Rune spike's updates: Desktop's own `updates.ts` checks, downloads and verifies a release
+// as today, through the stdio stand-in's Updater, which stages the verified tar and its
+// signature where the Rune shell installs them at its next launch (desktop-rune/update).
+
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import { Effect, FileSystem, Schedule, Schema } from "effect";
+import { electrobunUpdater } from "../desktop/src/bun/electrobun-updater";
+import { restartToUpdate, updatesOf } from "../desktop/src/bun/updates";
+import { runEffect } from "./support/effect";
+
+const FIXTURES = new URL("../desktop-rune/fixtures/update/", import.meta.url).pathname;
+const OS = process.platform === "darwin" ? "macos" : "linux";
+const PLATFORM = `${OS}-${process.arch}`;
+const ARCHIVE = `rune-stable-${PLATFORM}-collie-desktop.tar.zst`;
+const KEY = await Bun.file(`${FIXTURES}release-test.pub`).text();
+const TAR = await Bun.file(`${FIXTURES}bundle.tar`).bytes();
+
+let signature = await Bun.file(`${FIXTURES}bundle.tar.sig`).text();
+const server = Bun.serve({
+  port: 0,
+  fetch: (request) => {
+    const path = new URL(request.url).pathname;
+    if (path === `/latest/download/rune-stable-${PLATFORM}-update.json`)
+      return Response.json({
+        identifier: "dk.cego.collie.desktop.rune",
+        channel: "stable",
+        platform: OS,
+        arch: process.arch,
+        version: "0.131.0",
+        hash: "new0131",
+        artifact: { file: ARCHIVE },
+      });
+    if (path === `/latest/download/${ARCHIVE}`) return new Response(Bun.zstdCompressSync(TAR));
+    if (path === `/download/0.131.0/rune-stable-${PLATFORM}-collie-desktop.tar.sig`)
+      return new Response(signature);
+    return new Response("not found", { status: 404 });
+  },
+});
+
+const VersionJson = Schema.fromJsonString(
+  Schema.Struct({
+    version: Schema.String,
+    channel: Schema.String,
+    identifier: Schema.String,
+    baseUrl: Schema.String,
+    hash: Schema.String,
+  }),
+);
+
+let install = "";
+let standIn: typeof import("../desktop-rune/core/electrobun-stdio");
+beforeAll(() =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      install = yield* fs.makeTempDirectory({ prefix: "collie-rune-updater-" });
+      yield* fs.makeDirectory(`${install}/collie-desktop`);
+      yield* fs.writeFileString(
+        `${install}/collie-desktop/version.json`,
+        yield* Schema.encodeEffect(VersionJson)({
+          version: "0.130.0",
+          channel: "stable",
+          identifier: "dk.cego.collie.desktop.rune",
+          baseUrl: `http://localhost:${server.port}/latest/download`,
+          hash: "old0130",
+        }),
+      );
+      Bun.env.COLLIE_RUNE_VERSION = `${install}/collie-desktop/version.json`;
+      Bun.env.COLLIE_RUNE_STAGED = `${install}/.update/collie-desktop.tar`;
+      Bun.env.COLLIE_RUNE_USER_DATA = `${install}/data`;
+      standIn = yield* Effect.promise(() => import("../desktop-rune/core/electrobun-stdio"));
+    }),
+  ),
+);
+afterAll(() =>
+  runEffect(
+    Effect.gen(function* () {
+      void server.stop(true);
+      yield* (yield* FileSystem.FileSystem).remove(install, { recursive: true, force: true });
+    }),
+  ),
+);
+
+const checked = Effect.gen(function* () {
+  const port = yield* electrobunUpdater(standIn.Updater);
+  const updates = yield* updatesOf(port, "0.130.0", KEY, Schedule.recurs(0));
+  const news = yield* updates.check;
+  return { port, news };
+});
+
+test("a release Desktop's updates verify is staged for the shell when Desktop restarts to it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { port, news } = yield* checked;
+      expect(news).toEqual({ _tag: "Ready", version: "0.131.0" });
+      expect(yield* fs.exists(`${install}/.update`)).toBe(false);
+      const restarted = yield* Effect.flip(restartToUpdate(port, KEY));
+      expect(restarted).toContain("next opens");
+      expect(yield* fs.readFile(`${install}/.update/collie-desktop.tar`)).toEqual(TAR);
+      expect(yield* fs.readFileString(`${install}/.update/collie-desktop.tar.sig`)).toBe(signature);
+    }),
+  ));
+
+test("a release whose signature does not match is refused and nothing is staged", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.remove(`${install}/.update`, { recursive: true, force: true });
+      yield* fs.remove(`${install}/data`, { recursive: true, force: true });
+      signature = yield* fs.readFileString(`${FIXTURES}truncated.tar.sig`);
+      const { news } = yield* checked;
+      expect(news).toMatchObject({ _tag: "Refused", version: "0.131.0" });
+      expect(yield* fs.exists(`${install}/.update`)).toBe(false);
+    }),
+  ));

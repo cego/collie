@@ -35,6 +35,7 @@ The toolchain is pinned in `rust-toolchain.toml`, and Rune at one rev in `Cargo.
 bun run tools/rune-types.ts --write    # regenerate protocol/src/generated.rs from today's Schemas
 bun run tools/rune-types.ts --check    # fail where it differs (test/rune-types.test.ts does this)
 bun run tools/rune-fixtures.ts         # rewrite fixtures/ from test/support/rune-fixtures.ts
+bun run desktop-rune/scripts/bundle.ts [out]   # the shipped bundle and update archive, in dist/
 
 git submodule update --init desktop-rune/vendor/ghostty
 
@@ -304,3 +305,48 @@ on the current Step; arrows, Home and End move as `flowKey` does, Enter chooses.
 `flowAnnouncements` names are said through a polite live region. `board/src/flow.rs` ports
 `flowRows`, `nodeName`, `flowAnnouncements` and `flowKey` for this. Rune has no
 `aria-current`, so the current Step is only drawn differently.
+
+### Packaging, signing and updates
+
+`scripts/bundle.ts` builds what a release would carry, for the platform it runs on: the shell
+(`cargo build --release`), Desktop's main process compiled by `bun build --compile` against
+the stdio stand-in, an icon and a desktop entry. It writes `dist/build/<os>-<arch>/` and
+`dist/artifacts/`, laid out as Desktop's release lays out Electrobun's, so
+`tools/verify-mac-app.sh` checks it with only its wording changed. The workflow `rune-bundle.yml` runs it on
+Linux and macOS and keeps the artefacts. No release publishes them.
+
+| Platform | Bundle                                                                                           |
+| -------- | ------------------------------------------------------------------------------------------------ |
+| Linux    | `collie-desktop/{collie-desktop, collie-core, collie.png, collie-desktop.desktop, version.json}` |
+| macOS    | `Collie.app/Contents/{Info.plist, MacOS/collie-desktop, MacOS/collie-core, Resources/…}`         |
+
+The update archive is `rune-stable-<os>-<arch>-collie-desktop[.app].tar.zst`, beside
+`rune-stable-<os>-<arch>-update.json`. The `rune-` prefix and the identifier
+`dk.cego.collie.desktop.rune` keep them apart from Electrobun's files in the same release.
+
+**macOS signing.** Inside out, `collie-core`, then the shell, then the app, each with the
+hardened runtime and `MAC_ENTITLEMENTS` (now exported by `desktop/scripts/mac-signing.ts`, which
+Electrobun's config also reads). With `ELECTROBUN_DEVELOPER_ID` set, it signs with that identity
+and a timestamp, and with the Apple ID or API key `macSigning` reads, it notarises with
+`notarytool` and staples. Without one it signs ad hoc.
+
+**Updates.** Desktop's `updates.ts` checks, downloads and verifies against `release.pub`
+unchanged; the stand-in's `Updater` answers it. Restart to update stages the verified tar
+and its `.tar.sig` at `<install>/.update/<bundle>.tar`, where the shell looks at its next
+launch. `update/` verifies the signature again (Ed25519, as `src/signing.ts`), unpacks beside
+the installed bundle, moves the installed one to `.update/previous`, moves the new one in, and
+re-execs itself. A bad or missing signature is refused and the installed bundle keeps running.
+A launch that finds the bundle gone and `previous` there puts `previous` back. The shell does
+not relaunch itself after Restart to update; the update lands when Collie next opens.
+
+Sizes on vm-mk (Linux x64):
+
+| What                                   | Bytes       |
+| -------------------------------------- | ----------- |
+| bundle directory                       | 163,026,969 |
+| `collie-core` (`bun build --compile`)  | 113,416,368 |
+| shell, as built                        | 49,574,576  |
+| shell, stripped                        | 37,810,512  |
+| update archive (`.tar.zst`)            | 67,880,526  |
+| Electrobun's update archive, for scale | 193,154,969 |
+| Electrobun's `Setup.tar.gz`            | 194,472,586 |

@@ -1,6 +1,6 @@
 import type { ElectrobunConfig } from "electrobun";
 import manifest from "../herdr-plugin.toml";
-import { macSigning } from "./scripts/mac-signing";
+import { MAC_ENTITLEMENTS, macSigning } from "./scripts/mac-signing";
 
 export default {
   app: {
@@ -25,15 +25,7 @@ export default {
       bundleCEF: false,
       icons: "mac.iconset",
       ...macSigning(process.env),
-      // Electrobun signs with the hardened runtime, which Bun's JIT and an ad hoc identity's
-      // libraries need these to run under.
-      entitlements: {
-        "com.apple.security.cs.allow-jit": true,
-        "com.apple.security.cs.allow-unsigned-executable-memory": true,
-        "com.apple.security.cs.disable-executable-page-protection": true,
-        "com.apple.security.cs.allow-dyld-environment-variables": true,
-        "com.apple.security.cs.disable-library-validation": true,
-      },
+      entitlements: MAC_ENTITLEMENTS,
     },
     linux: {
       bundleCEF: true,

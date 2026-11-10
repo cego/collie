@@ -2,8 +2,12 @@
 // and the first window's RPC frames carried as NDJSON on stdin and stdout, framed by Effect's
 // own `RpcSerialization.ndjson`, so Desktop's code runs unchanged behind the Rune shell.
 
+import { Effect, Schema } from "effect";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
+import { rename } from "node:fs/promises";
 import type { FrameSchema } from "../../desktop/src/shared/channel";
+import { PreparedRecord, preparedRecordOf, releaseOf } from "../../src/desktop";
+import { appliedSignatureOf } from "../../src/signing";
 
 type Frame = FrameSchema["messages"]["frame"];
 interface Rpc {
@@ -74,14 +78,116 @@ export const Utils = {
   openFileDialog: () => Promise.resolve([]),
 };
 
+/** A bundle's own version.json, as `desktop-rune/scripts/bundle.ts` writes it. */
+const Local = Schema.fromJsonString(
+  Schema.Struct({ channel: Schema.String, hash: Schema.String, baseUrl: Schema.String }),
+);
+const UpdateManifest = Schema.fromJsonString(
+  Schema.Struct({
+    identifier: Schema.String,
+    channel: Schema.String,
+    platform: Schema.String,
+    arch: Schema.String,
+    version: Schema.String,
+    hash: Schema.String,
+    artifact: Schema.Struct({ file: Schema.String }),
+  }),
+);
+
+/** Run from a checkout, the core never updates itself. */
+const local = async () =>
+  Bun.env.COLLIE_RUNE_VERSION === undefined
+    ? { channel: "dev", hash: "rune-spike", baseUrl: "" }
+    : Effect.runPromise(
+        Schema.decodeEffect(Local)(await Bun.file(Bun.env.COLLIE_RUNE_VERSION).text()),
+      );
+
+const PLATFORM = `${process.platform === "darwin" ? "macos" : "linux"}-${process.arch}`;
+
+const fetched = async (url: string) => {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`${url} answered ${response.status}`);
+  return response;
+};
+
+const latest = async () =>
+  Effect.runPromise(
+    Schema.decodeEffect(UpdateManifest)(
+      await (
+        await fetched(`${(await local()).baseUrl}/rune-stable-${PLATFORM}-update.json`)
+      ).text(),
+    ),
+  );
+
+let downloadFailed = "";
+let status: ReadonlyArray<{ message: string }> = [];
+
+/**
+ * Electrobun's Updater as Desktop's `electrobun-updater.ts` asks it. Checking, downloading and
+ * verifying stay Desktop's; installing is the Rune shell's, at its next launch, from the tar
+ * and signature staged at `COLLIE_RUNE_STAGED`.
+ */
 export const Updater = {
-  getLocalInfo: () => Promise.resolve({ channel: "dev", hash: "rune-spike", baseUrl: "" }),
+  getLocalInfo: local,
   appDataFolder: () => Promise.resolve(userData),
-  checkForUpdate: () => Promise.resolve({ error: "", updateAvailable: false, version: "" }),
-  downloadUpdate: () => Promise.resolve(),
-  updateInfo: () => ({ error: "" }),
-  applyUpdate: () => Promise.resolve(),
-  getStatusHistory: () => [],
+  checkForUpdate: async () => {
+    try {
+      const [info, found] = await Promise.all([local(), latest()]);
+      return { error: "", updateAvailable: found.hash !== info.hash, version: found.version };
+    } catch (error) {
+      return { error: String(error), updateAvailable: false, version: "" };
+    }
+  },
+  downloadUpdate: async () => {
+    downloadFailed = "";
+    try {
+      const found = await latest();
+      const archive = await (
+        await fetched(`${(await local()).baseUrl}/${found.artifact.file}`)
+      ).bytes();
+      const retained = `${userData}/self-extraction/${found.hash}.tar`;
+      await Bun.write(retained, Bun.zstdDecompressSync(archive));
+      await Bun.write(
+        preparedRecordOf(userData),
+        await Effect.runPromise(
+          Schema.encodeEffect(PreparedRecord)({
+            schema_version: 1,
+            identifier: found.identifier,
+            channel: found.channel,
+            version: found.version,
+            hash: found.hash,
+            platform: found.platform,
+            arch: found.arch,
+            retained_tar_path: retained,
+            artifact_file: found.artifact.file,
+          }),
+        ),
+      );
+    } catch (error) {
+      downloadFailed = String(error);
+    }
+  },
+  updateInfo: () => ({ error: downloadFailed }),
+  // Desktop verified the tar before it asked; the shell verifies it again before installing.
+  applyUpdate: async () => {
+    const staged = Bun.env.COLLIE_RUNE_STAGED;
+    if (staged === undefined) {
+      status = [{ message: "this core runs from a checkout, so no shell installs updates" }];
+      return;
+    }
+    const prepared = await Effect.runPromise(
+      Schema.decodeEffect(PreparedRecord)(await Bun.file(preparedRecordOf(userData)).text()),
+    );
+    const named = appliedSignatureOf(prepared.artifact_file);
+    const signature = await (
+      await fetched(`${releaseOf((await local()).baseUrl, prepared.version)}/${named}`)
+    ).text();
+    await Bun.write(`${staged}.sig`, signature);
+    await Bun.write(`${staged}.partial`, Bun.file(prepared.retained_tar_path));
+    await rename(`${staged}.partial`, staged);
+    status = [{ message: `Collie ${prepared.version} is installed when Collie next opens` }];
+  },
+  getStatusHistory: () => status,
 };
 
 export default { ApplicationMenu: { setApplicationMenu: on }, events: { on } };

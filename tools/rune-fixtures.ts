@@ -4,6 +4,8 @@
 //
 // - `fixtures/flock.ndjson`: the test Flock, one encoded `flock` item a line;
 // - `fixtures/flows.json`: Desktop's Flow test case as it moves on, by name;
+// - `fixtures/update/`: a bundle's tar, and one cut off halfway, each signed as `src/signing.ts`
+//   signs a release, by a test key;
 // - `fixtures/transcripts/*.ndjson`: Effect's own RPC client and server speaking over
 //   Desktop's channel, every frame each way as `{"from":"shell"|"core","frame":…}`.
 
@@ -28,6 +30,7 @@ import { ActionFailed, DesktopRpcs, FlockItem } from "../desktop/src/shared/floc
 import { Flow } from "../src/board-model";
 import { FLOCK } from "../test/support/rune-fixtures";
 import { mainFlow } from "../test/support/flow";
+import { publicKeyOf, signRelease } from "../src/signing";
 
 const FIXTURES = new URL("../desktop-rune/fixtures/", import.meta.url).pathname;
 
@@ -156,7 +159,49 @@ const FLOWS = { before, after, asking };
 
 const Flows = Schema.Struct({ before: Flow, after: Flow, asking: Flow });
 
+/** Ed25519 from a fixed seed, so its signatures, like the tars, are the same every run. */
+const TEST_KEY = `-----BEGIN PRIVATE KEY-----
+${Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), Buffer.alloc(32, 7)]).toString("base64")}
+-----END PRIVATE KEY-----
+`;
+
+/** A Linux bundle at 0.131.0, its launcher saying its version. */
+const updateFixtures = Effect.gen(function* () {
+  const dir = `${FIXTURES}update`;
+  const work = `${dir}/work`;
+  const write = (path: string, data: string | Uint8Array) =>
+    Effect.promise(() => Bun.write(path, data));
+  yield* write(`${work}/collie-desktop/collie-desktop`, "#!/bin/sh\necho 0.131.0\n");
+  yield* write(`${work}/collie-desktop/version.json`, '{"version":"0.131.0"}\n');
+  const flags = ["--sort=name", "--mtime=@0", "--owner=0", "--group=0", "--numeric-owner"];
+  const tarred = Bun.spawn(
+    [
+      "tar",
+      ...flags,
+      "--mode=a+rx",
+      "--format=ustar",
+      "-cf",
+      `${dir}/bundle.tar`,
+      "-C",
+      work,
+      "collie-desktop",
+    ],
+    { stdio: ["ignore", "inherit", "inherit"] },
+  );
+  if ((yield* Effect.promise(() => tarred.exited)) !== 0)
+    return yield* Effect.die("tar could not write the bundle fixture");
+  yield* Effect.promise(() => Bun.$`rm -rf ${work}`.quiet());
+  const tar = yield* Effect.promise(() => Bun.file(`${dir}/bundle.tar`).bytes());
+  // Inside version.json's data: the launcher is written, then the tar ends.
+  const truncated = tar.slice(0, 2100);
+  yield* write(`${dir}/truncated.tar`, truncated);
+  yield* write(`${dir}/bundle.tar.sig`, signRelease(tar, TEST_KEY));
+  yield* write(`${dir}/truncated.tar.sig`, signRelease(truncated, TEST_KEY));
+  yield* write(`${dir}/release-test.pub`, publicKeyOf(TEST_KEY));
+});
+
 const written = Effect.gen(function* () {
+  yield* updateFixtures;
   const flows = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.toCodecJson(Flows)))(FLOWS);
   yield* Effect.promise(() => Bun.write(`${FIXTURES}flows.json`, `${flows}\n`));
   const flock = yield* Effect.forEach(FLOCK, (item) =>

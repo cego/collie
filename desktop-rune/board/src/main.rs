@@ -148,8 +148,48 @@ fn notifications(handle: &AppHandle<Board>, client: &Client) {
     std::thread::spawn(move || deliver(notices, &notifier, raise));
 }
 
+/// Installs a staged update before anything starts, and runs the new shell where it did.
+/// For a bundled shell, says where the core stages the next one and where the bundle's
+/// version is.
+fn update_at_launch() -> Vec<(&'static str, std::ffi::OsString)> {
+    use collie_desktop_update::{Applied, apply_staged, installed_from};
+    let exe = std::env::current_exe().expect("the shell's own path");
+    let Some((install, bundle, version)) = installed_from(&exe).and_then(|(install, bundle)| {
+        let version = ["version.json", "Contents/Resources/version.json"]
+            .iter()
+            .map(|at| install.join(&bundle).join(at))
+            .find(|at| at.is_file())?;
+        Some((install, bundle, version))
+    }) else {
+        return Vec::new();
+    };
+    match apply_staged(&install, &bundle, include_str!("../../../release.pub")) {
+        Applied::Installed => {
+            use std::os::unix::process::CommandExt;
+            let failed = std::process::Command::new(&exe)
+                .args(std::env::args_os().skip(1))
+                .exec();
+            eprintln!("the updated shell did not start: {failed}");
+        }
+        Applied::Refused(why) => eprintln!("update not installed: {why}"),
+        Applied::Nothing => {}
+    }
+    vec![
+        (
+            "COLLIE_RUNE_STAGED",
+            install.join(".update").join(format!("{bundle}.tar")).into(),
+        ),
+        ("COLLIE_RUNE_VERSION", version.into()),
+    ]
+}
+
 fn main() {
-    let core = Core::start();
+    let staging = update_at_launch();
+    let env: Vec<(&str, &std::ffi::OsStr)> = staging
+        .iter()
+        .map(|(name, value)| (*name, value.as_os_str()))
+        .collect();
+    let core = Core::start_with(&env);
     let client = core.client.clone();
 
     let app = App::new(AppSpec::new(

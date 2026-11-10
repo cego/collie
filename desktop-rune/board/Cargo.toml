@@ -9,6 +9,7 @@ publish.workspace = true
 collie-desktop-protocol = { path = "../protocol" }
 collie-desktop-terminal = { path = "../terminal" }
 collie-desktop-chat = { path = "../chat" }
+collie-desktop-update = { path = "../update" }
 base64 = "0.22"
 rune = { workspace = true, features = ["native-file-dialog"] }
 rune-mac.workspace = true
