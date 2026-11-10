@@ -77,6 +77,7 @@ import type { RunView } from "../src/engine";
 import type { TaskRecord } from "../src/task";
 import { memoryRecords, runEffect } from "./support/effect";
 import { madeRun } from "./support/records";
+import { exec } from "./support/command";
 import { collie, proves } from "./support/world";
 import { stopHost, until } from "./support/host";
 import { Launched } from "../src/launches";
@@ -1902,10 +1903,8 @@ test("a hostless Disposition an earlier host wrote names the merge request of it
       const on = Effect.fn("board.on")(function* (host: string) {
         const cwd = `${dir}/${host}`;
         yield* fs.makeDirectory(cwd, { recursive: true });
-        yield* Effect.sync(() => {
-          Bun.spawnSync(["git", "init", "-q"], { cwd });
-          Bun.spawnSync(["git", "remote", "add", "origin", `git@${host}:group/app.git`], { cwd });
-        });
+        yield* exec(["git", "init", "-q"], { cwd });
+        yield* exec(["git", "remote", "add", "origin", `git@${host}:group/app.git`], { cwd });
         return yield* madeRun(dir, {
           id: `r-${host}`,
           task: "task-1",
