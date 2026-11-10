@@ -36,6 +36,7 @@ bun run tools/rune-types.ts --write    # regenerate protocol/src/generated.rs fr
 bun run tools/rune-types.ts --check    # fail where it differs (test/rune-types.test.ts does this)
 bun run tools/rune-fixtures.ts         # rewrite fixtures/ from test/support/rune-fixtures.ts
 bun run desktop-rune/scripts/bundle.ts [out]   # the shipped bundle and update archive, in dist/
+bun bench/desktop-start/run.ts --rune desktop-rune/dist/build/linux-x64/collie-desktop/collie-desktop   # board_usable_ms, idle_rss_mib
 
 git submodule update --init desktop-rune/vendor/ghostty
 
@@ -308,6 +309,20 @@ record (`runDetail`) and the Flow map follows that record's Flow, above the pane
 after Back, until another card is pressed. Rune has no
 `aria-current`, so the current Step is only drawn differently.
 
+### Desktop's marks
+
+The shell takes the marks Desktop's view takes (`desktopTiming`, ticket 01), ported in
+`board/src/timing.rs`, and hands each to the core's `recordMark`, which writes it to
+`record-timing.log` while Record timing is on. `App::on_frame_drawn` reads the board after
+each presented frame: `board-usable` at the first frame with cards; `terminal-key` when a key
+was sent to the pane and `terminal-drawn` at the frame after its output; `chat-chunk` when a
+live turn's event arrives and `chat-drawn` at the frame that draws it; `frame` for each frame
+while the Diff tab's rows move. rune-kit's Diff reports no scrolling, so a move of its rows
+stands for one. The log is under the core's own state,
+`$XDG_STATE_HOME/collie-desktop-rune-spike/state/collie-desktop/`, and
+`bench/desktop-start/run.ts --rune` reads it there; the summariser reads it as it reads
+Desktop's.
+
 ### Packaging, signing and updates
 
 `scripts/bundle.ts` builds what a release would carry, for the platform it runs on: the shell
@@ -353,3 +368,7 @@ Sizes on vm-mk (Linux x64):
 | update archive (`.tar.zst`)            | 67,880,526  |
 | Electrobun's update archive, for scale | 193,154,969 |
 | Electrobun's `Setup.tar.gz`            | 194,472,586 |
+
+On an X11 session the shell loads `libxkbcommon-x11.so` at start (winit through
+`xkbcommon-dl`), and panics where it is missing, as on vm-mk under Xvfb. `install-desktop.sh` would
+need to check for it.
