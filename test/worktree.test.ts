@@ -1481,7 +1481,6 @@ test("a review of a pull request is fixed on its head branch, read through gh", 
 
 const MR_42 = "https://gitlab.example.com/acme/app/-/merge_requests/42";
 
-/** A GitLab where `acme/app!42` is open from `fix-the-parser`, and whatever else is named. */
 const gitlabMrs = (mr: Partial<FakeMr> = {}, ...others: FakeMr[]) =>
   forgeOnPath(bin, "gitlab", {
     installed: true,
@@ -1533,7 +1532,6 @@ test("work that is only a reference to a merge request of this checkout is built
     }),
   ));
 
-/** A GitHub checkout of `acme/app`, whose pull request 30 is open from `fix-the-parser`. */
 const githubPull = (pull: Partial<FakeMr> = {}) =>
   Effect.gen(function* () {
     yield* fakeGitAnswering({
@@ -1586,7 +1584,6 @@ test("a fork's pull request named as the work is refused, not given a fresh bran
     }),
   ));
 
-/** The branch new work gets: one generated under the login, cut from the default branch. */
 const fresh = (source: BranchSource) => ({
   branch: expect.stringMatching(new RegExp(`^${LOGIN}/`)),
   base: "origin/master",
@@ -1640,6 +1637,43 @@ test("work naming two open merge requests is about neither's branch", () =>
           plan: `Merge ${MR_42} into https://gitlab.example.com/acme/app/-/merge_requests/43`,
           plan_kind: "text",
         }),
+      ).toMatchObject(fresh("from the work"));
+    }),
+  ));
+
+test("work that opens with one merge request's link and names another is about neither", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser", "fix-the-lexer"]);
+      yield* gitlabMrs(
+        {},
+        {
+          project: "gitlab.example.com/acme/app",
+          iid: "43",
+          state: "open",
+          sourceBranch: "fix-the-lexer",
+        },
+      );
+
+      for (const link of [`${MR_42}/diffs`, `${MR_42}?tab=pipelines`, `${MR_42}#note_1`]) {
+        expect(
+          yield* plan({
+            plan: `${link} compared with https://gitlab.example.com/acme/app/-/merge_requests/43`,
+            plan_kind: "text",
+          }),
+        ).toMatchObject(fresh("from the work"));
+      }
+    }),
+  ));
+
+test("work giving one merge request's URL twice holds two URLs, so it gets a fresh branch", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs();
+
+      expect(
+        yield* plan({ plan: `Compare ${MR_42} with ${MR_42}`, plan_kind: "text" }),
       ).toMatchObject(fresh("from the work"));
     }),
   ));

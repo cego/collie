@@ -37,7 +37,7 @@ import {
   whatItSaid,
   type Runner,
 } from "./mr";
-import { mrWords, parseMrTarget, readMrRef, type MrRef } from "./board-model";
+import { mrWords, parseMrTarget, readMrRef } from "./board-model";
 import { FORGES, forgeOf, forgeOfHost } from "./forge/forge";
 import { withLock } from "./lock";
 import { terminalBackend, worktreesDirectory } from "./config";
@@ -552,21 +552,21 @@ const mrNamedBy = Effect.fn("worktree.mrNamedBy")(function* (
   cwd: string,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
-  const whole = readMrRef(text, { project: null });
+  // A URL followed by more words is prose, though `readMrRef` would take its start.
+  const whole = /\s/.test(Str.trim(text)) ? null : readMrRef(text, { project: null });
   if (whole) {
     return whole.project === null ? { ...whole, project: yield* projectHere(cwd, run) } : whole;
   }
-  const named = new Map<string, MrRef>();
   const urls = pipe_(
     text,
     Str.match(/https?:\/\/\S+/g),
     Option.getOrElse(() => []),
   );
-  for (const url of urls) {
+  const named = Arr.flatMap(urls, (url) => {
     const ref = readMrRef(pipe_(url, Str.replace(/[.,;:!?)\]>'"]+$/, "")));
-    if (ref) named.set(mrWords(ref).target, ref);
-  }
-  return named.size === 1 ? [...named.values()][0]! : null;
+    return ref ? [ref] : [];
+  });
+  return named.length === 1 ? named[0]! : null;
 });
 
 /**
