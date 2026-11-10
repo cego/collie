@@ -9206,7 +9206,6 @@ const decodeOptions = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Array(RecordedSolution)),
 );
 
-/** A Run's questions as its agents are told them, each answer by whoever the audit says gave it. */
 const askedQuestions = (rows: ReadonlyArray<DecisionRow>, audit: ReadonlyArray<AuditLine>) =>
   Effect.forEach(rows, (row) =>
     Effect.gen(function* () {

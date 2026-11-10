@@ -1889,7 +1889,6 @@ test(
 const askedOfRows = (rows: ReadonlyArray<DecisionRow>) =>
   Arr.map(rows, (row) => ({ name: row.decision, answer: row.answer }));
 
-/** `r1`'s questions as the host tends them, read from and written to its Store; each read is put in `reads`. */
 const tendR1Reading = (reads: Array<string>) =>
   Effect.gen(function* () {
     const store = yield* Store;

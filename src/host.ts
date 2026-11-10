@@ -1419,7 +1419,6 @@ export const boardWrites = (dir: string, model?: RunModelApi) =>
     Stream.map((event) => event.path),
   );
 
-/** The writes to the host's tables that the board is built again for. */
 export const boardTableWrites = Stream.unwrap(
   Effect.map(Reactivity.Reactivity, (reactivity) =>
     reactivity.stream([DELIVERIES, LAUNCHES, PROPOSALS, REGISTERED, TASKS], Effect.void),
