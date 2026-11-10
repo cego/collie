@@ -4,6 +4,7 @@
 // became of a Run's work is the disposition's answer alone — a finished Run with a merge
 // request has not been merged by anyone.
 
+import { lastOrdered } from "./launches";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -374,18 +375,6 @@ export function stepOfOperation(operation: string): Pick<Sentence, "step" | "ver
     verb: null,
   };
 }
-
-/** Where the Driver keeps a Run's launch order, one operation a line. */
-const launchesOf = (stateDir: string, runId: string) => `${stateDir}/agents/${runId}/launches`;
-
-/** The operation the Driver last launched an agent for, as its launch order records it. */
-const lastLaunched = Effect.fn("Board.lastLaunched")(function* (stateDir: string, runId: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const order = yield* fs
-    .readFileString(launchesOf(stateDir, runId))
-    .pipe(Effect.orElseSucceed(() => ""));
-  return Arr.filter(Str.split(order, "\n"), (line) => line !== "").at(-1) ?? null;
-});
 
 /** `2 times` reads as a count; twice reads as a sentence. */
 function times(n: number): string {
@@ -777,16 +766,10 @@ const holderOf = Effect.fn("Board.holderOf")(function* (run: RunFacts) {
 });
 
 /** The answer a Run carried on with, while nothing has been launched since it was given. */
-const resumedWith = Effect.fn("Board.resumedWith")(function* (stateDir: string, run: RunFacts) {
+const resumedWith = Effect.fn("Board.resumedWith")(function* (run: RunFacts) {
   const last = (yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => []))).at(-1);
   if (last?.operation !== "answer") return null;
-  const launched = yield* (yield* FileSystem.FileSystem).stat(launchesOf(stateDir, run.id)).pipe(
-    Effect.map((info) =>
-      Option.match(info.mtime, { onNone: () => 0, onSome: (at) => at.getTime() }),
-    ),
-    Effect.orElseSucceed(() => 0),
-  );
-  if (launched > epochMs(last.at)) return null;
+  if (((yield* lastOrdered(run.id))?.at ?? 0) > epochMs(last.at)) return null;
   const answered = Schema.decodeUnknownOption(Answered)(last.result);
   return Option.isSome(answered) ? answered.value.value : null;
 });
@@ -1356,7 +1339,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         // Under a minute has no span to name, and is not silence worth a card saying.
         const span = silentFor > quietMs ? spanned(silentFor) : "";
         const silent = span === "" ? null : span;
-        const operation = yield* lastLaunched(stateDir, leader.id);
+        const operation = (yield* lastOrdered(leader.id))?.stem ?? null;
         const doing = operation === null ? null : stepOfOperation(operation);
         // Stopped for a human with no Decision to answer: herdr reports `blocked` for an agent
         // sitting at its harness's own dialog, and a Run parks where its pane will not take a
@@ -1630,7 +1613,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           (yield* lastStopBy(leader)) === "host"
             ? ("done" as const)
             : state;
-        const resumed = going ? yield* resumedWith(stateDir, leader) : null;
+        const resumed = going ? yield* resumedWith(leader) : null;
         const sentenceAt = (now: number) =>
           sentenceFor({
             mr,

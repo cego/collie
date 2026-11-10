@@ -4,20 +4,21 @@
 import { Layer } from "effect";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import * as Reactivity from "effect/reactivity/Reactivity";
+import { launchesLayer, type Launches } from "./launches";
 import { deliveriesLayer, type Deliveries } from "./steering";
 import { storeLayer } from "./store";
 import { proposalsLayer, type Proposals } from "./proposals";
 import { registeredLayer, type Registered } from "./registry";
 import { tasksLayer, type Tasks } from "./task";
 
-export type Records = Deliveries | Proposals | Registered | Tasks;
+export type Records = Deliveries | Launches | Proposals | Registered | Tasks;
 
 /**
  * Over the host's own connection, which the Store has migrated. Fresh, or a layer provided
  * inside another would reuse the outer one's connection.
  */
 export const recordsLayer = Layer.fresh(
-  Layer.mergeAll(deliveriesLayer, proposalsLayer, registeredLayer, tasksLayer),
+  Layer.mergeAll(deliveriesLayer, launchesLayer, proposalsLayer, registeredLayer, tasksLayer),
 );
 
 /**

@@ -47,14 +47,16 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import { attachmentsDir, listAttachments, type Attachment } from "./attachments";
 import {
   Launched,
-  LAUNCH_ORDER,
-  LAUNCH_SUFFIX,
   launchDir,
+  orderLaunch,
+  launchesOfAgents,
   readLaunches,
+  recordLaunch,
   StartedWith,
   startedDir,
   withRelaunchLock,
   stemOf,
+  wasOrdered,
   type AgentSession,
 } from "./launches";
 import { CurrentStep, type At } from "./steps";
@@ -508,6 +510,10 @@ export interface AgentsApi {
    */
   readonly tendQuestions: (
     questionsFor: (runId: string) => Questions,
+    /** Each of these Runs' questions, in one read; a Run with none is absent. */
+    askedOf: (
+      runs: ReadonlyArray<string>,
+    ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<AskedQuestion>>>,
     /** Told of each queued message it submits now. */
     submitted?: (queued: Queued, sent: Steered) => Effect.Effect<void>,
   ) => Effect.Effect<void>;
@@ -1591,10 +1597,7 @@ type Under = <A, E>(effect: Effect.Effect<A, E, AgentServices>) => Effect.Effect
 
 const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): AgentsApi => {
   const dirFor = (runId: string) => launchDir(host.dir, runId);
-  const launchPath = (runId: string, operation: string) =>
-    `${dirFor(runId)}/${operation}${LAUNCH_SUFFIX}`;
   const outputFor = (runId: string, operation: string) => `${dirFor(runId)}/${operation}.json`;
-  const launchOrder = (runId: string) => `${dirFor(runId)}/${LAUNCH_ORDER}`;
   /** What went out as a step's prompt or its repair, kept so a resend is the same words. */
   const sentPath = (about: Launched, kind: "step" | "repair") =>
     `${dirFor(about.runId)}/${stemOf(about)}.${kind}.md`;
@@ -1653,7 +1656,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         ...launched,
         agentSession: { kind: launched.harness, value: id },
       };
-      yield* write(launchPath(launched.runId, stemOf(launched)), encodeLaunched(recorded));
+      yield* recordLaunch(recorded);
       return recorded;
     });
   /** The session the reporter wrote, once OpenCode has opened it. */
@@ -2464,12 +2467,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             });
         // Listed again: what herdr had before the wait may have changed during it.
         if (memory === "waited") return yield* launch(ask, fresh, note);
-        const fs = yield* FileSystem.FileSystem;
         // Work in the launch order already is this same work replayed, not new work for the agent.
-        const replayed = Str.split(
-          yield* fs.readFileString(launchOrder(ask.runId)).pipe(Effect.orElseSucceed(() => "")),
-          "\n",
-        ).includes(stemOf(ask));
+        const replayed = yield* wasOrdered(ask);
         const landedOn = (
           incarnation: Incarnation | undefined,
           chosen: AgentSession | null = null,
@@ -2509,7 +2508,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             const landed = yield* landedOn(incarnation, chosen);
             // Beside it, the agent this work landed on, so a stop and a human steering this
             // run later reach the agent that has it rather than one derived from a name again.
-            yield* write(launchPath(ask.runId, stemOf(ask)), encodeLaunched(landed));
+            yield* recordLaunch(landed);
             return landed;
           });
         const adapter = adapterFor(ask.harness ?? host.harness);
@@ -2559,7 +2558,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               ).pipe(Effect.flatMap((incarnation) => recorded(incarnation, chosen))),
             );
         if (atLaunch) {
-          if (!replayed) yield* append(launchOrder(ask.runId), stemOf(ask));
+          if (!replayed) yield* orderLaunch(ask);
           yield* write(sentPath(launched, "step"), pointer);
           yield* log(
             ask.runId,
@@ -2597,7 +2596,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             });
           }
         }
-        if (!replayed) yield* append(launchOrder(ask.runId), stemOf(ask));
+        if (!replayed) yield* orderLaunch(ask);
         // One send is one message and not a transcript, and a step's prompt carries a
         // whole contract. A skill marked `disable-model-invocation` refuses an agent that
         // invokes it itself; this is the human's channel, so a slash command here runs.
@@ -2746,6 +2745,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     questions: Questions,
     until = Infinity,
     herdr: Effect.Effect<Herdr, never, AgentServices> = Effect.succeed(host.herdr),
+    /** Its Run's questions as read once for a pass, kept up to date with what the pass asks and closes. */
+    known?: Map<string, AskedQuestion>,
   ) =>
     Effect.gen(function* () {
       const dir = yield* controlDir(host.env.stateDir, launched.agent);
@@ -2790,7 +2791,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               names: Arr.map(call.questions, () => agentQuestionName(stem, ++n)),
             }),
           );
-          const asked = new Map(Arr.map(yield* questions.asked, (one) => [one.name, one] as const));
+          const asked =
+            known ?? new Map(Arr.map(yield* questions.asked, (one) => [one.name, one] as const));
           let open = false;
           const opened = openQuestions.get(launched.agent) ?? new Set<string>();
           openQuestions.set(launched.agent, opened);
@@ -2817,7 +2819,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             };
             if (closing !== null) {
               for (const one of given)
-                if (isUnanswered(one)) yield* questions.close(one.name, closing);
+                if (isUnanswered(one)) {
+                  yield* questions.close(one.name, closing);
+                  asked.set(one.name, { ...one, answer: closing });
+                }
               holds(false);
               continue;
             }
@@ -2881,6 +2886,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
 
   const tendQuestions = (
     questionsFor: (runId: string) => Questions,
+    askedOf: (
+      runs: ReadonlyArray<string>,
+    ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<AskedQuestion>>>,
     submitted: (queued: Queued, sent: Steered) => Effect.Effect<void> = () => Effect.void,
   ) =>
     under(
@@ -2914,10 +2922,13 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           ),
         );
         if (asking.length === 0) return;
-        const runs = yield* fs
-          .readDirectory(launchDir(host.dir, ""))
-          .pipe(Effect.orElseSucceed(() => []));
-        const launches = (yield* Effect.forEach(runs, launchesOf)).flat();
+        const launches = yield* launchesOfAgents(asking);
+        const askedNow = new Map(
+          Arr.map(
+            [...(yield* askedOf(Arr.dedupe(Arr.map(launches, (one) => one.runId))))],
+            ([runId, asked]) => [runId, new Map(Arr.map(asked, (one) => [one.name, one] as const))],
+          ),
+        );
         // Every Herd's, and none where one cannot be read: an agent there may be live.
         const alive = yield* Effect.cached(
           Effect.gen(function* () {
@@ -2950,6 +2961,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             const next = own[at + 1];
             collected ||= yield* collecting.has(launched.runId, agent, stemOf(launched));
             if (collected) continue;
+            const known = askedNow.get(launched.runId) ?? new Map<string, AskedQuestion>();
+            askedNow.set(launched.runId, known);
             const tend = yield* questionsOf(
               launched,
               questionsFor(launched.runId),
@@ -2970,6 +2983,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                     ),
                   ) ?? host.herdr,
               ),
+              known,
             );
             if (!(yield* tend(null))) continue;
             if (
@@ -3059,7 +3073,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       ),
     );
 
-  const launchesOf = (runId: string) => readLaunches(host.dir, runId);
+  const launchesOf = (runId: string) => readLaunches(runId);
 
   /** The latest session of this kind recorded for this agent of the Run, where one is. */
   const sessionHad = (runId: string, agent: string, kind: string) =>
@@ -3158,7 +3172,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                 agentSession: { kind: adapter.kind, value: session.id },
               }
             : { ...one, terminalId: incarnation.terminalId };
-        yield* write(launchPath(runId, stemOf(one)), encodeLaunched(updated));
+        yield* recordLaunch(updated);
         if (one === latest) now = updated;
       }
       yield* log(
@@ -3928,10 +3942,6 @@ const stepText = (
     ? pointer
     : `${pointer}\nCleared for this step: ${Arr.join(clears, "; ")}.`;
 };
-const encodeLaunched = flow(
-  Schema.encodeResult(Schema.fromJsonString(Launched)),
-  Result.getOrThrow,
-);
 const encodeStarted = flow(
   Schema.encodeResult(Schema.fromJsonString(StartedWith)),
   Result.getOrThrow,

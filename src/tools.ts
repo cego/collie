@@ -39,6 +39,7 @@ import {
 } from "./operations";
 import { projectsRoot } from "./projects";
 import type { Action } from "./actions";
+import type { Launched } from "./launches";
 import {
   boardSnapshot,
   asksRun,
@@ -130,6 +131,7 @@ export interface RunAnswerReads {
   readonly offers: (runId: string) => ToolAnswer;
   readonly progress: (runId: string) => Effect.Effect<RunProgress | null, never, PlatformServices>;
   readonly flow: (runId: string) => Effect.Effect<Flow | null, never, PlatformServices>;
+  readonly launches: (runId: string) => Effect.Effect<ReadonlyArray<Launched>>;
 }
 
 const said = <E, R>(effect: Effect.Effect<string, E, R>) =>
@@ -426,7 +428,7 @@ const runAnswer = Effect.fn("Tools.runAnswer")(function* (
   reads?: RunAnswerReads,
 ) {
   const runs = yield* reads?.runs ?? listRuns(env);
-  const facts = yield* runFacts(env, run, runs);
+  const facts = yield* runFacts(env, run, runs, reads?.launches(run.id));
   const running = yield* checkLines(run, runs, yield* Clock.currentTimeMillis);
   const kept = Arr.filter(yield* donePasses(run), (one) => one.log !== null);
   const done =

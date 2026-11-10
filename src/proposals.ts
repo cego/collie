@@ -6,6 +6,7 @@
 // Nothing here runs an action: `confirm` returns the actions that may run, and who runs
 // them is `executors.ts` and the front door's business.
 
+import { StoreWrites } from "./store-writes";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
@@ -149,6 +150,7 @@ export const proposalsLayer = Layer.effect(Proposals)(
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const reactivity = yield* Reactivity.Reactivity;
+    const told = Option.getOrUndefined(yield* Effect.serviceOption(StoreWrites));
     // ponytail: one lock for every journal; one per journal if confirmations contend.
     const lock = Semaphore.makeUnsafe(1);
     return {
@@ -174,10 +176,16 @@ export const proposalsLayer = Layer.effect(Proposals)(
           Effect.orDie,
         ),
       append: (journal, line) =>
-        sql`INSERT INTO collie_proposals (journal, line) VALUES (${journal}, ${encodeLine(line)})`.pipe(
-          Effect.andThen(reactivity.invalidate([PROPOSALS])),
-          Effect.orDie,
-        ),
+        Effect.gen(function* () {
+          yield* sql`INSERT INTO collie_proposals (journal, line) VALUES (${journal}, ${encodeLine(line)})`;
+          const runs = yield* sql<{ readonly run: string }>`
+            SELECT run FROM collie_proposal_runs WHERE proposal = (
+              SELECT proposal FROM collie_proposals WHERE seq = last_insert_rowid()
+            )
+          `;
+          told?.(Arr.map(runs, (row) => row.run));
+          yield* reactivity.invalidate([PROPOSALS]);
+        }).pipe(Effect.orDie),
       atomically: lock.withPermits(1),
     } satisfies ProposalsApi;
   }),

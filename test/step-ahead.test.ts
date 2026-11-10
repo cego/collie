@@ -1,10 +1,10 @@
+import { launchesAt } from "./support/records";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Option, Schema, Stream, flow, Result } from "effect";
 import { frontDoor, socketOf } from "../src/host";
-import { readLaunches } from "../src/launches";
 import { deliveredTo, registeredAt } from "./support/records";
 import { collie, proves } from "./support/world";
 import { until } from "./support/host";
@@ -51,7 +51,7 @@ test(
           expect(start.envelope.ok).toBe(true);
           const { runId } = runIdOf(start.envelope.data);
           const first = (yield* until(
-            () => readLaunches(world.state, runId),
+            () => launchesAt(world.state, runId),
             (rows) => rows.length === 1,
           ))[0]!;
           const armed = yield* collie(world, ["run", "hold", runId, "--before", "b"]);
@@ -100,12 +100,12 @@ test(
           )!;
           expect(b).toMatchObject({ state: "waiting", primary: "continue", pause: null });
           expect(b.said).toMatch(/^Paused here, as .+ asked$/);
-          expect(Arr.map(yield* readLaunches(world.state, runId), (one) => one.operation)).toEqual([
+          expect(Arr.map(yield* launchesAt(world.state, runId), (one) => one.operation)).toEqual([
             "a",
           ]);
           expect((yield* collie(world, ["run", "release", runId])).envelope.ok).toBe(true);
           yield* until(
-            () => readLaunches(world.state, runId),
+            () => launchesAt(world.state, runId),
             (rows) => Arr.some(rows, (one) => one.operation === "b"),
           );
           const late = yield* collie(world, ["run", "hold", runId, "--before", "a"]);
@@ -144,7 +144,7 @@ test(
             ),
           ).toBe(first.agent);
           const second = Option.getOrUndefined(
-            Arr.findFirst(yield* readLaunches(world.state, runId), (one) => one.operation === "b"),
+            Arr.findFirst(yield* launchesAt(world.state, runId), (one) => one.operation === "b"),
           )!;
           yield* fs.writeFileString(second.output, encode("done"));
           const check = (yield* until(
@@ -245,7 +245,7 @@ test(
           );
           const { runId } = runIdOf(start.envelope.data);
           const first = (yield* until(
-            () => readLaunches(world.state, runId),
+            () => launchesAt(world.state, runId),
             (rows) => rows.length === 1,
           ))[0]!;
           expect((yield* collie(world, ["run", "hold", runId, "--before", "b"])).envelope.ok).toBe(
@@ -366,10 +366,10 @@ test(
           );
           // The first step prompt is the one refused.
           expect(prompts).toEqual(["step", "step", "steer"]);
-          const first = (yield* readLaunches(world.state, runId))[0]!;
+          const first = (yield* launchesAt(world.state, runId))[0]!;
           yield* fs.writeFileString(first.output, encode("done"));
           yield* until(
-            () => readLaunches(world.state, runId),
+            () => launchesAt(world.state, runId),
             (rows) => Arr.some(rows, (one) => one.operation === "b"),
           );
         }),

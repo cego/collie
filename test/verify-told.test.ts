@@ -10,18 +10,13 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { connect } from "../src/host";
 import { resetExecutors } from "../src/executors";
-import { Launched } from "../src/launches";
-import { deliveredTo, registeredAt } from "./support/records";
+import { deliveredTo, registeredAt, launchOf } from "./support/records";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { root, stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
-const decodeLaunched = flow(
-  Schema.decodeUnknownResult(Schema.fromJsonString(Launched)),
-  Result.getOrThrow,
-);
 const decodeCall = flow(
   Schema.decodeUnknownResult(
     Schema.fromJsonString(Schema.Struct({ argv: Schema.Array(Schema.String) })),
@@ -81,15 +76,10 @@ test(
               input: { work: "it" },
             })
             .pipe(Effect.orDie);
-          const launched = decodeLaunched(
-            yield* until(
-              () =>
-                fs
-                  .readFileString(`${world.state}/agents/${runId}/build.launch.json`)
-                  .pipe(Effect.orElseSucceed(() => "")),
-              (one) => one !== "",
-            ),
-          );
+          const launched = (yield* until(
+            () => launchOf(world.state, runId, "build"),
+            (one) => one !== undefined,
+          ))!;
           const pane = Option.getOrUndefined(
             Arr.findFirst(yield* registeredAt(world.state), (entry) => entry.runId === runId),
           )!.paneId;

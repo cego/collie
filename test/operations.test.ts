@@ -215,6 +215,7 @@ test("collie_run on a Task of several merge requests names each, ready at its he
           offers: () => Effect.succeed("(none)"),
           progress: () => Effect.succeed(progress),
           flow: () => Effect.succeed(null),
+          launches: () => Effect.succeed([]),
         },
       );
 

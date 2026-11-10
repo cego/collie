@@ -46,6 +46,7 @@ import {
   type HostServices,
 } from "../src/engine";
 import { Store } from "../src/store";
+import { readLaunches, recordLaunch } from "../src/launches";
 import { sweep, taskWorkspacesSweeper, worktreesSweeper } from "../src/cleanup";
 import { listTasks } from "../src/task";
 import { task as taskView } from "./support/task";
@@ -3068,7 +3069,7 @@ test(
 );
 
 test(
-  "forgetting a Run removes its row and what the engine kept of it, and leaves a claim alone",
+  "forgetting a Run removes its row, its launches and what the engine kept of it, and leaves a claim alone",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -3108,9 +3109,25 @@ test(
               readonly n: number;
             }>`SELECT count(*) AS n FROM cluster_messages WHERE entity_id = ${execution}`;
             const before = (yield* count)[0]?.n;
+            for (const runId of ids)
+              yield* recordLaunch({
+                agent: `${runId}-build`,
+                output: "/dev/null",
+                reused: false,
+                runId,
+                operation: "build",
+                role: "implementer",
+                workflow: hello!.id,
+                harness: "claude",
+                agentSession: { kind: "id", value: `${runId}-session` },
+              });
             const forgotten = yield* registry.retire([gone, "run-claimed"]);
             const messages = yield* count;
             return {
+              launches: {
+                gone: yield* readLaunches(gone),
+                kept: Arr.map(yield* readLaunches(kept), (one) => one.agent),
+              },
               forgotten,
               view: yield* registry.view(gone),
               other: yield* registry.view(kept),
@@ -3131,6 +3148,7 @@ test(
         expect(seen.claim).not.toBeNull();
         expect(seen.before).toBeGreaterThan(0);
         expect(seen.messages).toBe(0);
+        expect(seen.launches).toEqual({ gone: [], kept: [`${seen.other!.runId}-build`] });
       }),
     ),
   120_000,

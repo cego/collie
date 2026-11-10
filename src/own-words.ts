@@ -437,25 +437,32 @@ const fileStores = (home: string): ReadonlyArray<FileStore> => [
 
 const openCodeFile = (home: string) => `${home}/.local/share/opencode/opencode.db`;
 
-/** Every session Collie recorded launching a Run's agent in, by id or path. */
+/** Every session the state directory's host recorded launching a Run's agent in, by id or path. */
 const recordedAgentSessions = Effect.fn("OwnWords.recordedAgentSessions")(function* (
   stateDir: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const dir = `${stateDir}/agents`;
-  const names = yield* fs
-    .readDirectory(dir, { recursive: true })
-    .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-  const sessions = new Set<string>();
-  for (const name of Arr.filter(names, Str.endsWith(".launch.json"))) {
-    const text = yield* fs.readFileString(`${dir}/${name}`).pipe(Effect.orElseSucceed(() => ""));
-    const value = stringAt(
-      objectAt(pipe(decodeLine(text), Option.getOrUndefined), "agentSession"),
-      "value",
-    );
-    if (value !== undefined) sessions.add(value);
-  }
-  return sessions;
+  const file = `${stateDir}/host.db`;
+  if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) return new Set<string>();
+  return yield* Effect.try(() => {
+    const db = new Database(file, { readonly: true });
+    try {
+      return new Set(
+        Arr.map(
+          decodeSessions(
+            db
+              .query(
+                "SELECT json_extract(record, '$.agentSession.value') AS session FROM collie_launches WHERE session IS NOT NULL",
+              )
+              .all(),
+          ),
+          (one) => one.session,
+        ),
+      );
+    } finally {
+      db.close();
+    }
+  }).pipe(Effect.orElseSucceed(() => new Set<string>()));
 });
 
 const HUMAN_DOORS = new Set(["desktop", "cli-tty", "board"]);

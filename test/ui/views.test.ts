@@ -25,7 +25,8 @@ import { FINDINGS_FILE, FindingSchema, REVIEW_FILE } from "../../src/output";
 import type { RunFacts } from "../../src/runs";
 import { madeRun } from "../support/records";
 import { writeSettingsSet } from "../../src/config";
-import { Launched } from "../../src/launches";
+import { recordLaunch } from "../../src/launches";
+import type { Records } from "../../src/records";
 
 let rig: Rig;
 const encodeFindings = flow(
@@ -36,10 +37,6 @@ const encodeJson = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
   Result.getOrThrow,
 );
-const encodeLaunched = flow(
-  Schema.encodeResult(Schema.fromJsonString(Launched)),
-  Result.getOrThrow,
-);
 /** Every Run a test has made, newest first, as the host would list them. */
 let runs: RunFacts[] = [];
 
@@ -48,7 +45,7 @@ function effectTest(
   body: () => Effect.gen.Return<
     void,
     RigError | PlatformError.PlatformError | Error,
-    PlatformServices
+    PlatformServices | Records
   >,
 ) {
   test(name, () => runEffect(Effect.gen(body)));
@@ -513,19 +510,16 @@ const stepped = Effect.fn("viewsTest.stepped")(function* (
   yield* fs.writeFileString(`${dir}/${operation}.json`, "{}");
   const when = DateTime.toDateUtc(DateTime.makeUnsafe(at));
   yield* fs.utimes(`${dir}/${operation}.json`, when, when);
-  yield* fs.writeFileString(
-    `${dir}/${operation}.launch.json`,
-    encodeLaunched({
-      agent: `${run.id}-build`,
-      output: `${dir}/${operation}.json`,
-      reused: false,
-      runId: run.id,
-      operation,
-      role: "implementer",
-      workflow: "implement",
-      harness: "claude",
-    }),
-  );
+  yield* recordLaunch({
+    agent: `${run.id}-build`,
+    output: `${dir}/${operation}.json`,
+    reused: false,
+    runId: run.id,
+    operation,
+    role: "implementer",
+    workflow: "implement",
+    harness: "claude",
+  });
 });
 
 effectTest(

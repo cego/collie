@@ -14,6 +14,7 @@ import { OfferView } from "../src/board-model";
 import { RunView } from "../src/engine";
 import { readEnv } from "../src/env";
 import { BUILD, socketOf } from "../src/host";
+import { Launched } from "../src/launches";
 import { factsOfView, findRun } from "../src/runs";
 import { answerRead, toolNamed } from "../src/tools";
 import { runEffect } from "./support/effect";
@@ -33,6 +34,7 @@ const Asked = RpcGroup.make(
   Rpc.make("progress", { payload: { runId: Schema.String }, success: Schema.Null }),
   Rpc.make("offers", { payload: { runId: Schema.String }, success: Schema.Array(OfferView) }),
   Rpc.make("shown", { payload: { runId: Schema.String }, success: Schema.Null }),
+  Rpc.make("launches", { payload: { run: Schema.String }, success: Schema.Array(Launched) }),
 );
 
 const view = (runId: string, parent: string | null = null): RunView => ({
@@ -84,6 +86,7 @@ const hostOf = (dir: string, views: ReadonlyArray<RunView>, build = BUILD) =>
             progress: () => Effect.succeed(null),
             offers: () => Effect.succeed([]),
             shown: () => Effect.succeed(null),
+            launches: () => count("launches").pipe(Effect.as([])),
           }),
         ),
         Layer.provide(RpcServer.layerProtocolSocketServer),
@@ -167,6 +170,7 @@ test("a host's own collie_run answer uses one local listing and no loopback RPC"
           offers: () => Effect.succeed("Nothing is offered."),
           progress: () => Effect.succeed(null),
           flow: () => Effect.succeed(null),
+          launches: () => Effect.succeed([]),
         },
       );
       expect(said).toContain("Runs it started");

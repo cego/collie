@@ -6,6 +6,7 @@ import { Context, Layer, Schema, Effect, flow, Result } from "effect";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import type { AgentInfo } from "./herdr";
+import { StoreWrites } from "./store-writes";
 import { epochMs } from "./time";
 
 /**
@@ -119,6 +120,7 @@ export const registeredLayer = Layer.effect(Registered)(
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const reactivity = yield* Reactivity.Reactivity;
+    const told = Option.getOrUndefined(yield* Effect.serviceOption(StoreWrites));
     const inRegister = (register: string) =>
       sql<{ readonly record: string }>`
         SELECT record FROM collie_agents WHERE register = ${register} ORDER BY rowid
@@ -146,6 +148,7 @@ export const registeredLayer = Layer.effect(Registered)(
             INSERT OR REPLACE INTO collie_agents (register, agent, record)
             VALUES (${register}, ${entry.agent}, ${encodeAgentEntry(entry)})
           `;
+          told?.([entry.runId, ...Arr.map(dropped, (e) => e.runId)]);
           return yield* inRegister(register);
         }).pipe(
           sql.withTransaction,

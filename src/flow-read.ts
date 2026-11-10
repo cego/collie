@@ -107,7 +107,7 @@ export const laneFor = Effect.fn("Flow.lane")(function* (
   usual?: ReadonlyMap<string, number>,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const launches = yield* Effect.forEach(yield* readLaunches(env.stateDir, run.id), (launch) =>
+  const launches = yield* Effect.forEach(yield* readLaunches(run.id), (launch) =>
     fs.exists(launch.output).pipe(
       Effect.orElseSucceed(() => false),
       Effect.map((done) => ({ launch, done })),
@@ -320,7 +320,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
     }));
     const requested = Arr.filter(inputs.requested.get(run.id) ?? [], (one) => !inTask.has(one.id));
     if (requested.length > 0) {
-      const launches = yield* readLaunches(env.stateDir, run.id);
+      const launches = yield* readLaunches(run.id);
       for (const child of requested) {
         const launch = Option.getOrUndefined(
           Arr.findLast(

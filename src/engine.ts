@@ -15,7 +15,14 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { speaksForHuman, type Asker } from "./proposals";
-import { actorOf, readAudit, recordAudit, whoActed, type ScheduledBy } from "./audit";
+import {
+  actorOf,
+  readAudit,
+  recordAudit,
+  whoActed,
+  type AuditLine,
+  type ScheduledBy,
+} from "./audit";
 import { LinkDelivery, readLinkDeliveries } from "./run-links";
 import { appendLogLine } from "./run-log";
 import { readReplies, recordReply } from "./replies";
@@ -281,7 +288,7 @@ import {
   readStepSteering,
   StepNote as SteeringNote,
 } from "./step-steering";
-import { readLaunches } from "./launches";
+import { launchesOf, readLaunches, type Launched } from "./launches";
 import { steerTarget } from "./steer-target";
 import { ensureStepDurations, rememberStepDurations } from "./step-durations";
 import {
@@ -4436,29 +4443,7 @@ export const hostLayer = (options: {
             const audit = yield* under(readAudit(runDir(dir, runId))).pipe(
               Effect.orElseSucceed(() => []),
             );
-            return yield* Effect.forEach(rows, (row) =>
-              Effect.gen(function* () {
-                const actor =
-                  row.answerer ??
-                  Option.getOrUndefined(
-                    Arr.findFirst(
-                      audit,
-                      (line) => line.operation === "answer" && line.request === row.request,
-                    ),
-                  )?.actor;
-                const asked = {
-                  name: row.decision,
-                  answer: row.answer,
-                  superseded: row.superseded,
-                  options: yield* decodeOptions(row.options).pipe(
-                    Effect.orElseSucceed((): ReadonlyArray<Solution> => []),
-                  ),
-                };
-                if (actor === undefined) return asked;
-                const { requestId: _, schedule: __, ...by } = actor;
-                return { ...asked, by };
-              }),
-            );
+            return yield* askedQuestions(rows, audit);
           }),
         close: (runId, decision, value) =>
           store
@@ -7877,7 +7862,7 @@ const makeRegistry: (
     const waiting = yield* asked(runId);
     if (!Arr.some(waiting, isUnanswered)) return waiting;
     const fs = yield* FileSystem.FileSystem;
-    const launches = yield* readLaunches(dir, runId).pipe(Effect.orElseSucceed(() => []));
+    const launches = yield* readLaunches(runId).pipe(Effect.orElseSucceed(() => []));
     const candidates = yield* Effect.forEach(launches, (one) =>
       fs.exists(one.output).pipe(
         Effect.orElseSucceed(() => false),
@@ -8090,15 +8075,32 @@ const makeRegistry: (
     actor: Asker,
     agent: string,
     submitted = Infinity,
+    read?: {
+      readonly rows: ReadonlyArray<DecisionRow>;
+      readonly launches: ReadonlyArray<Launched>;
+    },
   ) {
-    const launches = yield* readLaunches(dir, runId).pipe(Effect.orElseSucceed(() => []));
-    const { aside, extended } = touchedBy(yield* store.asked(runId), launches, agent, submitted);
-    for (const one of aside)
-      yield* supersedeQuestion({ runId, decision: one.decision, cause, by: actor, agent });
+    const launches =
+      read?.launches ?? (yield* readLaunches(runId).pipe(Effect.orElseSucceed(() => [])));
+    const rows = read?.rows ?? (yield* store.asked(runId));
+    const { aside, extended } = touchedBy(rows, launches, agent, submitted);
+    const written = new Map(Arr.map(rows, (one) => [one.decision, one] as const));
+    for (const one of aside) {
+      const superseded = yield* supersedeQuestion({
+        runId,
+        decision: one.decision,
+        cause,
+        by: actor,
+        agent,
+      });
+      if (superseded._tag === "accepted") written.set(one.decision, superseded.row);
+    }
     for (const one of extended) {
       seenWorking.delete(`${runId}/${one.decision}/${agent}`);
-      yield* store.alsoMessaged({ run: runId, decision: one.decision, agent });
+      const messaged = yield* store.alsoMessaged({ run: runId, decision: one.decision, agent });
+      if (messaged !== undefined) written.set(one.decision, messaged);
     }
+    return [...written.values()];
   });
 
   const superseding = (runId: string, actor: Asker | undefined, sent: typeof Steered.Type) =>
@@ -8115,9 +8117,11 @@ const makeRegistry: (
     const runs = Arr.dedupe(Arr.map(yield* store.supersedable, (row) => row.run));
     if (runs.length === 0) return;
     const delivered = yield* humanSubmits;
+    const askedOf = yield* store.askedOf(runs);
+    const launchesOfRuns = yield* launchesOf(runs);
     for (const runId of runs) {
-      const rows = yield* store.asked(runId);
-      const launches = yield* readLaunches(dir, runId).pipe(Effect.orElseSucceed(() => []));
+      let rows = askedOf.get(runId) ?? [];
+      const launches = launchesOfRuns.get(runId) ?? [];
       const typed = yield* Effect.forEach(
         Arr.dedupe(Arr.map(launches, (launch) => launch.agent)),
         (agent) =>
@@ -8140,8 +8144,11 @@ const makeRegistry: (
       );
       for (const one of [...sent, ...Arr.flatten(typed)]) {
         const touched = touchedBy(rows, launches, one.agent, one.at);
-        if (touched.aside.length + touched.extended.length > 0)
-          yield* supersedeFor(runId, one.cause, one.actor, one.agent, one.at);
+        if (touched.aside.length + touched.extended.length === 0) continue;
+        rows = yield* supersedeFor(runId, one.cause, one.actor, one.agent, one.at, {
+          rows,
+          launches,
+        });
       }
     }
   });
@@ -8171,7 +8178,11 @@ const makeRegistry: (
    */
   const reviseQuestions = Effect.gen(function* () {
     const agents = yield* Agents;
-    for (const row of yield* store.setAside) {
+    const setAside = yield* store.setAside;
+    const setAsideRuns = Arr.dedupe(Arr.map(setAside, (row) => row.run));
+    const askedOf = yield* store.askedOf(setAsideRuns);
+    const launchesOfRuns = yield* launchesOf(setAsideRuns);
+    for (const row of setAside) {
       if ((yield* controlsOf(row.run)).includes(STOP)) continue;
       const found = yield* routed(row.run).pipe(Effect.option);
       if (Option.isNone(found)) continue;
@@ -8181,9 +8192,9 @@ const makeRegistry: (
         generation.entry,
       );
       if (state.status !== "suspended") continue;
-      const rows = yield* store.asked(row.run);
+      const rows = askedOf.get(row.run) ?? [];
       if (!(yield* awaitsRoot(row.run, rows, row.decision))) continue;
-      const launches = yield* readLaunches(dir, row.run).pipe(Effect.orElseSucceed(() => []));
+      const launches = launchesOfRuns.get(row.run) ?? [];
       const messaged = row.messaged ?? [];
       const keyOf = (agent: string) => `${row.run}/${row.decision}/${agent}`;
       const finished = Effect.fn("Engine.finished")(function* (agent: string, since: string) {
@@ -9265,7 +9276,7 @@ const makeRegistry: (
         });
         const launch = Option.getOrUndefined(
           Arr.findLast(
-            yield* readLaunches(dir, options.runId),
+            yield* readLaunches(options.runId),
             (one) => one.step?.step === options.step,
           ),
         );
@@ -9299,6 +9310,20 @@ const makeRegistry: (
           asked: host.asked(runId),
           close: (decision, value) => host.close(runId, decision, value),
         }),
+        (runs) =>
+          Effect.gen(function* () {
+            const rowsOf = yield* store.askedOf(runs);
+            const asked = new Map<string, ReadonlyArray<Sdk.AskedQuestion>>();
+            for (const [runId, rows] of rowsOf)
+              asked.set(
+                runId,
+                yield* askedQuestions(
+                  rows,
+                  yield* readAudit(runDir(dir, runId)).pipe(Effect.orElseSucceed(() => [])),
+                ),
+              );
+            return asked;
+          }).pipe(Effect.provideContext(bun)),
         (queued, sent) =>
           superseding(queued.runId, queued.actor, sent).pipe(Effect.provideContext(services)),
       );
@@ -9311,6 +9336,31 @@ const makeRegistry: (
 const decodeOptions = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Array(RecordedSolution)),
 );
+
+const askedQuestions = (rows: ReadonlyArray<DecisionRow>, audit: ReadonlyArray<AuditLine>) =>
+  Effect.forEach(rows, (row) =>
+    Effect.gen(function* () {
+      const actor =
+        row.answerer ??
+        Option.getOrUndefined(
+          Arr.findFirst(
+            audit,
+            (line) => line.operation === "answer" && line.request === row.request,
+          ),
+        )?.actor;
+      const asked = {
+        name: row.decision,
+        answer: row.answer,
+        superseded: row.superseded,
+        options: yield* decodeOptions(row.options).pipe(
+          Effect.orElseSucceed((): ReadonlyArray<Solution> => []),
+        ),
+      };
+      if (actor === undefined) return asked;
+      const { requestId: _, schedule: __, ...by } = actor;
+      return { ...asked, by };
+    }),
+  );
 
 /**
  * What a human's message submitted to `agent` at `submitted` does to its Run's questions

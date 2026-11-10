@@ -1,3 +1,4 @@
+import { launchesAt } from "./support/records";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -23,7 +24,6 @@ import { releaseBinary, twoMachines, type Side } from "./support/peers";
 import { freePort } from "./support/fake-ssh";
 import { collieCommand } from "./support/world";
 import { runDir } from "../src/engine";
-import { readLaunches } from "../src/launches";
 import { BUILD, connect, ownerOf } from "../src/host";
 import { stopHost, until } from "./support/host";
 import { applyItem, EMPTY_FLOCK, flockCards, type FlockItem } from "../desktop/src/shared/flock";
@@ -301,7 +301,7 @@ test(
                 {
                   kind: "deliver",
                   run: runId,
-                  agent: (yield* readLaunches(second.world.state, runId))[0]!.agent,
+                  agent: (yield* launchesAt(second.world.state, runId))[0]!.agent,
                   text: "from Flock chat",
                   mode: "boundary",
                 },
