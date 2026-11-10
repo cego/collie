@@ -32,6 +32,8 @@ export type Act = (
 
 const state = shallowRef<Answering>(nothingAnswered);
 const asking = shallowRef<ReadonlyMap<string, Questionnaire>>(new Map());
+/** The keys of the questions the last board showed open; null before the first board. */
+let onBoard: ReadonlySet<string> | null = null;
 let sends = 0;
 
 const titleOf = (question: Question, action: DesktopAction) =>
@@ -42,8 +44,15 @@ const titleOf = (question: Question, action: DesktopAction) =>
     : "";
 
 export const useAnswering = () => {
-  const of = (installation: string, question: Question) =>
-    asking.value.get(answerKey(installation, question.run, question.id)) ?? questionnaire(question);
+  const of = (installation: string, question: Question) => {
+    const key = answerKey(installation, question.run, question.id);
+    const kept = asking.value.get(key);
+    if (kept !== undefined) return kept;
+    const opened = questionnaire(question);
+    return onBoard === null || onBoard.has(key)
+      ? opened
+      : stepped(opened, { kind: "seen", question: null }).state;
+  };
   const put = (installation: string, question: Question, next: Questionnaire) =>
     (asking.value = new Map(asking.value).set(
       answerKey(installation, question.run, question.id),
@@ -105,6 +114,7 @@ export const useAnswering = () => {
           ),
         ),
       );
+      onBoard = new Set(open.keys());
       const seen = new Map(
         Arr.map([...asking.value], ([key, one]) => {
           const question = open.get(key) ?? null;

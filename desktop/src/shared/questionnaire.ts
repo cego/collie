@@ -219,7 +219,7 @@ const keyed = (state: Questionnaire, event: Extract<Event, { kind: "key" }>): St
           ? { kind: "submit" }
           : null,
     };
-  if (event.where === "answer") return { state, does: null };
+  if (event.where === "answer" || inFlight(state) || settled(state)) return { state, does: null };
   switch (event.key) {
     case "ArrowDown":
     case "ArrowRight":
@@ -245,7 +245,7 @@ const keyed = (state: Questionnaire, event: Extract<Event, { kind: "key" }>): St
 
 const replied = (state: Questionnaire, event: Extract<Event, { kind: "replied" }>) => {
   const pending = state.pending;
-  if (!inFlight(state) || pending?.request !== event.request) return state;
+  if (pending?.request !== event.request) return state;
   if (!event.ok)
     return {
       ...state,

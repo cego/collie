@@ -449,6 +449,37 @@ describe("keyboard", () => {
     expect(run(question ?? choice(), events).does).toEqual(does);
   });
 
+  const sentPg: Event[] = [
+    { kind: "pick", id: "pg" },
+    { kind: "submit", request: "q-1" },
+  ];
+  test.each([
+    { rule: "while it sends", events: sentPg },
+    {
+      rule: "once answered",
+      events: [...sentPg, { kind: "replied", request: "q-1", ok: true, fresh: true }],
+    },
+    {
+      rule: "once off the board",
+      events: [
+        { kind: "pick", id: "pg" },
+        { kind: "seen", question: null },
+      ],
+    },
+  ] satisfies ReadonlyArray<{ rule: string; events: Event[] }>)(
+    "no key moves the selection $rule",
+    ({ events }) => {
+      for (const name of ["ArrowDown", "ArrowUp", "Home", "End"])
+        expect({ name, checked: checked(choice(), [...events, key(name)]) }).toEqual({
+          name,
+          checked: ["pg"],
+        });
+      expect(checked(choice(), [...events, key("ArrowDown"), key("ArrowDown"), key(" ")])).toEqual([
+        "pg",
+      ]);
+    },
+  );
+
   test("Esc keeps the selection and the draft", () => {
     const events: Event[] = [
       key("ArrowDown"),
@@ -883,37 +914,53 @@ describe("status", () => {
   const confirmed: Event = { kind: "replied", request: "r", ok: true, fresh: true };
   const gone: Event = { kind: "seen", question: null };
 
+  const kinds = [
+    { kind: "answer", sends: answers, confirmed: "Answered: Go on" },
+    { kind: "hold", sends: holds, confirmed: "No longer open" },
+    {
+      kind: "steer",
+      sends: steers,
+      confirmed: "Sent to r-1-build-r1; the question is set aside",
+    },
+  ] as const;
+  const replies = (confirmedSays: string) =>
+    [
+      { reply: "confirmed", event: confirmed, status: confirmedSays },
+      { reply: "refused", event: refused, status: '"pick" was already answered "stop" by cli' },
+      { reply: "a connection failure", event: dropped, status: "connection renewed" },
+    ] as const;
+  const retried: Event = { kind: "trying", request: "r" };
+  const outlived: Array<{ rule: string; events: Event[]; status: string }> = Arr.flatMap(
+    kinds,
+    ({ kind, sends, confirmed: says }) => [
+      ...Arr.flatMap(replies(says), ({ reply, event, status }) => [
+        {
+          rule: `${kind} ${reply}, then the board drops it and refreshes`,
+          events: [...sends, event, gone, gone],
+          status,
+        },
+        {
+          rule: `${kind}: the board drops it, then ${reply}, then it refreshes`,
+          events: [...sends, gone, event, gone],
+          status,
+        },
+      ]),
+      {
+        rule: `${kind}: the board drops it, the connection fails, and Try again is confirmed`,
+        events: [...sends, gone, dropped, gone, retried, confirmed, gone],
+        status: says,
+      },
+    ],
+  );
+
+  test.each(outlived)("$rule: nothing more is sent", ({ events }) => {
+    const after = run(TWO, [...events, { kind: "draft", text: "more" }]).state;
+    expect(questionnaireView(after).submit).toBe(false);
+    expect(questionnaireView(after).steer.send).toBe(false);
+  });
+
   test.each([
-    {
-      rule: "an answer refused, then the board drops it and refreshes: the host's reason",
-      events: [...answers, refused, gone, gone],
-      status: '"pick" was already answered "stop" by cli',
-    },
-    {
-      rule: "a hold refused, then the board drops it and refreshes: the host's reason",
-      events: [...holds, refused, gone, gone],
-      status: '"pick" was already answered "stop" by cli',
-    },
-    {
-      rule: "a steer refused, then the board drops it and refreshes: the host's reason",
-      events: [...steers, refused, gone, gone],
-      status: '"pick" was already answered "stop" by cli',
-    },
-    {
-      rule: "an answer whose connection failed, then the board drops it: the failure",
-      events: [...answers, dropped, gone, gone],
-      status: "connection renewed",
-    },
-    {
-      rule: "the board drops it, then the connection fails: the failure",
-      events: [...answers, gone, dropped, gone],
-      status: "connection renewed",
-    },
-    {
-      rule: "the board drops it, the connection fails, and Try again is answered",
-      events: [...answers, gone, dropped, gone, { kind: "trying", request: "r" }, confirmed, gone],
-      status: "Answered: Go on",
-    },
+    ...outlived,
     {
       rule: "the board drops it, then a stale reply comes: the newer request still sends",
       events: [
@@ -934,6 +981,21 @@ describe("status", () => {
     {
       rule: "a steer confirmed, then the board drops it and refreshes: still steered",
       events: [...steers, confirmed, gone, gone],
+      status: "Sent to r-1-build-r1; the question is set aside",
+    },
+    {
+      rule: "answer: of two tries of one request, one fails and the other is confirmed",
+      events: [...answers, retried, dropped, confirmed],
+      status: "Answered: Go on",
+    },
+    {
+      rule: "hold: of two tries of one request, one fails and the other is confirmed",
+      events: [...holds, retried, dropped, confirmed],
+      status: "Run held · question still open",
+    },
+    {
+      rule: "steer: of two tries of one request, one fails and the other is confirmed",
+      events: [...steers, retried, dropped, confirmed],
       status: "Sent to r-1-build-r1; the question is set aside",
     },
     {

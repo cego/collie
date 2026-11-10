@@ -96,3 +96,37 @@ test("a question replaced while its answer is in flight settles, and its replace
     },
   );
 });
+
+test("a question gone from the board before its first gesture sends nothing", () => {
+  const installation = "gone untouched";
+  const question = asked("decide");
+  const answering = useAnswering();
+  const { act, sent } = replying();
+  answering.settle(boardOf(installation, question));
+  answering.settle(boardOf(installation));
+  for (const event of [
+    { kind: "pick", id: "go" },
+    { kind: "submit", request: "s-1" },
+    { kind: "pick", id: HOLD },
+    { kind: "submit", request: "s-2" },
+    { kind: "draft", text: "use a schema" },
+    { kind: "steer", request: "s-3" },
+  ] as const)
+    answering.step(installation, "mk-pc", question, event, act);
+  expect(questionnaireView(answering.of(installation, question)).status).toBe("No longer open");
+  expect(sent).toEqual([]);
+});
+
+test("of two tries of one answer, a failed one leaves the confirmed one standing", () => {
+  const installation = "overlapping tries";
+  const question = asked("decide");
+  const answering = useAnswering();
+  const { act, reply } = replying();
+  answering.settle(boardOf(installation, question));
+  answering.step(installation, "mk-pc", question, { kind: "pick", id: "go" }, act);
+  answering.step(installation, "mk-pc", question, { kind: "submit", request: "s-1" }, act);
+  reply(null);
+  reply(false, new ActionFailed({ reason: "connection renewed", refused: false }));
+  reply(true);
+  expect(questionnaireView(answering.of(installation, question)).status).toBe("Answered: Go on");
+});
