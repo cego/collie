@@ -347,21 +347,24 @@ for (const name of ["gitlab", "github"] as const) {
         }),
       ));
 
-    test("needs login repair when the forge refuses the token its CLI holds", () => {
-      const fake = fakeForge(name, model(name, { revoked: true }));
-      return runEffect(
-        forge.ready(PROJECT[name], "/w", fake.run).pipe(
-          Effect.provide(fake.layer),
-          Effect.map((ready) =>
-            expect(ready).toEqual({
+    test("needs login repair when the forge refuses the token its CLI holds", () =>
+      runEffect(
+        Effect.gen(function* () {
+          for (const over of [
+            { revoked: true },
+            { httpFault: { status: 403, message: "Bad credentials" } },
+          ]) {
+            const fake = fakeForge(name, model(name, over));
+            expect(
+              yield* forge.ready(PROJECT[name], "/w", fake.run).pipe(Effect.provide(fake.layer)),
+            ).toEqual({
               ok: false,
               reason: `${CLI[name]} is not logged in to ${host}`,
               cause: "login-missing",
-            }),
-          ),
-        ),
-      );
-    });
+            });
+          }
+        }),
+      ));
 
     test("stays recoverable when the forge cannot be reached or fails to answer", () =>
       runEffect(

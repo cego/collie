@@ -2890,7 +2890,7 @@ the fix round from there.
 
 A step pointed at a merge request needs its forge's CLI installed (`glab` on GitLab, `gh` on
 GitHub) and a login its host accepts: Collie asks the forge who the CLI's token belongs to.
-No token, or a 401, parks the Run as `login-missing`, for you to log in again; a forge that
+No token, a 401, or a 403 saying "Bad credentials" parks the Run as `login-missing`, for you to log in again; a forge that
 cannot be reached or fails to answer parks it as `forge-unavailable`, which clears by
 itself. In a directory that is not a checkout there is no branch and no
 working tree to review, so the target menu is one entry — **Type it…**.

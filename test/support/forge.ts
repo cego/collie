@@ -190,6 +190,7 @@ export const ForgeModel = Schema.Struct({
     Schema.Union([
       Schema.Struct({
         status: Schema.Finite,
+        message: Schema.optionalKey(Schema.String),
         headers: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
       }),
       Schema.Literals(["network", "hold"]),
@@ -2090,7 +2091,11 @@ export function httpFace(
         else init.signal?.addEventListener("abort", abort);
       });
     if (fault !== undefined)
-      return answered(fault.status, `{"message":"${fault.status}"}`, fault.headers);
+      return answered(
+        fault.status,
+        JSON.stringify({ message: fault.message ?? String(fault.status) }),
+        fault.headers,
+      );
     const url = new URL(input);
     const host = forge === "github" ? FORGE_HOST.github : url.host;
     if (!model.loggedIn.includes(host) || model.revoked === true || token !== tokenOf(forge, model))

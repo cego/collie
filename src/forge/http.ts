@@ -211,7 +211,8 @@ export const loginReadiness = <R>(
     const http = yield* ForgeHttp;
     const me = yield* http.ask(login, cwd, (provider, signal) => provider.users.me({ signal }));
     if (me.ok) return { ok: true, reason: "" };
-    return me.status === 401 || (yield* login.token(run, cwd)) === null
+    const refused = me.status === 401 || (me.status === 403 && /bad credentials/i.test(me.reason));
+    return refused || (yield* login.token(run, cwd)) === null
       ? { ok: false, reason: login.notReady, cause: "login-missing" }
       : {
           ok: false,
