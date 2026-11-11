@@ -314,8 +314,8 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
     rune_kit::root(split, layer)
         .on_layout_tx(|app: &mut App, [_, _, width, _], _| app.fit_chat(width))
         .on_window_focus(|app: &mut App, focused: bool, _: &mut Tx| {
-        if let Some(tab) = &mut app.terminal {
-            tab.focus(focused);
-        }
-    })
+            if let Some(tab) = &mut app.terminal {
+                tab.focus(focused);
+            }
+        })
 }

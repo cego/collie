@@ -1102,7 +1102,6 @@ fn a_reply_under_way_is_not_popped_out() {
     assert!(popped.lock().unwrap().is_empty());
 }
 
-
 #[test]
 fn p2_the_composer_is_cleared_and_keeps_focus_after_send() {
     let mut window = Window::reading(json!([]));
@@ -1121,7 +1120,10 @@ fn p2_a_refused_action_in_the_chat_is_said_not_swallowed() {
     let mut window = Window::reading(conversation());
     window.tap("chat-new");
     window.refuse("reopen", "Codex is not signed in.");
-    assert_eq!(window.node("chat-failed")["name"], "Codex is not signed in.");
+    assert_eq!(
+        window.node("chat-failed")["name"],
+        "Codex is not signed in."
+    );
     assert!(
         !window.has("chat-trouble"),
         "a refusal is not the chat reconnecting"
@@ -1130,7 +1132,10 @@ fn p2_a_refused_action_in_the_chat_is_said_not_swallowed() {
     assert!(!window.has("chat-failed"));
 
     window.tap("chat-proactive");
-    window.refuse("setFlockSetting", "The Flock's settings are read-only here.");
+    window.refuse(
+        "setFlockSetting",
+        "The Flock's settings are read-only here.",
+    );
     assert_eq!(
         window.node("chat-proactive")["name"],
         "Speaks first about News that matters",
@@ -1166,7 +1171,6 @@ fn p2_a_refused_action_in_the_chat_is_said_not_swallowed() {
     );
 }
 
-
 #[test]
 fn p2_pressing_the_card_of_a_task_gone_from_the_board_says_so() {
     let mut window = Window::reading(conversation());
@@ -1181,7 +1185,12 @@ fn p2_pressing_the_card_of_a_task_gone_from_the_board_says_so() {
 /// corner of the window.
 fn opens_at(trigger: &Value, popup: &Value) -> bool {
     let at = |v: &Value, i: usize| v[i].as_f64().unwrap();
-    let (tx, ty, tw, th) = (at(trigger, 0), at(trigger, 1), at(trigger, 2), at(trigger, 3));
+    let (tx, ty, tw, th) = (
+        at(trigger, 0),
+        at(trigger, 1),
+        at(trigger, 2),
+        at(trigger, 3),
+    );
     let (px, py, pw, ph) = (at(popup, 0), at(popup, 1), at(popup, 2), at(popup, 3));
     let overlaps_x = px < tx + tw && px + pw > tx;
     let touches_y = (py + ph - ty).abs() <= 12.0 || (py - (ty + th)).abs() <= 12.0;
@@ -1202,7 +1211,10 @@ fn the_chats_pickers_and_history_open_at_their_trigger() {
         let at = window.node(trigger)["bounds"].clone();
         window.tap(trigger);
         let shown = window.node(popup)["bounds"].clone();
-        assert!(opens_at(&at, &shown), "{popup} at {shown} for {trigger} at {at}");
+        assert!(
+            opens_at(&at, &shown),
+            "{popup} at {shown} for {trigger} at {at}"
+        );
         window.key(Key::Escape, Mods::default());
         assert!(!window.has(popup), "Escape closes {popup}");
     }
@@ -1215,15 +1227,19 @@ fn the_chats_pickers_open_at_their_trigger_in_its_own_window() {
     let mut alone = Alone::default();
     let asks = core.core.clone();
     alone.request = Some(Box::new(move |tag, payload, done| {
-        asks.request(tag, payload, move |a: &mut Alone, answer: Result<Value, CallError>| {
-            done(a, answer.map_err(|e| e.0))
-        })
+        asks.request(
+            tag,
+            payload,
+            move |a: &mut Alone, answer: Result<Value, CallError>| done(a, answer.map_err(|e| e.0)),
+        )
     }));
     let streams = core.core.clone();
     alone.stream = Some(Box::new(move |tag, payload, mut each| {
-        streams.stream(tag, payload, move |a: &mut Alone, value: Result<Value, CallError>| {
-            each(a, value.map_err(|e| e.0))
-        })
+        streams.stream(
+            tag,
+            payload,
+            move |a: &mut Alone, value: Result<Value, CallError>| each(a, value.map_err(|e| e.0)),
+        )
     }));
     alone.chat.pop = Some(Box::new(|_| {}));
     chat_window::opened(&mut alone);
@@ -1266,7 +1282,10 @@ fn the_chats_pickers_open_at_their_trigger_in_its_own_window() {
         rt.update(|a, _| core.settle(a));
         frame(&mut rt);
         let shown = bounds(&rt, popup).unwrap_or_else(|| panic!("{popup} is open"));
-        assert!(opens_at(&at, &shown), "{popup} at {shown} for {trigger} at {at}");
+        assert!(
+            opens_at(&at, &shown),
+            "{popup} at {shown} for {trigger} at {at}"
+        );
         rt.key(KeyEvent {
             key: Key::Escape,
             mods: Mods::default(),
@@ -1282,8 +1301,16 @@ fn p2_a_conversation_changed_under_a_stopped_reply_is_read_again() {
     window.type_in("hello");
     window.tap("send");
     window.push("conversationChanges", json!("changed"));
-    assert_eq!(window.asked("transcript").len(), 1, "not while a reply streams");
+    assert_eq!(
+        window.asked("transcript").len(),
+        1,
+        "not while a reply streams"
+    );
     window.tap("stop");
     assert!(!window.has("stop"), "the reply is no longer under way");
-    assert_eq!(window.asked("transcript").len(), 2, "read once it is stopped");
+    assert_eq!(
+        window.asked("transcript").len(),
+        2,
+        "read once it is stopped"
+    );
 }
