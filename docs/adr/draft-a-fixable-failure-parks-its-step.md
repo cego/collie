@@ -27,6 +27,12 @@ again under a new operation, since its first Output would replay. A finding that
 block delivery never stops the step. It is recorded and noted on the merge request. Each resume is one more bounded attempt, and only a human or an agent
 can trigger it, so this adds no automatic retry.
 
+In implement, these four stops park: an unreadable spec, a stopped builder, a ticket's
+unresolved blocking findings, and a halted final rally, including a disputed blocker.
+A resume reads the spec again or asks the stopped builder under a new operation and reads
+its new Output. A stopped rally gets one more fix-and-review round with the same builder
+and reviewers. If that round does not converge, it parks again with the new reason.
+
 **D2. An Output still unusable after its one repair parks.** It no longer ends the Run
 `output-unusable`. On resume, the file is read again. If it decodes now, the work goes on. If
 not, the agent that wrote it gets one more repair, and an Output still unusable after that

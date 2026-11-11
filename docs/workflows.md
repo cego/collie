@@ -134,8 +134,9 @@ rather than fails: the question names the ticket and the criteria still unmet, s
 ticket can be amended. It asks sooner when a hand-back leaves the tree as it found it and
 reports a blocking finding, since another could not move that blocker, and that question
 names the blockers too. **Hand back** reads the ticket again, goes on with no builder turn if
-nothing is unmet any more, and otherwise hands it back with two tries fresh. **Stop** fails
-the Run with that reason, before any review. An unattended Run waits on either question. A ticket's `## After merge` outcomes are not criteria:
+nothing is unmet any more, and otherwise hands it back with two tries fresh. **Stop** parks
+the Run with that reason, before any review. A resume asks the builder again under a new
+operation and reads its new Output. An unattended Run waits on either question. A ticket's `## After merge` outcomes are not criteria:
 the merge request names them under **Not settled by the run**. A criterion only CI, a merge
 or a deploy can show may be answered `after merge: <reason>`: it does not end the Run, the
 reviewer blocks one the Run could have shown, and the merge request names the ticket, the
@@ -211,11 +212,14 @@ runs at, and nothing uncommitted, as when a ticket is proved met by work already
 merge request step does not run and **What next?** is not asked. The Run ends with, and its
 log records, `nothing to land: no commits over <base>, where this branch leaves <default
 branch>, and nothing uncommitted`, and its card offers no follow-up. A branch with commits
-that cannot be pushed still fails, as below.
+that cannot be pushed parks for repair, as below.
 
-It fails with the reason there is no merge request — a ticket stopped
-on a blocking finding, acceptance criteria unreadable or still unmet when Stop was answered, a review that halted — and says to
-continue with a follow-up Run, which **Keep going on this** starts. A delivery the
+It parks its Step with the reason and what to correct when its spec cannot be read,
+the builder stops, a ticket's blocking findings remain unresolved, or the final rally halts,
+including a disputed blocker. `run resume` or `retry-noted` continues on the same worktree,
+branch and agents. A missing spec is read again; a stopped build gets a new operation.
+A stopped rally gets one more fix-and-review round. If it still cannot converge, it parks
+again with the new reason. No retry is automatic. A delivery the
 Merge request step's agent left undone — the branch not pushed, no merge request URL, or a
 blocking finding — does not fail it: the Run parks at Merge request with the reason, and a
 resume asks that agent again, told of the merge request already open. Its `minor` findings

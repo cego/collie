@@ -53,6 +53,7 @@ import {
   sameTree,
   stackedBranch,
   step,
+  stepFailed,
   unmetCriteria,
   type Criterion,
   type Finding,
@@ -353,9 +354,13 @@ export default defineWorkflow({
       const runId = (yield* Run).id;
       const place = yield* host.place(runId);
       const cwd = place.cwd;
-      const source = yield* classifyWorkSource(asked.plan).pipe(
-        Effect.orElseSucceed(() => ({ kind: "text", value: asked.plan })),
-      );
+      const source = yield* Activity.make({
+        name: "work-source",
+        success: Schema.Struct({ kind: Schema.String, value: Schema.String }),
+        execute: classifyWorkSource(asked.plan).pipe(
+          Effect.orElseSucceed(() => ({ kind: "text", value: asked.plan })),
+        ),
+      });
       const share = place.options.repo ?? "";
       if (source.kind === "linear") {
         const linear = yield* connection("linear");
@@ -412,17 +417,21 @@ export default defineWorkflow({
           });
         }
       }
-      // A Run that stops short of its merge request fails, so no wave waits on work that is
-      // not there and its card is not told as done.
-      const unbuilt = (reason: string) =>
-        Effect.fail(
-          new WorkflowError({
-            reason:
-              share === ""
-                ? `${reason}. Continue with a follow-up Run to finish delivery.`
-                : reason,
+      const unbuilt = (name: string, reason: string) =>
+        Activity.make({
+          name: `${name}.park`,
+          execute: Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const marker = `${place.dir}/${name}.parked`;
+            if (yield* fs.exists(marker).pipe(Effect.orDie)) return yield* host.parked(runId, null);
+            const why = `${reason}. Correct it, then resume ${runId}.`;
+            yield* fs.writeFileString(marker, "").pipe(Effect.orDie);
+            yield* host.record(runId, why);
+            yield* stepFailed(why);
+            yield* host.parked(runId, why);
+            return yield* Workflow.suspend(yield* WorkflowInstance);
           }),
-        );
+        });
       const checksNow = Effect.map(host.approved(runId), renderApproved);
 
       let input: typeof Implementing.Type = {
@@ -547,17 +556,24 @@ export default defineWorkflow({
       // Read only after the build, which is what writes SPEC.md for any source but a plan.
       let specReadings = 0;
       const specNow = Effect.gen(function* () {
-        if (source.kind === "plan-dir") return source.value;
-        specReadings += 1;
-        return yield* Activity.make({
-          name: `spec.${specReadings}`,
-          success: Schema.String,
-          execute: FileSystem.FileSystem.pipe(
-            Effect.flatMap((fs) => fs.exists(`${place.dir}/plan/SPEC.md`)),
-            Effect.map((written) => (written ? `${place.dir}/plan` : "")),
-            Effect.orElseSucceed(() => ""),
-          ),
-        });
+        const plan = source.kind === "plan-dir" ? source.value : `${place.dir}/plan`;
+        for (;;) {
+          specReadings += 1;
+          const readable = yield* Activity.make({
+            name: `spec-readable.${specReadings}`,
+            success: Schema.Boolean,
+            execute: FileSystem.FileSystem.pipe(
+              Effect.flatMap((fs) => fs.readFileString(`${plan}/SPEC.md`)),
+              Effect.as(true),
+              Effect.orElseSucceed(() => false),
+            ),
+          });
+          if (readable) return plan;
+          if (source.kind !== "plan-dir") return "";
+          yield* building(
+            unbuilt(`spec-${specReadings}`, `${plan}/SPEC.md cannot be read, so no review starts`),
+          );
+        }
       });
       // One ticket is not a plan to slice: one pass builds all of it, and only tickets
       // added after that pass are built one at a time.
@@ -580,8 +596,12 @@ export default defineWorkflow({
             : Option.getOrUndefined(Arr.findFirst(tickets, (one) => !built.has(one.file)));
         if (ticket === undefined) break;
         rallied = null;
-        const { done, blocking } = yield* building(
+        let attempt = 0;
+        const nextBuild = building(
           Effect.gen(function* () {
+            attempt += 1;
+            const item = ticket?.file ?? "build";
+            const operation = attempt === 1 ? item : `${item}-${attempt}`;
             const before = (yield* host.evidence(runId, cwd)).verifications.length;
             if (ticket !== null) yield* checkpoint(place.dir, ticket, "started", []);
             const merged =
@@ -597,7 +617,7 @@ export default defineWorkflow({
                 : Arr.flatMap(tickets, (one) => one.criteria));
             yield* restateKind;
             build = yield* agentWork({
-              operation: ticket?.file ?? "build",
+              operation,
               agent: BUILDER,
               role: "implementer",
               pushes: true,
@@ -632,24 +652,26 @@ export default defineWorkflow({
               },
               output: Built,
             });
-            const item = ticket?.file ?? "build";
             // A Linear issue's criteria are read from its description as the builder copied it.
-            const spec =
-              ticket === null && source.kind === "linear"
-                ? yield* Activity.make({
-                    name: "criteria.spec",
-                    success: Schema.NullOr(Schema.Array(Schema.String)),
-                    execute: FileSystem.FileSystem.pipe(
-                      Effect.flatMap((fs) => fs.readFileString(`${place.dir}/plan/SPEC.md`)),
-                      Effect.map(criteriaIn),
-                      Effect.orElseSucceed(() => null),
-                    ),
-                  })
-                : given;
-            if (spec === null) {
-              const why = `${item}: ${place.dir}/plan/SPEC.md cannot be read, so the issue's acceptance criteria cannot be checked and no review starts`;
-              yield* host.record(runId, why);
-              return yield* unbuilt(why);
+            let spec: ReadonlyArray<string> | null = given;
+            for (let reading = 1; ; reading++) {
+              spec =
+                ticket === null && source.kind === "linear"
+                  ? yield* Activity.make({
+                      name: `${operation}.criteria.spec-${reading}`,
+                      success: Schema.NullOr(Schema.Array(Schema.String)),
+                      execute: FileSystem.FileSystem.pipe(
+                        Effect.flatMap((fs) => fs.readFileString(`${place.dir}/plan/SPEC.md`)),
+                        Effect.map(criteriaIn),
+                        Effect.orElseSucceed(() => null),
+                      ),
+                    })
+                  : given;
+              if (spec !== null) break;
+              yield* unbuilt(
+                `${operation}.spec-${reading}`,
+                `${item}: ${place.dir}/plan/SPEC.md cannot be read, so the issue's acceptance criteria cannot be checked and no review starts`,
+              );
             }
             // A plan's tickets are read again before each judgement, so an amended one is judged
             // and handed back as it reads now; one that cannot be read keeps its last reading.
@@ -666,7 +688,7 @@ export default defineWorkflow({
               if (read.length === 0) return spec;
               reads += 1;
               const now = yield* Activity.make({
-                name: `${item}.criteria.read-${reads}`,
+                name: `${operation}.criteria.read-${reads}`,
                 success: Schema.Array(Schema.NullOr(TicketReading)),
                 execute: FileSystem.FileSystem.pipe(
                   Effect.flatMap((fs) =>
@@ -713,7 +735,7 @@ export default defineWorkflow({
               if (blockers.length > 0) {
                 stalls += 1;
                 const chosen = yield* ask({
-                  name: `${item}.criteria-stalled-${stalls}`,
+                  name: `${operation}.criteria-stalled-${stalls}`,
                   prompt: `${item}: a criteria hand-back reported a blocker and changed nothing.\n\nIts blockers:\n${formatFindings(blockers)}\n\nStill unmet:\n${formatFindings(unmet)}\n\nAmend the ticket or clear the blocker, then hand it back, or stop the Run.`,
                   options: CRITERIA_OPTIONS,
                 });
@@ -730,7 +752,7 @@ export default defineWorkflow({
               }
               if (tries > CRITERIA_TRIES) {
                 unmetAsks += 1;
-                const name = `${item}.criteria-unmet-${unmetAsks}`;
+                const name = `${operation}.criteria-unmet-${unmetAsks}`;
                 const still = `${item}: acceptance criteria still unanswered or unmet after ${CRITERIA_TRIES} hand-backs`;
                 const chosen = yield* ask({
                   name,
@@ -747,10 +769,10 @@ export default defineWorkflow({
                 tries = 1;
                 continue;
               }
-              const before = yield* treeAt(`${item}.criteria-${turn}.before`);
+              const before = yield* treeAt(`${operation}.criteria-${turn}.before`);
               yield* restateKind;
               const answered = yield* agentWork({
-                operation: `${item}.criteria-${turn}`,
+                operation: `${operation}.criteria-${turn}`,
                 agent: BUILDER,
                 role: "implementer",
                 pushes: true,
@@ -765,7 +787,7 @@ export default defineWorkflow({
                 },
                 output: Built,
               });
-              const after = yield* treeAt(`${item}.criteria-${turn}.after`);
+              const after = yield* treeAt(`${operation}.criteria-${turn}.after`);
               answers = [...answers, ...boundTo(criteria, answered.criteria ?? [])];
               assumptions.push(...(answered.assumptions ?? []));
               commits.push(...(answered.commits ?? []));
@@ -784,11 +806,11 @@ export default defineWorkflow({
                 (one) => `${one.name}: ${one.result}`,
               ),
             };
-            handed.push(done);
             if (stopped !== null) {
-              yield* host.record(runId, stopped);
-              return yield* unbuilt(stopped);
+              yield* unbuilt(`${operation}.stopped`, stopped);
+              return null;
             }
+            handed.push(done);
             answeredFor.push({ item, criteria, answers, assumptions });
             for (const one of assumptions) assumed.push(`assumed in ${item}: ${one}`);
             for (const one of read)
@@ -809,6 +831,9 @@ export default defineWorkflow({
             ? undefined
             : { item: ticket.file, items: Arr.map(tickets, (one) => one.file) },
         );
+        let completed = yield* nextBuild;
+        while (completed === null) completed = yield* nextBuild;
+        const { done, blocking } = completed;
         if (blocking.length > 0) {
           rallied = yield* builderRally({
             ...rallyAsk,
@@ -821,8 +846,26 @@ export default defineWorkflow({
               findings: blocking,
             },
           });
-          const unresolved = rallied.halted ?? Arr.join(rallied.unsettled, "; ");
-          if (unresolved !== "") return yield* unbuilt(`${done.item}: ${unresolved}`);
+          for (let attempt = 1; ; attempt++) {
+            const unresolved = rallied.halted ?? Arr.join(rallied.unsettled, "; ");
+            if (unresolved === "") break;
+            yield* reviewRound(
+              unbuilt(`${done.item}.rally-${attempt}`, `${done.item}: ${unresolved}`),
+              { round: rallyAsk.rounds.n },
+            );
+            rallied = yield* builderRally({
+              ...rallyAsk,
+              plan: yield* specNow,
+              criteria: reviewerCriteria(answeredFor),
+              input,
+              build: {
+                item: done.item,
+                completed: Arr.map(handed, (one) => one.item),
+                findings: blocking,
+              },
+              resume: { attempt, previous: rallied },
+            });
+          }
         }
         tickets = yield* ticketsNow;
       }
@@ -838,9 +881,17 @@ export default defineWorkflow({
           input,
         });
       }
-      if (rallied.halted !== null) {
-        yield* host.record(runId, rallied.halted);
-        return yield* unbuilt(rallied.halted);
+      for (let attempt = 1; ; attempt++) {
+        const unresolved = rallied.halted ?? Arr.join(rallied.unsettled, "; ");
+        if (unresolved === "") break;
+        yield* reviewRound(unbuilt(`rally-${attempt}`, unresolved), { round: rallyAsk.rounds.n });
+        rallied = yield* builderRally({
+          ...rallyAsk,
+          plan: yield* specNow,
+          criteria: reviewerCriteria(answeredFor),
+          input,
+          resume: { attempt, previous: rallied },
+        });
       }
 
       const onto =
@@ -1203,6 +1254,7 @@ const builderRally = (ask: {
   readonly input: typeof Implementing.Type;
   readonly build?: PartialBuild;
   readonly criteria: string;
+  readonly resume?: { readonly attempt: number; readonly previous: Rallied };
   readonly integrate: (
     operation: string,
   ) => Effect.Effect<
@@ -1216,7 +1268,14 @@ const builderRally = (ask: {
     const runId = (yield* Run).id;
     return yield* rally({
       ...ask,
-      prefix: ask.build === undefined ? "" : `${ask.build.item}.`,
+      prefix: `${ask.build === undefined ? "" : `${ask.build.item}.`}${ask.resume === undefined ? "" : `retry-${ask.resume.attempt}.`}`,
+      resume:
+        ask.resume === undefined
+          ? undefined
+          : {
+              previous: ask.resume.previous,
+              reviewers: ask.build === undefined ? "" : `${ask.build.item}.`,
+            },
       obstacle:
         ask.build === undefined
           ? ""
@@ -1234,7 +1293,7 @@ const builderRally = (ask: {
               inputs: { ...ask.input.inputs, outcome: proves },
               verify: renderApproved(yield* host.approved(runId)),
               iteration: String(at),
-              max_iterations: String(ROUNDS),
+              max_iterations: String(ask.resume === undefined ? ROUNDS : 1),
               findings,
             },
             output: FixOutputSchema,

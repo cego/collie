@@ -1457,7 +1457,7 @@ scenario(
 );
 
 scenario(
-  "a repository's share that stops on a blocking finding fails, so no wave waits on it",
+  "a repository's share that stops on a blocking finding parks with its work intact",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -1485,15 +1485,15 @@ scenario(
           reviewed,
         ]);
 
-        const result = yield* ran({
+        const result = yield* stalled({
           entry: shipped("implement"),
           runId: "r-impl-share",
           input: { plan, ...FINISH },
           options: { repo: "api" },
         });
 
-        expect(result._tag).toBe("Failure");
-        expect(reasonOf(result)).toContain("no_progress");
+        expect(result).toBe("suspended");
+        expect(yield* parkedWhy("r-impl-share")).toContain("no_progress");
         expect(yield* asked("r-impl-share", "build.review-1")).toContain(
           "the schema will not migrate",
         );
@@ -1503,8 +1503,71 @@ scenario(
   120_000,
 );
 
+const resumeImplementPark = (
+  options: ShippedRun,
+  reason: string,
+  hooks: {
+    beforePark?: Effect.Effect<void, never, FileSystem.FileSystem>;
+    beforeResume?: Effect.Effect<void, never, FileSystem.FileSystem>;
+    stop?: { decision: string; answer: string };
+  } = {},
+) =>
+  driven(options, (run) =>
+    Effect.gen(function* () {
+      if (hooks.beforePark !== undefined) yield* hooks.beforePark;
+      if (hooks.stop !== undefined) {
+        yield* stallAsked(run, hooks.stop.decision);
+        yield* run.answer(hooks.stop.decision, hooks.stop.answer);
+      }
+      const [status, why] = yield* until(
+        () => Effect.zip(run.status, parkedWhy(options.runId)),
+        ([got, why]) =>
+          got.status === "failed" ||
+          got.status === "complete" ||
+          (got.status === "suspended" && why !== ""),
+      );
+      expect(status.status).toBe("suspended");
+      expect(why).toContain(reason);
+      expect(why).not.toContain("follow-up Run");
+      const branch = yield* exec(["git", "branch", "--show-current"], { cwd: rig.projectDir });
+      const worktrees = yield* exec(["git", "worktree", "list", "--porcelain"], {
+        cwd: rig.projectDir,
+      });
+      const children = [...started];
+      const agents = yield* registeredAt(dir);
+      expect(
+        Arr.some(
+          yield* readStepLines(runDir(dir, options.runId)),
+          (line) => line.kind === "fail" && pipe(line.why, Str.includes(reason)),
+        ),
+      ).toBe(true);
+      if (hooks.beforeResume !== undefined) yield* hooks.beforeResume;
+      yield* run.resume;
+      const [finished, parked] = yield* until(
+        () => Effect.zip(run.status, parkedWhy(options.runId)),
+        ([got, next]) =>
+          got.status === "complete" || got.status === "failed" || (next !== "" && next !== why),
+      );
+      expect({ status: finished.status, parked }).toEqual({ status: "complete", parked: "" });
+      expect(yield* exec(["git", "branch", "--show-current"], { cwd: rig.projectDir })).toEqual(
+        branch,
+      );
+      expect(
+        yield* exec(["git", "worktree", "list", "--porcelain"], { cwd: rig.projectDir }),
+      ).toEqual(worktrees);
+      expect(started).toEqual(children);
+      const after = yield* registeredAt(dir);
+      expect(Arr.filter(after, (one) => one.role !== "reviewer")).toEqual(
+        Arr.filter(agents, (one) => one.role !== "reviewer"),
+      );
+      if (Arr.some(agents, (one) => one.role === "reviewer")) expect(after).toEqual(agents);
+      expect(yield* asked(options.runId, "mr")).toContain(`Project root: ${rig.projectDir}`);
+      expect(yield* parkedWhy(options.runId)).toBe("");
+    }),
+  );
+
 scenario(
-  "an implement Run that stops short of its merge request fails with the reason: a ticket left blocking",
+  "an implement Run that stops short of its merge request parks with the reason: a ticket left blocking",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -1530,25 +1593,28 @@ scenario(
           reviewed,
           { verdict: "clean", fixed: [], disputed: [], checks: [] },
           reviewed,
+          {
+            verdict: "clean",
+            fixed: [{ title: "the schema will not migrate", file: "db" }],
+            disputed: [],
+            checks: [],
+          },
+          CLEAN_SYNTHESIS,
+          OPENED,
         ]);
-
-        const result = yield* ran({
+        const options = {
           entry: shipped("implement"),
           runId: "r-impl-blocked",
           input: { plan, ...FINISH },
-        });
-
-        expect(result._tag).toBe("Failure");
-        expect(reasonOf(result)).toContain("build: no_progress");
-        expect(reasonOf(result)).toContain("Continue with a follow-up Run to finish delivery.");
-        expect(Arr.join(yield* prompts(), "\n")).not.toContain("r-impl-blocked/mr.prompt.md");
+        };
+        yield* resumeImplementPark(options, "build: no_progress");
       }),
     ),
   120_000,
 );
 
 scenario(
-  "an implement Run that stops short of its merge request fails with the reason: fix_unverified",
+  "an implement Run that stops short of its merge request parks with the reason: fix_unverified",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -1578,20 +1644,19 @@ scenario(
           blocking("fourth"),
           // Not one of the Run's Checks and never run, so the last fix's word for it buys nothing.
           fixed("fourth", [{ name: "lint" }]),
+          fixed("fourth"),
+          CLEAN_SYNTHESIS,
+          OPENED,
         ]);
 
-        const result = yield* ran({
-          entry: shipped("implement"),
-          runId: "r-impl-unverified",
-          input: { plan, ...FINISH },
-        });
-
-        expect(result._tag).toBe("Failure");
-        expect(reasonOf(result)).toContain(
+        yield* resumeImplementPark(
+          {
+            entry: shipped("implement"),
+            runId: "r-impl-unverified",
+            input: { plan, ...FINISH },
+          },
           `fix_unverified: check "lint" has no verification record — run it through collie verify`,
         );
-        expect(reasonOf(result)).toContain("Continue with a follow-up Run to finish delivery.");
-        expect(Arr.join(yield* prompts(), "\n")).not.toContain("r-impl-unverified/mr.prompt.md");
       }),
     ),
   120_000,
@@ -3569,7 +3634,7 @@ scenario(
 );
 
 scenario(
-  "an implement Run that stops short of its merge request fails with the reason: criteria still unmet after the hand-backs",
+  "an implement Run that stops short of its merge request parks with the reason: criteria still unmet after the hand-backs",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -3581,36 +3646,217 @@ scenario(
           { file: "02-second.md", title: "the second one", checks: "unit" },
         ]);
         yield* approve("r-unmet", ["unit"]);
-        yield* rig.queueOutputs([BUILT, BUILT, BUILT]);
-        const status = yield* driven(
+        yield* rig.queueOutputs([
+          BUILT,
+          BUILT,
+          BUILT,
+          {
+            ...BUILT,
+            criteria: [
+              {
+                criterion: "**Counted.** Every registry is counted once.",
+                met: "test/count.test.ts",
+              },
+              { criterion: "**Named.** Each one is named in the log.", met: "test/log.test.ts" },
+            ],
+          },
+          BUILT,
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        yield* resumeImplementPark(
           { entry: shipped("implement"), runId: "r-unmet", input: { plan, ...FINISH } },
-          (run) =>
-            Effect.gen(function* () {
-              expect(yield* stallAsked(run, "01-first.md.criteria-unmet-1")).toHaveLength(1);
-              yield* run.answer("01-first.md.criteria-unmet-1", "Stop");
-              return yield* ended(run.status);
-            }),
+          "01-first.md: acceptance criteria still unanswered or unmet after 2 hand-backs, so no review starts",
+          { stop: { decision: "01-first.md.criteria-unmet-1", answer: "Stop" } },
         );
         yield* bin.restore();
-
-        expect(status.status).toBe("failed");
-        const why = outcomeText(status);
-        expect(why).toContain(
-          "01-first.md: acceptance criteria still unanswered or unmet after 2 hand-backs, so no review starts",
-        );
-        expect(why).toContain("**Named.** Each one is named in the log.");
-        expect(why).toContain("Continue with a follow-up Run to finish delivery.");
-        expect(why).toContain("Stop was answered");
         const sent = Arr.join(yield* prompts(), "\n");
         expect(sent).toContain("01-first.md.criteria-2.prompt.md");
-        expect(sent).not.toContain("review-1");
-        expect(sent).not.toContain("02-second.md.prompt.md");
+        expect(sent).toContain("01-first.md-2.prompt.md");
       }),
     ),
   120_000,
 );
 
 const AMENDED = "**Named.** Each one is named in the audit log.";
+
+scenario(
+  "implement parks on a disputed blocker and resumes its fix and review",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
+        const runId = "r-disputed-resume";
+        const finding = { severity: "blocker", title: "dependency unavailable", file: "db" };
+        const review = { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [finding] };
+        yield* approve(runId, ["unit"]);
+        const stopped = [
+          BUILT,
+          review,
+          {
+            verdict: "clean",
+            fixed: [],
+            disputed: [{ ...finding, reason: "upstream must release it" }],
+            checks: [],
+          },
+          review,
+        ];
+        yield* rig.queueOutputs([...stopped, OPENED]);
+        yield* resumeImplementPark(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          "disputed blocking finding",
+          {
+            beforeResume: rig
+              .queueOutputs([
+                ...stopped,
+                {
+                  verdict: "clean",
+                  fixed: [{ title: finding.title, file: finding.file }],
+                  disputed: [],
+                  checks: [],
+                },
+                CLEAN_SYNTHESIS,
+                OPENED,
+              ])
+              .pipe(Effect.orDie),
+          },
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "implement parks after its builder stops and resumes under a fresh operation",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        const plan = yield* planOf([
+          { file: "01-only.md", title: "only", checks: "unit", body: CRITERIA },
+        ]);
+        const runId = "r-builder-stopped";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([
+          BUILT,
+          { ...BUILT, findings: [{ severity: "blocker", title: "dependency unavailable" }] },
+          {
+            ...BUILT,
+            criteria: [
+              {
+                criterion: "**Counted.** Every registry is counted once.",
+                met: "test/count.test.ts",
+              },
+              { criterion: "**Named.** Each one is named in the log.", met: "test/log.test.ts" },
+            ],
+          },
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        yield* resumeImplementPark(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          "a criteria hand-back reported a blocker and changed nothing",
+          { stop: { decision: "build.criteria-stalled-1", answer: "Stop" } },
+        );
+        const launches = yield* launchesAt(dir, runId);
+        const first = Arr.findFirst(launches, (one) => one.operation === "build");
+        const again = Arr.findFirst(launches, (one) => one.operation === "build-2");
+        expect(Option.isSome(again)).toBe(true);
+        expect(Option.getOrThrow(again).agent).toBe(Option.getOrThrow(first).agent);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "implement parks when its spec is missing before review and resumes after it is written",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        const fs = yield* FileSystem.FileSystem;
+        const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
+        const runId = "r-missing-review-spec";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([null, CLEAN_SYNTHESIS, OPENED]);
+        yield* resumeImplementPark(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          `${plan}/SPEC.md cannot be read`,
+          {
+            beforePark: Effect.gen(function* () {
+              yield* reached(`${dir}/agents/${runId}/build.prompt.md`);
+              yield* fs.remove(`${plan}/SPEC.md`).pipe(Effect.orDie);
+              yield* fs
+                .writeFileString(`${dir}/agents/${runId}/build.json`, asJson(BUILT))
+                .pipe(Effect.orDie);
+            }).pipe(Effect.orDie),
+            beforeResume: Effect.gen(function* () {
+              expect(yield* prompts()).not.toContainEqual(
+                expect.stringContaining("review-1.prompt.md"),
+              );
+              yield* fs.writeFileString(`${plan}/SPEC.md`, "# Restored spec\n").pipe(Effect.orDie);
+            }).pipe(Effect.orDie),
+          },
+        );
+        expect(yield* asked(runId, "review-1")).toContain(plan);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "implement parks again with the new reason when a resumed round does not converge",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
+        const runId = "r-rally-reparked";
+        const blocking = (title: string) => ({
+          ...CLEAN_SYNTHESIS,
+          verdict: "findings",
+          findings: [{ severity: "blocker", title, file: "db" }],
+        });
+        const fixed = { verdict: "clean", fixed: [], disputed: [], checks: [] };
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([
+          BUILT,
+          blocking("first stop"),
+          fixed,
+          blocking("first stop"),
+          fixed,
+          blocking("new stop"),
+        ]);
+        yield* driven({ entry: shipped("implement"), runId, input: { plan, ...FINISH } }, (run) =>
+          Effect.gen(function* () {
+            const first = yield* until(
+              () => Effect.zip(run.status, parkedWhy(runId)),
+              ([got, why]) => got.status === "failed" || (got.status === "suspended" && why !== ""),
+            );
+            expect(first[0].status).toBe("suspended");
+            expect(first[1]).toContain("no_progress");
+            yield* run.resume;
+            const next = yield* until(
+              () => Effect.zip(run.status, parkedWhy(runId)),
+              ([got, why]) =>
+                got.status === "failed" ||
+                (got.status === "suspended" && why !== first[1] && why !== ""),
+            );
+            expect(next[0].status).toBe("suspended");
+            expect(next[1]).toContain("new stop");
+            expect(next[1]).not.toContain("follow-up Run");
+            expect(yield* prompts()).not.toContainEqual(expect.stringContaining("mr.prompt.md"));
+          }),
+        );
+      }),
+    ),
+  120_000,
+);
 
 scenario(
   "a criterion amended while its ticket is being built is handed back as it reads now",
@@ -4518,23 +4764,34 @@ scenario(
 );
 
 scenario(
-  "a Linear issue whose description the builder did not copy stops the work before any reviewer",
+  "a Linear issue whose description the builder did not copy parks before review and rereads it on resume",
   () =>
     runEffect(
       Effect.gen(function* () {
         yield* noMergeRequests;
         yield* repository();
         yield* approve("r-linear-uncopied", ["unit"]);
-        yield* rig.queueOutputs([BUILT]);
-        const stopped = yield* ran({
-          entry: shipped("implement"),
-          runId: "r-linear-uncopied",
-          input: { plan: "ABC-124", ...FINISH },
-        });
-        expect(stopped._tag).toBe("Failure");
-        expect(reasonOf(stopped)).toContain("plan/SPEC.md cannot be read");
-        expect(reasonOf(stopped)).toContain("Continue with a follow-up Run to finish delivery.");
-        expect(yield* prompts()).not.toContainEqual(expect.stringContaining("review-1"));
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+        yield* resumeImplementPark(
+          {
+            entry: shipped("implement"),
+            runId: "r-linear-uncopied",
+            input: { plan: "ABC-124", ...FINISH },
+          },
+          "plan/SPEC.md cannot be read",
+          {
+            beforeResume: Effect.gen(function* () {
+              const fs = yield* FileSystem.FileSystem;
+              expect(yield* prompts()).not.toContainEqual(expect.stringContaining("review-1"));
+              yield* fs
+                .makeDirectory(`${runDir(dir, "r-linear-uncopied")}/plan`, { recursive: true })
+                .pipe(Effect.orDie);
+              yield* fs
+                .writeFileString(`${runDir(dir, "r-linear-uncopied")}/plan/SPEC.md`, "# ABC-124\n")
+                .pipe(Effect.orDie);
+            }).pipe(Effect.orDie),
+          },
+        );
       }).pipe(withLinear),
     ),
   120_000,
