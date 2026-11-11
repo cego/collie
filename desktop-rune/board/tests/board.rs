@@ -481,8 +481,12 @@ fn a_press_selects_a_card_a_double_press_opens_it_and_escape_lets_it_go() {
 
     double_press(&mut runtime, "card-t1");
     assert_eq!(
-        *panes.lock().unwrap(),
-        [("inst-pc".into(), "r-t1".into(), "mk-pc".into())]
+        runtime.state.open_run,
+        Some(("inst-pc".into(), "r-t1".into()))
+    );
+    assert!(
+        panes.lock().unwrap().is_empty(),
+        "opening a card attaches no pane; Go to pane does"
     );
     assert_eq!(runtime.state.selected_key().as_deref(), Some("inst-pc:t1"));
     assert!(
@@ -1326,4 +1330,26 @@ fn a_toast_goes_after_five_seconds_unless_the_pointer_is_on_it() {
     assert!(!runtime.state.expire_toasts(70_000.0));
     assert!(runtime.state.expire_toasts(75_000.0));
     assert!(runtime.state.pages.machines.told.said.is_empty());
+}
+
+#[test]
+fn go_to_pane_opens_a_cards_record_on_its_terminal() {
+    let harness = Harness::new();
+    let mut app = app(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![task("t1", "One", "active", json!({}))],
+        )],
+    );
+    let panes = record_panes(&mut app);
+    app.do_action(
+        "inst-pc:t1",
+        &collie_desktop_board::board::cards::CardAction::GoToTab,
+    );
+    assert_eq!(app.record_tab(), "terminal");
+    assert_eq!(
+        *panes.lock().unwrap(),
+        [("inst-pc".into(), "r-t1".into(), "mk-pc".into())]
+    );
 }

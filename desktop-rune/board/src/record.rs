@@ -203,8 +203,8 @@ pub struct Records {
     pub terminal_size: Option<(u16, u16)>,
     /// What Open in herdr did, or why it could not.
     pub terminal_said: Option<String>,
-    /// Whether the record a card opens now opens on Flow rather than on its terminal.
-    to_flow: bool,
+    /// The tab the record a card opens now opens on; its first tab when none.
+    open_on: Option<&'static str>,
     images: Option<rune::ImageCache>,
 }
 
@@ -239,24 +239,35 @@ fn facts_of(record: &Record, live: bool, flow: bool, mr: Option<String>) -> TabF
 }
 
 impl App {
-    /// Goes to a Run's pane: its record, on Terminal while its Machine is reached; on Flow for
-    /// a card's Flow strip, which never attaches to the agent.
+    /// Goes to a Run's pane: its record, on Terminal.
     pub fn go_to_pane(&mut self, installation: String, run: String, machine: String) {
-        let tab = if self.record.to_flow {
-            "flow"
-        } else {
-            "terminal"
-        };
-        self.open_record(installation, run, machine, Some(tab));
+        self.open_record(installation, run, machine, Some("terminal"));
+    }
+
+    /// Opens a card's record as the gesture that opened it asked: its first tab, unless Go to
+    /// pane or the Flow strip asked for another.
+    pub fn open_placed(&mut self, installation: String, run: String, machine: String) {
+        let tab = self.record.open_on;
+        self.open_record(installation, run, machine, tab);
     }
 
     /// Opens a card's record on its Flow, the Run's active Step chosen, its details shown and
     /// scrolled to; the card is chosen and seen as its name opens it.
     pub fn open_card_at_flow(&mut self, key: &str) {
-        self.record.to_flow = true;
+        self.record.open_on = Some("flow");
         self.open_card(key);
-        self.record.to_flow = false;
+        self.record.open_on = None;
         self.show_active_step();
+    }
+
+    /// Opens a card's record on its Terminal, or shows that tab if the record is open.
+    pub fn open_card_at_pane(&mut self, key: &str) {
+        self.record.open_on = Some("terminal");
+        self.open_card(key);
+        self.record.open_on = None;
+        if self.record.open.is_some() && self.record_tab() != "terminal" {
+            self.show_tab("terminal");
+        }
     }
 
     /// Shows Flow with the Run's active Step chosen, now or once the Flow is read.

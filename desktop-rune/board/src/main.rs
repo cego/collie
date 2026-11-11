@@ -322,7 +322,9 @@ fn main() {
         on_key: Some(collie_desktop_board::shell::on_key),
         ..AppSpec::new("Collie", (1280.0, 860.0), App::default, view)
     })
-    .on_frame_drawn(marks(&client));
+    .on_frame_drawn(marks(&client))
+    // A Shift pressed alone reaches the Diff, which extends a selection by a Shift-press.
+    .modifier_keys();
     let mut app = app;
     let handle = app.handle();
     let poster = std::sync::Mutex::new(handle.clone());

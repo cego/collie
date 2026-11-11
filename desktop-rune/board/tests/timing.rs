@@ -141,6 +141,9 @@ fn a_key_sent_to_the_pane_and_the_frame_after_its_output_mark_the_echo() {
     let mut runtime = runtime();
     frame_drawn(&runtime, 10.0);
     open(&mut runtime, "card-b2", 100.0);
+    // A card opens on its first tab; its pane is on Terminal.
+    runtime.update(|app, _| app.show_tab("terminal"));
+    runtime.frame(150.0);
     runtime.update(|board, _| board.terminal.as_ref().unwrap().keyed_at.set(Some(600.0)));
     assert_eq!(
         frame_drawn(&runtime, 605.0),
@@ -158,6 +161,9 @@ fn keys_before_presentation_keep_the_first_timestamp_until_its_echo_is_drawn() {
     let mut runtime = runtime();
     frame_drawn(&runtime, 10.0);
     open(&mut runtime, "card-b2", 100.0);
+    // A card opens on its first tab; its pane is on Terminal.
+    runtime.update(|app, _| app.show_tab("terminal"));
+    runtime.frame(150.0);
     tap(&mut runtime, "terminal-grid", 200.0);
     let key = || rune::KeyEvent {
         key: rune::Key::Text("a".into()),

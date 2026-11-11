@@ -287,7 +287,7 @@ fn the_conversation_is_read_again_when_it_changes_once_no_reply_streams() {
 }
 
 #[test]
-fn pressing_the_card_a_message_is_about_opens_its_runs_pane() {
+fn pressing_the_card_a_message_is_about_opens_its_runs_record_not_its_pane() {
     let asked: Arc<Mutex<Vec<(TerminalPayload, String)>>> = Arc::default();
     let mut board = board();
     let said = asked.clone();
@@ -298,10 +298,14 @@ fn pressing_the_card_a_message_is_about_opens_its_runs_pane() {
     let mut window = Window::open(board);
     window.answer("transcript", conversation());
     window.tap("chat-about");
-    let opened = asked.lock().unwrap().clone();
-    assert_eq!(opened.len(), 1, "{opened:?}");
-    assert_eq!(opened[0].0.installation, "inst-build");
-    assert_eq!(opened[0].0.run_id, "r1");
+    assert_eq!(
+        window.rt.state.open_run,
+        Some(("inst-build".into(), "r1".into()))
+    );
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "the record opens on its first tab; only Go to pane attaches"
+    );
 }
 
 #[test]

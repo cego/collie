@@ -127,7 +127,7 @@ fn keys(runtime: &Runtime<App>) -> Vec<String> {
 }
 
 #[test]
-fn pressing_a_card_goes_to_its_runs_pane_and_back_leaves_it_for_the_board() {
+fn a_cards_record_reaches_its_pane_only_on_terminal_and_back_leaves_it_for_the_board() {
     let asked: Arc<Mutex<Vec<(TerminalPayload, String)>>> = Arc::default();
     let mut board = board();
     let said = asked.clone();
@@ -146,6 +146,12 @@ fn pressing_a_card_goes_to_its_runs_pane_and_back_leaves_it_for_the_board() {
     );
     runtime.frame(0.0);
     open(&mut runtime, "card-b2", 100.0);
+    assert!(
+        asked.lock().unwrap().is_empty(),
+        "opening a card attaches no pane"
+    );
+    runtime.update(|app, _| app.show_tab("terminal"));
+    runtime.frame(200.0);
     let asked_for = asked.lock().unwrap().clone();
     assert_eq!(
         asked_for,

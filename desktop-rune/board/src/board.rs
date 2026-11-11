@@ -512,7 +512,7 @@ impl App {
                     );
                 }
                 self.board.opened = Some(key);
-                self.go_to_pane(installation, run, machine);
+                self.open_placed(installation, run, machine);
             }
         }
     }
@@ -678,7 +678,7 @@ impl App {
         match action {
             CardAction::GoToTab => {
                 if as_of.is_none() {
-                    self.open_card(key);
+                    self.open_card_at_pane(key);
                 }
             }
             CardAction::CheckOutput => {

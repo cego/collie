@@ -105,7 +105,7 @@ fn with_diff() -> Value {
 }
 
 #[test]
-fn a_card_opens_its_runs_record_on_its_terminal_streaming_the_record_until_back() {
+fn a_card_opens_its_runs_record_on_its_first_tab_never_its_terminal_streaming_until_back() {
     let harness = Harness::<App>::new();
     let mut runtime = opened(&harness);
     // Build box's board is a saved one, so its card opens by name, not by a double press.
@@ -116,7 +116,11 @@ fn a_card_opens_its_runs_record_on_its_terminal_streaming_the_record_until_back(
         [json!({"installation": "inst-build", "runId": "r1"})]
     );
     let shown = keys(&runtime);
-    assert!(shown.iter().any(|k| k == "terminal-grid"), "{shown:?}");
+    assert!(!shown.iter().any(|k| k == "terminal-grid"), "{shown:?}");
+    assert!(
+        runtime.state.terminal.is_none(),
+        "only Go to pane attaches to the agent"
+    );
     assert!(
         shown.iter().any(|k| k == "record-standing"),
         "it says it is reading: {shown:?}"
@@ -145,7 +149,7 @@ fn a_card_opens_its_runs_record_on_its_terminal_streaming_the_record_until_back(
             "tab-facts"
         ]
     );
-    let states = named(&runtime, "tab-terminal")["states"].clone();
+    let states = named(&runtime, "tab-summary")["states"].clone();
     assert!(
         states
             .as_array()
