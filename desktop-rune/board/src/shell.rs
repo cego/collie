@@ -80,6 +80,8 @@ pub struct Nav {
     pub usage_asked: Option<f64>,
     /// The Machines live when Usage was last asked for.
     pub usage_asked_of: Vec<String>,
+    /// Brings the chat's own window to the front while the chat is popped out of this one.
+    pub chat_window: Option<Box<dyn Fn()>>,
 }
 
 impl Default for Nav {
@@ -91,6 +93,7 @@ impl Default for Nav {
             chat_saved: None,
             usage_asked: None,
             usage_asked_of: Vec::new(),
+            chat_window: None,
         }
     }
 }
@@ -112,7 +115,15 @@ impl App {
         }
     }
 
+    /// Shows or hides the chat beside the board; while it is in its own window, brings that
+    /// window forward instead.
     pub fn toggle_chat(&mut self) {
+        if self.chat.popped {
+            if let Some(front) = &self.nav.chat_window {
+                front();
+            }
+            return;
+        }
         self.nav.chat.toggle();
     }
 
@@ -242,7 +253,9 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
     }
     let sidebar = sidebar.footer(nav_row(app, Page::Settings, k)).build(k);
     let chat_toggle = IconButton::new(&icons::CHAT)
-        .label(if app.nav.chat.is_open() {
+        .label(if app.chat.popped {
+            "Show the chat's window"
+        } else if app.nav.chat.is_open() {
             "Hide the chat"
         } else {
             "Show the chat"

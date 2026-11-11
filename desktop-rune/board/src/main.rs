@@ -156,7 +156,9 @@ fn chat_window(app: &mut rune::App<App>, handle: &AppHandle<App>, client: &Clien
         }));
     });
     let shows = alone.clone();
+    let front = alone.clone();
     handle.update(move |board, _| {
+        board.nav.chat_window = Some(Box::new(move || front.open()));
         board.chat.pop = Some(Box::new(move |out| {
             if out {
                 shows.update(|a, _| chat_window::opened(a));

@@ -444,10 +444,11 @@ fn alerts(app: &App, k: &Kit) -> Vec<El> {
             LostState::NoCollie | LostState::UpdateDesktop => &icons::WARNING,
         };
         let onboard = (lost.state == LostState::NoCollie).then(|| {
+            let machine = profile.to_string();
             Button::new("Onboard")
                 .variant(ButtonVariant::Outline)
                 .control_size(ControlSize::Small)
-                .on_press(|app: &mut App| app.open_page(Page::Machines))
+                .on_press(move |app: &mut App| app.onboard_on(&machine, None))
                 .build(k)
                 .key(format!("onboard-{profile}"))
         });

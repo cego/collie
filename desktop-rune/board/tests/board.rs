@@ -328,7 +328,7 @@ fn a_flock_that_has_heard_nothing_says_it_is_connecting_and_an_empty_one_says_so
 }
 
 #[test]
-fn a_machine_without_collie_is_said_with_onboard_which_opens_machines_and_one_out_of_reach_has_no_action()
+fn a_machine_without_collie_is_said_with_onboard_which_onboards_it_and_one_out_of_reach_has_no_action()
  {
     let harness = Harness::new();
     let lost = |profile: &str, name: &str, state: &str| {
@@ -348,7 +348,14 @@ fn a_machine_without_collie_is_said_with_onboard_which_opens_machines_and_one_ou
     assert!(node(&runtime, "lost-p-lap").is_some());
     assert!(node(&runtime, "onboard-p-lap").is_none());
     press(&mut runtime, "onboard-p-vm");
-    assert_eq!(runtime.state.nav.page, Page::Machines);
+    let asked = harness.fake.asked_of("onboard");
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0]["profile"], "p-vm");
+    assert_eq!(
+        runtime.state.nav.page,
+        Page::Board,
+        "the onboarding shows over the board"
+    );
 }
 
 #[test]

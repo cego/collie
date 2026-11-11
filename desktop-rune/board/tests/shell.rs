@@ -265,7 +265,10 @@ fn the_toolbar_says_each_accounts_busiest_window_and_opens_the_usage_page() {
     );
     harness.settle(&mut app);
     let mut runtime = runtime(app);
-    assert_eq!(texts(&runtime, "toolbar-usage-"), ["Claude 72%", "ChatGPT out"]);
+    assert_eq!(
+        texts(&runtime, "toolbar-usage-"),
+        ["Claude 72%", "ChatGPT out"]
+    );
     let usage = runtime
         .elements()
         .iter()
@@ -363,4 +366,26 @@ fn keyed<'a>(node: &'a Value, key: &str) -> Option<&'a Value> {
         .into_iter()
         .flatten()
         .find_map(|child| keyed(child, key))
+}
+
+#[test]
+fn while_the_chat_is_in_its_own_window_the_toolbar_brings_that_window_forward() {
+    let mut app = App::default();
+    let fronted = std::sync::Arc::new(std::sync::Mutex::new(0));
+    let count = fronted.clone();
+    app.nav.chat_window = Some(Box::new(move || *count.lock().unwrap() += 1));
+    app.chat.popped = true;
+    let mut runtime = runtime(app);
+    let toggle = runtime
+        .elements()
+        .iter()
+        .find(|e| e.key.as_deref() == Some("open-chat"))
+        .and_then(|e| e.label.clone());
+    assert_eq!(toggle.as_deref(), Some("Show the chat's window"));
+    tap(&mut runtime, "open-chat", 100.0);
+    assert_eq!(*fronted.lock().unwrap(), 1);
+    assert!(
+        !runtime.state.nav.chat.is_open(),
+        "the pane beside the board stays closed"
+    );
 }
