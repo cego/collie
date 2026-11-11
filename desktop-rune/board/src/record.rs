@@ -134,6 +134,8 @@ pub struct Record {
     pub opening: Vec<String>,
     /// The run or link of the selected Step the inspector shows, by id.
     pub entry: Option<String>,
+    /// The record's drawn width, which decides whether the drafts sit beside a tab or under it.
+    pub width: f32,
 }
 
 impl Record {
@@ -159,6 +161,7 @@ impl Record {
             whole_log: false,
             opening: Vec::new(),
             entry: None,
+            width: 0.0,
         }
     }
 
@@ -372,7 +375,12 @@ impl App {
         tabs::tab_shown(&self.record_tabs(), chosen)
     }
 
+    /// Shows `tab`; a comment box or a draft's edit open on the tab left closes, saving nothing.
     pub fn show_tab(&mut self, tab: &str) {
+        if self.record_tab() != tab {
+            self.close_comment();
+            self.close_diff_comment();
+        }
         if let Some(record) = &mut self.record.open {
             record.chosen = Some(tab.into());
         }

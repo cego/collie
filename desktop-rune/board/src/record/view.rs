@@ -290,23 +290,87 @@ pub fn anchor_said(anchor: &Anchor) -> String {
     }
 }
 
-/// A draft as the diff draws it under its line.
-pub fn draft_note(draft: &Draft, k: &Kit) -> El {
+/// A draft as the diff draws it under its line, with Edit and Remove; being edited, its words.
+pub fn draft_note(app: &App, draft: &Draft, k: &Kit) -> El {
+    let editing = app
+        .record
+        .open
+        .as_ref()
+        .filter(|r| r.editing.as_deref() == Some(draft.id.as_str()));
+    let body = match editing {
+        Some(record) => draft_editor(record, &draft.id, k),
+        None => text(draft.text.clone())
+            .font(k.ty.small)
+            .color(k.c.text_base)
+            .wrap()
+            .grow(1.0)
+            .min_w(0.0),
+    };
+    let (edit, gone) = (draft.id.clone(), draft.id.clone());
     row()
         .key(format!("note-{}", draft.id))
         .gap(8.0)
         .padding(8.0)
         .w_full()
+        .items_start()
         .radius(k.radius.sm)
         .fill(k.c.layer_03)
+        .on_press(|_: &mut App| {})
         .child(text("Draft").font(k.ty.small_medium).color(k.c.info.icon))
+        .child(col().gap(4.0).grow(1.0).min_w(0.0).child(body).children(editing.is_none().then(|| {
+            row()
+                .gap(2.0)
+                .ml(-10.0)
+                .child(
+                    Button::new("Edit")
+                        .variant(ButtonVariant::Ghost)
+                        .on_press(move |app: &mut App| app.edit_draft(&edit))
+                        .build(k)
+                        .key(format!("note-edit-{}", draft.id)),
+                )
+                .child(
+                    Button::new("Remove")
+                        .variant(ButtonVariant::Ghost)
+                        .on_press(move |app: &mut App| app.remove_draft(&gone))
+                        .build(k)
+                        .key(format!("note-remove-{}", draft.id)),
+                )
+        })))
+}
+
+/// A draft's words open to edit: Save, or Escape and Cancel to leave them as they were.
+fn draft_editor(record: &Record, id: &str, k: &Kit) -> El {
+    col()
+        .gap(6.0)
+        .w_full()
         .child(
-            text(draft.text.clone())
-                .font(k.ty.small)
-                .color(k.c.text_base)
-                .wrap()
-                .grow(1.0)
-                .min_w(0.0),
+            TextInput::new(&record.comment)
+                .label("Edit the comment")
+                .on_edit(|app: &mut App| {
+                    &mut app.record.open.as_mut().expect("an open record").comment
+                })
+                .on_submit(|app: &mut App, _| app.save_draft_edit())
+                .on_key(|app: &mut App, ev: &KeyEvent, tx: &mut Tx| app.comment_key(ev, tx))
+                .build(k)
+                .key(format!("draft-text-{id}")),
+        )
+        .child(
+            row()
+                .gap(8.0)
+                .child(
+                    Button::new("Save")
+                        .variant(ButtonVariant::Submit)
+                        .on_press(App::save_draft_edit)
+                        .build(k)
+                        .key(format!("draft-save-{id}")),
+                )
+                .child(
+                    Button::new("Cancel")
+                        .variant(ButtonVariant::Ghost)
+                        .on_press(App::close_comment)
+                        .build(k)
+                        .key(format!("draft-cancel-{id}")),
+                ),
         )
 }
 
@@ -316,6 +380,9 @@ pub fn view(app: &App, k: &Kit) -> Option<El> {
     let tabs = app.record_tabs();
     let shown = tabs::tab_shown(&tabs, record.chosen.as_deref());
     let keys = |app: &mut App, ev: &KeyEvent, tx: &mut Tx| {
+        if app.comment_key(ev, tx) {
+            return true;
+        }
         let Key::Text(typed) = &ev.key else {
             return false;
         };
@@ -376,6 +443,13 @@ pub fn view(app: &App, k: &Kit) -> Option<El> {
             .grow(1.0)
             .min_h(0.0)
             .min_w(0.0)
+            .on_layout(|app: &mut App, rect: [f32; 4]| {
+                if let Some(record) = &mut app.record.open
+                    && (record.width - rect[2]).abs() > 0.5
+                {
+                    record.width = rect[2];
+                }
+            })
             .on_key(keys)
             .child(header(app, record, k))
             .children(standing(app, record, k))
@@ -1741,8 +1815,69 @@ impl App {
         };
         let drafts = self.record.drafts.entry(record.key()).or_default();
         *drafts = add_draft(drafts, draft);
-        record.comment.clear();
+        record.comment = rune::edit::TextEdit::default();
         record.anchor = None;
+    }
+
+    /// A span selected in a plan file opens the comment box on it, focused, keeping what was
+    /// typed; a press that selects nothing closes an empty one.
+    pub fn choose_plan_span(&mut self, anchor: Option<Anchor>) {
+        let Some(record) = &mut self.record.open else {
+            return;
+        };
+        match anchor {
+            Some(anchor) => {
+                record.anchor = Some(anchor);
+                record.editing = None;
+                record.comment.focused = true;
+            }
+            None if record.comment.text.trim().is_empty() => record.anchor = None,
+            None => {}
+        }
+    }
+
+    /// Closes the plan's comment box and any draft being edited, saving nothing.
+    pub fn close_comment(&mut self) {
+        let Some(record) = &mut self.record.open else {
+            return;
+        };
+        if record.anchor.is_none() && record.editing.is_none() {
+            return;
+        }
+        record.anchor = None;
+        record.editing = None;
+        record.comment = rune::edit::TextEdit::default();
+    }
+
+    /// Escape closes a comment box or a draft's edit; Shift and Cmd-C go to the diff, which
+    /// extends a selection by a Shift-press and copies its lines.
+    pub fn comment_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
+        let on_diff = self.record_tab() == "diff";
+        if on_diff
+            && (matches!(ev.key, Key::Modifier { .. }) || ev.is_command('c'))
+            && let Some(tab) = &mut self.diff
+        {
+            return tab.state.key(ev, tx);
+        }
+        if ev.key != Key::Escape {
+            return false;
+        }
+        let editing = self
+            .record
+            .open
+            .as_ref()
+            .is_some_and(|r| r.anchor.is_some() || r.editing.is_some());
+        let writing = on_diff
+            && self
+                .diff
+                .as_ref()
+                .is_some_and(|t| t.writing.is_some() || t.state.selection().is_some());
+        if editing {
+            self.close_comment();
+        } else if writing {
+            self.close_diff_comment();
+        }
+        editing || writing
     }
 
     /// Writes the composer's words into the draft being edited.
@@ -1755,15 +1890,44 @@ impl App {
         };
         let said = record.comment.text.trim().to_string();
         let drafts = self.record.drafts.entry(record.key()).or_default();
-        *drafts = edit_draft(drafts, &id, &said);
-        record.comment.clear();
+        // A draft emptied is removed, as it would say nothing.
+        *drafts = if said.is_empty() {
+            remove_draft(drafts, &id)
+        } else {
+            edit_draft(drafts, &id, &said)
+        };
+        record.comment = rune::edit::TextEdit::default();
         self.refresh_annotations();
     }
 
-    pub fn remove_draft(&mut self, id: &str) {
-        let Some(record) = &self.record.open else {
+    /// Opens a draft's words to edit, focused.
+    pub fn edit_draft(&mut self, id: &str) {
+        let Some(record) = &mut self.record.open else {
             return;
         };
+        let Some(said) = self
+            .record
+            .drafts
+            .get(&record.key())
+            .and_then(|d| d.iter().find(|d| d.id == id))
+            .map(|d| d.text.clone())
+        else {
+            return;
+        };
+        record.anchor = None;
+        record.editing = Some(id.into());
+        record.comment = rune::edit::TextEdit::new(said);
+        record.comment.focused = true;
+    }
+
+    pub fn remove_draft(&mut self, id: &str) {
+        let Some(record) = &mut self.record.open else {
+            return;
+        };
+        if record.editing.as_deref() == Some(id) {
+            record.editing = None;
+            record.comment = rune::edit::TextEdit::default();
+        }
         let drafts = self.record.drafts.entry(record.key()).or_default();
         *drafts = remove_draft(drafts, id);
         self.refresh_annotations();
@@ -1894,16 +2058,11 @@ fn plan_tab(app: &App, record: &Record, k: &Kit) -> El {
                     if change.dragging() {
                         return;
                     }
-                    let Some(record) = &mut app.record.open else {
-                        return;
-                    };
                     let selected = change
                         .selection()
                         .map(|s| s.text().to_string())
                         .unwrap_or_default();
-                    if let Some(anchor) = plan_anchor(&at, &selected) {
-                        record.anchor = Some(anchor);
-                    }
+                    app.choose_plan_span(plan_anchor(&at, &selected));
                 })
         }
     };
@@ -1911,36 +2070,7 @@ fn plan_tab(app: &App, record: &Record, k: &Kit) -> El {
         .anchor
         .as_ref()
         .filter(|_| record.editing.is_none())
-        .map(|anchor| {
-            row()
-                .key("plan-composer")
-                .gap(8.0)
-                .center_y()
-                .w_full()
-                .child(
-                    text(anchor_said(anchor))
-                        .font(k.ty.small)
-                        .color(k.c.text_muted),
-                )
-                .child(
-                    TextInput::new(&record.comment)
-                        .placeholder("Comment on the selection")
-                        .label("Comment on the selection")
-                        .on_edit(|app: &mut App| {
-                            &mut app.record.open.as_mut().expect("an open record").comment
-                        })
-                        .on_submit(|app: &mut App, _| app.add_plan_comment())
-                        .build(k)
-                        .key("plan-comment")
-                        .grow(1.0),
-                )
-                .child(
-                    Button::new("Add comment")
-                        .on_press(App::add_plan_comment)
-                        .build(k)
-                        .key("add-plan-comment"),
-                )
-        });
+        .map(|anchor| plan_composer(record, anchor, k));
     let content = col()
         .gap(8.0)
         .grow(1.0)
@@ -1962,45 +2092,119 @@ fn plan_tab(app: &App, record: &Record, k: &Kit) -> El {
     )
 }
 
+/// The comment box on a span of a plan file: where it is, its quote, the words, Comment and
+/// Cancel. Enter saves it and Escape closes it.
+fn plan_composer(record: &Record, anchor: &Anchor, k: &Kit) -> El {
+    let quote = match anchor {
+        Anchor::Plan { quote, .. } => quote.trim().to_string(),
+        Anchor::Diff { .. } => String::new(),
+    };
+    let ready = !record.comment.text.trim().is_empty();
+    col()
+        .key("plan-composer")
+        .role("group")
+        .label(anchor_said(anchor).replacen("On ", "Comment on ", 1))
+        .gap(8.0)
+        .padding(10.0)
+        .w_full()
+        .radius(k.radius.md)
+        .fill(k.c.layer_02)
+        .border(1.0, k.c.border_base)
+        .child(
+            text(anchor_said(anchor).replacen("On ", "Comment on ", 1))
+                .font(k.ty.small)
+                .color(k.c.text_muted),
+        )
+        .children((!quote.is_empty()).then(|| {
+            row()
+                .gap(8.0)
+                .w_full()
+                .child(rune::el().w(2.0).self_stretch().fill(k.c.border_strong))
+                .child(
+                    text(quote)
+                        .font(k.ty.small)
+                        .color(k.c.text_muted)
+                        .wrap()
+                        .max_lines(3)
+                        .grow(1.0)
+                        .min_w(0.0),
+                )
+        }))
+        .child(
+            TextInput::new(&record.comment)
+                .placeholder("Say what should change")
+                .label("Comment on the selection")
+                .on_edit(|app: &mut App| {
+                    &mut app.record.open.as_mut().expect("an open record").comment
+                })
+                .on_submit(|app: &mut App, _| app.add_plan_comment())
+                .on_key(|app: &mut App, ev: &KeyEvent, tx: &mut Tx| app.comment_key(ev, tx))
+                .build(k)
+                .key("plan-comment")
+                .w_full(),
+        )
+        .child(
+            row()
+                .gap(8.0)
+                .child(
+                    Button::new("Comment")
+                        .variant(ButtonVariant::Submit)
+                        .disabled(!ready)
+                        .on_press(App::add_plan_comment)
+                        .build(k)
+                        .key("add-plan-comment"),
+                )
+                .child(
+                    Button::new("Cancel")
+                        .variant(ButtonVariant::Ghost)
+                        .on_press(App::close_comment)
+                        .build(k)
+                        .key("cancel-plan-comment"),
+                ),
+        )
+}
+
+/// The record's width from which the drafts sit beside the tab they comment on.
+pub(super) const BESIDE_W: f32 = 1100.0;
+
 /// A tab with the Run's review comment drafts beside it, while it has any.
 fn with_drafts(app: &App, record: &Record, tab: El, k: &Kit) -> El {
     let drafts = app.record.drafts_of(record);
     if drafts.is_empty() {
         return tab;
     }
+    let tab = col().grow(1.0).min_w(0.0).min_h(0.0).child(tab);
+    let panel = review_panel(app, record, drafts, k);
+    // Too narrow to keep the tab readable beside them, the drafts sit under it.
+    if record.width > 0.0 && record.width < BESIDE_W {
+        return col()
+            .gap(12.0)
+            .grow(1.0)
+            .min_h(0.0)
+            .w_full()
+            .child(tab)
+            .child(panel.w_full().h(180.0));
+    }
     row()
         .gap(12.0)
         .grow(1.0)
         .min_h(0.0)
         .w_full()
-        .child(col().grow(1.0).min_w(0.0).min_h(0.0).child(tab))
-        .child(review_panel(app, record, drafts, k))
+        .child(tab)
+        .child(panel.w(300.0))
 }
 
 /// The drafts, who they go to, and Send: one message, as ADR-0051 has it.
 fn review_panel(app: &App, record: &Record, drafts: &[Draft], k: &Kit) -> El {
+    // A diff's draft is edited under its line while the Diff is shown.
+    let inline = |draft: &Draft| {
+        matches!(draft.anchor, Anchor::Diff { .. }) && app.record_tab() == "diff"
+    };
     let rows = drafts.iter().map(|draft| {
-        let (edit, gone, said) = (draft.id.clone(), draft.id.clone(), draft.text.clone());
+        let (edit, gone) = (draft.id.clone(), draft.id.clone());
         let editing = record.editing.as_deref() == Some(draft.id.as_str());
-        let body = if editing {
-            col()
-                .gap(6.0)
-                .child(
-                    TextArea::new(&record.comment)
-                        .label("Edit the comment")
-                        .rows(3)
-                        .on_edit(|app: &mut App| {
-                            &mut app.record.open.as_mut().expect("an open record").comment
-                        })
-                        .build(k)
-                        .key(format!("draft-text-{}", draft.id)),
-                )
-                .child(
-                    Button::new("Save")
-                        .on_press(App::save_draft_edit)
-                        .build(k)
-                        .key(format!("draft-save-{}", draft.id)),
-                )
+        let body = if editing && !inline(draft) {
+            draft_editor(record, &draft.id, k)
         } else {
             text(draft.text.clone())
                 .font(k.ty.small)
@@ -2030,12 +2234,7 @@ fn review_panel(app: &App, record: &Record, drafts: &[Draft], k: &Kit) -> El {
                     .child(
                         Button::new("Edit")
                             .variant(ButtonVariant::Ghost)
-                            .on_press(move |app: &mut App| {
-                                if let Some(record) = &mut app.record.open {
-                                    record.editing = Some(edit.clone());
-                                    record.comment = rune::edit::TextEdit::new(said.clone());
-                                }
-                            })
+                            .on_press(move |app: &mut App| app.edit_draft(&edit))
                             .build(k)
                             .key(format!("draft-edit-{}", draft.id)),
                     )
@@ -2096,7 +2295,6 @@ fn review_panel(app: &App, record: &Record, drafts: &[Draft], k: &Kit) -> El {
         .label("Review comments")
         .gap(8.0)
         .padding(12.0)
-        .w(300.0)
         .min_h(0.0)
         .radius(k.radius.md)
         .fill(k.c.layer_02)

@@ -8,7 +8,9 @@ use collie_desktop_protocol::generated::{File, FileStatus};
 use rune::edit::TextEdit;
 use rune::{El, Tx, col, icon, row, text};
 use rune_kit::diff::FileStatus as Drawn;
-use rune_kit::diff::{Annotation, DiffMode, DiffState, DiffView, FileDiff, LineRef, parse};
+use rune_kit::diff::{
+    Annotation, DiffMode, DiffState, DiffView, FileDiff, LineRange, LineRef, parse,
+};
 use rune_kit::{Button, ButtonVariant, Checkbox, Kit, SegmentedControl, TextInput};
 use std::collections::{HashMap, HashSet};
 
@@ -293,7 +295,12 @@ pub struct DiffTab {
     pub reading: HashSet<String>,
     /// The file read last before the tab was left, which it opens on again.
     pub left_at: Option<String>,
+    /// The lines the comment box is open on, drawn under the last of them.
+    pub writing: Option<Anchor>,
 }
+
+/// The annotation id of the comment box being written.
+pub const WRITING: &str = "writing";
 
 impl DiffTab {
     pub fn new(files: Vec<FileDiff>) -> DiffTab {
@@ -309,6 +316,7 @@ impl DiffTab {
             queued: Vec::new(),
             reading: HashSet::new(),
             left_at: None,
+            writing: None,
         }
     }
 
@@ -326,6 +334,7 @@ impl DiffTab {
             tab.filter = was.filter;
             tab.comment = was.comment;
             tab.left_at = was.left_at;
+            tab.writing = was.writing;
             tab.state.set_mode(was.state.mode());
             tab.state.set_wrap(was.state.wrap());
         }
@@ -348,23 +357,21 @@ impl DiffTab {
             .map(|f| f.path().to_string())
     }
 
-    /// Draws `drafts` at the last line each is about.
+    /// Draws `drafts` at the last line each is about, and the comment box under its lines.
     pub fn annotate(&mut self, drafts: &[Draft]) {
+        let at = |anchor: &Anchor, id: &str| match anchor {
+            Anchor::Diff {
+                path, side, last, ..
+            } => {
+                let file = self.state.file_index(path)?;
+                Some(Annotation::new(file, LineRef::new(*side, *last), id))
+            }
+            Anchor::Plan { .. } => None,
+        };
         let notes = drafts
             .iter()
-            .filter_map(|draft| match &draft.anchor {
-                Anchor::Diff {
-                    path, side, last, ..
-                } => {
-                    let file = self.state.file_index(path)?;
-                    Some(Annotation::new(
-                        file,
-                        LineRef::new(*side, *last),
-                        draft.id.clone(),
-                    ))
-                }
-                Anchor::Plan { .. } => None,
-            })
+            .filter_map(|draft| at(&draft.anchor, &draft.id))
+            .chain(self.writing.as_ref().and_then(|a| at(a, WRITING)))
             .collect();
         self.state.set_annotations(notes);
     }
@@ -566,7 +573,17 @@ impl App {
                 _ => drawn.push(unread(file)),
             }
         }
+        // Setting the files lets go of the lines selected; they are chosen again where kept.
+        let selected = tab.state.selection().and_then(|range| {
+            let path = tab.state.files().get(range.file)?.path().to_string();
+            Some((path, range))
+        });
         tab.state.set_files(drawn);
+        if let Some((path, range)) = selected
+            && let Some(file) = tab.state.file_index(&path)
+        {
+            tab.state.set_selection(Some(LineRange { file, ..range }));
+        }
         tab.built = true;
         tab.apply_choices(&read);
         let drafts = self
@@ -594,6 +611,7 @@ impl App {
         if let Some(tab) = &mut self.diff {
             tab.left_at = tab.active();
         }
+        self.close_diff_comment();
     }
 
     /// Opens or closes a folder of the tree.
@@ -619,13 +637,59 @@ impl App {
         }
     }
 
+    /// Lines chosen on the diff's numbers or its "+": the comment box opens under them,
+    /// focused, keeping what was typed; none chosen closes it.
+    pub fn choose_diff_lines(&mut self, range: Option<LineRange>) {
+        let Some(tab) = &mut self.diff else { return };
+        tab.state.set_selection(range);
+        match diff_anchor(&tab.state) {
+            Some(anchor) => {
+                tab.writing = Some(anchor);
+                tab.comment.focused = true;
+            }
+            None => {
+                tab.writing = None;
+                tab.comment = TextEdit::default();
+            }
+        }
+        self.diff_drafts_changed();
+    }
+
+    /// Closes the diff's comment box, saving nothing, and lets go of its lines.
+    pub fn close_diff_comment(&mut self) {
+        let Some(tab) = &mut self.diff else { return };
+        if tab.writing.is_none() && tab.state.selection().is_none() {
+            return;
+        }
+        tab.writing = None;
+        tab.comment = TextEdit::default();
+        tab.state.set_selection(None);
+        self.diff_drafts_changed();
+    }
+
+    /// A press elsewhere in the diff closes an empty comment box; typed words keep it open.
+    pub fn diff_pressed_elsewhere(&mut self) {
+        if self
+            .diff
+            .as_ref()
+            .is_some_and(|t| t.writing.is_some() && t.comment.text.trim().is_empty())
+        {
+            self.close_diff_comment();
+        }
+    }
+
     /// Makes the comment written a draft about the lines selected.
     pub fn add_diff_comment(&mut self) {
         let (Some(record), Some(tab)) = (&self.record.open, &mut self.diff) else {
             return;
         };
         let said = tab.comment.text.trim().to_string();
-        let Some(anchor) = diff_anchor(&tab.state).filter(|_| !said.is_empty()) else {
+        let Some(anchor) = tab
+            .writing
+            .clone()
+            .or_else(|| diff_anchor(&tab.state))
+            .filter(|_| !said.is_empty())
+        else {
             return;
         };
         self.record.made += 1;
@@ -636,7 +700,8 @@ impl App {
         };
         let drafts = self.record.drafts.entry(record.key()).or_default();
         *drafts = add_draft(drafts, draft);
-        tab.comment.clear();
+        tab.comment = TextEdit::default();
+        tab.writing = None;
         tab.state.set_selection(None);
         self.diff_drafts_changed();
     }
@@ -706,8 +771,10 @@ impl App {
         self.go_to_file(&next, None, tx);
     }
 
-    /// Scrolls the diff to a file, or a line of it as it is now, opening it.
+    /// Scrolls the diff to a file, or a line of it as it is now, opening it; an open comment
+    /// box closes.
     pub fn go_to_file(&mut self, path: &str, line: Option<u32>, tx: &mut Tx) {
+        self.close_diff_comment();
         let Some(tab) = &mut self.diff else { return };
         let Some(index) = tab.state.file_index(path) else {
             return;
@@ -939,6 +1006,7 @@ pub fn view(app: &App, k: &Kit) -> El {
         .key("diff-toolbar")
         .gap(12.0)
         .center_y()
+        .flex_wrap()
         .w_full()
         .child(
             text(viewed_count(&ticks, &tab.files, &tab.base))
@@ -948,16 +1016,23 @@ pub fn view(app: &App, k: &Kit) -> El {
         )
         .children(reading)
         .child(rune::spacer())
-        .child(every("Expand all", "diff-expand", true))
-        .child(every("Collapse all", "diff-collapse", false))
-        .child(wrap)
-        .child(layout);
+        .child(
+            row()
+                .gap(12.0)
+                .center_y()
+                .child(every("Expand all", "diff-expand", true))
+                .child(every("Collapse all", "diff-collapse", false))
+                .child(wrap)
+                .child(layout),
+        );
     let filter = TextInput::new(&tab.filter)
         .placeholder("Filter files")
         .label("Filter files")
         .on_edit(|app: &mut App| &mut diff_tab_of(app).filter)
+        .width(None)
         .build(k)
-        .key("diff-filter");
+        .key("diff-filter")
+        .w_full();
     let mut rows = Vec::new();
     tree_rows(
         app,
@@ -970,7 +1045,11 @@ pub fn view(app: &App, k: &Kit) -> El {
         .key("diff-tree")
         .role("group")
         .label("Changed files")
-        .w(280.0)
+        .w(if record.width > 0.0 && record.width < super::view::BESIDE_W {
+            220.0
+        } else {
+            280.0
+        })
         .gap(6.0)
         .min_h(0.0)
         .child(filter)
@@ -1041,6 +1120,9 @@ pub fn view(app: &App, k: &Kit) -> El {
     };
     let kit = k.clone();
     let note = move |app: &App, note: &Annotation| -> El {
+        if note.id == WRITING {
+            return composer(app, &kit);
+        }
         let draft = app.record.open.as_ref().and_then(|r| {
             app.record
                 .drafts_of(r)
@@ -1049,42 +1131,17 @@ pub fn view(app: &App, k: &Kit) -> El {
                 .cloned()
         });
         match draft {
-            Some(draft) => super::view::draft_note(&draft, &kit),
+            Some(draft) => super::view::draft_note(app, &draft, &kit),
             None => row(),
         }
     };
     let diff = DiffView::new(diff_of, diff_of_mut)
-        .on_select(|app: &mut App, range, _| diff_of_mut(app).set_selection(range))
-        .on_comment(|app: &mut App, range, _| diff_of_mut(app).set_selection(Some(range)))
+        .on_select(|app: &mut App, range, _| app.choose_diff_lines(range))
+        .on_comment(|app: &mut App, range, _| app.choose_diff_lines(Some(range)))
         .header_actions(header)
         .annotation(note)
         .key("diff")
         .build(app, k);
-    let composer = diff_anchor(&tab.state).map(|anchor| {
-        let at = super::view::anchor_said(&anchor);
-        row()
-            .key("diff-composer")
-            .gap(8.0)
-            .center_y()
-            .w_full()
-            .child(text(at).font(k.ty.small).color(k.c.text_muted))
-            .child(
-                TextInput::new(&tab.comment)
-                    .placeholder("Comment on the selected lines")
-                    .label("Comment on the selected lines")
-                    .on_edit(|app: &mut App| &mut diff_tab_of(app).comment)
-                    .on_submit(|app: &mut App, _| app.add_diff_comment())
-                    .build(k)
-                    .key("diff-comment")
-                    .grow(1.0),
-            )
-            .child(
-                Button::new("Add comment")
-                    .on_press(App::add_diff_comment)
-                    .build(k)
-                    .key("add-comment"),
-            )
-    });
     row()
         .key("diff-tab")
         .gap(12.0)
@@ -1099,7 +1156,69 @@ pub fn view(app: &App, k: &Kit) -> El {
                 .min_w(0.0)
                 .min_h(0.0)
                 .child(toolbar)
-                .children(composer)
-                .child(diff),
+                .child(
+                    col()
+                        .key("diff-body")
+                        .grow(1.0)
+                        .min_h(0.0)
+                        .w_full()
+                        .on_press(App::diff_pressed_elsewhere)
+                        .child(diff),
+                ),
+        )
+}
+
+/// The comment box under the lines chosen: where it is, the words, Comment and Cancel. Enter
+/// saves it and Escape closes it.
+fn composer(app: &App, k: &Kit) -> El {
+    let Some(tab) = &app.diff else { return row() };
+    let Some(anchor) = &tab.writing else {
+        return row();
+    };
+    let ready = !tab.comment.text.trim().is_empty();
+    col()
+        .key("diff-composer")
+        .role("group")
+        .label(super::view::anchor_said(anchor).replacen("On ", "Comment on ", 1))
+        .gap(8.0)
+        .padding(10.0)
+        .w_full()
+        .fill(k.c.layer_02)
+        .border(1.0, k.c.border_base)
+        .on_press(|_: &mut App| {})
+        .child(
+            text(super::view::anchor_said(anchor).replacen("On ", "Comment on ", 1))
+                .font(k.ty.small)
+                .color(k.c.text_muted),
+        )
+        .child(
+            TextInput::new(&tab.comment)
+                .placeholder("Say what should change")
+                .label("Comment on the selected lines")
+                .on_edit(|app: &mut App| &mut diff_tab_of(app).comment)
+                .on_submit(|app: &mut App, _| app.add_diff_comment())
+                .on_key(|app: &mut App, ev: &rune::KeyEvent, tx: &mut Tx| app.comment_key(ev, tx))
+                .build(k)
+                .key("diff-comment")
+                .w_full(),
+        )
+        .child(
+            row()
+                .gap(8.0)
+                .child(
+                    Button::new("Comment")
+                        .variant(ButtonVariant::Submit)
+                        .disabled(!ready)
+                        .on_press(App::add_diff_comment)
+                        .build(k)
+                        .key("add-comment"),
+                )
+                .child(
+                    Button::new("Cancel")
+                        .variant(ButtonVariant::Ghost)
+                        .on_press(App::close_diff_comment)
+                        .build(k)
+                        .key("cancel-comment"),
+                ),
         )
 }

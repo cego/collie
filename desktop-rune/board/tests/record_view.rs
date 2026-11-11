@@ -243,9 +243,8 @@ fn the_diff_is_read_file_by_file_and_a_file_ticked_viewed_is_counted() {
 
 fn with_a_draft(runtime: &mut Runtime<App>, said: &str) {
     runtime.update(|app, _| {
-        let tab = app.diff.as_mut().unwrap();
         let at = LineRef::new(Side::New, 2);
-        tab.state.set_selection(Some(LineRange {
+        app.choose_diff_lines(Some(LineRange {
             file: 0,
             start: at,
             end: at,
