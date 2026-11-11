@@ -745,25 +745,36 @@ const healerBound =
                   // SAFETY: every RPC handler is called with the options carrying its client.
                   const who = stampIn(declared, (options as { client: { id: number } }).client);
                   if (who.origin !== "agent" || who.from?.run === undefined) return;
-                  const heals = (yield* registry
-                    .view(who.from.run)
-                    .pipe(Effect.orElseSucceed(() => null)))?.heals;
+                  const viewOf = (run: string) =>
+                    registry.view(run).pipe(Effect.orElseSucceed(() => null));
+                  const heals = (yield* viewOf(who.from.run))?.heals;
                   if (heals === undefined) return;
-                  const targets =
+                  const asked =
                     name === "act"
                       ? Option.map(Schema.decodeOption(ActsOn)(payload), (asked) =>
-                          Arr.map(asked.actions, (one) =>
-                            one.kind === "deliver" || one.kind === "resume" ? one.run : undefined,
-                          ),
+                          Arr.map(asked.actions, (one) => ({
+                            kind: one.kind,
+                            run:
+                              one.kind === "deliver" || one.kind === "resume" ? one.run : undefined,
+                          })),
                         )
                       : name === "steer" || name === "resume"
-                        ? Option.map(Schema.decodeOption(TargetsOne)(payload), (one) => [one.runId])
+                        ? Option.map(Schema.decodeOption(TargetsOne)(payload), (one) => [
+                            { kind: name, run: one.runId },
+                          ])
                         : Option.none();
-                  if (Option.isSome(targets) && Arr.every(targets.value, (run) => run === heals))
-                    return;
-                  return yield* new HostRefused({
-                    reason: `${who.from.run} is a Heal of ${heals}: its agents may only deliver to ${heals}'s agents and resume it`,
-                  });
+                  if (Option.isNone(asked) || !Arr.every(asked.value, (one) => one.run === heals))
+                    return yield* new HostRefused({
+                      reason: `${who.from.run} is a Heal of ${heals}: its agents may only deliver to ${heals}'s agents and resume it`,
+                    });
+                  // A resume clears a Stop, and a person's Stop is theirs to undo.
+                  if (
+                    Arr.some(asked.value, (one) => one.kind === "resume") &&
+                    (yield* viewOf(heals))?.controls.includes(STOP)
+                  )
+                    return yield* new HostRefused({
+                      reason: `${who.from.run} is a Heal of ${heals}: a person stopped it, and only a person resumes it`,
+                    });
                 });
                 const answer = handler(payload, options);
                 return Stream.isStream(answer)

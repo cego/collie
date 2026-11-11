@@ -348,6 +348,18 @@ test(
           expect(Arr.filter(asked?.waiting ?? [], (one) => one.answer !== null)).toEqual([]);
           expect(asked?.controls).toContain("hold");
           expect((yield* client.run({ runId }).pipe(Effect.orDie))?.controls).not.toContain("stop");
+          expect(
+            (yield* collie(world, ["run", "stop", runId, "--request-id", "stopped"])).envelope.ok,
+          ).toBe(true);
+          expect(yield* asHealer(world, healer, [{ kind: "resume", run: runId }])).toContain(
+            "a person stopped it",
+          );
+          const resumed = yield* collie(world, ["run", "resume", runId], {
+            COLLIE_RUN: healer.runId,
+            COLLIE_AGENT: healer.agent,
+          });
+          expect(resumed.envelope).toMatchObject({ ok: false });
+          expect((yield* client.run({ runId }).pipe(Effect.orDie))?.controls).toContain("stop");
         }),
       ["asks.workflow.ts", "parks-for.workflow.ts", "mender.workflow.ts"],
     ),
