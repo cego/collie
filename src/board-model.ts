@@ -378,6 +378,17 @@ export function readyToRelease(facts: ReleaseFacts): ReadyToRelease {
       lack("mergeable", `the forge says it cannot merge: ${facts.mergeable.said}`);
     else if (facts.mergeable.state === "unknown")
       lack("mergeable", "the forge is still working out whether it can merge", true);
+    if (
+      facts.unreadable ||
+      facts.read === null ||
+      !Number.isFinite(facts.read) ||
+      facts.read > facts.now ||
+      facts.now - facts.read > 2 * MERGE_POLL_MS ||
+      facts.head === null ||
+      facts.head !== facts.readHead
+    )
+      if (!Arr.some(missing, (one) => one.fact === "mergeable"))
+        lack("mergeable", "the forge answer is stale, unreadable or not at the current head", true);
   }
   if (facts.blocking > 0)
     lack("review", `${facts.blocking} blocking review finding(s) are unresolved`);
