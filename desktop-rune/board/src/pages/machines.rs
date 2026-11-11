@@ -496,11 +496,11 @@ fn add_dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                 } else {
                     "Add Machine"
                 })
-                    .variant(ButtonVariant::Contrast)
-                    .disabled(adding.busy || adding.to_add().is_none())
-                    .on_press(|app: &mut App| app.add_machine())
-                    .build(k)
-                    .key("add-submit"),
+                .variant(ButtonVariant::Contrast)
+                .disabled(adding.busy || adding.to_add().is_none())
+                .on_press(|app: &mut App| app.add_machine())
+                .build(k)
+                .key("add-submit"),
             ),
         );
     Dialog::new("add-machine", "Add Machine")

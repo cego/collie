@@ -299,7 +299,9 @@ fn moving_a_schedule_sends_it_to_the_machine_chosen_with_its_checkout_there() {
             json!({ "from": "i-vm", "to": "i-pc", "name": "daily", "checkout": "/home/mk/src/collie" })
         ]
     );
-    harness.fake.answer("moveSchedule", Ok(json!("Moved daily to mk-pc")));
+    harness
+        .fake
+        .answer("moveSchedule", Ok(json!("Moved daily to mk-pc")));
     settle(&harness, &mut runtime);
     assert!(runtime.state.pages.schedules.moving.is_none());
 }
@@ -340,7 +342,10 @@ fn a_move_keeps_its_dialog_until_it_is_done_and_says_why_one_was_refused() {
         .answer("moveSchedule", Ok(json!("Moved daily to mk-pc")));
     settle(&harness, &mut runtime);
     runtime.frame(at);
-    assert!(runtime.state.pages.schedules.moving.is_none(), "done, it closes");
+    assert!(
+        runtime.state.pages.schedules.moving.is_none(),
+        "done, it closes"
+    );
     assert_eq!(
         runtime.state.pages.schedules.told.texts(),
         ["Moved daily to mk-pc"]

@@ -879,7 +879,10 @@ fn add_machine_keeps_its_dialog_until_the_core_takes_it_and_says_why_it_refused(
     tap(&mut runtime, "add-submit", &mut at);
     harness.fake.answer("addMachine", Ok(json!("job-3")));
     settle(&harness, &mut runtime);
-    assert!(runtime.state.pages.machines.adding.is_none(), "taken, it closes");
+    assert!(
+        runtime.state.pages.machines.adding.is_none(),
+        "taken, it closes"
+    );
     assert_eq!(runtime.state.pages.machines.job.as_deref(), Some("job-3"));
 }
 

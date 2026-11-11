@@ -462,16 +462,17 @@ impl App {
         core.request(
             "moveSchedule",
             payload,
-            |app: &mut App, said: Result<String, crate::calls::CallError>| {
-                match (said, schedules(app).moving.as_mut()) {
-                    (Err(why), Some(moving)) => {
-                        moving.busy = false;
-                        moving.refused = Some(why.0);
-                    }
-                    (said, _) => {
-                        schedules(app).moving = None;
-                        app.schedule_said(said);
-                    }
+            |app: &mut App, said: Result<String, crate::calls::CallError>| match (
+                said,
+                schedules(app).moving.as_mut(),
+            ) {
+                (Err(why), Some(moving)) => {
+                    moving.busy = false;
+                    moving.refused = Some(why.0);
+                }
+                (said, _) => {
+                    schedules(app).moving = None;
+                    app.schedule_said(said);
                 }
             },
         );

@@ -1313,7 +1313,10 @@ fn the_harness_select_lists_a_harness_no_machine_reports_and_choosing_it_does_no
         .collect();
     let names: Vec<&str> = options.iter().filter_map(|o| o.label.as_deref()).collect();
     assert_eq!(names, ["Claude Code", "Codex", "OpenCode", "Pi"]);
-    let pi = options.iter().find(|o| o.label.as_deref() == Some("Pi")).unwrap();
+    let pi = options
+        .iter()
+        .find(|o| o.label.as_deref() == Some("Pi"))
+        .unwrap();
     let [x, y, w, h] = pi.rect;
     let (x, y) = (x + w / 2.0, y + h / 2.0);
     runtime.pointer_move(x, y);

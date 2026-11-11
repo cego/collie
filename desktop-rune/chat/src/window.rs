@@ -3,8 +3,8 @@
 
 use crate::chat::{self, Chat};
 use crate::host::{Done, Each, Host, Stop};
-use rune::{Cx, El, Tx};
 use collie_desktop_protocol::generated::About;
+use rune::{Cx, El, Tx};
 use serde_json::Value;
 
 pub type Request = Box<dyn Fn(&str, Value, Done<Alone>)>;
