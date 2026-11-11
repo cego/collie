@@ -61,6 +61,7 @@ impl Told {
 
 /// Draws what `told` says as toasts in the overlay layer, each closed through `lens`.
 pub fn toasts<S: 'static>(
+    app: &crate::App,
     told: &Told,
     lens: fn(&mut S) -> &mut Told,
     k: &Kit,
@@ -87,7 +88,7 @@ pub fn toasts<S: 'static>(
                     .on_hover_change(move |s: &mut S, inside, _| lens(s).hold(id, inside)),
             )
         });
-    layer.push(region.build(k));
+    layer.push(crate::toasts::beside_chat(app, region.build(k)));
 }
 
 /// A fresh request id, so a retried action is the same request to its host.

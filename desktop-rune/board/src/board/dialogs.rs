@@ -71,7 +71,7 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                 .fit()
                 .child(returns_to(app, card, body))
                 .on_close(close)
-                .build(k, layer);
+                .build(collie_desktop_theme::dialog(k.dark), layer);
         }
         Dialog::Offers {
             card,
@@ -166,7 +166,7 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                 .fit()
                 .child(returns_to(app, card, body))
                 .on_close(close)
-                .build(k, layer);
+                .build(collie_desktop_theme::dialog(k.dark), layer);
         }
         Dialog::Questions {
             card,
@@ -250,7 +250,7 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                 .fit()
                 .child(scrolled(body))
                 .on_close(close)
-                .build(k, layer);
+                .build(collie_desktop_theme::dialog(k.dark), layer);
         }
         Dialog::Check { card } => check_output(app, k, card, layer),
         Dialog::Proposal {
@@ -353,7 +353,7 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                         .child(footer),
                 ))
                 .on_close(close)
-                .build(k, layer);
+                .build(collie_desktop_theme::dialog(k.dark), layer);
         }
     }
 }
@@ -529,7 +529,11 @@ fn form(app: &App, k: &Kit, installation: &str, machine: &str, question: &Questi
                         k.c.border_weak
                     },
                 )
-                .fill(if *checked { k.c.layer_02 } else { k.c.layer_01 })
+                .fill(if *checked {
+                    k.c.layer_02
+                } else {
+                    k.c.surface_raised
+                })
                 .child(line)
                 .children(detail.clone().map(|d| {
                     text(d)
@@ -725,5 +729,5 @@ fn check_output(app: &App, k: &Kit, card: &str, layer: &mut Vec<El>) {
         .fit()
         .child(returns_to(app, card, body))
         .on_close(close)
-        .build(k, layer);
+        .build(collie_desktop_theme::dialog(k.dark), layer);
 }

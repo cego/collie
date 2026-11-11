@@ -75,6 +75,18 @@ fn pairs(k: &Kit, t: &Tones, side: &Kit) -> Vec<(String, Color, Color, f32)> {
         TEXT,
     );
     add(
+        "text_contrast on hovered bg_contrast".into(),
+        c.text_contrast,
+        flat(c.contrast_hover, c.bg_contrast),
+        TEXT,
+    );
+    add(
+        "submit_fg on hovered bg_icon_button_contrast".into(),
+        c.submit_fg,
+        flat(c.submit_hover, c.bg_icon_button_contrast),
+        TEXT,
+    );
+    add(
         "submit_fg on bg_icon_button_contrast".into(),
         c.submit_fg,
         c.bg_icon_button_contrast,
@@ -170,6 +182,42 @@ fn collie_has_a_colour_of_its_own_in_both_appearances() {
             k.c.bg_base, stock.c.bg_base,
             "surfaces are tinted, not flat grey"
         );
+    }
+}
+
+/// A primary button, and the chat's send button, lighten under the pointer and lighten more
+/// when pressed, by day and by night.
+#[test]
+fn a_primary_button_lightens_under_the_pointer_in_both_appearances() {
+    for dark in [false, true] {
+        let c = &kit(dark).c;
+        for (name, fill, hover, pressed) in [
+            (
+                "primary",
+                c.bg_contrast,
+                c.contrast_hover,
+                c.contrast_pressed,
+            ),
+            (
+                "send",
+                c.bg_icon_button_contrast,
+                c.submit_hover,
+                c.contrast_pressed,
+            ),
+        ] {
+            let (rest, hovered, held) = (
+                fill.luminance(),
+                flat(hover, fill).luminance(),
+                flat(pressed, fill).luminance(),
+            );
+            assert!(
+                hovered > rest && held > hovered,
+                "dark={dark}: the {name} button goes {} at rest, {} hovered, {} pressed",
+                fill.hex(),
+                flat(hover, fill).hex(),
+                flat(pressed, fill).hex()
+            );
+        }
     }
 }
 

@@ -511,7 +511,7 @@ fn add_dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
         .open(true)
         .child(body)
         .on_close(|app: &mut App| app.pages.machines.adding = None)
-        .build(k, layer);
+        .build(collie_desktop_theme::dialog(k.dark), layer);
 }
 
 pub fn view(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
@@ -592,6 +592,6 @@ pub fn view(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         .children(rows.iter().map(|row| machine(k, row, &holds)));
     add_dialog(app, k, layer);
     cleanup::dialog(app, &rows, k, layer);
-    toasts(&machines.told, told, k, layer);
+    toasts(app, &machines.told, told, k, layer);
     super::common::page("machines-page", "Machines", vec![top, list])
 }

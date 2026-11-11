@@ -580,7 +580,7 @@ fn move_dialog(state: &Schedules, k: &Kit, layer: &mut Vec<El>) {
         .open(true)
         .child(body)
         .on_close(|app: &mut App| app.pages.schedules.moving = None)
-        .build(k, layer);
+        .build(collie_desktop_theme::dialog(k.dark), layer);
     layer.extend(above);
 }
 
@@ -768,6 +768,7 @@ pub fn view(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
     let state = &app.pages.schedules;
     move_dialog(state, k, layer);
     toasts(
+        app,
         &state.told,
         |app: &mut App| &mut app.pages.schedules.told,
         k,

@@ -732,5 +732,5 @@ pub fn dialog(app: &App, rows: &[MachineRow], k: &Kit, layer: &mut Vec<El>) {
         .open(true)
         .child(body)
         .on_close(|app: &mut App| cleanup(app).open = false)
-        .build(k, layer);
+        .build(collie_desktop_theme::dialog(k.dark), layer);
 }

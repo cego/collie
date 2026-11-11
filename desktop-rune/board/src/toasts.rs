@@ -2,8 +2,24 @@
 //! pointer is on it.
 
 use crate::App;
+use rune::El;
 
 pub const TOAST_MS: f64 = 5_000.0;
+
+/// Where rune-kit's ToastRegion stands toasts: this far from the right and the bottom.
+const RIGHT: f32 = 32.0;
+const BOTTOM: f32 = 48.0;
+
+/// A built ToastRegion moved to the bottom right of the page's pane, so a toast never covers
+/// the chat open beside it; with the chat closed or in its own window, that is the window's.
+pub fn beside_chat(app: &App, region: El) -> El {
+    region.pin(
+        None,
+        None,
+        Some(RIGHT + app.nav.chat.shown_width()),
+        Some(BOTTOM),
+    )
+}
 
 /// When a toast was first drawn, and whether the pointer holds it.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]

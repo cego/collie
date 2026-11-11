@@ -41,6 +41,9 @@ struct Spec {
     /// The solid brand fill of a primary button or a switch that is on, and the ink on it.
     fill: &'static str,
     on_fill: &'static str,
+    /// What the pointer over that fill, and a press on it, lay over it: white, so it lightens.
+    fill_hover: &'static str,
+    fill_pressed: &'static str,
     chosen: &'static str,
     /// bg, fg, border, icon.
     brand: [&'static str; 4],
@@ -68,6 +71,8 @@ const LIGHT: Spec = Spec {
     focus: "#6a5ae0",
     fill: "#5647d6",
     on_fill: "#ffffff",
+    fill_hover: "#ffffff1f",
+    fill_pressed: "#ffffff3d",
     chosen: "#ffffffc7",
     brand: ["#ebe8ff", "#4636c2", "#c4bcf7", "#6a5ae0"],
     ready: ["#fbe8f6", "#a01f7c", "#efb9dd", "#c9369e"],
@@ -94,6 +99,9 @@ const DARK: Spec = Spec {
     focus: "#9d8cff",
     fill: "#6b5ae6",
     on_fill: "#ffffff",
+    // Lighter iris still carries white at AA, so only a little.
+    fill_hover: "#ffffff0d",
+    fill_pressed: "#ffffff1a",
     chosen: "#e0d8ff1c",
     brand: ["#231f45", "#b5a8ff", "#3f3780", "#9d8cff"],
     ready: ["#3a1a33", "#f5a3dc", "#70305f", "#ec7ac8"],
@@ -152,6 +160,9 @@ fn build(dark: bool) -> Kit {
         bg_icon_button_contrast: fill,
         bg_accent: fill,
         submit_fg: on_fill,
+        submit_hover: colour(s.fill_hover),
+        contrast_hover: colour(s.fill_hover),
+        contrast_pressed: colour(s.fill_pressed),
         submit_icon: on_fill,
         text_base: text,
         text_muted: muted,
@@ -213,6 +224,18 @@ pub fn sidebar(dark: bool) -> &'static Kit {
             k.c.icon_base = tones(dark).brand.icon;
             k
         })
+    })
+}
+
+/// The kit a dialog is built with: rune-kit's Dialog fills its panel with `layer_01`, and here
+/// that is the raised surface menus and cards stand on.
+pub fn dialog(dark: bool) -> &'static Kit {
+    static KITS: [[OnceLock<Kit>; 2]; 2] = [const { [const { OnceLock::new() }; 2] }; 2];
+    let srgb = rune::theme::blends_srgb();
+    KITS[dark as usize][srgb as usize].get_or_init(|| {
+        let mut k = kit(dark).clone();
+        k.c.layer_01 = k.c.surface_raised;
+        k
     })
 }
 
