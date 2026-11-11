@@ -15,6 +15,7 @@ import {
   FixOutputSchema,
   Host,
   ReviewOutputSchema,
+  ReviewScope,
   Run,
   SynthesisSchema,
   WorkflowError,
@@ -41,6 +42,7 @@ import {
   type SynthesisReport,
 } from "collie";
 import { Effect, FileSystem, Schema } from "effect";
+import * as Activity from "effect/workflow/Activity";
 import { type WorkflowEngine, type WorkflowInstance } from "effect/workflow/WorkflowEngine";
 import markdown from "./review.md" with { type: "text" };
 import type { Reviewed } from "./delivering.ts";
@@ -185,11 +187,6 @@ export const reviewPass = (ask: ReviewAsk) =>
     const { id } = yield* Run;
     const host = yield* Host;
     const { dir, cwd } = yield* host.place(id);
-    const scope =
-      ask.source !== null && (ask.target === "" || ask.target === "worktree")
-        ? yield* host.reviewScope(id, ask.source ?? ask.plan, ask.proves, ask.risks)
-        : null;
-    const input = told({ ...ask, base: scope?.target ?? ask.base }, { dir, id });
     // A check left to CI is read from the forge where the Run has a merge request, never run.
     const leftToCi = yield* Effect.forEach(
       Arr.filter(yield* host.approved(id), (spec) => spec.ci !== undefined),
@@ -216,6 +213,27 @@ export const reviewPass = (ask: ReviewAsk) =>
           ? undefined
           : `${ask.reviewers}review-${seat.name ?? String(at + 1)}`,
     }));
+    const scope = yield* Activity.make({
+      name: `${synthesis}.scope`,
+      success: Schema.NullOr(ReviewScope),
+      execute: Effect.gen(function* () {
+        if (ask.source === null || (ask.target !== "" && ask.target !== "worktree")) return null;
+        const fs = yield* FileSystem.FileSystem;
+        const collected = yield* Effect.forEach(seats, ({ operation }) =>
+          fs.exists(agents.outputFor(id, operation)),
+        );
+        // Earlier passes without a journaled scope cannot acquire one on replay.
+        if (Arr.some(collected, Boolean)) return null;
+        return yield* host.reviewScope(id, ask.source ?? ask.plan, ask.proves, ask.risks);
+      }).pipe(Effect.orDie),
+    });
+    const input = told({ ...ask, base: scope?.target ?? ask.base }, { dir, id });
+    const record = (review: SynthesisReport) =>
+      Activity.make({
+        name: `${synthesis}.record`,
+        success: Schema.Void,
+        execute: host.recordReview(id, scope, scope?.target ?? ask.base ?? "", review),
+      });
     // One seat is one review, already the one the human reads: its prompt asks a lone
     // reviewer for the synthesis's own fields, so a second agent would only copy it.
     if (seats.length === 1) {
@@ -230,7 +248,7 @@ export const reviewPass = (ask: ReviewAsk) =>
         output: SynthesisSchema,
       });
       yield* leaveReview(dir, alone);
-      yield* host.recordReview(id, scope, scope?.target ?? ask.base ?? "", alone);
+      yield* record(alone);
       return alone;
     }
     yield* Effect.forEach(
@@ -266,7 +284,7 @@ export const reviewPass = (ask: ReviewAsk) =>
     );
     // The prose a human reads and the findings a card counts, where both are looked for.
     yield* leaveReview(dir, reconciled);
-    yield* host.recordReview(id, scope, scope?.target ?? ask.base ?? "", reconciled);
+    yield* record(reconciled);
     return reconciled;
   });
 

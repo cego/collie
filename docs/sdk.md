@@ -170,7 +170,10 @@ system, paths and the process spawner. Everything else is yours.
 
 `Host.reviewScope(run, source, outcome, risks)` captures the requirements, Intent, target head,
 and checkout revision before a review. `Host.recordReview(run, scope, base, review)` records
-the completed review only while that scope still holds. `Host.recovery(run, parent, source)`
+the completed review only while that scope still holds. Journal the scope before launching
+the reviewers, and journal the association after collection, in separate Activities per pass.
+Replaying a review then retains its original scope and cannot supersede a newer judgement.
+`Host.recovery(run, parent, source)`
 takes the pushed branch by a guarded fast-forward and reads durable implementation and
 review facts. The module chooses its entry from those facts; the host doesn't select a
 workflow by name. Missing associations never authorise skipping review.

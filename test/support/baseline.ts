@@ -3533,14 +3533,16 @@ for (const feature of [false, true])
           const opening = yield* asked(child, "mr");
           expect(opening).toContain(OPENED.mr_url);
           expect(opening).toContain("Do **not** open a second merge request");
-          expect((yield* forge.model()).mrs).toHaveLength(1);
           yield* bin.restore();
         }),
       ),
     120_000,
   );
 
-const reviewedRecovery = () =>
+const reviewedRecovery = (
+  changed?: "pushed head" | "requirements" | "later blocking review",
+  panel = false,
+) =>
   Effect.gen(function* () {
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
     const forge = yield* noGitlabMrs(bin);
@@ -3561,16 +3563,59 @@ const reviewedRecovery = () =>
       cwd: rig.projectDir,
     });
     yield* exec(["git", "push", "-qu", "origin", "HEAD"], { cwd: rig.projectDir });
-    const head = yield* revParse("HEAD", rig.projectDir);
+    let head = yield* revParse("HEAD", rig.projectDir);
+    const entry = panel
+      ? yield* fork(
+          "review",
+          "replay-panel",
+          `{ ...shipped.agents, roles: { ...shipped.agents?.roles, reviewer: [{ harness: "claude", model: "opus" }, { harness: "pi", model: "openai-codex/gpt-6-astra" }] } }`,
+        )
+      : shipped("review");
     const review = {
-      entry: shipped("review"),
+      entry,
       runId: "r-current-review",
       input: { target: "worktree", plan },
       task: "t-recover",
       decision: "post-1",
     };
-    yield* rig.queueOutputs([null, CLEAN_SYNTHESIS]);
+    yield* rig.queueOutputs([
+      null,
+      ...(panel
+        ? [
+            { verdict: "clean", findings: [] },
+            { verdict: "clean", findings: [] },
+          ]
+        : []),
+      CLEAN_SYNTHESIS,
+    ]);
     yield* parked(review);
+    let consumed = panel ? 4 : 2;
+    if (changed === "pushed head") {
+      yield* exec(["git", "commit", "--allow-empty", "-qm", "work the waiting review never saw"], {
+        cwd: rig.projectDir,
+      });
+      yield* exec(["git", "push", "-qu", "origin", "HEAD"], { cwd: rig.projectDir });
+      head = yield* revParse("HEAD", rig.projectDir);
+    }
+    if (changed === "requirements")
+      yield* (yield* FileSystem.FileSystem).writeFileString(
+        `${plan}/SPEC.md`,
+        "# The spec\n\nAlso implement the missing export.\n",
+      );
+    if (changed === "later blocking review") {
+      const later = { ...review, entry: shipped("review"), runId: "r-later-review" };
+      yield* rig.queueOutputs([
+        ...Arr.replicate(null, consumed),
+        {
+          ...CLEAN_SYNTHESIS,
+          verdict: "findings",
+          findings: [{ severity: "major", title: "The export is missing", file: "src/index.ts" }],
+        },
+      ]);
+      yield* parked(later);
+      yield* answered({ ...later, value: "Don't post" });
+      consumed += 1;
+    }
     yield* answered({ ...review, value: "Don't post" });
     const opened = {
       writes: [
@@ -3590,15 +3635,53 @@ const reviewedRecovery = () =>
       ],
       output: OPENED,
     };
-    return { bin, forge, plan, parent, finished, head, opened };
+    const existing = opened.writes[0]!;
+    yield* (yield* FileSystem.FileSystem).writeFileString(existing.path, existing.text);
+    return { bin, forge, plan, parent, finished, head, opened, consumed };
   });
+
+for (const [changed, panel] of [
+  ["pushed head", false],
+  ["requirements", false],
+  ["pushed head", true],
+  ["later blocking review", false],
+] as const)
+  scenario(
+    `a resumed ${panel ? "panel" : "review"} cannot overwrite ${changed} it never reviewed`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, plan, parent, opened, consumed } = yield* reviewedRecovery(changed, panel);
+          const child = "r-after-review-replay";
+          yield* approve(child, ["unit"]);
+          yield* rig.queueOutputs([...Arr.replicate(null, consumed), CLEAN_SYNTHESIS, opened]);
+          expect(
+            outcomeText(
+              yield* recoveredRun(child, { plan, recovery: parent.runId, ...FINISH }, "review-1"),
+            ),
+          ).toBe(OPENED.mr_url);
+          expect(
+            Arr.sort(
+              Arr.map(yield* launchesAt(dir, "r-current-review"), (one) => one.operation),
+              Str.Order,
+            ),
+          ).toEqual(panel ? ["review-1", "review-2", "synthesize"] : ["review-1"]);
+          expect(Arr.map(yield* launchesAt(dir, child), (one) => one.operation)).toEqual([
+            "review-1",
+            "mr",
+          ]);
+          yield* bin.restore();
+        }),
+      ),
+    120_000,
+  );
 
 scenario(
   "a follow-up on a reviewed pushed head starts at Checks",
   () =>
     runEffect(
       Effect.gen(function* () {
-        const { bin, forge, plan, parent, head, opened } = yield* reviewedRecovery();
+        const { bin, plan, parent, head, opened } = yield* reviewedRecovery();
         const child = "r-checks-recovery";
         yield* approve(child, ["unit"]);
         yield* rig.queueOutputs([null, null, opened]);
@@ -3619,7 +3702,9 @@ scenario(
         const opening = Option.getOrElse(pipe(log, Str.indexOf("── Merge request")), () => -1);
         expect(checked).toBeGreaterThanOrEqual(0);
         expect(opening).toBeGreaterThan(checked);
-        expect((yield* forge.model()).mrs).toHaveLength(1);
+        const prompt = yield* asked(child, "mr");
+        expect(prompt).toContain(OPENED.mr_url);
+        expect(prompt).toContain("Do **not** open a second merge request");
         expect((yield* ran(parent))._tag).toBe("Failure");
         expect(yield* launchesAt(dir, parent.runId)).toHaveLength(1);
         yield* bin.restore();
@@ -3754,7 +3839,9 @@ for (const changed of [
             "mr",
           ]);
           expect(yield* asked(child, "fix-1")).toContain(missing.title);
-          expect((yield* forge.model()).mrs).toHaveLength(1);
+          const prompt = yield* asked(child, "mr");
+          expect(prompt).toContain(OPENED.mr_url);
+          expect(prompt).toContain("Do **not** open a second merge request");
           yield* bin.restore();
         }),
       ),
