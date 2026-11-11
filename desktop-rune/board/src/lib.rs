@@ -1,66 +1,25 @@
-//! The spike's board: each Machine `flock` names, its status and its cards; pressing a card goes
-//! to its pane's terminal.
-//! The fold is a narrow copy of `applyItem` in `desktop/src/shared/flock.ts`, enough to
-//! draw; the TypeScript stays its owner.
+//! Collie Desktop drawn by Rune: the app's state, and the panes the shell lays out.
 
-use base64::Engine;
+pub mod board;
 pub mod calls;
 pub mod flow;
 pub mod icons;
 pub mod notify;
 pub mod pages;
+pub mod record;
 pub mod shell;
 pub mod timing;
 
 pub use shell::view;
 
-use collie_desktop_chat::view::{Chat, DiffTab, chat, diff_tab};
-use collie_desktop_protocol::client::Client;
-use collie_desktop_protocol::generated::{
-    AguiEvent, DetailFlow, Encoding, FlockItem, KeptRecord, LostState, Message, RunDetailPayload,
-    RunFile, RunFilePayload, Task, TerminalPayload,
-};
-use collie_desktop_terminal::view::{Tab, terminal};
-use rune::{El, col, row, text};
-use rune_kit::{Badge, Button, Card, Kit};
-use serde_json::Value;
+use collie_desktop_chat::view::{Chat, DiffTab, chat};
+use collie_desktop_protocol::generated::AguiEvent;
+use collie_desktop_terminal::view::Tab;
+use rune::{El, col};
+use rune_kit::Kit;
 
-/// A Machine as the board shows it, by herdr profile.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Shown {
-    pub installation: Option<String>,
-    pub profile: String,
-    pub name: String,
-    pub cards: Vec<Task>,
-    /// Since when its board is no longer live; `None` while it is.
-    pub as_of: Option<f64>,
-    pub lost: Option<LostState>,
-}
-
-impl Shown {
-    pub fn status(&self) -> &'static str {
-        match (&self.lost, self.as_of) {
-            (Some(LostState::Unreachable), _) => "Out of reach",
-            (Some(LostState::Sso), _) => "Waiting for SSO",
-            (Some(LostState::NoCollie), _) => "Collie isn't installed",
-            (Some(LostState::UpdateDesktop), _) => "Update Desktop",
-            (None, Some(_)) => "Showing what it last said",
-            (None, None) => "Live",
-        }
-    }
-
-    fn label(&self) -> String {
-        let cards = match self.cards.len() {
-            0 => "no cards".to_string(),
-            1 => "1 card".to_string(),
-            n => format!("{n} cards"),
-        };
-        format!("{}: {}, {cards}", self.name, self.status())
-    }
-}
-
-/// Opens a pane's terminal on the core, named for its Machine, as the `opened`th.
-pub type GoTo = Box<dyn Fn(TerminalPayload, String, u64) -> Tab>;
+pub use board::Shown;
+pub use record::{GoTo, LoadDiff, ReadRecord, run_diff, run_file};
 
 #[derive(Default)]
 pub struct App {
@@ -89,52 +48,7 @@ pub struct App {
     pub timing: std::cell::RefCell<timing::Timing>,
 }
 
-pub type LoadDiff = Box<dyn Fn(String, String, u64)>;
-pub type ReadRecord = Box<dyn Fn(String, String, u64) -> Box<dyn FnOnce()>>;
-
-/// The cols and rows a terminal opens at, until its layout says otherwise.
-const OPEN_AT: (i64, i64) = (100, 30);
-
 impl App {
-    pub fn go_to_pane(&mut self, installation: String, run: String, machine: String) {
-        let Some(go_to) = &self.go_to else { return };
-        if let Some(open) = self.terminal.take() {
-            open.leave();
-        }
-        let payload = TerminalPayload {
-            installation,
-            run_id: run,
-            agent: None,
-            cols: OPEN_AT.0,
-            rows: OPEN_AT.1,
-        };
-        self.opened += 1;
-        self.open_run = Some((payload.installation.clone(), payload.run_id.clone()));
-        if let Some(stop) = self.stop_record.take() {
-            stop();
-        }
-        self.flow = None;
-        if let Some(read) = &self.read_record {
-            let run = (payload.installation.clone(), payload.run_id.clone());
-            self.stop_record = Some(read(run.0, run.1, self.opened));
-        }
-        self.terminal = Some(go_to(payload, machine, self.opened));
-    }
-
-    pub fn back(&mut self) {
-        if let Some(open) = self.terminal.take() {
-            open.leave();
-        }
-        self.open_run = None;
-        self.diff = None;
-    }
-
-    pub fn show_diff(&mut self) {
-        if let (Some(load), Some((installation, run))) = (&self.load_diff, &self.open_run) {
-            load(installation.clone(), run.clone(), self.opened);
-        }
-    }
-
     /// A `say` event heard at `at`; text content of the live turn starts a chat mark.
     pub fn chat_heard(&mut self, turn: u64, event: Result<AguiEvent, String>, at: f64) {
         let content = matches!(&event, Ok(AguiEvent::TextMessageContent(_)));
@@ -142,154 +56,6 @@ impl App {
             self.timing.get_mut().chunk(&format!("turn-{turn}"), at);
         }
     }
-
-    /// The Flow of the `opened`th pane's Run, kept on the board after Back until another opens.
-    pub fn flow_read(&mut self, opened: u64, read: DetailFlow) {
-        if opened != self.opened {
-            return;
-        }
-        match &mut self.flow {
-            Some(map) => map.set(read),
-            None => self.flow = Some(flow::FlowMap::new(read)),
-        }
-    }
-
-    /// Shows a diff read for the `opened`th pane, while that pane is still the open one.
-    pub fn diff_read(&mut self, opened: u64, patch: &str) {
-        if opened == self.opened && self.terminal.is_some() {
-            self.diff = Some(DiffTab::new(rune_kit::diff::parse(patch)));
-        }
-    }
-
-    fn at_profile(&mut self, profile: &str, name: &str) -> &mut Shown {
-        let at = match self.machines.iter().position(|m| m.profile == profile) {
-            Some(at) => at,
-            None => {
-                self.machines.push(Shown {
-                    installation: None,
-                    profile: profile.into(),
-                    name: name.into(),
-                    cards: Vec::new(),
-                    as_of: None,
-                    lost: None,
-                });
-                self.machines.len() - 1
-            }
-        };
-        &mut self.machines[at]
-    }
-
-    pub fn apply(&mut self, item: FlockItem) {
-        match item {
-            FlockItem::MachineMessage(said) => {
-                let machine = said.machine;
-                let shown = self.at_profile(&machine.profile, &machine.name);
-                shown.installation = Some(machine.installation);
-                shown.name = machine.name;
-                shown.as_of = None;
-                shown.lost = None;
-                match said.message {
-                    Message::Snapshot(snapshot) => shown.cards = snapshot.tasks,
-                    Message::Upsert(upsert) => {
-                        match shown
-                            .cards
-                            .iter_mut()
-                            .find(|card| card.id == upsert.task.id)
-                        {
-                            Some(card) => *card = upsert.task,
-                            None => shown.cards.push(upsert.task),
-                        }
-                    }
-                    Message::Remove(remove) => shown.cards.retain(|card| card.id != remove.id),
-                    Message::UnknownMessage(_) => {}
-                }
-            }
-            FlockItem::Lost(lost) => {
-                let shown = self.at_profile(&lost.machine.profile, &lost.machine.name);
-                shown.lost = Some(lost.state);
-                shown.as_of.get_or_insert(lost.at);
-            }
-            FlockItem::Reconnecting(again) => {
-                let shown = self.at_profile(&again.machine.profile, &again.machine.name);
-                shown.as_of.get_or_insert(again.at);
-            }
-            FlockItem::Saved(saved) => {
-                let shown = self.at_profile(&saved.machine.profile, &saved.machine.name);
-                if shown.installation.is_none() {
-                    shown.installation = Some(saved.machine.installation);
-                    shown.cards = saved.tasks;
-                    shown.as_of = Some(saved.at);
-                }
-            }
-            FlockItem::Merged(merged) => self.machines.retain_mut(|m| {
-                if m.profile == merged.machine.profile {
-                    m.lost = None;
-                }
-                m.installation.is_some() || m.lost.is_some()
-            }),
-            FlockItem::Removed(removed) => self
-                .machines
-                .retain(|m| m.profile != removed.machine.profile),
-            FlockItem::Routes(routes) => self
-                .machines
-                .retain(|m| routes.profiles.contains(&m.profile)),
-            _ => {}
-        }
-    }
-}
-
-/// A large item of a Run's whole, its parts read from `offset` on as Desktop's view does.
-pub fn run_file(client: &Client, installation: &str, run: &str, item: &str) -> Option<String> {
-    let mut bytes = Vec::new();
-    loop {
-        let part: RunFile = client
-            .request::<_, RunFile, Value>(
-                "runFile",
-                RunFilePayload {
-                    installation: installation.into(),
-                    run_id: run.into(),
-                    r#ref: item.into(),
-                    offset: Some(Some(bytes.len() as i64)),
-                },
-            )
-            .ok()?;
-        if matches!(part.encoding, Encoding::Utf8) && bytes.is_empty() {
-            return Some(part.content);
-        }
-        let read = base64::engine::general_purpose::STANDARD
-            .decode(part.content)
-            .ok()?;
-        let done = read.is_empty();
-        bytes.extend(read);
-        if done || bytes.len() as i64 >= part.size {
-            return String::from_utf8(bytes).ok();
-        }
-    }
-}
-
-/// A Run's diff as one patch: its files from `runDetail`, each file's patch from `runFile`;
-/// or why there is none.
-pub fn run_diff(client: &Client, installation: &str, run: &str) -> Result<String, String> {
-    let payload = RunDetailPayload {
-        installation: installation.into(),
-        run_id: run.into(),
-    };
-    // The record comes again as the host reads more of it; the diff comes after its detail.
-    // ponytail: a Run with no branch waits until its record ends; show "no diff" if that bites.
-    let mut records = client.stream::<_, KeptRecord, Value>("runDetail", payload);
-    let files = loop {
-        let kept = records
-            .next()
-            .ok_or("runDetail ended")?
-            .map_err(|e| e.to_string())?;
-        if let Some(diff) = kept.detail.and_then(|d| d.diff) {
-            break diff.files;
-        }
-    };
-    Ok(files
-        .iter()
-        .filter_map(|file| run_file(client, installation, run, &format!("diff:{}", file.path)))
-        .collect())
 }
 
 /// The marks a frame drawn at `at` ends or starts, read from the board it drew.
@@ -328,143 +94,13 @@ pub fn frame_drawn(drawn: &rune::Runtime<App>, at: f64) -> Vec<timing::Mark> {
     std::mem::take(&mut timing.marks)
 }
 
-fn card(k: &Kit, shown: &Shown, task: &Task) -> El {
-    // Card's own title neither wraps nor truncates, so the name is body text that wraps.
-    let name = text(task.name.clone())
-        .font(k.ty.body_medium)
-        .color(k.c.text_base)
-        .wrap()
-        .w_full();
-    let sentence = text(task.sentence.clone())
-        .font(k.ty.body)
-        .color(k.c.text_muted)
-        .wrap()
-        .max_lines(3)
-        .w_full();
-    let card = Card::new()
-        .child(name)
-        .child(sentence)
-        .build(k)
-        .key(format!("card-{}", task.id))
-        .role("button")
-        .label(task.name.clone())
-        .w(280.0);
-    match shown.installation.clone() {
-        Some(installation) => {
-            let (run, machine) = (task.run.clone(), shown.name.clone());
-            card.focusable(true).on_press(move |board: &mut App| {
-                board.go_to_pane(installation.clone(), run.clone(), machine.clone())
-            })
-        }
-        None => card,
-    }
-}
-
-fn machine(k: &Kit, shown: &Shown) -> El {
-    let heading = row()
-        .gap(8.0)
-        .center_y()
-        .child(
-            text(shown.name.clone())
-                .font(k.ty.ui_medium)
-                .color(k.c.text_strong)
-                .a11y_hidden(),
-        )
-        .child(Badge::new(shown.status()).build(k));
-    col()
-        .key(format!("machine-{}", shown.profile))
-        .role("group")
-        .label(shown.label())
-        .gap(8.0)
-        .child(heading)
-        .child(
-            row()
-                .flex_wrap()
-                .items_start()
-                .gap(8.0)
-                .children(shown.cards.iter().map(|task| card(k, shown, task))),
-        )
-}
-
-fn tab_of(board: &mut App) -> Option<&mut Tab> {
-    board.terminal.as_mut()
-}
-
 fn chat_of(board: &mut App) -> &mut Chat {
     &mut board.chat
 }
 
-fn flow_of(board: &mut App) -> &mut flow::FlowMap {
-    board.flow.as_mut().expect("a Flow map")
-}
-
-fn diff_of(board: &App) -> &DiffTab {
-    board.diff.as_ref().expect("an open diff")
-}
-
-fn diff_of_mut(board: &mut App) -> &mut DiffTab {
-    board.diff.as_mut().expect("an open diff")
-}
-
-/// The Board page's pane: the open Run's diff or pane, else each Machine and its cards.
+/// The Board page's pane: the open Run, else the board.
 pub fn board_pane(board: &App, k: &Kit) -> El {
-    if board.diff.is_some() {
-        let back = Button::new("Back to the pane")
-            .on_press(|board: &mut App| board.diff = None)
-            .build(k)
-            .key("close-diff");
-        return col()
-            .padding(16.0)
-            .gap(8.0)
-            .grow(1.0)
-            .min_h(0.0)
-            .child(back)
-            .child(diff_tab(board, diff_of, diff_of_mut, k));
-    }
-    if let Some(tab) = &board.terminal {
-        let back = Button::new("Back to the board")
-            .on_press(App::back)
-            .build(k)
-            .key("back");
-        let diff = Button::new("Diff")
-            .on_press(App::show_diff)
-            .build(k)
-            .key("open-diff");
-        return col()
-            .padding(16.0)
-            .gap(8.0)
-            .grow(1.0)
-            .min_h(0.0)
-            .child(row().gap(8.0).child(back).child(diff))
-            .children(
-                board
-                    .flow
-                    .as_ref()
-                    .map(|map| flow::flow_map(map, flow_of, k)),
-            )
-            .child(terminal(tab, tab_of));
-    }
-    let machines = board.machines.iter().map(|shown| machine(k, shown));
-    let ended = board
-        .ended
-        .iter()
-        .map(|why| text(why.clone()).color(k.c.text_strong).role("alert"));
-    col()
-        .padding(16.0)
-        .gap(20.0)
-        .grow(1.0)
-        .min_h(0.0)
-        .scroll(rune::ScrollSpec {
-            stick_bottom: false,
-        })
-        .children(ended)
-        .children(
-            board
-                .flow
-                .as_ref()
-                .map(|map| flow::flow_map(map, flow_of, k)),
-        )
-        .children(machines)
+    record::view(board, k).unwrap_or_else(|| board::view(board, k))
 }
 
 /// The chat as the window's trailing pane.
