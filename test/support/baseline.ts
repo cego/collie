@@ -4681,7 +4681,12 @@ scenario(
 const withOrigin = () =>
   Effect.gen(function* () {
     const git = (cwd: string, ...args: string[]) =>
-      exec(["git", ...args], { cwd }).pipe(Effect.map((done) => Str.trim(done.stdout)));
+      exec(["git", ...args], { cwd }).pipe(
+        Effect.map((done) => {
+          expect(done.exitCode, done.stderr).toBe(0);
+          return Str.trim(done.stdout);
+        }),
+      );
     const remote = `${rig.root}/origin.git`;
     const upstream = `${rig.root}/upstream`;
     yield* git(rig.root, "init", "-q", "--bare", "-b", "master", remote);
@@ -4717,17 +4722,6 @@ const withOrigin = () =>
     };
   });
 
-/** Until the file exists: a step whose prompt is written has been reached. */
-const reached = (file: string) =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) =>
-      until(
-        () => fs.exists(file).pipe(Effect.orElseSucceed(() => false)),
-        (there) => there,
-      ),
-    ),
-  );
-
 type Step = Effect.Effect<void, never, ChildProcessSpawner.ChildProcessSpawner>;
 
 /**
@@ -4758,7 +4752,13 @@ const builtUntilParked = (
     );
     const agents = `${dir}/agents/${runId}`;
     for (const { operation, step } of hands) {
-      yield* reached(`${agents}/${operation}.prompt.md`);
+      yield* until(
+        () => fs.readFileString(`${agents}/agents.log`).pipe(Effect.orElseSucceed(() => "")),
+        (said) =>
+          pipe(said, Str.includes(`: launched for ${operation}\n`)) ||
+          pipe(said, Str.includes(`: reattached to ${operation}\n`)),
+      );
+      expect(yield* prompts()).toContainEqual(expect.stringContaining(`${operation}.prompt.md`));
       yield* step;
       yield* fs.writeFileString(`${agents}/${operation}.json`, asJson(BUILT));
     }
@@ -8822,7 +8822,7 @@ scenario(
             Effect.gen(function* () {
               const [, why] = yield* until(
                 () => Effect.zip(run.status, parkedWhy(runId)),
-                ([got, why]) => why !== "" || got.status !== "pending",
+                ([got, why]) => got.status === "suspended" && why !== "",
               );
               expect(why).toContain("500");
               expect(why).toEndWith(`resume ${runId}.`);
@@ -9003,7 +9003,7 @@ scenario(
             Effect.gen(function* () {
               const [, why] = yield* until(
                 () => Effect.zip(run.status, parkedWhy(runId)),
-                ([got, why]) => why !== "" || got.status !== "pending",
+                ([got, why]) => got.status === "suspended" && why !== "",
               );
               expect(why).toContain("500");
               expect(why).toEndWith(`resume ${runId}.`);
@@ -9043,7 +9043,7 @@ scenario(
             Effect.gen(function* () {
               const [, why] = yield* until(
                 () => Effect.zip(run.status, parkedWhy(runId)),
-                ([got, why]) => why !== "" || got.status !== "pending",
+                ([got, why]) => got.status === "suspended" && why !== "",
               );
               expect(why).toContain("unable to access origin");
               expect(why).toEndWith(`resume ${runId}.`);
