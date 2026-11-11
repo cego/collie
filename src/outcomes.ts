@@ -316,8 +316,12 @@ export function measuresOf(
     }
     for (const resume of records?.resumes ?? []) {
       if (originOf(resume.origin) !== "human") continue;
-      const parkedFor = Arr.findLast(halts, (line) => epochMs(line.at) <= epochMs(resume.at));
-      if (Option.isSome(parkedFor)) causeOf(parkedFor.value.cause ?? "unknown").humanResumes += 1;
+      const at = epochMs(resume.at);
+      const parkedFor = Arr.findLast(halts, (line) => epochMs(line.at) <= at);
+      if (Option.isNone(parkedFor)) continue;
+      const parkedAt = epochMs(parkedFor.value.at);
+      if (Arr.some(moved, (when) => when > parkedAt && when < at)) continue;
+      causeOf(parkedFor.value.cause ?? "unknown").humanResumes += 1;
     }
     const peak = Arr.reduce<Metric, Metric | null>(
       Arr.filter(metrics, (line) => line.kind === "context"),

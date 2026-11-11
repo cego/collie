@@ -433,6 +433,29 @@ test("parks are counted per cause, with their time to the next step and the huma
   );
 });
 
+test("a human resume after the Run moved on from its park is not counted against that park", () => {
+  const report = reportOf(
+    [view({ runId: "a" })],
+    new Map(),
+    null,
+    new Map([
+      [
+        "a",
+        {
+          records: records({
+            moved: ["2026-09-30T11:00:00.000Z"],
+            resumes: [{ at: "2026-09-30T12:00:00.000Z", origin: "desktop" }],
+          }),
+          metrics: [halt("2026-09-30T10:00:00.000Z", "ci-job-absent")],
+        },
+      ],
+    ]),
+  );
+  expect(report.measures.parks.byCause).toMatchObject([
+    { cause: "ci-job-absent", humanResumes: 0 },
+  ]);
+});
+
 const reminded = (outcome: NonNullable<Metric["outcome"]>, waitedMs: number): Metric => ({
   at: "2026-09-30T10:00:00.000Z",
   kind: "recovery",
