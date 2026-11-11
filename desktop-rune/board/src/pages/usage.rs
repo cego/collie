@@ -12,7 +12,6 @@ use rune::{El, col, el, row, text};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Spinner};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
 
 const WARN_PERCENT: f64 = 90.0;
 
@@ -287,45 +286,25 @@ pub fn usage_page(
     PageView { sections, not_read }
 }
 
-/// How often Usage is read again while Desktop runs, as `useUsage` does.
-pub const USAGE_EVERY: Duration = Duration::from_secs(60);
-
+#[derive(Default)]
 pub struct Usage {
     pub machines: Vec<UsageSuccessItem>,
     pub listed: bool,
     /// When the shown reading was answered, in epoch milliseconds.
     pub read_at: Option<f64>,
     pub reading: bool,
-    /// Counts the asks, shared with the thread that asks again, so an older ask never wins.
+    /// Counts the asks, so an older ask never wins.
     asks: Arc<AtomicU64>,
     zone: Option<Zone>,
-    pub every: Duration,
-    fresh: bool,
-}
-
-impl Default for Usage {
-    fn default() -> Self {
-        Usage {
-            machines: Vec::new(),
-            listed: false,
-            read_at: None,
-            reading: false,
-            asks: Arc::default(),
-            zone: None,
-            every: USAGE_EVERY,
-            fresh: false,
-        }
-    }
 }
 
 impl Usage {
-    /// The sidebar has opened this page: reads Usage now, and from then on every minute.
+    /// The sidebar has opened this page: reads Usage now; the shell asks again each minute.
     pub fn opened(app: &mut App) {
         if app.pages.usage.zone.is_none() {
             app.pages.usage.zone = Some(Zone::here());
         }
         app.read_usage();
-        app.keep_usage_fresh();
     }
 }
 
@@ -355,26 +334,6 @@ impl App {
         let Some(core) = &self.core else { return };
         self.pages.usage.reading = true;
         ask_usage(core, &self.pages.usage.asks);
-    }
-
-    /// Asks again every `every` for as long as the app holds its Usage, once started.
-    fn keep_usage_fresh(&mut self) {
-        let Some(core) = self.core.clone() else {
-            return;
-        };
-        let state = &mut self.pages.usage;
-        if state.fresh {
-            return;
-        }
-        state.fresh = true;
-        let (asks, every) = (Arc::downgrade(&state.asks), state.every);
-        std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(every);
-                let Some(asks) = asks.upgrade() else { return };
-                ask_usage(&core, &asks);
-            }
-        });
     }
 }
 

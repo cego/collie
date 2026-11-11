@@ -416,10 +416,9 @@ fn opening_the_page_asks_each_machine_and_draws_a_meter_per_window_of_the_live_o
 }
 
 #[test]
-fn the_page_reads_usage_again_on_its_own_while_desktop_runs() {
+fn the_page_shows_the_reading_the_minutely_ask_brings() {
     let harness = Harness::<App>::new();
     let mut app = flock_app(&harness);
-    app.pages.usage.every = std::time::Duration::from_millis(250);
     let fresh = |percent: u32| {
         json!([machine(
             "vm",
@@ -429,22 +428,24 @@ fn the_page_reads_usage_again_on_its_own_while_desktop_runs() {
     };
     harness.fake.will_answer("usage", Ok(fresh(10)));
     app.open_page(Page::Usage);
+    harness.fake.will_answer("usage", Ok(fresh(10)));
+    app.ask_usage_when_due(0.0);
     let mut runtime = runtime(app);
     settle(&harness, &mut runtime);
     runtime.frame(100.0);
     assert!(said(&runtime, "Session: 10%"));
-    for _ in 0..8 {
-        harness.fake.will_answer("usage", Ok(fresh(64)));
-    }
-    std::thread::sleep(std::time::Duration::from_millis(700));
-    settle(&harness, &mut runtime);
-    runtime.frame(200.0);
-    assert!(
-        harness.fake.asked_of("usage").len() >= 2,
-        "it asked again without being told to"
+    harness.fake.will_answer("usage", Ok(fresh(64)));
+    runtime.update(|app, _| app.ask_usage_when_due(30_000.0));
+    assert_eq!(
+        harness.fake.asked_of("usage").len(),
+        2,
+        "not asked again within the minute"
     );
+    runtime.update(|app, _| app.ask_usage_when_due(61_000.0));
+    settle(&harness, &mut runtime);
+    runtime.frame(300.0);
     assert!(
         said(&runtime, "Session: 64%"),
-        "and shows the fresh reading"
+        "a minute on, the fresh reading"
     );
 }
