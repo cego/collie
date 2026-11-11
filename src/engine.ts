@@ -194,7 +194,7 @@ import {
   parkWithRecovery,
   recoveryLine,
 } from "./park-cause";
-import { healOn, healRequest, healerFor, passedOver } from "./heal";
+import { healOn, healRequest, passedOver } from "./heal";
 import type { Metrics, Solution } from "./board-model";
 import {
   forgeOfRef,
@@ -3766,7 +3766,9 @@ export const hostLayer = (options: {
             Effect.orElseSucceed(() => []),
           );
           const questions = yield* askedQuestions(yield* store.asked(runId), audit);
-          const passed = passedOver({
+          // Whether a healer is declared is the heal round's to find: loading every module
+          // here would hold the Run in its park call, where a resume is lost.
+          return passedOver({
             cause,
             isHeal: placing?.heals !== undefined,
             on: yield* under(healOn(userDir)).pipe(Effect.orElseSucceed(() => true)),
@@ -3775,12 +3777,6 @@ export const hostLayer = (options: {
               Arr.some(questions, (one) => one.answer === null),
             recoveries,
           });
-          if (passed !== null) return passed;
-          const healer =
-            row === null || env === undefined
-              ? null
-              : yield* under(healerFor({ pluginRoot: env.pluginRoot, userDir }, row.project));
-          return healer === null ? "no workflow declares itself the healer" : null;
         });
       const notify: Notifier["Service"]["notify"] = (runId, kind, body, about = {}) =>
         under(
