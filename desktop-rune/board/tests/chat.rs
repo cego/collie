@@ -478,11 +478,11 @@ fn a_harness_model_or_effort_is_saved_through_settings_and_a_refusal_is_said() {
     );
     window.refuse("setSettings", "Codex is not signed in.");
     assert_eq!(
-        window.node("chat-choice-refused")["name"],
+        window.node("chat-failed")["name"],
         "Codex is not signed in. Nothing was saved."
     );
-    window.tap("chat-choice-dismiss");
-    assert!(!window.has("chat-choice-refused"));
+    window.tap("chat-failed-dismiss");
+    assert!(!window.has("chat-failed"));
 
     window.tap("chat-model");
     window.rt.update(|board, _| {
@@ -1100,4 +1100,190 @@ fn a_reply_under_way_is_not_popped_out() {
     assert!(states(&pop).contains(&"disabled".to_string()), "{pop}");
     window.tap("chat-pop");
     assert!(popped.lock().unwrap().is_empty());
+}
+
+
+#[test]
+fn p2_the_composer_is_cleared_and_keeps_focus_after_send() {
+    let mut window = Window::reading(json!([]));
+    window.type_in("What needs me?");
+    window.tap("send");
+    assert_eq!(window.asked("say")[0]["text"], "What needs me?");
+    assert_eq!(window.composer(), "");
+    assert!(
+        window.flag(|b| b.chat.composer.focused),
+        "the composer has the focus back for the next message"
+    );
+}
+
+#[test]
+fn p2_a_refused_action_in_the_chat_is_said_not_swallowed() {
+    let mut window = Window::reading(conversation());
+    window.tap("chat-new");
+    window.refuse("reopen", "Codex is not signed in.");
+    assert_eq!(window.node("chat-failed")["name"], "Codex is not signed in.");
+    assert!(
+        !window.has("chat-trouble"),
+        "a refusal is not the chat reconnecting"
+    );
+    window.tap("chat-failed-dismiss");
+    assert!(!window.has("chat-failed"));
+
+    window.tap("chat-proactive");
+    window.refuse("setFlockSetting", "The Flock's settings are read-only here.");
+    assert_eq!(
+        window.node("chat-proactive")["name"],
+        "Speaks first about News that matters",
+        "the bell is back as it was"
+    );
+    assert_eq!(
+        window.node("chat-failed")["name"],
+        "The Flock's settings are read-only here."
+    );
+
+    let mut window = Window::reading(json!([]));
+    ask(&mut window, false);
+    window.tap("question-ask-1-0-1");
+    window.refuse("answer", "The question was already answered.");
+    assert_eq!(
+        window.node("chat-failed")["name"],
+        "The question was already answered."
+    );
+    assert_eq!(
+        window.node("question-ask-1-0-0")["disabled"],
+        Value::Null,
+        "the question can be answered again: {}",
+        window.node("question-ask-1-0-0")
+    );
+
+    let mut window = Window::reading(json!([]));
+    window.push("setupOffer", json!(true));
+    window.tap("setup-not-now");
+    window.refuse("declineSetup", "Settings could not be written.");
+    assert_eq!(
+        window.node("chat-failed")["name"],
+        "Settings could not be written."
+    );
+}
+
+
+#[test]
+fn p2_pressing_the_card_of_a_task_gone_from_the_board_says_so() {
+    let mut window = Window::reading(conversation());
+    window.tap("chat-about");
+    assert_eq!(
+        window.node("chat-failed")["name"],
+        "That Task is no longer on the board"
+    );
+}
+
+/// Whether the popup at `popup` opens against the trigger at `trigger`: beside it, not in a
+/// corner of the window.
+fn opens_at(trigger: &Value, popup: &Value) -> bool {
+    let at = |v: &Value, i: usize| v[i].as_f64().unwrap();
+    let (tx, ty, tw, th) = (at(trigger, 0), at(trigger, 1), at(trigger, 2), at(trigger, 3));
+    let (px, py, pw, ph) = (at(popup, 0), at(popup, 1), at(popup, 2), at(popup, 3));
+    let overlaps_x = px < tx + tw && px + pw > tx;
+    let touches_y = (py + ph - ty).abs() <= 12.0 || (py - (ty + th)).abs() <= 12.0;
+    overlaps_x && touches_y
+}
+
+#[test]
+fn the_chats_pickers_and_history_open_at_their_trigger() {
+    let mut window = Window::reading(json!([]));
+    window.push("settings", json!({}));
+    window.push("chatChoices", choices());
+    for (trigger, popup) in [
+        ("chat-harness", "chat-harness-menu-menu"),
+        ("chat-model", "chat-model-menu-content"),
+        ("chat-effort", "chat-effort-menu-menu"),
+        ("chat-earlier", "chat-earlier-menu-menu"),
+    ] {
+        let at = window.node(trigger)["bounds"].clone();
+        window.tap(trigger);
+        let shown = window.node(popup)["bounds"].clone();
+        assert!(opens_at(&at, &shown), "{popup} at {shown} for {trigger} at {at}");
+        window.key(Key::Escape, Mods::default());
+        assert!(!window.has(popup), "Escape closes {popup}");
+    }
+}
+
+#[test]
+fn the_chats_pickers_open_at_their_trigger_in_its_own_window() {
+    use collie_desktop_chat::window::{self as chat_window, Alone};
+    let core = Harness::<Alone>::new();
+    let mut alone = Alone::default();
+    let asks = core.core.clone();
+    alone.request = Some(Box::new(move |tag, payload, done| {
+        asks.request(tag, payload, move |a: &mut Alone, answer: Result<Value, CallError>| {
+            done(a, answer.map_err(|e| e.0))
+        })
+    }));
+    let streams = core.core.clone();
+    alone.stream = Some(Box::new(move |tag, payload, mut each| {
+        streams.stream(tag, payload, move |a: &mut Alone, value: Result<Value, CallError>| {
+            each(a, value.map_err(|e| e.0))
+        })
+    }));
+    alone.chat.pop = Some(Box::new(|_| {}));
+    chat_window::opened(&mut alone);
+    let env = Env {
+        system_dark: true,
+        scale: 1.0,
+    };
+    let mut rt = Runtime::new(alone, chat_window::view, (520.0, 820.0), env);
+    let mut at = 0.0;
+    let mut frame = |rt: &mut Runtime<Alone>| {
+        at += 100.0;
+        rt.frame(at);
+    };
+    frame(&mut rt);
+    core.fake.answer("transcript", Ok(json!([])));
+    core.fake.push("settings", Ok(json!({})));
+    core.fake.push("chatChoices", Ok(choices()));
+    rt.update(|a, _| core.settle(a));
+    frame(&mut rt);
+    let bounds = |rt: &Runtime<Alone>, key: &str| {
+        within(&rt.accessibility_json())
+            .into_iter()
+            .find(|n| n["key"] == key)
+            .map(|n| n["bounds"].clone())
+    };
+    for (trigger, popup) in [
+        ("chat-harness", "chat-harness-menu-menu"),
+        ("chat-model", "chat-model-menu-content"),
+        ("chat-effort", "chat-effort-menu-menu"),
+        ("chat-earlier", "chat-earlier-menu-menu"),
+    ] {
+        let at = bounds(&rt, trigger).unwrap();
+        let (x, y) = rt.find(trigger).unwrap();
+        rt.pointer_move(x, y);
+        frame(&mut rt);
+        rt.pointer_down(x, y);
+        frame(&mut rt);
+        rt.pointer_up(x, y);
+        frame(&mut rt);
+        rt.update(|a, _| core.settle(a));
+        frame(&mut rt);
+        let shown = bounds(&rt, popup).unwrap_or_else(|| panic!("{popup} is open"));
+        assert!(opens_at(&at, &shown), "{popup} at {shown} for {trigger} at {at}");
+        rt.key(KeyEvent {
+            key: Key::Escape,
+            mods: Mods::default(),
+        });
+        frame(&mut rt);
+        frame(&mut rt);
+    }
+}
+
+#[test]
+fn p2_a_conversation_changed_under_a_stopped_reply_is_read_again() {
+    let mut window = Window::reading(conversation());
+    window.type_in("hello");
+    window.tap("send");
+    window.push("conversationChanges", json!("changed"));
+    assert_eq!(window.asked("transcript").len(), 1, "not while a reply streams");
+    window.tap("stop");
+    assert!(!window.has("stop"), "the reply is no longer under way");
+    assert_eq!(window.asked("transcript").len(), 2, "read once it is stopped");
 }

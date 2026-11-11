@@ -79,8 +79,9 @@ pub struct Chat {
     pub settings: Option<SettingsSuccess>,
     pub choices: Option<ChatChoicesSuccess>,
     remembered: Option<SetChoice>,
-    /// Why the latest choice was refused, until dismissed or another is made.
-    pub choice_refused: Option<String>,
+    /// Why the last thing the human did in the chat was refused or failed, until dismissed or
+    /// another choice is made.
+    pub failed: Option<String>,
     /// The chat speaks first about News that matters, unless the Flock's setting says not.
     pub proactive: Option<bool>,
     pub earlier: Option<Result<ConversationsSuccess, String>>,
@@ -433,6 +434,8 @@ pub fn send<S: Host>(s: &mut S, now: bool) {
     }
     let before = chat.status.clone();
     chat.clear_draft();
+    // Send may have been pressed, so the next message is typed without a click first.
+    chat.composer.focused = true;
     if chat.transcript.running && !now {
         chat.enqueue(draft);
         return;
@@ -443,6 +446,12 @@ pub fn send<S: Host>(s: &mut S, now: bool) {
     let begun = chat.begin(draft, now);
     chat.announce_after(Some(before), false);
     start(s, begun);
+}
+
+/// Stop pressed: the reply ends, and a conversation that changed under it is read again.
+pub fn stop<S: Host>(s: &mut S) {
+    s.chat_mut().stop();
+    maybe_reload(s);
 }
 
 /// Sends the failed turn's message again.
@@ -680,7 +689,7 @@ pub fn reopen<S: Host>(s: &mut S, conversation: Option<Conversation>) {
                 chat.stale = true;
                 reload(s);
             }
-            Err(why) => s.chat_mut().trouble = Some(why),
+            Err(why) => s.chat_mut().failed = Some(why),
         },
     );
 }
@@ -688,7 +697,7 @@ pub fn reopen<S: Host>(s: &mut S, conversation: Option<Conversation>) {
 /// Saves a harness, model or effort choice; why not, where the core refuses it.
 pub fn choose_setting<S: Host>(s: &mut S, change: SetSettingsPayload) {
     let chat = s.chat_mut();
-    chat.choice_refused = None;
+    chat.failed = None;
     chat.menu = None;
     chat.model_menu.close();
     chat.composer.focused = true;
@@ -700,7 +709,7 @@ pub fn choose_setting<S: Host>(s: &mut S, change: SetSettingsPayload) {
             let chat = s.chat_mut();
             match saved {
                 Ok(settings) => chat.settings = Some(settings),
-                Err(why) => chat.choice_refused = Some(refusal_said(&why)),
+                Err(why) => chat.failed = Some(refusal_said(&why)),
             }
         },
     );
@@ -716,14 +725,17 @@ pub fn stay<S: Host>(s: &mut S) {
 }
 
 pub fn set_proactive<S: Host>(s: &mut S, proactive: bool) {
+    let was = s.chat().proactive;
     s.chat_mut().proactive = Some(proactive);
     ask(
         s,
         "setFlockSetting",
         json!({ "key": "flock_chat.proactive", "value": proactive.to_string() }),
-        |s: &mut S, said: Result<String, String>| {
+        move |s: &mut S, said: Result<String, String>| {
             if let Err(why) = said {
-                s.chat_mut().trouble = Some(why);
+                let chat = s.chat_mut();
+                chat.proactive = was;
+                chat.failed = Some(why);
             }
         },
     );
@@ -735,11 +747,18 @@ pub fn answer<S: Host>(s: &mut S, id: &str, args: &str) {
         return;
     };
     s.chat_mut().answered.insert(id.into());
+    let id = id.to_string();
     ask(
         s,
         "answer",
         json!({ "toolCallId": id, "answers": answers }),
-        |_: &mut S, _: Result<Value, String>| {},
+        move |s: &mut S, done: Result<Value, String>| {
+            if let Err(why) = done {
+                let chat = s.chat_mut();
+                chat.answered.remove(&id);
+                chat.failed = Some(why);
+            }
+        },
     );
 }
 
@@ -767,7 +786,11 @@ pub fn follow<S: Host>(s: &mut S, url: &str) {
             s,
             "openLink",
             json!({ "url": url }),
-            |_: &mut S, _: Result<Value, String>| {},
+            |s: &mut S, done: Result<Value, String>| {
+                if let Err(why) = done {
+                    s.chat_mut().failed = Some(why);
+                }
+            },
         );
     }
 }
@@ -882,10 +905,9 @@ pub fn clipboard_files<S: Host>(s: &mut S) {
         s,
         "clipboardFiles",
         (),
-        |s: &mut S, staged: Result<Vec<StagedOrRefusedItem>, String>| {
-            if let Ok(staged) = staged {
-                s.chat_mut().took(staged, Vec::new());
-            }
+        |s: &mut S, staged: Result<Vec<StagedOrRefusedItem>, String>| match staged {
+            Ok(staged) => s.chat_mut().took(staged, Vec::new()),
+            Err(why) => s.chat_mut().refused = Some(why),
         },
     );
 }
@@ -899,7 +921,7 @@ pub fn decline_setup<S: Host>(s: &mut S, for_good: bool) {
         json!({ "forGood": for_good }),
         |s: &mut S, done: Result<Value, String>| {
             if let Err(why) = done {
-                s.chat_mut().trouble = Some(why);
+                s.chat_mut().failed = Some(why);
             }
         },
     );
@@ -913,8 +935,16 @@ pub fn ask_setup<S: Host>(s: &mut S) {
         "setupInventory",
         (),
         |s: &mut S, found: Result<Vec<SetupInventorySuccessItem>, String>| {
-            if let Setup::Asked(listed) = &mut s.chat_mut().setup {
-                *listed = Some(found.unwrap_or_default());
+            let chat = s.chat_mut();
+            if !matches!(chat.setup, Setup::Asked(_)) {
+                return;
+            }
+            match found {
+                Ok(found) => chat.setup = Setup::Asked(Some(found)),
+                Err(why) => {
+                    chat.setup = Setup::Offered;
+                    chat.failed = Some(why);
+                }
             }
         },
     );
@@ -927,7 +957,11 @@ pub fn choose_setup<S: Host>(s: &mut S, choice: Choice) {
         s,
         "chooseSetup",
         json!({ "choice": choice }),
-        |_: &mut S, _: Result<Value, String>| {},
+        |s: &mut S, done: Result<Value, String>| {
+            if let Err(why) = done {
+                s.chat_mut().failed = Some(why);
+            }
+        },
     );
 }
 

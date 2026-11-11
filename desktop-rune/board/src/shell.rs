@@ -69,6 +69,11 @@ impl Page {
     }
 }
 
+const CHAT_MIN: f32 = 320.0;
+const CHAT_MAX: f32 = 820.0;
+/// The window the chat leaves to the sidebar and the board: 224 and stable's `boardMin`, 480.
+const CHAT_BESIDE: f32 = 224.0 + 480.0;
+
 pub struct Nav {
     pub page: Page,
     pub sidebar: PaneState,
@@ -89,7 +94,7 @@ impl Default for Nav {
         Nav {
             page: Page::Board,
             sidebar: PaneState::new(224.0).range(168.0, 360.0),
-            chat: PaneState::new(440.0).range(320.0, 820.0).collapsed(),
+            chat: PaneState::new(440.0).range(CHAT_MIN, CHAT_MAX).collapsed(),
             chat_saved: None,
             usage_asked: None,
             usage_asked_of: Vec::new(),
@@ -127,6 +132,19 @@ impl App {
         self.nav.chat.toggle();
     }
 
+    /// Keeps the chat to what a `window` points wide leaves the board, as `chatWidthMax` in
+    /// `desktop/src/shared/chat-width.ts` does; the width the human chose comes back as it widens.
+    pub fn fit_chat(&mut self, window: f32) {
+        let max = (window - CHAT_BESIDE).clamp(CHAT_MIN, CHAT_MAX);
+        if max == self.nav.chat.max_width() || self.nav.chat.is_resizing() {
+            return;
+        }
+        self.nav.chat = self.nav.chat.range(CHAT_MIN, max);
+        if let Some(chosen) = self.nav.chat_saved {
+            self.nav.chat.set_width(chosen);
+        }
+    }
+
     /// Takes the chat's saved width once settings are read, then saves each width a drag
     /// leaves it at.
     pub fn keep_chat_width(&mut self) {
@@ -137,11 +155,16 @@ impl App {
             if let Some(width) = settings.chat_width {
                 self.nav.chat.set_width(width as f32);
             }
-            self.nav.chat_saved = Some(self.nav.chat.width());
+            let chosen = settings.chat_width.map(|w| w as f32);
+            self.nav.chat_saved = Some(chosen.unwrap_or(self.nav.chat.width()));
             return;
         };
         let width = self.nav.chat.width();
-        if self.nav.chat.is_resizing() || width == saved {
+        let drawn = saved
+            .round()
+            .clamp(self.nav.chat.min_width(), self.nav.chat.max_width());
+        // A width the window narrowed is drawn, not chosen.
+        if self.nav.chat.is_resizing() || width == saved || width == drawn {
             return;
         }
         self.nav.chat_saved = Some(width);
@@ -288,7 +311,9 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
         .reduced_motion(cx.is_reduced_motion())
         .build(k);
     crate::standing::view(app, k, &mut layer);
-    rune_kit::root(split, layer).on_window_focus(|app: &mut App, focused: bool, _: &mut Tx| {
+    rune_kit::root(split, layer)
+        .on_layout_tx(|app: &mut App, [_, _, width, _], _| app.fit_chat(width))
+        .on_window_focus(|app: &mut App, focused: bool, _: &mut Tx| {
         if let Some(tab) = &mut app.terminal {
             tab.focus(focused);
         }

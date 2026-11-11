@@ -150,11 +150,13 @@ impl Host for App {
         self.nav.chat.set_open(!out);
     }
 
-    fn open_about(&mut self, about: &About) {
-        if let Some(card) = self.placed_at(&about.machine, &about.task) {
-            let key = card.key;
-            self.gesture(board::clicks::Gesture::Name(key));
-        }
+    fn open_about(&mut self, about: &About) -> Option<String> {
+        let Some(card) = self.placed_at(&about.machine, &about.task) else {
+            return Some("That Task is no longer on the board".into());
+        };
+        let key = card.key;
+        self.gesture(board::clicks::Gesture::Name(key));
+        None
     }
 }
 

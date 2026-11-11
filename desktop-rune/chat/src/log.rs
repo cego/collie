@@ -329,7 +329,11 @@ fn about_badge<S: Host>(k: &Kit, about: &About) -> El {
         .label(format!("About {line}"))
         .help(line.clone())
         .focusable(true)
-        .on_press(move |s: &mut S| s.open_about(&opened))
+        .on_press(move |s: &mut S| {
+            if let Some(why) = s.open_about(&opened) {
+                s.chat_mut().failed = Some(why);
+            }
+        })
         .self_end()
         .max_w(320.0)
         .gap(4.0)

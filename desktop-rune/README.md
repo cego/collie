@@ -230,8 +230,13 @@ trait the app implements, so `board/tests/chat.rs` drives it on the fake core. I
 once no reply streams; Enter queues while a reply streams and Ctrl+Enter sends now; Stop brings
 the queued words back to the composer. Tool rows open to their input and ANSI-coloured output,
 the chat's questions are answered in place (`answer`), harness, model (a typed id too) and effort
-save through `setSettings` and a refusal is said, earlier conversations reopen, the setup offer
-is answered inline, a message copies, and the board's card rides on the next message as a chip.
+save through `setSettings`, earlier conversations reopen, the setup offer is answered inline, a
+message copies, and the board's card rides on the next message as a chip. Whatever the core
+refuses there (a choice, a reopen, the bell, an answer, a setup step, a link) is said in one
+dismissible notice over the message box, and Send hands the composer its focus back. The chat
+is narrowed to leave the board 480 points (`fit_chat` in `board/src/shell.rs`), and the width
+the human chose comes back as the window widens. A card pressed in the chat's own window is
+opened by the board's.
 `chat/src/log.rs` draws the transcript (a run of finished tool calls folds into one "Used N
 tools" line, a reply under way says "Working…" until its words or a waiting call show, and a
 log scrolled up offers Jump to latest) and `chat/src/composer.rs` the message box, its choices

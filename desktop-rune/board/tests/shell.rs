@@ -389,3 +389,67 @@ fn while_the_chat_is_in_its_own_window_the_toolbar_brings_that_window_forward() 
         "the pane beside the board stays closed"
     );
 }
+
+#[test]
+fn p2_a_narrow_window_narrows_the_chat_without_saving_it_and_a_wide_one_gives_it_back() {
+    let harness = Harness::<App>::new();
+    let mut app = App::default();
+    app.core = Some(harness.core.clone());
+    app.nav.chat.set_open(true);
+    let mut settings = app.chat.settings();
+    settings.chat_width = Some(640.0);
+    app.chat.settings = Some(settings);
+    let mut runtime = Runtime::new(
+        app,
+        view,
+        (1024.0, 700.0),
+        Env {
+            system_dark: true,
+            scale: 1.0,
+        },
+    );
+    let mut at = 0.0;
+    let mut settle = |runtime: &mut Runtime<App>| {
+        for _ in 0..3 {
+            at += 100.0;
+            runtime.update(|app, _| app.keep_chat_width());
+            runtime.frame(at);
+        }
+    };
+    settle(&mut runtime);
+    let width = |runtime: &mut Runtime<App>| {
+        let mut width = 0.0;
+        runtime.update(|app, _| width = app.nav.chat.width());
+        width
+    };
+    let board_width = within_bounds(&runtime.accessibility_json(), "main-pane");
+    assert!(
+        width(&mut runtime) <= 320.0,
+        "the chat leaves the board room at 1024 points: {}",
+        width(&mut runtime)
+    );
+    assert!(
+        board_width.is_some_and(|w| w >= 400.0),
+        "the board keeps its room: {board_width:?}"
+    );
+    assert!(
+        harness.fake.asked_of("setSettings").is_empty(),
+        "a width the window narrowed is not saved"
+    );
+
+    runtime.set_viewport((1600.0, 1000.0), 1.0);
+    settle(&mut runtime);
+    assert_eq!(width(&mut runtime), 640.0, "the chosen width is back");
+    assert!(harness.fake.asked_of("setSettings").is_empty());
+}
+
+fn within_bounds(node: &Value, key: &str) -> Option<f64> {
+    if node["key"] == key {
+        return node["bounds"][2].as_f64();
+    }
+    node["children"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find_map(|child| within_bounds(child, key))
+}
