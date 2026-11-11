@@ -44,7 +44,7 @@ import { waitLine } from "./memory-wait";
 import { runWaits } from "./run-waits";
 import { awaitingLine } from "./awaiting";
 import { mrOf, readForge, readMrStates } from "./merges";
-import { filed, nothingToLandFile, standingOf } from "./standing";
+import { filed, nothingToLandFile, type Recorded, settlementOf, standingOf } from "./standing";
 import { offersOf } from "./lifecycle";
 import { mrIdIn, shell } from "./mr";
 import type {
@@ -946,7 +946,7 @@ interface Carried {
 function mrsOf(
   carried: ReadonlyArray<{ readonly run: RunFacts; readonly mr: string; readonly id: string }>,
   waves: ReadonlyArray<{ readonly run: string | null; readonly wave: number }>,
-): Array<Carried & { readonly id: string }> {
+): Array<Carried & { readonly id: string; readonly runs: ReadonlyArray<RunFacts> }> {
   const waveOf = new Map(Arr.map(waves, (one) => [one.run, one.wave]));
   const byId = new Map<string, { id: string; mr: string; runs: RunFacts[] }>();
   for (const { run, mr, id } of carried) {
@@ -989,28 +989,40 @@ export const ownedMrs = Effect.fn("Board.ownedMrs")(function* (runs: ReadonlyArr
   }));
 });
 
-/** A Run's Dispositions, each with the MR id it names as read in that Run's checkout. */
-const ledgerOf = Effect.fn("Board.ledgerOf")(function* (run: RunFacts) {
+/**
+ * A Run's Dispositions, each with the MR id it names as read in that Run's checkout, and
+ * whether it names a Run whose card is not `card`, as `cardOf` says each Run's card is.
+ */
+const ledgerOf = Effect.fn("Board.ledgerOf")(function* (
+  run: RunFacts,
+  card: string,
+  cardOf: ReadonlyMap<string, string>,
+) {
   const lines = yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => []));
   return yield* Effect.forEach(lines, (line) =>
-    Effect.map(line.ref === "" ? Effect.succeed(null) : mrIdIn(line.ref, run.cwd, shell), (id) => ({
-      line,
-      id,
-    })),
+    Effect.map(
+      line.ref === "" ? Effect.succeed(null) : mrIdIn(line.ref, run.cwd, shell),
+      (mr): Recorded => ({
+        run: run.id,
+        line,
+        mr,
+        elsewhere: Arr.some(Str.split(line.ref, /[\s;,]+/), (word) => {
+          const named = cardOf.get(word);
+          return named !== undefined && named !== card;
+        }),
+      }),
+    ),
   );
 });
 
 /** A merge request's latest Disposition: one naming it on any Run, or naming none on its owner. */
 function dispositionFor(
   entry: Carried & { readonly id: string },
-  ledgers: ReadonlyMap<
-    string,
-    ReadonlyArray<{ readonly line: Disposition; readonly id: string | null }>
-  >,
+  ledgers: ReadonlyMap<string, ReadonlyArray<Recorded>>,
 ): Disposition | null {
   const named = Arr.flatMap([...ledgers], ([run, lines]) =>
-    Arr.flatMap(lines, ({ line, id }) =>
-      (line.ref === "" ? run === entry.owner.id : id === entry.id) ? [line] : [],
+    Arr.flatMap(lines, ({ line, mr }) =>
+      (line.ref === "" ? run === entry.owner.id : mr === entry.id) ? [line] : [],
     ),
   );
   return named.sort((a, b) => epochMs(a.at) - epochMs(b.at)).at(-1) ?? null;
@@ -1183,6 +1195,11 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
     groups.set(key, [...(groups.get(key) ?? []), run]);
   }
 
+  const cardOf = new Map<string, string>();
+  for (const [key, runs] of groups)
+    for (const run of runs)
+      for (const one of [run, ...(repoRunsOf.get(run.id) ?? [])]) cardOf.set(one.id, key);
+
   const flowInputs = yield* flowInputsFor(opts.env, all);
   const views = yield* Effect.forEach(
     groups,
@@ -1272,8 +1289,72 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         const disposition = yield* dispositionOf(repoRun === undefined ? runs : [...runs, repoRun]);
         const checking = Arr.filter(everyRun, (run) => checked.has(run.id));
         const leader = leaderOf(runs);
+        // What the Task left behind: the tickets are whichever of its Runs wrote any.
+        let issues = 0;
+        for (const run of runs) issues = Math.max(issues, yield* planIssuesIn(run.dir));
+        let owed: string | null = null;
+        for (const run of runs) owed ??= yield* branchOwed(run);
+        const ledgers = new Map(
+          yield* Effect.forEach(everyRun, (run) =>
+            Effect.map(ledgerOf(run, id, cardOf), (lines) => [run.id, lines] as const),
+          ),
+        );
+        const recorded = Arr.flatten([...ledgers.values()]);
+        const forgeReads = (state: MrState | null) =>
+          state === null || state === "open" || state === "closed" ? state : ("merged" as const);
+        const fates = Arr.map(entries, (entry) => {
+          const state = mrStates.get(entry.id) ?? null;
+          const settlement = settlementOf(
+            {
+              id: entry.id,
+              runs: Arr.map(entry.runs, (run) => run.id),
+              forge: forgeReads(state),
+            },
+            recorded,
+            leader.id,
+          );
+          return {
+            ...entry,
+            state,
+            settlement,
+            disposed: dispositionFor(entry, ledgers),
+            merged: settlement.by === "merged",
+          };
+        });
+        // A branch, or a merge request no id can be told for, is owed by the Runs that carry it.
+        const unnamed =
+          entries.length > 0 || (owed === null && lead === undefined)
+            ? []
+            : [
+                settlementOf(
+                  {
+                    id: null,
+                    runs: Arr.map(
+                      Arr.filter(runs, (run) => run.branch !== null || mrOf(run) !== null),
+                      (run) => run.id,
+                    ),
+                    forge: null,
+                  },
+                  recorded,
+                  leader.id,
+                ),
+              ];
+        const settlements = [...Arr.map(fates, (one) => one.settlement), ...unnamed];
+        const owing =
+          Arr.some(settlements, (one) => one.by === null) ||
+          !Arr.every(everyRun, (run) => over(run, everyRun));
+        // The line that settled the work, never one that settled nothing.
+        const told =
+          settlements.length === 0
+            ? disposition
+            : (Arr.filter(
+                Arr.map(settlements, (one) => one.line),
+                (line) => line !== null,
+              )
+                .sort((a, b) => epochMs(a.at) - epochMs(b.at))
+                .at(-1) ?? null);
         const unseenReport = (run: RunFacts) =>
-          disposition === null &&
+          told === null &&
           run.state === "succeeded" &&
           (run.summary ?? "") !== "" &&
           since !== null &&
@@ -1292,7 +1373,17 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           Arr.every(runs, (run) => over(run, runs)) &&
           last < now - FINISHED_FOR_MS &&
           pending.length === 0 &&
-          (disposition !== null || (yield* nothingToFile(runs))) &&
+          ((yield* nothingToFile(runs)) ||
+            standingOf({
+              settled: true,
+              succeeded: leader.state === "succeeded",
+              branch: owed,
+              mr: lead?.mr ?? null,
+              owing,
+              planIssues: issues,
+              disposed: disposition !== null,
+              asking: false,
+            }).landed) &&
           !(yield* unseenReport(leader))
         )
           return keep(null, Infinity);
@@ -1398,37 +1489,14 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
               (b) => b !== null,
             ),
           ) ?? null;
-        // What the Task left behind: the tickets are whichever of its Runs wrote any.
-        let issues = 0;
-        for (const run of runs) issues = Math.max(issues, yield* planIssuesIn(run.dir));
-        let owed: string | null = null;
-        for (const run of runs) owed ??= yield* branchOwed(run);
-        const ledgers = new Map(
-          entries.length === 0
-            ? []
-            : yield* Effect.forEach(everyRun, (run) =>
-                Effect.map(ledgerOf(run), (lines) => [run.id, lines] as const),
-              ),
-        );
-        const fates = Arr.map(entries, (entry) => {
-          const state = mrStates.get(entry.id) ?? null;
-          const disposed = dispositionFor(entry, ledgers);
-          const merged =
-            (state !== null && LANDED_STATES.has(state)) || disposed?.kind === "merged";
-          return { ...entry, state, disposed, merged };
-        });
         const { planReady, landed } = standingOf({
           settled: settledNow,
           succeeded: status === "succeeded",
           branch: owed,
           mr,
-          // Several land together: each merged or disposed of, and nothing of the Task going.
-          mrLanded: several
-            ? Arr.every(fates, (one) => one.merged || one.disposed !== null) &&
-              Arr.every(everyRun, (run) => over(run, everyRun))
-            : mrState !== null && LANDED_STATES.has(mrState),
+          owing,
           planIssues: issues,
-          disposed: !several && disposition !== null,
+          disposed: disposition !== null,
           asking: decision !== null,
         });
         /** A merge request's checks and readiness, read in the Run `merging`. */
@@ -1489,11 +1557,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           mr,
           merging,
           check,
-          state === "done" &&
-            mr !== null &&
-            disposition === null &&
-            !landed &&
-            (mrState === null || mrState === "open"),
+          state === "done" && mr !== null && !landed && (mrState === null || mrState === "open"),
         );
         const each = several
           ? yield* Effect.forEach(fates, (one) =>
@@ -1505,7 +1569,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
                     one.mr,
                     one.owner,
                     yield* runningCheck(one.owner, all, markers, now),
-                    one.disposed === null && (one.state === null || one.state === "open"),
+                    one.settlement.by === null && (one.state === null || one.state === "open"),
                   )),
                 };
               }),
@@ -1534,6 +1598,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
             head: one.head,
             ready: one.readiness.ready,
             disposition: one.disposed === null ? null : dispositionLine(one.disposed),
+            settled: one.settlement.by,
             waitsOn: waitsOnOf(one.id, ids, forge),
           };
         });
@@ -1614,6 +1679,12 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
             ? ("done" as const)
             : state;
         const resumed = going ? yield* resumedWith(leader) : null;
+        // "Superseded by" is said only by the Run whose line it is, and never as the Task's outcome.
+        const spoken = landed
+          ? told
+          : state === "done"
+            ? null
+            : ((ledgers.get(leader.id) ?? []).at(-1)?.line ?? null);
         const sentenceAt = (now: number) =>
           sentenceFor({
             mr,
@@ -1622,7 +1693,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
                   short: mrs[at]!.short,
                   state: one.state,
                   merged: one.merged,
-                  disposed: one.disposed?.kind ?? null,
+                  disposed: one.merged ? null : one.settlement.by,
                   ready: one.readiness.ready,
                   waitsOn: Arr.map(mrs[at]!.waitsOn, (id) => shortOf.get(id) ?? id),
                 }))
@@ -1652,14 +1723,14 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
             resumed,
             stalled,
             disposition:
-              disposition === null
+              spoken === null
                 ? null
                 : {
-                    kind: disposition.kind,
+                    kind: spoken.kind,
                     // Recorded refs vary in shape; the card reads them all the one way.
-                    ref: disposition.ref === "" ? "" : mrLabel(disposition.ref),
-                    ago: ago(disposition.at, now),
-                    by: disposition.by,
+                    ref: spoken.ref === "" ? "" : mrLabel(spoken.ref),
+                    ago: ago(spoken.at, now),
+                    by: spoken.by,
                   },
           });
         const bare: TaskView = {

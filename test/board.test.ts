@@ -1340,7 +1340,254 @@ test("a Task's card reads its Task: the latest Disposition on any of its Runs", 
       expect((yield* board(env, [plan, implement]))[0]!.disposition).toBe("merged cego/collie#115");
 
       yield* disposed(implement, "2026-09-14T09:45:00Z", "cego/collie#116");
-      expect((yield* board(env, [plan, implement]))[0]!.disposition).toBe("merged cego/collie#116");
+      const [card] = yield* board(env, [plan, implement]);
+      expect(card!.disposition).toBe("merged cego/collie#116");
+      // The branch is settled by the line on the Run that carries it, not by the plan's.
+      expect(card!.landed).toBe(true);
+    }),
+  ));
+
+test("a Task's card reads its Task: a line on a Run that carries no branch settles nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const plan = yield* madeRun(dir, {
+        id: "r-plan",
+        workflow: "plan",
+        task: "task-1",
+        state: "succeeded",
+        created: "2026-09-14T08:00:00Z",
+        finished: "2026-09-14T08:05:00Z",
+      });
+      const implement = yield* madeRun(dir, {
+        id: "r-implement",
+        task: "task-1",
+        state: "succeeded",
+        branch: "mk/control-plane",
+        created: "2026-09-14T08:10:00Z",
+        finished: "2026-09-14T08:30:00Z",
+      });
+      yield* recordDisposition(plan.dir, {
+        at: "2026-09-14T09:30:00Z",
+        by: "mk",
+        kind: "superseded",
+        ref: "r-implement",
+        note: null,
+      });
+      const [card] = yield* board(env, [plan, implement]);
+      expect(card!.disposition).toBe("superseded r-implement");
+      expect(card!.landed).toBe(false);
+      expect(sectionOf(card!)).toBe("waiting");
+    }),
+  ));
+
+// A Task lands when what it owes is settled (ADR-draft-a-task-lands-when-what-it-owes-is-settled).
+
+const M = "https://gitlab.cego.dk/mk/support/-/merge_requests/279";
+const M_ID = "gitlab.cego.dk/mk/support!279";
+const M_HEAD = "77215b10aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+/**
+ * The support !279 chain: a failed Run carrying M, superseded by its follow-up in the same
+ * Task, which succeeded with `then=finish` carrying M too.
+ */
+const supersededChain = Effect.fn("board.supersededChain")(function* (dir: string) {
+  const first = yield* madeRun(dir, {
+    id: "r-first",
+    task: "task-1",
+    state: "failed",
+    branch: "mk/nuxt-ci",
+    mr: M,
+    created: "2026-09-14T08:00:00Z",
+    finished: "2026-09-14T08:30:00Z",
+  });
+  const second = yield* madeRun(dir, {
+    id: "r-second",
+    task: "task-1",
+    state: "succeeded",
+    branch: "mk/nuxt-ci",
+    mr: M,
+    created: "2026-09-14T08:40:00Z",
+    finished: "2026-09-14T09:30:00Z",
+  });
+  yield* recordDisposition(first.dir, {
+    at: "2026-09-14T09:00:00Z",
+    by: "cli:recovery",
+    kind: "superseded",
+    ref: `r-second; ${M}`,
+    note: null,
+  });
+  yield* appendVerification(second.evidence, checked("test", M_HEAD));
+  return { first, second };
+});
+
+/** The forge's word on M: `state`, green at its head, and not approved. */
+const unapproved = (state: MrState = "open") => ({
+  mrStates: new Map<string, MrState>([[M_ID, state]]),
+  forge: new Map([
+    [
+      M_ID,
+      {
+        checks: { state: "passed" as const },
+        head: M_HEAD,
+        mergeable: { state: "blocked" as const, said: "not approved" },
+      },
+    ],
+  ]),
+  head: () => Effect.succeed(M_HEAD),
+});
+
+test("a follow-up that finished at an open merge request leaves its Task owing it, whatever its predecessor's line", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const { first, second } = yield* supersededChain(dir);
+      const [card] = yield* board(env, [first, second], unapproved());
+      expect(card!.landed).toBe(false);
+      expect(sectionOf(card!)).toBe("waiting");
+      expect(card!.sentence).toContain("mk/support!279");
+      expect(card!.sentence).toContain("not approved");
+      expect(card!.sentence).not.toContain("Superseded by");
+    }),
+  ));
+
+test("a Task still owing a merge request is not folded into History a day later", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const { first, second } = yield* supersededChain(dir);
+      const views = yield* board(env, [first, second], {
+        ...unapproved(),
+        now: epochMs("2026-09-15T10:30:00Z"),
+      });
+      expect(Arr.map(views, (view) => view.id)).toEqual(["task-1"]);
+      expect(sectionOf(views[0]!)).toBe("waiting");
+    }),
+  ));
+
+test("a line handing the work to a Run of another Task lands its own Task, and the other owes what it carries", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const first = yield* madeRun(dir, {
+        id: "r-first",
+        task: "task-1",
+        state: "failed",
+        branch: "mk/nuxt-ci",
+        mr: M,
+        created: "2026-09-14T08:00:00Z",
+        finished: "2026-09-14T08:30:00Z",
+      });
+      const elsewhere = yield* madeRun(dir, {
+        id: "r-elsewhere",
+        task: "task-2",
+        state: "succeeded",
+        branch: "mk/nuxt-ci",
+        mr: M,
+        created: "2026-09-14T08:40:00Z",
+        finished: "2026-09-14T09:30:00Z",
+      });
+      yield* recordDisposition(first.dir, {
+        at: "2026-09-14T09:00:00Z",
+        by: "mk",
+        kind: "superseded",
+        ref: "r-elsewhere",
+        note: null,
+      });
+      const views = yield* board(env, [first, elsewhere], {
+        ...unapproved(),
+        tasks: [TASK, { ...TASK, id: "task-2" }],
+      });
+      const by = (task: string) =>
+        Option.getOrUndefined(Arr.findFirst(views, (view) => view.id === task))!;
+      expect(by("task-1").landed).toBe(true);
+      expect(sectionOf(by("task-1"))).toBe("finished");
+      expect(by("task-1").sentence).toContain("Superseded by r-elsewhere");
+      expect(by("task-2").landed).toBe(false);
+      expect(sectionOf(by("task-2"))).toBe("waiting");
+      expect(by("task-2").sentence).toContain("mk/support!279");
+    }),
+  ));
+
+test("a superseded merge request is settled while its forge reads it closed, and owed again once reopened", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, {
+        task: "task-1",
+        state: "succeeded",
+        branch: "mk/nuxt-ci",
+        mr: M,
+        finished: "2026-09-14T09:30:00Z",
+      });
+      yield* recordDisposition(run.dir, {
+        at: "2026-09-14T09:40:00Z",
+        by: "mk",
+        kind: "superseded",
+        ref: "support!279",
+        note: null,
+      });
+      const [closed] = yield* board(env, [run], unapproved("closed"));
+      expect(closed!.landed).toBe(true);
+      expect(closed!.mrs![0]!.settled).toBe("superseded");
+      const [reopened] = yield* board(env, [run], unapproved("open"));
+      expect(reopened!.landed).toBe(false);
+      expect(reopened!.mrs![0]!.settled).toBeNull();
+      expect(sectionOf(reopened!)).toBe("waiting");
+    }),
+  ));
+
+test("a Task with one merge request merged and one open is not landed, and says which is open", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const merged = yield* madeRun(dir, {
+        id: "r-merged",
+        task: "task-1",
+        state: "succeeded",
+        branch: "mk/one",
+        mr: "https://gitlab.cego.dk/mk/support/-/merge_requests/278",
+        created: "2026-09-14T08:00:00Z",
+        finished: "2026-09-14T08:30:00Z",
+      });
+      const open = yield* madeRun(dir, {
+        id: "r-open",
+        task: "task-1",
+        state: "succeeded",
+        branch: "mk/nuxt-ci",
+        mr: M,
+        created: "2026-09-14T08:40:00Z",
+        finished: "2026-09-14T09:30:00Z",
+      });
+      const [card] = yield* board(env, [merged, open], {
+        mrStates: new Map<string, MrState>([
+          ["gitlab.cego.dk/mk/support!278", "merged"],
+          [M_ID, "open"],
+        ]),
+      });
+      expect(card!.landed).toBe(false);
+      expect(sectionOf(card!)).toBe("waiting");
+      expect(card!.sentence).toBe("1 of 2 merged; support!279 is open.");
+    }),
+  ));
+
+test("a Task whose leading Run was abandoned is landed while its merge request is still open", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const { first, second } = yield* supersededChain(dir);
+      yield* recordDisposition(second.dir, {
+        at: "2026-09-14T09:50:00Z",
+        by: "mk",
+        kind: "abandoned",
+        ref: "",
+        note: null,
+      });
+      const [card] = yield* board(env, [first, second], unapproved());
+      expect(card!.landed).toBe(true);
+      expect(sectionOf(card!)).toBe("finished");
+      expect(card!.sentence).toBe("Abandoned.");
+      expect(card!.mrs![0]!.settled).toBe("abandoned");
     }),
   ));
 

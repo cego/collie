@@ -30,7 +30,7 @@ import { appendVerification } from "../src/verify";
 import type { Runner } from "../src/mr";
 import { readEnv } from "../src/env";
 import { madeRun } from "./support/records";
-import { task } from "./support/task";
+import { task, taskMr } from "./support/task";
 import { runEffect } from "./support/effect";
 import { epochMs } from "../src/time";
 import { readLanding, writeLanding, type Landing } from "../src/landing";
@@ -345,7 +345,7 @@ test("a merged card follows its deploy jobs: on stage, then in production, then 
     }),
   ));
 
-test("what is working is asked about, and what is already disposed of is not", () =>
+test("what is working or still owed is asked about, and what was abandoned is not", () =>
   runWithForge(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -355,16 +355,41 @@ test("what is working is asked about, and what is already disposed of is not", (
       yield* settleMerges({
         stateDir,
         cwd: "/project",
-        run: forge("gitlab", { mrs: [merged("65"), merged("66"), merged("67")] }, log),
+        run: forge(
+          "gitlab",
+          { mrs: [merged("65"), merged("66"), merged("67"), merged("68")] },
+          log,
+        ),
         views: [
           task({ id: "working", state: "active", mr: MR, run: "r-working" }),
           task({ id: "needs-you", state: "blocked", mr: mrUrl("67"), run: "r-needs-you" }),
           task({
-            id: "landed",
+            id: "superseded",
+            state: "done",
+            landed: false,
+            mr: mrUrl("66"),
+            run: "r-superseded",
+            disposition: "superseded r-earlier",
+            mrs: [
+              taskMr("mk/collie", 66, {
+                run: "r-superseded",
+                disposition: null,
+              }),
+            ],
+          }),
+          task({
+            id: "abandoned",
             state: "done",
             landed: true,
-            mr: mrUrl("66"),
-            disposition: "superseded mk/collie!66",
+            mr: mrUrl("68"),
+            run: "r-abandoned",
+            disposition: "abandoned",
+            mrs: [
+              taskMr("mk/collie", 68, {
+                run: "r-abandoned",
+                settled: "abandoned",
+              }),
+            ],
           }),
           task({ id: "no-mr", state: "failed" }),
         ],
@@ -377,15 +402,103 @@ test("what is working is asked about, and what is already disposed of is not", (
         panels: new Map(),
         making: new Set(),
       });
-      // A merge while a Run is busy or parked still lands its Task.
+      // A merge while a Run is busy, parked or finished at an owed merge request lands its Task.
       for (const [run, label] of [
         ["r-working", `${GITLAB}!65`],
         ["r-needs-you", `${GITLAB}!67`],
+        ["r-superseded", `${GITLAB}!66`],
       ] as const)
         expect(
           Arr.map(yield* readDispositions(runDir(stateDir, run)), (line) => [line.by, line.ref]),
         ).toEqual([["gitlab", label]]);
-      expect(Arr.filter(log, (call) => /[ /]66\b/.test(call))).toEqual([]);
+      expect(Arr.filter(log, (call) => /[ /]68\b/.test(call))).toEqual([]);
+    }),
+  ));
+
+/** A failed Run carrying !65, superseded by its follow-up in the same Task that finished at !65. */
+const supersededChain = Effect.fn("merges.supersededChain")(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const stateDir = yield* fs.makeTempDirectoryScoped({
+    prefix: "collie-merges-",
+  });
+  const env = readEnv({
+    HERDR_PLUGIN_STATE_DIR: stateDir,
+    COLLIE_CWD: "/project",
+  });
+  const first = yield* madeRun(stateDir, {
+    id: "r-first",
+    task: "task-1",
+    state: "failed",
+    mr: MR,
+    created: "2026-09-17T08:00:00Z",
+    finished: "2026-09-17T08:30:00Z",
+  });
+  const second = yield* madeRun(stateDir, {
+    id: "r-second",
+    task: "task-1",
+    state: "succeeded",
+    mr: MR,
+    created: "2026-09-17T08:40:00Z",
+    finished: "2026-09-17T09:30:00Z",
+  });
+  yield* recordDisposition(first.dir, {
+    at: "2026-09-17T09:00:00Z",
+    by: "cli:recovery",
+    kind: "superseded",
+    ref: `r-second; ${MR}`,
+    note: null,
+  });
+  const runs = [first, second];
+  const round = (run: Runner, now: number) =>
+    Effect.gen(function* () {
+      yield* settleMerges({
+        stateDir,
+        cwd: "/project",
+        run,
+        views: yield* buildBoard({ env, runs, now }),
+        runs,
+        record: () => Effect.void,
+        stop: () => Effect.void,
+        now,
+        checked: new Map(),
+        states: new Map(),
+        panels: new Map(),
+        making: new Set(),
+      });
+      return (yield* buildBoard({ env, runs, now }))[0]!;
+    });
+  return { stateDir, second, round };
+});
+
+test("a follow-up's merge request is still asked about after its predecessor was superseded", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const { round } = yield* supersededChain();
+      const log: string[] = [];
+      const card = yield* round(gitlab("open", log), epochMs("2026-09-17T10:00:00Z"));
+      expect(Arr.filter(log, (call) => /[ /]65\b/.test(call))).not.toEqual([]);
+      expect(card.mrState).toBe("open");
+      expect(sectionOf(card)).toBe("waiting");
+    }),
+  ));
+
+test("a forge that cannot be read leaves an owed merge request owed and a merged one landed", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const now = epochMs("2026-09-17T10:00:00Z");
+      for (const [state, landed] of [
+        ["open", false],
+        ["merged", true],
+      ] as const) {
+        const { stateDir, round } = yield* supersededChain();
+        yield* writeMrStates(stateDir, new Map([[`${GITLAB}!65`, state]]));
+        const before = yield* round(forge("gitlab", { installed: false }), now);
+        expect(before.landed).toBe(landed);
+        const after = yield* round(forge("gitlab", { loggedIn: [] }), now + MERGE_POLL_MS);
+        expect(after.landed).toBe(landed);
+        expect(sectionOf(after)).toBe(landed ? "finished" : "waiting");
+        expect(yield* readMrStates(stateDir)).toEqual(new Map([[`${GITLAB}!65`, state]]));
+      }
     }),
   ));
 

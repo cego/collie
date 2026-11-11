@@ -682,7 +682,12 @@ Run can be Reopened only until its agents close, an hour after it finished by de
 ([Cleanup](#cleanup)). **Waiting on you** is work that ended without landing, and that nobody has
 asked you about: an implement that succeeded and whose merge request is open, a plan that
 is ready to implement, a Run that failed, was stopped or was abandoned with a branch or a
-merge request behind it and has neither been resumed nor disposed of. An implement whose
+merge request behind it and has neither been resumed nor disposed of. A Task stays here
+while it owes a merge request, whatever an earlier Run of it carries: a `superseded` line
+on a predecessor hands that Run's work to its successor, and a successor in the same Task
+still owes the same merge request, so the card names it and what it lacks rather than
+"Superseded by" its own Run. Finishing a Run (`then=finish`, the end menu's Finish, or
+acknowledging its report) does not settle what it owes. An implement whose
 merge request is open says what checked it, from Collie's own checks counted only at the
 revision its branch is at now in its checkout (where that cannot be read, the newest
 revision Collie checked): `cego/collie!65 is open, but lint failed at 1a2b3c4. Next: fix
@@ -700,10 +705,13 @@ that declares none gets no button) — with Mark merged and Mark
 abandoned beside it in the menu. After what is ready to release, the newest ending is at the top; anything
 older than a week folds into one counted line, `▸ 9 older than a week`, and the header
 counts the week's endings while the fold counts the rest. **Finished** is work that landed
-— a disposition was recorded, the Run succeeded at a workflow that produces nothing to
-land, such as a review, or it ended with nothing to file — as one line, `3 finished today,
+— everything it owes is settled: each merge request merged on its forge, recorded merged,
+abandoned, or superseded while closed or by a Run of another Task; a plan with a
+disposition; or nothing to file at all — as one line, `3 finished today,
 1 failed`, until you click it open; anything older than a day is behind `older…`, which
 reads it from this checkout's history rather than carding every Run Collie has ever kept.
+Only landed work goes behind `older…`: a Task that still owes a merge request stays on the
+board however old it is.
 An **Unseen** card — a Run that ended by itself with a report and nothing to land, which
 nobody has opened since — is drawn above that line, marked `● unseen`, and still counted in
 it, however old: it does not go behind `older…` until it is seen. Its sentence states how the Run ended and then quotes the report as the Run's own:
@@ -714,8 +722,8 @@ behind the line.
 A Task whose Runs opened or were given several merge requests — a fan-out across
 repositories, or a Follow-up Run that opened its own — lists each on its card, by wave, with
 its own state, checks and head. Each is judged Ready to release at its own head, and the
-Task is when any one of them is. It has landed only once each is merged, abandoned or
-superseded and none of its Runs is still going. Its sentence says where each stands:
+Task is when any one of them is. It has landed only once each is settled, judged by itself,
+and none of its Runs is still going. Its sentence says where each stands:
 `1 of 3 merged; app!12 ready to release; api!7 waits on app!12.` A merge request waits on
 another of the Task's when the forge says it targets that one's source branch. One closed
 without merging that nobody has disposed of keeps the Task waiting on you, by name:
@@ -723,8 +731,10 @@ without merging that nobody has disposed of keeps the Task waiting on you, by na
 
 Collie learns a merge by itself, whether or not a pane is open: the host asks the merge
 request's own forge, through that forge's adapter — GitLab with `glab`, GitHub with `gh` —
-about each of a Task's merge requests every 5 minutes, whatever section its card is in, so a
-merge while a Run is busy or parked is noticed too; one
+about each of a Task's merge requests every 5 minutes, whatever section its card is in and
+whatever its Runs' Dispositions say, so a merge while a Run is busy or parked is noticed
+too, and a closed one that is reopened is owed again; only one settled by `abandoned` is not
+asked about. A forge that cannot be read changes nothing the board says. One
 that merged gets its `merged` disposition recorded as that forge's word and its card moves
 to Finished. Each branch of a Task's Runs on which none recorded a merge request takes the
 one opened from it, even where another Change run's is already recorded, whoever opened it — you on the forge, or a builder you told to in its pane — and

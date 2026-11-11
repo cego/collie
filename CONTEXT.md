@@ -321,7 +321,7 @@ corrections to it stop until an explicit `run clear-override`; nothing times it 
 
 **MR id** — A merge request's one identity, made of its host, project path and number in lower case: `gitlab.cego.dk/spilnu/app!42`, `github.com/cego/collie#300`. Every comparison of two merge requests goes through it: joining a Task, the merge watch and what it keeps, landing, cleanup and Dispositions. A legacy bare `mr:42`, or a hostless Disposition ref such as `app!42`, is resolved against the Run's checkout when it is read. One whose project cannot be told has none, and is never matched to another. A human is still shown the forge's own word and name ([ADR-draft-a-tasks-merge-requests-are-its-waves-changes](docs/adr/draft-a-tasks-merge-requests-are-its-waves-changes.md)).
 
-**Disposition** — What became of a Run's work, which is not how its execution ended. Recorded by a human beside the Run's status and never over it — `merged`, `abandoned` or `superseded`, with the merge request, commit or Run that backs it up. A Run that failed still failed; its disposition says whether the work landed anyway. Append-only, so a correction keeps what was believed before. Nothing to do with **Delivery**, which is one message to one agent.
+**Disposition** — What became of a Run's work, which is not how its execution ended. Recorded by a human beside the Run's status and never over it — `merged`, `abandoned` or `superseded`, with the merge request, commit or Run that backs it up. A Run that failed still failed; its disposition says whether the work landed anyway. A Disposition is the Run's, not its Task's: it settles what that Run carries as **Landed** says, and `superseded` only hands the Run's obligation on — to the successor it names, so a successor in the same Task leaves that Task owing the same merge request. Append-only, so a correction keeps what was believed before. Nothing to do with **Delivery**, which is one message to one agent.
 
 **Verification** — An independently collected command result bound to the tree it ran on,
 before and after. A tree is its content: committing exactly the bytes a Verification ran on
@@ -468,7 +468,10 @@ section, under Waiting on you.
 **Waiting on you** — A Task whose work has ended without **landing**, and which nobody has
 asked you about: an implement Run that succeeded and whose merge request is open, a plan
 that is ready to implement, a Run that failed or was stopped with a branch or merge
-request behind it and has neither been resumed nor disposed of. The board's second
+request behind it and has neither been resumed nor disposed of. It stays here while it owes
+anything, whatever Dispositions its earlier Runs carry and however it was finished: Finish
+ends a Run, not a Task's delivery. Its sentence names the merge request still owed and what
+it lacks — approval, checks at its head, a conflict, or `closed without merging`. The board's second
 section, under Needs you and over Working, because most of it is work a human can ship
 now; **Ready to release** leads it. Not a **Decision**: a Decision is Collie asking; this is work in your hands that
 has not been mentioned. A Run that ended with nothing to file — no branch, no merge
@@ -495,15 +498,29 @@ agents for as long as one is alive; a gone pane is the Follow-up Run's job (ADR-
 A finished Run's agent is closed once it has been idle for an hour since the Run finished
 (**Cleanup**), so a Run can be Reopened only until then.
 
-**Landed** — What a Task's work has done once it needs nothing more from anyone: a
-**Disposition** was recorded — merged, abandoned or superseded — the Run succeeded at a
-Workflow that produces nothing to land, such as a review, or it ended with nothing anyone
-could file: no branch, no merge request, no plan, no question. A Task with several merge
-requests has landed only once each is merged or carries an `abandoned` or `superseded`
-Disposition, and none of its Runs is still going. A Task whose work has landed
+**Landed** — What a Task's work has done once everything it owes is settled and none of its
+Runs is still going. A Task owes each merge request its Runs carry, and a branch with none.
+A merge request is settled when its forge reads it merged; when `abandoned` is recorded on a
+Run carrying it or on the Task's leading Run; when `merged` is recorded for it; or when
+`superseded` is recorded on it while its forge reads it closed, or on every Run of the Task
+carrying it with a ref naming a Run of another Task, which is then the one responsible. A
+`superseded` naming a successor in the same Task, or no Run, settles nothing while the merge
+request is open; reopened, a closed one is owed again. A plan is settled by any Disposition,
+and work that ended with nothing anyone could file — no branch, no merge request, no plan, no
+question — has nothing to settle. The board, History, the **Merge watch**, chat and Desktop
+read this one derivation ([ADR-draft-a-task-lands-when-what-it-owes-is-settled](docs/adr/draft-a-task-lands-when-what-it-owes-is-settled.md)). A Task whose work has landed
 is **Finished**, the board's last section, as long as none of its Runs is still going,
 asking or stalled and none of its agents is working. Finished is what **Cleanup** waits
-for before it closes anything of a Task.
+for before it closes anything of a Task. Only a landed Task folds into History a day after
+it ends; one that still owes a merge request stays on the board however old it is.
+
+**Merge watch** — The host's round, every 5 minutes, that asks each merge request's own
+forge what became of it and records `merged` as that forge's word when it merged. It asks
+about every merge request a Task owes, whatever its section, age or the Dispositions of
+its Runs, follows a merged one to production, and keeps asking about a closed one in case
+it is reopened. Only a merge request settled by `abandoned` is not asked about. A forge
+that cannot be read leaves every stored answer as it was, so it settles nothing and
+unsettles nothing.
 
 **Unseen** — A **Finished** Task's leading Run that ended by itself with something to
 report and that nobody has opened or acknowledged yet. The Run's host records **seen** once

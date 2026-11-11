@@ -6,7 +6,6 @@
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Struct from "effect/Struct";
-import { pipe as pipe_ } from "effect/Function";
 import * as Rec from "effect/Record";
 import { DateTime, Effect, FileSystem, Option, Path, Schema } from "effect";
 import type { ForgeFacts } from "./board";
@@ -150,7 +149,7 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
     if (mr !== null && !several)
       watched.push({
         mr,
-        disposition: view.disposition,
+        abandoned: view.mrs?.[0]?.settled === "abandoned",
         runs: shown === undefined ? view.runs : [...view.runs, shown.run],
         owner: shown?.run ?? found?.run ?? view.mrs?.[0]?.run ?? view.run,
       });
@@ -158,26 +157,27 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
       if (repo !== shown)
         watched.push({
           mr: repo.mr,
-          disposition: yield* dispositionIn(runDir(opts.stateDir, repo.run)),
+          abandoned: yield* abandonedIn(runDir(opts.stateDir, repo.run)),
           runs: [repo.run],
           owner: repo.run,
         });
     for (const one of adopted)
       if (one !== found)
-        watched.push({ mr: one.url, disposition: null, runs: [one.run], owner: one.run });
+        watched.push({ mr: one.url, abandoned: false, runs: [one.run], owner: one.run });
     if (several)
       for (const entry of view.mrs!)
         if (!Arr.some(repos, (repo) => repo.run === entry.run))
           watched.push({
             mr: entry.mr,
-            disposition: entry.disposition,
+            abandoned: entry.settled === "abandoned",
             runs: [entry.run],
             owner: entry.run,
           });
   }
-  for (const { mr, disposition, runs, owner } of watched) {
-    // A merged one is still followed to its deploy jobs, until production has it.
-    if (disposition !== null && !pipe_(disposition, Str.startsWith("merged"))) continue;
+  for (const { mr, abandoned, runs, owner } of watched) {
+    // Whatever else a Task says of it, it is asked about: a merged one is followed to its
+    // deploy jobs, and a closed one may be reopened. Only an abandonment settles it for good.
+    if (abandoned) continue;
     const label = mrLabel(mr);
     if (mrRefOf(mr) === null) continue;
     const at =
@@ -342,17 +342,18 @@ const sparedBy = Effect.fn("Merges.sparedBy")(function* <R>(
 /** A merge request the watch follows, and the Runs it lands. */
 interface Watched {
   readonly mr: string;
-  /** What became of its work, as `kind ref`; null where nobody said. */
-  readonly disposition: string | null;
+  /** Its Task abandoned it, which no forge answer changes. */
+  readonly abandoned: boolean;
   readonly runs: ReadonlyArray<string>;
   /** The Run its `merged` disposition is recorded on. */
   readonly owner: string;
 }
 
-/** A Run's latest disposition, as a card says one. */
-const dispositionIn = Effect.fn("Merges.dispositionIn")(function* (dir: string) {
-  const line = latest(yield* readDispositions(dir).pipe(Effect.orElseSucceed(() => [])));
-  return line === null ? null : line.ref === "" ? line.kind : `${line.kind} ${line.ref}`;
+/** Whether a Run's latest disposition abandons its work. */
+const abandonedIn = Effect.fn("Merges.abandonedIn")(function* (dir: string) {
+  return (
+    latest(yield* readDispositions(dir).pipe(Effect.orElseSucceed(() => [])))?.kind === "abandoned"
+  );
 });
 
 /**
@@ -392,7 +393,7 @@ const fromBranches = Effect.fn("Merges.fromBranches")(function* <R>(
     readonly now: number;
   },
 ) {
-  if (view.mr === null && view.disposition !== null) return [];
+  if (view.mr === null && view.landed) return [];
   const runs = Arr.filter(opts.runs, (run) => view.runs.includes(run.id));
   const branchOf = (run: RunFacts) => `branch:${run.project}:${run.branch}`;
   const owned = new Set(

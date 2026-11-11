@@ -418,6 +418,10 @@ export const TaskMr = Schema.Struct({
   ready: Schema.Boolean,
   /** Its latest Disposition, as `kind` or `kind ref`. */
   disposition: Schema.NullOr(Schema.String),
+  /** What settled it, or null while its Task owes it; absent from an older host. */
+  settled: Schema.optionalKey(
+    Schema.NullOr(Schema.Literals(["merged", "abandoned", "superseded"])),
+  ),
   /** The MR ids of the Task's merge requests whose source branch it targets. */
   waitsOn: Schema.Array(Schema.String),
 });
