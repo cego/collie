@@ -2,14 +2,14 @@
 //! from `runFile`, viewed ticks, big files closed, and selected lines made review comments. Its
 //! logic is a copy of `diff-view.ts`, which stays its owner.
 
-use super::review::{Anchor, Draft, add_draft, diff_anchor};
+use super::review::{Anchor, Draft, add_draft, diff_anchor, lines_at};
 use crate::App;
 use collie_desktop_protocol::generated::{File, FileStatus};
 use rune::edit::TextEdit;
-use rune::{El, Tx, col, icon, row, text};
+use rune::{Drag, El, Phase, Picked, PointerEvent, Tx, col, icon, row, text};
 use rune_kit::diff::FileStatus as Drawn;
 use rune_kit::diff::{
-    Annotation, DiffMode, DiffState, DiffView, FileDiff, LineRange, LineRef, parse,
+    Annotation, DiffMode, DiffState, DiffView, FileDiff, LineRange, LineRef, Side, parse,
 };
 use rune_kit::{Button, ButtonVariant, Checkbox, Kit, SegmentedControl, TextInput};
 use std::collections::{HashMap, HashSet};
@@ -297,6 +297,22 @@ pub struct DiffTab {
     pub left_at: Option<String>,
     /// The lines the comment box is open on, drawn under the last of them.
     pub writing: Option<Anchor>,
+    /// The diff's window point less its own, as the pointer last moved over it.
+    pub origin: (f32, f32),
+    /// A press held on the diff's code.
+    pub pressed: Option<Pressed>,
+}
+
+/// A press held on a line of the diff's code, and the lines it has been dragged over.
+#[derive(Debug, Clone)]
+pub struct Pressed {
+    file: usize,
+    row: String,
+    start: LineRef,
+    /// Set once the drag leaves the row it began on.
+    lines: Option<LineRange>,
+    /// The selection before the press, put back if it is cancelled.
+    was: Option<LineRange>,
 }
 
 /// The annotation id of the comment box being written.
@@ -317,6 +333,8 @@ impl DiffTab {
             reading: HashSet::new(),
             left_at: None,
             writing: None,
+            origin: (0.0, 0.0),
+            pressed: None,
         }
     }
 
@@ -676,6 +694,95 @@ impl App {
         {
             self.close_diff_comment();
         }
+    }
+
+    /// Keeps where the diff is in the window, which a drag over it needs to find its lines.
+    pub fn diff_pointer(&mut self, at: PointerEvent, tx: &mut Tx) {
+        if let Some(tab) = &mut self.diff {
+            tab.origin = (at.window_x - at.x, at.window_y - at.y);
+        }
+        tx.live_only();
+    }
+
+    /// A press on the diff's code dragged over other lines chooses them, highlighted as it
+    /// goes, and opens the comment box on them when let go. One that stays on its own line is
+    /// a press elsewhere; text there is selected by a double or triple click.
+    pub fn drag_diff_lines(&mut self, d: &mut Drag, tx: &mut Tx) {
+        let Some(tab) = &mut self.diff else { return };
+        let (x, y) = (d.x + tab.origin.0, d.y + tab.origin.1);
+        match d.phase {
+            Phase::Down => {
+                tab.pressed = None;
+                tx.element_at_in("diff", x, y, |app: &mut App, at, _| {
+                    app.diff_line_pressed(at)
+                });
+            }
+            Phase::Move => tx.element_at_in("diff", x, y, |app: &mut App, at, _| {
+                app.diff_line_reached(at)
+            }),
+            Phase::Up => {
+                let pressed = tab.pressed.take();
+                let lines = pressed.as_ref().and_then(|p| p.lines);
+                if d.cancelled() {
+                    if let Some(p) = pressed.filter(|p| p.lines.is_some()) {
+                        tab.state.set_selection(p.was);
+                    }
+                } else if lines.is_some() {
+                    self.choose_diff_lines(lines);
+                } else {
+                    self.diff_pressed_elsewhere();
+                }
+            }
+        }
+    }
+
+    /// The line a press on the diff's code began on: as the file is now, unless it was removed.
+    fn diff_line_pressed(&mut self, at: Option<Picked>) {
+        let Some(tab) = &mut self.diff else { return };
+        let Some(at) = at.and_then(|p| lines_at(&tab.state, p.path())) else {
+            return;
+        };
+        let side = if at.new.is_some() {
+            Side::New
+        } else {
+            Side::Old
+        };
+        let Some(line) = at.on(side) else { return };
+        tab.pressed = Some(Pressed {
+            file: at.file,
+            row: at.row,
+            start: LineRef::new(side, line),
+            lines: None,
+            was: tab.state.selection(),
+        });
+    }
+
+    /// The drag reached the line under the pointer, on the side it began on; a line only on
+    /// the other side leaves the range where it was.
+    fn diff_line_reached(&mut self, at: Option<Picked>) {
+        let Some(tab) = &mut self.diff else { return };
+        let Some(pressed) = &mut tab.pressed else {
+            return;
+        };
+        let Some(at) = at.and_then(|p| lines_at(&tab.state, p.path())) else {
+            return;
+        };
+        if at.file != pressed.file || (pressed.lines.is_none() && at.row == pressed.row) {
+            return;
+        }
+        let side = pressed.start.side;
+        let end = at
+            .on(side)
+            .map(|n| LineRef::new(side, n))
+            .or(pressed.lines.map(|l| l.end))
+            .unwrap_or(pressed.start);
+        let lines = LineRange {
+            file: pressed.file,
+            start: pressed.start,
+            end,
+        };
+        pressed.lines = Some(lines);
+        tab.state.set_selection(Some(lines));
     }
 
     /// Makes the comment written a draft about the lines selected.
@@ -1166,7 +1273,8 @@ pub fn view(app: &App, k: &Kit) -> El {
                         .grow(1.0)
                         .min_h(0.0)
                         .w_full()
-                        .on_press(App::diff_pressed_elsewhere)
+                        .on_pointer_move_local(App::diff_pointer)
+                        .on_drag(App::drag_diff_lines)
                         .child(diff),
                 ),
         )

@@ -327,7 +327,11 @@ file the Run has not changed again keeps its patch when the diff is read again, 
 to the tab brings back the file read last. A tree beside it folds by folder, filters and goes to a
 file; a file ticked Viewed collapses and stays ticked while its patch is unchanged. It shows unified or split. A press on a line
 number selects it, a drag or Shift-press extends it, and a comment box opens under the lines,
-focused; a span selected in the plan opens one too. Enter or Comment saves a draft, shown under
+focused. A press on a line's code dragged over other lines chooses them too, highlighted as it
+goes, on the side it began on (as the file is now, unless the line was removed): the Diff tab
+finds the line under the pointer by the key rune-kit gives its row (`review::lines_at`). A drag
+on the code is about lines, so its text is selected by a double or triple click. A span selected
+in the plan opens a box too. Enter or Comment saves a draft, shown under
 its lines, where it is edited or removed; Escape, Cancel, leaving the tab or file, or a press
 elsewhere with nothing typed closes the box. The drafts are sent as one Delivery, in the text
 `review-comments.ts` composes (ADR-0051), and cleared once the host takes it.

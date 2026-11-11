@@ -4,10 +4,12 @@
 //! edited and removed where they are drawn.
 
 use collie_desktop_board::calls::testing::Harness;
+use collie_desktop_board::record::review::Anchor;
 use collie_desktop_board::{App, view};
 use collie_desktop_terminal::view::Tab;
 use rune::edit::Modifier;
 use rune::{Env, Key, KeyEvent, Runtime};
+use rune_kit::diff::Side;
 use serde_json::{Value, json};
 
 const FLOCK: &str = include_str!("../../fixtures/flock.ndjson");
@@ -244,6 +246,134 @@ fn a_drag_down_the_numbers_or_a_shift_press_extends_the_range() {
     runtime.key(shift(false));
     runtime.frame(850.0);
     assert_eq!(selection(&runtime), Some((1, 3)), "a Shift-press");
+}
+
+/// Presses at `from`, drags to `to` in eight steps, calling `mid` at each, and lets go.
+fn drag_over(
+    runtime: &mut Runtime<App>,
+    from: (f32, f32),
+    to: (f32, f32),
+    at: f64,
+    mut mid: impl FnMut(&Runtime<App>, (f32, f32)),
+) {
+    runtime.pointer_move(from.0, from.1);
+    runtime.frame(at);
+    runtime.pointer_down(from.0, from.1);
+    runtime.frame(at + 20.0);
+    for step in 1..=8 {
+        let f = step as f32 / 8.0;
+        let point = (from.0 + (to.0 - from.0) * f, from.1 + (to.1 - from.1) * f);
+        runtime.pointer_move(point.0, point.1);
+        runtime.frame(at + 20.0 + 16.0 * step as f64);
+        mid(runtime, point);
+    }
+    runtime.pointer_up(to.0, to.1);
+    runtime.frame(at + 300.0);
+}
+
+/// A point on `path`'s code, `dx` in from its left edge.
+fn on_code(runtime: &Runtime<App>, path: &str, dx: f32) -> (f32, f32) {
+    let [x, y, _, h] = rect(runtime, path);
+    (x + dx, y + h / 2.0)
+}
+
+fn fill_of(runtime: &Runtime<App>, key: &str) -> rune::Color {
+    runtime
+        .elements()
+        .into_iter()
+        .find(|e| !e.exiting && e.key.as_deref() == Some(key))
+        .unwrap_or_else(|| panic!("no {key}"))
+        .fill
+}
+
+/// The lines the comment box is open on: the side and the first and last line.
+fn writing_on(runtime: &Runtime<App>) -> Option<(Side, u32, u32)> {
+    match runtime.state.diff.as_ref()?.writing.as_ref()? {
+        Anchor::Diff {
+            side, first, last, ..
+        } => Some((*side, *first, *last)),
+        Anchor::Plan { .. } => None,
+    }
+}
+
+#[test]
+fn a_drag_over_the_lines_code_highlights_them_as_it_goes_and_opens_the_box_on_them() {
+    let harness = Harness::<App>::new();
+    let mut runtime = on_diff(&harness, &[]);
+    let unselected = fill_of(&runtime, "df0.c3");
+    let from = on_code(&runtime, "df0.c1/code/text", 4.0);
+    let to = on_code(&runtime, "df0.c4/code/text", 40.0);
+    let c3 = rect(&runtime, "df0.c3");
+    let mut seen_on_c3 = None;
+    drag_over(&mut runtime, from, to, 300.0, |runtime, (_, y)| {
+        if y >= c3[1] && y < c3[1] + c3[3] && seen_on_c3.is_none() {
+            seen_on_c3 = Some((selection(runtime), fill_of(runtime, "df0.c3")));
+        }
+    });
+    let (mid, lit) = seen_on_c3.expect("the drag passed over line 3");
+    assert_eq!(
+        mid,
+        Some((1, 3)),
+        "the lines so far are chosen while dragging"
+    );
+    assert_ne!(lit, unselected, "and highlighted while dragging");
+
+    assert_eq!(selection(&runtime), Some((1, 4)), "the lines dragged over");
+    assert!(shown(&runtime, "diff-composer"), "{:?}", keys(&runtime));
+    assert_eq!(writing_on(&runtime), Some((Side::New, 1, 4)));
+    assert!(
+        focused(&runtime).contains("diff-comment"),
+        "its field has focus: {}",
+        focused(&runtime)
+    );
+}
+
+#[test]
+fn a_drag_that_stays_on_one_line_chooses_none_and_a_double_click_still_selects_a_word() {
+    let harness = Harness::<App>::new();
+    let mut runtime = on_diff(&harness, &[]);
+    let from = on_code(&runtime, "df0.c1/code/text", 4.0);
+    let to = on_code(&runtime, "df0.c1/code/text", 50.0);
+    drag_over(&mut runtime, from, to, 300.0, |_, _| {});
+    assert_eq!(selection(&runtime), None);
+    assert!(!shown(&runtime, "diff-composer"));
+
+    let word = on_code(&runtime, "df0.c3/code/text", 6.0);
+    runtime.pointer_move(word.0, word.1);
+    runtime.frame(1000.0);
+    for _ in 0..2 {
+        runtime.pointer_down(word.0, word.1);
+        runtime.pointer_up(word.0, word.1);
+    }
+    runtime.frame(1016.0);
+    assert_eq!(runtime.selected_text().as_deref(), Some("fn"));
+    assert_eq!(selection(&runtime), None, "a double-click is about words");
+}
+
+#[test]
+fn a_drag_across_an_open_box_reaches_the_line_under_the_pointer_and_keeps_its_words() {
+    let harness = Harness::<App>::new();
+    let mut runtime = writing(&harness, &[], "half a thought");
+    let from = on_code(&runtime, "df0.c1/code/text", 4.0);
+    let to = on_code(&runtime, "df0.c4/code/text", 40.0);
+    drag_over(&mut runtime, from, to, 400.0, |_, _| {});
+    assert_eq!(selection(&runtime), Some((1, 4)));
+    assert_eq!(writing_on(&runtime), Some((Side::New, 1, 4)));
+    let said = runtime.state.diff.as_ref().map(|t| t.comment.text.clone());
+    assert_eq!(said.as_deref(), Some("half a thought"));
+}
+
+#[test]
+fn a_drag_down_the_new_side_in_split_chooses_its_lines_as_they_are_now() {
+    let harness = Harness::<App>::new();
+    let mut runtime = on_diff(&harness, &[]);
+    press(&mut runtime, "diff-layout/segment1", 300.0);
+    // The removed line 2 and the added line 2 share a row, keyed by the removed one.
+    let from = on_code(&runtime, "df0.o2/new/code/text", 4.0);
+    let to = on_code(&runtime, "df0.c4/new/code/text", 40.0);
+    drag_over(&mut runtime, from, to, 400.0, |_, _| {});
+    assert_eq!(selection(&runtime), Some((2, 4)));
+    assert_eq!(writing_on(&runtime), Some((Side::New, 2, 4)));
 }
 
 #[test]

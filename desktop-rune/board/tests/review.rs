@@ -2,8 +2,8 @@
 //! selection.
 
 use collie_desktop_board::record::review::{
-    Anchor, Draft, add_draft, clear_sent, compose, diff_anchor, edit_draft, in_hunks, plan_anchor,
-    remove_draft,
+    Anchor, Draft, add_draft, clear_sent, compose, diff_anchor, edit_draft, in_hunks, lines_at,
+    plan_anchor, remove_draft,
 };
 use rune_kit::diff::{DiffState, LineRange, LineRef, Side, parse};
 
@@ -248,4 +248,40 @@ fn a_diff_draft_is_located_by_its_path_and_lines_and_by_the_side_as_it_was_for_r
         ]
     );
     assert!(said.contains("> twenty\n> inserted\n> again"));
+}
+
+#[test]
+fn a_point_on_a_drawn_line_is_that_line_on_each_side_and_in_split_on_its_half() {
+    let diff = DiffState::new(parse(CHANGED));
+    let at = |path: &str| {
+        lines_at(
+            &diff,
+            &format!("kit-root/record/diff-body/diff/scroll/rows/{path}"),
+        )
+        .map(|l| (l.file, l.old, l.new))
+    };
+    assert_eq!(at("df0.c1/code/text"), Some((0, Some(1), Some(1))));
+    assert_eq!(at("df0.o2/gutter/no"), Some((0, Some(2), None)));
+    assert_eq!(at("df0.n21/gutter/plus"), Some((0, None, Some(21))));
+    assert_eq!(
+        at("df0.c22/line/code/text"),
+        Some((0, Some(22), Some(24))),
+        "an unchanged line in a hunk, its row drawn with a note"
+    );
+    assert_eq!(at("df0.c10/code"), Some((0, Some(10), Some(10))));
+    assert_eq!(
+        at("df0.c30/code/text"),
+        Some((0, Some(30), Some(32))),
+        "an unchanged line shown past the hunk that added two"
+    );
+    assert_eq!(at("df0.o2/new/code/text"), Some((0, None, Some(2))));
+    assert_eq!(at("df0.o2/line/old/code"), Some((0, Some(2), None)));
+    assert_eq!(
+        at("df0.n21/old"),
+        None,
+        "the empty half beside an added line"
+    );
+    assert_eq!(at("df0.c4/notes/a.writing/diff-composer"), None);
+    assert_eq!(at("df0"), None);
+    assert_eq!(at("df0.g1/expand"), None);
 }
