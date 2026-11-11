@@ -240,7 +240,7 @@ import {
   type Attached,
 } from "./attachments";
 import { boardMessages, shareBoard } from "./board-stream";
-import { recordDisposition } from "./disposition";
+import { recordDisposition, refWords } from "./disposition";
 import { markSeenSince, readSeen, recordSeen } from "./seen";
 import { readReplies } from "./replies";
 import {
@@ -3429,6 +3429,13 @@ const frontDoorHandlers = (
         dispose: ({ runId, kind, ref, note, request }, { client }) =>
           known(runId).pipe(
             Effect.flatMap(disposedOn(ref)),
+            Effect.filterOrFail(
+              (kept) => kind !== "superseded" || !Arr.contains(refWords(kept.ref), kept.run),
+              (kept) =>
+                new HostRefused({
+                  reason: `${REFUSED_INPUT}: a superseded line cannot name ${kept.run}, the Run it is recorded on`,
+                }),
+            ),
             Effect.flatMap((kept) =>
               once(
                 trail(runId),

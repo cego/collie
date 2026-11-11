@@ -45,7 +45,8 @@ import { task } from "./support/task";
 import { runEffect } from "./support/effect";
 import { epochMs } from "../src/time";
 import { connect, frontDoor, socketOf } from "../src/host";
-import { hosted, hostedRun } from "./support/hosted";
+import { hosted, hostedRun, settledRun } from "./support/hosted";
+import { readDispositions } from "../src/disposition";
 import { until } from "./support/host";
 import { save } from "./support/world";
 import { Rig } from "./support/recorder";
@@ -780,3 +781,21 @@ test("a Machine's Native chat and Desktop's Flock chat are given the same Standi
       expect(yield* desktopContext()).toContain(native);
     }).pipe(Effect.scoped),
   ));
+
+test(
+  "chat's disposition is refused a superseded line naming its own Run, as the CLI's is",
+  () =>
+    hosted("collie-parity-self-", ({ world, env }) =>
+      Effect.gen(function* () {
+        const run = yield* settledRun(world, "retains");
+        const said = yield* toolNamed("collie_do")!.call(env, {
+          actions: [{ kind: "disposition", run: run.id, became: "superseded", ref: run.id }],
+        });
+        expect(said).toContain("disposition: failed");
+        expect(said).toContain(`cannot name ${run.id}, the Run it is recorded on`);
+        expect(yield* readDispositions(run.dir)).toEqual([]);
+      }),
+    ),
+  // A host, and a Run of it that finishes.
+  60_000,
+);

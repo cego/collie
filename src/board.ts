@@ -16,7 +16,7 @@ import { openReports, readDrift } from "./drift";
 import { describeAction } from "./lines";
 import type { PickItem } from "./inputs";
 import { LEADING_GLYPH, type AgentInfo } from "./herdr";
-import { latest, readDispositions } from "./disposition";
+import { latest, readDispositions, refWords } from "./disposition";
 import { readSeen, seenSince } from "./seen";
 import { runTitle } from "./naming";
 import { changeKey, planIssuesIn, planReposOf } from "./plan";
@@ -43,7 +43,7 @@ import { recordsIn } from "./check-processes";
 import { waitLine } from "./memory-wait";
 import { runWaits } from "./run-waits";
 import { awaitingLine } from "./awaiting";
-import { mrOf, readForge, readMrStates } from "./merges";
+import { MERGE_POLL_MS, mrOf, readForge, readMrStates } from "./merges";
 import { filed, nothingToLandFile, type Recorded, settlementOf, standingOf } from "./standing";
 import { offersOf } from "./lifecycle";
 import { mrIdIn, shell } from "./mr";
@@ -70,6 +70,7 @@ import {
   mrLabel,
   mrWords,
   readMrRef,
+  forgeOfRef,
   readyToRelease,
   SECTIONS,
   sectionOf,
@@ -207,6 +208,9 @@ export interface ForgeFacts {
   /** Its source and target branches, where the forge named them. */
   readonly source?: string;
   readonly target?: string;
+  /** When the forge gave this answer, and when the watch last asked it. */
+  readonly read?: string;
+  readonly asked?: string;
 }
 
 /**
@@ -274,6 +278,8 @@ export interface Sentence {
   readiness?: ReadyToRelease | null;
   /** A live agent of the Run's, which the next move can be handed to. */
   agent: string | null;
+  /** When the forge last answered about what is owed, once that is old or its last ask failed. */
+  answered?: { readonly forge: string; readonly ago: string; readonly failed: boolean } | null;
   /**
    * Where a human is being waited for, when no Decision says: the pane of the agent
    * herdr will not prompt, or the step the Driver recorded itself waiting on. Null
@@ -521,17 +527,20 @@ export function sentenceFor(facts: Sentence): string {
   if (facts.memory != null) return facts.memory;
   switch (facts.state) {
     case "done":
-      if (facts.mrs !== undefined && facts.mrs.length > 1) return severalSentence(facts.mrs);
-      return doneSentence(
-        facts.disposition,
-        facts.mr,
-        facts.mrState,
-        facts.planReady,
-        facts.checks,
-        facts.agent,
-        facts.summary,
-        facts.readiness ?? null,
-      );
+      return `${
+        facts.mrs !== undefined && facts.mrs.length > 1
+          ? severalSentence(facts.mrs)
+          : doneSentence(
+              facts.disposition,
+              facts.mr,
+              facts.mrState,
+              facts.planReady,
+              facts.checks,
+              facts.agent,
+              facts.summary,
+              facts.readiness ?? null,
+            )
+      }${answeredLine(facts.answered)}`;
     case "failed":
       return alsoBecame(failedSentence(facts), facts.disposition);
     case "stopped":
@@ -547,6 +556,13 @@ export function sentenceFor(facts: Sentence): string {
     default:
       return workingSentence(facts);
   }
+}
+
+function answeredLine(answered: Sentence["answered"]): string {
+  if (answered == null) return "";
+  return answered.failed
+    ? ` ${answered.forge} could not be read; it last answered ${answered.ago}.`
+    : ` ${answered.forge} last answered ${answered.ago}.`;
 }
 
 /**
@@ -1006,7 +1022,7 @@ const ledgerOf = Effect.fn("Board.ledgerOf")(function* (
         run: run.id,
         line,
         mr,
-        elsewhere: Arr.some(Str.split(line.ref, /[\s;,]+/), (word) => {
+        elsewhere: Arr.some(refWords(line.ref), (word) => {
           const named = cardOf.get(word);
           return named !== undefined && named !== card;
         }),
@@ -1304,11 +1320,13 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           state === null || state === "open" || state === "closed" ? state : ("merged" as const);
         const fates = Arr.map(entries, (entry) => {
           const state = mrStates.get(entry.id) ?? null;
+          const read = forge.get(entry.id)?.read;
           const settlement = settlementOf(
             {
               id: entry.id,
               runs: Arr.map(entry.runs, (run) => run.id),
               forge: forgeReads(state),
+              read: read === undefined ? null : epochMs(read),
             },
             recorded,
             leader.id,
@@ -1334,6 +1352,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
                       (run) => run.id,
                     ),
                     forge: null,
+                    read: null,
                   },
                   recorded,
                   leader.id,
@@ -1685,8 +1704,27 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           : state === "done"
             ? null
             : ((ledgers.get(leader.id) ?? []).at(-1)?.line ?? null);
+        // The answer the card dates: a failed ask first, else the oldest of what is still owed.
+        const dated = Arr.flatMap(fates, (one) => {
+          const facts = forge.get(one.id);
+          const ref = readMrRef(one.mr);
+          if (one.settlement.by !== null || facts?.read === undefined || ref === null) return [];
+          const read = epochMs(facts.read);
+          return [
+            {
+              forge: forgeOfRef(ref) === "github" ? "GitHub" : "GitLab",
+              read,
+              failed: epochMs(facts.asked ?? facts.read) > read,
+            },
+          ];
+        }).sort((a, b) => Number(b.failed) - Number(a.failed) || a.read - b.read)[0];
+        const answeredAt = (now: number) =>
+          dated === undefined || (!dated.failed && now - dated.read <= 2 * MERGE_POLL_MS)
+            ? null
+            : { forge: dated.forge, ago: agoMs(dated.read, now), failed: dated.failed };
         const sentenceAt = (now: number) =>
           sentenceFor({
+            answered: answeredAt(now),
             mr,
             mrs: several
               ? Arr.map(each, (one, at) => ({

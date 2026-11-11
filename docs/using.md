@@ -691,7 +691,11 @@ acknowledging its report) does not settle what it owes. An implement whose
 merge request is open says what checked it, from Collie's own checks counted only at the
 revision its branch is at now in its checkout (where that cannot be read, the newest
 revision Collie checked): `cego/collie!65 is open, but lint failed at 1a2b3c4. Next: fix
-lint, or tell builder to.`, or `cego/collie!65 is open; nothing has checked it.` Where
+lint, or tell builder to.`, or `cego/collie!65 is open; nothing has checked it.` Once the
+forge's last answer is more than two merge-watch rounds old, the card adds when it was:
+`GitLab last answered 11 minutes ago.`, and where the last ask failed, `GitLab could not be
+read; it last answered 6 minutes ago.` A `merged` recorded by hand is outranked by the forge
+reading the merge request open after it, and the card is owed again. Where
 every check passed it is **Ready to release**, leads the section, and says so: `Ready to
 release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: merge it, or tell
 builder to.` The agent is named only while it is alive. A GitHub pull request reads as

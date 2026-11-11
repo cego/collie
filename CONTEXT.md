@@ -501,7 +501,8 @@ A finished Run's agent is closed once it has been idle for an hour since the Run
 **Landed** — What a Task's work has done once everything it owes is settled and none of its
 Runs is still going. A Task owes each merge request its Runs carry, and a branch with none.
 A merge request is settled when its forge reads it merged; when `abandoned` is recorded on a
-Run carrying it or on the Task's leading Run; when `merged` is recorded for it; or when
+Run carrying it or on the Task's leading Run; when `merged` is recorded for it and its
+forge has not read it open since; or when
 `superseded` is recorded on it while its forge reads it closed, or on every Run of the Task
 carrying it with a ref naming a Run of another Task, which is then the one responsible. A
 `superseded` naming a successor in the same Task, or no Run, settles nothing while the merge
@@ -519,9 +520,14 @@ it ends; one that still owes a merge request stays on the board however old it i
 forge what became of it and records `merged` as that forge's word when it merged. It asks
 about every merge request a Task owes, whatever its section, age or the Dispositions of
 its Runs, follows a merged one to production, and keeps asking about a closed one in case
-it is reopened. Only a merge request settled by `abandoned` is not asked about. A forge
-that cannot be read leaves every stored answer as it was, so it settles nothing and
-unsettles nothing.
+it is reopened. Only a merge request settled by `abandoned` is not asked about. Each answer
+it keeps carries the time it was read and the head it was read at, across a host restart,
+and an answer of open read after a recorded `merged` outranks it: the merge request is owed
+again, and no record is rewritten. An answer with no read time, as an earlier host wrote
+them, counts as never asked until the next round asks it. A forge that cannot be read
+leaves every stored answer and its read time as it was, so it settles nothing and
+unsettles nothing. A card says when the forge last answered once that is more than two
+rounds old, and says when its last ask failed.
 
 **Unseen** — A **Finished** Task's leading Run that ended by itself with something to
 report and that nobody has opened or acknowledged yet. The Run's host records **seen** once

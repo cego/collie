@@ -1330,8 +1330,10 @@ URL, an [MR id](../CONTEXT.md), `cego/collie!43` or `collie!43`. Where it is one
 Task's merge requests, the disposition is recorded on the Run that owns it, under its MR id,
 whichever of the Task's Runs you named. A merge request that is not one of the Task's is
 refused, and the refusal lists the Task's. Anything else, a commit or a Run, is recorded as
-given on the Run you named. The board and chat's `collie_do` `disposition` take the same
-path.
+given on the Run you named. A `superseded` whose ref names, as one of its words, the Run it
+would be recorded on is refused with `invalid_input`, and nothing is recorded: a Run cannot
+supersede itself. A free-text ref, or one naming another Run, is recorded as given. The
+board and chat's `collie_do` `disposition` take the same path.
 
 Without `--as` the command reads. With it, `--as` is `merged`, `abandoned`, or
 `superseded`, and there is deliberately no value meaning the run succeeded after all.
@@ -1341,6 +1343,10 @@ person says so and the record says who and when.
 
 A correction is a new record rather than an edit, so what was believed before is still
 readable. The most recent one is what `run show` reports.
+
+A recorded `merged` settles its merge request only until the merge watch reads it open
+after the record: the forge's later answer outranks it and the merge request is owed
+again, while the record itself stays.
 
 This is integrated here and not yet on the board: the Home's rows and Live region do not
 read it, so a Run whose work shipped still reads as a plain failure there.

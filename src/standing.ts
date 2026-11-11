@@ -65,6 +65,8 @@ export interface Owed {
   readonly runs: ReadonlyArray<string>;
   /** What its forge last read it as; null where it has not been asked. */
   readonly forge: "open" | "merged" | "closed" | null;
+  /** When its forge said so, in epoch ms; null where that is not known. */
+  readonly read: number | null;
 }
 
 /** A Disposition line of one of the Task's Runs, as settlement reads it. */
@@ -86,9 +88,9 @@ export interface Settlement {
 
 /**
  * Whether `item` is settled (ADR-draft-a-task-lands-when-what-it-owes-is-settled): merged
- * on its forge, abandoned on a Run carrying it or on the Task's `leader`, recorded merged,
- * or superseded by a Run of another Task or while its forge reads it closed. Each Run's
- * latest line about it is that Run's answer.
+ * on its forge, abandoned on a Run carrying it or on the Task's `leader`, recorded merged
+ * and not read open since, or superseded by a Run of another Task or while its forge reads
+ * it closed. Each Run's latest line about it is that Run's answer.
  */
 export function settlementOf(
   item: Owed,
@@ -113,7 +115,9 @@ export function settlementOf(
   const abandoned = latest("abandoned", (one) => carries(one.run) || one.run === leader);
   if (abandoned !== null) return { by: "abandoned", line: abandoned };
   const merged = latest("merged");
-  if (merged !== null) return { by: "merged", line: merged };
+  const reopened =
+    merged !== null && item.forge === "open" && (item.read ?? -Infinity) > epochMs(merged.at);
+  if (merged !== null && !reopened) return { by: "merged", line: merged };
   const handedOn =
     item.runs.length > 0 &&
     Arr.every(item.runs, (run) => {

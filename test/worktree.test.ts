@@ -3515,7 +3515,7 @@ test("a merge the merge watch recorded on GitHub settles a branch still on the r
       yield* fs.makeDirectory(`${rig.stateDir}/board`, { recursive: true });
       yield* fs.writeFileString(
         `${rig.stateDir}/board/mr-states.json`,
-        '{"github.com/o/r#5":{"state":"merged","checks":{"state":"passed"},"head":"abc"}}',
+        '{"github.com/o/r#5":{"state":"merged","checks":{"state":"passed"},"head":"abc","read":"2026-09-14T09:00:00Z"}}',
       );
       settling = yield* settlingOf({
         stateDir: rig.stateDir,
@@ -3554,7 +3554,7 @@ test("a legacy bare mr: target is settled as the merge request of its checkout's
       yield* fs.makeDirectory(`${rig.stateDir}/board`, { recursive: true });
       yield* fs.writeFileString(
         `${rig.stateDir}/board/mr-states.json`,
-        '{"gitlab.example.com/group/app!42":{"state":"merged"},"gitlab.example.com/group/web!42":{"state":"open"}}',
+        '{"gitlab.example.com/group/app!42":{"state":"merged","read":"2026-09-14T09:00:00Z"},"gitlab.example.com/group/web!42":{"state":"open","read":"2026-09-14T09:00:00Z"}}',
       );
       settling = yield* settlingOf({
         stateDir: rig.stateDir,
@@ -3691,7 +3691,7 @@ const sharedCheckout = Effect.fn("worktreeTest.sharedCheckout")(function* (
   yield* fs.makeDirectory(`${rig.stateDir}/board`, { recursive: true });
   yield* fs.writeFileString(
     `${rig.stateDir}/board/mr-states.json`,
-    `{"gitlab.cego.dk/mk/support!279":{"state":"${state}"}}`,
+    `{"gitlab.cego.dk/mk/support!279":{"state":"${state}","read":"2026-09-14T09:00:00Z"}}`,
   );
   const views = yield* buildBoard({
     env: readEnv({ HERDR_PLUGIN_STATE_DIR: rig.stateDir, COLLIE_CWD: rig.projectDir }),
