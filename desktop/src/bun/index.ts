@@ -72,6 +72,7 @@ import { appWindowFor } from "./browser";
 import { applicationMenu } from "./menu";
 import { clipboardPaths } from "../shared/attachments";
 import { readAttachment, stageAttachment, stagePath } from "./attachments";
+import { placeStaged } from "./carried";
 import { actionsLog, reasonOf } from "./sent";
 import { type Place, setUp, setupInventory, setupOffer, thisComputer } from "./standing-setup";
 import { type FlockConversation, openFlockChat, refusal, untilStarted } from "./chat";
@@ -838,6 +839,9 @@ const main = Effect.gen(function* () {
         ),
       );
 
+  /** What this session placed on each Machine for a pane: path there, and when, by sha256. */
+  const placed: Map<string, Map<string, { readonly path: string; readonly at: number }>> =
+    new Map();
   /** Files named by path, each copied in or refused in words. */
   const stagedFrom = (paths: ReadonlyArray<string>) =>
     Effect.forEach(paths, (path) =>
@@ -1517,6 +1521,24 @@ const main = Effect.gen(function* () {
           ? (Utils.clipboardReadText() ?? "")
           : "",
       ).pipe(Effect.flatMap((text) => stagedFrom(clipboardPaths(text)))),
+    placeFiles: ({ installation, ids }) =>
+      doorTo(doors, installation).pipe(
+        Effect.flatMap((held) =>
+          placeStaged(
+            placed,
+            {
+              name: held.machine.name,
+              files: shown.machines.get(installation)?.files ?? false,
+              door: held.desktop,
+            },
+            own,
+            ids,
+          ).pipe(
+            Effect.mapError((cause) => new ActionFailed({ reason: reasonOf(cause) })),
+            Effect.provide(BunServices.layer),
+          ),
+        ),
+      ),
     attachmentFile: ({ id, offset }) =>
       readAttachment(own, id, offset).pipe(
         Effect.mapError(

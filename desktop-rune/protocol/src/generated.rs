@@ -3316,6 +3316,12 @@ pub struct StagePayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlaceFilesPayload {
+    pub installation: String,
+    pub ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AttachmentFilePayload {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
