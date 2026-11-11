@@ -91,6 +91,7 @@ import {
 import { readStepLines } from "../../src/steps";
 import { measuresOf } from "../../src/outcomes";
 import { redact } from "../../src/redact";
+import { leaksIn } from "../../src/public-text";
 import { slackApi } from "../../src/slack";
 import { botLeftOver, fakeSlack, signedInToSlack } from "./slack";
 import leakingReview from "../fixtures/public-text/mr-522-note-1839712.md" with { type: "text" };
@@ -20050,7 +20051,7 @@ scenario(
         );
         expect(body).toContain("| bench.count | primary | 7 | 3 |");
         const [table, evidence] = Str.split(body, "<details>");
-        expect(table).toContain(final!.id);
+        expect(table).toContain(final!.candidate.head_sha);
         for (const metric of ["bench.count", "bench.size"])
           for (const side of ["base", "candidate"] as const) {
             const line = Option.getOrUndefined(
@@ -20075,7 +20076,7 @@ scenario(
           final!.base.commit,
           final!.base.head_sha,
           final!.candidate.head_sha,
-          runId,
+          "sh bench/bench.sh",
         ])
           expect(evidence).toContain(text);
         expect(body).not.toContain(SECRET);
@@ -20108,6 +20109,9 @@ scenario(
         const measured = yield* finals(runId);
         expect(Arr.map(measured, (one) => one.base.commit)).toEqual([moved, original]);
         expect(verdictsOf(measured[0]!)).toEqual(["bench.count gain", "bench.size no-change"]);
+        const body = yield* readText(`${runDir(dir, runId)}/handoffs/tune-up-merge-request.md`);
+        expect(leaksIn(body)).toEqual([]);
+        expect(body).toContain(original);
         expect(Arr.map(measured, (one) => one.candidate.head_sha)).toEqual([
           yield* headOf(),
           yield* headOf(),
@@ -20184,7 +20188,10 @@ scenario(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const runId = "r-tune-ci-fixed";
+        const runId = "run-67a6e669";
+        dir = `${rig.root}/.collie/state`;
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.makeDirectory(dir, { recursive: true });
         const { bin, forge } = yield* tuneForge;
         yield* cycling(runId, [
           fasterTo(3),
@@ -20208,9 +20215,40 @@ scenario(
         expect(yield* runLog(runId)).toContain(`performance proved on ${head}`);
         // The merge request is told the whole replacement evidence, not only its table.
         const noted = Arr.join(yield* ciNotes(forge), "\n");
-        expect(noted).toContain(`Samples of \`final\` Measurement ${measured[1]!.id}`);
+        expect(noted).toContain("Samples of the final benchmark");
+        expect(noted).toContain("- bench.count, candidate: 2, 2, 2, 2");
         expect(noted).toContain(head);
         expect(noted).toContain("#### Reproduce");
+        expect(noted).toContain("sh bench/bench.sh");
+        expect(leaksIn(noted)).toEqual([]);
+        expect(noted).not.toContain(runId);
+        expect(noted).not.toContain(dir);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up reports a refused CI-fix note instead of silently completing",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-note-refused";
+        const { bin, forge } = yield* tuneForge;
+        yield* cycling(runId, [
+          fasterTo(3),
+          cleanedUp(),
+          TUNE_REVIEWED,
+          openedFailing(forge),
+          ciFixedTo(forge, 2),
+          { ...TUNE_REVIEWED, summary: "Collie checked it." },
+        ]);
+        yield* leftToCi(runId, ["nuxi"]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        yield* bin.restore();
+        expect(result._tag).toBe("Failure");
+        expect(reasonOf(result)).toContain('"Collie"');
+        expect(yield* ciNotes(forge)).toEqual([]);
       }),
     ),
   120_000,
@@ -20473,8 +20511,9 @@ scenario(
         expect(readme).toContain(`collie measure --run ${runId} --base ${final!.base.commit}`);
 
         const body = yield* readText(`${runDir(dir, runId)}/handoffs/tune-up-merge-request.md`);
-        expect(Str.split(body, "<details>")[0]).toContain(final!.id);
-        expect(body).toContain(archive);
+        expect(Str.split(body, "<details>")[0]).toContain(final!.candidate.head_sha);
+        expect(leaksIn(body)).toEqual([]);
+        expect(body).not.toContain(archive);
         expect(body).toContain("measured with it applied in a scratch tree");
         expect(body).not.toContain("Accepted tradeoffs");
       }),

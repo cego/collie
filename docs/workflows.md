@@ -1283,10 +1283,12 @@ with no Discover or Harness Output fails the Run, naming the files it looked for
    is `handoffs/tune-up-merge-request.md`, which Collie writes from the Measurements, with
    credential-shaped values taken out: the base and candidate table with each metric's
    ratio and interval, any tradeoff you accepted under **Accepted tradeoffs**, apart from
-   the verdicts, the commands and harness commits and where the archive is, the guardrails
+   the verdicts, the commands and harness commits, the guardrails
    and Cycles not kept, the checks and the review, the opportunities left, what to monitor after
    deploying, and, collapsed, every sample of the `final` Measurement, the frozen plan,
-   every plan and `final` Measurement, the commands to reproduce it and the Run id.
+   every plan and `final` Measurement, and the repository's commands to reproduce it.
+   Run ids and archive paths stay in the Run's record. A CI fix posts the replacement
+   evidence as a note; a refusal fails the Run with the host's reason.
 10. **External report**, at whichever end the Run reaches, after the merge request or with
     its findings alone. Discover and each Cycle hand on what only another repository could
     change, and Collie writes each to `handoffs/tune-up-external.md`: the owning repository
