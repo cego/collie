@@ -1160,3 +1160,38 @@ fn help_me_write_it_opens_the_standing_direction_dialog_and_reads_the_sessions()
     assert!(runtime.state.standing.open, "the dialog is open");
     assert_eq!(harness.fake.asked_of("setupInventory").len(), 1);
 }
+
+#[test]
+fn setting_up_linear_shows_the_job_it_started_as_an_onboarding() {
+    use collie_desktop_board::pages::settings::connections::Card;
+    use collie_desktop_protocol::generated::Id;
+    let (harness, mut runtime) = opened();
+    let card = Card {
+        id: Id::Linear,
+        name: "Linear",
+        primary: Some(Primary::Setup {
+            label: "Set up on vm".into(),
+            to: "vm".into(),
+        }),
+        needs_you: true,
+        state: "Not set up".into(),
+        account: None,
+        where_: String::new(),
+        machines: Vec::new(),
+    };
+    collie_desktop_board::pages::settings::connect(&mut runtime.state, &card);
+    assert_eq!(
+        harness.fake.asked_of("linearSetup"),
+        [json!({ "profile": "vm" })]
+    );
+    harness.fake.answer("linearSetup", Ok(json!("job-linear")));
+    settle(&harness, &mut runtime, 900.0);
+    assert_eq!(runtime.state.pages.machines.job.as_deref(), Some("job-linear"));
+    assert!(
+        runtime
+            .elements()
+            .iter()
+            .any(|e| e.text.as_deref() == Some("Starting…")),
+        "its onboarding dialog shows on Settings"
+    );
+}

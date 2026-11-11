@@ -3,9 +3,8 @@
 //! syncing and cleaning one up. The spec is `MachinesPage.vue` and its dialogs.
 
 use super::cleanup::{self, Cleanup};
-use super::clock::Zone;
-use super::common::{Told, Tone, heading, muted, panel, status, toasts, toned};
-use super::flock::{Fold, MachineRow, OwnRow, RowState, own_rows, route_said, settled};
+use super::common::{Told, Tone, muted, panel, status, toasts, toned};
+use super::flock::{Fold, MachineRow, RowState, route_said, settled};
 use super::in_sync::{DesktopHolds, Verdict, build_of, flock_in_sync, in_sync, syncable};
 use super::onboard;
 use crate::calls::Stop;
@@ -15,12 +14,8 @@ use collie_desktop_protocol::generated::{
     UpdatesSuccess,
 };
 use rune::{El, TextEdit, col, el, text};
-use rune_kit::{
-    Button, ButtonVariant, Cell, ControlSize, Dialog, Field, Kit, Table, TableColumn, TableState,
-    TextInput,
-};
+use rune_kit::{Button, ButtonVariant, ControlSize, Dialog, Field, Kit, TextInput};
 use serde_json::json;
-use std::borrow::Cow;
 
 /// What Add Machine asks for.
 #[derive(Default)]
@@ -59,8 +54,6 @@ pub struct Machines {
     /// A login code being pasted.
     pub code: TextEdit,
     pub told: Told,
-    pub own: TableState,
-    zone: Option<Zone>,
 }
 
 impl Machines {
@@ -80,10 +73,6 @@ impl Machines {
             version: self.version.clone()?,
             credentials: credentials_held(app.board.credentials.as_ref()?),
         })
-    }
-
-    fn zone(&self) -> Zone {
-        self.zone.clone().unwrap_or_else(Zone::local)
     }
 }
 
@@ -227,6 +216,51 @@ impl App {
     }
 }
 
+/// How many Machines Desktop reaches now, and each it doesn't, in words: `1 of 2 Machines
+/// reached · vm is connecting`.
+pub fn reach(rows: &[MachineRow]) -> (String, Tone) {
+    if rows.is_empty() {
+        return ("No Machines yet".into(), Tone::Quiet);
+    }
+    let live = rows.iter().filter(|r| r.state.is_live()).count();
+    let plural = if rows.len() == 1 { "" } else { "s" };
+    let mut said = vec![format!("{live} of {} Machine{plural} reached", rows.len())];
+    let mut tone = Tone::Ok;
+    for row in rows {
+        match &row.state {
+            RowState::Live => {}
+            RowState::Connecting => {
+                said.push(format!("{} is connecting", row.name));
+                if tone == Tone::Ok {
+                    tone = Tone::Quiet;
+                }
+            }
+            RowState::NotLive(state) => {
+                said.push(format!(
+                    "{}: {}",
+                    row.name,
+                    super::flock::not_live_said(state).to_lowercase()
+                ));
+                tone = Tone::Warn;
+            }
+        }
+    }
+    (said.join(" · "), tone)
+}
+
+/// The In sync sentence, which leaves a Machine still connecting out, and says so.
+pub fn in_sync_said(rows: &[MachineRow], holds: &DesktopHolds) -> (String, usize) {
+    let (said, lagging) = flock_in_sync(rows, holds);
+    let connecting = rows.iter().any(|r| r.state == RowState::Connecting);
+    if lagging == 0 && connecting {
+        return (
+            said.replacen("Every Machine is", "Every Machine reached is", 1),
+            0,
+        );
+    }
+    (said, lagging)
+}
+
 fn small(label: &str, variant: ButtonVariant) -> Button {
     Button::new(label)
         .variant(variant)
@@ -280,7 +314,6 @@ fn machine(k: &Kit, row: &MachineRow, holds: &DesktopHolds) -> El {
     if let Some(reason) = &row.transport_reason {
         body = body.child(muted(k, reason.clone()).key("transport-reason"));
     }
-    body = body.child(muted(k, build_of(row)).key("build"));
     for lag in &verdict.behind {
         body = body.child(toned(k, lag.said.clone(), Tone::Warn));
         if lag.part == super::in_sync::Part::Onboarding {
@@ -318,7 +351,19 @@ fn machine(k: &Kit, row: &MachineRow, holds: &DesktopHolds) -> El {
         }
         _ => {}
     }
-    let mut actions = rune::row().w_full().gap(8.0).child(el().grow(1.0));
+    let mut actions = rune::row()
+        .w_full()
+        .gap(8.0)
+        .center_y()
+        .child(
+            text(build_of(row))
+                .key("build")
+                .font(k.ty.text_small)
+                .color(k.c.text_faint)
+                .grow(1.0)
+                .shrink()
+                .truncate(),
+        );
     let profile = row.profile.clone();
     if syncable(&verdict) {
         let profile = profile.clone();
@@ -353,112 +398,6 @@ fn machine(k: &Kit, row: &MachineRow, holds: &DesktopHolds) -> El {
             .key("onboard"),
     );
     body.child(actions)
-}
-
-fn own_cell(row: &OwnRow, column: &str) -> Cell {
-    let dash = || "—".to_string();
-    match column {
-        "machine" => Cell::text(format!("{} · {}", row.name, row.where_)),
-        "sync" => {
-            let said = match &row.detail {
-                Some(detail) => format!("{} · {detail}", row.sync),
-                None => row.sync.to_string(),
-            };
-            Cell::text(said)
-        }
-        "root" => Cell::text(row.projects_root.clone().unwrap_or_else(dash)).mono(),
-        "chat" => Cell::text(row.chat_harness.clone().unwrap_or_else(dash)).mono(),
-        "harnesses" => Cell::text(if row.harnesses.is_empty() {
-            dash()
-        } else {
-            row.harnesses.join(", ")
-        })
-        .muted(),
-        _ => Cell::text(if row.remembered.is_empty() {
-            dash()
-        } else {
-            row.remembered
-                .iter()
-                .map(|(key, value)| format!("{key} = {value}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
-        .muted(),
-    }
-}
-
-fn own_table(app: &App, k: &Kit, routes: &[MachineRow]) -> El {
-    let machines = &app.pages.machines;
-    let owned = own_rows(
-        routes,
-        &machines.flock.own,
-        collie_desktop_protocol::epoch_ms(),
-        &machines.zone(),
-    );
-    if owned.is_empty() {
-        return muted(k, "No Machines yet. Add one above.");
-    }
-    let height = 34.0 + 28.0 * owned.len() as f32;
-    let ok = k.c.success.fg;
-    let warn = k.c.warning.fg;
-    let cells = owned.clone();
-    Table::new(
-        |app: &App| &app.pages.machines.own,
-        |app: &mut App| &mut app.pages.machines.own,
-        |app: &App| rows(app).len(),
-        |app: &App, i| {
-            Cow::Owned(
-                rows(app)
-                    .get(i)
-                    .map_or_else(String::new, |r| r.profile.clone()),
-            )
-        },
-    )
-    .name("What each Machine keeps for itself")
-    .column(TableColumn::new("machine", "Machine").flex(1.4).min(140.0))
-    .column(
-        TableColumn::new("sync", "Settings sync")
-            .flex(1.4)
-            .min(120.0),
-    )
-    .column(
-        TableColumn::new("root", "projects.root")
-            .flex(1.0)
-            .min(100.0),
-    )
-    .column(
-        TableColumn::new("chat", "chat_harness")
-            .width(110.0)
-            .min(90.0),
-    )
-    .column(
-        TableColumn::new("harnesses", "Harnesses found")
-            .flex(1.0)
-            .min(100.0),
-    )
-    .column(
-        TableColumn::new("remembered", "Remembered")
-            .flex(1.2)
-            .min(100.0),
-    )
-    .cell(move |_: &App, i, column| match cells.get(i) {
-        Some(row) => {
-            let cell = own_cell(row, column);
-            if column == "sync" {
-                cell.color(if row.sync_ok { ok } else { warn })
-            } else {
-                cell
-            }
-        }
-        None => Cell::text(""),
-    })
-    .build(app, k)
-    .key("own")
-    .w_full()
-    .h(height)
-    .radius(k.radius.md)
-    .border(1.0, k.c.border_muted)
-    .clip_rounded(k.radius.md)
 }
 
 fn add_dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
@@ -543,72 +482,92 @@ fn add_dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
 pub fn view(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
     let machines = &app.pages.machines;
     let rows = rows(app);
-    let summary = machines
-        .holds(app)
-        .map(|holds| flock_in_sync(&rows, &holds));
-    let holds = machines.holds(app).unwrap_or(DesktopHolds {
+    let holds = machines.holds(app);
+    let (reached, reach_tone) = reach(&rows);
+    let synced = holds.as_ref().map(|holds| in_sync_said(&rows, holds));
+    let line = |key: &str, said: String, tone: Tone, font, color| {
+        rune::row()
+            .key(key.to_string())
+            .role("status")
+            .label(said.clone())
+            .w_full()
+            .gap(8.0)
+            .items_start()
+            .child(
+                el().mt(6.0)
+                    .size(7.0, 7.0)
+                    .radius(3.5)
+                    .fill(super::common::tone_color(k, tone))
+                    .a11y_hidden(),
+            )
+            .child(
+                text(said)
+                    .font(font)
+                    .color(color)
+                    .wrap()
+                    .grow(1.0)
+                    .shrink()
+                    .a11y_hidden(),
+            )
+    };
+    let mut summary = col()
+        .grow(1.0)
+        .shrink()
+        .min_w(0.0)
+        .gap(6.0)
+        .child(line(
+            "reach",
+            reached,
+            reach_tone,
+            k.ty.body_medium,
+            k.c.text_strong,
+        ));
+    if let Some((said, lagging)) = synced {
+        let tone = if lagging == 0 { Tone::Ok } else { Tone::Warn };
+        summary = summary.child(line(
+            "in-sync",
+            said,
+            tone,
+            k.ty.text_small,
+            k.c.text_muted,
+        ));
+    }
+    let top = rune::row()
+        .w_full()
+        .gap(16.0)
+        .items_start()
+        .child(summary)
+        .child(
+            rune::row()
+                .gap(8.0)
+                .child(
+                    Button::new("Clean up…")
+                        .variant(ButtonVariant::Outline)
+                        .on_press(|app: &mut App| {
+                            app.open_cleanup(collie_desktop_protocol::epoch_ms())
+                        })
+                        .build(k)
+                        .key("clean-up"),
+                )
+                .child(
+                    Button::new("Add Machine")
+                        .variant(ButtonVariant::Contrast)
+                        .on_press(|app: &mut App| app.open_add_machine())
+                        .build(k)
+                        .key("add-machine"),
+                ),
+        );
+    let holds = holds.unwrap_or(DesktopHolds {
         version: String::new(),
         credentials: vec![],
     });
-    let mut top = col().w_full().gap(12.0);
-    if let Some((said, lagging)) = &summary {
-        let tone = if *lagging == 0 { Tone::Ok } else { Tone::Warn };
-        top = top.child(
-            rune::row()
-                .key("in-sync")
-                .role("status")
-                .label(said.clone())
-                .w_full()
-                .gap(8.0)
-                .items_start()
-                .child(
-                    el().mt(5.0)
-                        .size(8.0, 8.0)
-                        .radius(4.0)
-                        .fill(super::common::tone_color(k, tone)),
-                )
-                .child(
-                    text(said.clone())
-                        .font(k.ty.body_medium)
-                        .color(k.c.text_base)
-                        .wrap()
-                        .grow(1.0)
-                        .shrink()
-                        .a11y_hidden(),
-                ),
-        );
-    }
-    top = top.child(
-        rune::row()
-            .gap(8.0)
-            .child(
-                Button::new("Add Machine")
-                    .variant(ButtonVariant::Contrast)
-                    .on_press(|app: &mut App| app.open_add_machine())
-                    .build(k)
-                    .key("add-machine"),
-            )
-            .child(
-                Button::new("Clean up…")
-                    .variant(ButtonVariant::Outline)
-                    .on_press(|app: &mut App| app.open_cleanup(collie_desktop_protocol::epoch_ms()))
-                    .build(k)
-                    .key("clean-up"),
-            ),
-    );
     let list = col()
         .key("machines")
         .w_full()
         .gap(12.0)
         .children(rows.iter().map(|row| machine(k, row, &holds)));
-    let own = col()
-        .w_full()
-        .gap(8.0)
-        .child(heading(k, "What each Machine keeps for itself"))
-        .child(own_table(app, k, &rows));
     add_dialog(app, k, layer);
     cleanup::dialog(app, &rows, k, layer);
-    onboard::dialog(app, k, layer);
     toasts(&machines.told, told, k, layer);
-    super::common::page("machines-page", "Machines", vec![top, list, own])
+    super::common::page("machines-page", "Machines", vec![top, list])
 }

@@ -728,6 +728,10 @@ pub fn connect(app: &mut App, card: &connections::Card) {
         tag,
         payload,
         move |app: &mut App, said: Result<String, CallError>| {
+            // Linear's setup is a job, shown as an onboarding is, wherever it was started.
+            if let (true, Ok(job)) = (linear, &said) {
+                app.pages.machines.job = Some(job.clone());
+            }
             let page = &mut app.pages.settings;
             page.busy = None;
             let said = said.map_err(|why| why.0).map(|said| {

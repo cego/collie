@@ -755,10 +755,6 @@ fn the_page_hears_desktops_version_and_says_which_machine_lags_and_how() {
         .find(|e| e.key.as_deref() == Some("machine-local"))
         .unwrap();
     assert_eq!(pc.label.as_deref(), Some("mk-pc: In sync"));
-    assert!(
-        said(&runtime, "What each Machine keeps for itself"),
-        "the own-settings table is on the page"
-    );
 }
 
 #[test]
@@ -948,4 +944,50 @@ fn a_failed_sweep_is_tried_again_under_its_own_request() {
     tap(&mut runtime, "cleanup-p-vm/try-again", &mut at);
     let again = harness.fake.asked_of("sweep");
     assert_eq!((again.len(), &again[2]["request"]), (3, &first));
+}
+
+#[test]
+fn the_header_says_which_machines_it_reaches_and_never_calls_one_connecting_in_sync() {
+    let harness = Harness::<App>::new();
+    let mut runtime = machines_page(&harness);
+    for one in [
+        snapshot("i-vm", "p-vm", "vm", "0.35.0"),
+        item(json!({ "_tag": "Reconnecting", "machine": { "profile": "p-vm", "name": "vm" }, "at": 5.0 })),
+    ] {
+        runtime.state.apply(one);
+    }
+    settle(&harness, &mut runtime);
+    runtime.frame(400.0);
+    let reach = runtime
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("reach"))
+        .and_then(|e| e.label)
+        .unwrap_or_default();
+    assert_eq!(reach, "1 of 2 Machines reached · vm is connecting");
+    assert!(
+        !said(&runtime, "Every Machine is in sync"),
+        "a Machine connecting is not said to be in sync"
+    );
+    assert!(said(&runtime, "Every Machine reached is in sync with Desktop 0.35.0"));
+    runtime.state.apply(snapshot("i-vm", "p-vm", "vm", "0.35.0"));
+    settle(&harness, &mut runtime);
+    runtime.frame(800.0);
+    assert!(said(&runtime, "2 of 2 Machines reached"));
+    assert!(said(&runtime, "Every Machine is in sync with Desktop 0.35.0"));
+}
+
+#[test]
+fn an_onboarding_started_anywhere_shows_over_whichever_page_is_open() {
+    let harness = Harness::<App>::new();
+    let mut runtime = machines_page(&harness);
+    runtime.state.open_page(Page::Settings);
+    runtime.state.pages.machines.job = Some("job-9".into());
+    settle(&harness, &mut runtime);
+    runtime.frame(400.0);
+    assert!(said(&runtime, "Starting…"), "the onboarding shows on Settings");
+    runtime.state.open_page(Page::Board);
+    settle(&harness, &mut runtime);
+    runtime.frame(800.0);
+    assert!(said(&runtime, "Starting…"), "and on the Board");
 }
