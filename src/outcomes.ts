@@ -14,7 +14,7 @@ import { readDispositions, latest } from "./disposition";
 import { launchDir, readLaunches, stemOf } from "./launches";
 import { deliveriesOf } from "./steering";
 import { readVerifications } from "./verify";
-import type { Metric } from "./metrics";
+import type { Metric, RecoveryAction } from "./metrics";
 import type { ParkCause } from "./park-cause";
 import { readStepLines } from "./steps";
 import { epochMs } from "./time";
@@ -166,6 +166,19 @@ export interface Measures {
     /** An agent's collect budget ran out before it wrote its Output. */
     readonly collectExpiries: Counted;
   };
+  readonly recoveries: {
+    /** Counts actions using each recovery's latest outcome. */
+    readonly byCause: ReadonlyArray<
+      Counted & {
+        readonly cause: ParkCause;
+        readonly action: RecoveryAction;
+        /** Those whose Output was then written and decoded. */
+        readonly recovered: number;
+        /** Median ms from the turn's end to the Output, over the recovered; null where none. */
+        readonly toRecover: number | null;
+      }
+    >;
+  };
   /** The largest context sampled at a work boundary; not tokens consumed. */
   readonly peakContext: ReadonlyArray<{
     runId: string;
@@ -225,6 +238,10 @@ export function measuresOf(
   const reasons = new Map<string, string[]>();
   const causes = new Map<ParkCause, { runs: string[]; waits: number[]; humanResumes: number }>();
   const collectExpiries: string[] = [];
+  const recoveries = new Map<
+    string,
+    { cause: ParkCause; action: RecoveryAction; runs: string[]; waits: number[] }
+  >();
   const peakContext: Array<Measures["peakContext"][number]> = [];
 
   for (const { runId, records, metrics } of runs) {
@@ -246,6 +263,20 @@ export function measuresOf(
         const reason = reasonOf(line.note);
         reasons.set(reason, [...(reasons.get(reason) ?? []), runId]);
       }
+    }
+    const latestRecoveries = new Map<string | number, Metric>();
+    for (const [index, line] of metrics.entries()) {
+      if (line.kind !== "recovery" || line.action === undefined) continue;
+      latestRecoveries.set(line.recoveryId ?? index, line);
+    }
+    for (const line of latestRecoveries.values()) {
+      if (line.action === undefined) continue;
+      const cause = line.cause ?? "unknown";
+      const key = `${cause} ${line.action}`;
+      const kept = recoveries.get(key) ?? { cause, action: line.action, runs: [], waits: [] };
+      recoveries.set(key, kept);
+      kept.runs.push(runId);
+      if (line.outcome === "output-written") kept.waits.push(line.value);
     }
     for (const resume of records?.resumes ?? []) {
       if (originOf(resume.origin) !== "human") continue;
@@ -364,6 +395,19 @@ export function measuresOf(
         (a, b) => Num.sign(b.count - a.count || pipe(a.reason, Str.localeCompare(b.reason))),
       ),
       collectExpiries: counted(collectExpiries),
+    },
+    recoveries: {
+      byCause: Arr.sortWith(
+        Arr.map([...recoveries.values()], ({ cause, action, runs, waits }) => ({
+          cause,
+          action,
+          ...counted(runs),
+          recovered: waits.length,
+          toRecover: median(waits),
+        })),
+        (value) => value,
+        (a, b) => Num.sign(b.count - a.count || pipe(a.cause, Str.localeCompare(b.cause))),
+      ),
     },
     peakContext,
   };

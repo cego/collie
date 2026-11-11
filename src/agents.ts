@@ -167,7 +167,8 @@ import { machineName } from "./peers";
 import type { MachineCatalogue } from "./harness-choice";
 import { askRouteTo } from "./handoff";
 import { nowIso } from "./time";
-import { noteContext } from "./metrics";
+import { noteContext, noteReminder, type RecoveryOutcome } from "./metrics";
+import manifest from "../herdr-plugin.toml";
 import { roomFor, subscriptionOf, usedFor, type UsageReading } from "./usage-model";
 import { ownCodexReading } from "./usage";
 import {
@@ -284,8 +285,11 @@ export const RanOut = Schema.TaggedStruct("RanOut", {
 export type RanOut = typeof RanOut.Type;
 const isRanOut = Schema.is(RanOut);
 
-/** A collection: the Output's text, nothing in the time allowed, or the agent ran out. */
-export const Collected = Schema.Union([Schema.String, Schema.Null, RanOut]);
+const TurnEnded = Schema.TaggedStruct("TurnEnded", { endedAt: Schema.Finite });
+const isTurnEnded = Schema.is(TurnEnded);
+
+/** Output text, an expired budget, exhausted usage, or a turn ending without Output. */
+export const Collected = Schema.Union([Schema.String, Schema.Null, RanOut, TurnEnded]);
 
 /**
  * A failure nothing here could classify, so the Run fails. Uncertainty is reported; it is
@@ -455,6 +459,23 @@ export interface AgentsApi {
     /** Where given, an Output it refuses is read again until the agent's turn has ended. */
     usable?: (text: string) => boolean,
   ) => Effect.Effect<string | null, AgentUncertain | AgentParked>;
+  /** Waits for working → idle/done with absent Output and permission to remind. */
+  readonly endedWithoutOutput: (
+    launched: Launched,
+    may: Effect.Effect<boolean>,
+  ) => Effect.Effect<void>;
+  /** Returns when the reminder was sent, or null if it could not be. */
+  readonly remind: (
+    launched: Launched,
+    ordinal: number,
+  ) => Effect.Effect<string | null, AgentUncertain | AgentParked>;
+  /** Records what the turn after a reminder left. */
+  readonly reminded: (
+    launched: Launched,
+    ordinal: number,
+    outcome: RecoveryOutcome,
+    waitedMs: number,
+  ) => Effect.Effect<void>;
   /**
    * Hands one unusable Output back to the agent that wrote it. True where it was asked, or
    * where the Output is already something other than `unusable`; false where it could not
@@ -901,16 +922,20 @@ export const agentWork = <
             yield* haltLate;
         }),
       );
-    /** Its Output, or that it ran out; with `waiting`, only its Output, parking with that. */
-    const collecting = (on: Launched, from: AgentAsk, waiting?: string) => {
-      // Each budget spent idle, one that has gone is started again, as a resume once did.
-      const late = Effect.gen(function* () {
+    // Each budget spent idle, one that has gone is started again, as a resume once did.
+    const untilWritten = (on: Launched, from: AgentAsk) =>
+      Effect.gen(function* () {
         for (;;) {
           yield* reviving(from);
           const text = yield* watching(agents.collect(on, null, questions));
           if (text !== null) return text;
         }
       });
+    const remindable = Effect.gen(function* () {
+      if ((yield* host.held(runId)) || (yield* host.stopRequested(runId))) return false;
+      return !Arr.some(yield* host.asked(runId), (one) => one.answer === null);
+    });
+    const collecting = (on: Launched, from: AgentAsk, waiting?: string) => {
       // Collected throughout, so a verify ending between attempts is still told to it.
       const output = agents.collectedDuring(
         on,
@@ -921,18 +946,24 @@ export const agentWork = <
               () =>
                 pastBudget(on, waiting).pipe(
                   Effect.flatMap((why) => host.parked(runId, why, "idle-budget")),
-                  Effect.andThen(late),
+                  Effect.andThen(untilWritten(on, from)),
                 ),
             ),
           ),
           parksOnStop(on),
         ),
       );
+      const ended = agents.endedWithoutOutput(on, remindable).pipe(
+        Effect.andThen(Clock.currentTimeMillis),
+        Effect.map((endedAt) => TurnEnded.make({ endedAt })),
+      );
       return stoppable(
         parkedWhenStuck(
           reviving(from).pipe(
             Effect.andThen(
-              waiting === undefined ? Effect.raceFirst(output, agents.ranOut(on)) : output,
+              waiting === undefined
+                ? Effect.raceFirst(Effect.raceFirst(output, ended), agents.ranOut(on))
+                : output,
             ),
           ),
           host,
@@ -942,6 +973,75 @@ export const agentWork = <
         work.runId,
         agents.pollMs,
       );
+    };
+    let reminder: { on: Launched; ordinal: number; endedAt: number } | null = null;
+    // Separate Activities keep replay from spending a reminder twice.
+    const reminding = (at: string, on: Launched, from: AgentAsk, first: typeof Collected.Type) =>
+      Effect.gen(function* () {
+        reminder = null;
+        let collected = first;
+        const endedAt = isTurnEnded(first) ? first.endedAt : 0;
+        const sent: Array<string> = [];
+        while (isTurnEnded(collected)) {
+          const n = sent.length + 1;
+          const asked =
+            n > OUTPUT_REMINDERS
+              ? null
+              : yield* Activity.make({
+                  name: `${at}.remind-${n}`,
+                  success: Schema.NullOr(Schema.String),
+                  error: AgentUncertain,
+                  execute: stoppable(
+                    parkedWhenStuck(agents.remind(on, n), host, work.runId),
+                    host,
+                    work.runId,
+                    agents.pollMs,
+                  ),
+                });
+          if (asked === null) {
+            const why =
+              sent.length === 0
+                ? `${on.agent} ended its turn without writing ${output}, and could not be reminded to; its log says why. A chat message is not its Output. Collie keeps collecting it; ask it to write it.`
+                : `${on.agent} ended its turn without writing ${output}, and again after each of ${sent.length} reminders, sent ${Arr.join(sent, " and ")}. A chat message is not its Output. Collie keeps collecting it; ask it to write it, or why it cannot.`;
+            return yield* Activity.make({
+              name: `${at}.output-absent`,
+              success: Collected,
+              error: AgentUncertain,
+              execute: stoppable(
+                parkedWhenStuck(
+                  host
+                    .parked(runId, why, "output-absent")
+                    .pipe(Effect.andThen(untilWritten(on, from))),
+                  host,
+                  work.runId,
+                ),
+                host,
+                work.runId,
+                agents.pollMs,
+              ),
+            });
+          }
+          sent.push(asked);
+          reminder = { on, ordinal: n, endedAt };
+          collected = yield* Activity.make({
+            name: `${at}.remind-${n}.collect`,
+            success: Collected,
+            error: AgentUncertain,
+            execute: collecting(on, from),
+          });
+        }
+        return collected;
+      });
+    const recovered = () => {
+      const pending = reminder;
+      return pending === null
+        ? Effect.void
+        : Activity.make({
+            name: `${work.operation}.reminder-recovered`,
+            execute: Effect.flatMap(Clock.currentTimeMillis, (now) =>
+              agents.reminded(pending.on, pending.ordinal, "output-written", now - pending.endedAt),
+            ),
+          });
     };
     const launching = (next: AgentAsk) =>
       Effect.gen(function* () {
@@ -975,12 +1075,17 @@ export const agentWork = <
       execute: launching(ask),
     });
     let currentAsk: AgentAsk = ask;
-    let collected = yield* Activity.make({
-      name: `${work.operation}.collect`,
-      success: Collected,
-      error: AgentUncertain,
-      execute: collecting(current, ask),
-    });
+    let collected = yield* reminding(
+      work.operation,
+      current,
+      ask,
+      yield* Activity.make({
+        name: `${work.operation}.collect`,
+        success: Collected,
+        error: AgentUncertain,
+        execute: collecting(current, ask),
+      }),
+    );
     // Each agent that ran out is closed and replaced by one on the next choice with room
     // (ADR-0049 D8), every step its own Activity so a replay starts no third agent.
     const spent: Array<{ readonly on: AgentChoice; readonly why: string }> = [];
@@ -1066,21 +1171,29 @@ export const agentWork = <
         execute: launching(nextAsk),
       });
       currentAsk = nextAsk;
-      collected = yield* Activity.make({
-        name: `${work.operation}.fallback-${n}.collect`,
-        success: Collected,
-        error: AgentUncertain,
-        execute: collecting(current, nextAsk),
-      });
+      collected = yield* reminding(
+        `${work.operation}.fallback-${n}`,
+        current,
+        nextAsk,
+        yield* Activity.make({
+          name: `${work.operation}.fallback-${n}.collect`,
+          success: Collected,
+          error: AgentUncertain,
+          execute: collecting(current, nextAsk),
+        }),
+      );
     }
-    const first = isRanOut(collected) ? null : collected;
+    const first = isString(collected) ? collected : null;
     if (first === null) {
       return yield* new WorkflowError({
         reason: `${current.agent} wrote nothing to ${output}`,
       });
     }
     const read = decodeOutput(work.output, first, plain);
-    if (read.ok) return yield* carded(read.value);
+    if (read.ok) {
+      yield* recovered();
+      return yield* carded(read.value);
+    }
 
     // A harness that stopped is waited on past the budget, as its park says it is.
     const recollecting = (unusable: string, since: number) =>
@@ -1173,6 +1286,7 @@ export const agentWork = <
       const reread = decodeOutput(work.output, now, plain);
       repaired = reread.ok ? reread : yield* repairing(round + 1, now, reread.problem);
     }
+    yield* recovered();
     return yield* carded(repaired.value);
   }).pipe(
     Effect.catchTag("AgentUncertain", (cause) =>
@@ -3078,6 +3192,71 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       ),
     );
 
+  const endedWithoutOutput = (launched: Launched, may: Effect.Effect<boolean>) =>
+    under(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const absent = fs.readFileString(launched.output).pipe(
+          Effect.map((text) => Str.trim(text) === ""),
+          Effect.orElseSucceed(() => true),
+        );
+        let working = false;
+        for (;;) {
+          const status = yield* host.herdr
+            .agentStatus(launched.agent)
+            .pipe(Effect.orElseSucceed(() => null));
+          working ||= status === "working";
+          if (working && status !== null && isSettled(status) && (yield* absent) && (yield* may))
+            return;
+          yield* Effect.sleep(Duration.millis(host.pollMs ?? DEFAULT_POLL_MS));
+        }
+      }),
+    );
+
+  const remind = (launched: Launched, ordinal: number) =>
+    under(
+      Effect.gen(function* () {
+        const sent = yield* deliver(launched, reminderText(launched.output), {
+          kind: "repair",
+          ref: `${stemOf(launched)}.remind-${ordinal}`,
+        });
+        yield* log(
+          launched.runId,
+          sent.sent
+            ? `${launched.agent}: ended its turn without ${launched.operation}.json, so was reminded to write it (${ordinal} of ${OUTPUT_REMINDERS})`
+            : `${launched.agent}: ended its turn without ${launched.operation}.json, and could not be reminded to write it (${sent.why})`,
+        );
+        if (sent.sent) yield* reminded(launched, ordinal, "still-absent", 0);
+        return sent.sent ? yield* nowIso : null;
+      }).pipe(
+        Effect.catch((cause) =>
+          log(
+            launched.runId,
+            `${launched.agent}: could not be reminded to write ${launched.operation}.json (${reason(cause)})`,
+          ).pipe(Effect.as(null)),
+        ),
+      ),
+    );
+
+  const reminded = (
+    launched: Launched,
+    ordinal: number,
+    outcome: RecoveryOutcome,
+    waitedMs: number,
+  ) =>
+    under(
+      Effect.gen(function* () {
+        yield* noteReminder(`${host.dir}/evidence/${launched.runId}`, {
+          at: yield* nowIso,
+          agent: launched.agent,
+          recoveryId: `${launched.agent}:${stemOf(launched)}.remind-${ordinal}`,
+          outcome,
+          waitedMs,
+          build: manifest.version,
+        });
+      }),
+    );
+
   const launchesOf = (runId: string) => readLaunches(runId);
 
   /** The latest session of this kind recorded for this agent of the Run, where one is. */
@@ -3832,6 +4011,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     collectedDuring: (launched, waiting) =>
       collecting.during(launched.runId, launched.agent, waiting),
     repair,
+    endedWithoutOutput,
+    remind,
+    reminded,
     resumedOutput: (launched, round) =>
       under(
         Effect.gen(function* () {
@@ -4060,6 +4242,11 @@ const layeredPersona = Effect.fn("Agents.layeredPersona")(function* (
 
 /** What the role is stated as, in the persona and in the prompt alike. */
 const roleBody = (role: string) => `You are the ${role}.`;
+
+const OUTPUT_REMINDERS = 2;
+
+const reminderText = (output: string): string =>
+  `Your turn ended without writing your Output. A chat message is not the Output: write ${output}, the JSON the contract described and nothing else.\nOUTPUT_PATH: ${output}`;
 
 /**
  * One Output the agent could not write correctly, handed back to that same agent with the

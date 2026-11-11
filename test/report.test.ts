@@ -432,3 +432,70 @@ test("parks are counted per cause, with their time to the next step and the huma
     "  ci-job-absent  3 parks; to next step median 20m, max 30m; 1 human resume: a, b, c",
   );
 });
+
+const reminded = (outcome: NonNullable<Metric["outcome"]>, waitedMs: number): Metric => ({
+  at: "2026-09-30T10:00:00.000Z",
+  kind: "recovery",
+  subject: "a-build",
+  value: waitedMs,
+  note: "",
+  cause: "output-absent",
+  action: "reminded",
+  outcome,
+});
+
+test("Output reminders are counted with the recoveries they made and the median time from the turn's end to the Output", () => {
+  const report = reportOf(
+    Arr.map(["a", "b", "c", "d"], (runId) => view({ runId })),
+    new Map(),
+    null,
+    new Map([
+      ["a", { records: null, metrics: [reminded("output-written", 40_000)] }],
+      [
+        "b",
+        {
+          records: null,
+          metrics: [reminded("still-absent", 30_000), reminded("output-written", 80_000)],
+        },
+      ],
+      [
+        "c",
+        {
+          records: null,
+          metrics: [
+            reminded("still-absent", 20_000),
+            reminded("still-absent", 50_000),
+            halt("2026-09-30T10:01:00.000Z", "output-absent"),
+          ],
+        },
+      ],
+      ["d", { records: null, metrics: [halt("2026-09-30T10:00:00.000Z", "idle-budget")] }],
+    ]),
+  );
+  expect(report.measures.recoveries.byCause).toEqual([
+    {
+      cause: "output-absent",
+      action: "reminded",
+      count: 5,
+      runs: ["a", "b", "c"],
+      recovered: 2,
+      toRecover: 60_000,
+    },
+  ]);
+  expect(reportLines(report, null)).toContain(
+    "  output-absent reminded  5 times; 2 recovered; turn end to Output median 1m: a, b, c",
+  );
+});
+
+test("a reminder outcome update counts the same reminder once", () => {
+  const pending = { ...reminded("still-absent", 0), recoveryId: "review.remind-1" };
+  const recovered = { ...pending, outcome: "output-written" as const, value: 40_000 };
+  const report = (metrics: Metric[]) =>
+    reportOf([view({ runId: "a" })], new Map(), null, new Map([["a", { records: null, metrics }]]));
+  expect(report([pending]).measures.recoveries.byCause).toMatchObject([
+    { count: 1, recovered: 0, toRecover: null },
+  ]);
+  expect(report([pending, recovered, recovered]).measures.recoveries.byCause).toMatchObject([
+    { count: 1, recovered: 1, toRecover: 40_000 },
+  ]);
+});

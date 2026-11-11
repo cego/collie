@@ -184,7 +184,8 @@ const citing = (runs: ReadonlyArray<string>, cap = 10) =>
 
 /** The measures, as `run report` prints them under the tallies. */
 const measureLines = (measures: Measures): string[] => {
-  const { rounds, dispositions, steering, verifications, parks, peakContext } = measures;
+  const { rounds, dispositions, steering, verifications, parks, recoveries, peakContext } =
+    measures;
   const recorded = Arr.filter(peakContext, (one) => one.tokens !== null);
   return [
     `review rounds: ${rounds.runs.length} Runs with a rally, median ${rounds.median ?? "none"}, ${rounds.atCap.count} hit the cap${citing(rounds.atCap.runs)}`,
@@ -223,6 +224,14 @@ const measureLines = (measures: Measures): string[] => {
             ? "none moved on yet"
             : `to next step median ${took(one.toNextStep.median)}, max ${took(one.toNextStep.max)}`
         }; ${one.humanResumes} human resume${one.humanResumes === 1 ? "" : "s"}${citing(one.runs)}`,
+    ),
+    `recoveries: ${Arr.reduce(recoveries.byCause, 0, (sum, one) => sum + one.count)}`,
+    ...Arr.map(
+      recoveries.byCause,
+      (one) =>
+        `  ${one.cause} ${one.action}  ${one.count} time${one.count === 1 ? "" : "s"}; ${one.recovered} recovered${
+          one.toRecover === null ? "" : `; turn end to Output median ${took(one.toRecover)}`
+        }${citing(one.runs)}`,
     ),
     `parks: ${parks.collectExpiries.count} collect-budget expiries${citing(parks.collectExpiries.runs)}`,
     ...capped(

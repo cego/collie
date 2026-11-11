@@ -345,12 +345,21 @@ const verdict =
   ([`docs/cli.md`](cli.md#answering-holding-and-steering-one)), and while a `collie verify`
   it asked for waits because its Machine is [Short of memory](using.md#short-of-memory). A
   launch that waits for memory spends none of it either: the budget starts once the agent
-  is launched. Past the budget the Run parks saying how many minutes it sat idle, and Collie
-  keeps collecting: an Output written later clears the park and the step goes on, with no
-  resume. An agent that has gone by the end of another idle budget is started again. Gone is
-  an agent herdr no longer lists, or one it still lists but refuses as not active, as it
-  does when the agent's process died with its Machine; that one's pane is closed first, so
+  is launched. Past the budget the Run parks as `idle-budget`, saying how many minutes it
+  sat idle, and Collie keeps collecting. An Output written later clears the park and the step
+  goes on, with no resume. An agent that has gone by the end of another idle budget is
+  started again. Gone is an agent herdr no longer lists, or one it still lists but refuses
+  as not active, as it does when the agent's process died with its Machine; that one's pane is closed first, so
   the new agent can take its name. A stop still ends the wait.
+- **A turn that ends without the Output gets a reminder at once.** Where herdr reports the
+  agent `working` and then `idle` or `done` while its Output is still absent, Collie sends it
+  a reminder naming the Output file and saying that a chat message is not the Output. Each
+  agent launch gets at most two. If the turn after the second also ends without the Output,
+  the Run parks as `output-absent`, saying when both reminders went, and Collie keeps
+  collecting. An agent herdr reports `blocked` is not reminded, and neither is one whose Run
+  has an open Decision, a Hold or a Stop; once those clear, an agent still idle without its
+  Output is. The Output is never taken from the agent's chat. The idle budget stays the
+  backstop for an agent whose turn's end herdr cannot report.
 - **`cwd` is where the host placed the Run** unless you name another checkout.
 - **`role`** defaults to the operation's name. The role is injected as a persona, and where
   `personas/<role>.md` exists in the project, on this machine or in the installation, that
