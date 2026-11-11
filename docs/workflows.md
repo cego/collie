@@ -1151,7 +1151,7 @@ with no Discover or Harness Output fails the Run, naming the files it looked for
    it, against the Run's own checkout, which holds nothing else yet. The calibration is one
    of three:
    - **calibrated**: the primary shows no change against itself and every guardrail holds;
-   - **harness broken**: a prepare or sample failed or timed out, a metric went unread, or
+   - **harness broken**: the host refused the Measurement, a prepare or sample failed or timed out, a metric went unread, or
      an `exact` metric is not the same number on every sample of identical trees;
    - **proof unavailable**: the primary is `inconclusive` or differs from itself, or a
      guardrail is not held. Each metric is named with its interval and how far it reaches
@@ -1164,12 +1164,13 @@ with no Discover or Harness Output fails the Run, naming the files it looked for
    interval against itself and the plan, and repairs the harness, in new commits on the
    harness paths, or the plan: more samples, a steadier window, a counter, or limits of a
    metric's own with their `why`. Its answer is recorded as a new plan with its reason and
-   calibrated again. A repair that leaves the plan as it was is not calibrated again: one
+   calibrated again. After a verdict, a repair that leaves the plan as it was is not calibrated again: one
    that only rewords a `why`, or declares limits a metric already had from the plan, leaves
-   it as it was. Once
-   the repairs are spent, or one changed nothing, the Run **fails**, its reason the findings
-   file, then `harness broken:` or `proof unavailable:` and each metric. Every calibration,
-   plan and harness commit stays on the record.
+   it as it was. Once the repairs are spent, a broken harness **parks at Calibrate**, naming
+   the tree and reason. Resume grants one more repair and calibration, even of an unchanged
+   plan when no verdict was taken. A still-broken harness parks again. Proof unavailable
+   still **fails** after its repairs, or when a repair leaves its plan unchanged.
+   Every calibration, plan, and harness commit stays on the record.
 5. **Cycles**, at most `cycles` of them. In each, the tuner is given the ranked
    opportunities and every earlier Cycle's result, and commits one change on the Run's
    branch. Collie runs the Run's checks, all but those left to CI, and measures the
@@ -1180,6 +1181,9 @@ with no Discover or Harness Output fails the Run, naming the files it looked for
    then checks that the head and files are that tree again before anything else; a revert
    that leaves another tree fails the Run, naming both, rather than lose anyone's work. The findings are rewritten after each Cycle. A reverted Cycle, or one that
    changed nothing, still counts, and a restarted host resumes in the Cycle it was in.
+
+   If the host refuses a Cycle's Measurement, its Step parks with the reason. Resume
+   measures again. A refused final Measurement also parks its Step and measures again on resume.
 
    The Cycles stop early, with the reason in the Run's log and its findings, when the tuner
    says no measured opportunity is left or names an unsafe tradeoff, when two Cycles in a
@@ -1259,14 +1263,18 @@ with no Discover or Harness Output fails the Run, naming the files it looked for
 only where `performance` is proved: a `final` Measurement of the delivered head against the
 merge base showing a `gain` with every guardrail held, the checks passing, and a review of
 that same tree reporting both `behavior_preserved` and `measurement_valid`. Each end says
-which of four it is:
+which result it reached:
 
 - **verified gain**: the merge request;
 - **no gain**: no Cycle was kept, or the `final` Measurement shows no gain or a guardrail not
   held. There is no merge request and the Run is not failed. Its result is that file, then
   `no gain:` and why the Cycles stopped or the `final` Measurement's verdict;
-- **harness broken** and **proof unavailable**: calibration and its repairs could not make
-  the plan provable. The Run fails, its reason that file, then the class and each metric.
+- **proof unavailable**: calibration and its repairs could not make the plan provable.
+  The Run fails, its reason that file, then the class and each metric.
+
+A **harness broken** after its repairs parks at Calibrate, retaining its work for resume.
+A refused Cycle or final Measurement also parks; resume measures again. These parks are
+not terminal results, and a Measurement's verdict remains terminal.
 
 With no gain, the Run is back on its base tree: with no kept Cycle the branch already is, and a change that lost its gain is dropped back to the base
 tree at the latest merge base, in a commit that changes only the files it needs, keeps

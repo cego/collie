@@ -18045,25 +18045,63 @@ scenario(
 );
 
 scenario(
-  "a tune-up plan with a warmup below 0 is recorded, then refused by the host's measure",
+  "a tune-up plan with a warmup below 0 parks at Calibrate, then resumes with a repaired plan",
   () =>
     runEffect(
       Effect.gen(function* () {
         const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
         const runId = "r-tune-cold";
-        yield* rig.queueOutputs([
+        const invalid = { ...tunePlan(commit, [STEADY_PRIMARY]), warmup: -1 };
+        const stopped = [
           TUNE_DISCOVERED,
-          { ...tunePlan(commit, [STEADY_PRIMARY]), warmup: -1 },
-        ]);
-        const result = yield* tunedUp(runId);
-        expect(result._tag).toBe("Failure");
-        expect(reasonOf(result)).toContain("the plan is not one: ");
-        expect(yield* runLog(runId)).toContain("benchmark plan 1: written by Harness");
-        expect(yield* calibrations(runId)).toEqual([]);
+          invalid,
+          repaired(invalid, "still invalid"),
+          repaired(invalid, "still invalid again"),
+        ];
+        yield* rig.queueOutputs(stopped);
+        yield* driven({ entry: shipped("tune-up"), runId, input: {} }, (run) =>
+          Effect.gen(function* () {
+            yield* tunePark(run, runId, "the plan is not one: ");
+            expect(yield* calibrations(runId)).toEqual([]);
+            expect(yield* wasAsked(runId, "repair-3")).toBe(false);
+            yield* rig.queueOutputs([
+              ...stopped,
+              repaired(tunePlan(commit, [STEADY_PRIMARY]), "correct the warmup"),
+              EXHAUSTED,
+            ]);
+            yield* run.resume;
+            const result = yield* answeringProgress(run);
+            expect(result._tag).toBe("Success");
+            expect(yield* wasAsked(runId, "repair-3")).toBe(true);
+            expect(yield* wasAsked(runId, "cycle-1")).toBe(true);
+            expect(yield* calibrations(runId)).toHaveLength(1);
+            expect(yield* parkedWhy(runId)).toBe("");
+          }),
+        );
       }),
     ),
   120_000,
 );
+
+const tunePark = (run: Driving, runId: string, reason: string) =>
+  Effect.gen(function* () {
+    const [status, why] = yield* until(
+      () => Effect.zip(run.status, parkedWhy(runId)),
+      ([got, why]) =>
+        got.status === "failed" ||
+        got.status === "complete" ||
+        (got.status === "suspended" && why !== ""),
+    );
+    expect(status.status).toBe("suspended");
+    expect(why).toContain(reason);
+    expect(
+      Arr.some(
+        yield* readStepLines(runDir(dir, runId)),
+        (line) => line.kind === "fail" && pipe(line.why, Str.includes(reason)),
+      ),
+    ).toBe(true);
+    return why;
+  });
 
 scenario(
   "a tune-up plan with an empty harness parks at Harness, saying what to correct, and nothing is measured",
@@ -18161,29 +18199,95 @@ scenario(
 
 const UNBUILDABLE = (code: number) => ({ executable: "sh", argv: ["-c", `exit ${code}`] });
 
-scenario(
-  "a tune-up whose base cannot be built through its repairs fails as a broken harness, naming the tree",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
-        yield* rig.queueOutputs([
-          TUNE_DISCOVERED,
-          tunePlan(commit, [STEADY_PRIMARY], UNBUILDABLE(3)),
-          repaired(tunePlan(commit, [STEADY_PRIMARY], UNBUILDABLE(4)), "a different prepare"),
-          repaired(tunePlan(commit, [STEADY_PRIMARY], UNBUILDABLE(5)), "another prepare"),
-        ]);
-        const result = yield* tunedUp("r-tune-unbuildable");
-        expect(result._tag).toBe("Failure");
-        expect(reasonOf(result)).toContain(
-          `harness broken: the base tree at ${yield* revParse(`${commit}~1`)} could not be built`,
-        );
-        expect(reasonOf(result)).toContain("exited 5");
-        expect(yield* calibrations("r-tune-unbuildable")).toHaveLength(3);
-      }),
-    ),
-  120_000,
-);
+for (const fixed of [true, false])
+  scenario(
+    fixed
+      ? "a tune-up whose base cannot be built through its repairs parks at Calibrate, naming the tree, and resumes the unchanged plan"
+      : "a tune-up whose exhausted calibration stays broken parks again after one attempt per resume",
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+          const runId = "r-tune-unbuildable";
+          const gate = `${rig.root}/prepare-fixed`;
+          const plan = (code: number) =>
+            tunePlan(commit, [STEADY_PRIMARY], {
+              executable: "sh",
+              argv: ["-c", `test -e '${gate}' || exit ${code}`],
+            });
+          const stopped = [
+            TUNE_DISCOVERED,
+            plan(3),
+            repaired(plan(4), "a different prepare"),
+            repaired(plan(5), "another prepare"),
+          ];
+          yield* rig.queueOutputs(stopped);
+          yield* driven({ entry: shipped("tune-up"), runId, input: { samples: 4 } }, (run) =>
+            Effect.gen(function* () {
+              const why = `harness broken: the base tree at ${yield* revParse(`${commit}~1`)} could not be built`;
+              expect(yield* tunePark(run, runId, why)).toContain("exited 5");
+              const before = yield* calibrations(runId);
+              expect(before).toHaveLength(3);
+              const branch = yield* exec(["git", "branch", "--show-current"], {
+                cwd: rig.projectDir,
+              });
+              expect(yield* wasAsked(runId, "repair-3")).toBe(false);
+              if (fixed)
+                yield* FileSystem.FileSystem.pipe(
+                  Effect.flatMap((fs) => fs.writeFileString(gate, "fixed")),
+                  Effect.orDie,
+                );
+              const turns = [
+                ...stopped,
+                repaired(plan(5), "retry after the prepare environment was checked"),
+              ];
+              yield* rig.queueOutputs([...turns, ...(fixed ? [EXHAUSTED] : [])]);
+              yield* run.resume;
+              if (fixed) {
+                expect((yield* answeringProgress(run))._tag).toBe("Success");
+                expect(yield* wasAsked(runId, "cycle-1")).toBe(true);
+              } else {
+                yield* until(
+                  () => calibrations(runId),
+                  (all) => all.length >= 4,
+                );
+                const measurements = yield* calibrations(runId);
+                yield* tunePark(run, runId, `calibration ${measurements[3]!.id}`);
+                expect(yield* wasAsked(runId, "repair-4")).toBe(false);
+              }
+              const after = yield* calibrations(runId);
+              expect(after).toHaveLength(4);
+              expect(after.slice(0, 3)).toEqual(before);
+              expect(after[3]!.plan).toEqual(before[2]!.plan);
+              expect(after[3]!.candidate).toEqual(before[2]!.candidate);
+              expect(after[3]!.base).toEqual(before[2]!.base);
+              expect(yield* wasAsked(runId, "repair-3")).toBe(true);
+              expect(yield* wasAsked(runId, "repair-4")).toBe(false);
+              expect(
+                yield* exec(["git", "branch", "--show-current"], { cwd: rig.projectDir }),
+              ).toEqual(branch);
+              if (!fixed) {
+                yield* rig.queueOutputs([...turns, repaired(plan(5), "check it once more")]);
+                yield* run.resume;
+                yield* until(
+                  () => calibrations(runId),
+                  (all) => all.length >= 5,
+                );
+                const measurements = yield* calibrations(runId);
+                expect(yield* tunePark(run, runId, `calibration ${measurements[4]!.id}`)).toContain(
+                  "exited 5",
+                );
+                expect(yield* wasAsked(runId, "repair-4")).toBe(true);
+                expect(yield* wasAsked(runId, "repair-5")).toBe(false);
+                expect(yield* calibrations(runId)).toHaveLength(5);
+                expect(yield* wasAsked(runId, "cycle-1")).toBe(false);
+              }
+            }),
+          );
+        }),
+      ),
+    120_000,
+  );
 
 scenario(
   "a tune-up whose harness is broken is repaired by the tuner, calibrates and goes on to its Cycles",
@@ -18738,6 +18842,67 @@ const tuneForge = Effect.gen(function* () {
 const finals = (runId: string) =>
   Effect.map(readMeasurements(evidenceDir(dir, runId)), (all) =>
     Arr.filter(all, (one) => one.pass === "final"),
+  );
+
+for (const pass of ["cycle 1", "final"])
+  scenario(
+    `a tune-up whose ${pass === "final" ? "final" : "Cycle"} Measurement the host refuses parks and resumes the measurement`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const runId = "r-tune-measure-refused";
+          const { bin } = yield* tuneForge;
+          yield* cycling(runId, [
+            fasterWhileUpstreamPushes(3, "fixed"),
+            cleanedUp(),
+            asTold("true", "dropped"),
+          ]);
+          const calls: string[] = [];
+          const host: HostOverride = Layer.effect(Host)(
+            Effect.gen(function* () {
+              const original = yield* Host;
+              return Host.of({
+                ...original,
+                measure: (ask) =>
+                  Effect.suspend(() => {
+                    calls.push(ask.pass);
+                    return ask.pass === pass &&
+                      Arr.filter(calls, (one) => one === pass).length === 1
+                      ? Effect.fail(
+                          new WorkflowError({ reason: "the Machine Measurement lock was refused" }),
+                        )
+                      : original.measure(ask);
+                  }),
+              });
+            }),
+          );
+          yield* driven(
+            { entry: shipped("tune-up"), runId, input: { samples: 4, cycles: 1 }, host },
+            (run) =>
+              Effect.gen(function* () {
+                const result = yield* answeringProgress(run).pipe(Effect.forkScoped);
+                yield* tunePark(run, runId, "the Machine Measurement lock was refused");
+                const before = yield* readMeasurements(evidenceDir(dir, runId));
+                expect(Arr.some(before, (one) => one.pass === pass)).toBe(false);
+                expect(Arr.filter(calls, (one) => one === pass)).toHaveLength(1);
+                const head = yield* headOf();
+                yield* run.resume;
+                const ended = yield* Fiber.join(result);
+                expect(ended._tag).toBe("Success");
+                expect(said(ended)).toContain("no gain:");
+                expect(Arr.filter(calls, (one) => one === pass)).toHaveLength(2);
+                expect(yield* parkedWhy(runId)).toBe("");
+                expect((yield* cyclesMeasured(runId))[0]!.result._tag).toBe("Judged");
+                const [final] = yield* finals(runId);
+                expect(verdictsOf(final!)).toContain("bench.count no-change");
+                if (pass === "final") expect(final!.candidate.head_sha).toBe(head);
+                expect(yield* wasAsked(runId, "mr")).toBe(false);
+              }).pipe(Effect.scoped),
+          );
+          yield* bin.restore();
+        }),
+      ),
+    120_000,
   );
 
 const verdictsOf = (measured: { readonly result: Measurement["result"] }) =>

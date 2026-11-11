@@ -360,6 +360,7 @@ const recordedFor = (
     Arr.findFirst(
       records,
       (one) =>
+        one.result._tag === "Judged" &&
         sameTree({ fingerprint: key.print }, one.candidate) &&
         one.base.commit === key.commit &&
         one.plan_digest === key.digest &&
