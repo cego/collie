@@ -54,6 +54,7 @@ fn a_burst_of_resizes_sends_one_size_once_it_settles_and_leaving_sends_the_relea
             rows: 24,
         },
     );
+    pane.opened((80, 24));
     pane.resized((90, 24), ms(0));
     pane.resized((100, 30), ms(40));
     pane.tick(ms(100));
@@ -72,8 +73,9 @@ fn a_burst_of_resizes_sends_one_size_once_it_settles_and_leaving_sends_the_relea
         vec![
             json!({"_tag": "Hello"}),
             json!({"_tag": "Request", "id": 0, "tag": "terminal", "payload": {"installation": "inst-local", "runId": "run-1", "cols": 80, "rows": 24}, "headers": []}),
-            json!({"_tag": "Request", "id": 1, "tag": "terminalSend", "payload": {"command": {"type": "terminal.resize", "cols": 100, "rows": 30}}, "headers": []}),
-            json!({"_tag": "Request", "id": 2, "tag": "terminalSend", "payload": {"command": {"type": "terminal.input", "text": "ls\r"}}, "headers": []}),
+            json!({"_tag": "Request", "id": 1, "tag": "terminalSend", "payload": {"command": {"type": "terminal.resize", "cols": 80, "rows": 24}}, "headers": []}),
+            json!({"_tag": "Request", "id": 2, "tag": "terminalSend", "payload": {"command": {"type": "terminal.resize", "cols": 100, "rows": 30}}, "headers": []}),
+            json!({"_tag": "Request", "id": 3, "tag": "terminalSend", "payload": {"command": {"type": "terminal.input", "text": "ls\r"}}, "headers": []}),
             json!({"_tag": "Interrupt", "requestId": 0}),
         ]
     );
@@ -102,6 +104,41 @@ fn an_opened_controller_is_told_its_size_at_once() {
         heard[2..],
         [
             json!({"_tag": "Request", "id": 1, "tag": "terminalSend", "payload": {"command": {"type": "terminal.resize", "cols": 100, "rows": 30}}, "headers": []}),
+            json!({"_tag": "Interrupt", "requestId": 0}),
+        ]
+    );
+}
+
+/// Until the core opens the pane, `terminalSend` reaches the terminal shown before it: what is
+/// typed then waits for the pane, and a size waits to be sent as it opens.
+#[test]
+fn what_is_done_before_the_pane_opens_goes_to_it_once_it_has() {
+    let (client, core) = core();
+    let (mut pane, frames) = Pane::open(
+        &client,
+        TerminalPayload {
+            installation: "inst-local".into(),
+            run_id: "run-1".into(),
+            agent: None,
+            cols: 80,
+            rows: 24,
+        },
+    );
+    pane.resized((100, 30), ms(0));
+    pane.tick(ms(400));
+    pane.send(Command::TerminalInput(TerminalInput {
+        r#type: Type::TerminalInput,
+        text: "y".into(),
+    }));
+    pane.opened((100, 30));
+    pane.leave();
+    let heard = core.join().unwrap();
+    drop(frames);
+    assert_eq!(
+        heard[2..],
+        [
+            json!({"_tag": "Request", "id": 1, "tag": "terminalSend", "payload": {"command": {"type": "terminal.resize", "cols": 100, "rows": 30}}, "headers": []}),
+            json!({"_tag": "Request", "id": 2, "tag": "terminalSend", "payload": {"command": {"type": "terminal.input", "text": "y"}}, "headers": []}),
             json!({"_tag": "Interrupt", "requestId": 0}),
         ]
     );

@@ -3,6 +3,7 @@
 
 use collie_desktop_board::calls::{Answer, CallError, Calls, Each, Live, Stop};
 use collie_desktop_board::notify::deliver;
+use collie_desktop_board::shell::panes;
 use collie_desktop_board::timing::Mark;
 use collie_desktop_board::{App, frame_drawn, view};
 use collie_desktop_chat::window::{self as chat_window, Alone};
@@ -10,8 +11,6 @@ use collie_desktop_protocol::client::Client;
 use collie_desktop_protocol::core::Core;
 use collie_desktop_protocol::epoch_ms;
 use collie_desktop_protocol::generated::{FlockItem, RecordMarkPayload};
-use collie_desktop_terminal::pane::Pane;
-use collie_desktop_terminal::view::Tab;
 use rune::{AppHandle, AppSpec, WindowSpec};
 use serde_json::Value;
 use std::sync::Arc;
@@ -20,28 +19,12 @@ use std::time::Duration;
 /// Opens a pressed card's pane: its frames are read off the view's thread into the open Tab,
 /// and a tick sends each size once it has settled.
 fn go_to_panes(handle: &AppHandle<App>, client: &Client) {
-    let (opener, shows) = (client.clone(), handle.clone());
+    let (client, shows) = (client.clone(), handle.clone());
     handle.update(move |board, _| {
-        board.go_to = Some(Box::new(move |payload, machine, opened| {
-            let (cols, rows) = (payload.cols as u16, payload.rows as u16);
-            let (pane, frames) = Pane::open(&opener, payload);
-            let shows = shows.clone();
-            std::thread::spawn(move || {
-                for event in frames {
-                    shows.update(move |board, _| {
-                        let Some(tab) = board.terminal.as_mut().filter(|_| board.opened == opened)
-                        else {
-                            return;
-                        };
-                        match event {
-                            Ok(event) => tab.shown(event),
-                            Err(error) => tab.failed(error),
-                        }
-                    });
-                }
-            });
-            Tab::new(Some(pane), machine, cols, rows)
-        }));
+        board.go_to = Some(panes::opener(
+            client,
+            Arc::new(move |change| shows.update(move |board: &mut App, _| change(board))),
+        ))
     });
     let ticks = handle.clone();
     std::thread::spawn(move || {
@@ -319,6 +302,7 @@ fn main() {
         fonts: rune_theme_opencode::FONTS,
         families: rune_theme_opencode::FAMILIES,
         min_size: Some((720.0, 480.0)),
+        on_key: Some(collie_desktop_board::shell::on_key),
         ..AppSpec::new("Collie", (1280.0, 860.0), App::default, view)
     })
     .on_frame_drawn(marks(&client));

@@ -9,6 +9,7 @@ use collie_desktop_protocol::generated::{
     TerminalResizeType, TerminalSendPayload,
 };
 use serde_json::Value;
+use std::cell::RefCell;
 use std::sync::mpsc::{Sender, channel};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -23,6 +24,9 @@ enum Out {
 
 pub struct Pane {
     sizes: SettledResizes,
+    /// What was done before the core opened the pane, which a `terminalSend` then would have
+    /// given to the terminal shown before it; none once it has opened.
+    held: RefCell<Option<Vec<Command>>>,
     commands: Sender<Out>,
     sender: JoinHandle<()>,
     release: Release,
@@ -60,6 +64,7 @@ impl Pane {
         });
         let pane = Pane {
             sizes: SettledResizes::default(),
+            held: RefCell::new(Some(Vec::new())),
             commands,
             sender,
             release: frames.release(),
@@ -68,7 +73,14 @@ impl Pane {
     }
 
     pub fn send(&self, command: Command) {
-        let _ = self.commands.send(Out::Send(command));
+        match self.held.borrow_mut().as_mut() {
+            // Its size is sent as it opens.
+            Some(_) if matches!(command, Command::TerminalResize(_)) => {}
+            Some(held) => held.push(command),
+            None => {
+                let _ = self.commands.send(Out::Send(command));
+            }
+        }
     }
 
     /// Opens `url` in the human's own browser, through the core.
@@ -79,7 +91,11 @@ impl Pane {
     /// The core opened the controller, which takes its size at once.
     pub fn opened(&mut self, size: Size) {
         let size = self.sizes.opened(size);
+        let held = self.held.borrow_mut().take().unwrap_or_default();
         self.send(resize(size));
+        for command in held {
+            self.send(command);
+        }
     }
 
     pub fn resized(&mut self, size: Size, now: Duration) {

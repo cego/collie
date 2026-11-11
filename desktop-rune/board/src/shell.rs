@@ -1,6 +1,7 @@
 //! The window's frame: the sidebar that picks a page, the page under its toolbar, and the
 //! Flock chat as the trailing pane.
 
+pub mod panes;
 mod usage;
 
 pub use usage::{UsageEntry, usage_due, usage_entries};
@@ -9,6 +10,7 @@ use crate::board::model::{Section, section_of};
 use crate::calls::CallError;
 use crate::pages::usage::Level;
 use crate::{App, board_pane, chat_pane_in, icons, pages};
+use collie_desktop_terminal::view::Keyed;
 use rune::{Cx, El, Icon, Tx, row, text};
 use rune_kit::shell::{PaneState, Sidebar, SidebarRow, SplitView, Toolbar};
 use rune_kit::{IconButton, Kit};
@@ -288,9 +290,54 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
         .reduced_motion(cx.is_reduced_motion())
         .build(k);
     crate::standing::view(app, k, &mut layer);
-    rune_kit::root(split, layer).on_window_focus(|app: &mut App, focused: bool, _: &mut Tx| {
-        if let Some(tab) = &mut app.terminal {
-            tab.focus(focused);
+    rune_kit::root(split, layer)
+        .on_window_focus(|app: &mut App, focused: bool, _: &mut Tx| {
+            if let Some(tab) = &mut app.terminal {
+                tab.focus(focused);
+            }
+        })
+        .on_paste(|app: &mut App, pasted: &str, _: &mut Tx| {
+            if let Some(tab) = app.shown_pane() {
+                tab.paste(pasted);
+            }
+        })
+}
+
+/// The window's own keys (`AppSpec::on_key`), which Rune offers first while nothing has
+/// focus: a key typed then goes to the pane the record shows, as stable Desktop's pane takes
+/// the keys once Go to pane opens it. Tab still moves focus into the app, and nothing is
+/// typed into a pane under a dialog.
+pub fn on_key(app: &mut App, key: &rune::KeyEvent, tx: &mut Tx) -> bool {
+    let over = app.board.dialog.is_some()
+        || app.board.menu.is_some()
+        || app.standing.open
+        || app.pages.machines.job.is_some();
+    key.key != rune::Key::Tab && !over && app.type_into_pane(key, tx)
+}
+
+impl App {
+    /// The pane the record shows, while its Terminal tab is up.
+    fn shown_pane(&mut self) -> Option<&mut collie_desktop_terminal::view::Tab> {
+        let shown = self.record.open.is_some() && self.record_tab() == "terminal";
+        self.terminal.as_mut().filter(|_| shown)
+    }
+
+    /// A key typed into the shown pane, as its grid takes one.
+    fn type_into_pane(&mut self, key: &rune::KeyEvent, tx: &mut Tx) -> bool {
+        let Some(tab) = self.shown_pane() else {
+            return false;
+        };
+        match tab.key(key) {
+            Keyed::Passed => false,
+            Keyed::Taken => true,
+            Keyed::Copy(text) => {
+                tx.copy(text);
+                true
+            }
+            Keyed::Paste => {
+                tx.request_paste();
+                true
+            }
         }
-    })
+    }
 }

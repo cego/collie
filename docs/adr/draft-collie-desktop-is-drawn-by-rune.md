@@ -70,8 +70,10 @@ human on run-f0d81d1d, 2026-11-11, after trying the spike: it is built to today'
 features in full (board, record and its tabs, the Flock chat, Workflows, Machines,
 Schedules, Usage, Settings), in a Rune-native design rather than a copy of the Vue view's
 look. Today's view is the feature spec. Go to pane's terminal draws as Ghostty does, from the
-human's Ghostty config over Ghostty's defaults, since the look asked for is the terminal
-they use. D2's three required items are built: selection and copy with every mouse button
+human's Ghostty config over Ghostty's defaults (font, cursor and palette), since the look asked
+for is the terminal they use; its default foreground and background are the app's own text and
+surface, so the pane sits in the record with no frame or seam, in light and dark (the human,
+after trying it). D2's three required items are built: selection and copy with every mouse button
 reaching the pane (Rune reports a secondary press and release together, so a right-button
 drag is not reported), raw HTML keeping its text, and a dialog that picks several files.
 Zoom is still missing. Until the gate, it installs beside stable Desktop as "Collie (Rune)".

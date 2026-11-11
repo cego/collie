@@ -370,6 +370,25 @@ impl Vt {
         }
     }
 
+    /// The colours a cell without its own is drawn in, and the cursor's.
+    pub fn set_colors(&mut self, fg: Rgb, bg: Rgb, cursor: Rgb) {
+        let c = |rgb: Rgb| GhosttyColorRgb {
+            r: rgb.0,
+            g: rgb.1,
+            b: rgb.2,
+        };
+        let (fg, bg, cursor) = (c(fg), c(bg), c(cursor));
+        unsafe {
+            for (option, color) in [
+                (GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &fg),
+                (GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &bg),
+                (GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, &cursor),
+            ] {
+                ghostty_terminal_set(self.term, option, color as *const _ as *const c_void);
+            }
+        }
+    }
+
     pub fn write(&mut self, bytes: &[u8]) {
         unsafe { ghostty_terminal_vt_write(self.term, bytes.as_ptr(), bytes.len()) };
     }

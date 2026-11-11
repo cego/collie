@@ -2,7 +2,7 @@
 //! without a window.
 
 use collie_desktop_protocol::generated::TerminalEvent;
-use collie_desktop_terminal::view::{Tab, terminal};
+use collie_desktop_terminal::view::{Link, Tab, terminal};
 use rune::{Cx, El, Env, Runtime};
 use serde_json::Value;
 
@@ -61,7 +61,10 @@ fn a_core_attach_is_drawn_row_by_row_with_its_place_and_its_cursor() {
     );
     runtime.frame(0.0);
     let tree = runtime.accessibility_json();
-    assert_eq!(named(&tree, "terminal-where"), "vm-mk › recording");
+    assert_eq!(
+        runtime.state.tab.place().as_deref(),
+        Some("vm-mk › recording")
+    );
     assert_eq!(
         named(&tree, "row-1"),
         "journald.conf  logind.conf  network  networkd.conf  pstore.conf  resolved.conf  sleep.conf  system"
@@ -88,20 +91,8 @@ fn a_pane_the_core_cannot_open_says_why_in_its_own_words() {
         step: None,
         refused: None,
     }));
-    let mut runtime = Runtime::new(
-        Shown { tab },
-        view,
-        (800.0, 600.0),
-        Env {
-            system_dark: true,
-            scale: 1.0,
-        },
+    assert_eq!(
+        tab.link(),
+        Link::Failed("that Machine is not connected".into())
     );
-    runtime.frame(0.0);
-    let said = runtime
-        .elements()
-        .into_iter()
-        .find(|e| e.key.as_deref() == Some("terminal-ended"))
-        .and_then(|e| e.text);
-    assert_eq!(said.as_deref(), Some("that Machine is not connected"));
 }
