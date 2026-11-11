@@ -7,6 +7,7 @@ import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import {
   Clock,
+  ConfigProvider,
   Deferred,
   type Duration,
   Effect,
@@ -654,6 +655,39 @@ test("a build over 2 s is logged at warn with how long it took, and a faster one
       expect(slow).toHaveLength(1);
       expect(slow[0]).toMatch(/the board took \d+ ms to build/);
       expect(yield* builtIn("1 second")).toEqual([]);
+    }),
+  ));
+
+test("the benchmark log records a board build below the slow-build threshold", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-board-marks-" });
+      const file = `${dir}/marks.log`;
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const clock = yield* TestClock.make();
+          const began = yield* Deferred.make<void>();
+          const finish = yield* Deferred.make<void>();
+          const { boards } = yield* shareBoard({
+            build: Deferred.succeed(began, undefined).pipe(
+              Effect.andThen(Deferred.await(finish)),
+              Effect.as([one]),
+            ),
+            changed: Stream.never,
+          }).pipe(Effect.provideService(Clock.Clock, clock));
+          yield* Deferred.await(began);
+          yield* clock.adjust("125 millis");
+          yield* Deferred.succeed(finish, undefined);
+          yield* Stream.runHead(boards);
+          expect(yield* fs.readFileString(file)).toMatch(/^\d+ board:built 125\n$/);
+        }),
+      ).pipe(
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromUnknown({ COLLIE_RECORD_MARKS: file }),
+        ),
+      );
     }),
   ));
 
