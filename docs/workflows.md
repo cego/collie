@@ -215,7 +215,12 @@ that cannot be pushed still fails, as below.
 
 It fails with the reason there is no merge request — a ticket stopped
 on a blocking finding, acceptance criteria unreadable or still unmet when Stop was answered, a review that halted — and says to
-continue with a follow-up Run, which **Keep going on this** starts. Nobody is asked along
+continue with a follow-up Run, which **Keep going on this** starts. A delivery the
+Merge request step's agent left undone — the branch not pushed, no merge request URL, or a
+blocking finding — does not fail it: the Run parks at Merge request with the reason, and a
+resume asks that agent again, told of the merge request already open. Its `minor` findings
+never stop the step: each is recorded in the Run's record as `unsettled: <title>`, and all of
+them go onto the merge request as one note from Collie. Nobody is asked along
 the way: the human verifies the work in the merge request, before it lands. Where a failed check's
 output names the tests that failed (bun test's does), the gate reruns each of those tests
 once, alone, on the same tree. A test that then passes is a **Flake**: it is not handed to a
@@ -244,7 +249,16 @@ an implementer made where the spec was silent — goes into the description unde
 settled by the run**, and the merge request opens anyway.
 
 Once the `mr` step has pushed and the merge request is recorded — opened by the step, or
-found from the Task's branch by the merge watch — each check
+found from the Task's branch by the merge watch — the head it delivered has a pipeline.
+The step reads the branch's head on `origin` before its agent runs; where that is the
+checkout's `HEAD` after it, the push sent nothing, because the build's or a fix's push with
+`ci.skip` already carried that head. Collie then starts a pipeline on it, unless one that
+was not skipped is there: on GitLab the merge request's, else the branch's, and on GitHub
+none, since Actions run on every push. The Run's record says `pipeline: started <url> on
+<sha>`, or that the head already has one. Where GitLab refuses both because the project's CI
+gives that head none, the record says so with GitLab's message and the run goes on; any
+other failure parks it at Merge request with the forge's reason, and a resume tries again.
+Then each check
 [left to CI](cli.md#what-collie-may-run-itself) is proved by its pipeline job on the merge
 request's head, which must be the checkout's `HEAD`. The run reads the job through the
 forge every 30 s while it is pending or running, and its log and `collie run checks` say
