@@ -4665,12 +4665,13 @@ export const hostLayer = (options: {
                 return { posted: false, why: "this Run recorded no merge request to share" };
               const details = yield* forgeOf(ref).details(ref, asked.cwd, runShell);
               if (details._tag !== "Details") return { posted: false, why: details.reason };
-              const refused = yield* publicRefusal(details.title, Effect.succeed(ref.project));
+              const title = redact(details.title);
+              const refused = yield* publicRefusal(title, Effect.succeed(ref.project));
               if (refused !== null) return { posted: false, why: refused };
               const { env } = yield* placing;
               const slack = options.slack ?? slackApi;
               const api = slack(yield* slackUserToken(env, slack));
-              const posted = yield* api.post(asked.channel, `<${mr}|${slackText(details.title)}>`);
+              const posted = yield* api.post(asked.channel, `<${mr}|${slackText(title)}>`);
               const link = yield* api.permalink(posted.channel, posted.ts).pipe(Effect.result);
               return link._tag === "Success"
                 ? { posted: true, link: link.success }
@@ -4799,9 +4800,10 @@ export const hostLayer = (options: {
             Effect.gen(function* () {
               const ref = mrRefOf(yield* mergeRequestOf(fs, dir, asked.runId));
               if (ref === null) return { ok: false, message: "this Run has no merge request" };
-              const refused = yield* publicRefusal(asked.body, Effect.succeed(ref.project));
+              const body = redact(asked.body);
+              const refused = yield* publicRefusal(body, Effect.succeed(ref.project));
               if (refused !== null) return { ok: false, message: refused };
-              return yield* forgeOf(ref).post(ref, asked.body, false, asked.cwd, runShell);
+              return yield* forgeOf(ref).post(ref, body, false, asked.cwd, runShell);
             }),
           ).pipe(Effect.orDie),
         claim: <E, R>(asked: {
@@ -5265,6 +5267,7 @@ export const hostLayer = (options: {
         post: (asked) =>
           under(
             fs.readFileString(asked.file).pipe(
+              Effect.map(redact),
               Effect.flatMap((body) =>
                 Effect.flatMap(loadDefaults(options.userDir ?? dir), (defaults) =>
                   Effect.gen(function* () {

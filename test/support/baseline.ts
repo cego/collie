@@ -13689,6 +13689,56 @@ for (const name of ["gitlab", "github"] as const) {
     120_000,
   );
 
+  for (const operation of ["post", "note", "share"] as const)
+    scenario(
+      `public text on ${name}: ${operation} redacts credentials before checking and sending`,
+      () =>
+        runEffect(
+          Effect.gen(function* () {
+            const { bin, forge, changed } = yield* releasable(name);
+            const fs = yield* FileSystem.FileSystem;
+            const runId = `r-redacted-${operation}-${name}`;
+            const body = "Verified glpat-run-67a6e669abcdef.";
+            const file = `${rig.root}/redacted-review.md`;
+            yield* fs.writeFileString(file, body);
+            yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
+            yield* fs.writeFileString(`${runDir(dir, runId)}/merge-request`, `${mr}\n`);
+            yield* changed({ title: body });
+            slack = fakeSlack();
+            yield* signedInToSlack(hostOf().env, "U456").pipe(Effect.orDie);
+            const sent = yield* session(
+              Effect.gen(function* () {
+                const host = yield* Host;
+                if (operation === "share")
+                  return yield* host.shareForApproval({
+                    runId,
+                    cwd: rig.projectDir,
+                    channel: "C123",
+                  });
+                return yield* operation === "post"
+                  ? host.post({ runId, target, cwd: rig.projectDir, file })
+                  : host.note({ runId, cwd: rig.projectDir, body });
+              }),
+            );
+            const model = yield* forge.model();
+            yield* bin.restore();
+            if (operation === "share") {
+              expect(sent).toEqual({ posted: true, link: expect.any(String) });
+              expect(
+                Arr.map(
+                  Arr.filter(slack.calls, (call) => call.method === "chat.postMessage"),
+                  (call) => call.parameters.text,
+                ),
+              ).toEqual([`<${mr}|Verified &lt;gitlab token&gt;.>`]);
+            } else {
+              expect(sent).toMatchObject({ ok: true });
+              expect(Rec.values(model.notes ?? {}).flat()).toEqual(["Verified <gitlab token>."]);
+            }
+          }),
+        ),
+      120_000,
+    );
+
   scenario(
     `public text on ${name}: the !522 review note is refused before it reaches the merge request`,
     () =>
