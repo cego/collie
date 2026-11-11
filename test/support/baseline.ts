@@ -1751,7 +1751,7 @@ scenario(
 );
 
 scenario(
-  "Flow: a plan started to build never reaches its End menu, which is not run",
+  "Flow: a plan started to build forecasts no End menu, and its Steps before it are done",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -1766,7 +1766,6 @@ scenario(
           ["grill", "done"],
           ["spec", "done"],
           ["tickets", "done"],
-          ["menu", "not-run"],
         ]);
       }),
     ),
@@ -5149,6 +5148,7 @@ scenario(
         expect(
           Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === "next"))?.prompt,
         ).toContain(OPENED.mr_url);
+        expect(statesOf(yield* laneNow(runId, "waiting")).at(-1)).toEqual(["next", "needs-you"]);
 
         const result = yield* answered({
           entry: shipped("implement"),
@@ -5458,6 +5458,55 @@ scenario(
 
         expect(said(result)).toBe(`${OPENED.mr_url}; done`);
         expect(yield* questions(runId)).toEqual([]);
+        expect(started).toEqual([RELEASE_STARTED]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "Flow: implement started with then=finish forecasts no What next, and its Steps up to the merge request are done",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-impl-finish-flow";
+        const { bin, plan } = yield* delivering(runId);
+        yield* ran({ entry: shipped("implement"), runId, input: { plan, ...FINISH } });
+        yield* bin.restore();
+
+        expect(statesOf(yield* laneNow(runId, "succeeded"))).toEqual([
+          ["build", "done"],
+          ["review", "done"],
+          ["checks", "done"],
+          ["merge-request", "done"],
+        ]);
+        expect(yield* questions(runId)).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "Flow: implement started with then=release forecasts no What next, and shows the Release it starts",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-impl-release-flow";
+        const { bin, plan } = yield* delivering(runId);
+        yield* ran({
+          entry: shipped("implement"),
+          runId,
+          // oxlint-disable-next-line unicorn/no-thenable -- implement's Input is named `then`
+          input: { plan, then: "release" },
+        });
+        yield* bin.restore();
+
+        expect(statesOf(yield* laneNow(runId, "succeeded"))).toEqual([
+          ["build", "done"],
+          ["review", "done"],
+          ["checks", "done"],
+          ["merge-request", "done"],
+        ]);
         expect(started).toEqual([RELEASE_STARTED]);
       }),
     ),
@@ -8516,6 +8565,33 @@ for (const name of ["gitlab", "github"] as const) {
           expect(said(result)).toBe(OPENED.mr_url);
           expect(yield* questions(runId)).toEqual([]);
           expect(started).toEqual([]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `Flow: implement forecasts no What next once its ${name} ${noun} merges itself once green`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge } = yield* deliveringOn(name, autoMerging(false));
+          const plan = yield* planOf([
+            { file: "01-only.md", title: "the only one", checks: "unit" },
+          ]);
+          const runId = `r-impl-${name}-merges-itself-flow`;
+          yield* approve(runId, ["unit"]);
+          const on = forge.holding({ ...(yield* forge.model()), mrs: autoMerging(true) });
+          yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, { writes: [on], output: OPENED }]);
+          yield* ran({ entry: shipped("implement"), runId, input: { plan } });
+          yield* bin.restore();
+
+          expect(statesOf(yield* laneNow(runId, "succeeded"))).toEqual([
+            ["build", "done"],
+            ["review", "done"],
+            ["checks", "done"],
+            ["merge-request", "done"],
+          ]);
         }),
       ),
     120_000,
@@ -19619,7 +19695,6 @@ scenario(
           ["review", "expected"],
           ["checks", "expected"],
           ["merge-request", "expected"],
-          ["next", "expected"],
         ]);
       }),
     ),

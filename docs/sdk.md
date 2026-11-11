@@ -1254,8 +1254,10 @@ item, and the items it has not reached yet are expected runs.
 `path` lists the Steps the Workflow expects to take, in order. A Step is known by its id, so
 two values with one id are one Step, and a path that lists one id twice is refused by the
 definition check. `forecast` replaces the path from there once the Run knows which branch it
-takes; the Steps it drops are no longer drawn. A Step called off the path still runs and is
-drawn after the Step that ran before it, and a path Step the Run never reached ends `not run`.
+takes; the Steps it drops are no longer drawn. A module forecasts only what its input and
+facts let it reach, as soon as it knows: a Step its input says it will skip is left out, not
+drawn `not run`. A Step called off the path still runs and is drawn after the Step that ran
+before it, and a path Step the Run expected and never reached ends `not run`.
 The records are Activities, so a replay records nothing twice, and the host is their only
 writer ([ADR-draft-a-step-is-declared-where-its-work-is-written](adr/draft-a-step-is-declared-where-its-work-is-written.md)).
 

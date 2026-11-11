@@ -265,6 +265,8 @@ const next = step({
   description: "Whether the open merge request is released, staged or left as it is.",
   kind: "question",
 });
+/** The path of a Run that ends at its merge request without asking what next. */
+const delivery = [building, reviewRound, gate, mergeRequest];
 const repoRuns = step({
   id: "repo-runs",
   title: "Change runs",
@@ -309,7 +311,7 @@ export default defineWorkflow({
   output: Schema.String,
   agents: { roles: { implementer: IMPLEMENTER, reviewer: REVIEWER } },
   hints: { plan: "work-source" },
-  path: [building, reviewRound, gate, mergeRequest, next],
+  path: [...delivery, next],
   // The branch it builds, on a worktree of its own, so two Runs never share an index.
   checkout: "branch",
   // What kind of result this Run has to prove is the human's to say, and an unclassified
@@ -412,6 +414,7 @@ export default defineWorkflow({
           });
         }
       }
+      if ((asked.then ?? "") !== "") yield* forecast(delivery);
       // A Run that stops short of its merge request fails, so no wave waits on work that is
       // not there and its card is not told as done.
       const unbuilt = (reason: string) =>
@@ -925,7 +928,10 @@ const releasing = (delivered: {
             ),
           ),
       });
-      if (merging !== null) return mr;
+      if (merging !== null) {
+        yield* forecast(delivery);
+        return mr;
+      }
       let stageFailed = "";
       let failedStage = "";
       // Why another Stage would still be refused at the checkout the last one was refused
