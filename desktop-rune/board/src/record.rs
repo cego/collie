@@ -138,6 +138,8 @@ pub struct Record {
     pub width: f32,
     /// Whether the Run's active Step is chosen on Flow once its Flow is read.
     pub at_active: bool,
+    /// The evidence items opened under their rows: a check's output, a kept log, a note.
+    pub expanded: Vec<String>,
 }
 
 impl Record {
@@ -165,6 +167,7 @@ impl Record {
             entry: None,
             width: 0.0,
             at_active: false,
+            expanded: Vec::new(),
         }
     }
 
@@ -504,6 +507,24 @@ impl App {
         record.items.insert(item.into(), Item::Reading);
         let (installation, run) = (record.installation.clone(), record.run.clone());
         self.read_part(installation, run, item.to_string(), Vec::new());
+    }
+
+    /// Opens `item` under its Evidence row, read the first time, or closes it.
+    pub fn toggle_evidence(&mut self, item: &str) {
+        let Some(record) = &mut self.record.open else {
+            return;
+        };
+        if let Some(at) = record.expanded.iter().position(|one| one == item) {
+            record.expanded.remove(at);
+            return;
+        }
+        record.expanded.push(item.into());
+        // One that could not be read is tried again as it is opened again.
+        if matches!(record.items.get(item), Some(Item::Failed(_))) {
+            self.reread_item(item);
+        } else {
+            self.read_item(item);
+        }
     }
 
     /// Reads `item` again, as when the host has changed it.

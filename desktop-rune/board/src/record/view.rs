@@ -1192,7 +1192,7 @@ fn inspector_view(app: &App, record: &Record, map: &flow::FlowMap, k: &Kit) -> O
         Part::Evidence if !proofs.is_empty() => col()
             .gap(2.0)
             .w_full()
-            .children(proofs.iter().map(|v| verification_row(v, k))),
+            .children(proofs.iter().map(|v| verification_row(v, record, k))),
         Part::Why => col()
             .gap(6.0)
             .w_full()
@@ -1726,17 +1726,32 @@ fn summary_tab(app: &App, record: &Record, k: &Kit) -> El {
     )
 }
 
-/// A file of the record with its size, and Open, which shows it in the browser.
-fn file_row(item: &str, name: &str, bytes: i64, record: &Record, k: &Kit) -> El {
-    let opening = item.to_string();
-    let reading = record.opening.iter().any(|one| one == item);
-    let size = if bytes >= 1 << 20 {
+/// A file's size as it is said.
+fn size_of(bytes: i64) -> String {
+    if bytes >= 1 << 20 {
         format!("{:.1} MB", bytes as f64 / (1 << 20) as f64)
     } else if bytes >= 1024 {
         format!("{} KB", bytes / 1024)
     } else {
         format!("{bytes} B")
-    };
+    }
+}
+
+/// Open, which shows a file of the record in the browser.
+fn open_button(item: &str, name: &str, record: &Record, k: &Kit) -> El {
+    let opening = item.to_string();
+    let reading = record.opening.iter().any(|one| one == item);
+    Button::new(if reading { "Opening…" } else { "Open" })
+        .variant(ButtonVariant::Ghost)
+        .icon(&icons::OPEN_ASIDE)
+        .on_press(move |app: &mut App| app.open_aside(opening.clone()))
+        .build(k)
+        .key(format!("open-{}", slug(item)))
+        .label(format!("Open {name} in the browser"))
+}
+
+/// A file of the record with its size, and Open, which shows it in the browser.
+fn file_row(item: &str, name: &str, bytes: i64, record: &Record, k: &Kit) -> El {
     row()
         .key(format!("file-{}", slug(item)))
         .gap(8.0)
@@ -1750,16 +1765,32 @@ fn file_row(item: &str, name: &str, bytes: i64, record: &Record, k: &Kit) -> El 
                 .grow(1.0)
                 .min_w(0.0),
         )
-        .child(text(size).font(k.ty.small).color(k.c.text_faint))
-        .child(
-            Button::new(if reading { "Opening…" } else { "Open" })
-                .variant(ButtonVariant::Ghost)
-                .icon(&icons::OPEN_ASIDE)
-                .on_press(move |app: &mut App| app.open_aside(opening.clone()))
-                .build(k)
-                .key(format!("open-{}", slug(item)))
-                .label(format!("Open {name} in the browser")),
-        )
+        .child(text(size_of(bytes)).font(k.ty.small).color(k.c.text_faint))
+        .child(open_button(item, name, record, k))
+}
+
+/// A kept log or note, read under its row as it is opened, and still opened in the browser.
+fn text_file_row(item: &str, name: &str, bytes: i64, record: &Record, k: &Kit) -> El {
+    let size = size_of(bytes);
+    evidence_text(
+        EvidenceRow {
+            key: format!("file-{}", slug(item)),
+            item: item.to_string(),
+            label: format!("{name}, {size}"),
+            parts: vec![
+                text(name.to_string())
+                    .font(k.ty.mono)
+                    .color(k.c.text_base)
+                    .truncate()
+                    .grow(1.0)
+                    .min_w(0.0),
+                text(size).font(k.ty.small).color(k.c.text_faint),
+            ],
+            aside: Some(open_button(item, name, record, k)),
+        },
+        record,
+        k,
+    )
 }
 
 fn plan_text(record: &Record, file: &str) -> Option<Result<String, String>> {
@@ -2429,7 +2460,11 @@ fn source_file(record: &Record, file: &str, line: Option<u32>, k: &Kit) -> El {
     section("source-file", &said, k, [body])
 }
 
-fn verification_row(v: &collie_desktop_protocol::generated::Verification, k: &Kit) -> El {
+fn verification_row(
+    v: &collie_desktop_protocol::generated::Verification,
+    record: &Record,
+    k: &Kit,
+) -> El {
     use collie_desktop_protocol::generated::GlyphState;
     let passed = v.result == VerificationResult::Pass;
     let expected = crate::flow::written(&v.expect);
@@ -2440,49 +2475,149 @@ fn verification_row(v: &collie_desktop_protocol::generated::Verification, k: &Ki
     };
     let result = crate::flow::written(&v.result);
     let by = crate::flow::written(&v.by);
-    row()
-        .key(format!("check-{}", v.id))
-        .role("group")
-        .label(format!("{}: {result}, expected {expected}", v.name))
+    let title = text(v.name.clone())
+        .font(k.ty.mono)
+        .color(k.c.text_base)
+        .truncate()
+        .grow(1.0)
+        .min_w(0.0);
+    let verdict = text(format!(
+        "{result}{}",
+        if passed || expected != "pass" {
+            format!(", expected {expected}")
+        } else {
+            String::new()
+        }
+    ))
+    .font(k.ty.text_xsmall)
+    .color(k.c.text_muted);
+    let ran = text(format!(
+        "exit {} · {by} · {}",
+        v.exit,
+        when_of(&v.at, now())
+    ))
+    .font(k.ty.text_xsmall)
+    .color(k.c.text_faint)
+    .w(170.0)
+    .align(rune::Align::End);
+    evidence_text(
+        EvidenceRow {
+            key: format!("check-{}", v.id),
+            item: format!("verification:{}", v.id),
+            label: format!("{}: {result}, expected {expected}", v.name),
+            parts: vec![
+                crate::flow::glyph::glyph(&state, 14.0, k),
+                title,
+                verdict,
+                ran,
+            ],
+            aside: None,
+        },
+        record,
+        k,
+    )
+}
+
+/// A row of the Evidence tab whose item opens under it: a check's output, a kept log, a note.
+struct EvidenceRow {
+    key: String,
+    item: String,
+    label: String,
+    parts: Vec<El>,
+    /// Beside the row, outside its press: a file's Open.
+    aside: Option<El>,
+}
+
+/// An `EvidenceText.vue`: the row opens and closes on a press, Space or Enter, reading its item
+/// the first time; the text is monospace, selectable and scrolls within its box.
+fn evidence_text(row_of: EvidenceRow, record: &Record, k: &Kit) -> El {
+    let EvidenceRow {
+        key,
+        item,
+        label,
+        parts,
+        aside,
+    } = row_of;
+    let open = record.expanded.contains(&item);
+    let chevron = if open {
+        &icons::CHEVRON_DOWN
+    } else {
+        &icons::CHEVRON_RIGHT
+    };
+    let toggled = item.clone();
+    let keyed = item.clone();
+    let head = row()
+        .key(key.clone())
+        .role("button")
+        .label(label)
+        .expanded(open)
+        .focusable(true)
+        .focus_ring(2.0, 0.0, k.c.border_focus)
         .gap(10.0)
         .center_y()
         .h(32.0)
         .px(8.0)
-        .w_full()
+        .grow(1.0)
+        .min_w(0.0)
         .radius(k.radius.sm)
         .hover(k.c.surface_hover)
-        .child(crate::flow::glyph::glyph(&state, 14.0, k))
+        .on_press(move |app: &mut App| app.toggle_evidence(&toggled))
+        // Space presses it as any button; Enter too, as a disclosure takes it.
+        .on_key(move |app: &mut App, ev: &KeyEvent, _: &mut Tx| {
+            let enter = ev.key == Key::Enter && ev.mods == rune::Mods::default();
+            if enter {
+                app.toggle_evidence(&keyed);
+            }
+            enter
+        })
         .child(
-            text(v.name.clone())
-                .font(k.ty.mono)
-                .color(k.c.text_base)
-                .truncate()
-                .grow(1.0)
-                .min_w(0.0),
+            rune::icon(chevron, 14.0)
+                .color(k.c.icon_muted)
+                .a11y_hidden(),
         )
-        .child(
-            text(format!(
-                "{result}{}",
-                if passed || expected != "pass" {
-                    format!(", expected {expected}")
+        .children(parts);
+    let line = row()
+        .gap(4.0)
+        .center_y()
+        .w_full()
+        .child(head)
+        .children(aside);
+    let body = open.then(|| {
+        let said = match record.items.get(&item) {
+            Some(Item::Read(bytes)) => {
+                let plain = super::evidence::without_escapes(&String::from_utf8_lossy(bytes));
+                if plain.trim().is_empty() {
+                    quiet("It is empty.", k).key(format!("{key}-text"))
                 } else {
-                    String::new()
+                    mono(&plain, &format!("{key}-text"), k)
                 }
-            ))
-            .font(k.ty.text_xsmall)
-            .color(k.c.text_muted),
-        )
-        .child(
-            text(format!(
-                "exit {} · {by} · {}",
-                v.exit,
-                when_of(&v.at, now())
-            ))
-            .font(k.ty.text_xsmall)
-            .color(k.c.text_faint)
-            .w(170.0)
-            .align(rune::Align::End),
-        )
+            }
+            Some(Item::Failed(why)) => {
+                quiet(format!("Could not be read: {why}"), k).key(format!("{key}-failed"))
+            }
+            _ => quiet("Reading…", k)
+                .role("status")
+                .key(format!("{key}-reading")),
+        };
+        col()
+            .key(format!("{key}-body"))
+            .w_full()
+            .max_h(360.0)
+            .padding(10.0)
+            .radius(k.radius.sm)
+            .fill(k.c.layer_01)
+            .border(1.0, k.c.border_weak)
+            .scroll(ScrollSpec {
+                stick_bottom: false,
+            })
+            .child(said)
+    });
+    col()
+        .key(format!("{key}-box"))
+        .gap(4.0)
+        .w_full()
+        .child(line)
+        .children(body)
 }
 
 fn image_box(record: &Record, item: &EvidenceItem, k: &Kit) -> El {
@@ -2543,10 +2678,12 @@ fn evidence_tab(record: &Record, k: &Kit) -> El {
             "checks",
             &format!("Checks · {n}"),
             k,
-            [col()
-                .gap(0.0)
-                .w_full()
-                .children(detail.verifications.iter().map(|v| verification_row(v, k)))],
+            [col().gap(0.0).w_full().children(
+                detail
+                    .verifications
+                    .iter()
+                    .map(|v| verification_row(v, record, k)),
+            )],
         )
     });
     let gallery = (!sorted.gallery.is_empty()).then(|| {
@@ -2571,7 +2708,8 @@ fn evidence_tab(record: &Record, k: &Kit) -> El {
                 .collect::<Vec<_>>(),
         )
     });
-    let listed = |key: &str, said: &str, files: &[EvidenceItem], prefix: &str| {
+    // Logs and notes open under their rows; reports and videos only in the browser.
+    let listed = |key: &str, said: &str, files: &[EvidenceItem], prefix: &str, read: bool| {
         (!files.is_empty()).then(|| {
             section(
                 key,
@@ -2579,7 +2717,14 @@ fn evidence_tab(record: &Record, k: &Kit) -> El {
                 k,
                 files
                     .iter()
-                    .map(|f| file_row(&format!("{prefix}:{}", f.name), &f.name, f.bytes, record, k))
+                    .map(|f| {
+                        let item = format!("{prefix}:{}", f.name);
+                        if read {
+                            text_file_row(&item, &f.name, f.bytes, record, k)
+                        } else {
+                            file_row(&item, &f.name, f.bytes, record, k)
+                        }
+                    })
                     .collect::<Vec<_>>(),
             )
         })
@@ -2589,11 +2734,18 @@ fn evidence_tab(record: &Record, k: &Kit) -> El {
         "Reports, opened sandboxed in the browser",
         &sorted.reports,
         "evidence",
+        false,
     );
-    let videos = listed("videos", "Videos", &sorted.videos, "evidence");
-    let files = listed("evidence-files", "Files", &sorted.files, "evidence");
+    let videos = listed("videos", "Videos", &sorted.videos, "evidence", false);
+    let files = listed(
+        "evidence-files",
+        "Logs and files",
+        &sorted.files,
+        "evidence",
+        true,
+    );
     let handoffs = detail.handoff_files.clone().flatten().unwrap_or_default();
-    let handoffs = listed("handoff-files", "Handoff files", &handoffs, "handoff");
+    let handoffs = listed("handoff-files", "Handoff notes", &handoffs, "handoff", true);
     let m = &detail.outcome.metrics;
     let mut metrics = vec![fact("Rework", format!("{}", m.rework), k)];
     let metrics_of = |rows: Vec<El>| [facts(rows)];
