@@ -1119,7 +1119,10 @@ const fromText = Schemaflow(
 );
 
 /** How often a board is built again with nothing written, so "silent for" stays true. */
-const BOARD_TICK = "5 seconds";
+const boardTick = Config.Duration("COLLIE_BOARD_TICK").pipe(
+  Config.withDefault(Duration.seconds(5)),
+  Effect.orDie,
+);
 
 /** This process's env, for the state directory it serves rather than the one it inherited. */
 const servingEnv = (dir: string) =>
@@ -1456,7 +1459,7 @@ const sharedBoardLayer = (dir: string) =>
         ],
         { concurrency: "unbounded" },
       ).pipe(Stream.share({ capacity: 1, strategy: "sliding" }));
-      const refresh = yield* Stream.tick(BOARD_TICK).pipe(
+      const refresh = yield* Stream.tick(yield* boardTick).pipe(
         Stream.tap(() => herdrMoved),
         Stream.share({ capacity: 1, strategy: "sliding" }),
       );

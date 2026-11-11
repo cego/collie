@@ -1,11 +1,12 @@
-// The host's Run model against changes made outside it: each reaches the board stream within
-// a second, and the board then equals one this process builds from disk, item by item.
+// The host's Run model against changes made outside it: with the host's board tick off, each
+// reaches the board stream through its own event, and the board then equals one this process
+// builds from disk, item by item.
 
 import { recordsAt } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
-import { Clock, Effect, FileSystem, Option, Result, Schema, Stream, flow } from "effect";
+import { Effect, FileSystem, Option, Result, Schema, Stream, flow } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type { TaskView } from "../src/board-model";
 import { buildBoard, readBranchHead } from "../src/board";
@@ -37,9 +38,6 @@ const decodeRequest = flow(
 const FakeHerdrAgents = Schema.fromJsonString(
   Schema.Struct({ agents: Schema.Array(Schema.Struct({ pane_id: Schema.String })) }),
 );
-
-/** How soon a change must be on the board stream. */
-const WITHIN_MS = 1_000;
 
 const MERGED = "mr:gitlab.example.com/mk/project!7";
 const UNKNOWN = "mr:gitlab.example.com/mk/project!8";
@@ -79,7 +77,7 @@ const herdrEvents = (path: string) =>
         const event = { event: "pane.agent_status_changed", data: { pane_id: "gone" } };
         for (const socket of subscribed) socket.write(`${JSON.stringify(event)}\n`);
       };
-      return { server, push };
+      return { server, push, subscribers: () => subscribed.size };
     }),
     ({ server }) => Effect.sync(() => server.stop(true)),
   );
@@ -112,7 +110,7 @@ const elsewhere = (world: World, statement: string, params: ReadonlyArray<string
   });
 
 test(
-  "each change made outside the host reaches the board within a second, and equals a board read from disk",
+  "each change made outside the host reaches the board through its own event, and equals a board read from disk",
   () =>
     proves(
       "collie-run-model-host-",
@@ -146,6 +144,7 @@ test(
             COLLIE_FORGE_API,
             HERDR_SOCKET_PATH: socket,
             HERDR_WORKSPACE_ID: workspace.workspaceId,
+            COLLIE_BOARD_TICK: "1 hour",
           };
           const start = (args: ReadonlyArray<string>) =>
             collie(world, ["run", "start", ...args], extra).pipe(
@@ -172,32 +171,31 @@ test(
           ]);
 
           const door = yield* frontDoor(socketOf(world.state)).pipe(Effect.orDie);
-          const seen: Array<{ readonly at: number; readonly board: Map<string, TaskView> }> = [];
+          const seen: Array<Map<string, TaskView>> = [];
           const board = new Map<string, TaskView>();
           yield* door.board().pipe(
             Stream.runForEach((message) =>
-              Effect.gen(function* () {
+              Effect.sync(() => {
                 if (message._tag === "Snapshot") {
                   board.clear();
                   for (const task of message.tasks) board.set(task.id, task);
                 } else if (message._tag === "Upsert") board.set(message.task.id, message.task);
                 else if (message._tag === "Remove") board.delete(message.id);
                 else return;
-                seen.push({ at: yield* Clock.currentTimeMillis, board: new Map(board) });
+                seen.push(new Map(board));
               }),
             ),
             Effect.forkScoped,
           );
           const cardOf = (tasks: Map<string, TaskView>, run: string) =>
             Arr.findFirst([...tasks.values()], (view) => view.runs.includes(run));
-          /** When the stream first said what `wanted` waits for, after the `from`th board it told. */
+          /** Waits for the stream to tell what `wanted` waits for, after the `from`th board it told. */
           const arrival = (from: number, wanted: (tasks: Map<string, TaskView>) => boolean) =>
             until(
-              () =>
-                Effect.sync(() => Arr.findFirst(seen.slice(from), ({ board }) => wanted(board))),
+              () => Effect.sync(() => Arr.findFirst(seen.slice(from), wanted)),
               Option.isSome,
             ).pipe(
-              Effect.map((found) => Option.getOrThrow(found).at),
+              Effect.asVoid,
               Effect.catchDefect((defect) =>
                 Effect.die(
                   new Error(
@@ -257,19 +255,25 @@ test(
               );
             }
           });
-          const within = (change: string, from: number, arrived: number) =>
-            Effect.sync(() =>
-              expect({
-                change,
-                ms: arrived - from < WITHIN_MS ? "within" : arrived - from,
-              }).toEqual({ change, ms: "within" }),
-            );
-
           const ended = (run: string) => (tasks: Map<string, TaskView>) => {
             const card = cardOf(tasks, run);
             return card._tag === "Some" && card.value.state !== "active";
           };
           yield* arrival(0, (tasks) => ended(files)(tasks) && ended(store)(tasks));
+          // herdr says the agent's pane appeared, once it has the pane and the host listens.
+          const herdrState = `${Bun.env.FAKE_HERDR_LOG}.state.json`;
+          const fake = yield* until(
+            () =>
+              fs
+                .readFileString(herdrState)
+                .pipe(Effect.flatMap(Schema.decodeEffect(FakeHerdrAgents))),
+            (state) => state.agents.length > 0,
+          );
+          yield* until(
+            () => Effect.sync(events.subscribers),
+            (count) => count > 0,
+          );
+          events.push();
           yield* arrival(0, (tasks) => {
             const card = cardOf(tasks, agent);
             return card._tag === "Some" && card.value.agents.length > 0;
@@ -277,16 +281,10 @@ test(
           yield* equalsDisk;
 
           // The forge says the merge request merged; the change is the host's poll learning it.
-          const learned = yield* arrival(0, (tasks) => {
+          yield* arrival(0, (tasks) => {
             const card = cardOf(tasks, merged);
             return card._tag === "Some" && card.value.mrState === "merged";
           });
-          const polled = yield* fs.stat(`${world.state}/board/mr-states.json`).pipe(Effect.orDie);
-          yield* within(
-            "forge",
-            polled.mtime._tag === "Some" ? polled.mtime.value.getTime() : 0,
-            learned,
-          );
           yield* equalsDisk;
 
           // A second connection, in another process, changes a Run's row.
@@ -296,8 +294,7 @@ test(
             "unregistered",
             store,
           ]);
-          let at = yield* Clock.currentTimeMillis;
-          yield* within("store", at, yield* arrival(mark, changed));
+          yield* arrival(mark, changed);
           yield* equalsDisk;
 
           // A branch the board reads the head of moves in its checkout.
@@ -336,35 +333,25 @@ test(
           });
           mark = seen.length;
           yield* git("commit", "-q", "--allow-empty", "-m", "two");
-          at = yield* Clock.currentTimeMillis;
-          yield* within(
-            "checkout",
-            at,
-            yield* arrival(mark, (tasks) => {
-              const card = cardOf(tasks, checkout);
-              return card._tag === "Some" && card.value.checks?.state === "unchecked";
-            }),
-          );
+          yield* arrival(mark, (tasks) => {
+            const card = cardOf(tasks, checkout);
+            return card._tag === "Some" && card.value.checks?.state === "unchecked";
+          });
           yield* equalsDisk;
 
-          // herdr drops the Run's agent and says so.
-          const herdrState = `${Bun.env.FAKE_HERDR_LOG}.state.json`;
-          const fake = yield* Schema.decodeEffect(FakeHerdrAgents)(
-            yield* fs.readFileString(herdrState),
-          ).pipe(Effect.orDie);
-          mark = seen.length;
+          // herdr drops the Run's agent. A tick would re-read herdr, so the card keeps it until herdr says so.
           for (const one of fake.agents)
             yield* exec([Bun.env.HERDR_BIN_PATH!, "pane", "close", one.pane_id]);
-          events.push();
-          at = yield* Clock.currentTimeMillis;
-          yield* within(
-            "herdr",
-            at,
-            yield* arrival(mark, (tasks) => {
-              const card = cardOf(tasks, agent);
-              return card._tag === "Some" && card.value.agents.length === 0;
-            }),
+          yield* Effect.sleep("8 seconds");
+          expect(Option.map(cardOf(board, agent), (card) => card.agents.length > 0)).toEqual(
+            Option.some(true),
           );
+          mark = seen.length;
+          events.push();
+          yield* arrival(mark, (tasks) => {
+            const card = cardOf(tasks, agent);
+            return card._tag === "Some" && card.value.agents.length === 0;
+          });
           yield* equalsDisk;
 
           // Another process writes a plan ticket into a Run's directory.
@@ -377,8 +364,7 @@ test(
             `${world.install}/user/workflows/notes.md`,
             `${runDir}/plan/issues/01-next.md`,
           ]);
-          at = yield* Clock.currentTimeMillis;
-          yield* within("files", at, yield* arrival(mark, changed));
+          yield* arrival(mark, changed);
           yield* equalsDisk;
 
           // The Run's directory is taken away, then copied back in.
@@ -386,15 +372,13 @@ test(
           mark = seen.length;
           changed = changedFrom(files);
           yield* exec(["mv", runDir, kept]);
-          at = yield* Clock.currentTimeMillis;
-          yield* within("deleted", at, yield* arrival(mark, changed));
+          yield* arrival(mark, changed);
           yield* equalsDisk;
 
           mark = seen.length;
           changed = changedFrom(files);
           yield* exec(["cp", "-r", kept, runDir]);
-          at = yield* Clock.currentTimeMillis;
-          yield* within("copied in", at, yield* arrival(mark, changed));
+          yield* arrival(mark, changed);
           yield* equalsDisk;
         }).pipe(Effect.provide(recordsAt(world.state))),
       ["plain.workflow.ts", "targeted.workflow.ts", "agent.workflow.ts", "notes.md"],
