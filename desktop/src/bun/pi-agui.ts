@@ -77,6 +77,12 @@ const Record = Schema.Union([
     data: Schema.optionalKey(Schema.Struct({ disposition: Schema.optionalKey(Schema.String) })),
   }),
   Schema.Struct({
+    type: Schema.Literal("extension_ui_request"),
+    id: Schema.String,
+    method: Schema.Literal("notify"),
+    message: Schema.String,
+  }),
+  Schema.Struct({
     type: Schema.Literal("auto_retry_end"),
     success: Schema.Boolean,
     finalError: Schema.optionalKey(Schema.String),
@@ -99,6 +105,8 @@ export const piEvents = (thread: string) => {
   let turn = 0;
   let message = 0;
   let error: string | undefined;
+  let command = false;
+  let reported: string[] = [];
   const tools = new Set<string>();
   let usage: TurnCost["usage"] = {
     input_tokens: 0,
@@ -189,11 +197,24 @@ export const piEvents = (thread: string) => {
         error = record.message.stopReason === "error" ? record.message.errorMessage : undefined;
         return [];
       }
+      case "extension_ui_request": {
+        if (!command) {
+          reported.push(record.message);
+          return [];
+        }
+        const id = `${thread}:${record.id}`;
+        return [
+          { type: "TEXT_MESSAGE_START", messageId: id, role: "assistant" },
+          { type: "TEXT_MESSAGE_CONTENT", messageId: id, delta: record.message },
+          { type: "TEXT_MESSAGE_END", messageId: id },
+        ];
+      }
       case "auto_retry_end":
         if (!record.success) error = record.finalError;
         return [];
       case "response":
         if (record.command !== "prompt") return [];
+        if (!record.success || record.data?.disposition === "handled") command = false;
         if (!record.success)
           return [
             {
@@ -206,14 +227,17 @@ export const piEvents = (thread: string) => {
           ? [{ type: "RUN_FINISHED", threadId: thread, runId: runId() }]
           : [];
       case "agent_settled":
+        command = false;
         return isString(error) && !record.aborted
           ? [{ type: "RUN_ERROR", runId: runId(), message: error }]
           : [{ type: "RUN_FINISHED", threadId: thread, runId: runId() }];
     }
   };
   return {
-    begin: (): AguiEvent => {
+    /** A turn of one of Pi's own commands has Pi's notices as its reply. */
+    begin: (isCommand = false): AguiEvent => {
       turn++;
+      command = isCommand;
       error = undefined;
       tools.clear();
       usage = {
@@ -226,5 +250,11 @@ export const piEvents = (thread: string) => {
     },
     step,
     usage: () => ({ ...usage }),
+    /** What Pi noticed outside its commands since last asked, once. */
+    reported: () => {
+      const said = reported;
+      reported = [];
+      return said.length === 0 ? undefined : said;
+    },
   };
 };

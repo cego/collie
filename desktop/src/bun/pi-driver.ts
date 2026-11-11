@@ -23,16 +23,19 @@ import type { ChatEndpoint } from "./chat-endpoint";
 import { childEnv, which } from "./login-env";
 import { SESSION_STORES, SESSIONS_CLOSED, sessionStoreReached } from "../../../src/own-words";
 import { decodePiRecord, piEvents, piToolName } from "./pi-agui";
-import { piPrompt, piSessions } from "./pi-transcript";
-import { noticedContext, placementContext, systemPrompt } from "./session";
+import { piCommand, piPrompt, piReportedContext, piSessions } from "./pi-transcript";
+import { noticedContext, placementContext, systemPrompt, type UserMcpServers } from "./session";
+import { PiServer, piConnections, piServers } from "./pi-servers";
 import { standingDirectionContext } from "../../../src/standing-direction";
 
 const TOKEN_ENV = "COLLIE_CHAT_MCP_TOKEN";
+const SERVERS_ENV = "COLLIE_CHAT_MCP_SERVERS";
 const TOOL_TIMEOUT = 24 * 60 * 60;
 
 export const piDriver = (
   context: DriverContext,
   endpoint: ChatEndpoint,
+  userServers: () => Promise<UserMcpServers>,
   command: ReadonlyArray<string> | null = which("pi") === null ? null : [which("pi")!],
 ): ChatDriver => {
   const sessions = `${context.dir}/pi-sessions`;
@@ -41,6 +44,9 @@ export const piDriver = (
     installed: command !== null,
     open: Effect.fnUntraced(function* (id, model, effort) {
       const { url, token } = yield* endpoint.start;
+      const servers = piServers(
+        yield* Effect.tryPromise(userServers).pipe(Effect.orElseSucceed(() => ({}))),
+      );
       // A short private name avoids user overrides and Pi hashing provider tool names.
       const server = `cf-${pipe_(
         yield* Effect.promise(() =>
@@ -66,6 +72,19 @@ const touched = {
 };
 export default function(pi) {
   pi.registerMcpServer("${server}", { url: ${yield* json(url)}, exposure: "direct", timeout: ${TOOL_TIMEOUT}, headers: { Authorization: "Bearer " + process.env.${TOKEN_ENV} } });
+  const servers = JSON.parse(process.env.${SERVERS_ENV} ?? "{}");
+  delete process.env.${SERVERS_ENV};
+  const refused = [];
+  for (const [name, config] of Object.entries(servers)) {
+    try {
+      pi.registerMcpServer(name, config);
+    } catch (error) {
+      refused.push(name + ": " + (error instanceof Error ? error.message : String(error)));
+    }
+  }
+  pi.on("session_start", (_event, ctx) => {
+    for (const one of refused) ctx.ui.notify("Pi refused the MCP server " + one, "warning");
+  });
   pi.on("tool_call", (event, ctx) => {
     const input = event.input ?? {};
     const call = Object.hasOwn(touched, event.toolName) ? touched[event.toolName]((key) => typeof input[key] === "string" ? input[key] : undefined) : undefined;
@@ -92,10 +111,12 @@ export default function(pi) {
         "--session-id",
         id,
         "--system-prompt",
-        systemPrompt(hostname()),
+        `${systemPrompt(hostname())}\n\n${piConnections(servers)}`,
         "--append-system-prompt",
         "",
         "--no-extensions",
+        "-e",
+        "builtin:tool-search",
         "-e",
         "builtin:mcp",
         "-e",
@@ -104,13 +125,19 @@ export default function(pi) {
         "--no-prompt-templates",
         "--no-context-files",
         "--tools",
-        `read,bash,edit,write,grep,find,ls,mcp__${pipe_(server, Str.replaceAll("-", "_"))}__*`,
+        "read,bash,edit,write,grep,find,ls,tool_search,mcp__*",
       ];
       if (model !== "default") args.push("--model", model);
       if (effort !== null) args.push("--thinking", effort);
       const child = Bun.spawn(args, {
         cwd: context.dir,
-        env: { ...childEnv(), [TOKEN_ENV]: token },
+        env: {
+          ...childEnv(),
+          [TOKEN_ENV]: token,
+          [SERVERS_ENV]: yield* Schema.encodeEffect(
+            Schema.fromJsonString(Schema.Record(Schema.String, PiServer)),
+          )(servers.given).pipe(Effect.orDie),
+        },
         stdin: "pipe",
         stdout: "pipe",
         stderr: "pipe",
@@ -144,8 +171,11 @@ export default function(pi) {
         Effect.gen(function* () {
           yield* endpoint.begin;
           started = yield* Clock.currentTimeMillis;
-          yield* Queue.offer(output, state.begin());
+          const command = piCommand(content);
+          yield* Queue.offer(output, state.begin(command !== undefined));
+          if (command !== undefined) return yield* write({ type: "prompt", message: command });
           const placement = context.placement();
+          const reported = state.reported();
           const noticed = context.noticed();
           const note = Arr.join(
             Arr.filter(
@@ -153,6 +183,7 @@ export default function(pi) {
                 placement === undefined ? "" : placementContext(placement),
                 standingDirectionContext(context.flock.standingDirection()) ?? "",
                 noticed === undefined ? "" : noticedContext(noticed),
+                reported === undefined ? "" : piReportedContext(reported),
               ],
               (text) => text !== "",
             ),

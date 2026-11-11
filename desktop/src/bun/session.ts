@@ -40,7 +40,9 @@ Machine. None of these asks the human first, so use them as they would. A host's
 directory is changed only through Collie's tools, never by writing its files.
 
 The tools of the MCP servers the human configured, such as Linear or Slack, are theirs, and
-you use them as they would, without asking first.
+you use them as they would, without asking first. GitLab and GitHub you reach with glab and gh
+in your shell, signed in as the human. A simple read or change in one of these is yours to
+do here, not a Run's.
 
 Choose the workflow whose description in collie_workspaces fits the request. A request that
 is not planning, building a change to a merge request, reviewing, renovating or an
@@ -168,6 +170,12 @@ export const userMcpServers = (claudeJson: string): UserMcpServers =>
         }),
     ),
   );
+
+/** Read again at each session's start, so a server added since applies to the next one. */
+export const readUserMcpServers = () =>
+  Bun.file(`${childEnv().CLAUDE_CONFIG_DIR ?? homedir()}/.claude.json`)
+    .text()
+    .then(userMcpServers);
 
 /** The human's Machine rule, and the Machines it may name now. */
 export interface Placement {
