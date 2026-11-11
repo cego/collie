@@ -158,7 +158,18 @@ While nothing has focus, the window's `on_key` (`shell::on_key`) types into the 
 stable Desktop's pane takes the keys once Go to pane opens it; Tab still moves focus into the
 app, and nothing is typed into a pane under a dialog. `examples/terminal-tab.rs` draws the tab
 from a recording in each state (`STATE=connecting|ended|failed|nopane`, snapped with `--at 0.6`
-so the recording has arrived).
+so the recording has arrived), and `TAB=flow` draws it in a Flow Step instead.
+
+**A Step's terminal on Flow** (`step_work`, `step_pane` and `sync_pane` in `record.rs`,
+`step_terminal` in `record/view.rs`): a working Step's Terminal part draws its agent's pane
+right there, under the same bar as the Terminal tab, at a steady 420 points tall, with Open in
+Terminal tab, which keeps the same pane. The part is offered as stable's `StepWork.vue` offers
+it: the Machine reached and the card listing the Step's agent. A Step that has finished says
+so calmly instead of drawing an empty grid. One pane is held at a time, exactly while one is
+shown, on the Terminal tab or in a Step's part: choosing another part, Step, tab or record gives
+it back. Choosing another Step opens it on its own part, as stable does. The inline pane takes
+keys once it is focused (a click on it); unfocused, Flow's keys stay Flow's. Files pasted or
+dropped while it is shown are given to it as on the Terminal tab.
 
 **Files given to the pane** (`board/src/shell/files.rs`): a paste carrying files or an image
 (Ctrl+Shift+V, or Ctrl+V while the clipboard holds them), or files dropped on the window

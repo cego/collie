@@ -367,6 +367,10 @@ impl App {
     /// A key typed into the shown pane, as its grid takes one. Ctrl+V reads the clipboard
     /// first, so files on it are given to the pane rather than left to the pane's program.
     fn type_into_pane(&mut self, key: &rune::KeyEvent, tx: &mut Tx) -> bool {
+        // A Step's pane on Flow takes keys only once it is focused, as the grid's own.
+        if self.record_tab() != "terminal" {
+            return false;
+        }
         let Some(tab) = self.shown_pane() else {
             return false;
         };

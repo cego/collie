@@ -10,13 +10,14 @@ pub mod tabs;
 mod view;
 pub mod when;
 
+use crate::flow::inspector::{self, PartTab, StepLog};
 use crate::{App, flow};
 use act::Notice;
 use base64::Engine;
 use collie_desktop_protocol::client::Client;
 use collie_desktop_protocol::generated::{
-    Detail, DetailFlow, Encoding, KeptRecord, Review, RunDetailPayload, RunFile, RunFilePayload,
-    Task, TerminalPayload,
+    Detail, DetailFlow, Encoding, KeptRecord, Lane, Node, NodeRun, Review, RunDetailPayload,
+    RunFile, RunFilePayload, Task, TerminalPayload, Verification,
 };
 use collie_desktop_terminal::view::Tab;
 use review::{Anchor, Draft};
@@ -214,6 +215,21 @@ impl Records {
     }
 }
 
+/// What the Flow's inspector shows: the Step chosen, else the Run's current one; the run or
+/// link of it picked; and the part of its work shown.
+pub struct StepWork<'a> {
+    pub spot: flow::Spot,
+    pub parent: &'a Node,
+    pub node: NodeRun,
+    pub lane: Option<&'a Lane>,
+    /// Whether its agent's terminal can be shown.
+    pub live: bool,
+    pub log: StepLog,
+    pub proofs: Vec<&'a Verification>,
+    pub parts: Vec<PartTab>,
+    pub part: inspector::Part,
+}
+
 /// What decides a record's tabs; its Flow is the last one sent, as a later record may leave it out.
 fn facts_of(record: &Record, live: bool, flow: bool, mr: Option<String>) -> TabFacts {
     let Some(detail) = record.detail() else {
@@ -280,7 +296,10 @@ impl App {
         }
         self.show_tab("flow");
         match &mut self.flow {
-            Some(map) => map.open_active(),
+            Some(map) => {
+                map.open_active();
+                self.step_chosen();
+            }
             None => {
                 if let Some(record) = &mut self.record.open {
                     record.at_active = true;
@@ -371,6 +390,7 @@ impl App {
         };
         if let Some(record) = self.record.open.as_mut().filter(|r| r.at_active) {
             record.at_active = false;
+            record.part = None;
             map.open_active();
         }
     }
@@ -451,11 +471,6 @@ impl App {
         if let Some(record) = &mut self.record.open {
             record.chosen = Some(tab.into());
         }
-        // A pane is attached only while its tab shows it.
-        if self.record_tab() != "terminal" {
-            self.leave_terminal();
-            self.record.terminal_agent = None;
-        }
         self.tab_opened();
     }
 
@@ -473,18 +488,135 @@ impl App {
 
     /// Reads what the tab shown needs and has not got: its terminal, its diff, its plan file.
     fn tab_opened(&mut self) {
-        let tab = self.record_tab();
-        // The pane is held only while its tab is shown, as Desktop holds it.
-        if tab != "terminal" {
-            self.leave_terminal();
-        }
-        match tab.as_str() {
-            "terminal" => self.open_terminal(),
+        self.sync_pane();
+        match self.record_tab().as_str() {
             "diff" => self.read_diff(),
             "plan" => self.read_plan_file(),
             "evidence" => self.read_shots(),
             _ => {}
         }
+    }
+
+    /// The Flow Step whose work the inspector shows, and which part of it.
+    pub fn step_work(&self) -> Option<StepWork<'_>> {
+        let record = self.record.open.as_ref()?;
+        let map = self.flow.as_ref()?;
+        let spot = map.selected.clone().or_else(|| {
+            map.flow.current.as_ref().map(|c| flow::Spot {
+                run: c.run.clone(),
+                node: c.node.clone(),
+            })
+        })?;
+        let parent = flow::node_at(&map.flow, &spot)?;
+        let node = record
+            .entry
+            .as_ref()
+            .and_then(|id| {
+                inspector::entries_of(parent)
+                    .into_iter()
+                    .find(|e| &e.id == id)
+            })
+            .unwrap_or_else(|| flow::actions::as_run(parent));
+        let lane = map.flow.lanes.iter().find(|l| l.run == spot.run);
+        let agents = self
+            .task_of_record()
+            .map_or(&[][..], |t| t.agents.as_slice());
+        let live = inspector::step_live(&node, self.record_live(), agents);
+        let detail = record.detail();
+        let starts: Vec<i64> = map
+            .flow
+            .lanes
+            .iter()
+            .flat_map(|l| &l.nodes)
+            .filter_map(|n| n.log.flatten())
+            .collect();
+        let log = inspector::step_lines(
+            detail.and_then(|d| d.tail.as_ref()),
+            detail.and_then(|d| d.log_start.flatten()).unwrap_or(0),
+            node.log.flatten(),
+            &starts,
+        );
+        let checks = detail.map(|d| d.verifications.as_slice()).unwrap_or(&[]);
+        let picked = record.entry.as_ref().map(|_| &node);
+        let proofs = inspector::step_evidence(checks, &parent.id, picked);
+        let parts = inspector::inspector_parts(&node, live, log.count, proofs.len());
+        let chosen = record
+            .part
+            .unwrap_or_else(|| inspector::inspector_part(&node, live));
+        let part = inspector::shown_part(chosen, &parts);
+        Some(StepWork {
+            spot,
+            parent,
+            node,
+            lane,
+            live,
+            log,
+            proofs,
+            parts,
+            part,
+        })
+    }
+
+    /// The agent whose pane the Flow draws in its Step's Terminal part, while that Step works.
+    pub fn step_pane(&self) -> Option<String> {
+        if self.record_tab() != "flow" {
+            return None;
+        }
+        let work = self.step_work()?;
+        let drawn =
+            work.part == inspector::Part::Terminal && work.live && inspector::at_work(&work.node);
+        work.node.agent.flatten().filter(|_| drawn)
+    }
+
+    /// Whether a pane is shown: on the Terminal tab, or in a Flow Step's Terminal part.
+    pub fn pane_shown(&self) -> bool {
+        self.record.open.is_some()
+            && (self.record_tab() == "terminal" || self.step_pane().is_some())
+    }
+
+    /// Holds a pane exactly while one is shown, on the agent it shows; gives it back otherwise.
+    pub fn sync_pane(&mut self) {
+        if self.record.open.is_some() && self.record_tab() == "terminal" {
+            self.open_terminal();
+            return;
+        }
+        let Some(agent) = self.step_pane() else {
+            self.leave_terminal();
+            self.record.terminal_agent = None;
+            return;
+        };
+        let same = self.terminal.is_some()
+            && self.record.terminal_agent.as_deref() == Some(agent.as_str());
+        if let Some(record) = &mut self.record.open {
+            record.picked = Some(agent);
+        }
+        if !same {
+            self.attach_terminal();
+        }
+    }
+
+    /// Another Step was chosen on Flow: it opens on its own part, as `StepWork.vue` does.
+    pub fn step_chosen(&mut self) {
+        if let Some(record) = &mut self.record.open {
+            record.part = None;
+        }
+        self.sync_pane();
+    }
+
+    /// Shows `part` of the chosen Step's work.
+    pub fn choose_part(&mut self, part: inspector::Part) {
+        if let Some(record) = &mut self.record.open {
+            record.part = Some(part);
+        }
+        self.sync_pane();
+    }
+
+    /// Shows the Step's run or link `entry`, or the Step itself again.
+    pub fn choose_entry(&mut self, entry: Option<String>) {
+        if let Some(record) = &mut self.record.open {
+            record.entry = entry;
+        }
+        self.sync_pane();
     }
 
     /// Opens the shown record's terminal, unless one is open: an agent that starts or stops
@@ -509,10 +641,9 @@ impl App {
     }
 
     /// Asks for the agent's own Run's pane, as `askedFor` does: an agent of a Run under the
-    /// card's is found only under its own. Only while Terminal is the tab shown, so no pane is
-    /// attached unseen.
+    /// card's is found only under its own. Only while a pane is shown, so none is attached unseen.
     fn attach_terminal(&mut self) {
-        if self.record_tab() != "terminal" {
+        if !self.pane_shown() {
             return;
         }
         let Some(record) = &self.record.open else {

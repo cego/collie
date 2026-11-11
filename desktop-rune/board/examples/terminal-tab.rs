@@ -2,7 +2,11 @@
 //! it in the app without a live pane: nothing is sent anywhere.
 //!
 //! `REPLAY=fixtures/terminal/herdr-ls.ndjson [STATE=connecting|ended|failed|nopane] cargo run -p collie-desktop-board --example terminal-tab -- --snap tab.png --at 0.6 --size 1280x860 --theme light`
+//!
+//! `TAB=flow` draws it inline instead, in the working Build Step's Terminal part on Flow, the
+//! record read from a fake core.
 
+use collie_desktop_board::calls::testing::Harness;
 use collie_desktop_board::{App, view};
 use collie_desktop_protocol::generated::TerminalEvent;
 use collie_desktop_terminal::view::Tab;
@@ -10,6 +14,7 @@ use rune::AppSpec;
 use serde_json::json;
 
 const FLOCK: &str = include_str!("../../fixtures/flock.ndjson");
+const FLOWS: &str = include_str!("../../fixtures/flows.json");
 
 fn init() -> App {
     let mut app = App::default();
@@ -17,8 +22,49 @@ fn init() -> App {
         app.apply(serde_json::from_str(line).unwrap());
     }
     app.go_to = Some(Box::new(|_, machine, _| Tab::new(None, machine, 100, 30)));
-    app.go_to_pane("inst-build".into(), "r1".into(), "Build box".into());
+    if std::env::var("TAB").as_deref() == Ok("flow") {
+        on_flow(&mut app);
+    } else {
+        app.go_to_pane("inst-build".into(), "r1".into(), "Build box".into());
+    }
     app
+}
+
+/// Build box's b1 with a builder at work, its record open on Flow at the Build Step.
+fn on_flow(app: &mut App) {
+    let snapshot: serde_json::Value = FLOCK
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|line| line["message"]["installation"] == "inst-build")
+        .unwrap();
+    let mut task = snapshot["message"]["tasks"][0].clone();
+    task["agents"] = json!([{"name": "build-1", "role": "builder",
+        "status": "working", "now": "Slice 4 of 6", "run": "r1"}]);
+    let upsert = json!({"machine": snapshot["machine"], "message": {"_tag": "Upsert", "seq": 9,
+        "task": task}});
+    app.apply(serde_json::from_value(upsert).unwrap());
+    let mut flow: serde_json::Value =
+        serde_json::from_str::<serde_json::Value>(FLOWS).unwrap()["before"].clone();
+    flow["lanes"][1]["nodes"][0]["agent"] = json!("build-1");
+    let detail = json!({"detail": {
+        "id": "r1", "dir": "/runs/r1", "title": "Nightly evidence sweep", "status": "running",
+        "revision": {"epoch": "e1", "seq": 7.0}, "inputs": [], "steps": [], "handoffs": [],
+        "outputs": [], "review": {"_tag": "None", "reason": "no review"},
+        "attention": {"category": "none", "reason": "", "explanation": "", "actions": []},
+        "outcome": {"gaps": [], "metrics": {"verifications": {"pass": 0, "fail": 0, "unstable": 0, "byCollie": 0},
+            "slices": {"done": 3, "total": 6}, "rework": 0, "halts": [], "obstacles": []}},
+        "finishedAt": 0, "findings": [], "verifications": [], "steering": [], "evidence": [],
+        "flow": flow}, "asOf": null, "bytes": 100});
+    let harness = Harness::<App>::new();
+    app.core = Some(harness.core.clone());
+    app.open_record(
+        "inst-build".into(),
+        "r1".into(),
+        "Build box".into(),
+        Some("flow"),
+    );
+    harness.fake.push("runDetail", Ok(detail));
+    harness.settle(app);
 }
 
 fn event(value: serde_json::Value) -> TerminalEvent {

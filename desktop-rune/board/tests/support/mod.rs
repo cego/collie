@@ -2,6 +2,8 @@
 
 #![allow(dead_code)]
 
+pub mod pane;
+
 use collie_desktop_board::App;
 use collie_desktop_board::calls::testing::Harness;
 use collie_desktop_board::view;
