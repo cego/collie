@@ -238,7 +238,8 @@ It parks its Step with the reason and what to correct when its spec cannot be re
 the builder stops, a ticket's blocking findings remain unresolved, or the final rally halts,
 including a disputed blocker. `run resume` or `retry-noted` continues on the same worktree,
 branch and agents. A missing spec is read again; a stopped build gets a new operation.
-A stopped rally gets one more fix-and-review round. If it still cannot converge, it parks
+A stopped rally gets one more fix-and-review round. Unresolved disputes stay on its card
+at their original blocking severity while it is parked. If it still cannot converge, it parks
 again with the new reason. No retry is automatic. A delivery the
 Merge request step's agent left undone — the branch not pushed, no merge request URL, or a
 blocking finding — does not fail it: the Run parks at Merge request with the reason, and a
@@ -268,7 +269,7 @@ with a check still failing and no stall, the Run is parked "Outcome unproved aft
 fixes …", naming the gaps; repair the checks and resume it, and a resume from that park runs
 each check still failing whole once more, since a repair can be outside the tree. A gate fix lands after the last
 review, so the merge request says it was not re-reviewed. What the Run could not settle —
-checks still unproved, blocking disputes the reviewers left unanswered, and the assumptions
+checks still unproved, disputes from gate fixes, and the assumptions
 an implementer made where the spec was silent — goes into the description under **Not
 settled by the run**, and the merge request opens anyway.
 

@@ -22,6 +22,7 @@ import {
   agentWork,
   contentOf,
   findingKey,
+  findingsIn,
   panelOf,
   formatFindings,
   isBlocking,
@@ -497,7 +498,18 @@ export const rally = (ask: {
         }),
         { round: ask.rounds.n },
       );
-      if (ended !== null) return ended;
+      if (ended !== null) {
+        if (ended.disputes.length > 0) {
+          const dir = (yield* host.place(runId)).dir;
+          const keys = new Set(Arr.map(ended.disputes, findingKey));
+          const onFile = yield* findingsIn(dir);
+          yield* leaveOutstanding(dir, [
+            ...Arr.filter(onFile, (one) => !keys.has(findingKey(one))),
+            ...ended.disputes,
+          ]);
+        }
+        return ended;
+      }
     }
     return yield* new WorkflowError({ reason: "the rally ran no rounds at all" });
   });

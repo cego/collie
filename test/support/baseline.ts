@@ -4965,7 +4965,7 @@ const NAMED_NOT_MET = {
 };
 
 scenario(
-  "a criterion still answered not met after every hand-back asks to hand back or stop, and Stop fails the Run before any review",
+  "a criterion still answered not met after every hand-back asks to hand back or stop, and Stop parks before any review",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -4978,7 +4978,7 @@ scenario(
         ]);
         yield* approve("r-not-met", ["unit"]);
         yield* rig.queueOutputs([NAMED_NOT_MET, NAMED_NOT_MET, NAMED_NOT_MET]);
-        const status = yield* driven(
+        const why = yield* driven(
           { entry: shipped("implement"), runId: "r-not-met", input: { plan, ...FINISH } },
           (run) =>
             Effect.gen(function* () {
@@ -4998,13 +4998,16 @@ scenario(
               });
               expect(Arr.join(yield* prompts(), "\n")).not.toContain("review-1");
               yield* run.answer("01-first.md.criteria-unmet-1", "Stop");
-              return yield* ended(run.status);
+              return yield* stepPark(
+                run,
+                "r-not-met",
+                "acceptance criteria still unanswered or unmet",
+              );
             }),
         );
         yield* bin.restore();
 
-        expect(status.status).toBe("failed");
-        expect(outcomeText(status)).toContain(
+        expect(why).toContain(
           "acceptance criterion not met: **Named.** Each one is named in the log.",
         );
         const sent = Arr.join(yield* prompts(), "\n");
@@ -5110,7 +5113,7 @@ const stallAsked = (
   ).pipe(Effect.map(([rows]) => Arr.filter(rows, (row) => row.decision === name)));
 
 scenario(
-  "a criteria hand-back that changed nothing and reported a blocker asks, and Stop fails the Run before any review",
+  "a criteria hand-back that changed nothing and reported a blocker asks, and Stop parks before any review",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -5123,7 +5126,7 @@ scenario(
         ]);
         yield* approve("r-stalled", ["unit"]);
         yield* rig.queueOutputs([COUNTED_ONLY, BLOCKED, BLOCKED]);
-        const status = yield* driven(
+        const why = yield* driven(
           { entry: shipped("implement"), runId: "r-stalled", input: { plan, ...FINISH } },
           (run) =>
             Effect.gen(function* () {
@@ -5146,13 +5149,11 @@ scenario(
                 "01-first.md.criteria-2.prompt.md",
               );
               yield* run.answer("01-first.md.criteria-stalled-1", "Stop");
-              return yield* ended(run.status);
+              return yield* stepPark(run, "r-stalled", "a criteria hand-back reported a blocker");
             }),
         );
         yield* bin.restore();
 
-        expect(status.status).toBe("failed");
-        const why = outcomeText(status);
         expect(why).toContain(
           "01-first.md: a criteria hand-back reported a blocker and changed nothing, so no review starts",
         );
@@ -5166,7 +5167,7 @@ scenario(
 );
 
 scenario(
-  "answering Hand back to a stalled criteria hand-back hands the ticket back again, and a second stall is asked anew",
+  "answering Hand back to a stalled criteria hand-back hands the ticket back again, and Stop on the second stall parks",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -5179,7 +5180,7 @@ scenario(
         ]);
         yield* approve("r-handed-again", ["unit"]);
         yield* rig.queueOutputs([COUNTED_ONLY, BLOCKED, BLOCKED]);
-        const status = yield* driven(
+        yield* driven(
           { entry: shipped("implement"), runId: "r-handed-again", input: { plan, ...FINISH } },
           (run) =>
             Effect.gen(function* () {
@@ -5187,12 +5188,15 @@ scenario(
               yield* run.answer("01-first.md.criteria-stalled-1", "Hand back");
               expect(yield* stallAsked(run, "01-first.md.criteria-stalled-2")).toHaveLength(1);
               yield* run.answer("01-first.md.criteria-stalled-2", "Stop");
-              return yield* ended(run.status);
+              return yield* stepPark(
+                run,
+                "r-handed-again",
+                "a criteria hand-back reported a blocker",
+              );
             }),
         );
         yield* bin.restore();
 
-        expect(status.status).toBe("failed");
         expect(yield* asked("r-handed-again", "01-first.md.criteria-2")).toContain(
           "acceptance criterion not answered: **Named.** Each one is named in the log.",
         );
@@ -5220,7 +5224,7 @@ scenario(
         ]);
         yield* approve("r-unmeasured", ["unit"]);
         yield* rig.queueOutputs([COUNTED_ONLY, BLOCKED, BLOCKED]);
-        const status = yield* driven(
+        const why = yield* driven(
           { entry: shipped("implement"), runId: "r-unmeasured", input: { plan, ...FINISH } },
           (run) =>
             Effect.gen(function* () {
@@ -5231,13 +5235,12 @@ scenario(
                 ),
               ).toHaveLength(0);
               yield* run.answer("01-first.md.criteria-unmet-1", "Stop");
-              return yield* ended(run.status);
+              return yield* stepPark(run, "r-unmeasured", "after 2 hand-backs");
             }),
         );
         yield* bin.restore();
 
-        expect(status.status).toBe("failed");
-        expect(outcomeText(status)).toContain("after 2 hand-backs");
+        expect(why).toContain("after 2 hand-backs");
         expect(Arr.join(yield* prompts(), "\n")).toContain("01-first.md.criteria-2.prompt.md");
       }),
     ),
@@ -8725,7 +8728,7 @@ scenario(
 );
 
 scenario(
-  "a blocking dispute nobody answers, and an assumption nobody settled, go to the merge request",
+  "a blocking dispute nobody answers parks before the merge request, with its assumption still shown to review",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -8754,19 +8757,19 @@ scenario(
           { ...CLEAN_SYNTHESIS },
           OPENED,
         ]);
-        const result = yield* ran({
-          entry: shipped("implement"),
-          runId: "r-impl-dispute",
-          input: { plan, ...FINISH },
-        });
+        const why = yield* driven(
+          { entry: shipped("implement"), runId: "r-impl-dispute", input: { plan, ...FINISH } },
+          (run) => stepPark(run, "r-impl-dispute", "disputed blocking finding"),
+        );
         yield* bin.restore();
 
-        expect(said(result)).toBe(OPENED.mr_url);
-        const opening = yield* asked("r-impl-dispute", "mr");
-        expect(opening).toContain(
-          "- disputed blocking finding: [blocker] the guard is on the wrong side (src/a.ts): the list is never empty here",
+        expect(why).toContain(
+          "disputed blocking finding: [blocker] the guard is on the wrong side (src/a.ts): the list is never empty here",
         );
-        expect(opening).toContain("- assumed in build: callers never pass an empty list");
+        expect(yield* wasAsked("r-impl-dispute", "mr")).toBe(false);
+        expect(yield* asked("r-impl-dispute", "review-1")).toContain(
+          "- assumed: callers never pass an empty list",
+        );
         // Still the human's, so the card counts it whatever the last review wrote.
         expect(
           Arr.map(yield* findingsIn(runDir(dir, "r-impl-dispute")), (one) => one.title),
@@ -8808,17 +8811,16 @@ scenario(
           },
           OPENED,
         ]);
-        const result = yield* ran({
-          entry: shipped("implement"),
-          runId: "r-impl-weakened",
-          input: { plan, ...FINISH },
-        });
+        const why = yield* driven(
+          { entry: shipped("implement"), runId: "r-impl-weakened", input: { plan, ...FINISH } },
+          (run) => stepPark(run, "r-impl-weakened", "disputed blocking finding"),
+        );
         yield* bin.restore();
 
-        expect(said(result)).toBe(OPENED.mr_url);
-        expect(yield* asked("r-impl-weakened", "mr")).toContain(
-          "- disputed blocking finding: [blocker] the guard is on the wrong side",
+        expect(why).toContain(
+          "disputed blocking finding: [blocker] the guard is on the wrong side",
         );
+        expect(yield* wasAsked("r-impl-weakened", "mr")).toBe(false);
         const onFile = yield* findingsIn(runDir(dir, "r-impl-weakened"));
         expect(
           Arr.map(
@@ -8832,7 +8834,7 @@ scenario(
 );
 
 scenario(
-  "a dispute left open by the last fix reaches the merge request, and so does that fix being unreviewed",
+  "a dispute left open by the last fix parks the Run and retains its reason and review",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -8884,20 +8886,18 @@ scenario(
           },
           OPENED,
         ]);
-        const result = yield* ran({
-          entry: shipped("implement"),
-          runId: "r-final-dispute",
-          input: { plan, ...FINISH },
-        });
+        const why = yield* driven(
+          { entry: shipped("implement"), runId: "r-final-dispute", input: { plan, ...FINISH } },
+          (run) => stepPark(run, "r-final-dispute", "disputed blocking finding"),
+        );
         yield* bin.restore();
 
-        expect(said(result)).toBe(OPENED.mr_url);
-        const opening = yield* asked("r-final-dispute", "mr");
-        expect(opening).toContain("implementer-reported, not re-reviewed");
-        expect(opening).toContain(
-          "- disputed blocking finding: [blocker] B (src/a.ts): B is by design",
+        expect(why).toContain("disputed blocking finding: [blocker] B (src/a.ts): B is by design");
+        expect(why).not.toContain("a reason the reviewer answers");
+        expect(yield* wasAsked("r-final-dispute", "mr")).toBe(false);
+        expect(yield* readText(`${runDir(dir, "r-final-dispute")}/review.md`)).toContain(
+          "- `src/a.ts` — A\n  it breaks",
         );
-        expect(opening).not.toContain("a reason the reviewer answers");
         expect(
           Arr.map(yield* findingsIn(runDir(dir, "r-final-dispute")), (one) => one.title),
         ).toContain("B");
@@ -8958,14 +8958,13 @@ scenario(
           },
           OPENED,
         ]);
-        const result = yield* ran({
-          entry: shipped("implement"),
-          runId: "r-final-stands",
-          input: { plan, ...FINISH },
-        });
+        yield* driven(
+          { entry: shipped("implement"), runId: "r-final-stands", input: { plan, ...FINISH } },
+          (run) => stepPark(run, "r-final-stands", "disputed blocking finding: [blocker] X"),
+        );
         yield* bin.restore();
 
-        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* wasAsked("r-final-stands", "mr")).toBe(false);
         expect(
           Arr.map(yield* findingsIn(runDir(dir, "r-final-stands")), (one) => one.title),
         ).toEqual(["a nit", "X"]);
@@ -9026,7 +9025,7 @@ scenario(
 );
 
 scenario(
-  "a dispute from an early round still reaches the merge request when the last fix holds",
+  "a dispute from an early round still parks the Run when the last fix holds",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -9076,17 +9075,14 @@ scenario(
           fixes("four"),
           OPENED,
         ]);
-        const result = yield* ran({
-          entry: shipped("implement"),
-          runId: "r-early-dispute",
-          input: { plan, ...FINISH },
-        });
+        const why = yield* driven(
+          { entry: shipped("implement"), runId: "r-early-dispute", input: { plan, ...FINISH } },
+          (run) => stepPark(run, "r-early-dispute", "disputed blocking finding"),
+        );
         yield* bin.restore();
 
-        expect(said(result)).toBe(OPENED.mr_url);
-        expect(yield* asked("r-early-dispute", "mr")).toContain(
-          "- disputed blocking finding: [blocker] X (src/a.ts): X is by design",
-        );
+        expect(why).toContain("disputed blocking finding: [blocker] X (src/a.ts): X is by design");
+        expect(yield* wasAsked("r-early-dispute", "mr")).toBe(false);
       }),
     ),
   120_000,
@@ -18928,16 +18924,26 @@ for (const [what, unusable] of [
   );
 
 scenario(
-  "a tune-up harness commit touching a path outside the harness fails the Run, naming it",
+  "a tune-up harness commit touching a path outside the harness parks after bounded repairs, naming it",
   () =>
     runEffect(
       Effect.gen(function* () {
         const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH, README: "faster\n" });
-        yield* rig.queueOutputs([TUNE_DISCOVERED, tunePlan(commit, [STEADY_PRIMARY])]);
-        const result = yield* tunedUp("r-tune-stray");
-        expect(result._tag).toBe("Failure");
-        expect(reasonOf(result)).toContain("README");
-        expect(reasonOf(result)).not.toContain("bench/bench.sh");
+        const runId = "r-tune-stray";
+        const plan = tunePlan(commit, [STEADY_PRIMARY]);
+        yield* rig.queueOutputs([
+          TUNE_DISCOVERED,
+          plan,
+          repaired(plan, "still includes the stray path"),
+          repaired(plan, "the stray path is still there"),
+        ]);
+        const why = yield* driven({ entry: shipped("tune-up"), runId, input: {} }, (run) =>
+          stepPark(run, runId, "README"),
+        );
+        expect(why).not.toContain("bench/bench.sh");
+        expect(yield* wasAsked(runId, "repair-2")).toBe(true);
+        expect(yield* wasAsked(runId, "repair-3")).toBe(false);
+        expect(yield* calibrations(runId)).toEqual([]);
       }),
     ),
   120_000,
@@ -18960,7 +18966,7 @@ scenario(
         yield* rig.queueOutputs(stopped);
         yield* driven({ entry: shipped("tune-up"), runId, input: {} }, (run) =>
           Effect.gen(function* () {
-            yield* tunePark(run, runId, "the plan is not one: ");
+            yield* stepPark(run, runId, "the plan is not one: ");
             expect(yield* calibrations(runId)).toEqual([]);
             expect(yield* wasAsked(runId, "repair-3")).toBe(false);
             yield* rig.queueOutputs([
@@ -18982,7 +18988,7 @@ scenario(
   120_000,
 );
 
-const tunePark = (run: Driving, runId: string, reason: string) =>
+const stepPark = (run: Driving, runId: string, reason: string) =>
   Effect.gen(function* () {
     const [status, why] = yield* until(
       () => Effect.zip(run.status, parkedWhy(runId)),
@@ -19124,7 +19130,7 @@ for (const fixed of [true, false])
           yield* driven({ entry: shipped("tune-up"), runId, input: { samples: 4 } }, (run) =>
             Effect.gen(function* () {
               const why = `harness broken: the base tree at ${yield* revParse(`${commit}~1`)} could not be built`;
-              expect(yield* tunePark(run, runId, why)).toContain("exited 5");
+              expect(yield* stepPark(run, runId, why)).toContain("exited 5");
               const before = yield* calibrations(runId);
               expect(before).toHaveLength(3);
               const branch = yield* exec(["git", "branch", "--show-current"], {
@@ -19151,7 +19157,7 @@ for (const fixed of [true, false])
                   (all) => all.length >= 4,
                 );
                 const measurements = yield* calibrations(runId);
-                yield* tunePark(run, runId, `calibration ${measurements[3]!.id}`);
+                yield* stepPark(run, runId, `calibration ${measurements[3]!.id}`);
                 expect(yield* wasAsked(runId, "repair-4")).toBe(false);
               }
               const after = yield* calibrations(runId);
@@ -19173,7 +19179,7 @@ for (const fixed of [true, false])
                   (all) => all.length >= 5,
                 );
                 const measurements = yield* calibrations(runId);
-                expect(yield* tunePark(run, runId, `calibration ${measurements[4]!.id}`)).toContain(
+                expect(yield* stepPark(run, runId, `calibration ${measurements[4]!.id}`)).toContain(
                   "exited 5",
                 );
                 expect(yield* wasAsked(runId, "repair-4")).toBe(true);
@@ -19780,7 +19786,7 @@ for (const pass of ["cycle 1", "final"])
             (run) =>
               Effect.gen(function* () {
                 const result = yield* answeringProgress(run).pipe(Effect.forkScoped);
-                yield* tunePark(run, runId, "the Machine Measurement lock was refused");
+                yield* stepPark(run, runId, "the Machine Measurement lock was refused");
                 const before = yield* readMeasurements(evidenceDir(dir, runId));
                 expect(Arr.some(before, (one) => one.pass === pass)).toBe(false);
                 expect(Arr.filter(calls, (one) => one === pass)).toHaveLength(1);
