@@ -756,3 +756,63 @@ fn a_file_the_run_has_not_changed_again_keeps_its_patch_when_the_diff_is_read_ag
         "only the file changed again is read again"
     );
 }
+
+#[test]
+fn a_cards_flow_strip_opens_its_record_on_flow_with_the_active_step_chosen_never_its_terminal() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    // Build box's b2, as its latest upsert has it, with a Flow strip on its card.
+    let mut upsert: Value = FLOCK
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .rfind(|line| line["message"]["task"]["id"] == "b2")
+        .unwrap();
+    upsert["message"]["seq"] = json!(3);
+    upsert["message"]["task"]["flow"] = json!({"release": 0, "current": null, "glyphs": [
+        {"title": "Plan", "state": "done"}, {"title": "Ask", "state": "needs-you"},
+        {"title": "Build", "state": "done"}, {"title": "Ship", "state": "expected"}]});
+    runtime.update(|app, _| app.apply(serde_json::from_value(upsert).unwrap()));
+    runtime.frame(50.0);
+    let shown = keys(&runtime);
+    let strip = shown
+        .iter()
+        .find(|k| k.ends_with("b2-flow"))
+        .unwrap_or_else(|| panic!("no Flow strip for b2 in {shown:?}"))
+        .clone();
+    tap(&mut runtime, &strip, 100.0);
+    assert_eq!(
+        harness.fake.asked_of("runDetail"),
+        [json!({"installation": "inst-build", "runId": "r1"})]
+    );
+    assert!(
+        runtime.state.terminal.is_none(),
+        "the strip opens no terminal"
+    );
+    // No Step is current; the one needing the human is the active one, over the latest done.
+    let step = |id: &str, state: &str| {
+        let lane = flow_with(json!({"id": id, "title": id, "state": state}), json!([]));
+        lane["lanes"][0]["nodes"][0].clone()
+    };
+    let flow = json!({"lanes": [{"run": "r1", "workflow": "implement", "title": "Build", "machine": "Build box",
+        "execution": "running", "declared": true, "actions": [], "nodes": [
+            step("plan", "done"), step("ask", "needs-you"), step("build", "done"), step("ship", "expected")]}],
+        "current": null});
+    harness
+        .fake
+        .push("runDetail", Ok(detail(json!({"flow": flow}))));
+    settle(&mut runtime, &harness, 400.0);
+    settle(&mut runtime, &harness, 500.0);
+    assert_eq!(runtime.state.record_tab(), "flow");
+    assert!(runtime.state.terminal.is_none(), "still no terminal");
+    let selected = runtime.state.flow.as_ref().and_then(|m| m.selected.clone());
+    assert_eq!(
+        selected.map(|s| (s.run, s.node)),
+        Some(("r1".to_string(), "ask".to_string()))
+    );
+    assert!(
+        runtime.state.flow.as_ref().unwrap().reveal.is_none(),
+        "the Step was laid out and scrolled to"
+    );
+    let shown = keys(&runtime);
+    assert!(shown.iter().any(|k| k == "inspector"), "{shown:?}");
+}

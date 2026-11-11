@@ -136,6 +136,8 @@ pub struct Record {
     pub entry: Option<String>,
     /// The record's drawn width, which decides whether the drafts sit beside a tab or under it.
     pub width: f32,
+    /// Whether the Run's active Step is chosen on Flow once its Flow is read.
+    pub at_active: bool,
 }
 
 impl Record {
@@ -162,6 +164,7 @@ impl Record {
             opening: Vec::new(),
             entry: None,
             width: 0.0,
+            at_active: false,
         }
     }
 
@@ -188,6 +191,8 @@ pub struct Records {
     pub sending: bool,
     /// The agent the open terminal was asked for; none for the Run's newest.
     pub terminal_agent: Option<String>,
+    /// Whether the record a card opens now opens on Flow rather than on its terminal.
+    to_flow: bool,
     images: Option<rune::ImageCache>,
 }
 
@@ -222,9 +227,39 @@ fn facts_of(record: &Record, live: bool, flow: bool, mr: Option<String>) -> TabF
 }
 
 impl App {
-    /// Goes to a Run's pane: its record, on Terminal while its Machine is reached.
+    /// Goes to a Run's pane: its record, on Terminal while its Machine is reached; on Flow for
+    /// a card's Flow strip, which never attaches to the agent.
     pub fn go_to_pane(&mut self, installation: String, run: String, machine: String) {
-        self.open_record(installation, run, machine, Some("terminal"));
+        let tab = if self.record.to_flow { "flow" } else { "terminal" };
+        self.open_record(installation, run, machine, Some(tab));
+    }
+
+    /// Opens a card's record on its Flow, the Run's active Step chosen, its details shown and
+    /// scrolled to; the card is chosen and seen as its name opens it.
+    pub fn open_card_at_flow(&mut self, key: &str) {
+        self.record.to_flow = true;
+        self.open_card(key);
+        self.record.to_flow = false;
+        self.show_active_step();
+    }
+
+    /// Shows Flow with the Run's active Step chosen, now or once the Flow is read.
+    fn show_active_step(&mut self) {
+        if self.record.open.is_none() {
+            return;
+        }
+        if self.record_tab() == "diff" {
+            self.diff_left();
+        }
+        self.show_tab("flow");
+        match &mut self.flow {
+            Some(map) => map.open_active(),
+            None => {
+                if let Some(record) = &mut self.record.open {
+                    record.at_active = true;
+                }
+            }
+        }
     }
 
     /// Opens a Run's record on `tab`, or on its first tab.
@@ -302,9 +337,16 @@ impl App {
         if !self.current(opened) {
             return;
         }
-        match &mut self.flow {
-            Some(map) => map.set(read),
-            None => self.flow = Some(flow::FlowMap::new(read)),
+        let map = match &mut self.flow {
+            Some(map) => {
+                map.set(read);
+                map
+            }
+            None => self.flow.insert(flow::FlowMap::new(read)),
+        };
+        if let Some(record) = self.record.open.as_mut().filter(|r| r.at_active) {
+            record.at_active = false;
+            map.open_active();
         }
     }
 

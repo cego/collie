@@ -141,6 +141,33 @@ pub fn moved(flow: &DetailFlow, focus: &Spot, key: &Key) -> Option<Spot> {
     })
 }
 
+/// The Run's active Step: the one under way, or else the first needing the human, or else the
+/// latest reached.
+pub fn active(flow: &DetailFlow) -> Option<Spot> {
+    let all: Vec<Spot> = rows(flow)
+        .iter()
+        .flat_map(|row| {
+            row.nodes.iter().map(move |node| Spot {
+                run: row.run.into(),
+                node: node.id.clone(),
+            })
+        })
+        .collect();
+    let state = |spot: &Spot| node_at(flow, spot).map(|n| n.state.clone());
+    let first = |wanted: GlyphState| all.iter().find(|s| state(s) == Some(wanted.clone())).cloned();
+    spot_of(&flow.current)
+        .filter(|spot| node_at(flow, spot).is_some())
+        .or_else(|| first(GlyphState::Running))
+        .or_else(|| first(GlyphState::NeedsYou))
+        .or_else(|| {
+            all.iter()
+                .rev()
+                .find(|s| state(s).is_some_and(|st| st != GlyphState::Expected))
+                .cloned()
+        })
+        .or_else(|| all.first().cloned())
+}
+
 pub struct FlowMap {
     pub flow: DetailFlow,
     /// The Step the map's one tab stop is on.
@@ -150,6 +177,8 @@ pub struct FlowMap {
     pub announcement: String,
     /// How wide the map was laid out, which decides how many Steps go on a line.
     pub width: f32,
+    /// The Step to scroll into view once it is laid out.
+    pub reveal: Option<Spot>,
 }
 
 impl FlowMap {
@@ -166,6 +195,16 @@ impl FlowMap {
             selected: None,
             announcement: String::new(),
             width: 0.0,
+            reveal: None,
+        }
+    }
+
+    /// Chooses the Run's active Step, its details shown and the Step scrolled into view.
+    pub fn open_active(&mut self) {
+        if let Some(spot) = active(&self.flow) {
+            self.focus = Some(spot.clone());
+            self.selected = Some(spot.clone());
+            self.reveal = Some(spot);
         }
     }
 
@@ -184,6 +223,10 @@ impl FlowMap {
         self.focus = kept.or(fresh.focus);
         self.selected = self
             .selected
+            .take()
+            .filter(|spot| node_at(&fresh.flow, spot).is_some());
+        self.reveal = self
+            .reveal
             .take()
             .filter(|spot| node_at(&fresh.flow, spot).is_some());
         self.flow = fresh.flow;
@@ -322,7 +365,8 @@ fn step<S: 'static>(
                 .a11y_hidden()
         }));
     let linked = node.link.clone().flatten().is_some();
-    row()
+    let revealed = (map.reveal.as_ref() == Some(&spot)).then(|| key.clone());
+    let step = row()
         .key(key)
         .role("button")
         .label(node_name(node))
@@ -351,7 +395,16 @@ fn step<S: 'static>(
             map.selected = Some(spot.clone());
         })
         .child(glyph::glyph(&node.state, 16.0, k))
-        .child(words)
+        .child(words);
+    match revealed {
+        // Once laid out, it is scrolled to, and only the once.
+        Some(key) => step.on_layout_tx(move |s: &mut S, _, tx| {
+            if lens(s).reveal.take().is_some() {
+                tx.scroll_into_view(key.clone());
+            }
+        }),
+        None => step,
+    }
 }
 
 /// One lane: its title, its Machine and how it runs, then its Steps, line after line.
