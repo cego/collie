@@ -547,7 +547,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
               yield* fs.writeFileString(unprovedPark, "").pipe(Effect.orDie);
               const why = `Outcome unproved after ${fixes} gate fixes: ${Arr.join(missing.gaps, "; ")}. Repair the checks, then resume ${runId}.`;
               yield* stepFailed(why);
-              yield* host.parked(runId, why);
+              yield* host.parked(runId, why, "gate-fix-unproved");
               return yield* Workflow.suspend(yield* WorkflowInstance);
             }
             const reviewedAgain = missing.reviewable.length > 0;
@@ -660,7 +660,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
             const reason = `Cannot read ${ready.branch}'s head on origin: ${read.reason}. Repair it, then resume ${runId}.`;
             yield* host.record(runId, reason);
             yield* stepFailed(reason);
-            yield* host.parked(runId, reason);
+            yield* host.parked(runId, reason, "forge-unavailable");
             return yield* Workflow.suspend(yield* WorkflowInstance);
           }),
         });
@@ -741,7 +741,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
               const reason = `Cannot note what delivery left unsettled on ${opened.mr_url}: ${posted.message}. Repair it, then resume ${runId}.`;
               yield* host.record(runId, reason);
               yield* stepFailed(reason);
-              yield* host.parked(runId, reason);
+              yield* host.parked(runId, reason, "forge-unavailable");
               return yield* Workflow.suspend(yield* WorkflowInstance);
             }),
           });
@@ -757,7 +757,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
               const reason = `Cannot start a pipeline on ${at}: ${answer.reason}. Repair it, then resume ${runId}.`;
               yield* host.record(runId, reason);
               yield* stepFailed(reason);
-              yield* host.parked(runId, reason);
+              yield* host.parked(runId, reason, "forge-unavailable");
               return yield* Workflow.suspend(yield* WorkflowInstance);
             }
             yield* host.record(
@@ -834,7 +834,11 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           if (why !== null) {
             const reason = `${why}. Repair it, then resume ${runId}.`;
             yield* host.record(runId, reason);
-            yield* host.parked(runId, reason);
+            yield* host.parked(
+              runId,
+              reason,
+              unproved.length > 0 ? "ci-job-absent" : "gate-fix-unproved",
+            );
             return yield* Workflow.suspend(yield* WorkflowInstance);
           }
           yield* host.parked(runId, null);

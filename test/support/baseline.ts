@@ -107,6 +107,7 @@ import {
   AWAITING,
   HOLD,
   PARKED,
+  PARK_CAUSE,
   RunStatus,
   Registry,
   answerDecision,
@@ -136,6 +137,8 @@ import * as Reactivity from "effect/reactivity/Reactivity";
 import { registerAgent, scopeFor } from "../../src/registry";
 import { deliveriesOf, SENT_STATES } from "../../src/steering";
 import { fixtures, until } from "./host";
+import { BUILD } from "../../src/host";
+import { readMetrics } from "../../src/metrics";
 
 const ROOT = new URL("../../", import.meta.url).pathname;
 
@@ -6450,6 +6453,10 @@ scenario(
         expect(why).toContain(
           `nuxi is left to CI and unproved: job nuxi-job on ${pipe(head, Str.slice(0, 12))} is not in its pipeline`,
         );
+        expect(yield* parkedCause(runId)).toBe("ci-job-absent");
+        expect(yield* halts(runId)).toEqual([
+          expect.objectContaining({ cause: "ci-job-absent", build: BUILD }),
+        ]);
         expect(yield* ciRecords(runId)).toEqual([]);
       }),
     ),
@@ -6747,6 +6754,7 @@ scenario(
         });
         yield* bin.restore();
         expect(why).toContain("Outcome unproved after 4 CI fixes");
+        expect(yield* parkedCause(runId)).toBe("gate-fix-unproved");
         expect(why).toContain(
           `nuxi is left to CI and unproved: job nuxi-job on ${pipe(last, Str.slice(0, 12))} is failed`,
         );
@@ -7641,6 +7649,7 @@ const heldUnproved = (runId: string) =>
     );
     expect(result).toBe("suspended");
     expect(yield* parkedWhy(runId)).toContain("Outcome unproved after 4 gate fixes: lint failed");
+    expect(yield* parkedCause(runId)).toBe("gate-fix-unproved");
     return { bin, options };
   });
 
@@ -9275,6 +9284,17 @@ const parkedWhy = (runId: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(controlPath(dir, PARKED, runId))),
     Effect.orElseSucceed(() => ""),
+  );
+
+const parkedCause = (runId: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.readFileString(controlPath(dir, PARK_CAUSE, runId))),
+    Effect.orElseSucceed(() => ""),
+  );
+
+const halts = (runId: string) =>
+  Effect.map(readMetrics(evidenceDir(dir, runId)), (lines) =>
+    Arr.filter(lines, (line) => line.kind === "halt"),
   );
 
 /** What a Run awaits that ends by itself, or "" while it awaits nothing. */

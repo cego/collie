@@ -44,6 +44,7 @@ export type { Report } from "./report";
 export type { Produces, StepKind, StepMeta } from "./steps";
 import type { VerifySpec } from "./verify-spec";
 import type { CiJob } from "./ci-job";
+import type { ParkCause } from "./park-cause";
 import type { PipelineStart } from "./forge/forge";
 import type { ChildProcessSpawner } from "effect/process";
 import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
@@ -104,6 +105,7 @@ export { SOURCES, SOURCE_NAMES, isSource, type Source } from "./offers";
  * arguments that point a command at its project from anywhere.
  */
 export { targetKind } from "./mr";
+export { ParkCause } from "./park-cause";
 export { repoArgs } from "./forge/gitlab";
 export { mrForgeFacts } from "./forge/forge";
 /** How much of a Subscription is used, as the host reads it (ADR-0049). */
@@ -815,9 +817,9 @@ export interface HostApi {
   readonly step: (runId: string, note: StepNote) => Effect.Effect<void>;
   /**
    * Why this Run has parked its own work and what picks it up again, shown beside its
-   * status; null says it no longer has.
+   * status; null says it no longer has. A park naming no cause is recorded as `unknown`.
    */
-  readonly parked: (runId: string, why: string | null) => Effect.Effect<void>;
+  readonly parked: (runId: string, why: string | null, cause?: ParkCause) => Effect.Effect<void>;
   /**
    * Records the question this run is waiting on, so the host can say what may answer it.
    * `asker` is the operation whose agent asked it, which the workflow is not woken for.

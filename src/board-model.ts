@@ -12,6 +12,7 @@ import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import { IntentSeedSchema } from "./intent-model";
 import { ScheduleChange, ScheduleChanged, ScheduleListing } from "./schedule-model";
+import { Park } from "./park-cause";
 import { VerifyEvent, Pass, VerificationSchema } from "./verify-model";
 import { MeasureEvent } from "./measurement-model";
 
@@ -454,6 +455,8 @@ export const TaskView = Schema.Struct({
   drift: Schema.NullOr(Schema.String),
   /** `⏸ Held until 14:00.`, or null while nothing is holding it. */
   held: Schema.NullOr(Schema.String),
+  /** Why its leading Run parked, as a Park cause and its kind; absent from an older host. */
+  park: Schema.optionalKey(Schema.NullOr(Park)),
   /** Who asked for the hold and why, which the drawer says and the card does not. */
   heldBy: Schema.NullOr(Schema.Struct({ by: Schema.String, reason: Schema.String })),
   decision: Schema.NullOr(Decision),

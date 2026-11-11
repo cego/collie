@@ -569,7 +569,7 @@ export default defineWorkflow({
           const why = `${reason}. Repair it, then resume ${runId}.`;
           yield* host.record(runId, why);
           yield* stepFailed(why);
-          yield* host.parked(runId, why);
+          yield* host.parked(runId, why, "release-failed");
           return yield* Workflow.suspend(yield* WorkflowInstance);
         });
 

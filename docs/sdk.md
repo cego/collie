@@ -1563,9 +1563,13 @@ checkout's `HEAD` after it, so the agent's push sent nothing.
 ```ts
 for (const spec of (yield * host.approved(runId)).filter((one) => one.ci !== undefined)) {
   const read = yield * host.ciJob({ runId, cwd, name: spec.name, wait: true, settle: true });
-  if ("unproved" in read) yield * host.parked(runId, read.unproved);
+  if ("unproved" in read) yield * host.parked(runId, read.unproved, "ci-job-absent");
 }
 ```
+
+`host.parked`'s third argument is the park's **Park cause**, one of `ParkCause`'s closed
+list ([ADR-draft-a-run-recovers-where-it-parks](adr/draft-a-run-recovers-where-it-parks.md)).
+A park that names none is recorded as `unknown`; it is never refused.
 
 A speed-up is proved by a **Measurement**, which compares two trees rather than passing one:
 `host.measure({ runId, base, cwd, plan, pass, reason })`. The host makes a base tree at `base` with

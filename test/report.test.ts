@@ -2,9 +2,10 @@
 
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
+import type * as Types from "effect/Types";
 import { HOLD, STOP, type RunView } from "../src/engine";
 import type { Metrics } from "../src/board-model";
-import { reportOf } from "../src/report";
+import { reportLines, reportOf } from "../src/report";
 import type { OutcomeRecords } from "../src/outcomes";
 import type { Metric } from "../src/metrics";
 
@@ -357,4 +358,77 @@ test("a check named only by its executable is counted, wherever the executable w
     ]),
   );
   expect(report.measures.verifications.executableOnly).toEqual({ count: 1, runs: ["a"] });
+});
+
+const halt = (at: string, cause?: Metric["cause"]): Metric => {
+  const line: Types.Mutable<Metric> = { at, kind: "halt", subject: "", value: 0, note: "parked" };
+  if (cause !== undefined) line.cause = cause;
+  return line;
+};
+
+test("parks are counted per cause, with their time to the next step and the human resumes they took", () => {
+  const report = reportOf(
+    Arr.map(["a", "b", "c"], (runId) => view({ runId })),
+    new Map(),
+    null,
+    new Map([
+      [
+        "a",
+        {
+          records: records({
+            moved: ["2026-09-30T09:00:00.000Z", "2026-09-30T10:10:00.000Z"],
+            resumes: [{ at: "2026-09-30T10:05:00.000Z", origin: "desktop" }],
+          }),
+          metrics: [halt("2026-09-30T10:00:00.000Z", "ci-job-absent")],
+        },
+      ],
+      [
+        "b",
+        {
+          records: records({
+            moved: ["2026-09-30T11:30:00.000Z", "2026-09-30T13:00:00.000Z"],
+            resumes: [
+              { at: "2026-09-30T11:20:00.000Z", origin: "chat" },
+              { at: "2026-09-30T12:40:00.000Z", origin: "cli-tty" },
+            ],
+          }),
+          metrics: [
+            halt("2026-09-30T11:00:00.000Z", "ci-job-absent"),
+            halt("2026-09-30T12:00:00.000Z", "output-absent"),
+          ],
+        },
+      ],
+      [
+        "c",
+        {
+          records: records({ moved: [] }),
+          metrics: [
+            halt("2026-09-30T10:00:00.000Z", "ci-job-absent"),
+            halt("2026-09-30T10:00:00.000Z"),
+          ],
+        },
+      ],
+    ]),
+  );
+  // c's ci-job-absent park has not moved on, so it is counted and never timed.
+  expect(report.measures.parks.byCause).toEqual([
+    {
+      cause: "ci-job-absent",
+      count: 3,
+      runs: ["a", "b", "c"],
+      toNextStep: { median: 20 * 60_000, max: 30 * 60_000 },
+      humanResumes: 1,
+    },
+    {
+      cause: "output-absent",
+      count: 1,
+      runs: ["b"],
+      toNextStep: { median: 60 * 60_000, max: 60 * 60_000 },
+      humanResumes: 1,
+    },
+    { cause: "unknown", count: 1, runs: ["c"], toNextStep: null, humanResumes: 0 },
+  ]);
+  expect(reportLines(report, null)).toContain(
+    "  ci-job-absent  3 parks; to next step median 20m, max 30m; 1 human resume: a, b, c",
+  );
 });

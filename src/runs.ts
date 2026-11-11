@@ -16,6 +16,7 @@ import {
   type Solution,
 } from "./board-model";
 import type { PluginEnv } from "./env";
+import type { Park } from "./park-cause";
 import { resultText, runView, runViews } from "./lifecycle";
 import { HOLD, STOP, evidenceDir, runDir, type RunView } from "./engine";
 import { isSetAside, isUnanswered } from "./store";
@@ -81,6 +82,8 @@ export interface RunFacts {
   readonly change?: string | null;
   /** Why it parked its own work, in its own words, or null while it has not. */
   readonly parked: string | null;
+  /** That park's cause, where its host named one. */
+  readonly park?: Park | null;
   /** What it waits for that ends without anyone repairing anything, or null. */
   readonly awaiting: Awaiting | null;
   /** The Subscription its work waits on to reset, where it waits on one. */
@@ -176,6 +179,7 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
   repo: view.options.repo ?? null,
   change: view.options.change ?? null,
   parked: view.parked,
+  park: view.park ?? null,
   awaiting: view.awaiting,
   usage: view.usage ?? null,
   undriven: view.diagnostic !== null,

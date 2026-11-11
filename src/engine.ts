@@ -176,6 +176,7 @@ import {
 import { redact } from "./redact";
 import { reportOf, type Recorded } from "./report";
 import { outcomeRecordsOf, type OutcomeRecords } from "./outcomes";
+import { Park, ParkCause, parkOf } from "./park-cause";
 import type { Metrics, Solution } from "./board-model";
 import {
   forgeOfRef,
@@ -424,6 +425,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly state: "ok"; readonly account: string; readonly detail: string }
     | { readonly state: "absent" | "broken"; readonly detail: string; readonly fix: string; readonly reusable?: { readonly from: string } };
   export const ConnectionReading: Schema.Codec<ConnectionReading, unknown, never, never>;
+  export type ParkCause = ${Arr.join(
+    Arr.map(ParkCause.literals, (id) => JSON.stringify(id)),
+    " | ",
+  )};
+  export const ParkCause: Schema.Codec<ParkCause, unknown, never, never>;
   import type { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
   import type { PlatformError } from "effect/PlatformError";
   import type { ChildProcessSpawner } from "effect/process";
@@ -902,8 +908,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly usageWait: (runId: string, wait: { readonly account: string; readonly resetsAt: string | null } | null) => Effect.Effect<void>;
     /** Records where the Run's work is among its Steps; \`step\` and \`forecast\` call it. */
     readonly step: (runId: string, note: { readonly kind: string } & Record<string, unknown>) => Effect.Effect<void>;
-    /** Why this Run parked its own work, shown beside its status; null clears it. */
-    readonly parked: (runId: string, why: string | null) => Effect.Effect<void>;
+    /** Why this Run parked its own work, shown beside its status; null clears it. No cause is \`unknown\`. */
+    readonly parked: (runId: string, why: string | null, cause?: ParkCause) => Effect.Effect<void>;
     readonly asking: (runId: string, question: DecisionSpec, asker?: string) => Effect.Effect<void>;
     /** Every question this run has been asked, oldest first, with its answer once it has one. */
     readonly asked: (
@@ -3155,12 +3161,21 @@ const HAND_OVER_TIMEOUT = "30 seconds";
 export { HOLD, STOP, controlPath };
 /** Why work parked; the host clears it when taking that work up. */
 export const PARKED = "parked";
+/** The Park cause of the park in `PARKED`; left when that clears, and read only beside it. */
+export const PARK_CAUSE = "park-cause";
 /** A wait that ends by itself; the host clears it when the wait ends. */
 export const AWAITING = "awaiting";
 /** Work waiting for a Subscription to reset; cleared once it goes on. */
 export const USAGE = "usage";
 /** A directory per parent, holding a file per child whose result it is blocked on. */
 const AWAITED = "awaited";
+
+const decodeParkCause = Schema.decodeUnknownOption(ParkCause);
+const readParkCause = (fs: FileSystem.FileSystem, path: string) =>
+  fs.readFileString(path).pipe(
+    Effect.map((text) => Option.getOrElse(decodeParkCause(text), (): ParkCause => "unknown")),
+    Effect.orElseSucceed((): ParkCause => "unknown"),
+  );
 
 export const UsageWaitSchema = Schema.Struct({
   account: Schema.String,
@@ -4411,18 +4426,23 @@ export const hostLayer = (options: {
             Effect.provideService(FileSystem.FileSystem, fs),
             Effect.orDie,
           ),
-        parked: (runId, why) => {
+        parked: (runId, why, cause = "unknown") => {
           const path = controlPath(dir, PARKED, runId);
+          const causePath = controlPath(dir, PARK_CAUSE, runId);
+          // Renamed into place, so a reader never sees it empty.
+          const put = (to: string, text: string) =>
+            fs
+              .writeFileString(`${to}.new`, text)
+              .pipe(Effect.andThen(fs.rename(`${to}.new`, to)), Effect.orDie);
           return (
             why === null
               ? fs.remove(path, { force: true }).pipe(Effect.orDie)
               : Effect.gen(function* () {
                   const before = yield* fs.readFileString(path).pipe(Effect.option);
-                  // Renamed into place, so a reader never sees it empty.
-                  yield* fs
-                    .writeFileString(`${path}.new`, why)
-                    .pipe(Effect.andThen(fs.rename(`${path}.new`, path)), Effect.orDie);
-                  if (Option.getOrNull(before) === why) return;
+                  const causeBefore = yield* readParkCause(fs, causePath);
+                  yield* put(causePath, cause);
+                  yield* put(path, why);
+                  if (Option.getOrNull(before) === why && causeBefore === cause) return;
                   yield* under(
                     Effect.gen(function* () {
                       yield* appendMetric(evidenceDir(dir, runId), {
@@ -4431,10 +4451,12 @@ export const hostLayer = (options: {
                         subject: "",
                         value: 0,
                         note: why,
+                        cause,
+                        build: manifest.version,
                       });
                     }),
                   );
-                  yield* notify(runId, "needs-you", why, { key: `parked:${why}` });
+                  yield* notify(runId, "needs-you", why, { key: `parked:${cause}` });
                 })
           ).pipe(Effect.andThen(store.announce));
         },
@@ -6098,6 +6120,8 @@ export const RunView = Schema.Struct({
   diagnostic: Schema.NullOr(Schema.String),
   /** Why the Run parked its own work and what picks it up again, or null. */
   parked: Schema.NullOr(Schema.String),
+  /** That park's cause and what it lets the host do; absent from an older host. */
+  park: Schema.optionalKey(Schema.NullOr(Park)),
   /** What it waits for that needs nobody to repair anything, or null. */
   awaiting: Schema.NullOr(AwaitingSchema),
   /** The merge request the Run opened, as its workflow recorded it, or null. */
@@ -7726,6 +7750,9 @@ const makeRegistry: (
     const { cwd, branch, workspace, worktree } = placedOf(row, admitted.options);
     const outcome = admitted.options.outcome ?? UNSPECIFIED;
     const generation = live.get(row.generation);
+    const parked = yield* fs
+      .readFileString(controlPath(dir, PARKED, row.run))
+      .pipe(Effect.orElseSucceed(() => null));
     const about = {
       ...admitted,
       strategies: generation?.hints ?? {},
@@ -7737,9 +7764,11 @@ const makeRegistry: (
       created: row.admitted,
       waiting: yield* steered(row.run),
       controls: yield* controlsOf(row.run),
-      parked: yield* fs
-        .readFileString(controlPath(dir, PARKED, row.run))
-        .pipe(Effect.orElseSucceed(() => null)),
+      parked,
+      park:
+        parked === null
+          ? null
+          : parkOf(yield* readParkCause(fs, controlPath(dir, PARK_CAUSE, row.run))),
       awaiting: yield* fs.readFileString(controlPath(dir, AWAITING, row.run)).pipe(
         Effect.flatMap(Schema.decodeUnknownEffect(AwaitingJson)),
         Effect.orElseSucceed(() => null),

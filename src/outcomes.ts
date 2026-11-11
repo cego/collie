@@ -5,6 +5,7 @@
 import * as Num from "effect/Number";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
+import * as Option from "effect/Option";
 import { pipe } from "effect/Function";
 import { Effect, FileSystem, Schema } from "effect";
 import { evidenceDir, runDir } from "./engine";
@@ -14,6 +15,9 @@ import { launchDir, readLaunches, stemOf } from "./launches";
 import { deliveriesOf } from "./steering";
 import { readVerifications } from "./verify";
 import type { Metric } from "./metrics";
+import type { ParkCause } from "./park-cause";
+import { readStepLines } from "./steps";
+import { epochMs } from "./time";
 
 const STEERING = ["steer", "followup", "deliver", "correction"] as const;
 type SteeringKind = (typeof STEERING)[number];
@@ -34,6 +38,12 @@ export const OutcomeRecords = Schema.Struct({
       result: Schema.String,
       by: Schema.String,
     }),
+  ),
+  /** When it entered or left a Step; absent from an older host. */
+  moved: Schema.optionalKey(Schema.Array(Schema.String)),
+  /** Each resume asked of it, and by which front door; absent from an older host. */
+  resumes: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ at: Schema.String, origin: Schema.String })),
   ),
 });
 export type OutcomeRecords = typeof OutcomeRecords.Type;
@@ -56,9 +66,12 @@ export const outcomeRecordsOf = Effect.fn("Outcomes.records")(function* (
   }
   const dir = runDir(stateDir, runId);
   const steering: Array<{ kind: SteeringKind; origin: string }> = [];
-  for (const line of yield* readAudit(dir).pipe(Effect.orElseSucceed(() => [])))
+  const resumes: Array<{ at: string; origin: string }> = [];
+  for (const line of yield* readAudit(dir).pipe(Effect.orElseSucceed(() => []))) {
     for (const kind of STEERING)
       if (line.operation === kind) steering.push({ kind, origin: line.actor.origin });
+    if (line.operation === "resume") resumes.push({ at: line.at, origin: line.actor.origin });
+  }
   const corrections = new Set<string>();
   for (const delivery of yield* deliveriesOf(runId))
     if (delivery.cause.kind === "correction") corrections.add(delivery.causal_key);
@@ -80,6 +93,10 @@ export const outcomeRecordsOf = Effect.fn("Outcomes.records")(function* (
       result: one.result,
       by: one.by,
     })),
+    moved: Arr.flatMap(yield* readStepLines(dir), (line) =>
+      line.kind === "enter" || line.kind === "leave" ? [line.at] : [],
+    ),
+    resumes,
   } satisfies OutcomeRecords;
 });
 
@@ -136,6 +153,15 @@ export interface Measures {
     readonly executableOnly: Counted;
   };
   readonly parks: {
+    readonly byCause: ReadonlyArray<
+      Counted & {
+        readonly cause: ParkCause;
+        /** From each park to the Run's next Step, in ms; null where none has moved on yet. */
+        readonly toNextStep: { readonly median: number; readonly max: number } | null;
+        /** Resumes a person asked for while the Run was parked for it. */
+        readonly humanResumes: number;
+      }
+    >;
     readonly byReason: ReadonlyArray<Counted & { readonly reason: string }>;
     /** An agent's collect budget ran out before it wrote its Output. */
     readonly collectExpiries: Counted;
@@ -197,17 +223,34 @@ export function measuresOf(
   const repeated: string[] = [];
   const executableOnly: string[] = [];
   const reasons = new Map<string, string[]>();
+  const causes = new Map<ParkCause, { runs: string[]; waits: number[]; humanResumes: number }>();
   const collectExpiries: string[] = [];
   const peakContext: Array<Measures["peakContext"][number]> = [];
 
   for (const { runId, records, metrics } of runs) {
-    for (const line of metrics) {
-      if (line.kind !== "halt") continue;
+    const halts = Arr.filter(metrics, (line) => line.kind === "halt");
+    const moved = Arr.map(records?.moved ?? [], epochMs);
+    const causeOf = (cause: ParkCause) => {
+      const kept = causes.get(cause) ?? { runs: [], waits: [], humanResumes: 0 };
+      causes.set(cause, kept);
+      return kept;
+    };
+    for (const line of halts) {
+      const at = epochMs(line.at);
+      const kept = causeOf(line.cause ?? "unknown");
+      kept.runs.push(runId);
+      const next = Arr.findFirst(moved, (when) => when > at);
+      if (Option.isSome(next)) kept.waits.push(next.value - at);
       if (pipe(line.note, Str.includes(COLLECT_EXPIRY))) collectExpiries.push(runId);
       else {
         const reason = reasonOf(line.note);
         reasons.set(reason, [...(reasons.get(reason) ?? []), runId]);
       }
+    }
+    for (const resume of records?.resumes ?? []) {
+      if (originOf(resume.origin) !== "human") continue;
+      const parkedFor = Arr.findLast(halts, (line) => epochMs(line.at) <= epochMs(resume.at));
+      if (Option.isSome(parkedFor)) causeOf(parkedFor.value.cause ?? "unknown").humanResumes += 1;
     }
     const peak = Arr.reduce<Metric, Metric | null>(
       Arr.filter(metrics, (line) => line.kind === "context"),
@@ -304,6 +347,17 @@ export function measuresOf(
       executableOnly: counted(executableOnly),
     },
     parks: {
+      byCause: Arr.sortWith(
+        Arr.map([...causes], ([cause, { runs, waits, humanResumes }]) => ({
+          cause,
+          ...counted(runs),
+          toNextStep:
+            waits.length === 0 ? null : { median: median(waits)!, max: Math.max(...waits) },
+          humanResumes,
+        })),
+        (value) => value,
+        (a, b) => Num.sign(b.count - a.count || pipe(a.cause, Str.localeCompare(b.cause))),
+      ),
       byReason: Arr.sortWith(
         Arr.map([...reasons], ([reason, of]) => ({ reason, ...counted(of) })),
         (value) => value,

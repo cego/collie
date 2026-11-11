@@ -50,6 +50,7 @@ import { styledMarkdown } from "./markdown";
 import { C, stateGlyph, stepGlyph } from "./sections";
 import { handoffsDir } from "../handoffs";
 import { replyLine } from "../replies";
+import { PARK_CAUSES, parkLine } from "../park-cause";
 
 /** How many of a running check's last lines the Summary shows. */
 const DRAWER_LINES = 8;
@@ -163,6 +164,16 @@ export function Drawer(props: DrawerProps) {
             markFg: C.dim,
           },
         ];
+
+  const parked = (): Line[] => {
+    const park = props.view.park;
+    if (park == null) return [];
+    const entry = PARK_CAUSES[park.cause];
+    return [
+      { text: parkLine(park), mark: "◆", markFg: C.amber },
+      ...("reason" in entry ? [{ text: `Needs you: ${entry.reason}.`, fg: C.muted }] : []),
+    ];
+  };
 
   /** What a yes on this card would name, where the record is open beside it. */
   const proposed = (): Line[] => {
@@ -342,6 +353,9 @@ export function Drawer(props: DrawerProps) {
         <Show when={props.tab === "summary"}>
           <Show when={held().length > 0}>
             <Section title="held" lines={held()} />
+          </Show>
+          <Show when={parked().length > 0}>
+            <Section title="parked" lines={parked()} />
           </Show>
           <Show when={proposed().length > 0}>
             <Section title="proposal" lines={proposed()} />

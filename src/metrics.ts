@@ -18,6 +18,7 @@ import { Effect, FileSystem, Path, Schema } from "effect";
 import { appendJournal, readJournal } from "./journal";
 import type { Metrics } from "./board-model";
 import { epochMs } from "./time";
+import { ParkCause } from "./park-cause";
 
 export const MetricSchema = Schema.Struct({
   at: Schema.String,
@@ -36,6 +37,10 @@ export const MetricSchema = Schema.Struct({
   value: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(0))),
   /** The word that matters: a result, a status, a reason. */
   note: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed(""))),
+  /** A halt's Park cause; absent from a halt recorded before causes were. */
+  cause: Schema.optionalKey(ParkCause),
+  /** The build of the host that recorded a halt. */
+  build: Schema.optionalKey(Schema.String),
 });
 export type Metric = Schema.Schema.Type<typeof MetricSchema>;
 const MetricJson = Schema.fromJsonString(MetricSchema);

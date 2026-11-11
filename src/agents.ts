@@ -648,7 +648,11 @@ const untilPushable = (operation: string, cwd: string) =>
       if (read._tag === "Failure") {
         const why = `not pushed: whether it merges itself is unknown: ${read.failure.reason}`;
         yield* host.record(runId, why);
-        yield* host.parked(runId, `${why}. Resume ${runId} once the forge can be read.`);
+        yield* host.parked(
+          runId,
+          `${why}. Resume ${runId} once the forge can be read.`,
+          "forge-unavailable",
+        );
         return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
       }
       const url = read.success;
@@ -871,6 +875,7 @@ export const agentWork = <
         yield* host.parked(
           runId,
           `${on.agent} stopped before writing ${output}: ${harnessSaid(on, why)}`,
+          "output-absent",
         );
         return yield* Effect.never;
       });
@@ -915,7 +920,7 @@ export const agentWork = <
               (text) => text !== null,
               () =>
                 pastBudget(on, waiting).pipe(
-                  Effect.flatMap((why) => host.parked(runId, why)),
+                  Effect.flatMap((why) => host.parked(runId, why, "idle-budget")),
                   Effect.andThen(late),
                 ),
             ),
