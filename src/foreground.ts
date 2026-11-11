@@ -20,10 +20,15 @@ export const Foreground = Context.Reference<ForegroundApi>("collie/Foreground", 
 
 const active = new WeakSet<ForegroundApi>();
 
+// A captured host context must not replace a live lease.
+const Serving = Context.Reference<ForegroundApi | null>("collie/ForegroundLease", {
+  defaultValue: () => null,
+});
+
 /** Whether the running fiber is serving interactive work. */
 export const servedNow = () => {
-  const foreground = Fiber.getCurrent()?.getRef(Foreground);
-  return foreground !== undefined && active.has(foreground);
+  const foreground = Fiber.getCurrent()?.getRef(Serving);
+  return foreground ? active.has(foreground) : false;
 };
 
 export const makeForeground = Effect.gen(function* () {
@@ -42,16 +47,24 @@ export const makeForeground = Effect.gen(function* () {
           active.add(served);
           return (++serving === 1 ? idle.close : Effect.void).pipe(Effect.as(served));
         }),
-        (served) => Effect.provideService(effect, Foreground, served),
+        (served) =>
+          effect.pipe(
+            Effect.provideService(Foreground, served),
+            Effect.provideService(Serving, served),
+          ),
         (served) =>
           Effect.suspend(() => {
             active.delete(served);
             return --serving === 0 ? idle.open : Effect.void;
           }),
       ),
-    boundary: Effect.andThen(
-      Effect.yieldNow,
-      idle.await.pipe(Effect.timeoutOption(PATIENCE), Effect.asVoid),
+    boundary: Effect.suspend(() =>
+      servedNow()
+        ? Effect.void
+        : Effect.andThen(
+            Effect.yieldNow,
+            idle.await.pipe(Effect.timeoutOption(PATIENCE), Effect.asVoid),
+          ),
     ),
   };
   return foreground;

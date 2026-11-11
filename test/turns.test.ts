@@ -169,3 +169,44 @@ test.each(["toasts", "measure"] as const)(
       ),
     ),
 );
+
+test.each(["read", "verify"] as const)(
+  "%s keeps priority and does not wait on its own boundary when restoring the host context",
+  (name) =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const foreground = yield* makeForeground;
+          const clock = yield* TestClock.make();
+          return yield* Effect.gen(function* () {
+            const hosted = yield* Effect.context<never>();
+            const answer = Effect.gen(function* () {
+              const prioritized = servedNow();
+              yield* (yield* Foreground).boundary;
+              return prioritized;
+            }).pipe(Effect.provideContext(hosted));
+            const handlers = timingFirstValues({
+              read: () => answer,
+              verify: () => Stream.fromEffect(answer),
+            });
+            const answering =
+              name === "read"
+                ? handlers.read()
+                : handlers.verify().pipe(
+                    Stream.runFold(
+                      () => false,
+                      (_, value) => value,
+                    ),
+                  );
+            const reading = yield* answering.pipe(Effect.forkScoped);
+            yield* clock.adjust("1 millis");
+            expect(reading.pollUnsafe()).toBeDefined();
+            expect(yield* Fiber.join(reading)).toBe(true);
+          }).pipe(
+            Effect.provideService(Foreground, foreground),
+            Effect.provideService(Clock.Clock, clock),
+          );
+        }),
+      ),
+    ),
+);
