@@ -385,12 +385,20 @@ after Back, until another card is pressed. Rune has no
 ### Machines, Workflows, Schedules, Usage and the Standing setup
 
 `board/src/pages/` ports Desktop's Machines page (`flock.rs` folds `flock` as `applyItem` does,
-`in_sync.rs`, `cleanup.rs`, `onboard.rs`, Add Machine and each Machine's own settings), the
-Workflows page (a Tree of what this computer's host read), Schedules (one Table, its actions
-on the chosen row, Move to…), and Usage (one section per Subscription account, ADR-0049).
-`clock.rs` reads ISO times and the local zone without a date crate. `board/src/standing.rs`
-is the Standing setup's offer, consent dialog and choice. `board/tests/{machines,schedules,
-usage,workflows,standing}.rs` drive them through the fake core.
+`in_sync.rs`, `cleanup.rs`, `onboard.rs`, Add Machine; its header says how many Machines it
+reaches before whether they are In sync), the Workflows page (a Tree of what this computer's
+host read, a definition read under a ruled header, its metadata folded), Schedules (each
+Machine's in its own section, next and last on this computer's clock, each row's own actions,
+Move to…; read again whenever the live Machines change, through an `on_layout` marker keyed by
+them), and Usage (one section per Subscription account, ADR-0049; a thread asks again every
+minute while the app holds the page, as `useUsage` does). Settings draws each Machine's own as
+a table from `flock`'s `OwnRead`s, its controls in one 260 pt column, and Help me write it on
+the Standing direction. An onboarding, or Linear's setup job, shows over whichever page is open:
+`standing::view` draws its dialog. `clock.rs` reads ISO times and the local zone without a date
+crate. `board/src/standing.rs` is the Standing setup's offer, consent dialog and choice.
+`board/tests/{machines,schedules,usage,workflows,settings,standing}.rs` drive them through the
+fake core. Zoom is not offered: Rune draws at the monitor's own scale and has no app-wide zoom
+for the setting to change.
 
 ### Desktop's marks
 

@@ -9,7 +9,10 @@ use collie_desktop_protocol::generated::{
     Source, Subscription, UsageSuccessItem, UsageSuccessItemReading as Reading, Window,
 };
 use rune::{El, col, el, row, text};
-use rune_kit::{Button, ButtonVariant, ControlSize, Kit};
+use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Spinner};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 const WARN_PERCENT: f64 = 90.0;
 
@@ -284,50 +287,103 @@ pub fn usage_page(
     PageView { sections, not_read }
 }
 
-#[derive(Default)]
+/// How often Usage is read again while Desktop runs, as `useUsage` does.
+pub const USAGE_EVERY: Duration = Duration::from_secs(60);
+
 pub struct Usage {
     pub machines: Vec<UsageSuccessItem>,
     pub listed: bool,
-    asks: u64,
+    /// When the shown reading was answered, in epoch milliseconds.
+    pub read_at: Option<f64>,
+    pub reading: bool,
+    /// Counts the asks, shared with the thread that asks again, so an older ask never wins.
+    asks: Arc<AtomicU64>,
     zone: Option<Zone>,
+    pub every: Duration,
+    fresh: bool,
+}
+
+impl Default for Usage {
+    fn default() -> Self {
+        Usage {
+            machines: Vec::new(),
+            listed: false,
+            read_at: None,
+            reading: false,
+            asks: Arc::default(),
+            zone: None,
+            every: USAGE_EVERY,
+            fresh: false,
+        }
+    }
 }
 
 impl Usage {
-    /// The sidebar has opened this page.
+    /// The sidebar has opened this page: reads Usage now, and from then on every minute.
     pub fn opened(app: &mut App) {
         if app.pages.usage.zone.is_none() {
-            app.pages.usage.zone = Some(Zone::local());
+            app.pages.usage.zone = Some(Zone::here());
         }
         app.read_usage();
+        app.keep_usage_fresh();
     }
+}
+
+fn ask_usage(core: &crate::calls::Core<App>, asks: &AtomicU64) {
+    let ask = asks.fetch_add(1, Ordering::SeqCst) + 1;
+    core.request(
+        "usage",
+        (),
+        move |app: &mut App, read: Result<Vec<UsageSuccessItem>, _>| {
+            let state = &mut app.pages.usage;
+            if state.asks.load(Ordering::SeqCst) != ask {
+                return;
+            }
+            state.reading = false;
+            if let Ok(machines) = read {
+                state.machines = machines;
+                state.read_at = Some(collie_desktop_protocol::epoch_ms());
+            }
+            state.listed = true;
+        },
+    );
 }
 
 impl App {
     /// Asks each connected Machine's host for its Usage; an older ask never wins.
     pub fn read_usage(&mut self) {
         let Some(core) = &self.core else { return };
-        self.pages.usage.asks += 1;
-        let ask = self.pages.usage.asks;
-        core.request(
-            "usage",
-            (),
-            move |app: &mut App, read: Result<Vec<UsageSuccessItem>, _>| {
-                let state = &mut app.pages.usage;
-                if state.asks != ask {
-                    return;
-                }
-                if let Ok(machines) = read {
-                    state.machines = machines;
-                }
-                state.listed = true;
-            },
-        );
+        self.pages.usage.reading = true;
+        ask_usage(core, &self.pages.usage.asks);
+    }
+
+    /// Asks again every `every` for as long as the app holds its Usage, once started.
+    fn keep_usage_fresh(&mut self) {
+        let Some(core) = self.core.clone() else {
+            return;
+        };
+        let state = &mut self.pages.usage;
+        if state.fresh {
+            return;
+        }
+        state.fresh = true;
+        let (asks, every) = (Arc::downgrade(&state.asks), state.every);
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(every);
+                let Some(asks) = asks.upgrade() else { return };
+                ask_usage(&core, &asks);
+            }
+        });
     }
 }
 
+const LABEL_W: f32 = 132.0;
+const PERCENT_W: f32 = 48.0;
+
 fn meter(k: &Kit, window: &WindowView) -> El {
     let fill = match window.level {
-        Level::Ok => k.c.border_active,
+        Level::Ok => k.c.text_muted,
         Level::Warn => k.c.warning.icon,
         Level::Out => k.c.danger.icon,
     };
@@ -343,64 +399,80 @@ fn meter(k: &Kit, window: &WindowView) -> El {
                 .radius(3.0)
                 .fill(fill),
         );
-    let mut cell = col().grow(1.0).shrink().gap(4.0).child(track);
-    if let Some(reset) = &window.reset {
-        cell = cell.child(
-            text(reset.clone())
-                .font(k.ty.text_xsmall)
-                .color(k.c.text_faint),
+    let bar = col()
+        .grow(1.0)
+        .shrink()
+        .min_w(0.0)
+        .gap(6.0)
+        .pt(6.0)
+        .child(track)
+        .children(
+            window
+                .reset
+                .clone()
+                .map(|reset| text(reset).font(k.ty.text_xsmall).color(k.c.text_faint)),
         );
-    }
     row()
         .key(format!("window-{}", window.key))
         .role("progressbar")
         .label(format!("{}: {}%", window.label, window.percent))
         .w_full()
-        .gap(12.0)
+        .gap(16.0)
         .items_start()
         .child(
             text(window.label.clone())
                 .font(k.ty.text_small)
                 .color(k.c.text_base)
-                .w(140.0)
+                .w(LABEL_W)
+                .truncate()
                 .a11y_hidden(),
         )
-        .child(cell.a11y_hidden())
+        .child(bar.a11y_hidden())
         .child(
-            text(format!("{}%", window.percent))
-                .font(k.ty.text_small_medium)
-                .color(if window.level == Level::Ok {
-                    k.c.text_muted
-                } else {
-                    fill
-                })
-                .w(44.0)
-                .a11y_hidden(),
+            row().w(PERCENT_W).justify_end().child(
+                text(format!("{}%", window.percent))
+                    .font(k.ty.text_small_medium)
+                    .color(if window.level == Level::Ok {
+                        k.c.text_base
+                    } else {
+                        fill
+                    })
+                    .a11y_hidden(),
+            ),
         )
 }
 
 fn section(k: &Kit, section: &Section) -> El {
-    let mut body = super::common::panel(k, format!("usage-{}", section.key), section.title.clone())
+    let (subscription, rest) = match section.title.split_once(" · ") {
+        Some((name, rest)) => (name.to_string(), Some(rest.to_string())),
+        None => (section.title.clone(), None),
+    };
+    let head = row()
+        .w_full()
+        .gap(8.0)
+        .center_y()
         .child(
-            text(section.title.clone())
+            text(subscription)
                 .font(k.ty.ui_medium)
                 .color(k.c.text_strong)
                 .a11y_hidden(),
-        );
+        )
+        .children(rest.map(|rest| {
+            text(rest)
+                .font(k.ty.text_small)
+                .color(k.c.text_muted)
+                .truncate()
+                .shrink()
+                .a11y_hidden()
+        }));
+    let mut meters = col().w_full().gap(14.0);
     for window in &section.windows {
-        body = body.child(meter(k, window));
-    }
-    if let Some(said) = &section.said {
-        body = body.child(
-            text(said.clone())
-                .font(k.ty.text_xsmall)
-                .color(k.c.text_faint),
-        );
+        meters = meters.child(meter(k, window));
     }
     let mut logged = row().flex_wrap().gap(4.0).child(
         text("Logged in on")
-            .font(k.ty.text_small)
-            .color(k.c.text_muted),
+            .font(k.ty.text_xsmall)
+            .color(k.c.text_faint),
     );
     for (i, (name, problem)) in section.machines.iter().enumerate() {
         let comma = if i + 1 < section.machines.len() {
@@ -413,18 +485,35 @@ fn section(k: &Kit, section: &Section) -> El {
                 None => format!("{name}{comma}"),
                 Some(_) => name.clone(),
             })
-            .font(k.ty.text_small_medium)
-            .color(k.c.text_base),
+            .font(k.ty.text_xsmall_medium)
+            .color(k.c.text_muted),
         );
         if let Some(problem) = problem {
             logged = logged.child(
                 text(format!("({problem}){comma}"))
-                    .font(k.ty.text_small)
+                    .font(k.ty.text_xsmall)
                     .color(k.c.warning.fg),
             );
         }
     }
-    body.child(logged)
+    let foot = col()
+        .w_full()
+        .gap(4.0)
+        .children(section.said.clone().map(|said| {
+            text(said)
+                .font(k.ty.text_xsmall)
+                .color(k.c.text_faint)
+                .wrap()
+                .w_full()
+        }))
+        .child(logged);
+    super::common::panel(k, format!("usage-{}", section.key), section.title.clone())
+        .padding(18.0)
+        .gap(16.0)
+        .child(head)
+        .children((!section.windows.is_empty()).then_some(meters))
+        .child(rune_kit::Divider::horizontal().build(k))
+        .child(foot)
 }
 
 pub fn view(app: &App, k: &Kit, _layer: &mut Vec<El>) -> El {
@@ -435,29 +524,56 @@ pub fn view(app: &App, k: &Kit, _layer: &mut Vec<El>) -> El {
         .map(|r| r.profile)
         .collect();
     let zone = state.zone.clone().unwrap_or_default();
-    let shown = usage_page(
-        &state.machines,
-        &live,
-        collie_desktop_protocol::epoch_ms(),
-        &zone,
-    );
-    let refresh = row()
+    let now = collie_desktop_protocol::epoch_ms();
+    let shown = usage_page(&state.machines, &live, now, &zone);
+    let read = match state.read_at {
+        _ if state.reading && !state.listed => "Asking each live Machine…".to_string(),
+        Some(at) => format!(
+            "Read at {} from each live Machine, and again every minute",
+            super::clock::when_of(at, now, &zone)
+        ),
+        None => "Read from each live Machine every minute".to_string(),
+    };
+    let header = row()
         .w_full()
-        .gap(8.0)
-        .center_y()
-        .child(el().grow(1.0))
+        .gap(16.0)
+        .items_start()
         .child(
-            Button::new("Refresh")
-                .variant(ButtonVariant::Ghost)
-                .control_size(ControlSize::Small)
-                .on_press(|app: &mut App| app.read_usage())
-                .build(k)
-                .key("usage-refresh"),
+            col()
+                .grow(1.0)
+                .shrink()
+                .min_w(0.0)
+                .gap(4.0)
+                .child(
+                    text("Subscriptions")
+                        .role("heading")
+                        .font(k.ty.body_medium)
+                        .color(k.c.text_strong),
+                )
+                .child(muted(k, read).key("usage-read")),
+        )
+        .child(
+            row()
+                .gap(8.0)
+                .center_y()
+                .children(
+                    state
+                        .reading
+                        .then(|| Spinner::new().size(12.0).build(k).key("usage-reading")),
+                )
+                .child(
+                    Button::new("Refresh")
+                        .icon(&crate::icons::REFRESH)
+                        .variant(ButtonVariant::Outline)
+                        .control_size(ControlSize::Small)
+                        .disabled(state.reading)
+                        .on_press(|app: &mut App| app.read_usage())
+                        .build(k)
+                        .key("usage-refresh"),
+                ),
         );
-    let mut children = vec![refresh];
-    if !state.listed {
-        children.push(muted(k, "Asking each Machine…"));
-    } else if shown.sections.is_empty() && shown.not_read.is_empty() {
+    let mut children = vec![header];
+    if state.listed && shown.sections.is_empty() && shown.not_read.is_empty() {
         children.push(muted(k, "No live Machine has reported usage yet."));
     }
     children.extend(shown.sections.iter().map(|s| section(k, s)));
