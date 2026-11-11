@@ -728,7 +728,7 @@ const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run:
         : Arr.map(
             deliveries,
             (delivery) =>
-              `- ${delivery.id}: ${delivery.state}${delivery.note ? ` (${delivery.note})` : ""}, for ${delivery.cause.kind}`,
+              `- ${delivery.id}: ${delivery.state}${delivery.note ? ` (${delivery.note})` : ""}, for ${delivery.cause.kind}${delivery.workflowNotice === undefined ? "" : `. ${delivery.workflowNotice}`}`,
           )),
       ...unread,
     ],

@@ -53,6 +53,7 @@ import {
   Stream,
   flow,
   Result,
+  type Types,
 } from "effect";
 import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -9326,9 +9327,36 @@ const makeRegistry: (
           note: options.request,
         };
       }
-      const sent = yield* (yield* Agents).steer(options);
+      let workflowNotice: string | undefined;
+      if (yield* workflowEnded(options.runId)) {
+        const current = yield* view(options.runId);
+        const status =
+          current?.status.status === "complete"
+            ? "succeeded"
+            : current?.status.status === "failed"
+              ? "failed"
+              : "terminal status unavailable without its module";
+        const available = yield* offeredBy(options.runId).pipe(
+          Effect.map(({ generation, facts, refused }) =>
+            offersFrom(generation.offers, facts, { self: generation.id, refused }),
+          ),
+          Effect.orElseSucceed(() => []),
+        );
+        const followUp = Option.getOrUndefined(
+          Arr.findFirst(available, (one) => one.kind === "follow-up" && one.unavailable === null),
+        );
+        const route =
+          followUp === undefined
+            ? `Start a new Run on ${current?.branch == null ? "its branch" : `its branch ${current.branch}`}.`
+            : `Use follow-up offer "${followUp.id}", giving the message as its input.`;
+        workflowNotice = `${options.runId} has finished (${status}). No Step reads this turn's Output. ${route}`;
+      }
+      const sent = yield* (yield* Agents).steer({ ...options, workflowNotice });
       yield* superseding(options.runId, options.actor, sent);
-      return sent.gone === true ? { ...sent, finished: yield* hasEnded(options.runId) } : sent;
+      const result: Types.Mutable<typeof Steered.Type> = { ...sent };
+      if (workflowNotice !== undefined) result.workflowNotice = workflowNotice;
+      if (sent.gone === true) result.finished = yield* hasEnded(options.runId);
+      return result;
     }),
 
     tendQuestions: Effect.gen(function* () {
