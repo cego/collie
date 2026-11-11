@@ -2,7 +2,7 @@
 //! its accessibility tree, without a window.
 
 use collie_desktop_board::{App, view};
-use collie_desktop_protocol::generated::{DetailFlow, TerminalPayload};
+use collie_desktop_protocol::generated::TerminalPayload;
 use collie_desktop_terminal::view::Tab;
 use rune::{Env, Runtime};
 use serde_json::Value;
@@ -92,8 +92,6 @@ fn each_machine_says_its_status_and_shows_its_cards_by_name() {
     }
 }
 
-const PATCH: &str = "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-x\n+y\n";
-
 fn tap(runtime: &mut Runtime<App>, key: &str, at: f64) {
     let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
     runtime.pointer_move(x, y);
@@ -174,117 +172,6 @@ fn the_chat_opens_beside_the_board_and_closes() {
     assert!(shown.iter().any(|k| k == "card-b2"), "{shown:?}");
     tap(&mut runtime, "open-chat", 1000.0);
     assert!(!keys(&runtime).iter().any(|k| k == "chat"));
-}
-
-#[test]
-fn a_panes_diff_button_asks_for_its_runs_diff_and_shows_it_once_read() {
-    let asked: Arc<Mutex<Vec<(String, String, u64)>>> = Arc::default();
-    let mut board = board();
-    board.go_to = Some(Box::new(|_, machine, _| Tab::new(None, machine, 100, 30)));
-    let said = asked.clone();
-    board.load_diff = Some(Box::new(move |installation, run, opened| {
-        said.lock().unwrap().push((installation, run, opened));
-    }));
-    let mut runtime = Runtime::new(
-        board,
-        view,
-        (1280.0, 900.0),
-        Env {
-            system_dark: true,
-            scale: 1.0,
-        },
-    );
-    runtime.frame(0.0);
-    tap(&mut runtime, "card-b2", 100.0);
-    tap(&mut runtime, "open-diff", 1000.0);
-    assert_eq!(
-        *asked.lock().unwrap(),
-        [("inst-build".to_string(), "r1".to_string(), 1)]
-    );
-    runtime.update(|board, _| board.diff_read(1, PATCH));
-    runtime.frame(2000.0);
-    let shown = keys(&runtime);
-    assert!(shown.iter().any(|k| k == "diff"), "{shown:?}");
-    tap(&mut runtime, "close-diff", 3000.0);
-    let shown = keys(&runtime);
-    assert!(!shown.iter().any(|k| k == "diff"), "{shown:?}");
-    assert!(shown.iter().any(|k| k == "terminal-grid"), "{shown:?}");
-}
-
-#[test]
-fn a_diff_read_for_a_pane_since_left_is_not_shown_over_the_next() {
-    let mut board = board();
-    board.go_to = Some(Box::new(|_, machine, _| Tab::new(None, machine, 100, 30)));
-    board.load_diff = Some(Box::new(|_, _, _| {}));
-    let mut runtime = Runtime::new(
-        board,
-        view,
-        (1280.0, 900.0),
-        Env {
-            system_dark: true,
-            scale: 1.0,
-        },
-    );
-    runtime.frame(0.0);
-    tap(&mut runtime, "card-b2", 100.0);
-    tap(&mut runtime, "open-diff", 1000.0);
-    tap(&mut runtime, "back", 2000.0);
-    tap(&mut runtime, "card-b1", 3000.0);
-    runtime.update(|board, _| board.diff_read(1, PATCH));
-    runtime.frame(4000.0);
-    let shown = keys(&runtime);
-    assert!(!shown.iter().any(|k| k == "diff"), "{shown:?}");
-    runtime.update(|board, _| board.diff_read(2, PATCH));
-    runtime.frame(5000.0);
-    assert!(keys(&runtime).iter().any(|k| k == "diff"));
-}
-
-fn flow(name: &str) -> DetailFlow {
-    let flows: Value = serde_json::from_str(include_str!("../../fixtures/flows.json")).unwrap();
-    serde_json::from_value(flows[name].clone()).unwrap()
-}
-
-#[test]
-fn a_panes_run_record_gives_its_flow_map_and_one_since_left_does_not() {
-    let asked: Arc<Mutex<Vec<(String, String, u64)>>> = Arc::default();
-    let mut board = board();
-    board.go_to = Some(Box::new(|_, machine, _| Tab::new(None, machine, 100, 30)));
-    let said = asked.clone();
-    board.read_record = Some(Box::new(move |installation, run, opened| {
-        said.lock().unwrap().push((installation, run, opened));
-        Box::new(|| {})
-    }));
-    let mut runtime = Runtime::new(
-        board,
-        view,
-        (1280.0, 900.0),
-        Env {
-            system_dark: true,
-            scale: 1.0,
-        },
-    );
-    runtime.frame(0.0);
-    tap(&mut runtime, "card-b2", 100.0);
-    assert_eq!(
-        *asked.lock().unwrap(),
-        [("inst-build".to_string(), "r1".to_string(), 1)]
-    );
-    runtime.update(|board, _| board.flow_read(1, flow("before")));
-    runtime.frame(1000.0);
-    let shown = keys(&runtime);
-    assert!(shown.iter().any(|k| k == "flow"), "{shown:?}");
-    assert!(shown.iter().any(|k| k == "terminal-grid"), "{shown:?}");
-
-    tap(&mut runtime, "back", 2000.0);
-    assert!(
-        keys(&runtime).iter().any(|k| k == "flow"),
-        "the board keeps it"
-    );
-    tap(&mut runtime, "card-b1", 3000.0);
-    runtime.update(|board, _| board.flow_read(1, flow("before")));
-    runtime.frame(4000.0);
-    let shown = keys(&runtime);
-    assert!(!shown.iter().any(|k| k == "flow"), "{shown:?}");
 }
 
 #[test]

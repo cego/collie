@@ -1,7 +1,7 @@
 //! `desktop/test/review-comments.test.ts`, with each diff anchor taken from a rune-kit Diff's
 //! selection.
 
-use collie_desktop_chat::review::{
+use collie_desktop_board::record::review::{
     Anchor, Draft, add_draft, clear_sent, compose, diff_anchor, edit_draft, in_hunks, plan_anchor,
     remove_draft,
 };

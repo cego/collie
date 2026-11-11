@@ -12,14 +12,14 @@ pub mod timing;
 
 pub use shell::view;
 
-use collie_desktop_chat::view::{Chat, DiffTab, chat};
+use collie_desktop_chat::view::{Chat, chat};
 use collie_desktop_protocol::generated::AguiEvent;
 use collie_desktop_terminal::view::Tab;
 use rune::{El, col};
 use rune_kit::Kit;
 
 pub use board::Shown;
-pub use record::{GoTo, LoadDiff, ReadRecord, run_diff, run_file};
+pub use record::{DiffTab, GoTo, LoadDiff, ReadRecord, run_diff, run_file};
 
 #[derive(Default)]
 pub struct App {
@@ -45,6 +45,8 @@ pub struct App {
     /// back what stops reading it.
     pub read_record: Option<ReadRecord>,
     stop_record: Option<Box<dyn FnOnce()>>,
+    /// The open Run's record, and each Run's review comment drafts and viewed files.
+    pub record: record::Records,
     pub timing: std::cell::RefCell<timing::Timing>,
 }
 

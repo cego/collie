@@ -1,0 +1,515 @@
+//! An open Run's record drawn from the test Flock with a fake core: `runDetail` streamed in,
+//! items read from `runFile` in parts, and every gesture sent on `act` exactly as the host
+//! takes it. Ports the record's cases of `test/desktop-record-door.test.ts`,
+//! `desktop-deliver.test.ts`, `desktop-retry.test.ts` and `desktop/test/diff-comments.test.ts`.
+
+use base64::Engine;
+use collie_desktop_board::calls::CallError;
+use collie_desktop_board::calls::testing::Harness;
+use collie_desktop_board::record::review::compose;
+use collie_desktop_board::{App, view};
+use collie_desktop_terminal::view::Tab;
+use rune::edit::TextEdit;
+use rune::{Env, Runtime};
+use rune_kit::diff::{LineRange, LineRef, Side};
+use serde_json::{Value, json};
+
+const FLOCK: &str = include_str!("../../fixtures/flock.ndjson");
+
+fn within(node: &Value) -> Vec<&Value> {
+    let mut found = vec![node];
+    for child in node["children"].as_array().into_iter().flatten() {
+        found.extend(within(child));
+    }
+    found
+}
+
+fn keys(runtime: &Runtime<App>) -> Vec<String> {
+    within(&runtime.accessibility_json())
+        .iter()
+        .filter_map(|node| node["key"].as_str().map(String::from))
+        .collect()
+}
+
+fn named(runtime: &Runtime<App>, key: &str) -> Value {
+    within(&runtime.accessibility_json())
+        .into_iter()
+        .find(|node| node["key"] == key)
+        .cloned()
+        .unwrap_or_else(|| panic!("no {key} in {:?}", keys(runtime)))
+}
+
+fn tap(runtime: &mut Runtime<App>, key: &str, at: f64) {
+    let (x, y) = runtime
+        .find(key)
+        .unwrap_or_else(|| panic!("no {key} in {:?}", keys(runtime)));
+    runtime.pointer_move(x, y);
+    runtime.frame(at);
+    runtime.pointer_down(x, y);
+    runtime.frame(at + 50.0);
+    runtime.pointer_up(x, y);
+    runtime.frame(at + 100.0);
+}
+
+fn opened(harness: &Harness<App>) -> Runtime<App> {
+    let mut app = App::default();
+    for line in FLOCK.lines() {
+        app.apply(serde_json::from_str(line).unwrap());
+    }
+    app.core = Some(harness.core.clone());
+    app.go_to = Some(Box::new(|_, machine, _| Tab::new(None, machine, 100, 30)));
+    let mut runtime = Runtime::new(
+        app,
+        view,
+        (1400.0, 900.0),
+        Env {
+            system_dark: true,
+            scale: 1.0,
+        },
+    );
+    runtime.frame(0.0);
+    runtime
+}
+
+fn settle(runtime: &mut Runtime<App>, harness: &Harness<App>, at: f64) {
+    harness.settle(&mut runtime.state);
+    // Rune draws again only for a change it is told of.
+    runtime.update(|_, _| {});
+    runtime.frame(at);
+}
+
+fn detail(extra: Value) -> Value {
+    let mut base = json!({
+        "id": "r1", "dir": "/runs/r1", "title": "Build it", "status": "running",
+        "revision": {"epoch": "e1", "seq": 7.0},
+        "inputs": [], "steps": [], "handoffs": [], "outputs": [],
+        "review": {"_tag": "None", "reason": "no review"},
+        "attention": {"category": "none", "reason": "", "explanation": "", "actions": []},
+        "outcome": {"gaps": [], "metrics": {"verifications": {"pass": 0, "fail": 0, "unstable": 0, "byCollie": 0},
+            "slices": {"done": 0, "total": 0}, "rework": 0, "halts": [], "obstacles": []}},
+        "finishedAt": 0, "findings": [], "verifications": [], "steering": [], "evidence": []
+    });
+    for (key, value) in extra.as_object().unwrap() {
+        base[key] = value.clone();
+    }
+    json!({"detail": base, "asOf": null, "bytes": 100})
+}
+
+const PATCH: &str = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,2 +1,2 @@\n fn a() {}\n-old\n+new\n";
+
+fn with_diff() -> Value {
+    detail(json!({
+        "diff": {"base": "abc", "live": true, "files": [{"path": "src/a.rs", "status": "modified", "added": 1, "removed": 1}]},
+        "agents": [{"operation": "build", "agent": "build-1", "harness": "claude"}]
+    }))
+}
+
+#[test]
+fn a_card_opens_its_runs_record_on_its_terminal_streaming_the_record_until_back() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    tap(&mut runtime, "card-b2", 100.0);
+    assert_eq!(
+        harness.fake.asked_of("runDetail"),
+        [json!({"installation": "inst-build", "runId": "r1"})]
+    );
+    let shown = keys(&runtime);
+    assert!(shown.iter().any(|k| k == "terminal-grid"), "{shown:?}");
+    assert!(
+        shown.iter().any(|k| k == "record-standing"),
+        "it says it is reading: {shown:?}"
+    );
+    let tabs: Vec<String> = shown
+        .iter()
+        .filter(|k| k.starts_with("tab-"))
+        .cloned()
+        .collect();
+    assert_eq!(tabs, ["tab-log", "tab-terminal", "tab-facts"]);
+
+    harness.fake.push("runDetail", Ok(with_diff()));
+    settle(&mut runtime, &harness, 1000.0);
+    let tabs: Vec<String> = keys(&runtime)
+        .into_iter()
+        .filter(|k| k.starts_with("tab-"))
+        .collect();
+    assert_eq!(
+        tabs,
+        [
+            "tab-summary",
+            "tab-diff",
+            "tab-evidence",
+            "tab-log",
+            "tab-terminal",
+            "tab-facts"
+        ]
+    );
+    let states = named(&runtime, "tab-terminal")["states"].clone();
+    assert!(
+        states
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s == "selected" || s == "checked"),
+        "{states}"
+    );
+
+    tap(&mut runtime, "back", 2000.0);
+    harness
+        .fake
+        .push("runDetail", Ok(detail(json!({"title": "Since left"}))));
+    settle(&mut runtime, &harness, 3000.0);
+    let shown = keys(&runtime);
+    assert!(shown.iter().any(|k| k == "card-b2"), "{shown:?}");
+    assert!(runtime.state.record.open.is_none());
+}
+
+#[test]
+fn a_record_shows_flow_first_and_the_summary_of_what_it_says() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    runtime.update(|app, _| {
+        app.open_record("inst-build".into(), "r1".into(), "Build box".into(), None)
+    });
+    let flows: Value = serde_json::from_str(include_str!("../../fixtures/flows.json")).unwrap();
+    harness.fake.push(
+        "runDetail",
+        Ok(detail(json!({
+            "flow": flows["before"],
+            "inputs": [{"name": "goal", "value": "Ship the record", "source": "cli"}],
+        }))),
+    );
+    settle(&mut runtime, &harness, 100.0);
+    let shown = keys(&runtime);
+    assert!(
+        shown.iter().any(|k| k == "flow-build-run-build"),
+        "{shown:?}"
+    );
+    assert!(
+        shown.iter().any(|k| k == "inspector"),
+        "the current Step is inspected: {shown:?}"
+    );
+    assert!(
+        !shown.iter().any(|k| k == "terminal-grid"),
+        "no terminal is opened unasked"
+    );
+    tap(&mut runtime, "tab-summary", 200.0);
+    let inputs = named(&runtime, "summary-inputs");
+    assert_eq!(inputs["name"], "Inputs");
+    tap(&mut runtime, "tab-flow", 300.0);
+    assert!(keys(&runtime).iter().any(|k| k == "flow"));
+}
+
+fn diff_open(harness: &Harness<App>) -> Runtime<App> {
+    let mut runtime = opened(harness);
+    runtime.update(|app, _| {
+        app.open_record(
+            "inst-build".into(),
+            "r1".into(),
+            "Build box".into(),
+            Some("diff"),
+        )
+    });
+    harness.fake.push("runDetail", Ok(with_diff()));
+    settle(&mut runtime, harness, 100.0);
+    assert_eq!(
+        harness.fake.asked_of("runFile"),
+        [json!({"installation": "inst-build", "runId": "r1", "ref": "diff:src/a.rs", "offset": 0})]
+    );
+    assert!(keys(&runtime).iter().any(|k| k == "diff-reading"));
+    harness.fake.answer(
+        "runFile",
+        Ok(json!({"ref": "diff:src/a.rs", "encoding": "utf8", "content": PATCH, "size": PATCH.len()})),
+    );
+    settle(&mut runtime, harness, 200.0);
+    runtime
+}
+
+#[test]
+fn the_diff_is_read_file_by_file_and_a_file_ticked_viewed_is_counted() {
+    let harness = Harness::<App>::new();
+    let mut runtime = diff_open(&harness);
+    let shown = keys(&runtime);
+    assert!(shown.iter().any(|k| k == "diff"), "{shown:?}");
+    assert!(shown.iter().any(|k| k == "tree-file-src/a.rs"), "{shown:?}");
+    assert_eq!(named(&runtime, "diff-viewed")["name"], "0 of 1 viewed");
+    runtime.update(|app, _| app.toggle_viewed("src/a.rs"));
+    runtime.frame(300.0);
+    assert_eq!(named(&runtime, "diff-viewed")["name"], "1 of 1 viewed");
+    let row = named(&runtime, "tree-file-src/a.rs");
+    assert!(row["name"].as_str().unwrap().contains("viewed"), "{row}");
+}
+
+fn with_a_draft(runtime: &mut Runtime<App>, said: &str) {
+    runtime.update(|app, _| {
+        let tab = app.diff.as_mut().unwrap();
+        let at = LineRef::new(Side::New, 2);
+        tab.state.set_selection(Some(LineRange {
+            file: 0,
+            start: at,
+            end: at,
+        }));
+    });
+    runtime.frame(400.0);
+    assert!(keys(runtime).iter().any(|k| k == "diff-composer"));
+    let said = said.to_string();
+    runtime.update(move |app, _| app.diff.as_mut().unwrap().comment = TextEdit::new(said.clone()));
+    tap(runtime, "add-comment", 500.0);
+}
+
+#[test]
+fn selected_lines_become_a_draft_sent_as_one_delivery_and_cleared_once_taken() {
+    let harness = Harness::<App>::new();
+    let mut runtime = diff_open(&harness);
+    with_a_draft(&mut runtime, "Name this better");
+    let shown = keys(&runtime);
+    assert!(shown.iter().any(|k| k == "draft-d1"), "{shown:?}");
+    assert!(
+        shown.iter().any(|k| k == "note-d1"),
+        "drawn under its line: {shown:?}"
+    );
+    let drafts = runtime.state.record.drafts[&("inst-build".to_string(), "r1".to_string())].clone();
+
+    tap(&mut runtime, "send-review", 700.0);
+    let sent = harness.fake.asked_of("act");
+    assert_eq!(sent.len(), 1);
+    let action = &sent[0]["action"];
+    assert_eq!(action["_tag"], "Deliver");
+    assert_eq!(action["runId"], "r1");
+    assert_eq!(action["text"], compose(&drafts));
+    assert_eq!(action["shown"], json!({"epoch": "e1", "seq": 7.0}));
+    assert!(sent[0]["request"].as_str().is_some_and(|r| r.len() == 36));
+    assert!(
+        keys(&runtime).iter().any(|k| k == "draft-d1"),
+        "kept until the host takes it"
+    );
+
+    harness
+        .fake
+        .answer("act", Ok(json!("Delivered to build-1.")));
+    settle(&mut runtime, &harness, 800.0);
+    let shown = keys(&runtime);
+    assert!(!shown.iter().any(|k| k == "draft-d1"), "{shown:?}");
+    assert_eq!(
+        named(&runtime, "record-notice")["name"],
+        "Delivered to build-1."
+    );
+}
+
+#[test]
+fn a_delivery_the_host_refused_says_why_and_try_again_sends_the_same_request() {
+    let harness = Harness::<App>::new();
+    let mut runtime = diff_open(&harness);
+    with_a_draft(&mut runtime, "Again");
+    tap(&mut runtime, "send-review", 700.0);
+    harness
+        .fake
+        .answer("act", Err(CallError("No live agent took it.".into())));
+    settle(&mut runtime, &harness, 800.0);
+    assert_eq!(
+        named(&runtime, "record-notice")["name"],
+        "No live agent took it."
+    );
+    assert!(
+        keys(&runtime).iter().any(|k| k == "draft-d1"),
+        "the drafts stay"
+    );
+    tap(&mut runtime, "notice-again", 900.0);
+    let sent = harness.fake.asked_of("act");
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[0]["request"], sent[1]["request"]);
+    assert_eq!(sent[0]["action"], sent[1]["action"]);
+}
+
+fn flow_with(node: Value, lane_actions: Value) -> Value {
+    let mut node = node;
+    for (key, value) in
+        json!({"kind": "agent", "description": "", "declared": true, "offPath": false,
+        "attempts": [], "questions": [], "runs": []})
+        .as_object()
+        .unwrap()
+    {
+        if node.get(key).is_none() {
+            node[key] = value.clone();
+        }
+    }
+    let id = node["id"].clone();
+    json!({"lanes": [{"run": "r1", "workflow": "implement", "title": "Build", "machine": "Build box",
+        "execution": "running", "declared": true, "nodes": [node], "actions": lane_actions}],
+        "current": {"run": "r1", "node": id}})
+}
+
+#[test]
+fn the_next_move_retries_a_failed_step_on_act_and_a_lane_action_holds_the_run() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    runtime.update(|app, _| {
+        app.open_record("inst-build".into(), "r1".into(), "Build box".into(), None)
+    });
+    let flow = flow_with(
+        json!({"id": "checks", "title": "Checks", "state": "failed", "primary": "retry", "why": "Tests failed"}),
+        json!(["hold"]),
+    );
+    harness
+        .fake
+        .push("runDetail", Ok(detail(json!({"flow": flow}))));
+    settle(&mut runtime, &harness, 100.0);
+    tap(&mut runtime, "next-action", 200.0);
+    tap(&mut runtime, "lane-hold-run", 400.0);
+    let sent: Vec<Value> = harness
+        .fake
+        .asked_of("act")
+        .into_iter()
+        .map(|a| a["action"].clone())
+        .collect();
+    assert_eq!(sent[0], json!({"_tag": "Resume", "runId": "r1"}));
+    assert_eq!(
+        sent[1],
+        json!({"_tag": "Control", "runId": "r1", "control": "hold", "set": true, "shown": {"epoch": "e1", "seq": 7.0}})
+    );
+}
+
+#[test]
+fn a_note_for_a_step_names_its_step_and_retry_with_a_note_resumes_once_delivered() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    runtime.update(|app, _| {
+        app.open_record("inst-build".into(), "r1".into(), "Build box".into(), None)
+    });
+    let flow = flow_with(
+        json!({"id": "checks", "title": "Checks", "state": "failed", "primary": "retry-noted", "why": "Tests failed"}),
+        json!([]),
+    );
+    harness
+        .fake
+        .push("runDetail", Ok(detail(json!({"flow": flow}))));
+    settle(&mut runtime, &harness, 100.0);
+    tap(&mut runtime, "next-action", 200.0);
+    assert!(keys(&runtime).iter().any(|k| k == "form-text"));
+    runtime.update(|app, _| {
+        if let Some(collie_desktop_board::record::Form::Text { edit, .. }) =
+            app.record.open.as_mut().unwrap().form.as_mut()
+        {
+            *edit = TextEdit::new("Use the fixture");
+        }
+    });
+    tap(&mut runtime, "form-send", 300.0);
+    let sent = harness.fake.asked_of("act");
+    assert_eq!(sent.len(), 1, "the retry waits for the note");
+    assert_eq!(
+        sent[0]["action"],
+        json!({"_tag": "Deliver", "runId": "r1", "step": "checks", "text": "Use the fixture", "shown": {"epoch": "e1", "seq": 7.0}})
+    );
+    harness.fake.answer("act", Ok(json!("Noted.")));
+    settle(&mut runtime, &harness, 400.0);
+    let sent = harness.fake.asked_of("act");
+    assert_eq!(sent[1]["action"], json!({"_tag": "Resume", "runId": "r1"}));
+    assert_ne!(sent[0]["request"], sent[1]["request"]);
+}
+
+#[test]
+fn an_open_question_is_answered_by_an_option() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    runtime.update(|app, _| {
+        app.open_record("inst-build".into(), "r1".into(), "Build box".into(), None)
+    });
+    let flow = flow_with(
+        json!({"id": "ask", "title": "Ask", "state": "needs-you", "primary": "answer",
+            "questions": [{"id": "q-1", "name": "Which way?", "open": true, "text": "Which way?",
+                "options": [{"id": "left", "title": "Left"}, {"id": "right", "title": "Right", "recommended": true}]}]}),
+        json!([]),
+    );
+    harness
+        .fake
+        .push("runDetail", Ok(detail(json!({"flow": flow}))));
+    settle(&mut runtime, &harness, 100.0);
+    tap(&mut runtime, "next-action", 200.0);
+    tap(&mut runtime, "option-right", 300.0);
+    tap(&mut runtime, "form-send", 400.0);
+    assert_eq!(
+        harness.fake.asked_of("act")[0]["action"],
+        json!({"_tag": "Answer", "runId": "r1", "decision": "q-1", "value": "right"})
+    );
+}
+
+#[test]
+fn a_report_is_read_in_parts_confined_and_opened_in_the_browser_from_a_file() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    runtime.update(|app, _| {
+        app.open_record(
+            "inst-build".into(),
+            "r1".into(),
+            "Build box".into(),
+            Some("evidence"),
+        )
+    });
+    harness.fake.push(
+        "runDetail",
+        Ok(detail(
+            json!({"evidence": [{"name": "report.html", "bytes": 40}]}),
+        )),
+    );
+    settle(&mut runtime, &harness, 100.0);
+    tap(&mut runtime, "open-evidence-report-html", 200.0);
+    let html = "<html><head></head><body>ok</body></html>";
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let (first, rest) = html.split_at(20);
+    harness.fake.answer(
+        "runFile",
+        Ok(json!({"ref": "evidence:report.html", "encoding": "base64", "content": b64.encode(first), "size": html.len()})),
+    );
+    settle(&mut runtime, &harness, 300.0);
+    let asked = harness.fake.asked_of("runFile");
+    assert_eq!(asked[1]["offset"], 20, "{asked:?}");
+    harness.fake.answer(
+        "runFile",
+        Ok(json!({"ref": "evidence:report.html", "encoding": "base64", "content": b64.encode(rest), "size": html.len()})),
+    );
+    settle(&mut runtime, &harness, 400.0);
+    let opened = harness.fake.asked_of("openLink");
+    let url = opened[0]["url"].as_str().unwrap();
+    let path = url.strip_prefix("file://").unwrap();
+    let written = std::fs::read_to_string(path).unwrap();
+    assert!(written.contains("Content-Security-Policy"), "{written}");
+    assert!(written.contains("<body>ok</body>"));
+}
+
+#[test]
+fn a_gesture_on_a_machine_out_of_reach_says_so_to_the_host() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    runtime.update(|app, _| {
+        app.machines.iter_mut().for_each(|m| m.as_of = Some(1.0));
+        app.open_record("inst-build".into(), "r1".into(), "Build box".into(), None)
+    });
+    let flow = flow_with(
+        json!({"id": "checks", "title": "Checks", "state": "failed", "primary": "retry"}),
+        json!([]),
+    );
+    harness
+        .fake
+        .push("runDetail", Ok(detail(json!({"flow": flow}))));
+    settle(&mut runtime, &harness, 100.0);
+    assert!(
+        !keys(&runtime).iter().any(|k| k == "next-action"),
+        "no action is offered while away"
+    );
+    assert!(
+        named(&runtime, "record-standing")["name"]
+            .as_str()
+            .unwrap()
+            .starts_with("Not current")
+    );
+    runtime.update(|app, _| {
+        app.act(
+            "inst-build".into(),
+            collie_desktop_board::flow::actions::resume("r1"),
+            Default::default(),
+        )
+    });
+    assert_eq!(
+        harness.fake.asked_of("act")[0]["unsent"],
+        "its Machine is out of reach"
+    );
+}

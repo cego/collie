@@ -1,13 +1,11 @@
 //! The chat panel and the Diff tab as Rune builds them, read through the accessibility tree
 //! and driven by the pointer, without a window.
 
-use collie_desktop_chat::review::{Anchor, Draft, compose};
-use collie_desktop_chat::view::{Chat, DiffTab, chat, diff_tab};
+use collie_desktop_chat::view::{Chat, chat};
 use collie_desktop_protocol::generated::{AguiEvent, SayPayload};
 use rune::edit::TextEdit;
 use rune::{ClipboardContent, Cx, El, Env, Runtime};
 use rune_kit::Kit;
-use rune_kit::diff::{DiffMode, LineRange, LineRef, Side, parse};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -17,11 +15,6 @@ const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/chat");
 fn chat_view(chat_at: &Chat, cx: &mut Cx<Chat>) -> El {
     let k = Kit::neutral(cx.system_dark());
     rune_kit::root(chat(chat_at, |c: &mut Chat| c, &k), [])
-}
-
-fn diff_view(tab: &DiffTab, cx: &mut Cx<DiffTab>) -> El {
-    let k = Kit::neutral(cx.system_dark());
-    rune_kit::root(diff_tab(tab, |t| t, |t| t, &k), [])
 }
 
 fn runtime<S: 'static>(state: S, view: fn(&S, &mut Cx<S>) -> El) -> Runtime<S> {
@@ -178,63 +171,6 @@ fn send_says_the_composers_text_and_stop_cancels_the_turn() {
     tap(&mut runtime, "stop", 1000.0);
     assert_eq!(*cancelled.lock().unwrap(), 1);
     assert!(keyed(&runtime, "stop").is_none(), "no Stop once stopped");
-}
-
-const CHANGED: &str = "diff --git a/src/a.ts b/src/a.ts
-index 1111111..2222222 100644
---- a/src/a.ts
-+++ b/src/a.ts
-@@ -1,4 +1,4 @@
- one
--two
-+TWO
- three
- four
-";
-
-#[test]
-fn a_selected_range_becomes_a_draft_and_the_drafts_compose_one_delivery() {
-    let mut tab = DiffTab::new(parse(CHANGED));
-    tab.state.set_selection(Some(LineRange {
-        file: 0,
-        start: LineRef::new(Side::New, 2),
-        end: LineRef::new(Side::New, 3),
-    }));
-    tab.comment = TextEdit::new("Keep it lower case.");
-    let mut runtime = runtime(tab, diff_view);
-    tap(&mut runtime, "add-comment", 100.0);
-    assert!(said(&runtime, "draft-1").contains("Keep it lower case."));
-
-    tap(&mut runtime, "compose", 1000.0);
-    let delivery = keyed(&runtime, "delivery").expect("the Delivery text");
-    let expected = compose(&[Draft {
-        id: "1".into(),
-        anchor: Anchor::Diff {
-            path: "src/a.ts".into(),
-            side: Side::New,
-            first: 2,
-            last: 3,
-            lines: vec!["TWO".into(), "three".into()],
-        },
-        text: "Keep it lower case.".into(),
-    }]);
-    assert_eq!(delivery["name"], expected.as_str());
-}
-
-fn mode(runtime: &mut Runtime<DiffTab>) -> DiffMode {
-    let mut mode = DiffMode::default();
-    runtime.update(|tab, _| mode = tab.state.mode());
-    mode
-}
-
-#[test]
-fn the_diff_shows_unified_or_split() {
-    let mut runtime = runtime(DiffTab::new(parse(CHANGED)), diff_view);
-    assert!(keyed(&runtime, "diff").is_some());
-    tap(&mut runtime, "segment1", 100.0);
-    assert_eq!(mode(&mut runtime), DiffMode::Split);
-    tap(&mut runtime, "segment0", 1000.0);
-    assert_eq!(mode(&mut runtime), DiffMode::Unified);
 }
 
 type Staged = Arc<Mutex<Vec<Vec<PathBuf>>>>;
