@@ -37,7 +37,7 @@ import {
   whatItSaid,
   type Runner,
 } from "./mr";
-import { mrWords, parseMrTarget, readMrRef } from "./board-model";
+import { mrWords, parseMrTarget, readMrRef, readMrUrl } from "./board-model";
 import { FORGES, forgeOf, forgeOfHost } from "./forge/forge";
 import { withLock } from "./lock";
 import { terminalBackend, worktreesDirectory } from "./config";
@@ -542,8 +542,18 @@ function targetBranch(target: string): string | null {
   return head;
 }
 
-const MR_URLS =
-  /(?<![\w.-])(?:https?:\/\/)?(?:github\.com\/[\w.-]+\/[\w.-]+\/pull|[\w.:-]+(?:\/[\w.-]+)+?\/-\/merge_requests)\/\d+(?![\w-])/gi;
+/** No URL holds these unescaped, so no URL spans one. */
+const OUTSIDE_URL = /[\s<>"{}|\\^`[\]]+/;
+const PROSE_EDGES = /^[('"]+|[)'".,;:!?]+$/g;
+
+/** Each word of prose that is a whole merge request URL; a word holding several URLs counts twice. */
+const mrUrlsIn = (text: string) =>
+  Arr.flatMap(Str.split(text, OUTSIDE_URL), (word) => {
+    const said = pipe_(word, Str.replace(PROSE_EDGES, ""));
+    const ref = readMrUrl(said);
+    if (Str.split(said, "://").length > 2) return [ref, ref];
+    return ref === null ? [] : [ref];
+  });
 
 /**
  * The one merge request work names: the only merge or pull request URL in it, else its
@@ -555,12 +565,8 @@ const mrNamedBy = Effect.fn("worktree.mrNamedBy")(function* (
   cwd: string,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
-  const urls = pipe_(
-    text,
-    Str.match(MR_URLS),
-    Option.getOrElse(() => []),
-  );
-  if (urls.length > 0) return urls.length === 1 ? readMrRef(urls[0]!) : null;
+  const urls = mrUrlsIn(text);
+  if (urls.length > 0) return urls.length === 1 ? urls[0]! : null;
   const whole = /\s/.test(Str.trim(text)) ? null : readMrRef(text, { project: null });
   if (whole?.project === null) return { ...whole, project: yield* projectHere(cwd, run) };
   return whole;

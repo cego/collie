@@ -2094,13 +2094,19 @@ export function readMrRef(
     const ref = { project, iid: iid! };
     return (sign === "#") === (forgeOfRef(ref) === "github") ? ref : null;
   }
-  const url = MR_URL.exec(said);
-  if (url) return { project: (url[1] ?? url[2])!, iid: url[3]! };
+  const url = readMrUrl(said);
+  if (url) return url;
   // `owner/repo#30` is how GitHub names a pull request, wherever it is typed.
   const short = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(said);
   if (short) return { project: `github.com/${short[1]}`, iid: short[2]! };
   const typed = typedIn === undefined ? null : /^[!#]?(\d+)$/.exec(said);
   return typed ? { project: typedIn!.project, iid: typed[1]! } : null;
+}
+
+/** A merge request or pull request URL, the whole of `text`, and never a shorthand. */
+export function readMrUrl(text: string): MrRef | null {
+  const url = MR_URL.exec(Str.trim(text));
+  return url ? { project: (url[1] ?? url[2])!, iid: url[3]! } : null;
 }
 
 /** `mr:gitlab.example.com/group/project!42`, `mr:github.com/owner/repo#30` or the bare `mr:42`. */
