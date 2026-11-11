@@ -2718,6 +2718,9 @@ scenario(
         expect(
           Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === "post-1"))?.prompt,
         ).toContain(`${rig.projectDir} has no remote, so group/project!42 may not be its own`);
+        expect(flat(yield* asked("r-review-no-remote", "review-1"))).not.toContain(
+          "the Merge request step starts and proves it",
+        );
       }),
     ),
   120_000,
@@ -3978,10 +3981,15 @@ scenario(
 );
 
 /** implement delivering a ticket with an after-merge outcome, to park on its merge request: `gh` is missing. */
+/** A git whose origin, a GitLab URL no test can reach, answers that it has no such branch. */
+const branchlessOrigin = (bin: FakeBin) =>
+  bin.add("git", `[ "$1" = ls-remote ] && exit 2\nexec "${Bun.which("git")}" "$@"`);
+
 const afterMergeParking = (runId: string) =>
   Effect.gen(function* () {
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
     yield* noGitlabMrs(bin);
+    yield* branchlessOrigin(bin);
     yield* bin.add(
       "gh",
       `case "$1 $2" in
@@ -5917,6 +5925,10 @@ scenario(
         expect(yield* prompts()).toHaveLength(4);
         expect(yield* asked("r-gate-judged", "review-5-1")).toContain('"scope_met": true');
         expect(yield* asked("r-gate-judged", "review-5-1")).toContain(`Spec: ${plan}\n`);
+        for (const review of ["review-1", "review-5-1"])
+          expect(flat(yield* asked("r-gate-judged", review))).toContain(
+            "A missing or skipped pipeline on the head is never a finding",
+          );
       }),
     ),
   120_000,
@@ -8619,8 +8631,26 @@ for (const name of ["gitlab", "github"] as const) {
   );
 }
 
+const UNDELIVERED = {
+  verdict: "findings",
+  pushed: false,
+  mr_url: null,
+  findings: [{ severity: "major", title: "push denied" }],
+};
+
+const stoppedAt = (options: ShippedRun) =>
+  Effect.gen(function* () {
+    const status = yield* running(options, (reading) =>
+      until(
+        () => reading,
+        (got) => got !== "pending",
+      ),
+    );
+    return { status, why: yield* parkedWhy(options.runId) };
+  });
+
 scenario(
-  "implement fails when the delivery agent has not pushed and supplied a merge request",
+  "implement parks when the delivery agent has not pushed and supplied a merge request",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -8630,24 +8660,21 @@ scenario(
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const runId = "r-impl-delivery-failed";
         yield* approve(runId, ["unit"]);
-        yield* rig.queueOutputs([
-          BUILT,
-          CLEAN_SYNTHESIS,
-          {
-            verdict: "findings",
-            pushed: false,
-            mr_url: null,
-            findings: [{ severity: "major", title: "push denied" }],
-          },
-        ]);
-        const result = yield* ran({
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, UNDELIVERED]);
+        const { status, why } = yield* stoppedAt({
           entry: shipped("implement"),
           runId,
           input: { plan, ...FINISH },
         });
         yield* bin.restore();
-        expect(reasonOf(result)).toContain("Merge request delivery did not finish");
-        expect(reasonOf(result)).toContain("push denied");
+        expect(status).toBe("suspended");
+        for (const undone of [
+          "the branch was not pushed",
+          "no merge request URL was reported",
+          "push denied",
+        ])
+          expect(why).toContain(undone);
+        expect(why).toEndWith(`resume ${runId}.`);
         expect(yield* prompts()).toHaveLength(3);
       }),
     ),
@@ -8655,7 +8682,7 @@ scenario(
 );
 
 scenario(
-  "implement fails when a clean delivery result still reports findings",
+  "implement parks when a delivered merge request still reports a blocking finding",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -8670,15 +8697,357 @@ scenario(
           CLEAN_SYNTHESIS,
           { ...OPENED, findings: [{ severity: "major", title: "delivery blocked" }] },
         ]);
+        const { status, why } = yield* stoppedAt({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+        });
+        yield* bin.restore();
+        expect(status).toBe("suspended");
+        expect(why).toContain("delivery blocked");
+        expect(why).toEndWith(`resume ${runId}.`);
+        expect(yield* prompts()).toHaveLength(3);
+      }),
+    ),
+  120_000,
+);
+
+const OPEN_MR: ForgeModel["mrs"] = [
+  { project: PROJECT.gitlab, iid: "31", state: "open", sourceBranch: "master" },
+];
+const MINOR_FINDINGS = [
+  { severity: "minor", title: "an approval is still needed" },
+  { severity: "minor", title: "the pipeline is still running" },
+];
+const DELIVERED_WITH_MINOR = { ...OPENED_CI, verdict: "findings", findings: MINOR_FINDINGS };
+const unsettledOf = (runId: string) =>
+  Effect.map(runLog(runId), (log) =>
+    Arr.filter(Str.split(log, "\n"), Str.startsWith("unsettled: ")),
+  );
+
+scenario(
+  "implement completes on a delivered merge request with minor findings, recording each and noting them on it once",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, forge } = yield* deliveringOn("gitlab", OPEN_MR);
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-impl-delivery-minor";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, DELIVERED_WITH_MINOR]);
         const result = yield* ran({
           entry: shipped("implement"),
           runId,
           input: { plan, ...FINISH },
         });
         yield* bin.restore();
-        expect(reasonOf(result)).toContain("Merge request delivery did not finish");
-        expect(reasonOf(result)).toContain("delivery blocked");
+        expect(said(result)).toBe(CI_MR);
+        expect(yield* unsettledOf(runId)).toEqual([
+          "unsettled: an approval is still needed",
+          "unsettled: the pipeline is still running",
+        ]);
+        const [note, ...more] = yield* ciNotes(forge);
+        expect(more).toEqual([]);
+        expect(note).toContain("an approval is still needed");
+        expect(note).toContain("the pipeline is still running");
+        const prompt = pipe(yield* asked(runId, "mr"), Str.replace(/\s+/g, " "));
+        for (const rule of [
+          "`blocker` or `major` only where it leaves delivery undone",
+          "is `minor`: approvals still needed, a pipeline still running, failures that were there before this Run",
+        ])
+          expect(prompt).toContain(rule);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a delivery parked undone and resumed asks its agent again, records the merge request once, and replays no unsettled line or note",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, forge } = yield* deliveringOn("gitlab", OPEN_MR);
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-impl-delivery-resumed";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, UNDELIVERED, DELIVERED_WITH_MINOR]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan } },
+          (run) =>
+            Effect.gen(function* () {
+              const first = yield* until(
+                () => Effect.zip(run.status, parkedWhy(runId)),
+                ([got, why]) => why !== "" || got.status === "failed",
+              );
+              expect(first[1]).toContain("push denied");
+              yield* run.resume;
+              // Answering replays the Run past its delivery.
+              yield* goAsked(run.asked, "next");
+              yield* run.answer("next", "Finish");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+        expect(status.status).toBe("complete");
+        expect(yield* asked(runId, "mr-2")).toContain(CI_MR);
+        expect(yield* readText(`${runDir(dir, runId)}/merge-request`)).toBe(`${CI_MR}\n`);
+        expect(yield* unsettledOf(runId)).toHaveLength(MINOR_FINDINGS.length);
+        expect(yield* ciNotes(forge)).toHaveLength(1);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a delivery whose unsettled note GitLab refuses parks at Merge request, and a resume once it is repaired posts it once",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, forge } = yield* deliveringOn("gitlab", OPEN_MR);
+        yield* forge.set({ ...(yield* forge.model()), refusesNote: 500 });
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-impl-delivery-note-refused";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, DELIVERED_WITH_MINOR]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              const [, why] = yield* until(
+                () => Effect.zip(run.status, parkedWhy(runId)),
+                ([got, why]) => why !== "" || got.status !== "pending",
+              );
+              expect(why).toContain("500");
+              expect(why).toEndWith(`resume ${runId}.`);
+              const { refusesNote: _, ...repaired } = yield* forge.model();
+              yield* forge.set(repaired);
+              yield* run.resume;
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+        expect(status.status).toBe("complete");
+        expect(yield* unsettledOf(runId)).toHaveLength(MINOR_FINDINGS.length);
+        expect(yield* ciNotes(forge)).toHaveLength(1);
         expect(yield* prompts()).toHaveLength(3);
+      }),
+    ),
+  120_000,
+);
+
+/**
+ * A GitLab delivery from a branch of its own, open as merge request !31, whose head's only
+ * pipeline was skipped. The build's push carried that head to origin; where `pushed` is
+ * false, a commit after it has not been pushed yet, as the mr agent's push would carry it.
+ */
+const skippedHead = (pushed: boolean, over: Partial<ForgeModel> = {}) =>
+  Effect.gen(function* () {
+    const { bin } = yield* deliveringOn("gitlab");
+    const branch = "delivered";
+    for (const args of [
+      ["checkout", "-q", "-b", branch],
+      ["push", "-q", "origin", "HEAD"],
+      ...(pushed ? [] : [["commit", "-qm", "the mr agent's", "--allow-empty"]]),
+    ])
+      yield* exec(["git", ...args], { cwd: rig.projectDir });
+    const head = yield* headOf();
+    const forge = yield* forgeOnPath(bin, "gitlab", {
+      installed: true,
+      loggedIn: [FORGE_HOST.gitlab],
+      login: "tester",
+      mrs: [{ project: PROJECT.gitlab, iid: "31", state: "open", head, sourceBranch: branch }],
+      pipelinesOn: { [head]: [{ id: 9, status: "skipped" }] },
+      ...over,
+    });
+    const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+    const started = Effect.map(forge.model(), (model) =>
+      Arr.filter(model.pipelinesOn?.[head] ?? [], (one) => one.source !== undefined),
+    );
+    return { bin, forge, head, branch, plan, started };
+  });
+const sha12 = (sha: string) => pipe(sha, Str.slice(0, 12));
+const flat = (text: string) => pipe(text, Str.replace(/\s+/g, " "));
+
+scenario(
+  "a delivery whose push sent nothing gets one merge request pipeline on its skipped head, and the Run records it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, head, plan, started } = yield* skippedHead(true);
+        const runId = "r-impl-pipeline-started";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED_CI]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+        });
+        yield* bin.restore();
+        expect(said(result)).toBe(CI_MR);
+        const [one, ...more] = yield* started;
+        expect(more).toEqual([]);
+        expect(one).toMatchObject({ source: "merge_request_event" });
+        expect(yield* runLog(runId)).toContain(
+          `pipeline: started https://${PROJECT.gitlab}/-/pipelines/${one!.id} on ${sha12(head)}`,
+        );
+        const mr = flat(yield* asked(runId, "mr"));
+        expect(mr).toContain("Collie starts the head's pipeline");
+        expect(mr).toContain("Never start one yourself");
+        expect(flat(yield* asked(runId, "review-1"))).toContain(
+          "the Merge request step starts and proves it once the merge request is open",
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a delivery whose push sent nothing gets its branch's pipeline where GitLab refuses the merge request's with 400",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, branch, plan, started } = yield* skippedHead(true, {
+          refusesPipeline: { mr: 400 },
+        });
+        const runId = "r-impl-pipeline-branch";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED_CI]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+        });
+        yield* bin.restore();
+        expect(said(result)).toBe(CI_MR);
+        const [one, ...more] = yield* started;
+        expect(more).toEqual([]);
+        expect(one).toMatchObject({ source: "api", ref: branch });
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a delivery whose push moved the head gets no pipeline started by Collie, so CI never runs twice",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, plan, started } = yield* skippedHead(false);
+        const runId = "r-impl-pipeline-moved";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED_CI]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+        });
+        yield* bin.restore();
+        expect(said(result)).toBe(CI_MR);
+        // Only the remote head read before the agent tells this from a push that sent nothing.
+        expect(yield* started).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a delivery whose project's CI gives its head no pipeline completes, recording the head and GitLab's message",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, head, plan, started } = yield* skippedHead(true, {
+          refusesPipeline: { mr: 400, branch: 400 },
+        });
+        const runId = "r-impl-pipeline-none";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED_CI]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+        });
+        yield* bin.restore();
+        expect(said(result)).toBe(CI_MR);
+        expect(yield* started).toEqual([]);
+        const line = Option.getOrUndefined(
+          Arr.findFirst(Str.split(yield* runLog(runId), "\n"), Str.startsWith("pipeline: ")),
+        );
+        expect(line).toContain(`pipeline: none on ${sha12(head)}`);
+        expect(line).toContain("No stages / jobs for this pipeline.");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a delivery whose pipeline GitLab fails to start parks at Merge request, and a resume once it is repaired starts it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, forge, plan, started } = yield* skippedHead(true, {
+          refusesPipeline: { mr: 500 },
+        });
+        const runId = "r-impl-pipeline-failed";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED_CI]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              const [, why] = yield* until(
+                () => Effect.zip(run.status, parkedWhy(runId)),
+                ([got, why]) => why !== "" || got.status !== "pending",
+              );
+              expect(why).toContain("500");
+              expect(why).toEndWith(`resume ${runId}.`);
+              const { refusesPipeline: _, ...repaired } = yield* forge.model();
+              yield* forge.set(repaired);
+              yield* run.resume;
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+        expect(status.status).toBe("complete");
+        expect(yield* started).toHaveLength(1);
+        // The mr agent was asked once: the resume tried the start again, not delivery.
+        expect(yield* prompts()).toHaveLength(3);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a delivery whose origin cannot be read before its agent parks at Merge request, and a resume once it can starts the head's pipeline",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, plan, started } = yield* skippedHead(true);
+        const reachable = `${bin.dir}/origin-reachable`;
+        yield* bin.add(
+          "git",
+          `[ "$1" = ls-remote ] && [ ! -e "${reachable}" ] && echo "fatal: unable to access origin" >&2 && exit 128\nexec "${Bun.which("git")}" "$@"`,
+        );
+        const runId = "r-impl-remote-unread";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED_CI]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              const [, why] = yield* until(
+                () => Effect.zip(run.status, parkedWhy(runId)),
+                ([got, why]) => why !== "" || got.status !== "pending",
+              );
+              expect(why).toContain("unable to access origin");
+              expect(why).toEndWith(`resume ${runId}.`);
+              yield* (yield* FileSystem.FileSystem).writeFileString(reachable, "");
+              yield* run.resume;
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+        expect(status.status).toBe("complete");
+        expect(yield* started).toHaveLength(1);
       }),
     ),
   120_000,
@@ -8735,8 +9104,16 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        yield* noGitlabMrs(bin);
         yield* levelRepository();
+        // The fake agent commits nothing, so its push sends nothing: the head's pipeline is read.
+        const head = yield* headOf();
+        yield* forgeOnPath(bin, "gitlab", {
+          installed: true,
+          loggedIn: [FORGE_HOST.gitlab],
+          login: "tester",
+          mrs: [{ project: "gitlab.example.com/group/project", iid: "7", state: "open", head }],
+          pipelinesOn: { [head]: [{ id: 1, status: "running" }] },
+        });
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const runId = "r-impl-uncommitted";
         yield* approve(runId, ["unit"]);
@@ -8770,6 +9147,7 @@ scenario(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
         yield* noGitlabMrs(bin);
+        yield* branchlessOrigin(bin);
         // The HTTP login works, but the CLI needed to deliver is missing.
         yield* bin.add(
           "gh",
@@ -18452,7 +18830,7 @@ scenario(
 );
 
 scenario(
-  "a tune-up whose forge refuses the merge request fails with the forge's reason, and merges nothing",
+  "a tune-up whose forge refuses the merge request parks with the forge's reason, and merges nothing",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -18470,10 +18848,20 @@ scenario(
             pushed: true,
           },
         ]);
-        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        const why = yield* driven(
+          { entry: shipped("tune-up"), runId, input: { samples: 4, cycles: 1 } },
+          (run) =>
+            Effect.race(
+              Effect.as(answeringProgress(run), "ended unparked"),
+              until(
+                () => parkedWhy(runId),
+                (why) => why !== "",
+              ),
+            ),
+        );
         yield* bin.restore();
-        expect(result._tag).toBe("Failure");
-        expect(reasonOf(result)).toContain(refusal);
+        expect(why).toContain(refusal);
+        expect(why).toEndWith(`resume ${runId}.`);
         expect((yield* forge.model()).merges ?? []).toEqual([]);
       }),
     ),

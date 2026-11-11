@@ -44,6 +44,7 @@ export type { Report } from "./report";
 export type { Produces, StepKind, StepMeta } from "./steps";
 import type { VerifySpec } from "./verify-spec";
 import type { CiJob } from "./ci-job";
+import type { PipelineStart } from "./forge/forge";
 import type { ChildProcessSpawner } from "effect/process";
 import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
 import * as Activity from "effect/workflow/Activity";
@@ -227,7 +228,7 @@ export {
 export type { FailedTest, Snapshot, Verification } from "./verify";
 export type { VerifySpec } from "./verify-spec";
 export type { CiJob } from "./ci-job";
-export type { JobState } from "./forge/forge";
+export type { JobState, PipelineStart } from "./forge/forge";
 
 /** This Run's checks as a human would type them, for a prompt to name what it faces. */
 export { renderApproved } from "./verify-spec";
@@ -928,6 +929,16 @@ export interface HostApi {
      */
     readonly settle?: boolean;
   }) => Effect.Effect<CiJob>;
+  /**
+   * A pipeline on `cwd`'s HEAD, through the forge of the merge request the Run recorded,
+   * unless that head has one that was not skipped. GitLab starts the merge request's, and the
+   * source branch's where it refuses that with 400; refused both ways with 400 is `NoneByRules`,
+   * in GitLab's words. GitHub starts nothing, since its Actions run on every push.
+   */
+  readonly startPipeline: (options: {
+    readonly runId: string;
+    readonly cwd: string;
+  }) => Effect.Effect<PipelineStart>;
   /** Puts a note on the merge request this Run recorded, sent by Collie rather than an agent. */
   readonly note: (options: {
     readonly runId: string;

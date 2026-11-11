@@ -1548,6 +1548,18 @@ and waits on it; a pass then answers `{ proved, retried: true }`, a Flake. Name 
 the merge request with `host.note({ runId, cwd, body })`, which puts a note on the merge
 request the Run recorded.
 
+A merge request's head that an earlier push with `ci.skip` carried has no pipeline to read a
+job from. `host.startPipeline({ runId, cwd })` asks the forge adapter for one on `cwd`'s
+`HEAD`, the head of the merge request the Run recorded. Where that head already has a
+pipeline that was not skipped, it starts nothing and answers `{ _tag: "Has", url }`.
+Otherwise GitLab starts the merge request's pipeline, and the source branch's where it
+refuses that with 400, answering `{ _tag: "Started", url }`. Both refused with 400 is
+`{ _tag: "NoneByRules", message }`, in GitLab's words: the project's CI gives that head
+none. Any other refusal is `{ _tag: "Failed", reason }`. GitHub starts nothing and asks
+nothing, since its Actions run on every push: `{ _tag: "Unneeded", why }`. The shared Merge
+request step calls it only where the remote branch's head before the mr agent ran is the
+checkout's `HEAD` after it, so the agent's push sent nothing.
+
 ```ts
 for (const spec of (yield * host.approved(runId)).filter((one) => one.ci !== undefined)) {
   const read = yield * host.ciJob({ runId, cwd, name: spec.name, wait: true, settle: true });

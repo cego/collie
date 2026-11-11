@@ -1316,6 +1316,8 @@ export const github: Forge = {
   job,
   baseJob,
   retryJob,
+  startPipeline: () =>
+    Effect.succeed({ _tag: "Unneeded", why: "GitHub's Actions run on every push" } as const),
   jobLog,
   template,
   commands: ({ project, branch, assignee, existing, onto }) => {

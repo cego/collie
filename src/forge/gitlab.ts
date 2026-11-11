@@ -31,6 +31,7 @@ import type {
   JobRead,
   JobState,
   PipelineRead,
+  PipelineStart,
   TagPipelineRead,
   Readiness,
 } from "./forge";
@@ -1088,6 +1089,84 @@ function retryJob(ref: MrRef, id: string, cwd: string): Effect.Effect<Readiness,
   });
 }
 
+const ShaPipelines = Schema.Array(Schema.Struct({ status: Schema.String, web_url: optionalText }));
+const SourceBranch = Schema.Struct({ source_branch: optionalText });
+const StartedPipeline = Schema.Struct({
+  web_url: optionalText,
+  sha: optionalText,
+  ref: optionalText,
+});
+
+/**
+ * The merge request's pipeline on `head`, else its source branch's where GitLab refuses that
+ * with 400, unless `head` has one that was not skipped.
+ */
+function startPipeline(
+  ref: MrRef,
+  head: string,
+  cwd: string,
+): Effect.Effect<PipelineStart, never, ForgeHttp> {
+  return Effect.gen(function* () {
+    const where = whereOf(ref);
+    const reached = projectRest(ref, cwd);
+    if (!reached.ok) return { _tag: "Failed", reason: reached.reason };
+    const { rest, login, project } = reached;
+    const on = yield* rest(ShaPipelines, `pipelines?sha=${head}`);
+    if (!on.ok)
+      return { _tag: "Failed", reason: `could not list the pipelines on ${head}: ${on.reason}` };
+    const running = Arr.findFirst(on.value, (one) => one.status !== "skipped");
+    if (Option.isSome(running)) return { _tag: "Has", url: running.value.web_url ?? "" };
+    // GitLab builds the ref's head at the time, which a later push may have moved past `head`.
+    const started = (answer: Answered<unknown>) =>
+      Effect.gen(function* () {
+        if (!answer.ok)
+          return {
+            _tag: "Failed",
+            reason: `could not start a pipeline for ${where}: ${answer.reason}`,
+          } as const;
+        const pipeline = Option.getOrUndefined(
+          Schema.decodeUnknownOption(StartedPipeline)(answer.value),
+        );
+        const url = pipeline?.web_url ?? "";
+        const sha = pipeline?.sha ?? "";
+        if (sha === head) return { _tag: "Started", url } as const;
+        // A merged-results pipeline runs on a merge of the target (first parent) and the head.
+        const merged =
+          pipeline?.ref === `refs/merge-requests/${ref.iid}/merge`
+            ? yield* rest(Commit, `repository/commits/${sha}`)
+            : null;
+        if (merged?.ok === true && merged.value.parent_ids[1] === head)
+          return { _tag: "Started", url } as const;
+        return {
+          _tag: "Failed",
+          reason: `GitLab started ${url || "a pipeline"} for ${where} on ${sha === "" ? "a revision it did not name" : pipe(sha, Str.slice(0, 12))}, not on ${pipe(head, Str.slice(0, 12))}`,
+        } as const;
+      });
+    const asMr = yield* request(
+      login,
+      cwd,
+      "POST",
+      `${project}/merge_requests/${ref.iid}/pipelines`,
+    );
+    if (asMr.ok || asMr.status !== 400) return yield* started(asMr);
+    const mr = yield* rest(SourceBranch, `merge_requests/${ref.iid}`);
+    if (!mr.ok || !mr.value.source_branch)
+      return {
+        _tag: "Failed",
+        reason: `could not read ${where}'s source branch: ${mr.ok ? "GitLab named none" : mr.reason}`,
+      };
+    const asBranch = yield* request(
+      login,
+      cwd,
+      "POST",
+      `${project}/pipeline?ref=${encodeURIComponent(mr.value.source_branch)}`,
+    );
+    if (!asBranch.ok && asBranch.status === 400)
+      return { _tag: "NoneByRules", message: asBranch.reason };
+    return yield* started(asBranch);
+  });
+}
+
 const jobLog = (ref: MrRef, id: string) =>
   Result.getOrThrow(CommandLine.join(["glab", "ci", "trace", id, ...repoArgs(ref.project)]));
 
@@ -1234,6 +1313,7 @@ export const gitlab: Forge = {
   job,
   baseJob,
   retryJob,
+  startPipeline,
   jobLog,
   template,
   // `glab mr create` and `glab mr note` take text only, so a file goes through the API,

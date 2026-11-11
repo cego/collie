@@ -22,8 +22,16 @@ They tell a human what the job runs. Collie never runs them.
 
 **D3. Its proof is collected once the merge request is open.**
 
-- After the `mr` step has pushed without `ci.skip` and opened or updated the merge request,
-  the Run waits for the named job in the pipeline on the merge request's head commit.
+- After the `mr` step has pushed without `ci.skip` and opened or updated the merge
+  request, the head it delivered has a pipeline. Where the step's push sent nothing,
+  because an earlier push with `ci.skip` already carried that head, and the forge shows
+  no pipeline on it, or only a skipped one, Collie starts one through the forge's
+  adapter: on GitLab the merge request's pipeline, else the branch's. Where GitLab
+  refuses both because the project's CI gives that head no pipeline, the Run records
+  that and goes on, and a check left to CI then parks unproved as in D4. Any other
+  failure to start one parks the Run at Merge request, and a resume tries again.
+- The Run then waits for the named job in the pipeline on the merge request's head
+  commit.
 - The job is read through the forge's adapter (ADR-0050).
 - A pass on that commit is **Evidence**. Collie records it as a Verification of the check,
   bound to that commit, with the job's URL. Collie read it from the forge, so it is not a
