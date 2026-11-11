@@ -20,6 +20,7 @@ import { epochMs, isoAt, nowIso } from "./time";
 import { mrId } from "./board-model";
 import { readForge, type MrPanels } from "./merges";
 import { isSetAside, isUnanswered } from "./store";
+import { readStepLines } from "./steps";
 
 const RoundJson = Schema.fromJsonString(
   Schema.Struct({ at: Schema.String, failed: Schema.Boolean }),
@@ -174,6 +175,10 @@ export const recoverParks = <E, R>(opts: {
                 recoveryId: `recover:${view.runId}:${park}:${attempt}`,
                 park,
                 since: view.park.since ?? at,
+                entries: Arr.filter(
+                  yield* readStepLines(`${opts.env.stateDir}/runs/${view.runId}`),
+                  (line) => line.kind === "entry",
+                ).length,
               };
               candidates.push({ view, claimed, fresh: true });
             } else {

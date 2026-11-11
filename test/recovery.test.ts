@@ -642,80 +642,83 @@ test(
   120_000,
 );
 
-test(
-  "a host killed after claiming recovery completes the same resume on restart",
-  () =>
-    proves(
-      "collie-recovery-crash-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          yield* fs.writeFileString(`${world.project}/dirty`, "waiting").pipe(Effect.orDie);
-          const extra = {
-            COLLIE_RECOVERY_EVERY: "250 millis",
-            COLLIE_RECOVERY_CRASH_AT: "claimed",
-          };
-          const started = yield* collie(
-            world,
-            [
-              "run",
-              "start",
-              "rechecks",
-              "--input",
-              "cause=checkout-dirty-collie",
-              "--input",
-              "mr=",
-              "--input",
-              `file=${world.home}/fact`,
-            ],
-            extra,
-          );
-          expect(started.envelope).toMatchObject({ ok: true });
-          const runId = yield* idOf(started.envelope.data);
-          const client = yield* connect(world.state).pipe(Effect.orDie);
-          yield* until(
-            () => client.run({ runId }).pipe(Effect.orDie),
-            (view) => view?.parked !== null,
-          );
-          yield* fs.writeFileString(`${world.home}/fact`, "ready").pipe(Effect.orDie);
-          yield* fs.remove(`${world.project}/dirty`).pipe(Effect.orDie);
-          yield* until(
-            () =>
-              ownerOf(world.state).pipe(
-                Effect.flatMap((owner) =>
-                  owner === null ? Effect.succeed(false) : holderLives(owner),
+for (const point of ["claimed", "recovery-park-cleared", "recovery-entered"] as const)
+  test(
+    `a host killed at ${point} completes the same resume on restart`,
+    () =>
+      proves(
+        "collie-recovery-crash-",
+        (world) =>
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            yield* fs.writeFileString(`${world.project}/dirty`, "waiting").pipe(Effect.orDie);
+            const extra = {
+              COLLIE_RECOVERY_EVERY: "250 millis",
+              ...(point === "claimed"
+                ? { COLLIE_RECOVERY_CRASH_AT: point }
+                : { COLLIE_HOST_CRASH_AT: point }),
+            };
+            const started = yield* collie(
+              world,
+              [
+                "run",
+                "start",
+                "rechecks",
+                "--input",
+                "cause=checkout-dirty-collie",
+                "--input",
+                "mr=",
+                "--input",
+                `file=${world.home}/fact`,
+              ],
+              extra,
+            );
+            expect(started.envelope).toMatchObject({ ok: true });
+            const runId = yield* idOf(started.envelope.data);
+            const client = yield* connect(world.state).pipe(Effect.orDie);
+            yield* until(
+              () => client.run({ runId }).pipe(Effect.orDie),
+              (view) => view?.parked !== null,
+            );
+            yield* fs.writeFileString(`${world.home}/fact`, "ready").pipe(Effect.orDie);
+            yield* fs.remove(`${world.project}/dirty`).pipe(Effect.orDie);
+            yield* until(
+              () =>
+                ownerOf(world.state).pipe(
+                  Effect.flatMap((owner) =>
+                    owner === null ? Effect.succeed(false) : holderLives(owner),
+                  ),
                 ),
-              ),
-            (alive) => !alive,
-          );
-          const restarted = yield* collie(world, ["run", "show", runId], {
-            COLLIE_RECOVERY_EVERY: "250 millis",
-          });
-          expect(restarted.envelope.ok).toBe(true);
-          const again = yield* connect(world.state).pipe(Effect.orDie);
-          const done = yield* until(
-            () => again.run({ runId }).pipe(Effect.orDie),
-            (view) => view?.status.status === "complete",
-          );
-          expect(done?.status.status).toBe("complete");
-          const lines = yield* again.runMetrics({ runId }).pipe(Effect.orDie);
-          const claims = Arr.filter(
-            lines,
-            (line) => line.action === "resumed" && line.outcome === "claimed",
-          );
-          expect(claims).toHaveLength(1);
-          const audit = yield* until(
-            () => readAudit(`${world.state}/runs/${runId}`).pipe(Effect.orDie),
-            (lines) => Arr.filter(lines, (line) => line.operation === "resume").length === 1,
-          );
-          expect(Arr.filter(audit, (line) => line.operation === "resume")[0]?.request).toBe(
-            claims[0]?.recoveryId,
-          );
-        }),
-      ["rechecks.workflow.ts"],
-    ),
-  120_000,
-);
+              (alive) => !alive,
+            );
+            const restarted = yield* collie(world, ["run", "show", runId], {
+              COLLIE_RECOVERY_EVERY: "250 millis",
+            });
+            expect(restarted.envelope.ok).toBe(true);
+            const again = yield* connect(world.state).pipe(Effect.orDie);
+            const done = yield* until(
+              () => again.run({ runId }).pipe(Effect.orDie),
+              (view) => view?.status.status === "complete",
+            );
+            expect(done?.status.status).toBe("complete");
+            const lines = yield* again.runMetrics({ runId }).pipe(Effect.orDie);
+            const claims = Arr.filter(
+              lines,
+              (line) => line.action === "resumed" && line.outcome === "claimed",
+            );
+            expect(claims).toHaveLength(1);
+            const audit = yield* until(
+              () => readAudit(`${world.state}/runs/${runId}`).pipe(Effect.orDie),
+              (lines) => Arr.filter(lines, (line) => line.operation === "resume").length === 1,
+            );
+            expect(Arr.filter(audit, (line) => line.operation === "resume")[0]?.request).toBe(
+              claims[0]?.recoveryId,
+            );
+          }),
+        ["rechecks.workflow.ts"],
+      ),
+    120_000,
+  );
 
 test(
   "a CI park waits for its job at the parked head and records the recheck on its card",

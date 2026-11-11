@@ -151,7 +151,7 @@ import { readDefinitions } from "./authoring";
 import { SharedDefinition } from "./definitions-model";
 import { DefinitionRefused, sharedDefinitions, takeDefinitions } from "./shared-definitions";
 import { sideJobs } from "./side-jobs";
-import { canRecover, recoverParks } from "./recovery";
+import { recoverParks } from "./recovery";
 import { machineMemory } from "./memory";
 import { Usage, usageLayer } from "./usage";
 import { HarnessCatalogues, catalogueLayer } from "./catalogue";
@@ -2161,25 +2161,6 @@ const frontDoorHandlers = (
           resume: (view, request, park) =>
             auditedControl(view.runId, "resume", request, { origin: "host" })(
               Effect.gen(function* () {
-                const current = yield* registry.view(view.runId);
-                if (current !== null && current.park?.id !== park)
-                  return {
-                    runId: view.runId,
-                    control: STOP,
-                    set: false,
-                    left: [],
-                    applied: true,
-                    detail: "The claimed park has already been left",
-                  };
-                if (current === null || !canRecover(current))
-                  return {
-                    runId: view.runId,
-                    control: STOP,
-                    set: false,
-                    left: [],
-                    applied: false,
-                    detail: "Recovery no longer eligible",
-                  };
                 if (
                   (yield* machineMemory(env)).short ||
                   configValue(yield* readConfig(env.userDir), "recovery.resume") === false
@@ -4117,7 +4098,16 @@ const locateIn =
       }),
     );
 
-const isCrashPoint = Schema.is(Schema.Literals(["admitted", "executed", "answered", "reported"]));
+const isCrashPoint = Schema.is(
+  Schema.Literals([
+    "admitted",
+    "executed",
+    "answered",
+    "reported",
+    "recovery-park-cleared",
+    "recovery-entered",
+  ]),
+);
 
 /** Where a test has this host kill itself mid-start; unset for every other host. */
 const crashPoint = Config.option(Config.String("COLLIE_HOST_CRASH_AT")).pipe(

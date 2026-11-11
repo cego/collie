@@ -61,6 +61,7 @@ export const MetricSchema = Schema.Struct({
   recoveryId: Schema.optionalKey(Schema.String),
   park: Schema.optionalKey(Schema.String),
   since: Schema.optionalKey(Schema.String),
+  entries: Schema.optionalKey(Schema.Int),
 });
 export type Metric = Schema.Schema.Type<typeof MetricSchema>;
 const MetricJson = Schema.fromJsonString(MetricSchema);

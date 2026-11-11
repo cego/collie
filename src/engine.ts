@@ -6471,7 +6471,13 @@ export interface Admitted {
  * run recorded and the engine not yet told, and with the engine told and the receipt not
  * yet written. Only a test sets one, through the host's `COLLIE_HOST_CRASH_AT`.
  */
-export type CrashPoint = "admitted" | "executed" | "answered" | "reported";
+export type CrashPoint =
+  | "admitted"
+  | "executed"
+  | "answered"
+  | "reported"
+  | "recovery-park-cleared"
+  | "recovery-entered";
 
 /**
  * How a host turns a public workflow id into the module this project should run. It is
@@ -7898,12 +7904,40 @@ const makeRegistry: (
     },
     recoveryPark?: string,
   ) {
+    const claim =
+      recoveryPark === undefined
+        ? undefined
+        : Option.getOrUndefined(
+            Arr.findLast(
+              yield* readMetrics(evidenceDir(dir, runId)),
+              (line) =>
+                line.park === recoveryPark &&
+                line.action === "resumed" &&
+                line.outcome === "claimed",
+            ),
+          );
+    const recoveryEntered = () =>
+      readStepLines(runDir(dir, runId)).pipe(
+        Effect.map(
+          (lines) =>
+            claim !== undefined &&
+            (claim.entries === undefined
+              ? Arr.some(
+                  lines,
+                  (line) => line.kind === "entry" && epochMs(line.at) >= epochMs(claim.at),
+                )
+              : Arr.filter(lines, (line) => line.kind === "entry").length > claim.entries),
+        ),
+      );
     if (recoveryPark !== undefined) {
+      if (yield* recoveryEntered()) return true;
       const row = yield* store.run(runId);
       const view = row === null ? null : yield* viewOf(row);
+      const savedPark = yield* readParkInfo(fs, controlPath(dir, PARK_INFO, runId));
       if (
+        claim === undefined ||
         view === null ||
-        view.park?.id !== recoveryPark ||
+        (view.park === null ? savedPark?.id !== recoveryPark : view.park?.id !== recoveryPark) ||
         view.controls.length > 0 ||
         Arr.some(
           view.waiting,
@@ -7927,6 +7961,7 @@ const makeRegistry: (
       const before = entries?.get(runId) ?? 0;
       const old = yield* fs.readFileString(controlPath(dir, PARKED, runId)).pipe(Effect.option);
       yield* clearParked(runId);
+      if (recoveryPark !== undefined) yield* crash("recovery-park-cleared");
       yield* engine
         .resume(workflow, found.execution)
         .pipe(Effect.onError(() => restoreParked(runId, old)));
@@ -7937,7 +7972,12 @@ const makeRegistry: (
       }
     }
     yield* settle(found);
-    return status === "suspended";
+    if (recoveryPark !== undefined) yield* crash("recovery-entered");
+    if (recoveryPark !== undefined && !(yield* recoveryEntered()))
+      return yield* new HostRefused({
+        reason: `${runId} has not recorded entry after its recovery claim`,
+      });
+    return recoveryPark !== undefined || status === "suspended";
   }, waking.withPermits(1));
 
   const settle = (found: { readonly generation: Generation; readonly execution: string }) =>
