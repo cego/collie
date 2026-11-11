@@ -324,6 +324,10 @@ impl Tab {
         self.blink.set(if lit { 1.0 } else { 0.0 });
     }
 
+    pub fn scale(&self) -> f32 {
+        self.scale.get()
+    }
+
     /// The display scale the grid is drawn at, which the view reads from Rune's `Env`.
     pub fn set_scale(&self, scale: f32) {
         if scale > 0.0 {

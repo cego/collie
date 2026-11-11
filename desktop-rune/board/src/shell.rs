@@ -172,6 +172,9 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
         .on_press(|app: &mut App| app.toggle_chat())
         .build(k)
         .key("open-chat");
+    if let Some(tab) = &app.terminal {
+        tab.set_scale(cx.env().scale);
+    }
     let main = page_pane(app, k, &mut layer);
     let split = SplitView::new(main)
         .sidebar(
@@ -193,5 +196,9 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
         .reduced_motion(cx.is_reduced_motion())
         .build(k);
     crate::standing::view(app, k, &mut layer);
-    rune_kit::root(split, layer)
+    rune_kit::root(split, layer).on_window_focus(|app: &mut App, focused: bool, _: &mut Tx| {
+        if let Some(tab) = &mut app.terminal {
+            tab.focus(focused);
+        }
+    })
 }

@@ -151,3 +151,29 @@ fn the_chats_width_is_taken_from_settings_and_saved_once_a_drag_lets_go() {
         [json!({ "chatWidth": 512.0 })]
     );
 }
+
+#[test]
+fn the_windows_focus_reaches_an_open_terminal_and_its_scale_is_the_displays() {
+    let mut app = App::default();
+    app.terminal = Some(collie_desktop_terminal::view::Tab::new(
+        None,
+        "laptop".into(),
+        80,
+        24,
+    ));
+    let mut runtime = Runtime::new(
+        app,
+        view,
+        (1280.0, 860.0),
+        Env {
+            system_dark: true,
+            scale: 1.5,
+        },
+    );
+    runtime.frame(0.0);
+    runtime.window_focus(false);
+    runtime.frame(0.1);
+    let tab = runtime.state.terminal.as_ref().unwrap();
+    assert!(!tab.focused());
+    assert_eq!(tab.scale(), 1.5);
+}
