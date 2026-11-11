@@ -257,7 +257,10 @@ fn main() {
                 .update(move |app: &mut App, _| change(app))
         }),
     );
-    handle.update(move |app, _| app.core = Some(calls));
+    handle.update(move |app, _| {
+        app.core = Some(calls);
+        app.listen_setup();
+    });
     go_to_panes(&handle, &client);
     chat(&handle, &client);
     diffs(&handle, &client);

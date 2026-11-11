@@ -160,5 +160,6 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
         .titlebar_inset(cx.titlebar_inset())
         .reduced_motion(cx.is_reduced_motion())
         .build(k);
+    crate::standing::view(app, k, &mut layer);
     rune_kit::root(split, layer)
 }
