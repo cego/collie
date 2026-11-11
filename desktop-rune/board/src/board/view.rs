@@ -44,6 +44,9 @@ pub fn view_in(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
     };
 
     let mut body = col().key("board-body").w_full().gap(28.0);
+    if board.columns.replace(columns) != columns {
+        body = body.instant_changes();
+    }
     let connecting = !board.flock.heard
         && app.machines.is_empty()
         && board.trouble.is_none()
@@ -724,16 +727,30 @@ fn card(
                 .grow(1.0)
                 .shrink()
                 .gap(6.0)
-                .child(
-                    text(task.name.clone())
-                        .key("name")
-                        .font(k.ty.ui_medium)
-                        .color(c.text_strong)
-                        .wrap()
-                        .max_lines(2)
+                .child({
+                    // The name always opens its record, a saved card's too, as stable's does.
+                    let opens = key.clone();
+                    el().key(format!("{id}-name"))
                         .w_full()
-                        .a11y_hidden(),
-                )
+                        .radius(4.0)
+                        .hover(c.hover)
+                        .cursor(rune::Cursor::Pointer)
+                        .focusable(true)
+                        .focus_ring(2.0, 0.0, c.border_focus)
+                        .role("button")
+                        .label(task.name.clone())
+                        .on_press(move |app: &mut App| app.open_card(&opens))
+                        .child(
+                            text(task.name.clone())
+                                .key("name")
+                                .font(k.ty.ui_medium)
+                                .color(c.text_strong)
+                                .wrap()
+                                .max_lines(2)
+                                .w_full()
+                                .a11y_hidden(),
+                        )
+                })
                 .child(status.a11y_hidden()),
         )
         .child(el().mt(-3.0).mr(-4.0).child(menu));

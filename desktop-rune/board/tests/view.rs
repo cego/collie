@@ -105,8 +105,11 @@ fn tap(runtime: &mut Runtime<App>, key: &str, at: f64) {
     runtime.frame(at + 100.0);
 }
 
-/// A card is opened by a second press; the first selects it.
+/// A card is opened by a second press; the first selects it. It is scrolled to first.
 fn open(runtime: &mut Runtime<App>, key: &str, at: f64) {
+    let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
+    runtime.wheel(x, 450.0, 450.0 - y);
+    runtime.frame(1.0);
     let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
     runtime.pointer_move(x, y);
     runtime.frame(at);
@@ -145,6 +148,7 @@ fn a_cards_record_reaches_its_pane_only_on_terminal_and_back_leaves_it_for_the_b
         },
     );
     runtime.frame(0.0);
+    runtime.frame(0.016);
     open(&mut runtime, "card-b2", 100.0);
     assert!(
         asked.lock().unwrap().is_empty(),
@@ -177,7 +181,7 @@ fn a_cards_record_reaches_its_pane_only_on_terminal_and_back_leaves_it_for_the_b
 }
 
 #[test]
-fn the_chat_opens_beside_the_board_and_closes() {
+fn the_chat_is_open_beside_the_board_at_start_and_closes_and_opens_again() {
     let mut runtime = Runtime::new(
         board(),
         view,
@@ -188,13 +192,16 @@ fn the_chat_opens_beside_the_board_and_closes() {
         },
     );
     runtime.frame(0.0);
-    assert!(!keys(&runtime).iter().any(|k| k == "chat"));
-    tap(&mut runtime, "open-chat", 100.0);
     let shown = keys(&runtime);
-    assert!(shown.iter().any(|k| k == "chat"), "{shown:?}");
+    assert!(
+        shown.iter().any(|k| k == "chat"),
+        "open at start: {shown:?}"
+    );
     assert!(shown.iter().any(|k| k == "card-b2"), "{shown:?}");
-    tap(&mut runtime, "open-chat", 1000.0);
+    tap(&mut runtime, "open-chat", 100.0);
     assert!(!keys(&runtime).iter().any(|k| k == "chat"));
+    tap(&mut runtime, "open-chat", 1000.0);
+    assert!(keys(&runtime).iter().any(|k| k == "chat"));
 }
 
 #[test]

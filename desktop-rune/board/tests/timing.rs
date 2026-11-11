@@ -98,12 +98,17 @@ fn runtime() -> Runtime<App> {
             scale: 1.0,
         },
     );
+    // The first frame measures the board; its columns are drawn on the next.
     runtime.frame(0.0);
+    runtime.frame(0.016);
     runtime
 }
 
-/// A card is opened by a second press; the first selects it.
+/// A card is opened by a second press; the first selects it. It is scrolled to first.
 fn open(runtime: &mut Runtime<App>, key: &str, at: f64) {
+    let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
+    runtime.wheel(x, 450.0, 450.0 - y);
+    runtime.frame(1.0);
     let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
     runtime.pointer_move(x, y);
     runtime.frame(at);

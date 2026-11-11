@@ -79,7 +79,7 @@ const CHAT_BESIDE: f32 = 224.0 + 480.0;
 pub struct Nav {
     pub page: Page,
     pub sidebar: PaneState,
-    /// The Flock chat's pane, closed until asked for.
+    /// The Flock chat's pane, open beside the board until closed or popped out.
     pub chat: PaneState,
     /// The chat's width as settings hold it, once they have been read.
     pub chat_saved: Option<f32>,
@@ -96,7 +96,7 @@ impl Default for Nav {
         Nav {
             page: Page::Board,
             sidebar: PaneState::new(224.0).range(168.0, 360.0),
-            chat: PaneState::new(440.0).range(CHAT_MIN, CHAT_MAX).collapsed(),
+            chat: PaneState::new(440.0).range(CHAT_MIN, CHAT_MAX),
             chat_saved: None,
             usage_asked: None,
             usage_asked_of: Vec::new(),

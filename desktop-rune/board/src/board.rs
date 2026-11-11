@@ -145,6 +145,8 @@ pub struct Board {
     pub older_open: bool,
     /// The board's width, for its columns.
     pub width: f32,
+    /// The columns last drawn, so a change of them lands at once rather than springing.
+    pub columns: std::cell::Cell<usize>,
     /// A fixed now for tests; the wall clock otherwise.
     pub clock: Option<f64>,
     /// Minutes east of UTC, for a test; this computer's own otherwise.

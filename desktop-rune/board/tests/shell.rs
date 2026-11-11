@@ -48,13 +48,13 @@ fn each_sidebar_row_opens_its_page_and_the_toolbar_names_it() {
 }
 
 #[test]
-fn the_chat_pane_opens_and_closes_from_the_toolbar() {
+fn the_chat_pane_starts_open_and_closes_and_opens_from_the_toolbar() {
     let mut runtime = runtime(App::default());
-    assert!(!runtime.state.nav.chat.is_open());
-    tap(&mut runtime, "open-chat", 100.0);
     assert!(runtime.state.nav.chat.is_open());
-    tap(&mut runtime, "open-chat", 2000.0);
+    tap(&mut runtime, "open-chat", 100.0);
     assert!(!runtime.state.nav.chat.is_open());
+    tap(&mut runtime, "open-chat", 2000.0);
+    assert!(runtime.state.nav.chat.is_open());
 }
 
 #[derive(Default)]
@@ -375,6 +375,7 @@ fn while_the_chat_is_in_its_own_window_the_toolbar_brings_that_window_forward() 
     let count = fronted.clone();
     app.nav.chat_window = Some(Box::new(move || *count.lock().unwrap() += 1));
     app.chat.popped = true;
+    collie_desktop_chat::Host::popped(&mut app, true);
     let mut runtime = runtime(app);
     let toggle = runtime
         .elements()

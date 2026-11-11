@@ -80,7 +80,9 @@ fn runtime(app: App) -> Runtime<App> {
             scale: 1.0,
         },
     );
+    // The first frame measures the board; its columns are drawn on the next.
     runtime.frame(0.0);
+    runtime.frame(0.016);
     runtime
 }
 
@@ -1140,7 +1142,7 @@ fn p2_a_card_menu_opens_at_its_trigger_on_a_card_scrolled_down_a_long_section() 
     let mut runtime = runtime_of(&harness, vec![snapshot(&pc(), tasks)]);
     let before = runtime.find("card-t28-menu").map(|(_, y)| y);
     let (x, y) = runtime.find("card-t0").unwrap();
-    runtime.wheel(x, y, -1500.0);
+    runtime.wheel(x, y, -8000.0);
     runtime.frame(1.0);
     let (tx, ty) = runtime.find("card-t28-menu").expect("the trigger is drawn");
     assert_ne!(before, Some(ty), "the board scrolled");
@@ -1351,5 +1353,55 @@ fn go_to_pane_opens_a_cards_record_on_its_terminal() {
     assert_eq!(
         *panes.lock().unwrap(),
         [("inst-pc".into(), "r-t1".into(), "mk-pc".into())]
+    );
+}
+
+#[test]
+fn a_cards_title_opens_its_record_with_one_press() {
+    let harness = Harness::new();
+    let mut runtime = runtime_of(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![task("t1", "One", "active", json!({}))],
+        )],
+    );
+    let title = node(&runtime, "card-t1-name").expect("the title is a control");
+    assert_eq!(title["role"], "button");
+    press(&mut runtime, "card-t1-name");
+    assert_eq!(
+        runtime.state.open_run,
+        Some(("inst-pc".into(), "r-t1".into()))
+    );
+    assert_eq!(runtime.state.selected_key().as_deref(), Some("inst-pc:t1"));
+}
+
+#[test]
+fn cards_take_the_columns_the_boards_width_fits_at_once_never_springing_into_them() {
+    let harness = Harness::new();
+    let mut runtime = runtime_of(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![task("t1", "Busy", "active", json!({}))],
+        )],
+    );
+    let (board, _) = runtime.presented("board-body").expect("the board");
+    runtime.frame(0.016);
+    let (card, _) = runtime.presented("card-t1").expect("the card");
+    assert_eq!(
+        card[2], board[2],
+        "one column, filled in the frame after measuring"
+    );
+
+    runtime.state.nav.chat.set_open(false);
+    runtime.invalidate();
+    runtime.frame(0.016);
+    runtime.frame(0.016);
+    let (board, _) = runtime.presented("board-body").expect("the board");
+    let (card, _) = runtime.presented("card-t1").expect("the card");
+    assert!(
+        (card[2] - (board[2] - 2.0 * 12.0) / 3.0).abs() < 1.0,
+        "three columns once the chat closes, without springing: {card:?} in {board:?}"
     );
 }

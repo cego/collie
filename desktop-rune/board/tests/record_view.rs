@@ -898,7 +898,12 @@ fn a_record_whose_details_are_not_on_its_machine_says_so_rather_than_reading() {
         Ok(json!({"detail": null, "asOf": null, "bytes": 0})),
     );
     settle(&mut runtime, &harness, 100.0);
-    let said: Vec<String> = within(&runtime.accessibility_json())
+    let tree = runtime.accessibility_json();
+    let record = within(&tree)
+        .into_iter()
+        .find(|n| n["key"] == "record")
+        .expect("the record");
+    let said: Vec<String> = within(record)
         .iter()
         .filter_map(|n| n["name"].as_str().map(String::from))
         .collect();
