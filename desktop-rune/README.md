@@ -17,6 +17,7 @@ review comments. The board's Chat button opens the Flock chat, which streams tur
 | `protocol/src/client.rs`     | The NDJSON client: requests, streams acked chunk by chunk, interrupts, the core gone                                                               |
 | `protocol/src/bin/roundtrip` | Decodes and re-encodes frames through the Rust types, for `test/rune-contract.test.ts`                                                             |
 | `board/`                     | The board view and its fold of `flock` items (a narrow copy of `applyItem`), and the app                                                           |
+| `board/src/pages/settings/`  | Settings: the Flock's settings, each checked by the core, Record timing, Connections and their tokens, About                                       |
 | `protocol/src/core.rs`       | Starts Desktop's main process as the core, for the app and the recorders                                                                           |
 | `chat/`                      | The Flock chat (AG-UI reducer, markdown policy, syntect highlighter) and the Diff tab's review comments                                            |
 | `terminal/`                  | Go to pane's terminal: the VT state, its Rune view, input as `terminal-input` maps it, settled resizes                                             |
