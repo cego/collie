@@ -457,6 +457,7 @@ export const TaskView = Schema.Struct({
   held: Schema.NullOr(Schema.String),
   /** Why its leading Run parked, as a Park cause and its kind; absent from an older host. */
   park: Schema.optionalKey(Schema.NullOr(Park)),
+  recovery: Schema.optionalKey(Schema.Array(Schema.String)),
   /** Who asked for the hold and why, which the drawer says and the card does not. */
   heldBy: Schema.NullOr(Schema.Struct({ by: Schema.String, reason: Schema.String })),
   decision: Schema.NullOr(Decision),

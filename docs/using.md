@@ -662,7 +662,13 @@ where a person does — it parks, and the card goes to Needs you. A parked card 
 more line naming its [**Park cause**](../CONTEXT.md) and what that cause lets Collie do —
 `Parked: ci-job-absent · Collie rechecks`, or `· needs you` — and the drawer's **parked**
 section adds why a person is needed; `collie run show` gives the same as `park` with its
-`cause` and `kind`. A Run is notified once per cause it parks for. While Collie runs
+`cause` and `kind`. Recheck parks stay quiet while Collie checks their facts and resumes
+those whose cause clears. After three automatic tries for the same cause, another park
+needs you and lists the tries. A card keeps its latest two recovery actions, and the drawer's
+**recovery** section keeps the latest 20, including after the Run moves on. A park that needs
+you is notified once per cause. You can turn automatic resume off with
+`collie settings set recovery.resume false`; rechecks continue. See
+[Stop and resume](cli.md#stop-and-resume) for the rechecks and their limits. While Collie runs
 one of the Run's checks itself, the sentence is about that check rather than the last step:
 which check, which pass and why, how long it has run against the median of its last five
 runs in this repository, and how many other checks this host is running —

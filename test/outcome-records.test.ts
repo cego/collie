@@ -115,7 +115,7 @@ test(
       (world) =>
         Effect.gen(function* () {
           const { runId, parked } = yield* parkedFor(world, "none");
-          expect(parked.park).toEqual({ cause: "unknown", kind: "needs-you" });
+          expect(parked.park).toMatchObject({ cause: "unknown", kind: "needs-you" });
           expect(yield* parkNotices(world, runId)).toEqual(["needs-you:parked:unknown"]);
         }),
       ["parks-for.workflow.ts"],
@@ -124,24 +124,21 @@ test(
 );
 
 test(
-  "a Run is told once per cause it parks for, whatever each park says",
+  "a recheck park stays quiet when a manual resume enters another recheck park",
   () =>
     proves(
       "collie-park-notices-",
       (world) =>
         Effect.gen(function* () {
           const { client, runId } = yield* parkedFor(world, "forge-unavailable,ci-job-absent");
-          expect(yield* parkNotices(world, runId)).toHaveLength(1);
+          expect(yield* parkNotices(world, runId)).toEqual([]);
           yield* client.resume({ runId, request: "resume-1" }).pipe(Effect.orDie);
           const again = yield* until(
             () => client.run({ runId }).pipe(Effect.orDie),
             (view) => view?.park?.cause === "ci-job-absent",
           );
           expect(again?.parked).toContain("ci-job-absent");
-          expect(yield* parkNotices(world, runId)).toEqual([
-            "needs-you:parked:forge-unavailable",
-            "needs-you:parked:ci-job-absent",
-          ]);
+          expect(yield* parkNotices(world, runId)).toEqual([]);
           const records = yield* client.runOutcomes({ runId }).pipe(Effect.orDie);
           expect(records.resumes).toEqual([{ at: expect.any(String), origin: "cli" }]);
           const reported = yield* collie(world, ["run", "report"]);

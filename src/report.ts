@@ -229,8 +229,10 @@ const measureLines = (measures: Measures): string[] => {
     ...Arr.map(
       recoveries.byCause,
       (one) =>
-        `  ${one.cause} ${one.action}  ${one.count} time${one.count === 1 ? "" : "s"}; ${one.recovered} recovered${
-          one.toRecover === null ? "" : `; turn end to Output median ${took(one.toRecover)}`
+        `  ${one.cause} ${one.action}  ${one.count} time${one.count === 1 ? "" : "s"}; ${one.recovered} recovered${one.falseRecoveries === undefined ? "" : `; ${one.falseRecoveries} false recover${one.falseRecoveries === 1 ? "y" : "ies"}`}${
+          one.toRecover === null
+            ? ""
+            : `; ${one.action === "resumed" ? "park to next step" : "turn end to Output"} median ${took(one.toRecover)}`
         }${citing(one.runs)}`,
     ),
     `parks: ${parks.collectExpiries.count} collect-budget expiries${citing(parks.collectExpiries.runs)}`,

@@ -14,10 +14,11 @@ import { readDispositions, latest } from "./disposition";
 import { launchDir, readLaunches, stemOf } from "./launches";
 import { deliveriesOf } from "./steering";
 import { readVerifications } from "./verify";
-import type { Metric, RecoveryAction } from "./metrics";
+import { recoveriesIn, type Metric, type RecoveryAction } from "./metrics";
 import type { ParkCause } from "./park-cause";
 import { readStepLines } from "./steps";
 import { epochMs } from "./time";
+import type * as Types from "effect/Types";
 
 const STEERING = ["steer", "followup", "deliver", "correction"] as const;
 type SteeringKind = (typeof STEERING)[number];
@@ -172,10 +173,11 @@ export interface Measures {
       Counted & {
         readonly cause: ParkCause;
         readonly action: RecoveryAction;
-        /** Those whose Output was then written and decoded. */
+        /** Actions followed by decoded Output or progress past the park. */
         readonly recovered: number;
-        /** Median ms from the turn's end to the Output, over the recovered; null where none. */
+        /** Median ms to recovery, from the missing Output's turn end or the park; null where none. */
         readonly toRecover: number | null;
+        readonly falseRecoveries?: number;
       }
     >;
   };
@@ -240,7 +242,13 @@ export function measuresOf(
   const collectExpiries: string[] = [];
   const recoveries = new Map<
     string,
-    { cause: ParkCause; action: RecoveryAction; runs: string[]; waits: number[] }
+    {
+      cause: ParkCause;
+      action: RecoveryAction;
+      runs: string[];
+      waits: number[];
+      falseRecoveries: number;
+    }
   >();
   const peakContext: Array<Measures["peakContext"][number]> = [];
 
@@ -264,19 +272,47 @@ export function measuresOf(
         reasons.set(reason, [...(reasons.get(reason) ?? []), runId]);
       }
     }
-    const latestRecoveries = new Map<string | number, Metric>();
-    for (const [index, line] of metrics.entries()) {
-      if (line.kind !== "recovery" || line.action === undefined) continue;
-      latestRecoveries.set(line.recoveryId ?? index, line);
-    }
-    for (const line of latestRecoveries.values()) {
+    for (const line of recoveriesIn(metrics)) {
       if (line.action === undefined) continue;
+      if (line.action === "resumed" && line.outcome !== "resumed") continue;
       const cause = line.cause ?? "unknown";
       const key = `${cause} ${line.action}`;
-      const kept = recoveries.get(key) ?? { cause, action: line.action, runs: [], waits: [] };
+      const kept = recoveries.get(key) ?? {
+        cause,
+        action: line.action,
+        runs: [],
+        waits: [],
+        falseRecoveries: 0,
+      };
       recoveries.set(key, kept);
       kept.runs.push(runId);
       if (line.outcome === "output-written") kept.waits.push(line.value);
+      if (line.action === "resumed") {
+        const claim =
+          Option.getOrUndefined(
+            Arr.findFirst(
+              metrics,
+              (one) => one.recoveryId === line.recoveryId && one.outcome === "claimed",
+            ),
+          ) ?? line;
+        const nextPark = Option.getOrUndefined(
+          Arr.findFirst(
+            halts,
+            (one) =>
+              epochMs(one.at) >= epochMs(claim.at) &&
+              (line.park === undefined || one.park !== line.park),
+          ),
+        );
+        if (nextPark?.cause === cause) kept.falseRecoveries += 1;
+        else {
+          const next = Option.getOrUndefined(Arr.findFirst(moved, (at) => at >= epochMs(claim.at)));
+          kept.waits.push(
+            next === undefined || line.since === undefined
+              ? line.value
+              : Math.max(0, next - epochMs(line.since)),
+          );
+        }
+      }
     }
     for (const resume of records?.resumes ?? []) {
       if (originOf(resume.origin) !== "human") continue;
@@ -398,13 +434,17 @@ export function measuresOf(
     },
     recoveries: {
       byCause: Arr.sortWith(
-        Arr.map([...recoveries.values()], ({ cause, action, runs, waits }) => ({
-          cause,
-          action,
-          ...counted(runs),
-          recovered: waits.length,
-          toRecover: median(waits),
-        })),
+        Arr.map([...recoveries.values()], ({ cause, action, runs, waits, falseRecoveries }) => {
+          const result: Types.Mutable<Measures["recoveries"]["byCause"][number]> = {
+            cause,
+            action,
+            ...counted(runs),
+            recovered: waits.length,
+            toRecover: median(waits),
+          };
+          if (action === "resumed") result.falseRecoveries = falseRecoveries;
+          return result;
+        }),
         (value) => value,
         (a, b) => Num.sign(b.count - a.count || pipe(a.cause, Str.localeCompare(b.cause))),
       ),

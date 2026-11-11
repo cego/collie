@@ -553,6 +553,9 @@ function Card(props: {
       <Show when={props.view.park != null}>
         <text fg={C.dim}>{parkLine(props.view.park!)}</text>
       </Show>
+      <For each={(props.view.recovery ?? []).slice(-2)}>
+        {(line) => <text fg={C.dim}>{line}</text>}
+      </For>
 
       <Show when={props.batch.stopping(props.view)}>
         <text fg={C.dim}>■ stopping…</text>

@@ -1,7 +1,10 @@
 // Why a Run parked, from one closed list, and what each cause lets the host do about it
 // (ADR-draft-a-run-recovers-where-it-parks).
 
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 import { Schema } from "effect";
+import type { Metric } from "./metrics";
 
 export const ParkCause = Schema.Literals([
   "output-absent",
@@ -23,7 +26,13 @@ export const ParkKind = Schema.Literals(["asks-agent", "rechecks", "needs-you"])
 export type ParkKind = typeof ParkKind.Type;
 
 /** A park as a reader shows it. */
-export const Park = Schema.Struct({ cause: ParkCause, kind: ParkKind });
+export const Park = Schema.Struct({
+  cause: ParkCause,
+  kind: ParkKind,
+  id: Schema.optionalKey(Schema.String),
+  since: Schema.optionalKey(Schema.String),
+  history: Schema.optionalKey(Schema.Array(Schema.String)),
+});
 export type Park = typeof Park.Type;
 
 type Entry =
@@ -73,6 +82,22 @@ export const PARK_CAUSES: Readonly<Record<ParkCause, Entry>> = {
 };
 
 export const parkOf = (cause: ParkCause): Park => ({ cause, kind: PARK_CAUSES[cause].kind });
+
+export const recoveryLine = (line: Metric) =>
+  `${line.at}: ${line.action} ${line.outcome} — ${line.note}`;
+
+export const parkWithRecovery = (park: Park, actions: ReadonlyArray<Metric>): Park => {
+  const same = Arr.filter(actions, (line) => line.cause === park.cause);
+  const tries = Arr.filter(same, (line) => line.action === "resumed" && line.outcome !== "skipped");
+  const exhausted = tries.length >= 3 && Arr.every(tries, (line) => line.park !== park.id);
+  const history = Arr.map(
+    [...Arr.filter(same, (line) => line.action === "rechecked").slice(-20), ...tries].sort((a, b) =>
+      Str.localeCompare(b.at)(a.at),
+    ),
+    recoveryLine,
+  );
+  return { ...park, kind: exhausted ? "needs-you" : park.kind, history };
+};
 
 const KIND_SAID: Readonly<Record<ParkKind, string>> = {
   "asks-agent": "Collie asks its agent",

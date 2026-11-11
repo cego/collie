@@ -157,7 +157,7 @@ function causesOf(
       significance: "decision",
       text: `Run ${run.id} (${about}) drifted from ${drifted} and Collie could not correct it. What is it doing instead, and should it be stopped or steered?`,
     });
-  if (run.state === "waiting" && run.asking.length === 0)
+  if (run.state === "waiting" && run.asking.length === 0 && run.park?.kind !== "rechecks")
     out.push({
       run: run.id,
       key: `${run.id}:parked:${run.note ?? ""}`,

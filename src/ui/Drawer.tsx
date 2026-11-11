@@ -357,6 +357,12 @@ export function Drawer(props: DrawerProps) {
           <Show when={parked().length > 0}>
             <Section title="parked" lines={parked()} />
           </Show>
+          <Show when={(props.view.recovery?.length ?? 0) > 0}>
+            <Section
+              title="recovery"
+              lines={Arr.map(props.view.recovery ?? [], (text) => ({ text, fg: C.muted }))}
+            />
+          </Show>
           <Show when={proposed().length > 0}>
             <Section title="proposal" lines={proposed()} />
           </Show>

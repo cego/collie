@@ -499,3 +499,62 @@ test("a reminder outcome update counts the same reminder once", () => {
     { count: 1, recovered: 1, toRecover: 40_000 },
   ]);
 });
+
+test("automatic resumes count false recoveries and time the next Step from the park", () => {
+  const resumed = (runId: string): Metric[] => {
+    const claim: Metric = {
+      at: "2026-09-30T10:01:00.000Z",
+      kind: "recovery",
+      subject: runId,
+      cause: "ci-job-absent",
+      build: "test",
+      action: "resumed",
+      outcome: "claimed",
+      recoveryId: `recover:${runId}:p:1`,
+      park: "p",
+      since: "2026-09-30T10:00:00.000Z",
+      value: 0,
+      note: "job present",
+    };
+    const done: Metric = {
+      ...claim,
+      at: "2026-09-30T10:02:00.000Z",
+      outcome: "resumed",
+      value: 120_000,
+    };
+    return [{ ...halt("2026-09-30T10:00:00.000Z", "ci-job-absent"), park: "p" }, claim, done, done];
+  };
+  const report = reportOf(
+    [view({ runId: "a" }), view({ runId: "b" }), view({ runId: "c" })],
+    new Map(),
+    null,
+    new Map([
+      ["a", { records: records({ moved: ["2026-09-30T10:01:30.000Z"] }), metrics: resumed("a") }],
+      [
+        "b",
+        {
+          records: records({ moved: ["2026-09-30T10:01:10.000Z"] }),
+          metrics: [
+            ...resumed("b"),
+            { ...halt("2026-09-30T10:01:20.000Z", "ci-job-absent"), park: "p2" },
+          ],
+        },
+      ],
+      ["c", { records: records({ moved: ["2026-09-30T10:04:30.000Z"] }), metrics: resumed("c") }],
+    ]),
+  );
+  expect(report.measures.recoveries.byCause).toEqual([
+    {
+      cause: "ci-job-absent",
+      action: "resumed",
+      count: 3,
+      runs: ["a", "b", "c"],
+      recovered: 2,
+      falseRecoveries: 1,
+      toRecover: 180_000,
+    },
+  ]);
+  expect(reportLines(report, null)).toContain(
+    "  ci-job-absent resumed  3 times; 2 recovered; 1 false recovery; park to next step median 3m: a, b, c",
+  );
+});

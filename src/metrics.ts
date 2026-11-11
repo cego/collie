@@ -20,9 +20,18 @@ import type { Metrics } from "./board-model";
 import { epochMs } from "./time";
 import { ParkCause } from "./park-cause";
 
-export const RecoveryAction = Schema.Literals(["reminded"]);
+export const RecoveryAction = Schema.Literals(["reminded", "rechecked", "resumed"]);
 export type RecoveryAction = typeof RecoveryAction.Type;
-export const RecoveryOutcome = Schema.Literals(["output-written", "still-absent"]);
+export const RecoveryOutcome = Schema.Literals([
+  "output-written",
+  "still-absent",
+  "cleared",
+  "uncleared",
+  "error",
+  "claimed",
+  "resumed",
+  "skipped",
+]);
 export type RecoveryOutcome = typeof RecoveryOutcome.Type;
 
 export const MetricSchema = Schema.Struct({
@@ -50,6 +59,8 @@ export const MetricSchema = Schema.Struct({
   action: Schema.optionalKey(RecoveryAction),
   outcome: Schema.optionalKey(RecoveryOutcome),
   recoveryId: Schema.optionalKey(Schema.String),
+  park: Schema.optionalKey(Schema.String),
+  since: Schema.optionalKey(Schema.String),
 });
 export type Metric = Schema.Schema.Type<typeof MetricSchema>;
 const MetricJson = Schema.fromJsonString(MetricSchema);
@@ -125,6 +136,13 @@ export const readMetrics = Effect.fn("Metrics.read")(function* (runDir: string) 
     Effect.orElseSucceed(() => none),
   );
 });
+
+export const recoveriesIn = (lines: ReadonlyArray<Metric>) => {
+  const latest = new Map<string | number, Metric>();
+  for (const [index, line] of lines.entries())
+    if (line.kind === "recovery") latest.set(line.recoveryId ?? index, line);
+  return [...latest.values()];
+};
 
 /** Enough of a verification for the detector; the real one is in `verify.ts`. */
 export interface FailureLike {

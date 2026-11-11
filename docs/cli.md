@@ -1002,6 +1002,23 @@ the same request asked while it runs gets that one result.
 Delivery reconciliation remains explicit: `not-sent` permits one resend, while `sent` waits
 for Output. An unresolved delivery stays uncertain.
 
+A park whose cause rechecks can resume automatically. The host checks for the named CI job
+at the parked head, an answering forge or herdr, or a clean Collie checkout. Rechecks start
+after one minute and double up to one hour. Host startup, a peer reconnecting, or a matching
+forge or pipeline update resets that wait to one minute. The resumed Step still runs its own gate.
+
+Automatic resumes use Actor `host` and request ids `recover:<run>:<park>:<n>`. A durable claim
+lets a restarted host finish the same request. They leave Decisions, Holds, Stops, and work
+on a superseded question alone, including controls on child Runs. At most two run at once
+on a Machine, and none starts while it is Short of memory. After three automatic resumes
+for one cause, another park for that cause needs you and lists the tries. A recheck park
+stays quiet until then; recovery itself sends no notification.
+
+`collie settings set recovery.resume false` turns automatic resume off across the Flock;
+rechecks are still recorded. Set it to `true` to turn it on again, its default. Three failed
+recheck rounds in a row raise one News item, `recovery-failing:<machine>`, which clears
+after a successful round. A failed round resumes nothing.
+
 A finished execution keeps its recorded result; `resume` does not reopen its steps. Use
 the Run's follow-up action to continue unfinished work on the same Task and branch.
 
@@ -1626,7 +1643,7 @@ counted from what the Runs in the window recorded, and each names the Run ids it
 | `steering`      | `runs[]`: each Run's `steer`, `followup`, `deliver` and `correction` counts and `byOrigin`. `byOrigin`: who asked — `human` (the board, Desktop, a terminal), `chat`, `agent` (an agent or a non-interactive CLI) and `host` (Collie's own corrections).                                                                                                                                                                                                                                                                    |
 | `verifications` | `total`, `runs[]` with each Run's `total` and how many an `agent` and `collie` collected, `byCollector`, `repeated` (same Run, check, start tree, result and collector as one before it) and `executableOnly` (named only by its executable, such as `bun`).                                                                                                                                                                                                                                                                |
 | `parks`         | `byCause`: each **Park cause**'s `count` of parks, its `runs`, `toNextStep` (the `median` and `max` milliseconds from a park to the Run's next Step, `null` while none has moved on) and `humanResumes` (resumes a person asked for, from the board, Desktop or a terminal, while the Run was parked for it). `byReason`: each park's `reason`, with the Run, pane, path and command it named taken out so like counts with like, and `collectExpiries`: an agent that had written nothing when its collect budget ran out. |
-| `recoveries`    | `byCause`: what Collie did about a **Park cause** on its own, each `cause` and `action` with its `count`, its `runs`, how many `recovered` and `toRecover`, the median milliseconds to recover (`null` where none has). For now that is the Output reminder: `output-absent` `reminded`, recovered when the Output written in the turn after the reminder decodes, timed from the first turn that ended without it.                                                                                                         |
+| `recoveries`    | `byCause`: each `cause` and `action` (`reminded`, `rechecked`, or `resumed`), its `count` and `runs`, how many `recovered`, and `toRecover`, the median milliseconds to recovery (`null` where none has). Resumes add `falseRecoveries`: an automatic resume followed by another park for the same cause. Reminders time from the first turn ending without Output to decoded Output; successful resumes time from the park to the next Step.                                                                               |
 | `peakContext[]` | Each Run's largest context sample at a work boundary, in `tokens`, and the `agent` it was on. A sample, not tokens consumed; `null` is not recorded, and is never estimated.                                                                                                                                                                                                                                                                                                                                                |
 
 Every field before `measures` is unchanged. A park is recorded as a `halt` line in the Run's
@@ -1636,6 +1653,10 @@ Each Output reminder records a `recovery` line when sent, with its `cause`, `act
 `recoveryId`, `outcome` (`still-absent`) and the host's `build`. Once the Output decodes,
 another line records `output-written` under the same `recoveryId`. The report counts each
 reminder once, using its latest outcome, including an Output corrected by the existing repair.
+Rechecks record their result, build, and backoff. An automatic resume records a claim and its
+outcome under one `recoveryId`; the report counts a completed resume once. A false recovery
+counts as a resume, but contributes no successful recovery time. `run show` and the card
+retain the latest recovery actions after the park clears; the drawer lists the latest 20.
 A context sample is recorded as a
 `context` line wherever Collie samples a reused agent's context at a work boundary. A Run
 from before those were recorded counts none of either. The text caps each list at 20 lines and each list of Run ids
