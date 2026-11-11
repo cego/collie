@@ -78,6 +78,8 @@ pub enum Words {
 /// The board's one open dialog.
 pub enum Dialog {
     Words {
+        /// The card it was opened on, by key.
+        card: String,
         kind: Words,
         installation: String,
         run: String,
@@ -86,6 +88,7 @@ pub enum Dialog {
         as_of: Option<f64>,
     },
     Offers {
+        card: String,
         installation: String,
         run: String,
         as_of: Option<f64>,
@@ -105,6 +108,7 @@ pub enum Dialog {
     /// A card's running check: what it is doing and its last lines, read off the live card.
     Check { card: String },
     Proposal {
+        card: String,
         installation: String,
         proposal: Proposal,
         as_of: Option<f64>,
@@ -288,6 +292,13 @@ pub fn offer_input(arguments: Option<&Value>, typed: &[(String, String)]) -> Val
     Value::Object(input)
 }
 
+/// An empty field that takes focus when its dialog opens.
+fn focused_edit() -> TextEdit {
+    let mut edit = TextEdit::new("");
+    edit.focused = true;
+    edit
+}
+
 impl App {
     /// One `flock` item: folded into the Flock, and what the board holds settled against it.
     pub fn apply(&mut self, item: FlockItem) {
@@ -301,6 +312,7 @@ impl App {
             self.notify(text, true, None);
         }
         self.board.told = notices;
+        self.settle_dialog();
         // A record closes when its card leaves the Flock.
         if let (Some(_), Some(key)) = (&self.open_run, self.board.opened.clone())
             && self.placed_by(&key).is_none()
@@ -678,21 +690,23 @@ impl App {
             }
             CardAction::Steer => {
                 self.board.dialog = Some(Dialog::Words {
+                    card: key.into(),
                     kind: Words::Steer,
                     installation,
                     run,
                     title: format!("What should {name} do?"),
-                    edit: TextEdit::new(""),
+                    edit: focused_edit(),
                     as_of,
                 })
             }
             CardAction::FollowUp => {
                 self.board.dialog = Some(Dialog::Words {
+                    card: key.into(),
                     kind: Words::FollowUp,
                     installation,
                     run,
                     title: format!("What still needs doing on {name}?"),
-                    edit: TextEdit::new(""),
+                    edit: focused_edit(),
                     as_of,
                 })
             }
@@ -702,9 +716,9 @@ impl App {
                 }
             }
             CardAction::Offer(offer) => {
-                self.open_offers(installation, run, as_of, Some(offer.id.clone()))
+                self.open_offers(key, installation, run, as_of, Some(offer.id.clone()))
             }
-            CardAction::Offers => self.open_offers(installation, run, as_of, None),
+            CardAction::Offers => self.open_offers(key, installation, run, as_of, None),
             CardAction::Resume => {
                 self.act(
                     &installation,
@@ -787,6 +801,7 @@ impl App {
     /// Asks the Run what it offers now: its module's decision at this moment, not the card's.
     fn open_offers(
         &mut self,
+        card: &str,
         installation: String,
         run: String,
         as_of: Option<f64>,
@@ -797,6 +812,7 @@ impl App {
         };
         let payload = json!({"installation": installation, "runId": run});
         self.board.dialog = Some(Dialog::Offers {
+            card: card.into(),
             installation,
             run,
             as_of,
@@ -857,7 +873,15 @@ impl App {
             *picked = Some(offer);
             *typed = fields
                 .iter()
-                .map(|(name, required)| (name.clone(), *required, TextEdit::new("")))
+                .enumerate()
+                .map(|(at, (name, required))| {
+                    let edit = if at == 0 {
+                        focused_edit()
+                    } else {
+                        TextEdit::new("")
+                    };
+                    (name.clone(), *required, edit)
+                })
                 .collect();
         }
         if fields.is_empty() {
@@ -932,6 +956,7 @@ impl App {
             return;
         };
         self.board.dialog = Some(Dialog::Proposal {
+            card: key.into(),
             installation: card.installation.to_string(),
             proposal,
             as_of: card.as_of,
@@ -986,6 +1011,46 @@ impl App {
             as_of,
             None,
         );
+    }
+
+    /// A dialog whose card has left the board closes, and a proposal's follows its card: a new
+    /// one is read from the start, and one decided elsewhere is no longer asked.
+    fn settle_dialog(&mut self) {
+        let card = match &self.board.dialog {
+            Some(
+                Dialog::Words { card, .. }
+                | Dialog::Offers { card, .. }
+                | Dialog::Proposal { card, .. }
+                | Dialog::Check { card },
+            ) => card.clone(),
+            _ => return,
+        };
+        let Some(placed) = self.placed_by(&card) else {
+            self.board.dialog = None;
+            return;
+        };
+        let now = match &placed.task.decision {
+            Some(collie_desktop_protocol::generated::Decision::Proposal(p)) => Some(p.clone()),
+            _ => None,
+        };
+        if let Some(Dialog::Proposal {
+            proposal,
+            seen,
+            shown,
+            end,
+            ..
+        }) = &mut self.board.dialog
+        {
+            match now {
+                Some(now) if now.id == proposal.id => {
+                    if now.hash != proposal.hash {
+                        *proposal = now;
+                        (*seen, *shown, *end) = (false, [0.0, 0.0], f32::MAX);
+                    }
+                }
+                _ => self.board.dialog = None,
+            }
+        }
     }
 
     /// The question dialog for a card's open questions.

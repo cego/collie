@@ -12,6 +12,15 @@ fn close(app: &mut App) {
     app.board.dialog = None;
 }
 
+/// A dialog's body, which gives focus back to its card when it closes: whatever opened it,
+/// a menu's item or the card's own button, may be gone by then.
+fn returns_to(app: &App, card: &str, body: El) -> El {
+    match super::view::card_id(app, card) {
+        Some(id) => body.focus_return(id),
+        None => body,
+    }
+}
+
 fn words_edit(app: &mut App) -> &mut TextEdit {
     match &mut app.board.dialog {
         Some(Dialog::Words { edit, .. }) => edit,
@@ -25,7 +34,11 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
     };
     match open {
         Dialog::Words {
-            kind, title, edit, ..
+            card,
+            kind,
+            title,
+            edit,
+            ..
         } => {
             let empty = edit.text.trim().is_empty();
             let body = col()
@@ -56,11 +69,12 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
             Modal::new("words", title.clone())
                 .open(true)
                 .fit()
-                .child(body)
+                .child(returns_to(app, card, body))
                 .on_close(close)
                 .build(k, layer);
         }
         Dialog::Offers {
+            card,
             run,
             as_of,
             offers,
@@ -149,7 +163,7 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
             Modal::new("offers", title)
                 .open(true)
                 .fit()
-                .child(body)
+                .child(returns_to(app, card, body))
                 .on_close(close)
                 .build(k, layer);
         }
@@ -238,7 +252,12 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                 .build(k, layer);
         }
         Dialog::Check { card } => check_output(app, k, card, layer),
-        Dialog::Proposal { proposal, seen, .. } => {
+        Dialog::Proposal {
+            card,
+            proposal,
+            seen,
+            ..
+        } => {
             let mut steps = col().gap(6.0).pt(12.0);
             for (at, action) in proposal.actions.iter().enumerate() {
                 let said = if action.allowed {
@@ -316,14 +335,16 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                 .open(true)
                 .width(600.0)
                 .fit()
-                .child(
+                .child(returns_to(
+                    app,
+                    card,
                     col()
                         .gap(12.0)
                         .padding(16.0)
                         .pt(0.0)
                         .child(content)
                         .child(footer),
-                )
+                ))
                 .on_close(close)
                 .build(k, layer);
         }
@@ -658,7 +679,7 @@ fn check_output(app: &App, k: &Kit, card: &str, layer: &mut Vec<El>) {
         }
     }
     let live = placed.as_ref().is_some_and(|p| p.as_of.is_none());
-    let card = card.to_string();
+    let opens = card.to_string();
     body = body.child(
         row().w_full().justify_end().child(
             Button::new("Open record")
@@ -666,7 +687,7 @@ fn check_output(app: &App, k: &Kit, card: &str, layer: &mut Vec<El>) {
                 .disabled(!live)
                 .on_press(move |app: &mut App| {
                     app.board.dialog = None;
-                    app.open_card(&card);
+                    app.open_card(&opens);
                 })
                 .build(k)
                 .key("check-open-record"),
@@ -680,7 +701,7 @@ fn check_output(app: &App, k: &Kit, card: &str, layer: &mut Vec<El>) {
         .open(true)
         .width(640.0)
         .fit()
-        .child(body)
+        .child(returns_to(app, card, body))
         .on_close(close)
         .build(k, layer);
 }
