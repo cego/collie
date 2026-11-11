@@ -360,6 +360,7 @@ interface Answer {
   readonly cloned?: string;
   readonly noted?: { readonly key: string; readonly body: string };
   readonly approved?: string;
+  readonly dismissed?: string;
   readonly retried?: { readonly mr: FakeMr; readonly at: number | ReadonlyArray<number> };
   readonly pipelineStarted?: {
     readonly sha: string;
@@ -1575,11 +1576,10 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
     if (
       pull !== undefined &&
       kind === "pulls" &&
-      rest === "reviews" &&
-      flag(args, "-X") === "POST" &&
-      field(args, "commit_id") !== pull.head
+      rest === "reviews/1/dismissals" &&
+      flag(args, "-X") === "PUT"
     )
-      return refused("422 SHA does not match HEAD");
+      return { ...json({ id: 1, state: "DISMISSED" }), dismissed: keyOf("github", pull) };
     if (pull !== undefined && kind === "pulls" && rest === "reviews" && flag(args, "-X") === "POST")
       return model.refusesApproval
         ? refused(model.refusesApproval === true ? "403 Forbidden" : `403 ${model.refusesApproval}`)
@@ -1974,6 +1974,11 @@ export function answer(
     after = { ...after, cloned: [...(after.cloned ?? []), said.cloned] };
   if (said.approved !== undefined)
     after = { ...after, approved: [...(after.approved ?? []), said.approved] };
+  if (said.dismissed !== undefined)
+    after = {
+      ...after,
+      approved: Arr.filter(after.approved ?? [], (one) => one !== said.dismissed),
+    };
   if (said.retried !== undefined) {
     const { mr, at } = said.retried;
     after = {

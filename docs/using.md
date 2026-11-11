@@ -2845,6 +2845,11 @@ a host restart. The note names the reviewed head, your forge login, the Run, and
 When no open or disputed findings remain, the menu offers **Post and approve `<short sha>`**. Approval follows
 the post as a separate request pinned to that head. A forge refusal, including a moved head
 or a self-approval rule, ends the Run with its reason on the card and is not retried.
+GitLab rejects a stale `sha` atomically. GitHub's `commit_id` names the reviewed commit,
+so Collie also checks the PR head before and after approval. If the head changes during
+approval, Collie dismisses that approval and reports failure. GitHub has no atomic head
+guard here; an approval can briefly stand before dismissal. If dismissal fails, the card
+asks you to dismiss it on GitHub.
 With findings left, **Post** sends only the note. It refuses a merge request assigned to
 you, on either forge: those findings are yours to fix. On GitLab, that comparison uses
 your login on the target's own host.

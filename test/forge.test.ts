@@ -116,6 +116,38 @@ for (const name of ["gitlab", "github"] as const) {
       );
     });
 
+    test("refuses an approval after the reviewed head has changed", () => {
+      const fake = fakeForge(name, model(name, { mrs: [mr(name, { head: MERGED })] }));
+      return runEffect(
+        Effect.gen(function* () {
+          const approved = yield* forge.approve(ref(name), HEAD, "/w", fake.run);
+          expect(approved.ok).toBe(false);
+          expect(approved.message).toContain("SHA does not match HEAD");
+          expect(fake.model().approved ?? []).toEqual([]);
+        }).pipe(Effect.provide(fake.layer)),
+      );
+    });
+
+    if (name === "github")
+      test("withdraws an approval if a push races with GitHub accepting it", () => {
+        const fake = fakeForge(name, model(name));
+        const layer = forgeHttpTest(fake.run, (url, init) =>
+          fake.fetch(url, init).then((response) => {
+            if (Str.endsWith("/reviews")(url) && init?.method === "POST")
+              fake.set({ ...fake.model(), mrs: [mr(name, { head: MERGED })] });
+            return response;
+          }),
+        );
+        return runEffect(
+          Effect.gen(function* () {
+            const approved = yield* forge.approve(ref(name), HEAD, "/w", fake.run);
+            expect(approved.ok).toBe(false);
+            expect(approved.message).toContain("SHA does not match HEAD");
+            expect(fake.model().approved ?? []).toEqual([]);
+          }).pipe(Effect.provide(layer)),
+        );
+      });
+
     test("finds only the note whose last line signs this Run, round and head", () => {
       const signature = `Review by Collie for @me · run-one round 1 at ${HEAD}`;
       const fake = fakeForge(

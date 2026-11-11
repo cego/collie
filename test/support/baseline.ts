@@ -2826,16 +2826,20 @@ for (const name of ["gitlab", "github"] as const) {
                   Str.endsWith(name === "gitlab" ? "/approve" : "/reviews")(one.url) &&
                   one.method === "POST",
               );
-            expect(Arr.map(approvals(), (one) => one.body)).toEqual([
-              name === "gitlab"
-                ? { sha: REVIEW_HEAD }
-                : { event: "APPROVE", commit_id: REVIEW_HEAD },
-            ]);
+            const expected: Schema.Json[] =
+              name === "github" && refusal === "stale head"
+                ? []
+                : [
+                    name === "gitlab"
+                      ? { sha: REVIEW_HEAD }
+                      : { event: "APPROVE", commit_id: REVIEW_HEAD },
+                  ];
+            expect(Arr.map(approvals(), (one) => one.body)).toEqual(expected);
             const restarted = yield* driven({ ...options, restarted: true }, (run) =>
               ended(run.status),
             );
             expect(outcomeText(restarted)).toContain(reason);
-            expect(approvals()).toHaveLength(1);
+            expect(approvals()).toHaveLength(expected.length);
             yield* bin.restore();
           }),
         ),
