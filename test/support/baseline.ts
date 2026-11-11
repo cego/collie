@@ -5581,7 +5581,6 @@ const withOrigin = () =>
 
 const PREREQUISITE_MR = `https://${PROJECT.gitlab}/-/merge_requests/41`;
 
-/** Another Run on this host whose recorded merge request is open on the fake forge. */
 const prerequisiteOpen = (runId: string) =>
   Effect.gen(function* () {
     const origin = yield* withOrigin();
@@ -5606,7 +5605,6 @@ const prerequisiteOpen = (runId: string) =>
       forge,
       open,
       other,
-      /** The merge request merged as a new commit on origin's master, answering with it. */
       land: Effect.gen(function* () {
         const merged = yield* origin.moveMaster("prerequisite.txt", "landed\n");
         yield* forge.set({
@@ -5618,7 +5616,6 @@ const prerequisiteOpen = (runId: string) =>
     };
   });
 
-/** The same, with a ticket that needs its Change merged and the fixture that waits on it. */
 const awaitingPrerequisite = (runId: string) =>
   Effect.gen(function* () {
     const prerequisite = yield* prerequisiteOpen(runId);
@@ -10490,7 +10487,6 @@ const awaitingOn = (runId: string) =>
     Effect.orElseSucceed(() => ""),
   );
 
-/** The line a Run's card shows for what it awaits, or "" while it awaits nothing. */
 const awaitedLine = (runId: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(controlPath(dir, AWAITING, runId))),

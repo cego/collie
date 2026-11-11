@@ -4357,7 +4357,6 @@ export const hostLayer = (options: {
             return { _tag: "Merged", onDefault: carried.code === 0 } satisfies MrLanding;
           }),
         );
-      /** One read of whether the Changes a ticket needs merged have landed. */
       const prerequisitesRead = (asked: {
         readonly runId: string;
         readonly cwd: string;

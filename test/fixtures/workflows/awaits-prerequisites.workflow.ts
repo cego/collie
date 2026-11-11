@@ -1,5 +1,3 @@
-// A Run that waits until the Changes its ticket needs merged have landed.
-
 import { Host, PrerequisiteStandingSchema, Run, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";

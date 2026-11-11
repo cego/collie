@@ -1,6 +1,3 @@
-// Whether the other Runs' Changes a ticket needs merged have landed, judged from what the host
-// gathered: its Runs, the merge requests they recorded, and where each merge went.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Schema } from "effect";
@@ -36,7 +33,6 @@ export interface RunLine {
   readonly parent: string | null;
 }
 
-/** The named Run and every Run that came out of it. */
 function withDescendants(rows: ReadonlyArray<RunLine>, run: string): ReadonlyArray<string> {
   const family = [run];
   for (let at = 0; at < family.length; at++)

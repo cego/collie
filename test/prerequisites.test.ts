@@ -1,5 +1,3 @@
-// Whether the Changes a ticket needs merged have landed, judged from what the host gathered.
-
 import { expect, test } from "bun:test";
 import { judgePrerequisites, type MrLanding, type RunDetail } from "../src/prerequisites";
 
