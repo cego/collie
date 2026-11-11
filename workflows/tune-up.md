@@ -195,8 +195,8 @@ marker. File exactly one issue for it with the Linear MCP server, in team {{team
 {{finding}}
 
 - Title: the finding's title.
-- Description: the finding as above, then `{{marker}}` exactly, on a line of its own, so a
-  later search finds this issue rather than filing another.
+- Description: the finding as above, then the hidden HTML comment `<!-- {{marker}} -->`
+  exactly, on a line of its own, so a later search finds this issue rather than filing another.
 
 Public text is what goes outside Collie in the human's name: a merge request note or reply,
 an issue or comment in another repository, a Slack message, a Linear issue. Write it as the

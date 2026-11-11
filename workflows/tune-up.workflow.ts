@@ -667,7 +667,7 @@ const keyOf = (one: External) =>
 const markerOf = (key: string) => `collie:${key}`;
 
 /** One external finding as the human reads it, in the report and in its question. */
-const previewOf = (one: External, key: string) =>
+const previewOf = (one: External) =>
   redact(
     Arr.join(
       [
@@ -683,7 +683,6 @@ const previewOf = (one: External, key: string) =>
         ...(one.existing === undefined ? [] : [`- Existing issue: ${one.existing}`]),
         "- Acceptance criteria:",
         ...Arr.map(one.criteria, (criterion) => `  - ${criterion}`),
-        `- Key: ${key}, carried by its issue as ${markerOf(key)}`,
       ],
       "\n",
     ),
@@ -877,8 +876,7 @@ const bodyOf = (got: {
           ...Arr.map(got.plans, (reason, at) => `- Plan ${at + 1}: ${reason}`),
           ...Arr.map(
             got.finals,
-            (one) =>
-              `- ${one.base.commit} against ${one.candidate.head_sha}: ${verdictsLine(one)}`,
+            (one) => `- ${one.base.commit} against ${one.candidate.head_sha}: ${verdictsLine(one)}`,
           ),
           "",
           "#### Reproduce",
@@ -1511,7 +1509,7 @@ export default defineWorkflow({
           const decided = `${key}.decided`;
           if (one.existing !== undefined)
             return yield* recorded(decided, `external ${key}: existing ${one.existing}`);
-          const finding = previewOf(one, key);
+          const finding = previewOf(one);
           const team =
             one.team ??
             (yield* ask({
@@ -1613,7 +1611,7 @@ export default defineWorkflow({
                         "",
                         "Improvements only another repository can make. None is assumed done: no Measurement, outcome or merge readiness counts on any of them.",
                         "",
-                        ...Arr.flatMap(keyed, ({ key, one }) => [previewOf(one, key), ""]),
+                        ...Arr.flatMap(keyed, ({ one }) => [previewOf(one), ""]),
                       ],
                       "\n",
                     ),

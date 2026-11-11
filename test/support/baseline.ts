@@ -20768,7 +20768,7 @@ const ISSUE = "https://linear.app/acme/issue/PERF-1";
 /** One issue filed in the fake tracker, carrying the marker its prompt gave. */
 const FILED = () => ({
   writes: [],
-  sh: `${MARKED} && echo "${ISSUE} $marker" >> '${tracker()}'`,
+  sh: `marker=$(grep -o '<!-- collie:external-[0-9a-f]* -->' "$PROMPT_PATH" | head -n 1); [ -n "$marker" ] && echo "${ISSUE} $marker" >> '${tracker()}'`,
   output: { url: ISSUE },
 });
 
@@ -20876,8 +20876,10 @@ scenario(
             Arr.some(driving.asked, (row) => pipe(row.prompt, Str.includes(KNOWN.title))),
           ).toBe(false);
           expect(yield* externalPrompts(runId)).toEqual([`${pooling}-search`, `${pooling}-create`]);
-          expect(yield* asked(runId, `${pooling}-create`)).toContain(`collie:${pooling}`);
-          expect(yield* trackerLines()).toEqual([`${ISSUE} collie:${pooling}`]);
+          const creating = yield* asked(runId, `${pooling}-create`);
+          expect(creating).toContain(`hidden HTML comment \`<!-- collie:${pooling} -->\``);
+          expect(creating).not.toContain("- Key:");
+          expect(yield* trackerLines()).toEqual([`${ISSUE} <!-- collie:${pooling} -->`]);
           const log = yield* runLog(runId);
           const proved = Option.getOrElse(
             pipe(log, Str.indexOf("performance proved on")),
@@ -20942,7 +20944,7 @@ scenario(
             `${key}-create`,
             `${key}-recheck`,
           ]);
-          expect(yield* trackerLines()).toEqual([`${ISSUE} collie:${key}`]);
+          expect(yield* trackerLines()).toEqual([`${ISSUE} <!-- collie:${key} -->`]);
           expect(yield* runLog(runId)).toContain(`external ${key}: posted ${ISSUE}`);
         }),
       ),

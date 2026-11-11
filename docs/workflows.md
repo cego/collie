@@ -1299,7 +1299,8 @@ with no Discover or Harness Output fails the Run, naming the files it looked for
     `Post` only, its question showing the finding. A finding with no known team asks for the
     team in your own words first. Post has the tuner search Linear, read-only, for the issue
     carrying the key's marker and for open issues asking for the same change, and file one
-    issue carrying the marker only where it found none. A finding that already matched an
+    issue carrying the marker in a hidden HTML comment only where it found none.
+    Searches still recognise earlier issues whose marker was visible. A finding that already matched an
     issue when it was found is recorded as `existing` and not asked. Your answer and the
     issue's URL go in the Run's log. A host restarted while an issue was being filed never
     files blind: it searches again, records the issue it finds, and otherwise asks again,
