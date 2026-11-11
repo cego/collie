@@ -232,6 +232,15 @@ the queued words back to the composer. Tool rows open to their input and ANSI-co
 the chat's questions are answered in place (`answer`), harness, model (a typed id too) and effort
 save through `setSettings` and a refusal is said, earlier conversations reopen, the setup offer
 is answered inline, a message copies, and the board's card rides on the next message as a chip.
+`chat/src/log.rs` draws the transcript (a run of finished tool calls folds into one "Used N
+tools" line, a reply under way says "Working…" until its words or a waiting call show, and a
+log scrolled up offers Jump to latest) and `chat/src/composer.rs` the message box, its choices
+as menus in one row with Attach and Send. A lost subscription retries on its own with Desktop's
+backoff and counts down to it. The header's Pop out moves the chat to its own window
+(`chat/src/window.rs`, opened through `App::window`, not while a reply streams), and closing that
+window puts it back beside the board. `cargo run -p collie-desktop-chat --example states --
+--scene <name> --snap x.png` draws its empty, loading, tools, working, question, error,
+reconnecting, popped, queued and long states on no core.
 
 ### An open Run's record
 
@@ -380,12 +389,20 @@ after Back, until another card is pressed. Rune has no
 ### Machines, Workflows, Schedules, Usage and the Standing setup
 
 `board/src/pages/` ports Desktop's Machines page (`flock.rs` folds `flock` as `applyItem` does,
-`in_sync.rs`, `cleanup.rs`, `onboard.rs`, Add Machine and each Machine's own settings), the
-Workflows page (a Tree of what this computer's host read), Schedules (one Table, its actions
-on the chosen row, Move to…), and Usage (one section per Subscription account, ADR-0049).
-`clock.rs` reads ISO times and the local zone without a date crate. `board/src/standing.rs`
-is the Standing setup's offer, consent dialog and choice. `board/tests/{machines,schedules,
-usage,workflows,standing}.rs` drive them through the fake core.
+`in_sync.rs`, `cleanup.rs`, `onboard.rs`, Add Machine; its header says how many Machines it
+reaches before whether they are In sync), the Workflows page (a Tree of what this computer's
+host read, a definition read under a ruled header, its metadata folded), Schedules (each
+Machine's in its own section, next and last on this computer's clock, each row's own actions,
+Move to…; read again whenever the live Machines change, through an `on_layout` marker keyed by
+them), and Usage (one section per Subscription account, ADR-0049; a thread asks again every
+minute while the app holds the page, as `useUsage` does). Settings draws each Machine's own as
+a table from `flock`'s `OwnRead`s, its controls in one 260 pt column, and Help me write it on
+the Standing direction. An onboarding, or Linear's setup job, shows over whichever page is open:
+`standing::view` draws its dialog. `clock.rs` reads ISO times and the local zone without a date
+crate. `board/src/standing.rs` is the Standing setup's offer, consent dialog and choice.
+`board/tests/{machines,schedules,usage,workflows,settings,standing}.rs` drive them through the
+fake core. Zoom is not offered: Rune draws at the monitor's own scale and has no app-wide zoom
+for the setting to change.
 
 ### Desktop's marks
 

@@ -2,6 +2,7 @@
 //! resuming, removing or moving the chosen one. A port of `desktop/src/shared/schedules.ts`,
 //! `useSchedules` and `MoveScheduleDialog.vue`.
 
+use super::clock::{Zone, epoch_ms, reset_in, when_of};
 use super::common::{Told, Tone, muted, toasts, toned};
 use crate::App;
 use collie_desktop_protocol::generated::{
@@ -10,10 +11,9 @@ use collie_desktop_protocol::generated::{
 };
 use rune::{El, TextEdit, col, el, row, text};
 use rune_kit::{
-    Button, ButtonVariant, Cell, ControlSize, Dialog, Field, Kit, Select, Table, TableColumn,
-    TableState, TextInput,
+    Badge, BadgeVariant, Button, ButtonVariant, ControlSize, Dialog, Divider, Field, Kit, Select,
+    Spinner, TextInput,
 };
-use std::borrow::Cow;
 
 pub const UPGRADE_SAID: &str = "Can't list its Schedules; upgrade this Machine.";
 
@@ -85,6 +85,37 @@ pub struct RowView {
     pub next: String,
     pub last: String,
     pub actions: Vec<Action>,
+    /// What `when`, `next` and `last` are made of, for the page to say on its own clock.
+    pub cron_words: Option<String>,
+    pub expression: String,
+    pub paused: bool,
+    pub next_at: Option<String>,
+    pub last_at: Option<(String, String)>,
+}
+
+/// When a Schedule fires next, on this computer's clock: `05:00 · in 3h 0m`.
+pub fn next_said(row: &RowView, now: f64, zone: &Zone) -> String {
+    if row.paused {
+        return "Paused".into();
+    }
+    match row.next_at.as_deref() {
+        None => "When its Run ends".into(),
+        Some(iso) => match epoch_ms(iso) {
+            Some(ms) => format!("{} · {}", when_of(ms, now, zone), reset_in(iso, now)),
+            None => iso.to_string(),
+        },
+    }
+}
+
+/// What its last occurrence came to, on this computer's clock: `14 Oct, 05:00 · run-1 complete`.
+pub fn last_said(row: &RowView, now: f64, zone: &Zone) -> String {
+    match &row.last_at {
+        None => "Nothing yet".into(),
+        Some((iso, said)) => match epoch_ms(iso) {
+            Some(ms) => format!("{} · {said}", when_of(ms, now, zone)),
+            None => format!("{iso} · {said}"),
+        },
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,6 +185,15 @@ pub fn cron_words(cron: &str) -> Option<String> {
     }
 }
 
+fn outcome_said(last: &Last) -> String {
+    match &last.outcome {
+        LastOutcome::Run(run) => format!("{} {}", run.run, run.status),
+        LastOutcome::WaitingForRun(run) => format!("waiting for {} ({})", run.run, run.status),
+        LastOutcome::WaitingForHerdr(_) => "waiting for herdr".into(),
+        LastOutcome::Refused(refused) => format!("refused: {}", refused.reason),
+    }
+}
+
 /// What one Schedule's last occurrence came to, in a few words.
 pub fn last_line(last: Option<&Last>) -> String {
     let Some(last) = last else {
@@ -177,7 +217,7 @@ fn row_of(machine: &SchedulesSuccessItem, entry: &Schedule) -> RowView {
         workflow: entry.workflow.clone(),
         checkout: entry.checkout.clone(),
         when: match cron_words(&entry.cron) {
-            None => expression,
+            None => expression.clone(),
             Some(words) => format!("{words} ({expression})"),
         },
         next: if entry.paused {
@@ -189,6 +229,14 @@ fn row_of(machine: &SchedulesSuccessItem, entry: &Schedule) -> RowView {
             )
         },
         last: last_line(entry.last.as_ref()),
+        cron_words: cron_words(&entry.cron),
+        expression,
+        paused: entry.paused,
+        next_at: entry.next.clone(),
+        last_at: entry
+            .last
+            .as_ref()
+            .map(|last| (last.occurrence.clone(), outcome_said(last))),
         actions: vec![
             if entry.paused {
                 Action::Resume
@@ -266,9 +314,22 @@ pub struct Schedules {
     /// Whether the first listing has come.
     pub listed: bool,
     asks: u64,
-    pub table: TableState,
+    /// The Machines live when the latest listing was asked for; another set asks again.
+    asked_live: Option<String>,
     pub moving: Option<Moving>,
     pub told: Told,
+}
+
+/// The Machines live now, as a listing of Schedules is asked of them.
+fn live_set(app: &App) -> String {
+    let mut live: Vec<&str> = app
+        .machines
+        .iter()
+        .filter(|m| app.is_live(m))
+        .map(|m| m.machine.installation.as_str())
+        .collect();
+    live.sort_unstable();
+    live.join(" ")
 }
 
 impl Schedules {
@@ -283,13 +344,6 @@ impl Schedules {
             .iter()
             .flat_map(|m| machine_schedules(m).rows)
             .collect()
-    }
-
-    fn chosen(&self) -> Option<RowView> {
-        let id = self.table.cursor()?;
-        self.rows()
-            .into_iter()
-            .find(|r| format!("{}/{}", r.installation, r.name) == id)
     }
 
     /// The other reachable Machines a Schedule on `from` can move to: installation and name.
@@ -310,7 +364,9 @@ impl App {
     /// Asks each connected Machine's host for its Schedules; an older ask never wins.
     pub fn read_schedules(&mut self) {
         let Some(core) = &self.core else { return };
+        let live = live_set(self);
         let state = &mut self.pages.schedules;
+        state.asked_live = Some(live);
         state.asks += 1;
         let ask = state.asks;
         core.request(
@@ -330,6 +386,20 @@ impl App {
                 }
             },
         );
+    }
+
+    /// The page has drawn with `live` Machines; one that came or went since the listing
+    /// was asked for has Schedules of its own, so every Machine is asked again.
+    pub fn schedules_reach(&mut self, live: &str) {
+        let state = &self.pages.schedules;
+        if self.nav.page == crate::shell::Page::Schedules
+            && state
+                .asked_live
+                .as_deref()
+                .is_some_and(|asked| asked != live)
+        {
+            self.read_schedules();
+        }
     }
 
     fn schedule_said(&mut self, said: Result<String, crate::calls::CallError>) {
@@ -476,60 +546,184 @@ fn move_dialog(state: &Schedules, k: &Kit, layer: &mut Vec<El>) {
         .build(k, layer);
 }
 
-fn cell(row: &RowView, column: &str) -> Cell {
-    match column {
-        "name" => Cell::text(row.name.clone()),
-        "machine" => Cell::text(row.machine.clone()).muted(),
-        "workflow" => Cell::text(format!("{} in {}", row.workflow, row.checkout)).muted(),
-        "when" => Cell::text(row.when.clone()),
-        "next" => Cell::text(row.next.clone()).mono(),
-        _ => Cell::text(row.last.clone()).muted(),
-    }
+fn action_button(k: &Kit, row: &RowView, action: Action) -> El {
+    let (installation, name) = (row.installation.clone(), row.name.clone());
+    Button::new(action.label())
+        .variant(if action == Action::Remove {
+            ButtonVariant::GhostMuted
+        } else {
+            ButtonVariant::Ghost
+        })
+        .control_size(ControlSize::Small)
+        .on_press(move |app: &mut App| app.schedule_action(&installation, &name, action))
+        .build(k)
+        .key(action.key())
+        .label(format!(
+            "{} {}",
+            action.label().trim_end_matches('…'),
+            row.name
+        ))
 }
 
-fn actions(state: &Schedules, k: &Kit) -> El {
-    let bar = row()
-        .key("schedule-actions")
+/// One fact of a Schedule: a faint caption over its value.
+fn fact(k: &Kit, caption: &str, value: String, sub: Option<String>) -> El {
+    col()
+        .w_frac(1.0 / 3.0)
+        .min_w(0.0)
+        .pr(12.0)
+        .gap(2.0)
+        .role("group")
+        .label(format!("{caption}: {value}"))
+        .child(
+            text(caption.to_string())
+                .font(k.ty.text_xsmall_medium)
+                .color(k.c.text_faint)
+                .a11y_hidden(),
+        )
+        .child(
+            text(value)
+                .font(k.ty.text_small)
+                .color(k.c.text_base)
+                .wrap()
+                .w_full()
+                .a11y_hidden(),
+        )
+        .children(sub.map(|sub| {
+            text(sub)
+                .font(k.ty.text_xsmall)
+                .color(k.c.text_faint)
+                .wrap_anywhere()
+                .w_full()
+                .a11y_hidden()
+        }))
+}
+
+fn schedule_row(k: &Kit, row: &RowView, now: f64, zone: &Zone) -> El {
+    let title = rune::row()
         .w_full()
-        .h(32.0)
         .gap(8.0)
-        .center_y();
-    let refresh = Button::new("Refresh")
-        .variant(ButtonVariant::Ghost)
-        .control_size(ControlSize::Small)
-        .on_press(|app: &mut App| app.read_schedules())
-        .build(k)
-        .key("schedules-refresh");
-    let Some(chosen) = state.chosen() else {
-        return bar
-            .child(muted(k, "Choose a Schedule to pause, resume, remove or move it.").grow(1.0))
-            .child(refresh);
-    };
-    let mut bar = bar.child(
-        text(format!("{} on {}", chosen.name, chosen.machine))
-            .font(k.ty.text_small_medium)
-            .color(k.c.text_base)
-            .truncate()
-            .shrink(),
-    );
-    bar = bar.child(el().grow(1.0));
-    for action in &chosen.actions {
-        let (installation, name, action) =
-            (chosen.installation.clone(), chosen.name.clone(), *action);
-        bar = bar.child(
-            Button::new(action.label())
-                .variant(if action == Action::Remove {
-                    ButtonVariant::Danger
-                } else {
-                    ButtonVariant::Outline
-                })
-                .control_size(ControlSize::Small)
-                .on_press(move |app: &mut App| app.schedule_action(&installation, &name, action))
+        .center_y()
+        .child(
+            text(row.name.clone())
+                .font(k.ty.ui_medium)
+                .color(k.c.text_strong)
+                .truncate()
+                .shrink(),
+        )
+        .children(row.paused.then(|| {
+            Badge::new("Paused")
+                .variant(BadgeVariant::Subtle)
                 .build(k)
-                .key(action.key()),
+                .key("paused")
+        }))
+        .child(el().grow(1.0))
+        .children(row.actions.iter().map(|a| action_button(k, row, *a)));
+    let when = match &row.cron_words {
+        Some(words) => {
+            let mut chars = words.chars();
+            let first = chars.next().map(|c| c.to_uppercase().to_string());
+            first.unwrap_or_default() + chars.as_str()
+        }
+        None => row.expression.clone(),
+    };
+    col()
+        .key(format!("schedule-{}", row.name))
+        .role("listitem")
+        .label(format!("{} on {}", row.name, row.machine))
+        .w_full()
+        .px(16.0)
+        .py(12.0)
+        .gap(8.0)
+        .child(title)
+        .child(
+            text(format!("{} in {}", row.workflow, row.checkout))
+                .font(k.ty.text_small)
+                .color(k.c.text_muted)
+                .truncate()
+                .w_full(),
+        )
+        .child(
+            rune::row()
+                .w_full()
+                .items_start()
+                .child(fact(
+                    k,
+                    "Runs",
+                    when,
+                    row.cron_words.as_ref().map(|_| row.expression.clone()),
+                ))
+                .child(fact(k, "Next", next_said(row, now, zone), None))
+                .child(fact(k, "Last", last_said(row, now, zone), None)),
+        )
+}
+
+fn machine_section(k: &Kit, machine: &SchedulesSuccessItem, now: f64, zone: &Zone) -> El {
+    let view = machine_schedules(machine);
+    let count = match view.state {
+        Standing::Listed => {
+            let n = view.rows.len();
+            format!("{n} Schedule{}", if n == 1 { "" } else { "s" })
+        }
+        Standing::Empty => "No Schedules".into(),
+        Standing::Upgrade => "Needs an upgrade".into(),
+        Standing::Unreachable => "Out of reach".into(),
+        Standing::Problem => "Not listed".into(),
+    };
+    let tone = match view.state {
+        Standing::Listed | Standing::Empty => Tone::Quiet,
+        _ => Tone::Warn,
+    };
+    let head = row()
+        .w_full()
+        .gap(8.0)
+        .center_y()
+        .child(
+            text(machine.name.clone())
+                .font(k.ty.ui_medium)
+                .color(k.c.text_strong),
+        )
+        .child(
+            text(count)
+                .font(k.ty.text_small)
+                .color(if tone == Tone::Warn {
+                    k.c.warning.fg
+                } else {
+                    k.c.text_faint
+                }),
+        );
+    let mut body = col()
+        .key("list")
+        .role("list")
+        .label(format!("{}'s Schedules", machine.name))
+        .w_full()
+        .radius(k.radius.lg)
+        .fill(k.c.surface_raised_base)
+        .border(1.0, k.c.border_weak);
+    if view.rows.is_empty() {
+        let said = view.said.unwrap_or_default();
+        body = body.child(
+            col()
+                .w_full()
+                .px(16.0)
+                .py(14.0)
+                .child(toned(k, said, tone).key(format!("schedules-said-{}", machine.profile))),
         );
     }
-    bar.child(refresh)
+    let n = view.rows.len();
+    for (i, one) in view.rows.iter().enumerate() {
+        body = body.child(schedule_row(k, one, now, zone));
+        if i + 1 < n {
+            body = body.child(Divider::horizontal().build(k));
+        }
+    }
+    col()
+        .key(format!("schedules-{}", machine.installation))
+        .role("group")
+        .label(machine.name.clone())
+        .w_full()
+        .gap(8.0)
+        .child(head)
+        .child(body)
 }
 
 pub fn view(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
@@ -541,77 +735,72 @@ pub fn view(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         k,
         layer,
     );
-    let mut page = col()
+    let live = live_set(app);
+    let reach = live.clone();
+    let marker = el()
+        .key(format!("schedules-reach-{live}"))
+        .w_full()
+        .h(0.0)
+        .on_layout(move |app: &mut App, _| app.schedules_reach(&reach));
+    let header = row()
+        .w_full()
+        .gap(16.0)
+        .items_start()
+        .child(
+            col()
+                .grow(1.0)
+                .shrink()
+                .min_w(0.0)
+                .gap(4.0)
+                .child(
+                    text("Each Machine's Schedules")
+                        .role("heading")
+                        .font(k.ty.body_medium)
+                        .color(k.c.text_strong),
+                )
+                .child(muted(
+                    k,
+                    "A Schedule is a saved start its Machine's host fires on time, even while Desktop is closed. Ask the Flock chat to add one.",
+                )),
+        )
+        .child(
+            Button::new("Refresh")
+                .icon(&crate::icons::REFRESH)
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Small)
+                .on_press(|app: &mut App| app.read_schedules())
+                .build(k)
+                .key("schedules-refresh"),
+        );
+    let mut children = vec![header];
+    if !state.listed {
+        children.push(
+            row()
+                .gap(8.0)
+                .center_y()
+                .child(Spinner::new().size(12.0).build(k))
+                .child(muted(k, "Reading each Machine's Schedules…")),
+        );
+    } else {
+        let now = collie_desktop_protocol::epoch_ms();
+        let zone = Zone::here();
+        children.extend(
+            state
+                .machines
+                .iter()
+                .map(|m| machine_section(k, m, now, &zone)),
+        );
+    }
+    col()
         .key("schedules-page")
         .label("Schedules")
         .grow(1.0)
         .min_h(0.0)
         .w_full()
-        .padding(20.0)
-        .gap(14.0);
-    if !state.listed {
-        return page.child(muted(k, "Reading each Machine's Schedules…"));
-    }
-    let notes = state.machines.iter().filter_map(|m| {
-        let view = machine_schedules(m);
-        let tone = match view.state {
-            Standing::Empty | Standing::Listed => Tone::Quiet,
-            _ => Tone::Warn,
-        };
-        view.said
-            .map(|said| toned(k, said, tone).key(format!("schedules-said-{}", m.profile)))
-    });
-    page = page
-        .child(col().w_full().gap(4.0).children(notes))
-        .child(actions(state, k));
-    let rows = state.rows();
-    if rows.is_empty() {
-        return page;
-    }
-    let cells = rows.clone();
-    page.child(
-        Table::new(
-            |app: &App| &app.pages.schedules.table,
-            |app: &mut App| &mut app.pages.schedules.table,
-            |app: &App| app.pages.schedules.rows().len(),
-            |app: &App, i| {
-                Cow::Owned(
-                    app.pages
-                        .schedules
-                        .rows()
-                        .get(i)
-                        .map_or_else(String::new, |r| format!("{}/{}", r.installation, r.name)),
-                )
-            },
-        )
-        .name("Schedules")
-        .column(TableColumn::new("name", "Schedule").flex(1.0).min(110.0))
-        .column(
-            TableColumn::new("machine", "Machine")
-                .width(110.0)
-                .min(80.0),
-        )
-        .column(
-            TableColumn::new("workflow", "Workflow")
-                .flex(1.4)
-                .min(140.0),
-        )
-        .column(TableColumn::new("when", "When").flex(1.6).min(160.0))
-        .column(TableColumn::new("next", "Next").flex(1.2).min(140.0))
-        .column(TableColumn::new("last", "Last").flex(1.4).min(140.0))
-        .cell(move |_: &App, i, column| {
-            cells
-                .get(i)
-                .map_or_else(|| Cell::text(""), |row| cell(row, column))
-        })
-        .zebra(true)
-        .build(app, k)
-        .key("schedules")
-        .w_full()
-        .grow(1.0)
-        .min_h(0.0)
-        .radius(k.radius.md)
-        .border(1.0, k.c.border_muted)
-        .clip_rounded(k.radius.md),
-    )
+        .child(marker)
+        .child(super::common::page(
+            "schedules-scroll",
+            "Schedules",
+            children,
+        ))
 }

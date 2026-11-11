@@ -227,7 +227,7 @@ fn texts(runtime: &Runtime<App>, prefix: &str) -> Vec<String> {
 fn the_toolbar_says_each_accounts_busiest_window_and_opens_the_usage_page() {
     let harness = Harness::<App>::new();
     let mut app = live_app(&harness, &["mk-pc", "vm-mk"]);
-    app.keep_usage_fresh(NOW);
+    app.ask_usage_when_due(NOW);
     assert_eq!(harness.fake.asked_of("usage").len(), 1);
     harness.fake.answer(
         "usage",
@@ -265,7 +265,7 @@ fn the_toolbar_says_each_accounts_busiest_window_and_opens_the_usage_page() {
     );
     harness.settle(&mut app);
     let mut runtime = runtime(app);
-    assert_eq!(texts(&runtime, "usage-"), ["Claude 72%", "ChatGPT out"]);
+    assert_eq!(texts(&runtime, "toolbar-usage-"), ["Claude 72%", "ChatGPT out"]);
     let usage = runtime
         .elements()
         .iter()
@@ -319,19 +319,19 @@ fn a_machine_that_is_not_live_takes_its_reading_out_of_the_toolbar() {
 fn usage_is_asked_when_desktop_opens_when_a_machine_comes_live_and_then_each_minute() {
     let harness = Harness::<App>::new();
     let mut app = live_app(&harness, &[]);
-    app.keep_usage_fresh(NOW);
-    app.keep_usage_fresh(NOW + 1_000.0);
+    app.ask_usage_when_due(NOW);
+    app.ask_usage_when_due(NOW + 1_000.0);
     assert_eq!(harness.fake.asked_of("usage").len(), 1, "once at open");
     app.apply(serde_json::from_value(snapshot("p-mk-pc", "mk-pc")).unwrap());
-    app.keep_usage_fresh(NOW + 2_000.0);
+    app.ask_usage_when_due(NOW + 2_000.0);
     assert_eq!(harness.fake.asked_of("usage").len(), 2, "again for mk-pc");
-    app.keep_usage_fresh(NOW + 61_000.0);
+    app.ask_usage_when_due(NOW + 61_000.0);
     assert_eq!(
         harness.fake.asked_of("usage").len(),
         2,
         "not before the minute"
     );
-    app.keep_usage_fresh(NOW + 62_000.0);
+    app.ask_usage_when_due(NOW + 62_000.0);
     assert_eq!(harness.fake.asked_of("usage").len(), 3);
 }
 

@@ -145,6 +145,10 @@ impl Host for App {
             .chunk(&format!("turn-{turn}"), epoch_ms());
     }
 
+    fn popped(&mut self, out: bool) {
+        self.nav.chat.set_open(!out);
+    }
+
     fn open_about(&mut self, about: &About) {
         if let Some(card) = self.placed_at(&about.machine, &about.task) {
             let key = card.key;

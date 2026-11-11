@@ -117,3 +117,18 @@ icon!(
     "chat-flock",
     r#"<path d="M3 3.5H13C13.3 3.5 13.5 3.7 13.5 4V10.5C13.5 10.8 13.3 11 13 11H7L4 13.5V11H3C2.7 11 2.5 10.8 2.5 10.5V4C2.5 3.7 2.7 3.5 3 3.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/><path d="M5.5 7.25H10.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>"#
 );
+icon!(
+    CARD,
+    "chat-card",
+    r#"<rect x="2.5" y="3.5" width="11" height="9" rx="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M5 6.5H11M5 9H8.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>"#
+);
+icon!(
+    ARROW_DOWN,
+    "chat-arrow-down",
+    r#"<path d="M8 3V12.5M3.75 8.5L8 12.75L12.25 8.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#
+);
+icon!(
+    WINDOW,
+    "chat-window",
+    r#"<rect x="2.5" y="3" width="11" height="10" rx="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M2.5 5.75H13.5" stroke="currentColor" stroke-width="1.2"/>"#
+);

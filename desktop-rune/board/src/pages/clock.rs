@@ -121,6 +121,12 @@ impl Zone {
         }
     }
 
+    /// This computer's zone, read once.
+    pub fn here() -> Zone {
+        static HERE: std::sync::OnceLock<Zone> = std::sync::OnceLock::new();
+        HERE.get_or_init(Zone::local).clone()
+    }
+
     /// This computer's zone, from `TZ` naming a zone file or from `/etc/localtime`; UTC where
     /// neither reads.
     pub fn local() -> Zone {

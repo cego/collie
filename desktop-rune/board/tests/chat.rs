@@ -815,3 +815,289 @@ fn a_stopped_subscription_is_said_and_taken_again_on_retry() {
     assert_eq!(window.asked("settings").len(), 2);
     assert!(!window.has("chat-trouble"));
 }
+
+fn states(node: &Value) -> Vec<String> {
+    node["states"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|s| s.as_str().map(String::from))
+        .collect()
+}
+
+/// A conversation of `turns` questions and long answers.
+fn long_conversation(turns: usize) -> Value {
+    let mut items = Vec::new();
+    for n in 0..turns {
+        items.push(json!({
+            "id": format!("u{n}"), "role": "user",
+            "parts": [{ "type": "text", "content": format!("Question {n}?") }]
+        }));
+        items.push(json!({
+            "id": format!("a{n}"), "role": "assistant",
+            "parts": [{ "type": "text", "content": format!(
+                "Answer {n}.\n\n- The sweep is waiting on you.\n- The bump is working.\n\nNothing else needs you right now, and the rest of the Flock is quiet."
+            ) }]
+        }));
+    }
+    Value::Array(items)
+}
+
+impl Window {
+    fn flag<T: Default + 'static>(&mut self, read: impl FnOnce(&App) -> T + 'static) -> T {
+        let mut out = T::default();
+        self.rt.update(|board, _| out = read(board));
+        out
+    }
+
+    /// Wheels the log by `dy` points and lets the scroll and its layout settle.
+    fn wheel_log(&mut self, dy: f32) {
+        let (x, y) = self.rt.find("chat-log").unwrap();
+        self.rt.pointer_move(x, y);
+        self.rt.wheel_xy(x, y, 0.0, dy);
+        for _ in 0..4 {
+            self.frame();
+        }
+    }
+}
+
+#[test]
+fn a_long_conversation_offers_a_jump_to_the_latest_once_scrolled_up() {
+    let mut window = Window::reading(long_conversation(30));
+    for _ in 0..3 {
+        window.frame();
+    }
+    assert!(!window.has("chat-jump"), "it opens at the latest message");
+    window.wheel_log(2400.0);
+    assert!(window.has("chat-jump"), "{:?}", window.keys());
+    assert_eq!(window.node("chat-jump")["name"], "Jump to latest");
+    window.tap("chat-jump");
+    for _ in 0..20 {
+        window.frame();
+    }
+    assert!(!window.has("chat-jump"), "back at the latest message");
+}
+
+#[test]
+fn a_reply_under_way_says_it_is_working_until_its_words_arrive() {
+    let mut window = Window::reading(json!([]));
+    window.type_in("What needs me?");
+    window.tap("send");
+    assert!(window.has("chat-working"), "{:?}", window.keys());
+    window.push(
+        "say",
+        json!({ "type": "RUN_STARTED", "runId": "r", "threadId": "t" }),
+    );
+    window.push(
+        "say",
+        json!({ "type": "TEXT_MESSAGE_START", "messageId": "m", "role": "assistant" }),
+    );
+    assert!(window.has("chat-working"), "no words yet");
+    window.push(
+        "say",
+        json!({ "type": "TEXT_MESSAGE_CONTENT", "messageId": "m", "delta": "Two cards." }),
+    );
+    assert!(!window.has("chat-working"), "{:?}", window.keys());
+    window.push(
+        "say",
+        json!({ "type": "TOOL_CALL_START", "toolCallId": "c1", "toolCallName": "mcp__collie__collie_herd", "parentMessageId": "m" }),
+    );
+    assert!(
+        !window.has("chat-working"),
+        "the waiting call spins on its own row"
+    );
+    assert!(window.has("tool-c1-toggle"), "{:?}", window.keys());
+    window.push(
+        "say",
+        json!({ "type": "TOOL_CALL_RESULT", "toolCallId": "c1", "messageId": "m", "content": "7 cards", "role": "tool" }),
+    );
+    assert!(
+        window.has("chat-working"),
+        "the reply carries on after the call"
+    );
+    window.push(
+        "say",
+        json!({ "type": "RUN_FINISHED", "runId": "r", "threadId": "t" }),
+    );
+    assert!(!window.has("chat-working"));
+}
+
+fn tool_call(id: &str, name: &str) -> Value {
+    json!({
+        "type": "tool-call", "id": id, "name": name,
+        "arguments": "{\"machine\":\"build\"}", "state": "complete", "output": "done"
+    })
+}
+
+#[test]
+fn a_run_of_finished_tool_calls_reads_as_one_line_until_opened() {
+    let mut window = Window::reading(json!([
+        { "id": "u1", "role": "user", "parts": [{ "type": "text", "content": "What needs me?" }] },
+        { "id": "a1", "role": "assistant", "parts": [
+            tool_call("c1", "mcp__collie__collie_herd"),
+            tool_call("c2", "mcp__collie__collie_news"),
+            tool_call("c3", "mcp__collie__collie_herd"),
+            { "type": "text", "content": "Two cards need you." },
+            tool_call("c4", "mcp__collie__collie_run")
+        ] }
+    ]));
+    let line = window.node("tools-a1-0-toggle");
+    let name = line["name"].as_str().unwrap();
+    assert!(name.starts_with("Used 3 tools"), "{name}");
+    assert!(!states(&line).contains(&"expanded".to_string()), "{line}");
+    assert!(!window.has("tool-c1-toggle"), "{:?}", window.keys());
+    assert!(
+        window.has("tool-c4-toggle"),
+        "one call alone keeps its own row"
+    );
+    window.tap("tools-a1-0-toggle");
+    for id in ["c1", "c2", "c3"] {
+        assert!(window.has(&format!("tool-{id}-toggle")), "{id}");
+    }
+}
+
+fn haiku_choices() -> Value {
+    json!({
+        "heldOn": "claude", "runsOn": null, "turning": false,
+        "harnesses": [
+            { "harness": "claude", "label": "Claude Code", "installed": true, "offered": {
+                "from": "table", "unset": { "harness": "claude", "model": "opus", "effort": "medium" },
+                "models": [
+                    { "id": "opus", "label": "Opus 5.5", "description": "For complex work and everyday tasks",
+                      "efforts": ["low", "medium", "high", "xhigh", "max"], "unsetEffort": "medium" },
+                    { "id": "sonnet", "label": "Sonnet 5.5", "efforts": ["low", "medium", "high"], "unsetEffort": "medium" },
+                    { "id": "claude-haiku-4-5", "label": "Haiku 4.5", "efforts": [], "unsetEffort": null }
+                ]
+            }}
+        ]
+    })
+}
+
+impl Window {
+    fn search_models(&mut self, words: &str) -> Vec<String> {
+        let words = words.to_string();
+        self.rt.update(move |board, _| {
+            board.chat.model_menu.search = TextEdit::new(&words);
+        });
+        self.frame();
+        self.keys()
+            .into_iter()
+            .filter_map(|k| k.strip_prefix("chat-model-menu-option-").map(String::from))
+            .collect()
+    }
+}
+
+#[test]
+fn model_menu_filtering_keeps_a_pasted_typed_id_visible_and_finds_a_model_by_its_id() {
+    let mut window = Window::reading(json!([]));
+    window.push("settings", json!({}));
+    window.push("chatChoices", haiku_choices());
+    window.tap("chat-model");
+    for pasted in ["claude-opus-5 ", "  claude-opus-5\t", "\nclaude-opus-5\n"] {
+        assert_eq!(
+            window.search_models(pasted),
+            ["claude-opus-5"],
+            "{pasted:?}"
+        );
+    }
+    assert_eq!(window.search_models(" sonnet "), ["sonnet"]);
+    assert_eq!(
+        window.search_models(" \t ").len(),
+        4,
+        "the default and the three models"
+    );
+    assert_eq!(
+        window.search_models("claude-haiku-4-5"),
+        ["claude-haiku-4-5"],
+        "a model whose name hides its id"
+    );
+}
+
+#[test]
+fn the_reconnect_notice_counts_down_and_takes_the_subscriptions_again_on_its_own() {
+    let mut window = Window::reading(json!([]));
+    window.core.fake.push(
+        "settings",
+        Err(CallError("Desktop's core went away".into())),
+    );
+    window.settle();
+    let said = window.said("chat-trouble");
+    assert!(said.contains("Trying again in 1 s."), "{said}");
+    window.rt.update(|board, _| {
+        collie_desktop_chat::chat::tick(board, 0.0);
+    });
+    window.settle();
+    assert_eq!(
+        window.asked("settings").len(),
+        1,
+        "not before its wait is over"
+    );
+    window.rt.update(|board, _| {
+        collie_desktop_chat::chat::tick(board, f64::MAX);
+    });
+    window.settle();
+    assert_eq!(window.asked("settings").len(), 2, "taken again");
+    assert!(!window.has("chat-trouble"));
+}
+
+#[test]
+fn popping_the_chat_out_moves_it_to_its_own_window_and_back() {
+    let popped: Arc<Mutex<Vec<bool>>> = Arc::default();
+    let mut board = App::default();
+    let told = popped.clone();
+    board.chat.pop = Some(Box::new(move |out| told.lock().unwrap().push(out)));
+    let mut window = Window::open(board);
+    window.answer("transcript", conversation());
+    assert_eq!(window.node("chat-pop")["name"], "Pop out");
+    window.tap("chat-pop");
+    assert_eq!(*popped.lock().unwrap(), [true]);
+    assert!(
+        !window.flag(|b| b.nav.chat.is_open()),
+        "the pane beside the board stands aside"
+    );
+
+    window.rt.update(|board, _| board.nav.chat.set_open(true));
+    window.frame();
+    assert!(window.has("chat-popped"), "{:?}", window.keys());
+    assert!(
+        !window.has("composer"),
+        "one message box, in the chat's window"
+    );
+    assert!(
+        !window.has("chat-new") && !window.has("chat-earlier"),
+        "the conversation's controls are in its window: {:?}",
+        window.keys()
+    );
+    window.tap("chat-pop-in");
+    assert_eq!(*popped.lock().unwrap(), [true, false]);
+    assert!(window.has("composer"));
+    assert_eq!(
+        window.asked("transcript").len(),
+        2,
+        "read again, as it comes back"
+    );
+
+    window.tap("chat-pop");
+    window
+        .rt
+        .update(|board, _| collie_desktop_chat::chat::came_back(board));
+    window.settle();
+    assert!(window.flag(|b| b.nav.chat.is_open()), "its window closed");
+    assert!(window.has("composer"));
+}
+
+#[test]
+fn a_reply_under_way_is_not_popped_out() {
+    let popped: Arc<Mutex<Vec<bool>>> = Arc::default();
+    let mut board = App::default();
+    let told = popped.clone();
+    board.chat.pop = Some(Box::new(move |out| told.lock().unwrap().push(out)));
+    let mut window = Window::open(board);
+    window.answer("transcript", json!([]));
+    window.type_in("hello");
+    window.tap("send");
+    let pop = window.node("chat-pop");
+    assert!(states(&pop).contains(&"disabled".to_string()), "{pop}");
+    window.tap("chat-pop");
+    assert!(popped.lock().unwrap().is_empty());
+}

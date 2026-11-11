@@ -193,7 +193,7 @@ fn usage_button(app: &App, k: &Kit) -> El {
         };
         words = words.child(
             text(entry.text.clone())
-                .key(format!("usage-{}", entry.key))
+                .key(format!("toolbar-usage-{}", entry.key))
                 .font(font)
                 .color(color),
         );

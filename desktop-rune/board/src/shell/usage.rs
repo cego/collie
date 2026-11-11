@@ -134,7 +134,7 @@ fn zone() -> &'static Zone {
 impl App {
     /// Asks each Machine for its Usage when it is due: when Desktop opens, when a Machine
     /// comes live, then each minute.
-    pub fn keep_usage_fresh(&mut self, now: f64) {
+    pub fn ask_usage_when_due(&mut self, now: f64) {
         if self.core.is_none() {
             return;
         }

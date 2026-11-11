@@ -142,3 +142,8 @@ icon!(
     "collie-step-expected",
     r#"<circle cx="8" cy="8" r="6.25" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2.4 2.2" fill="none"/>"#
 );
+icon!(
+    SPARKLES,
+    "collie-sparkles",
+    r#"<path d="M6.5 2.5L7.6 5.4L10.5 6.5L7.6 7.6L6.5 10.5L5.4 7.6L2.5 6.5L5.4 5.4Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/><path d="M11.5 9.5L12.1 10.9L13.5 11.5L12.1 12.1L11.5 13.5L10.9 12.1L9.5 11.5L10.9 10.9Z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round" fill="none"/>"#
+);

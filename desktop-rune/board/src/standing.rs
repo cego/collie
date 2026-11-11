@@ -153,8 +153,10 @@ impl App {
     }
 }
 
-/// The consent dialog while it is open, over whichever page is shown.
+/// The consent dialog while it is open, and an onboarding the human started, over whichever
+/// page is shown.
 pub fn view(app: &App, k: &Kit, layer: &mut Vec<El>) {
+    crate::pages::onboard::dialog(app, k, layer);
     let state = &app.standing;
     toasts(
         &state.told,
