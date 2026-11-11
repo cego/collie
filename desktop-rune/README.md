@@ -240,12 +240,24 @@ opened by the board's.
 `chat/src/log.rs` draws the transcript (a run of finished tool calls folds into one "Used N
 tools" line, a reply under way says "Working…" until its words or a waiting call show, and a
 log scrolled up offers Jump to latest) and `chat/src/composer.rs` the message box, its choices
-as menus in one row with Attach and Send. A lost subscription retries on its own with Desktop's
-backoff and counts down to it. The header's Pop out moves the chat to its own window
+as menus in one row with Attach and Send. Each subscription is taken again on its own, as
+`retrying` in `desktop/src/shared/retrying.ts` does: one the core ends is taken again at once and
+quietly, one that fails is said once, with a countdown, until it answers. A reply whose `say`
+stream ends without RUN_FINISHED or RUN_ERROR is over all the same. The header's Pop out moves the chat to its own window
 (`chat/src/window.rs`, opened through `App::window`, not while a reply streams), and closing that
 window puts it back beside the board. `cargo run -p collie-desktop-chat --example states --
 --scene <name> --snap x.png` draws its empty, loading, tools, working, question, error,
 reconnecting, popped, queued and long states on no core.
+
+### The app's log
+
+The app keeps its own log in `$XDG_STATE_HOME/collie-desktop-rune/desktop.log` (else
+`~/.local/state/collie-desktop-rune/desktop.log`; `COLLIE_RUNE_LOG_DIR` moves it), kept once as
+`desktop.log.1` past 1 MiB, as the core keeps `actions.log`. Each line is JSON: `at`, `area`,
+`what`, a `reason` and ids, never a message's words, an answer or a file. `board/src/calls.rs`
+logs every request and stream that fails, by its RPC, and every stream that ends; the chat logs
+a failed turn, a refused choice and each subscription's failure, schedule, retaking and return.
+Other areas call `collie_desktop_protocol::log::event(area, what, reason, ids)`.
 
 ### An open Run's record
 

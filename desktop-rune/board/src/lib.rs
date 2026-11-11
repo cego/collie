@@ -13,7 +13,8 @@ pub mod timing;
 
 pub use shell::view;
 
-use collie_desktop_chat::host::{Done, Each, Stop};
+use collie_desktop_chat::host::{Done, Each, Ended, Stop};
+pub use collie_desktop_protocol::log;
 use collie_desktop_chat::{Chat, Host};
 use collie_desktop_protocol::generated::{About, AguiEvent};
 use collie_desktop_terminal::view::Tab;
@@ -130,12 +131,13 @@ impl Host for App {
         }
     }
 
-    fn stream(&self, tag: &str, payload: Value, mut each: Each<App>) -> Option<Stop> {
+    fn stream(&self, tag: &str, payload: Value, mut each: Each<App>, ended: Ended<App>) -> Option<Stop> {
         let core = self.core.as_ref()?;
-        Some(core.stream(
+        Some(core.stream_until(
             tag,
             payload,
             move |app, value: Result<Value, calls::CallError>| each(app, value.map_err(|e| e.0)),
+            ended,
         ))
     }
 

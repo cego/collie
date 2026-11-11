@@ -24,7 +24,7 @@ fn the_chat_in_its_own_window_reads_the_conversation_and_puts_itself_back() {
     alone.request = Some(Box::new(move |tag, _, _| {
         requests.lock().unwrap().push(tag.into())
     }));
-    alone.stream = Some(Box::new(move |tag, _, _| {
+    alone.stream = Some(Box::new(move |tag, _, _, _| {
         streams.lock().unwrap().push(tag.into());
         Box::new(|| {})
     }));

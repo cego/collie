@@ -6,7 +6,7 @@ use crate::choices::{
     ChatStatus, Draft, Queued, SetChoice, chat_announcement, choice_notices, refusal_said,
     remember_choice, stay_on, stop_draft,
 };
-use crate::host::{Host, Stop, ask, listen};
+use crate::host::{Host, Stop, ask, listen, log};
 use crate::images;
 use crate::policy::{Opened, opened};
 use crate::words::questions_of;
@@ -100,8 +100,6 @@ pub struct Chat {
     pub trouble: Option<String>,
     /// When the stopped subscriptions are taken again on their own (epoch ms).
     pub retry_at: Option<f64>,
-    /// Failures in a row since the core last answered, for the wait before the next try.
-    failures: u32,
     /// The whole seconds the reconnect notice last said were left.
     said_left: Option<i64>,
     /// The log is scrolled up from its latest message.
@@ -121,7 +119,9 @@ pub struct Chat {
     /// The turn whose events are still heard; none once it is cancelled.
     live: Option<u64>,
     queued: u64,
-    subscriptions: Vec<Stop>,
+    subscriptions: HashMap<&'static str, Subscription>,
+    /// Takings of subscriptions so far, so each has its own number.
+    takings: u64,
 }
 
 impl Chat {
@@ -238,9 +238,17 @@ impl Chat {
         if self.live != Some(turn) {
             return false;
         }
+        let turn = turn.to_string();
         match event {
-            Ok(event) => self.transcript.apply(event),
+            Ok(event) => {
+                if let AguiEvent::RunError(failed) = &event {
+                    let why = Some(failed.message.as_str());
+                    log::event("chat", "turn failed", why, &[("turn", &turn)]);
+                }
+                self.transcript.apply(event)
+            }
             Err(error) => {
+                log::event("chat", "turn failed", Some(&error), &[("turn", &turn)]);
                 self.transcript.error = Some(error);
                 self.transcript.running = false;
             }
@@ -385,8 +393,24 @@ fn start<S: Host>(s: &mut S, begun: Option<(SayPayload, u64)>) {
         "say",
         payload,
         move |s: &mut S, event: Result<AguiEvent, String>| heard(s, turn, event),
+        move |s: &mut S| turn_ended(s, turn),
     );
     s.chat_mut().turn = stop.map(|stop| stop as Box<dyn FnOnce()>);
+}
+
+/// The `turn`th turn's stream ended with no word of its end: the reply is over all the same.
+fn turn_ended<S: Host>(s: &mut S, turn: u64) {
+    let chat = s.chat_mut();
+    if chat.live != Some(turn) || !chat.transcript.running {
+        return;
+    }
+    log::event("chat", "turn ended unsaid", None, &[("turn", &turn.to_string())]);
+    let was = chat.status.clone();
+    chat.turn = None;
+    chat.transcript.stop();
+    chat.announce_after(Some(was), false);
+    next_queued(s);
+    maybe_reload(s);
 }
 
 /// An event of the `turn`th turn; once the turn ends, the next queued message goes.
@@ -482,95 +506,257 @@ pub fn retry<S: Host>(s: &mut S) {
     start(s, begun);
 }
 
+/// What the chat subscribes to, in the order its trouble is said.
+const SUBSCRIPTIONS: [&str; 7] = [
+    "settings",
+    "chatChoices",
+    "flockSettings",
+    "conversationChanges",
+    "desktopTurns",
+    "setupOffer",
+    "setupChosen",
+];
+
+/// One of the chat's subscriptions: retaken on its own when it fails or ends, as
+/// `retrying` in `desktop/src/shared/retrying.ts` retakes a page's.
+#[derive(Default)]
+pub(crate) struct Subscription {
+    /// Which taking of it is current; a stopped one's late values are not heard.
+    taking: u64,
+    stop: Option<Stop>,
+    /// Failures in a row since it last told a value, for the wait before the next try.
+    failures: u32,
+    /// Ends in a row since it last told a value: the first is taken again at once, quietly.
+    renewals: u32,
+    /// Why it stopped, until it tells a value again.
+    trouble: Option<String>,
+    /// When it is taken again (epoch ms).
+    retry_at: Option<f64>,
+}
+
 /// Reads the conversation from the core and subscribes to what changes it.
 pub fn open<S: Host>(s: &mut S) {
     if !s.chat().subscriptions.is_empty() {
         return;
     }
-    let chat = s.chat_mut();
-    chat.trouble = None;
-    chat.retry_at = None;
-    chat.said_left = None;
-    let mut subscriptions = Vec::new();
-    subscriptions.extend(listen(s, "settings", (), |s: &mut S, v| {
-        held(s, v, |chat, settings: SettingsSuccess| {
-            chat.settings = Some(settings);
-            chat.remembered = remember_choice(
-                chat.remembered.take(),
-                &chat.settings(),
-                chat.choices.as_ref(),
-            );
-            chat.announce();
-        });
-    }));
-    subscriptions.extend(listen(s, "chatChoices", (), |s: &mut S, v| {
-        held(s, v, |chat, choices: ChatChoicesSuccess| {
-            chat.remembered =
-                remember_choice(chat.remembered.take(), &chat.settings(), Some(&choices));
-            chat.choices = Some(choices);
-            chat.announce();
-        });
-    }));
-    subscriptions.extend(listen(s, "flockSettings", (), |s: &mut S, v| {
-        held(s, v, |chat, flock: FlockSettingsSuccess| {
-            let set = flock.settings.get("flock_chat.proactive");
-            chat.proactive = Some(set.and_then(|s| s.value.as_ref()) != Some(&Value::Bool(false)));
-        });
-    }));
-    subscriptions.extend(listen(s, "conversationChanges", (), |s: &mut S, v| {
-        if held(s, v, |chat, _: String| chat.stale = true) {
-            maybe_reload(s);
-        }
-    }));
-    subscriptions.extend(listen(s, "desktopTurns", (), |s: &mut S, v| {
-        if held(s, v, |chat, turn: DesktopTurnsSuccess| {
-            chat.desktop_speaking = turn == DesktopTurnsSuccess::Started;
-            if !chat.desktop_speaking {
-                chat.stale = true;
-            }
-        }) {
-            maybe_reload(s);
-        }
-    }));
-    subscriptions.extend(listen(s, "setupOffer", (), |s: &mut S, v| {
-        held(s, v, |chat, offered: bool| {
-            chat.setup = match (offered, &chat.setup) {
-                (false, _) => Setup::None,
-                (true, Setup::None) => Setup::Offered,
-                (true, kept) => kept.clone(),
-            };
-        });
-    }));
-    subscriptions.extend(listen(
-        s,
-        "setupChosen",
-        (),
-        |s: &mut S, v: Result<Option<Choice>, String>| {
-            if let Ok(Some(_)) = v {
-                take_setup(s);
-            }
-        },
-    ));
-    s.chat_mut().subscriptions = subscriptions;
+    s.chat_mut().said_left = None;
+    for tag in SUBSCRIPTIONS {
+        subscribe(s, tag);
+    }
+    s.chat_mut().refresh_trouble();
     reload(s);
 }
 
-/// What a subscription told, applied; or why it stopped, kept for the chat to say.
-fn held<S: Host, A>(s: &mut S, value: Result<A, String>, apply: impl FnOnce(&mut Chat, A)) -> bool {
+/// Takes `tag` (again), ending the taking before it.
+fn subscribe<S: Host>(s: &mut S, tag: &'static str) {
+    let chat = s.chat_mut();
+    chat.takings += 1;
+    let taking = chat.takings;
+    let sub = chat.subscriptions.entry(tag).or_default();
+    if let Some(stop) = sub.stop.take() {
+        stop();
+    }
+    sub.taking = taking;
+    sub.retry_at = None;
+    let ended = move |s: &mut S| renewed(s, tag, taking);
+    let stop = match tag {
+        "settings" => listen(
+            s,
+            tag,
+            (),
+            move |s: &mut S, v| {
+                held(s, tag, taking, v, |chat, settings: SettingsSuccess| {
+                    chat.settings = Some(settings);
+                    chat.remembered = remember_choice(
+                        chat.remembered.take(),
+                        &chat.settings(),
+                        chat.choices.as_ref(),
+                    );
+                    chat.announce();
+                });
+            },
+            ended,
+        ),
+        "chatChoices" => listen(
+            s,
+            tag,
+            (),
+            move |s: &mut S, v| {
+                held(s, tag, taking, v, |chat, choices: ChatChoicesSuccess| {
+                    chat.remembered =
+                        remember_choice(chat.remembered.take(), &chat.settings(), Some(&choices));
+                    chat.choices = Some(choices);
+                    chat.announce();
+                });
+            },
+            ended,
+        ),
+        "flockSettings" => listen(
+            s,
+            tag,
+            (),
+            move |s: &mut S, v| {
+                held(s, tag, taking, v, |chat, flock: FlockSettingsSuccess| {
+                    let set = flock.settings.get("flock_chat.proactive");
+                    chat.proactive =
+                        Some(set.and_then(|s| s.value.as_ref()) != Some(&Value::Bool(false)));
+                });
+            },
+            ended,
+        ),
+        "conversationChanges" => listen(
+            s,
+            tag,
+            (),
+            move |s: &mut S, v| {
+                if held(s, tag, taking, v, |chat, _: String| chat.stale = true) {
+                    maybe_reload(s);
+                }
+            },
+            ended,
+        ),
+        "desktopTurns" => listen(
+            s,
+            tag,
+            (),
+            move |s: &mut S, v| {
+                if held(s, tag, taking, v, |chat, turn: DesktopTurnsSuccess| {
+                    chat.desktop_speaking = turn == DesktopTurnsSuccess::Started;
+                    if !chat.desktop_speaking {
+                        chat.stale = true;
+                    }
+                }) {
+                    maybe_reload(s);
+                }
+            },
+            ended,
+        ),
+        "setupOffer" => listen(
+            s,
+            tag,
+            (),
+            move |s: &mut S, v| {
+                held(s, tag, taking, v, |chat, offered: bool| {
+                    chat.setup = match (offered, &chat.setup) {
+                        (false, _) => Setup::None,
+                        (true, Setup::None) => Setup::Offered,
+                        (true, kept) => kept.clone(),
+                    };
+                });
+            },
+            ended,
+        ),
+        _ => listen(
+            s,
+            tag,
+            (),
+            move |s: &mut S, v: Result<Option<Choice>, String>| {
+                let mut chosen = false;
+                held(s, tag, taking, v, |_, choice| chosen = choice.is_some());
+                if chosen {
+                    take_setup(s);
+                }
+            },
+            ended,
+        ),
+    };
+    if let Some(sub) = s.chat_mut().subscriptions.get_mut(tag)
+        && sub.taking == taking
+    {
+        sub.stop = stop;
+    } else if let Some(stop) = stop {
+        stop();
+    }
+}
+
+impl Chat {
+    fn current(&mut self, tag: &str, taking: u64) -> Option<&mut Subscription> {
+        self.subscriptions
+            .get_mut(tag)
+            .filter(|sub| sub.taking == taking)
+    }
+
+    /// The trouble the chat says: the first subscription's that has one.
+    fn refresh_trouble(&mut self) {
+        let first = SUBSCRIPTIONS
+            .iter()
+            .filter_map(|tag| self.subscriptions.get(tag))
+            .find(|sub| sub.trouble.is_some());
+        self.trouble = first.and_then(|sub| sub.trouble.clone());
+        self.retry_at = first.and_then(|sub| sub.retry_at);
+    }
+}
+
+/// What the `taking` of subscription `tag` told, applied; or why it stopped, kept for the chat to
+/// say once while it is taken again. A stopped taking is not heard.
+fn held<S: Host, A>(
+    s: &mut S,
+    tag: &str,
+    taking: u64,
+    value: Result<A, String>,
+    apply: impl FnOnce(&mut Chat, A),
+) -> bool {
+    let chat = s.chat_mut();
+    let Some(sub) = chat.current(tag, taking) else {
+        return false;
+    };
     match value {
         Ok(value) => {
-            s.chat_mut().failures = 0;
-            apply(s.chat_mut(), value);
+            sub.failures = 0;
+            sub.renewals = 0;
+            if sub.trouble.take().is_some() {
+                log::event("chat", "subscription back", None, &[("rpc", tag)]);
+                chat.refresh_trouble();
+            }
+            apply(chat, value);
             true
         }
         Err(why) => {
-            let chat = s.chat_mut();
-            chat.retry_at = Some(epoch_ms() + backoff(chat.failures));
-            chat.failures += 1;
-            chat.trouble = Some(why);
+            let wait = backoff(sub.failures);
+            sub.failures += 1;
+            sub.retry_at = Some(epoch_ms() + wait);
+            let attempt = sub.failures.to_string();
+            let again = (wait as u64).to_string();
+            if sub.trouble.as_ref() != Some(&why) {
+                log::event("chat", "subscription failed", Some(&why), &[("rpc", tag)]);
+            }
+            sub.trouble = Some(why);
+            log::event(
+                "chat",
+                "resubscribe scheduled",
+                None,
+                &[("rpc", tag), ("attempt", &attempt), ("in_ms", &again)],
+            );
+            chat.refresh_trouble();
             false
         }
     }
+}
+
+/// The `taking` of `tag` ended without an error, as a connection renewed: taken again at once
+/// the first time, then after a wait, and quietly.
+fn renewed<S: Host>(s: &mut S, tag: &'static str, taking: u64) {
+    let Some(sub) = s.chat_mut().current(tag, taking) else {
+        return;
+    };
+    sub.stop = None;
+    let renewals = sub.renewals;
+    sub.renewals += 1;
+    log::event("chat", "subscription ended", None, &[("rpc", tag)]);
+    if renewals == 0 {
+        log::event("chat", "resubscribe", None, &[("rpc", tag)]);
+        subscribe(s, tag);
+    } else {
+        let wait = backoff(renewals - 1);
+        sub.retry_at = Some(epoch_ms() + wait);
+        log::event(
+            "chat",
+            "resubscribe scheduled",
+            None,
+            &[("rpc", tag), ("in_ms", &(wait as u64).to_string())],
+        );
+    }
+    s.chat_mut().refresh_trouble();
 }
 
 /// `min(1 s × 2^failures, 60 s)`, as `backoff` in `src/peers-model.ts`.
@@ -584,37 +770,46 @@ fn epoch_ms() -> f64 {
         .map_or(0.0, |d| d.as_secs_f64() * 1000.0)
 }
 
-/// The app's clock at `now` (epoch ms): stopped subscriptions are taken again once their wait
-/// is over. Says whether anything the chat shows changed.
+/// The app's clock at `now` (epoch ms): each subscription whose wait is over is taken again.
+/// Says whether anything the chat shows changed.
 pub fn tick<S: Host>(s: &mut S, now: f64) -> bool {
+    let due: Vec<&'static str> = SUBSCRIPTIONS
+        .into_iter()
+        .filter(|tag| {
+            s.chat()
+                .subscriptions
+                .get(tag)
+                .and_then(|sub| sub.retry_at)
+                .is_some_and(|at| at <= now)
+        })
+        .collect();
+    for tag in &due {
+        log::event("chat", "resubscribe", None, &[("rpc", tag)]);
+        subscribe(s, tag);
+    }
     let chat = s.chat_mut();
-    if chat.trouble.is_none() {
-        return false;
-    }
-    if chat.retry_at.is_some_and(|at| at <= now) {
-        reconnect(s);
-        return true;
-    }
-    let left = chat.retry_in(now);
-    let changed = left != chat.said_left;
+    chat.refresh_trouble();
+    let left = chat.trouble.as_ref().and(chat.retry_in(now));
+    let changed = !due.is_empty() || left != chat.said_left;
     chat.said_left = left;
     changed
 }
 
-/// Subscribes again after the subscriptions stopped.
+/// Retry now: every subscription waiting to be taken again is taken now.
 pub fn reconnect<S: Host>(s: &mut S) {
-    for stop in std::mem::take(&mut s.chat_mut().subscriptions) {
-        stop();
-    }
-    open(s);
+    tick(s, f64::MAX);
 }
 
 /// Ends the chat's subscriptions and any turn, as its window closes.
 pub fn close<S: Host>(s: &mut S) {
     let chat = s.chat_mut();
-    for stop in std::mem::take(&mut chat.subscriptions) {
-        stop();
+    for (_, mut sub) in std::mem::take(&mut chat.subscriptions) {
+        if let Some(stop) = sub.stop.take() {
+            stop();
+        }
     }
+    chat.trouble = None;
+    chat.retry_at = None;
     chat.cancel();
 }
 
@@ -648,7 +843,7 @@ pub fn reload<S: Host>(s: &mut S) {
                 Ok(_) => chat.stale = true,
                 Err(why) => {
                     chat.loaded = true;
-                    chat.trouble = Some(why);
+                    chat.failed = Some(format!("The conversation could not be read: {why}"));
                 }
             }
             maybe_reload(s);
@@ -709,7 +904,10 @@ pub fn choose_setting<S: Host>(s: &mut S, change: SetSettingsPayload) {
             let chat = s.chat_mut();
             match saved {
                 Ok(settings) => chat.settings = Some(settings),
-                Err(why) => chat.failed = Some(refusal_said(&why)),
+                Err(why) => {
+                    log::event("chat", "choice refused", Some(&why), &[("rpc", "setSettings")]);
+                    chat.failed = Some(refusal_said(&why));
+                }
             }
         },
     );
@@ -988,6 +1186,7 @@ fn take_setup<S: Host>(s: &mut S) {
                 "setUp",
                 json!({ "choice": choice }),
                 move |s: &mut S, event| heard(s, turn, event),
+                move |s: &mut S| turn_ended(s, turn),
             );
             s.chat_mut().turn = stop.map(|stop| stop as Box<dyn FnOnce()>);
         },

@@ -1,6 +1,7 @@
 //! What the chat needs of the app it sits in: its own state, and the Desktop core to call.
 
 use crate::chat::Chat;
+pub use collie_desktop_protocol::log;
 use collie_desktop_protocol::generated::About;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -12,6 +13,8 @@ pub type Done<S> = Box<dyn FnOnce(&mut S, Result<Value, String>) + Send>;
 pub type Each<S> = Box<dyn FnMut(&mut S, Result<Value, String>) + Send>;
 /// Ends a stream; nothing more of it is heard.
 pub type Stop = Box<dyn FnOnce() + Send>;
+/// Where a stream ends without an error, or the core cuts it off; never after its Stop.
+pub type Ended<S> = Box<dyn FnOnce(&mut S) + Send>;
 
 /// The app around the chat: the main window's, or the chat's own popped-out window's.
 pub trait Host: Sized + 'static {
@@ -20,7 +23,8 @@ pub trait Host: Sized + 'static {
     /// Asks the core `tag` once; without a core nothing is asked.
     fn request(&self, tag: &str, payload: Value, done: Done<Self>);
     /// Subscribes to `tag`; none without a core.
-    fn stream(&self, tag: &str, payload: Value, each: Each<Self>) -> Option<Stop>;
+    fn stream(&self, tag: &str, payload: Value, each: Each<Self>, ended: Ended<Self>)
+    -> Option<Stop>;
     /// A text delta of the `turn`th turn arrived, for the app's timing marks.
     fn heard_chunk(&mut self, _turn: u64) {}
     /// The human pressed the card a message was sent about; why it could not be opened, if not.
@@ -46,18 +50,20 @@ pub fn ask<S: Host, A: DeserializeOwned>(
     );
 }
 
-/// Subscribes to `tag` with typed values.
+/// Subscribes to `tag` with typed values; `ended` runs where it ends without an error.
 pub fn listen<S: Host, A: DeserializeOwned>(
     s: &S,
     tag: &str,
     payload: impl Serialize,
     mut each: impl FnMut(&mut S, Result<A, String>) + Send + 'static,
+    ended: impl FnOnce(&mut S) + Send + 'static,
 ) -> Option<Stop> {
     let payload = serde_json::to_value(payload).unwrap_or(Value::Null);
     s.stream(
         tag,
         payload,
         Box::new(move |s, value| each(s, value.and_then(decoded))),
+        Box::new(ended),
     )
 }
 
