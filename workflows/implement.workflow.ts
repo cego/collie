@@ -699,24 +699,25 @@ export default defineWorkflow({
               `${one.file}: ${standing.why}`,
             );
         });
-      // The first unbuilt ticket whose blockers are built and whose Prerequisites have
-      // landed, waiting on the first unbuilt one's while there is none.
       const pickable = Effect.gen(function* () {
         for (;;) {
           const left = Arr.filter(tickets, (one) => !built.has(one.file));
           if (left.length === 0) return undefined;
-          // Only a blocker ahead of it counts, as `orderedTickets` breaks a cycle in plan order.
-          for (const [at, one] of left.entries())
-            if (
-              Arr.every(
-                one.blockedBy,
-                (id) => !Arr.some(left.slice(0, at), (other) => other.number === id),
-              ) &&
-              (one.prerequisites.length === 0 || (yield* landed(one)))
-            )
-              return one;
-          yield* building(awaited(left[0]!), {
-            item: left[0]!.file,
+          const unblocked = Arr.filter(left, (one) =>
+            Arr.every(one.blockedBy, (id) => !Arr.some(left, (other) => other.number === id)),
+          );
+          for (const one of unblocked)
+            if (one.prerequisites.length === 0 || (yield* landed(one))) return one;
+          const waiting = unblocked[0];
+          if (waiting === undefined)
+            return yield* new WorkflowError({
+              reason: `these tickets block each other, so none of them can be built first: ${Arr.join(
+                Arr.map(left, (one) => one.file),
+                ", ",
+              )}`,
+            });
+          yield* building(awaited(waiting), {
+            item: waiting.file,
             items: Arr.map(tickets, (one) => one.file),
           });
         }
@@ -738,7 +739,6 @@ export default defineWorkflow({
             const operation = attempt === 1 ? item : `${item}-${attempt}`;
             const before = (yield* host.evidence(runId, cwd)).verifications.length;
             if (ticket !== null) yield* checkpoint(place.dir, ticket, "started", []);
-            // A ticket needing another Run's Change is built on the default branch it landed on.
             const merged =
               (ticket !== null && built.size > 0) ||
               Arr.some(ticket === null ? tickets : [ticket], (one) => one.prerequisites.length > 0)

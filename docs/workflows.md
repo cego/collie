@@ -404,8 +404,8 @@ its result names what each repository ended as.
   is recorded and shown on the Run, and the menu comes back; started directly, the start is
   refused with it before any Run is admitted. The same reading checks
   the tickets when the planner writes them, and a plan it refuses goes back to the planner
-  once, so most of these never reach the menu. The reasons are a cycle between Changes, a
-  `Change:` name git would refuse in a branch name or that names another repository, a
+  once, so most of these never reach the menu. The reasons are a cycle between Changes or
+  between one Change's tickets, a `Change:` name git would refuse in a branch name or that names another repository, a
   ticket with no `Repo:` line where its siblings have one, a repository with no checkout
   under the root — Collie does not clone — a `Repo:` that is not a path under the root, two
   tickets wearing one number, or a "Blocked by" line naming something that is not a ticket

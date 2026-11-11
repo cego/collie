@@ -437,6 +437,37 @@ export function readPlanRepos(
     );
   }
 
+  // Edges inside one Change; a cycle between Changes is refused below, naming them.
+  const changeOfId = new Map(
+    Arr.map(parsed, (ticket) => [ticket.id, `${ticket.repo ?? "."}\0${ticket.change ?? ""}`]),
+  );
+  let cyclic = Arr.map(parsed, (ticket) => ({
+    ...ticket,
+    blockedBy: Arr.filter(
+      ticket.blockedBy ?? [],
+      (id) => changeOfId.get(id) === changeOfId.get(ticket.id),
+    ),
+  }));
+  for (;;) {
+    const ids = new Set(Arr.map(cyclic, (ticket) => ticket.id));
+    const stuck = Arr.filter(
+      cyclic,
+      (ticket) =>
+        Arr.some(ticket.blockedBy, (id) => ids.has(id)) &&
+        Arr.some(cyclic, (other) => other.blockedBy.includes(ticket.id)),
+    );
+    if (stuck.length === cyclic.length) break;
+    cyclic = stuck;
+  }
+  if (cyclic.length > 0)
+    return refuse(
+      "cycle",
+      `These tickets block each other, so none of them can be built first: ${Arr.join(
+        Arr.map(cyclic, (ticket) => ticket.file),
+        ", ",
+      )}. Take one of them off another's "Blocked by" line.`,
+    );
+
   // Every ticket in one repository, whether it says so or not: today's plans, and the
   // ones written inside a repo, where `.` is the only answer there is. One Change of it
   // is today's single run; several fan out like several repositories.
