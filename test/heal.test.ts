@@ -2,10 +2,13 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schedule, Schema, flow, Result } from "effect";
+import { Effect, FileSystem, Option, Schedule, Schema, flow, Result } from "effect";
 import { connect, ownerOf } from "../src/host";
 import { holderLives } from "../src/lock";
 import { readAudit } from "../src/audit";
+import { HealOutput } from "../src/heal";
+import { herdOf } from "../src/steering";
+import { newsPath, pending, read as readNews } from "../src/news";
 import { collie, proves, type World } from "./support/world";
 import { until } from "./support/host";
 
@@ -550,6 +553,65 @@ test(
             expect.objectContaining({ outcome: "skipped", note: "it is itself a Heal" }),
           ]);
           expect(yield* healsOf(client, heal!.runId)).toEqual([]);
+        }),
+      ["parks-for.workflow.ts", "parking-healer.workflow.ts"],
+    ),
+  120_000,
+);
+
+test("a Heal's Output that escalates must say why a person is needed", () => {
+  const escalated = {
+    diagnosis: "It waits on a release date.",
+    actions: [],
+    result: "escalate",
+    finding: FINDING,
+  };
+  expect(Option.isNone(Schema.decodeUnknownOption(HealOutput)(escalated))).toBe(true);
+  expect(
+    Option.isSome(
+      Schema.decodeUnknownOption(HealOutput)({ ...escalated, needs_person: "Pick the date." }),
+    ),
+  ).toBe(true);
+});
+
+test(
+  "the third Heal in a row to fail raises the recovery-failing News as it is judged",
+  () =>
+    proves(
+      "collie-heal-failing-",
+      (world) =>
+        Effect.gen(function* () {
+          const socket = `${world.home}/herdr.sock`;
+          const runs: Array<{ runId: string; client: Client }> = [];
+          for (const name of ["first", "second", "third"])
+            runs.push(
+              yield* started(
+                world,
+                "parks-for",
+                { causes: "unknown", entries: `${world.home}/${name}` },
+                { HERDR_SOCKET_PATH: socket },
+              ),
+            );
+          const failedOf = (one: { runId: string; client: Client }) =>
+            one.client.runMetrics({ runId: one.runId }).pipe(
+              Effect.map((lines) =>
+                Arr.some(lines, (line) => line.action === "healed" && line.outcome === "failed"),
+              ),
+              Effect.orDie,
+            );
+          for (const one of runs)
+            yield* until(
+              () => failedOf(one),
+              (failed) => failed,
+            );
+          const file = yield* newsPath(world.state, yield* herdOf(socket).pipe(Effect.orDie));
+          yield* until(
+            () => readNews(file),
+            (news) =>
+              Arr.some(pending(news).items, (item) =>
+                Str.startsWith("recovery-failing:")(item.key),
+              ),
+          );
         }),
       ["parks-for.workflow.ts", "parking-healer.workflow.ts"],
     ),

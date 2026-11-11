@@ -306,12 +306,9 @@ export const healParks = <E, R, E2, R2>(opts: {
     const evidence = (run: string) => `${opts.env.stateDir}/evidence/${run}`;
     const close = (view: RunView, claim: Metric, line: Partial<Metric>) =>
       Effect.gen(function* () {
-        yield* appendMetric(evidence(view.runId), {
-          ...claim,
-          at: yield* nowIso,
-          build: manifest.version,
-          ...line,
-        });
+        const closed = { ...claim, at: yield* nowIso, build: manifest.version, ...line };
+        yield* appendMetric(evidence(view.runId), closed);
+        return closed;
       });
     /** Three judged Heals in a row that failed say so once, until one does not. */
     const noteFailures = (judged: ReadonlyArray<Metric>) =>
@@ -363,7 +360,7 @@ export const healParks = <E, R, E2, R2>(opts: {
             const why =
               heal?.parked ??
               (heal?.status.status === "failed" ? heal.status.reason : "it was stopped");
-            yield* close(view, claim, { ...took, outcome: "failed", note: why });
+            all.push(yield* close(view, claim, { ...took, outcome: "failed", note: why }));
             yield* opts.notify(
               view.runId,
               "needs-you",
@@ -378,21 +375,25 @@ export const healParks = <E, R, E2, R2>(opts: {
           const finding = output === null ? {} : { finding: output.finding };
           const words = said(output, heal.runId);
           if (!stillParked(view, claim)) {
-            yield* close(view, claim, {
-              ...took,
-              ...finding,
-              outcome: "recovered",
-              note: output?.diagnosis ?? "",
-            });
+            all.push(
+              yield* close(view, claim, {
+                ...took,
+                ...finding,
+                outcome: "recovered",
+                note: output?.diagnosis ?? "",
+              }),
+            );
             yield* opts.notify(view.runId, "run-healed", words, `heal:${claim.park}`);
             continue;
           }
-          yield* close(view, claim, {
-            ...took,
-            ...finding,
-            outcome: output?.result === "resumed" ? "false-recovery" : "escalated",
-            note: words,
-          });
+          all.push(
+            yield* close(view, claim, {
+              ...took,
+              ...finding,
+              outcome: output?.result === "resumed" ? "false-recovery" : "escalated",
+              note: words,
+            }),
+          );
           yield* opts.notify(
             view.runId,
             "needs-you",
