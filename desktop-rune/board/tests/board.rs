@@ -384,7 +384,7 @@ fn a_machine_that_drops_keeps_its_cards_as_of_when_and_they_open_nothing() {
     double_press(&mut runtime, "card-t-vm");
     assert!(panes.lock().unwrap().is_empty());
     assert_eq!(
-        runtime.state.board.selected.as_deref(),
+        runtime.state.selected_key().as_deref(),
         Some("inst-vm:t-vm")
     );
 }
@@ -409,6 +409,38 @@ fn a_gitlab_token_due_within_two_weeks_is_said_and_renew_opens_settings() {
     assert_eq!(alert["name"], "The GitLab token expires on 2026-11-20");
     press(&mut runtime, "renew");
     assert_eq!(runtime.state.nav.page, Page::Settings);
+}
+
+#[test]
+fn the_selected_card_is_the_chats_chip_and_clearing_the_chip_lets_the_card_go() {
+    let harness = Harness::new();
+    let app = app(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![task("t1", "One", "active", json!({}))],
+        )],
+    );
+    let mut runtime = runtime(app);
+    press(&mut runtime, "card-t1");
+    let chip = runtime
+        .state
+        .chat
+        .about
+        .clone()
+        .expect("the card rides on the chat");
+    assert_eq!(
+        (
+            chip.machine.as_str(),
+            chip.task.as_str(),
+            chip.run.as_str(),
+            chip.name.as_str()
+        ),
+        ("mk-pc", "t1", "r-t1", "One")
+    );
+    runtime.update(|app, _| app.chat.choose(None));
+    runtime.frame(1.0);
+    assert!(!has_state(&node(&runtime, "card-t1").unwrap(), "checked"));
 }
 
 #[test]
@@ -438,14 +470,14 @@ fn a_press_selects_a_card_a_double_press_opens_it_and_escape_lets_it_go() {
         mods: Mods::default(),
     });
     runtime.frame(1.0);
-    assert_eq!(runtime.state.board.selected, None);
+    assert_eq!(runtime.state.selected_key(), None);
 
     double_press(&mut runtime, "card-t1");
     assert_eq!(
         *panes.lock().unwrap(),
         [("inst-pc".into(), "r-t1".into(), "mk-pc".into())]
     );
-    assert_eq!(runtime.state.board.selected.as_deref(), Some("inst-pc:t1"));
+    assert_eq!(runtime.state.selected_key().as_deref(), Some("inst-pc:t1"));
     assert!(
         acts(&harness).is_empty(),
         "a seen card is opened without a seen"

@@ -127,3 +127,27 @@ fn a_stream_delivers_each_value_until_it_is_stopped() {
     harness.settle(&mut heard);
     assert_eq!(heard, [1, 2]);
 }
+
+#[test]
+fn the_chats_width_is_taken_from_settings_and_saved_once_a_drag_lets_go() {
+    let harness = Harness::<App>::new();
+    let mut app = App::default();
+    app.core = Some(harness.core.clone());
+    let mut settings = app.chat.settings();
+    settings.chat_width = Some(600.0);
+    app.chat.settings = Some(settings);
+    app.keep_chat_width();
+    assert_eq!(app.nav.chat.width(), 600.0);
+    assert!(
+        harness.fake.asked_of("setSettings").is_empty(),
+        "a width read back is not saved again"
+    );
+
+    app.nav.chat.set_width(512.0);
+    app.keep_chat_width();
+    app.keep_chat_width();
+    assert_eq!(
+        harness.fake.asked_of("setSettings"),
+        [json!({ "chatWidth": 512.0 })]
+    );
+}

@@ -507,7 +507,11 @@ fn card(
     let task = p.task;
     let key = p.key.clone();
     let live = p.as_of.is_none();
-    let selected = app.board.selected.as_deref() == Some(key.as_str());
+    let selected = app
+        .chat
+        .about
+        .as_ref()
+        .is_some_and(|about| about.machine == p.machine && about.task == task.id);
     let c = &k.c;
 
     // The name, the state and what the card can be asked for.

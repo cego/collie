@@ -52,6 +52,7 @@ fn go_to_panes(handle: &AppHandle<App>, client: &Client) {
                 if let Some(tab) = &mut board.terminal {
                     tab.tick();
                 }
+                board.keep_chat_width();
                 false
             });
         }

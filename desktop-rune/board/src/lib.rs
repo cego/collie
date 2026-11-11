@@ -150,17 +150,9 @@ impl Host for App {
     }
 
     fn open_about(&mut self, about: &About) {
-        let found = self
-            .machines
-            .iter()
-            .filter(|m| m.name == about.machine)
-            .find_map(|shown| {
-                let installation = shown.installation.clone()?;
-                let card = shown.cards.iter().find(|c| c.run == about.run)?;
-                Some((installation, card.run.clone(), shown.name.clone()))
-            });
-        if let Some((installation, run, machine)) = found {
-            self.go_to_pane(installation, run, machine);
+        if let Some(card) = self.placed_at(&about.machine, &about.task) {
+            let key = card.key;
+            self.gesture(board::clicks::Gesture::Name(key));
         }
     }
 }
@@ -168,18 +160,6 @@ impl Host for App {
 /// The Board page's pane: the open Run, else the board.
 pub fn board_pane(board: &App, k: &Kit, layer: &mut Vec<El>) -> El {
     record::view(board, k).unwrap_or_else(|| board::view_in(board, k, layer))
-}
-
-/// The chat as the window's trailing pane, its menus drawn inside it.
-pub fn chat_pane(board: &App, k: &Kit) -> El {
-    let mut layer = Vec::new();
-    let pane = chat_pane_in(board, k, &mut layer);
-    rune::el()
-        .w_full()
-        .grow(1.0)
-        .min_h(0.0)
-        .child(pane.w_full().h_full())
-        .children(layer)
 }
 
 /// The chat as the window's trailing pane, its menus on the window's `layer`.

@@ -11,7 +11,7 @@ pub mod model;
 pub mod questionnaire;
 mod view;
 
-use collie_desktop_protocol::generated::LostState;
+use collie_desktop_protocol::generated::{About, LostState};
 pub use model::{Flock, Placed, Shown};
 pub use view::{view, view_in};
 
@@ -117,7 +117,6 @@ pub enum Dialog {
 pub struct Board {
     /// The Flock but its Machines' boards, which are `App::machines`.
     pub flock: Flock,
-    pub selected: Option<String>,
     /// The card whose record the board opened, by key.
     pub opened: Option<String>,
     pub trouble: Option<Trouble>,
@@ -421,9 +420,21 @@ impl App {
         self.placed().into_iter().find(|p| p.key == key)
     }
 
-    /// The selected card, for the chat's selection.
-    pub fn selected_card(&self) -> Option<Placed<'_>> {
-        self.placed_by(self.board.selected.as_deref()?)
+    /// The selected card's key. The chat's chip is the selection (ADR-0012), so a chip whose
+    /// card has left the board keeps a key no card has.
+    pub fn selected_key(&self) -> Option<String> {
+        let about = self.chat.about.as_ref()?;
+        Some(
+            self.placed_at(&about.machine, &about.task)
+                .map(|p| p.key)
+                .unwrap_or_else(|| format!("gone:{}:{}", about.machine, about.task)),
+        )
+    }
+
+    pub fn placed_at(&self, machine: &str, task: &str) -> Option<Placed<'_>> {
+        self.placed()
+            .into_iter()
+            .find(|p| p.machine == machine && p.task.id == task)
     }
 
     fn page(&self) -> Option<String> {
@@ -434,11 +445,26 @@ impl App {
     /// open record.
     pub fn gesture(&mut self, done: Gesture) {
         let before = BoardState {
-            selected: self.board.selected.clone(),
+            selected: self.selected_key(),
             page: self.page(),
         };
         let after = clicks::after_gesture(&before, &done);
-        self.board.selected = after.selected.clone();
+        match &after.selected {
+            None if before.selected.is_some() => self.chat.choose(None),
+            None => {}
+            // Chosen again even when unchanged, so the chip follows the card's latest Run and name.
+            Some(key) => {
+                if let Some(card) = self.placed_by(key) {
+                    let about = About {
+                        machine: card.machine.clone(),
+                        task: card.task.id.clone(),
+                        run: card.task.run.clone(),
+                        name: card.task.name.clone(),
+                    };
+                    self.chat.choose(Some(about));
+                }
+            }
+        }
         if after.page == before.page {
             return;
         }

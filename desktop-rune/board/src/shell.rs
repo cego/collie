@@ -1,10 +1,12 @@
 //! The window's frame: the sidebar that picks a page, the page under its toolbar, and the
 //! Flock chat as the trailing pane.
 
-use crate::{App, board_pane, chat_pane, icons, pages};
+use crate::calls::CallError;
+use crate::{App, board_pane, chat_pane_in, icons, pages};
 use rune::{Cx, El, Icon, Tx};
 use rune_kit::shell::{PaneState, Sidebar, SidebarRow, SidebarSection, SplitView, Toolbar};
 use rune_kit::{IconButton, Kit};
+use serde_json::{Value, json};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Page {
@@ -66,6 +68,8 @@ pub struct Nav {
     pub sidebar: PaneState,
     /// The Flock chat's pane, closed until asked for.
     pub chat: PaneState,
+    /// The chat's width as settings hold it, once they have been read.
+    pub chat_saved: Option<f32>,
 }
 
 impl Default for Nav {
@@ -74,6 +78,7 @@ impl Default for Nav {
             page: Page::Board,
             sidebar: PaneState::new(224.0).range(168.0, 360.0),
             chat: PaneState::new(440.0).range(320.0, 820.0).collapsed(),
+            chat_saved: None,
         }
     }
 }
@@ -97,6 +102,33 @@ impl App {
 
     pub fn toggle_chat(&mut self) {
         self.nav.chat.toggle();
+    }
+
+    /// Takes the chat's saved width once settings are read, then saves each width a drag
+    /// leaves it at.
+    pub fn keep_chat_width(&mut self) {
+        let Some(settings) = &self.chat.settings else {
+            return;
+        };
+        let Some(saved) = self.nav.chat_saved else {
+            if let Some(width) = settings.chat_width {
+                self.nav.chat.set_width(width as f32);
+            }
+            self.nav.chat_saved = Some(self.nav.chat.width());
+            return;
+        };
+        let width = self.nav.chat.width();
+        if self.nav.chat.is_resizing() || width == saved {
+            return;
+        }
+        self.nav.chat_saved = Some(width);
+        if let Some(core) = &self.core {
+            core.request(
+                "setSettings",
+                json!({ "chatWidth": width }),
+                |_: &mut App, _: Result<Value, CallError>| {},
+            );
+        }
     }
 }
 
@@ -150,7 +182,7 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
         .inspector(
             &app.nav.chat,
             |app: &mut App| &mut app.nav.chat,
-            chat_pane(app, k),
+            chat_pane_in(app, k, &mut layer),
         )
         .toolbar(
             Toolbar::new()
