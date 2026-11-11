@@ -5,6 +5,7 @@
 // the tab slow the day it became useful.
 
 import * as Arr from "effect/Array";
+import { branchMovement } from "./recovery";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
@@ -625,6 +626,7 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
     agents: yield* runAgents(run.id),
     diff: parts ? yield* diffOf(run) : null,
     flow: opts.flow ?? undefined,
+    branchProgress: yield* branchMovement(run),
   } satisfies RunDetail;
 });
 

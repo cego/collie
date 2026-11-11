@@ -28,6 +28,7 @@ import {
   Children,
   Host,
   Run,
+  Recovery,
   WorkflowError,
   afterMergeAnswers,
   afterMergeIn,
@@ -90,6 +91,8 @@ import { Tree, deliver, gate, mergeRequest } from "./delivering.ts";
 
 const content = contentOf(markdown);
 const text = Schema.String;
+const recoveryEntry = (facts: Recovery | undefined) =>
+  facts?.review != null ? "Checks" : facts?.implementation === true ? "Review" : "Build";
 
 /** What every implement prompt is told: the plan, what it proves, and what may prove it. */
 const Implementing = Schema.Struct({
@@ -299,6 +302,11 @@ export default defineWorkflow({
       description:
         "Where the work is written down: a plan, a review, an issue, a follow-up, or words",
     }),
+    recovery: Schema.optionalKey(
+      Schema.String.annotate({
+        description: "The finished Run whose existing work this explicit follow-up recovers",
+      }),
+    ),
     // oxlint-disable-next-line unicorn/no-thenable -- The workflow input selects the next step using string values.
     then: Schema.optionalKey(
       Schema.Literals(["", "finish", "release"]).annotate({
@@ -344,6 +352,8 @@ export default defineWorkflow({
       title: "Keep going on this",
       workflow: "self",
       when: "always",
+      inputs: { plan: "started-with", recovery: "run-dir" },
+      entry: (facts) => recoveryEntry(facts.recovery),
       eligible: (facts) => facts.branch !== null && facts.nothingToLand !== true,
     },
   ],
@@ -585,7 +595,68 @@ export default defineWorkflow({
       const answeredFor: Answered[] = [];
       let build: typeof Built.Type | null = null;
       let rallied: Rallied | null = null;
-      for (;;) {
+      const recovered = yield* Activity.make({
+        name: "recovery-entry",
+        success: Recovery,
+        error: WorkflowError,
+        execute:
+          asked.recovery === undefined
+            ? Effect.succeed({
+                implementation: false,
+                reason: "An ordinary start builds the work.",
+                previous: "",
+                commits: "",
+                review: null,
+              })
+            : host.recovery(runId, asked.recovery, asked.plan),
+      });
+      const recovery = { ...recovered, entry: recoveryEntry(recovered) };
+      if (asked.recovery !== undefined)
+        yield* host.record(runId, `Follow-up enters at ${recovery.entry}: ${recovery.reason}`);
+      let parentDir = "";
+      if (recovery.entry !== "Build") {
+        const parent = Str.split(asked.recovery ?? "", "/").at(-1) ?? "";
+        parentDir = (yield* host.place(parent)).dir;
+        build = yield* Activity.make({
+          name: "recovery-build-claims",
+          success: Schema.NullOr(Built),
+          execute: Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const outputs = yield* Effect.forEach(
+              ["build", ...Arr.map(tickets, (one) => one.file)],
+              (operation) =>
+                fs.readFileString(agents.outputFor(parent, operation)).pipe(
+                  Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Built))),
+                  Effect.orElseSucceed(() => null),
+                ),
+            );
+            const found = Arr.filter(outputs, Predicate.isNotNull);
+            const last = found.at(-1);
+            return last === undefined
+              ? null
+              : {
+                  ...last,
+                  tickets_done: Arr.flatMap(found, (one) => one.tickets_done ?? []),
+                  criteria: Arr.flatMap(found, (one) => one.criteria ?? []),
+                };
+          }),
+        });
+        yield* forecast([
+          ...(recovery.entry === "Review" ? [reviewRound] : []),
+          gate,
+          mergeRequest,
+          next,
+        ]);
+        if (recovery.entry === "Checks" && recovery.review !== null)
+          rallied = {
+            halted: null,
+            unreviewed: "",
+            unsettled: [],
+            disputes: [],
+            reviewed: recovery.review,
+          };
+      }
+      for (; recovery.entry === "Build";) {
         // Identities before work: two tickets nobody can tell apart would share one
         // result, and finding that out after an agent has been paid for is too late.
         const clash = identityProblem(Arr.map(tickets, (ticket) => ticket.file));
@@ -869,7 +940,8 @@ export default defineWorkflow({
         }
         tickets = yield* ticketsNow;
       }
-      if (build === null) return yield* new WorkflowError({ reason: "nothing was built" });
+      if (build === null && recovery.entry === "Build")
+        return yield* new WorkflowError({ reason: "nothing was built" });
       // The builder may have named the checks, and every prompt from here shows them.
       input = { ...input, verify: yield* checksNow };
 
@@ -879,6 +951,10 @@ export default defineWorkflow({
           plan: yield* specNow,
           criteria: reviewerCriteria(answeredFor),
           input,
+          obstacle:
+            recovery.entry === "Review"
+              ? `Recover the existing implementation. Review the whole requested outcome, including the current work source ${asked.plan} and any added requirements; an unbuilt requirement is a blocking finding for the builder. Previous head: ${recovery.previous || "unrecorded"}. Commits since that head:\n${recovery.commits || "(none or unavailable)"}\nThe parent's original requirements and review associations are in ${parentDir}/reviews.jsonl. Read its open findings at ${parentDir}/findings.json, and its spec at ${parentDir}/plan where present.`
+              : "",
         });
       }
       for (let attempt = 1; ; attempt++) {
@@ -1254,6 +1330,7 @@ const builderRally = (ask: {
   readonly input: typeof Implementing.Type;
   readonly build?: PartialBuild;
   readonly criteria: string;
+  readonly obstacle?: string;
   readonly resume?: { readonly attempt: number; readonly previous: Rallied };
   readonly integrate: (
     operation: string,
@@ -1268,6 +1345,7 @@ const builderRally = (ask: {
     const runId = (yield* Run).id;
     return yield* rally({
       ...ask,
+      source: ask.build === undefined ? ask.input.inputs.plan : null,
       prefix: `${ask.build === undefined ? "" : `${ask.build.item}.`}${ask.resume === undefined ? "" : `retry-${ask.resume.attempt}.`}`,
       resume:
         ask.resume === undefined
@@ -1278,7 +1356,7 @@ const builderRally = (ask: {
             },
       obstacle:
         ask.build === undefined
-          ? ""
+          ? (ask.obstacle ?? "")
           : `Review the built part of this plan: ${Arr.join(ask.build.completed, ", ")}. Later tickets have not started and are outside this review, including its scope judgement. Check these findings reported by the implementer:\n${formatFindings(ask.build.findings)}`,
       fix: ({ operation, at, proves, findings }) =>
         Effect.gen(function* () {

@@ -123,6 +123,26 @@ a new `<your GitLab login>/<task>` from `--input task=`, else, given another Run
 plan directory, the branch that Run's Task is on until its merge request lands, else a new
 one from the plan directory's own name, or the work itself. Nobody is asked for one ([the full order](cli.md#start-a-run)).
 
+**Follow-ups:** **Keep going on this** names its entry: **Checks**, **Review**, or **Build**.
+It carries the original work source and recovers the finished Run's branch. A completed
+clean review must settle the same requirements, outcome, pushed head, fingerprint, and
+diff target before Checks can be the entry. That review can belong to another Run of the
+same Task. A green pipeline alone doesn't qualify. Older Runs without those associations
+need review again. A review of only completed tickets cannot settle the whole plan.
+External issue bodies also need a fresh review while the host cannot
+snapshot their current requirements.
+
+Where the branch already carries implementation, the follow-up starts at Review and uses
+the same bounded fix-and-review rally. Reviewers see commits since the previous review,
+the original requirements, and any additional work you requested. A missing requirement
+goes to the builder as a finding. With no established implementation, it starts at Build.
+The host reads the facts again when you take the offer. A clean checkout behind the
+pushed branch fast-forwards; divergent history or unpublished work refuses that checkout
+change. Changed requirements, head, outcome, or target require review again. Checks still
+prove the current revision, and delivery updates the branch's existing merge request.
+The parent keeps its terminal status and finishing revision
+([ADR-draft-a-finished-delivery-names-the-way-back-to-work](adr/draft-a-finished-delivery-names-the-way-back-to-work.md)).
+
 **What happens:** one implementer agent builds, a commit per ticket. It reviews what it
 built with the same pass `review` runs — one complete review — and loops on the findings for
 at most four review and fix rounds. Every commit is pushed, so the reviewers read the change

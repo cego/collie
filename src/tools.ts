@@ -22,6 +22,7 @@
 
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
+import { branchMovement } from "./recovery";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
@@ -471,7 +472,19 @@ const runAnswer = Effect.fn("Tools.runAnswer")(function* (
           encodeFlow(shown.flow),
           "```",
         ];
-  return Arr.join([...running, facts, ...done, ...offered, ...ready, ...flow], "\n");
+  const movement = yield* branchMovement(run);
+  return Arr.join(
+    [
+      ...running,
+      facts,
+      ...(movement === null ? [] : [movement]),
+      ...done,
+      ...offered,
+      ...ready,
+      ...flow,
+    ],
+    "\n",
+  );
 });
 
 /** What `collie_herd` answers with: the board, so chat and board can never disagree about a card. */

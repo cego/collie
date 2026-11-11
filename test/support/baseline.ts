@@ -93,7 +93,7 @@ import { measuresOf } from "../../src/outcomes";
 import { redact } from "../../src/redact";
 import { slackApi } from "../../src/slack";
 import { botLeftOver, fakeSlack, signedInToSlack } from "./slack";
-import { INTENT_FILE, IntentSchema, amend, seedIntent } from "../../src/intent";
+import { INTENT_FILE, IntentSchema, amend, seedIntent, writeIntent } from "../../src/intent";
 import selfImprove from "../../workflows/self-improve.workflow";
 import { invocationFor } from "../../workflows/staging";
 import {
@@ -566,6 +566,7 @@ const admit = (options: {
   readonly input: Readonly<Record<string, Schema.Json>>;
   readonly options?: Readonly<Record<string, string>>;
   readonly parent?: string;
+  readonly task?: string;
 }) =>
   Store.pipe(
     Effect.flatMap((store) =>
@@ -579,7 +580,7 @@ const admit = (options: {
         options: options.options ?? {},
         generation: `${options.workflow}@${options.runId}`,
         execution: options.runId,
-        task: null,
+        task: options.task ?? null,
         parent: options.parent ?? null,
       }),
     ),
@@ -596,6 +597,7 @@ const parked = (options: {
   readonly decision: string;
   /** The Run this one was started from. */
   readonly parent?: string;
+  readonly task?: string;
 }) =>
   session(
     Effect.gen(function* () {
@@ -607,6 +609,7 @@ const parked = (options: {
         input: options.input,
         options: options.options,
         parent: options.parent,
+        task: options.task,
       });
       return yield* Effect.gen(function* () {
         yield* made.workflow.execute(
@@ -3066,7 +3069,7 @@ scenario("what a finished Run of each shipped module offers is the module's own 
       expect(Arr.map(offered, (o) => [o.id, o.title, o.workflow])).toEqual([
         ["release", "Release", "release"],
         ["stage", "Stage", "stage"],
-        ["follow-up", "Keep going on this", idOf("implement")],
+        ["follow-up", "Keep going on this — Build", idOf("implement")],
       ]);
       expect(inputsFor(offered[0]!, { runDir: "/r", facts: delivered, input: {} })).toEqual({
         mr: mrUrl,
@@ -3174,6 +3177,7 @@ const ran = (options: {
   readonly input: Readonly<Record<string, Schema.Json>>;
   readonly options?: Readonly<Record<string, string>>;
   readonly host?: HostOverride;
+  readonly task?: string;
 }) =>
   session(
     Effect.gen(function* () {
@@ -3183,6 +3187,7 @@ const ran = (options: {
         workflow: made.workflow.name,
         input: options.input,
         options: options.options,
+        task: options.task,
       });
       const payload = { runId: options.runId, input: options.input };
       // Authored modules expose Schema.Unknown failures; this test records their actual result.
@@ -3400,6 +3405,435 @@ const OPENED = {
   branch: "mk/one-registry",
   pushed: true,
 };
+
+const recoveredRun = (runId: string, input: Readonly<Record<string, Schema.Json>>, first: string) =>
+  driven({ entry: shipped("implement"), runId, input }, (run) =>
+    Effect.gen(function* () {
+      const launches = yield* until(
+        () => launchesAt(dir, runId),
+        (all) => all.length > 0,
+      );
+      expect(launches[0]?.operation).toBe(first);
+      return yield* ended(run.status);
+    }),
+  );
+
+for (const feature of [false, true])
+  scenario(
+    feature
+      ? "a feature follow-up on a reviewed head reuses its build claims at Checks"
+      : "a follow-up reviews implementation committed after its parent finished",
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const bin = yield* FakeBin.make(`${rig.root}/bin`);
+          const forge = yield* noGitlabMrs(bin);
+          yield* repository();
+          const parent = "r-recovery-parent";
+          const child = "r-recovery-child";
+          const plan = yield* planOf([{ file: "01-work.md", title: "work", checks: "unit" }]);
+          yield* approve(parent, ["unit"]);
+          yield* approve(child, ["unit"]);
+          yield* exec(["git", "switch", "-qc", "feature"], { cwd: rig.projectDir });
+          yield* exec(["git", "push", "-qu", "origin", "HEAD"], { cwd: rig.projectDir });
+          const parentHead = yield* revParse("HEAD", rig.projectDir);
+          yield* rig.queueOutputs([
+            BUILT,
+            CLEAN_SYNTHESIS,
+            {
+              writes: [
+                forge.holding({
+                  ...(yield* forge.model()),
+                  mrs: [
+                    {
+                      project: "gitlab.example.com/group/project",
+                      iid: "7",
+                      state: "open",
+                      head: parentHead,
+                      sourceBranch: "feature",
+                      checks: [{ name: "test", state: "passed" }],
+                    },
+                  ],
+                }),
+              ],
+              output: OPENED,
+            },
+          ]);
+          expect(
+            said(
+              yield* ran({
+                entry: shipped("implement"),
+                runId: parent,
+                input: { plan, ...FINISH },
+                options: feature ? { outcome: "feature" } : undefined,
+              }),
+            ),
+          ).toBe(OPENED.mr_url);
+          const previous = yield* revParse("HEAD", rig.projectDir);
+          if (!feature)
+            yield* exec(
+              ["git", "commit", "--allow-empty", "-qm", "complete post-finish implementation"],
+              { cwd: rig.projectDir },
+            );
+          yield* exec(["git", "push", "-qu", "origin", "HEAD"], { cwd: rig.projectDir });
+          const head = yield* revParse("HEAD", rig.projectDir);
+          yield* rig.queueOutputs([
+            null,
+            null,
+            null,
+            ...(feature ? [] : [CLEAN_SYNTHESIS]),
+            {
+              writes: [
+                forge.holding({
+                  ...(yield* forge.model()),
+                  mrs: [
+                    {
+                      project: "gitlab.example.com/group/project",
+                      iid: "7",
+                      state: "open",
+                      head,
+                      sourceBranch: "feature",
+                      checks: [{ name: "test", state: "passed" }],
+                    },
+                  ],
+                }),
+              ],
+              output: OPENED,
+            },
+          ]);
+          if (feature) {
+            const fs = yield* FileSystem.FileSystem;
+            const intent = outcomeSet(child, "feature");
+            yield* fs.makeDirectory(runDir(dir, child), { recursive: true });
+            yield* fs.writeFileString(intent.path, intent.text);
+          }
+          const result = yield* recoveredRun(
+            child,
+            { plan, recovery: parent, ...FINISH },
+            feature ? "mr" : "review-1",
+          );
+          expect(outcomeText(result)).toBe(OPENED.mr_url);
+          if (!feature) {
+            const review = yield* asked(child, "review-1");
+            expect(review).toContain(previous);
+            expect(review).toContain("complete post-finish implementation");
+          }
+          const launches = yield* launchesAt(dir, child);
+          expect(Arr.map(launches, (launch) => launch.operation)).toEqual(
+            feature ? ["mr"] : ["review-1", "mr"],
+          );
+          expect(
+            Option.getOrUndefined(
+              Arr.findFirst(
+                (yield* laneNow(child, "succeeded")).nodes,
+                (node) => node.id === "checks",
+              ),
+            )?.state,
+          ).toBe("done");
+          const opening = yield* asked(child, "mr");
+          expect(opening).toContain(OPENED.mr_url);
+          expect(opening).toContain("Do **not** open a second merge request");
+          expect((yield* forge.model()).mrs).toHaveLength(1);
+          yield* bin.restore();
+        }),
+      ),
+    120_000,
+  );
+
+const reviewedRecovery = () =>
+  Effect.gen(function* () {
+    const bin = yield* FakeBin.make(`${rig.root}/bin`);
+    const forge = yield* noGitlabMrs(bin);
+    yield* repository();
+    yield* exec(["git", "switch", "-qc", "feature"], { cwd: rig.projectDir });
+    yield* exec(["git", "push", "-qu", "origin", "HEAD"], { cwd: rig.projectDir });
+    const plan = yield* planOf([{ file: "01-work.md", title: "work", checks: "unit" }]);
+    const parent = {
+      entry: `${fixtures}/reviewed-parent.workflow.ts`,
+      runId: "r-failed-parent",
+      input: { plan },
+      task: "t-recover",
+    };
+    yield* rig.queueOutputs([CLEAN_SYNTHESIS]);
+    expect((yield* ran(parent))._tag).toBe("Failure");
+    const finished = yield* revParse("HEAD", rig.projectDir);
+    yield* exec(["git", "commit", "--allow-empty", "-qm", "finish the implementation"], {
+      cwd: rig.projectDir,
+    });
+    yield* exec(["git", "push", "-qu", "origin", "HEAD"], { cwd: rig.projectDir });
+    const head = yield* revParse("HEAD", rig.projectDir);
+    const review = {
+      entry: shipped("review"),
+      runId: "r-current-review",
+      input: { target: "worktree", plan },
+      task: "t-recover",
+      decision: "post-1",
+    };
+    yield* rig.queueOutputs([null, CLEAN_SYNTHESIS]);
+    yield* parked(review);
+    yield* answered({ ...review, value: "Don't post" });
+    const opened = {
+      writes: [
+        forge.holding({
+          ...(yield* forge.model()),
+          mrs: [
+            {
+              project: "gitlab.example.com/group/project",
+              iid: "7",
+              state: "open" as const,
+              head,
+              sourceBranch: "feature",
+              checks: [{ name: "test", state: "passed" as const }],
+            },
+          ],
+        }),
+      ],
+      output: OPENED,
+    };
+    return { bin, forge, plan, parent, finished, head, opened };
+  });
+
+scenario(
+  "a follow-up on a reviewed pushed head starts at Checks",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, forge, plan, parent, head, opened } = yield* reviewedRecovery();
+        const child = "r-checks-recovery";
+        yield* approve(child, ["unit"]);
+        yield* rig.queueOutputs([null, null, opened]);
+        expect(
+          outcomeText(
+            yield* recoveredRun(child, { plan, recovery: parent.runId, ...FINISH }, "mr"),
+          ),
+        ).toBe(OPENED.mr_url);
+        expect(Arr.map(yield* launchesAt(dir, child), (one) => one.operation)).toEqual(["mr"]);
+        const verifications = yield* readVerifications(evidenceDir(dir, child));
+        expect(verifications.length).toBeGreaterThan(0);
+        expect(
+          Arr.every(verifications, (one) => one.end.head_sha === head && one.result === "pass"),
+        ).toBe(true);
+        const log = yield* runLog(child);
+        expect(log).toContain("Follow-up enters at Checks");
+        const checked = Option.getOrElse(pipe(log, Str.indexOf("── Checks")), () => -1);
+        const opening = Option.getOrElse(pipe(log, Str.indexOf("── Merge request")), () => -1);
+        expect(checked).toBeGreaterThanOrEqual(0);
+        expect(opening).toBeGreaterThan(checked);
+        expect((yield* forge.model()).mrs).toHaveLength(1);
+        expect((yield* ran(parent))._tag).toBe("Failure");
+        expect(yield* launchesAt(dir, parent.runId)).toHaveLength(1);
+        yield* bin.restore();
+      }),
+    ),
+  120_000,
+);
+
+for (const changed of [
+  "pushed head",
+  "requirements",
+  "old record",
+  "green pipeline alone",
+  "Intent",
+  "target branch",
+  "additional work",
+  "later blocking review",
+  "unreadable review record",
+] as const)
+  scenario(
+    `a follow-up rechecks ${changed} before using a reviewed entry`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, plan, parent } = yield* reviewedRecovery();
+          const fs = yield* FileSystem.FileSystem;
+          if (changed === "unreadable review record")
+            yield* fs.writeFileString(
+              `${runDir(dir, parent.runId)}/reviews.jsonl`,
+              "broken record\nbroken record\n",
+            );
+          let consumed = 2;
+          if (changed === "later blocking review") {
+            const review = {
+              entry: shipped("review"),
+              runId: "r-later-review",
+              input: { target: "worktree", plan },
+              task: "t-recover",
+              decision: "post-1",
+            };
+            yield* rig.queueOutputs([
+              null,
+              null,
+              {
+                ...CLEAN_SYNTHESIS,
+                verdict: "findings",
+                findings: [
+                  { severity: "major", title: "The export is still missing", file: "src/index.ts" },
+                ],
+              },
+            ]);
+            yield* parked(review);
+            yield* answered({ ...review, value: "Don't post" });
+            consumed = 3;
+          }
+          if (changed === "target branch") {
+            const other = `${rig.root}/target-editor`;
+            yield* exec(["git", "clone", "-q", `${rig.root}/project-origin.git`, other], {
+              cwd: rig.root,
+            });
+            for (const args of [
+              ["config", "user.name", "test"],
+              ["config", "user.email", "test@example.com"],
+              ["commit", "--allow-empty", "-qm", "target advanced"],
+              ["push", "-q", "origin", "HEAD"],
+            ])
+              yield* exec(["git", ...args], { cwd: other });
+          }
+          if (changed === "pushed head") {
+            yield* exec(["git", "commit", "--allow-empty", "-qm", "new work after the offer"], {
+              cwd: rig.projectDir,
+            });
+            yield* exec(["git", "push", "-qu", "origin", "HEAD"], { cwd: rig.projectDir });
+          }
+          if (changed === "requirements")
+            yield* fs.writeFileString(
+              `${plan}/SPEC.md`,
+              "# The spec\n\nAlso implement the missing export.\n",
+            );
+          if (changed === "old record" || changed === "green pipeline alone") {
+            yield* fs.remove(`${runDir(dir, parent.runId)}/reviews.jsonl`, { force: true });
+            yield* fs.remove(`${runDir(dir, "r-current-review")}/reviews.jsonl`, { force: true });
+          }
+          const child = "r-rechecked-recovery";
+          if (changed === "Intent") {
+            const seed = seedIntent(child, { goal: "Also implement the missing export." });
+            yield* fs.makeDirectory(runDir(dir, child), { recursive: true });
+            yield* writeIntent(runDir(dir, child), seed);
+          }
+          yield* approve(child, ["unit"]);
+          const missing = {
+            severity: "major",
+            title: "The requested export is missing",
+            file: "src/index.ts",
+          };
+          const head = yield* revParse("HEAD", rig.projectDir);
+          const green = forge.holding({
+            ...(yield* forge.model()),
+            mrs: [
+              {
+                project: "gitlab.example.com/group/project",
+                iid: "7",
+                state: "open",
+                head,
+                sourceBranch: "feature",
+                checks: [{ name: "test", state: "passed" }],
+              },
+            ],
+          });
+          if (changed === "green pipeline alone") yield* fs.writeFileString(green.path, green.text);
+          yield* rig.queueOutputs([
+            ...Arr.replicate(null, consumed),
+            { ...CLEAN_SYNTHESIS, verdict: "findings", scope_met: false, findings: [missing] },
+            { verdict: "clean", fixed: [missing], disputed: [] },
+            CLEAN_SYNTHESIS,
+            { writes: [green], output: OPENED },
+          ]);
+          const work = changed === "additional work" ? "Also add the missing export." : plan;
+          expect(
+            outcomeText(
+              yield* recoveredRun(
+                child,
+                { plan: work, recovery: parent.runId, ...FINISH },
+                "review-1",
+              ),
+            ),
+          ).toBe(OPENED.mr_url);
+          expect(Arr.map(yield* launchesAt(dir, child), (one) => one.operation)).toEqual([
+            "review-1",
+            "fix-1",
+            "review-2-1",
+            "mr",
+          ]);
+          expect(yield* asked(child, "fix-1")).toContain(missing.title);
+          expect((yield* forge.model()).mrs).toHaveLength(1);
+          yield* bin.restore();
+        }),
+      ),
+    120_000,
+  );
+
+scenario(
+  "a recovery takes the reviewed pushed head without replaying its parent",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, plan, parent, finished, head, opened } = yield* reviewedRecovery();
+        yield* exec(["git", "reset", "--hard", finished], { cwd: rig.projectDir });
+        const child = "r-behind-recovery";
+        yield* approve(child, ["unit"]);
+        yield* rig.queueOutputs([null, null, opened]);
+        expect(
+          outcomeText(
+            yield* recoveredRun(child, { plan, recovery: parent.runId, ...FINISH }, "mr"),
+          ),
+        ).toBe(OPENED.mr_url);
+        expect(yield* revParse("HEAD", rig.projectDir)).toBe(head);
+        expect((yield* ran(parent))._tag).toBe("Failure");
+        yield* bin.restore();
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a force-pushed recovery reports divergence and never inherits a review",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, forge, plan, parent } = yield* reviewedRecovery();
+        yield* exec(["git", "reset", "--hard", "origin/master"], { cwd: rig.projectDir });
+        yield* exec(["git", "commit", "--allow-empty", "-qm", "replacement implementation"], {
+          cwd: rig.projectDir,
+        });
+        yield* exec(["git", "push", "-q", "--force", "origin", "HEAD"], { cwd: rig.projectDir });
+        const head = yield* revParse("HEAD", rig.projectDir);
+        const green = forge.holding({
+          ...(yield* forge.model()),
+          mrs: [
+            {
+              project: "gitlab.example.com/group/project",
+              iid: "7",
+              state: "open",
+              head,
+              sourceBranch: "feature",
+              checks: [{ name: "test", state: "passed" }],
+            },
+          ],
+        });
+        const child = "r-force-recovery";
+        yield* approve(child, ["unit"]);
+        yield* rig.queueOutputs([
+          null,
+          null,
+          BUILT,
+          CLEAN_SYNTHESIS,
+          { writes: [green], output: OPENED },
+        ]);
+        expect(
+          outcomeText(
+            yield* recoveredRun(child, { plan, recovery: parent.runId, ...FINISH }, "build"),
+          ),
+        ).toBe(OPENED.mr_url);
+        expect(Arr.map(yield* launchesAt(dir, child), (one) => one.operation)).toEqual([
+          "build",
+          "review-1",
+          "mr",
+        ]);
+        expect(yield* runLog(child)).toContain("diverged");
+        yield* bin.restore();
+      }),
+    ),
+  120_000,
+);
 
 scenario(
   "implement builds a plan one ticket at a time on one implementer, then reviews what it built",
@@ -5899,6 +6333,11 @@ once(
         expect(synthesis).toContain("the guard is missing");
         expect(synthesis).toContain(`${dir}/agents/r-impl-build-panel/build.review-1.json`);
         expect(synthesis).toContain(`${dir}/agents/r-impl-build-panel/build.review-2.json`);
+        const fs = yield* FileSystem.FileSystem;
+        const reviews = yield* fs
+          .readFileString(`${runDir(dir, "r-impl-build-panel")}/reviews.jsonl`)
+          .pipe(Effect.orElseSucceed(() => ""));
+        expect(reviews).toBe("");
       }),
     ),
   120_000,
@@ -11001,7 +11440,7 @@ const driven = <A, E>(
     /** Whether the engine has done with the answer to `decision`, waking the Run included. */
     readonly taken: (decision: string) => Effect.Effect<boolean>;
     readonly resume: Effect.Effect<void>;
-  }) => Effect.Effect<A, E, FileSystem.FileSystem>,
+  }) => Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>,
 ) =>
   session(
     Effect.gen(function* () {

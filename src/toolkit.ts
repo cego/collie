@@ -441,7 +441,7 @@ function cardLine(view: TaskView): string {
           Arr.map(view.agents, (agent) => agent.name),
           ", ",
         )}`;
-  return `- run ${view.run}: ${view.name}${project}, ${view.state}${where}${agents}. ${view.sentence}`;
+  return `- run ${view.run}: ${view.name}${project}, ${view.state}${where}${agents}. ${view.sentence}${view.drift === null ? "" : ` ${view.drift}`}`;
 }
 
 /** The board as chat reads it: the header, then each section's cards in the board's order. */

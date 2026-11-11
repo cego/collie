@@ -151,6 +151,7 @@ export interface ReviewAsk {
   readonly base?: string;
   /** What the builder says of each criterion, and its assumptions, for the reviewer to check. */
   readonly criteria?: string;
+  readonly source?: string | null;
 }
 
 /** What the reviewers and the synthesis are both told, beside the section they are given. */
@@ -184,7 +185,11 @@ export const reviewPass = (ask: ReviewAsk) =>
     const { id } = yield* Run;
     const host = yield* Host;
     const { dir, cwd } = yield* host.place(id);
-    const input = told(ask, { dir, id });
+    const scope =
+      ask.source !== null && (ask.target === "" || ask.target === "worktree")
+        ? yield* host.reviewScope(id, ask.source ?? ask.plan, ask.proves, ask.risks)
+        : null;
+    const input = told({ ...ask, base: scope?.target ?? ask.base }, { dir, id });
     // A check left to CI is read from the forge where the Run has a merge request, never run.
     const leftToCi = yield* Effect.forEach(
       Arr.filter(yield* host.approved(id), (spec) => spec.ci !== undefined),
@@ -225,6 +230,7 @@ export const reviewPass = (ask: ReviewAsk) =>
         output: SynthesisSchema,
       });
       yield* leaveReview(dir, alone);
+      yield* host.recordReview(id, scope, scope?.target ?? ask.base ?? "", alone);
       return alone;
     }
     yield* Effect.forEach(
@@ -260,6 +266,7 @@ export const reviewPass = (ask: ReviewAsk) =>
     );
     // The prose a human reads and the findings a card counts, where both are looked for.
     yield* leaveReview(dir, reconciled);
+    yield* host.recordReview(id, scope, scope?.target ?? ask.base ?? "", reconciled);
     return reconciled;
   });
 
@@ -297,6 +304,7 @@ export const rally = (ask: {
   readonly risks: string;
   /** What the change is held to beside the spec, for the reviewer. */
   readonly criteria: string;
+  readonly source?: string | null;
   /** Before every operation's name, telling this rally's rounds from another's. */
   readonly prefix: string;
   /** What every round's reviewers are told beside the change; empty for nothing. */
@@ -360,6 +368,7 @@ export const rally = (ask: {
             // built, rather than a merge request somebody else has to be pointed at.
             target: "",
             plan: ask.plan,
+            source: ask.source,
             proves,
             previous: "",
             // The last round's fix, which a follow-up review checks each of its findings against.

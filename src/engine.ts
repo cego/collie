@@ -74,6 +74,7 @@ import { HOLD, STOP, controlPath, controlSet } from "./controls";
 import manifest from "../herdr-plugin.toml";
 import { Agents } from "./agents";
 import * as Sdk from "./sdk";
+import { recoveryFrom, reviewScope, recordReview, takePushed } from "./recovery";
 import {
   Children,
   Host,
@@ -425,6 +426,10 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly state: "ok"; readonly account: string; readonly detail: string }
     | { readonly state: "absent" | "broken"; readonly detail: string; readonly fix: string; readonly reusable?: { readonly from: string } };
   export const ConnectionReading: Schema.Codec<ConnectionReading, unknown, never, never>;
+  export interface ReviewScope { readonly source: string; readonly requirements: string; readonly target: string; readonly head: string; readonly fingerprint: string; readonly outcome: string; readonly risks: string }
+  export const ReviewScope: Schema.Codec<ReviewScope, unknown, never, never>;
+  export interface Recovery { readonly implementation: boolean; readonly reason: string; readonly previous: string; readonly commits: string; readonly review: SynthesisReport | null }
+  export const Recovery: Schema.Codec<Recovery, unknown, never, never>;
   import type { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
   import type { PlatformError } from "effect/PlatformError";
   import type { ChildProcessSpawner } from "effect/process";
@@ -867,6 +872,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   /** What the host lends a workflow. Hold and stop are read fresh on every replay. */
   export interface HostApi {
+    readonly reviewScope: (runId: string, source: string, outcome: string, risks: string) => Effect.Effect<ReviewScope | null>;
+    readonly recordReview: (runId: string, scope: ReviewScope | null, base: string, review: SynthesisReport) => Effect.Effect<void>;
+    readonly recovery: (runId: string, parent: string, source: string) => Effect.Effect<Recovery, WorkflowError>;
     readonly report: (since: string) => Effect.Effect<Report, WorkflowError>;
     readonly issues: (runId: string, numbers?: ReadonlyArray<number>) => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
     readonly fileIssue: (options: { readonly runId: string; readonly title: string; readonly body: string }) => Effect.Effect<IssueRef, WorkflowError>;
@@ -1768,6 +1776,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | "started-with";
 
   export interface FollowUp {
+    readonly entry?: (facts: ActionFacts) => string;
     readonly connections?: ReadonlyArray<ConnectionId>;
     readonly id: string;
     readonly title: string;
@@ -1782,6 +1791,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   /** What an action decides eligibility from: facts, never a workflow's name. */
   export interface ActionFacts {
+    readonly recovery?: Recovery;
     readonly outcome: Outcome;
     readonly succeeded: boolean;
     readonly branch: string | null;
@@ -2434,6 +2444,7 @@ export function declaredByModule(metadata: WorkflowMetadata | undefined): Declar
     workflow: itself(offer.workflow),
     arguments: null,
     kind: "follow-up" as const,
+    entry: offer.entry,
     inputs: offer.inputs ?? {},
     connections: offer.connections,
     eligible: (facts: ActionFacts) =>
@@ -3595,6 +3606,37 @@ const atDefaultBase = <A, R>(
     return yield* body(branch).pipe(Effect.ensuring(restoreCheckout(cwd, away).pipe(Effect.orDie)));
   });
 
+const recoveryFor = Effect.fn("Engine.recoveryFor")(function* (
+  store: StoreApi,
+  dir: string,
+  runId: string,
+  parent: string,
+  source: string,
+) {
+  const id = Str.split(parent, "/").at(-1) ?? parent;
+  const from = yield* store.run(id);
+  const own = yield* store.run(runId);
+  const options =
+    own === null
+      ? {}
+      : yield* decodeStrings(own.options ?? "{}").pipe(
+          Effect.orElseSucceed((): Record<string, string> => ({})),
+        );
+  const candidates = Arr.filter(
+    yield* store.runs,
+    (row) => row.run === id || (from?.task != null && row.task === from.task),
+  );
+  return yield* recoveryFrom({
+    cwd: own === null ? dir : workingPlace(own).cwd,
+    dir: runDir(dir, runId),
+    parent: runDir(dir, id),
+    candidates: from === null ? [] : Arr.map(candidates, (row) => runDir(dir, row.run)),
+    source,
+    outcome: Rec.get(options, "outcome").pipe(Option.getOrElse(() => "")),
+    risks: Rec.get(options, "risks").pipe(Option.getOrElse(() => "")),
+  });
+});
+
 export const hostLayer = (options: {
   readonly dir: string;
   /** Where a user's own `verify.json` is, for a project that wrote none. */
@@ -4314,6 +4356,51 @@ export const hostLayer = (options: {
               (at, lineage) => ({ ...at, lineage }),
             ),
           ),
+        reviewScope: (runId, source, outcome, risks) =>
+          under(
+            Effect.flatMap(store.run(runId), (row) =>
+              reviewScope(
+                row === null ? dir : workingPlace(row).cwd,
+                runDir(dir, runId),
+                source,
+                outcome,
+                risks,
+              ),
+            ),
+          ),
+        recordReview: (runId, scope, base, review) =>
+          under(
+            Effect.flatMap(store.run(runId), (row) =>
+              recordReview(
+                row === null ? dir : workingPlace(row).cwd,
+                runDir(dir, runId),
+                scope,
+                base,
+                review,
+              ),
+            ),
+          ).pipe(Effect.orDie, Effect.andThen(store.announce)),
+        recovery: (runId, parent, source) =>
+          under(
+            Effect.gen(function* () {
+              const row = yield* store.run(runId);
+              const why = yield* takePushed(row === null ? dir : workingPlace(row).cwd);
+              if (why !== null) return yield* new WorkflowError({ reason: why });
+              const facts = yield* recoveryFor(store, dir, runId, parent, source);
+              const id = Str.split(parent, "/").at(-1) ?? parent;
+              const from = yield* store.run(id);
+              if (
+                facts.implementation &&
+                row !== null &&
+                from !== null &&
+                (row.parent === id || (row.task !== null && row.task === from.task))
+              )
+                yield* fs
+                  .writeFileString(`${runDir(dir, runId)}/recovery-parent`, id)
+                  .pipe(Effect.orDie);
+              return facts;
+            }),
+          ),
         reviewedBranch,
         checkoutReviewed,
         reviewedRefusal: (runId, failed, target) =>
@@ -4472,9 +4559,19 @@ export const hostLayer = (options: {
           under(
             Effect.gen(function* () {
               const own = yield* treeOf(yield* store.run(runId), runId, dir);
+              const parent = yield* fs
+                .readFileString(`${runDir(dir, runId)}/recovery-parent`)
+                .pipe(Effect.orElseSucceed(() => ""));
+              const prior =
+                parent === ""
+                  ? []
+                  : yield* readVerifications(evidenceDir(dir, parent)).pipe(
+                      Effect.orElseSucceed((): ReadonlyArray<Verification> => []),
+                    );
               return yield* Effect.all({
                 verifications: readVerifications(evidenceDir(dir, runId)).pipe(
                   Effect.orElseSucceed((): ReadonlyArray<Verification> => []),
+                  Effect.map((own) => [...prior, ...own]),
                 ),
                 final: fingerprint(cwd),
                 commands: Effect.forEach(yield* approvedOf(dir, runId), (spec) =>
@@ -8417,6 +8514,8 @@ const makeRegistry: (
   const unfilled = (offer: Offer, project: string, filled: Readonly<Record<string, Schema.Json>>) =>
     resolve({ project, id: offer.workflow }).pipe(
       Effect.map((target) => {
+        const field = fieldWith(target.hints, "work-source");
+        if (field !== undefined) offer = { ...offer, textField: field };
         const rest = Arr.filter(Rec.toEntries(target.fields), ([name]) => !(name in filled));
         if (rest.length === 0) return offer;
         return {
@@ -8452,7 +8551,7 @@ const makeRegistry: (
       yield* readDispositions(where).pipe(Effect.orElseSucceed((): Array<Disposition> => [])),
     );
     const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
-    const facts: ActionFacts = {
+    const facts: Types.Mutable<ActionFacts> = {
       outcome: isOutcome(asked) ? asked : "unspecified",
       succeeded: state.status === "complete",
       // Where the host placed it: a branch it inferred is as much the Run's as one named.
@@ -8467,6 +8566,13 @@ const makeRegistry: (
       diffTarget: pointedAt(generation, input),
       claim: yield* claimOf(runId),
     };
+    const work = fieldWith(generation.hints, "work-source");
+    const workSource =
+      work === undefined ? undefined : Rec.get(input, work).pipe(Option.getOrUndefined);
+    if (isText(workSource) && Arr.some(generation.offers, (offer) => offer.entry !== undefined))
+      facts.recovery = yield* recoveryFor(store, dir, runId, runId, workSource).pipe(
+        Effect.provideContext(bun),
+      );
     const available: Declared[] = [];
     const readings = new Map<ConnectionId, ConnectionReading>();
     for (const offer of generation.offers) {
@@ -9042,6 +9148,18 @@ const makeRegistry: (
       const filled = { ...inputsFor(offer, { runDir: where, facts, input }), ...options.input };
       // Held to what its parent was, grants included, where the parent had anything.
       const inherited = yield* approvedOf(dir, row.run);
+      const carried: Record<string, string> = {};
+      if (offer.kind === "follow-up" && facts.branch !== null) {
+        carried.branch = facts.branch;
+        if (offer.workflow === generation.id && facts.outcome !== "unspecified")
+          carried.outcome = facts.outcome;
+        if (offer.workflow === generation.id) {
+          const previous = yield* decodeStrings(row.options ?? "{}").pipe(
+            Effect.orElseSucceed((): Record<string, string> => ({})),
+          );
+          if (previous.risks !== undefined) carried.risks = previous.risks;
+        }
+      }
       // The offer's own workflow settles what it was given, so arguments it will not
       // take are refused here and nothing is started.
       return yield* startWork({
@@ -9054,8 +9172,7 @@ const makeRegistry: (
         verify: inherited,
         attachments: options.attachments,
         // A follow-up carries on the parent's work, so it is on the parent's branch.
-        options:
-          offer.kind === "follow-up" && facts.branch !== null ? { branch: facts.branch } : {},
+        options: carried,
       });
     }),
 
