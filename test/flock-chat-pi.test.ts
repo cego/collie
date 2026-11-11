@@ -15,6 +15,7 @@ import { aboutNote } from "../desktop/src/shared/chat-view";
 import { FLOCK_TOOLS } from "../desktop/src/bun/flock-tools";
 import { FILE_TOOLS } from "../desktop/src/bun/file-tools";
 import { piPrompt } from "../desktop/src/bun/pi-transcript";
+import { piEvents } from "../desktop/src/bun/pi-agui";
 import { type AguiEvent, ends } from "../desktop/src/shared/agui";
 import { childEnv } from "../desktop/src/bun/login-env";
 import { offerOf, opensOn, readPiConfig } from "../desktop/src/bun/chat-choices";
@@ -906,6 +907,44 @@ test("a /mcp command goes to Pi as written, and what Pi says of it is the reply"
       expect(events.at(-1)).toMatchObject({ type: "RUN_FINISHED" });
     }),
   ));
+
+test("what Pi reports after its command's turn has ended comes with a later message's note, once", () =>
+  withPi((driver) =>
+    Effect.gen(function* () {
+      const turn = yield* opened(driver, "pi-after-command");
+      yield* turn("/mcp login linear-server");
+      // Pi may send it before or after the next message is written, so either next note may carry it.
+      const notes = [
+        inspectedOf(yield* turn("inspect")).prompt.message,
+        inspectedOf(yield* turn("inspect")).prompt.message,
+      ];
+      expect(
+        Arr.filter(notes, Str.includes("linear-server: connected after sign-in")),
+      ).toHaveLength(1);
+    }),
+  ));
+
+const notice = {
+  type: "extension_ui_request",
+  id: "late",
+  method: "notify",
+  message: "late",
+} as const;
+for (const [ending, record] of [
+  [
+    "a handled prompt",
+    { type: "response", command: "prompt", success: true, data: { disposition: "handled" } },
+  ],
+  ["a refused prompt", { type: "response", command: "prompt", success: false, error: "no" }],
+  ["a settled agent", { type: "agent_settled", aborted: false }],
+] as const)
+  test(`a command's turn ends with ${ending}, and a notice after it waits for the next message`, () => {
+    const state = piEvents("thread");
+    state.begin(true);
+    state.step(record);
+    expect(state.step(notice)).toEqual([]);
+    expect(state.reported()).toEqual(["late"]);
+  });
 
 test("what Pi reports during a model's turn comes with the next message's note, once", () =>
   withPi((driver) =>

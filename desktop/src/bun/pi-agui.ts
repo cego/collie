@@ -214,6 +214,7 @@ export const piEvents = (thread: string) => {
         return [];
       case "response":
         if (record.command !== "prompt") return [];
+        if (!record.success || record.data?.disposition === "handled") command = false;
         if (!record.success)
           return [
             {
@@ -226,6 +227,7 @@ export const piEvents = (thread: string) => {
           ? [{ type: "RUN_FINISHED", threadId: thread, runId: runId() }]
           : [];
       case "agent_settled":
+        command = false;
         return isString(error) && !record.aborted
           ? [{ type: "RUN_ERROR", runId: runId(), message: error }]
           : [{ type: "RUN_FINISHED", threadId: thread, runId: runId() }];

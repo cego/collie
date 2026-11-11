@@ -192,6 +192,13 @@ for await (const chunk of Bun.stdin.stream()) {
         success: true,
         data: { disposition: "handled" },
       });
+      emit({
+        type: "extension_ui_request",
+        id: "signed-in",
+        method: "notify",
+        message: "linear-server: connected after sign-in",
+        notifyType: "info",
+      });
       continue;
     }
     if (
