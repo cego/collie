@@ -2686,6 +2686,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             );
         if (atLaunch) {
           if (!replayed) yield* orderLaunch(ask);
+          givenAtLaunch.add(launched.agent);
           yield* write(sentPath(launched, "step"), pointer);
           yield* log(
             ask.runId,
@@ -3208,7 +3209,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           Effect.map((text) => Str.trim(text) === ""),
           Effect.orElseSucceed(() => true),
         );
-        let working = false;
+        // A turn begun with its launch may end before it is first watched.
+        let working = givenAtLaunch.delete(launched.agent);
         for (;;) {
           const status = yield* host.herdr
             .agentStatus(launched.agent)
@@ -3283,6 +3285,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
 
   /** The agents the host is starting again after core lost them, until each has started. */
   const comingBack = new Map<string, Deferred.Deferred<void>>();
+  /** Agents whose step went in with their launch, so their turn began unwatched. */
+  const givenAtLaunch = new Set<string>();
   const resuming = Semaphore.makeUnsafe(1);
 
   /**
@@ -3353,6 +3357,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         start(ask, agent, listed, "core", atLaunch ? told : null, session),
       );
       if (incarnation === undefined) return [];
+      if (atLaunch) givenAtLaunch.add(agent);
       // Every record of its work names this incarnation now, so a stop and a send reach it.
       let now = latest;
       for (const one of own) {
