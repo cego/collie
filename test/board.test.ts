@@ -42,9 +42,11 @@ import {
   sectionsOf,
   SECTIONS,
   sortBoard,
+  primaryAction,
   type TaskMr,
-  type TaskView,
+  TaskView,
 } from "../src/board-model";
+import { applyItem, EMPTY_FLOCK, flockCards } from "../desktop/src/shared/flock";
 import { recordAudit } from "../src/audit";
 import { recordDisposition } from "../src/disposition";
 import { markSeenSince, recordSeen } from "../src/seen";
@@ -1531,6 +1533,7 @@ const unapproved = (state: MrState = "open") => ({
         checks: { state: "passed" as const },
         head: M_HEAD,
         mergeable: { state: "blocked" as const, said: "not approved" },
+        read: "2026-09-14T10:04:00Z",
       },
     ],
   ]),
@@ -1586,14 +1589,50 @@ test("fresh green work has a Merge shipping action, revoked by a moved head, fai
           mrStates: new Map([[M_ID, "open"]]),
           forge: new Map([[M_ID, { ...fresh, ...facts }]]),
           head: () => Effect.succeed(M_HEAD),
+          offers: () =>
+            Effect.succeed([
+              {
+                id: "release",
+                title: "Release",
+                workflow: "release",
+                arguments: null,
+                kind: "follow-up",
+                primary: true,
+                unavailable: null,
+              },
+            ]),
         });
       const [ready] = yield* read(fresh);
       expect(sectionOf(ready!)).toBe("ready-to-ship");
       expect(ready!.shipping).toBe("merge");
       expect(ready!.shippingMr).toBe(M);
-      expect(Arr.join(boardLines([ready!]), "\n")).toContain("Ready to ship");
-      expect(herdLines([ready!], epochMs("2026-09-14T10:05:00Z"))).toContain("Ready to ship");
-      expect(sectionsOf([ready!], "").ready).toEqual([ready!]);
+      const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(TaskView))(ready!);
+      const received = yield* Schema.decodeEffect(Schema.fromJsonString(TaskView))(encoded);
+      const desktop = flockCards(
+        applyItem(EMPTY_FLOCK, {
+          machine: { installation: "host", profile: "local", name: "host" },
+          message: {
+            _tag: "Snapshot",
+            installation: "host",
+            build: "dev",
+            protocol: 5,
+            herds: [],
+            tasks: [received],
+            seq: 1,
+          },
+        }),
+      ).tasks;
+      expect(sectionsOf(desktop, "").ready).toHaveLength(1);
+      expect(primaryAction(desktop[0]!)).toEqual({
+        kind: "offer",
+        offer: { id: "release", title: "Release" },
+      });
+      const text = Arr.join(boardLines([received]), "\n");
+      expect(text).toContain("Ready to ship · 1");
+      expect(text).toContain("Merge: Ready to release: mk/support!279");
+      const chat = herdLines([received], epochMs("2026-09-14T10:05:00Z"));
+      expect(chat).toContain("## Ready to ship · 1");
+      expect(chat).toContain("Merge: Ready to release: mk/support!279");
       const cards = { revision: () => 1, kept: new Map(), markers: new Map() };
       const cached = (now: string) =>
         board(env, [second], {
@@ -1746,6 +1785,11 @@ test("a follow-up that finished at an open merge request leaves its Task owing i
       expect(sectionOf(card!)).toBe("waiting");
       expect(card!.sentence).toContain("mk/support!279");
       expect(card!.sentence).toContain("not approved");
+      expect(card!.readiness?.missing).toContainEqual({
+        fact: "mergeable",
+        said: "the forge says it cannot merge: not approved",
+        settling: false,
+      });
       expect(card!.sentence).not.toContain("Superseded by");
     }),
   ));
