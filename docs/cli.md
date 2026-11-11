@@ -1883,7 +1883,7 @@ A **Measurement** proves a speed-up, which a Check cannot: it compares two trees
 Machine on many samples
 ([ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement](adr/draft-a-performance-gain-is-proved-by-the-hosts-measurement.md)).
 The host makes the **base tree** as a detached worktree at `--base` with the plan's harness
-commits applied, under `measurements/trees/<run>/` in its state directory, and keeps it for
+commits it does not already contain applied, under `measurements/trees/<run>/` in its state directory, and keeps it for
 the Run's later Measurements of the same base. It also keeps every such tree, whatever its
 Run's state, while a Measurement is running on this Machine, so `--run` may name a Run that
 has ended; once none is running, an ended Run's trees are removed. The **candidate** is the

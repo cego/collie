@@ -328,6 +328,36 @@ test(
 );
 
 test(
+  "a base that already holds its repaired harness is sampled as it is, with nothing applied",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { root, repo, harness, write, commit } = yield* project;
+        yield* exec(["git", "reset", "-q", "--hard", harness], { cwd: repo });
+        yield* write("bench/bench.sh", 'echo "{\\"counter\\": $(( $(cat value) * 2 ))}"\n');
+        const repair = yield* commit("repair");
+        yield* write("value", "7\n");
+        yield* commit("product");
+        const plan = planOf(harness, sh("bench.sh"), {
+          harness: { commits: [harness, repair], paths: ["bench"] },
+        });
+        const measured = yield* measuring(root, { base: repair, cwd: repo, plan });
+        expect(resultOf(measured)._tag).toBe("Judged");
+        expect(measured.base.commit).toBe(repair);
+        expect(measured.base.head_sha).toBe(repair);
+        const readings = (tree: string) =>
+          Arr.map(
+            Arr.filter(measured.samples, (one) => one.tree === tree),
+            (one) => one.readings["bench.counter"],
+          );
+        expect(readings("base")).toEqual([20, 20]);
+        expect(readings("candidate")).toEqual([14, 14]);
+      }),
+    ),
+  30_000,
+);
+
+test(
   "a Run's new plan is measured only with its reason, which its Measurement keeps",
   () =>
     runEffect(
