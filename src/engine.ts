@@ -845,6 +845,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** What opening a merge request from here needs, and what it would be filled in with. */
   export interface MrReady {
     readonly ok: boolean;
+    readonly cause?: ParkCause;
     readonly provider?: "gitlab" | "github";
     readonly repository?: string;
     /** Why it cannot be done here. Empty where it can. */
@@ -4612,6 +4613,10 @@ export const hostLayer = (options: {
                   return {
                     ok: false,
                     provider,
+                    cause:
+                      reading.state === "absent"
+                        ? ("login-missing" as const)
+                        : ("forge-unavailable" as const),
                     reason: `${reading.detail}. Fix: ${reading.fix}`,
                     assignee: "",
                     template: "",

@@ -3790,6 +3790,7 @@ test("a herdr that cannot say what it has parks the work rather than starting an
       const why = yield* parkedOn(`{"agent list":"herdr is not answering"}`);
       expect(why).toContain("herdr cannot say which agents it has");
       expect(why).toContain("herdr is not answering");
+      expect(yield* read(controlPath(dir, PARK_CAUSE, "r1"))).toBe("herdr-unavailable");
       // What uncertainty must never be rounded down to.
       expect(why).toContain("Nothing here says the agent did no work.");
       expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(0);

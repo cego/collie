@@ -8389,6 +8389,30 @@ const deliveringOn = (name: MrForge, mrs: ForgeModel["mrs"] = []) =>
 for (const name of ["gitlab", "github"] as const) {
   const noun = name === "gitlab" ? "merge request" : "pull request";
 
+  scenario(`a missing ${name} login parks delivery naming login-missing`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, forge } = yield* deliveringOn(name);
+        const denied = forge.holding({ installed: true, loggedIn: [], login: null, mrs: [] });
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = `r-${name}-login-missing`;
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([{ writes: [denied], output: BUILT }, CLEAN_SYNTHESIS]);
+        const why = yield* parkedOn({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+        });
+        yield* bin.restore();
+        expect(why).toContain("login");
+        expect(yield* parkedCause(runId)).toBe("login-missing");
+        expect(yield* halts(runId)).toEqual([
+          expect.objectContaining({ cause: "login-missing", build: BUILD }),
+        ]);
+      }),
+    ),
+  );
+
   scenario(
     `implement opens a ${noun} on a ${name} checkout with that forge's own command`,
     () =>

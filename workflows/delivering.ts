@@ -639,7 +639,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           const reason = `Cannot open the merge request: ${ready.reason}.${Arr.join(unproved, "")} Repair it, then resume ${runId}.`;
           yield* host.record(runId, reason);
           yield* stepFailed(reason);
-          yield* host.parked(runId, reason);
+          yield* host.parked(runId, reason, ready.cause);
           return yield* Workflow.suspend(yield* WorkflowInstance);
         }
 

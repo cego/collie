@@ -340,6 +340,7 @@ for (const name of ["gitlab", "github"] as const) {
           expect(yield* ask({ loggedIn: [] })).toEqual({
             ok: false,
             reason: `${CLI[name]} is not logged in to ${host}`,
+            cause: "login-missing",
           });
         }),
       ));

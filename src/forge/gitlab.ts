@@ -294,7 +294,7 @@ export function gitlabForProject<R>(
     const auth = yield* run("glab", ["auth", "status", "--hostname", host], cwd);
     return auth.code === 0
       ? { ok: true, reason: "" }
-      : { ok: false, reason: `glab is not logged in to ${host}` };
+      : { ok: false, reason: `glab is not logged in to ${host}`, cause: "login-missing" };
   });
 }
 

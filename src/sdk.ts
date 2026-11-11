@@ -1282,6 +1282,7 @@ export type ReviewedBranch = { readonly branch: string } | { readonly refused: s
 /** What opening a merge request from here needs, and what it would be filled in with. */
 export interface MrReady {
   readonly ok: boolean;
+  readonly cause?: ParkCause;
   /** The checkout's forge; absent on a host that only supports GitLab. */
   readonly provider?: "gitlab" | "github";
   /** The repository's path on its forge — `owner/repo` or `group/project` — for `--repo`. */

@@ -15,6 +15,7 @@ import * as Cause from "effect/Cause";
 // `docs/adr/0020-an-agent-is-launched-once-and-its-output-is-decoded.md` is why.
 
 import { Foreground } from "./foreground";
+import { ParkCause } from "./park-cause";
 import * as Struct from "effect/Struct";
 import * as Num from "effect/Number";
 import * as Arr from "effect/Array";
@@ -315,6 +316,7 @@ export class AgentParked extends Schema.TaggedError<
 >()("AgentParked", {
   operation: Schema.String,
   reason: Schema.String,
+  cause: Schema.optionalKey(ParkCause),
 }) {}
 
 /** The Run's own questions, which a collection puts an agent's question on. */
@@ -1397,7 +1399,7 @@ const parkedWhenStuck = <A>(
     Effect.tap(() => host.parked(runId, null)),
     Effect.catchTag("AgentParked", (parked) =>
       Effect.gen(function* () {
-        yield* host.parked(runId, parked.reason);
+        yield* host.parked(runId, parked.reason, parked.cause);
         return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
       }),
     ),
@@ -1792,9 +1794,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       return yield* withCodex(record.endpoint, (client) => boundThread(client, record.cwd));
     }).pipe(Effect.orElseSucceed(() => null));
   /** A launch nobody can say the fate of: a resume lists herdr's agents again before it starts one. */
-  const unsettled = (ask: AgentAsk, what: string) =>
+  const unsettled = (ask: AgentAsk, what: string, cause: ParkCause = "unknown") =>
     new AgentParked({
       operation: ask.operation,
+      cause,
       reason: `${what}. Nothing here says the agent did no work. Its work is in ${promptFile(ask)}; \`collie run resume ${ask.runId}\` takes up the agent or starts it, then hands that to it.`,
     });
   const log = (runId: string, line: string) => append(`${dirFor(runId)}/agents.log`, line);
@@ -2550,6 +2553,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           return yield* unsettled(
             ask,
             `herdr cannot say which agents it has (${herdrFailureReason(listing.failure)})`,
+            "herdr-unavailable",
           );
         }
         const live = Option.getOrUndefined(

@@ -225,9 +225,10 @@ for (const name of ["gitlab", "github"] as const) {
         expect((yield* prepare(checkout({ installed: false }))).reason).toBe(
           `${CLI[name]} is not installed`,
         );
-        expect((yield* prepare(checkout({ loggedIn: [] }))).reason).toBe(
-          `${CLI[name]} is not logged in to ${FORGE_HOST[name]}`,
-        );
+        expect(yield* prepare(checkout({ loggedIn: [] }))).toMatchObject({
+          reason: `${CLI[name]} is not logged in to ${FORGE_HOST[name]}`,
+          cause: "login-missing",
+        });
         expect(yield* prepare(checkout({ origin: "git@bitbucket.org:a/b.git" }))).toMatchObject({
           ok: false,
           reason: "bitbucket.org is neither GitHub nor GitLab",
