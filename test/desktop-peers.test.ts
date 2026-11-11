@@ -16,6 +16,9 @@ import {
   type ShellRoute,
 } from "../desktop/src/bun/machine";
 import { giveHelle, giveToken } from "../desktop/src/bun/credentials";
+import { onboardThrough, platformOf } from "../desktop/src/bun/onboarding";
+import { generateKeyPairSync } from "node:crypto";
+import { signRelease } from "../src/signing";
 import { readAudit } from "../src/audit";
 import { peersOf } from "../src/peers";
 import { exec } from "./support/command";
@@ -352,6 +355,91 @@ test(
             ]);
           }),
         ["attended.workflow.ts"],
+      ),
+    ),
+  180_000,
+);
+
+test(
+  "a paired Machine's runner goes over its SSH connection byte for byte, its link carrying no stdin",
+  () =>
+    runEffect(
+      twoMachines(
+        "collie-desktop-runner-",
+        (first, second) =>
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            yield* first.lists([second]);
+            yield* first.cli(["--machine", "second", "board"]);
+            const [peer] = yield* peersOf(first.world.state);
+            const ssh = yield* remoteRoute(
+              `${Str.split(first.env.PATH!, ":")[0]}/ssh`,
+              (yield* loggedCollie(first)).command,
+              SECOND,
+              "desktop-test",
+              true,
+            );
+            const route = linkRoute(yield* collieCommand, peer!, ssh, "desktop-test", first.env);
+            expect((yield* route.open(() => Effect.void)).machine.route).toBe("link");
+            const runner = new Uint8Array([
+              ...new TextEncoder().encode(
+                `#!/bin/sh\necho '{"ok":true,"data":{"ready":true,"steps":[]}}'\n# `,
+              ),
+              0xff,
+              0xfe,
+              0x80,
+              0x0a,
+            ]);
+            const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+            const uname = yield* Effect.promise(() => Bun.$`uname -sm`.text());
+            const asset = `/0.40.0/collie-${platformOf(uname)}`;
+            const server = yield* Effect.acquireRelease(
+              Effect.sync(() =>
+                Bun.serve({
+                  port: 0,
+                  fetch: (request) => {
+                    const path = new URL(request.url).pathname;
+                    return path === asset
+                      ? new Response(runner)
+                      : path === `${asset}.sig`
+                        ? new Response(
+                            signRelease(
+                              runner,
+                              privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+                            ),
+                          )
+                        : new Response("no", { status: 404 });
+                  },
+                }),
+              ),
+              (server) => Effect.promise(() => server.stop(true)),
+            );
+            const onboarded = yield* onboardThrough(
+              route,
+              {
+                version: "0.40.0",
+                releases: `http://127.0.0.1:${server.port}`,
+                runners: `${first.world.home}/runners`,
+                key: publicKey.export({ type: "spki", format: "pem" }).toString(),
+              },
+              () => Effect.void,
+            );
+            expect(onboarded.steps[0]).toMatchObject({ step: "runner", status: "done" });
+            expect(onboarded.ready).toBe(true);
+            expect(
+              yield* fs.readFile(`${second.world.home}/.cache/collie/runners/collie-0.40.0`),
+            ).toEqual(runner);
+            const shells = yield* readAudit(`${second.world.state}/shell`);
+            expect(shells.length).toBeGreaterThan(0);
+            expect(
+              Arr.filter(shells, ({ asked }) =>
+                Option.isSome(
+                  Schema.decodeUnknownOption(Schema.Struct({ stdinHash: Schema.String }))(asked),
+                ),
+              ),
+            ).toEqual([]);
+          }),
+        [],
       ),
     ),
   180_000,

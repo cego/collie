@@ -76,8 +76,8 @@ const place = (route: ShellRoute, version: string, runner: { bytes: Uint8Array; 
     const file = placedAt(version);
     const there = yield* shOn(route, `${SHA256} < ${file} 2>/dev/null`);
     if (pipe_(there.out, Str.slice(0, 64)) === runner.sha256) return;
-    const put = yield* shOn(
-      route,
+    // Not `shOn`: a link carries stdin as text, which would change a binary's bytes.
+    const upload = yield* route.sh(
       Arr.join(
         [
           `set -e; mkdir -p "$HOME/.cache/collie/runners"; f=${file}; cat > "$f.new"`,
@@ -86,8 +86,8 @@ const place = (route: ShellRoute, version: string, runner: { bytes: Uint8Array; 
         ],
         "; ",
       ),
-      runner.bytes,
     );
+    const put = yield* ranWith(upload, runner.bytes);
     if (put.code !== 0)
       return yield* Effect.fail(
         Str.trim(put.err) || `could not put the runner on ${route.machine.name}`,

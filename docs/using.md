@@ -1580,10 +1580,12 @@ release, with its `.sig`, and verifies it against Collie's release key before it
 anywhere; one that is unsigned or does not match is refused and said, and nothing reaches
 the Machine. The verified runner is kept on this computer, checked again each time it is
 used, and put on the Machine under `~/.cache/collie/runners/` only once what arrived has
-the same SHA-256. Desktop then runs `collie --json onboard --to <its version>` there and
-shows each step as it streams: a step that needs root shows the exact command to run and
-**Retry**, and one that needs you shows what to open. A Machine onboarding left short lists
-its missing steps on its row in Machines, each with its command or link and **Retry**;
+the same SHA-256. It goes over the Machine's SSH connection, where `collie onboard` then
+runs, even on a paired Machine: a link carries text, and a runner's bytes are not. Desktop
+then runs `collie --json onboard --to <its version>` there and shows each step as it
+streams: a step that needs root shows the exact command to run and **Retry**, and one
+that needs you shows what to open. A Machine onboarding left short lists its missing
+steps on its row in Machines, each with its command or link and **Retry**;
 onboarding again repairs only what is missing. Once onboarding ends, Desktop tries the
 Machine's board again at once rather than after its backoff. Desktop keeps each Machine's
 latest onboarding on this computer, beside its saved board. Whether a Machine is onboarded

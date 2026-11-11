@@ -244,3 +244,22 @@ test("closing a route's scope leaves the shared connection open", () =>
       expect(yield* fs.exists(path)).toBe(true);
     }),
   ));
+
+test("stdin that is not text is refused by a link, never changed on its way", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir } = yield* rig;
+      const fallback: ShellRoute = {
+        machine: { profile: "vm", name: "vm-mk", target: "mk@vm-mk" },
+        open: () => Effect.die("SSH should not open"),
+        collie: () => Effect.die("SSH should not run"),
+        sh: () => Effect.die("SSH should not run"),
+        forward: () => Effect.void,
+      };
+      const route = linkRoute([`${dir}/far/collie`], { name: "vm-mk" }, fallback, "mk-pc");
+      const refused = yield* route.execute!("cat", new Uint8Array([0x7f, 0x45, 0xff, 0xfe])).pipe(
+        Effect.flip,
+      );
+      expect(refused).toBe("vm-mk's link carries stdin as text, and this is not UTF-8");
+    }),
+  ));

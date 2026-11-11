@@ -681,6 +681,13 @@ export const linkRoute = (
   const execute = (script: string, stdin?: Uint8Array) =>
     Effect.scoped(
       Effect.gen(function* () {
+        const text =
+          stdin === undefined
+            ? undefined
+            : yield* Effect.try({
+                try: () => new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(stdin),
+                catch: () => `${peer.name}'s link carries stdin as text, and this is not UTF-8`,
+              });
         const door =
           doors?.desktop ??
           (yield* openBridge(bridgeCommand([...collie, "--machine", peer.name], client), env).pipe(
@@ -690,8 +697,7 @@ export const linkRoute = (
           script,
           request: yield* (yield* SecureRandom.SecureRandom).uuidV4(),
         };
-        const payload =
-          stdin === undefined ? asked : { ...asked, stdin: new TextDecoder().decode(stdin) };
+        const payload = text === undefined ? asked : { ...asked, stdin: text };
         const { code, stdout, stderr } = yield* door
           .shell(payload)
           .pipe(Effect.mapError((cause) => refusal()(cause).reason));
