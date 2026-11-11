@@ -26,7 +26,9 @@ import {
   Result,
 } from "effect";
 import { ChildProcessSpawner } from "effect/process";
-import type { MrForge } from "../../src/board-model";
+import type { MrForge, MrState } from "../../src/board-model";
+import type { ForgeFacts } from "../../src/board";
+import { writeMrStates } from "../../src/merges";
 import { forgeHttpTest, type ForgeHttp } from "../../src/forge/http";
 import { runEffect } from "./effect";
 import { glabExpiry, MONTHS } from "../../src/forge/gitlab";
@@ -2371,4 +2373,22 @@ export const serveForges = (
       (server) => Effect.promise(() => server.stop(true)),
     ),
     (server) => `http://127.0.0.1:${server.port}`,
+  );
+
+/** What a merge watch that asked at `read` stored: each state, with the facts given or none. */
+export const storedAnswers = (
+  stateDir: string,
+  states: ReadonlyMap<string, MrState>,
+  facts: ReadonlyMap<string, ForgeFacts> = new Map(),
+  read = "2026-09-17T10:00:00Z",
+) =>
+  writeMrStates(
+    stateDir,
+    states,
+    new Map(
+      Arr.map([...states.keys()], (id) => [
+        id,
+        { checks: { state: "unknown" as const }, head: null, ...facts.get(id), read },
+      ]),
+    ),
   );

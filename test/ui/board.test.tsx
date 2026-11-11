@@ -1896,16 +1896,27 @@ test("the Home board draws its sections in the board's one order", () =>
           tasks: [
             ...HERD,
             task({ id: "t4", name: "Shippable", state: "done", landed: false, run: "r4" }),
+            task({
+              id: "t5",
+              name: "Green and approved",
+              state: "done",
+              landed: false,
+              shipping: "merge",
+              run: "r5",
+            }),
           ],
         }),
+        120,
+        60,
       );
       const lines = Arr.map(
-        ["Needs you", "Waiting on you · 1", "Working · 2", "1 finished today"],
+        ["Needs you", "Ready to ship · 1", "Waiting on you · 1", "Working · 2", "1 finished today"],
         (label) => app.lineOf(label),
       );
       expect(lines).toEqual([...lines].sort((a, b) => a - b));
       expect(Arr.map(SECTIONS, ([, title]) => title)).toEqual([
         "Needs you",
+        "Ready to ship",
         "Waiting on you",
         "Working",
         "Finished",

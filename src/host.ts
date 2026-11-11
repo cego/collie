@@ -243,7 +243,7 @@ import {
   type Attached,
 } from "./attachments";
 import { boardMessages, shareBoard } from "./board-stream";
-import { recordDisposition } from "./disposition";
+import { recordDisposition, refWords } from "./disposition";
 import { markSeenSince, readSeen, recordSeen } from "./seen";
 import { readReplies } from "./replies";
 import {
@@ -1253,9 +1253,9 @@ const hostBoard = (dir: string) =>
       Effect.gen(function* () {
         const herds = yield* liveHerds(herdr, env);
         const sessions = Arr.map(herds, (session) => session.herdr);
-        const build = board.views(herds);
         const all = yield* board.runs;
         const tasks = yield* listTasks;
+        const views = yield* board.views(herds).pipe(Effect.option);
         return [
           // Before the worktrees: a checkout goes only once its Task's workspace has closed.
           taskWorkspacesSweeper({
@@ -1263,7 +1263,7 @@ const hostBoard = (dir: string) =>
             sessions: herds,
             tasks,
             // No board, no Task judged Finished, so nothing closed.
-            views: yield* build.pipe(Effect.orElseSucceed(() => [])),
+            views: Option.getOrElse(views, () => []),
             runs: all,
             seen,
           }),
@@ -1289,6 +1289,7 @@ const hostBoard = (dir: string) =>
             settling: settlingOf({
               stateDir: env.stateDir,
               runs: all,
+              views: Option.getOrNull(views),
               tasks,
               sessions,
               protect: [env.pluginRoot],
@@ -3462,6 +3463,13 @@ const frontDoorHandlers = (
         dispose: ({ runId, kind, ref, note, request }, { client }) =>
           known(runId).pipe(
             Effect.flatMap(disposedOn(ref)),
+            Effect.filterOrFail(
+              (kept) => kind !== "superseded" || !Arr.contains(refWords(kept.ref), kept.run),
+              (kept) =>
+                new HostRefused({
+                  reason: `${REFUSED_INPUT}: a superseded line cannot name ${kept.run}, the Run it is recorded on`,
+                }),
+            ),
             Effect.flatMap((kept) =>
               once(
                 trail(runId),
@@ -4197,6 +4205,8 @@ const own = (
     const stamp = yield* (yield* SecureRandom.SecureRandom).uuidV4();
     const toasted = yield* PubSub.unbounded<Toasted>();
     const reconnects = yield* Ref.make(0);
+    // Kept until the reports layer takes them, so a link up before it starts is not missed.
+    const linked = yield* Queue.unbounded<Peer>();
     const peers = yield* startPeers({
       reconnected: Ref.update(reconnects, (count) => count + 1),
       dir,
@@ -4224,6 +4234,7 @@ const own = (
         Effect.map((backend) => backend === "herdr"),
         Effect.provideContext(bun),
       ),
+      linked: (peer) => Queue.offer(linked, peer).pipe(Effect.asVoid),
       tell: (peer) =>
         Effect.scoped(
           connectPeer(dir, peer.name, { as: "host", client: machineName(), stamp }).pipe(
@@ -4258,7 +4269,9 @@ const own = (
             Layer.effectDiscard(
               Effect.gen(function* () {
                 const { reportsLayer } = yield* Effect.promise(() => import("./reports"));
-                yield* Layer.build(reportsLayer({ env, installation, stamp, crashAt }));
+                yield* Layer.build(
+                  reportsLayer({ env, installation, stamp, crashAt, linked, live: peers.live }),
+                );
               }),
             ),
           ).pipe(

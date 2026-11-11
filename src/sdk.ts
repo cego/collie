@@ -68,6 +68,8 @@ import {
   type Outcome,
 } from "./outcome";
 import type { Source } from "./offers";
+import { ShippingGo } from "./shipping";
+export type { ShippingGo } from "./shipping";
 import {
   CurrentStep,
   runKey,
@@ -1345,6 +1347,7 @@ export interface DecisionSpec {
   readonly options: ReadonlyArray<string | Solution>;
   /** What keeps it short of standard, flagged wherever it is shown. */
   readonly shortfall?: string;
+  readonly shipping?: ShippingGo;
 }
 
 /** One answer an `ask` takes: a bare string is its id and title. */
@@ -1371,6 +1374,7 @@ export const ask = (question: {
   /** Its identity: the same name is the same question, however often the work replays. */
   readonly name: string;
   readonly prompt?: string;
+  readonly shipping?: ShippingGo;
   /**
    * The answers it takes, exactly one of them recommended; none is a question answered in
    * the operator's own words.
@@ -1378,6 +1382,10 @@ export const ask = (question: {
   readonly options?: ReadonlyArray<AskOption>;
 }): Effect.Effect<string, never, Run | Host | WorkflowEngine | WorkflowInstance> =>
   Effect.gen(function* () {
+    const shipping =
+      question.shipping === undefined
+        ? undefined
+        : yield* Schema.decodeEffect(ShippingGo)(question.shipping).pipe(Effect.orDie);
     const host = yield* Host;
     const runId = (yield* Run).id;
     const at = yield* CurrentStep;
@@ -1400,6 +1408,7 @@ export const ask = (question: {
       prompt: question.prompt ?? question.name,
       options: shortfall === null ? solutions : Arr.map(solutions, Struct.omit(["recommended"])),
       shortfall: shortfall ?? undefined,
+      shipping,
     });
     return yield* DurableDeferred.await(
       DurableDeferred.make(question.name, { success: Schema.String }),

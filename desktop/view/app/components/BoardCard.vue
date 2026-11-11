@@ -18,7 +18,7 @@ import { DateTime } from "effect";
 import type { DesktopAction } from "../../../src/shared/flock";
 import type { Act } from "../composables/useAnswering";
 import { type Gesture, seenBy } from "../../../src/shared/board-clicks";
-import { offerKey } from "../../../src/shared/actions";
+import { offeringOf } from "../../../src/shared/actions";
 import { cardQuestion, openQuestions } from "../../../src/shared/pending-answer";
 import { cardFlow } from "../../../src/shared/flow-strip";
 import { flockMrsAtom, runDetailKey } from "../flock";
@@ -106,7 +106,7 @@ const repoAndBranch = computed(() =>
 /** Words a Steer or a Follow-up needs before it can be sent. */
 const asking = ref<{ title: string; send: (text: string) => DesktopAction } | null>(null);
 /** The offers dialog: closed, choosing, or on the offer a button named. */
-const offering = ref<{ offer: string | null } | null>(null);
+const offering = ref<ReturnType<typeof offeringOf> | null>(null);
 const reviewing = ref(false);
 
 const panes = usePanes();
@@ -152,11 +152,16 @@ const doing = (action: CardAction, primary: boolean) => {
         : { label: openMrLabel(action.mr, primary, action.named), press: () => openLink(url) };
     }
     case "offer": {
-      const offer = offerKey(action.offer);
-      return { label: action.offer.title, press: () => (offering.value = { offer }) };
+      return {
+        label: primary && view.shipping === "merge" ? "Merge" : action.offer.title,
+        press: () => (offering.value = offeringOf(runId, action.offer)),
+      };
     }
     case "offers":
-      return { label: "What it offers…", press: () => (offering.value = { offer: null }) };
+      return {
+        label: "What it offers…",
+        press: () => (offering.value = offeringOf(runId, null)),
+      };
     case "resume":
       return {
         label: primary ? "Resume" : "Resume run",
@@ -438,7 +443,7 @@ const menu = computed(() =>
   <OffersDialog
     v-if="offering !== null"
     :installation="installation"
-    :run-id="task.run"
+    :run-id="offering.runId"
     :chosen="offering.offer"
     :as-of="() => asOf"
     @close="offering = null"

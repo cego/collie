@@ -19,7 +19,7 @@ import { readAudit } from "../src/audit";
 import { type MrState } from "../src/board-model";
 import { connect } from "../src/host";
 import { factsOfView } from "../src/runs";
-import { writeMrStates } from "../src/merges";
+import { storedAnswers } from "./support/forge";
 import { runEffect } from "./support/effect";
 import { HostReply, events, fixtures, openHost, runDirOf, until, workspace } from "./support/host";
 
@@ -416,7 +416,7 @@ const stoppedOn = Effect.fn("test.stoppedOn")(function* (prefix: string, mr: MrS
   );
   const claim = `${yield* runDirOf(state, "r1")}/helle.json`;
   yield* fs.writeFileString(claim, CLAIM);
-  yield* writeMrStates(state, new Map([["gitlab.example.com/group/project!7", mr]]));
+  yield* storedAnswers(state, new Map([["gitlab.example.com/group/project!7", mr]]));
   return { host, state, claim };
 });
 

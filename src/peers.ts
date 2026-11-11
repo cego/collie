@@ -336,6 +336,8 @@ export interface Link {
   readonly machines: Effect.Effect<ReadonlyArray<SshMachine> | null>;
   /** Whether a pairing `machines` leaves out is forgotten: herdr's list, not core's. */
   readonly forgetsUnlisted: Effect.Effect<boolean>;
+  /** Told each time a paired peer's link comes up. */
+  readonly linked: (peer: Peer) => Effect.Effect<void>;
 }
 
 export const levelPeer = Effect.fn("Peers.level")(function* (link: Link, peer: Peer) {
@@ -401,6 +403,7 @@ export interface Peers {
   readonly list: Effect.Effect<ReadonlyArray<PeerView>>;
   /** Ends the backoff of the link to the peer this Machine dials by that name. */
   readonly wake: (name: string) => Effect.Effect<void>;
+  readonly live: (installation: string) => Effect.Effect<boolean>;
 }
 
 /** One line answering a relay connection's header: open, or why not. */
@@ -649,10 +652,13 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
           Effect.andThen(reconcileMachines),
           Effect.andThen(() =>
             Arr.some(peers, (one) => one.installation === peer.installation)
-              ? level(peer).pipe(
-                  Effect.andThen(syncSettings(peer)),
-                  Effect.andThen(syncDefinitions(peer)),
-                )
+              ? link
+                  .linked(peer)
+                  .pipe(
+                    Effect.andThen(level(peer)),
+                    Effect.andThen(syncSettings(peer)),
+                    Effect.andThen(syncDefinitions(peer)),
+                  )
               : Effect.void,
           ),
         ),
@@ -1302,6 +1308,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
         ]);
       }).pipe(pairing.withPermits(1)),
     forget,
+    live: (installation) => Effect.sync(() => standings.get(installation)?.state === "live"),
     list: reconcileMachines.pipe(
       Effect.andThen(pairing.withPermits(1)(settle)),
       Effect.andThen(() =>

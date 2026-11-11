@@ -12,7 +12,7 @@ const facts = (over: Partial<WorkFacts> = {}): WorkFacts => ({
   succeeded: true,
   branch: null,
   mr: null,
-  mrLanded: false,
+  owing: false,
   planIssues: 0,
   disposed: false,
   asking: false,
@@ -37,7 +37,7 @@ test("succeeded work with tickets and nothing else is a plan ready to implement"
 });
 
 test("a branch nobody has answered for is not landed, and is not a plan either", () => {
-  expect(standingOf(facts({ branch: "mk/thing" }))).toEqual({
+  expect(standingOf(facts({ branch: "mk/thing", owing: true }))).toEqual({
     unfiled: false,
     planReady: false,
     landed: false,
@@ -51,14 +51,18 @@ test("tickets beside a branch are work in progress, not a plan to hand on", () =
   expect(standingOf(facts({ planIssues: 2, mr: "mk/collie!65" })).planReady).toBe(false);
 });
 
-test("a disposition is the answer: the work landed and the plan is no longer offered", () => {
+test("a disposition is the answer for a plan, but not for a merge request still owed", () => {
   expect(standingOf(facts({ planIssues: 2, disposed: true })).planReady).toBe(false);
-  expect(standingOf(facts({ branch: "mk/thing", disposed: true })).landed).toBe(true);
+  expect(standingOf(facts({ planIssues: 2, disposed: true })).landed).toBe(true);
+  expect(standingOf(facts({ planIssues: 2 })).landed).toBe(false);
+  expect(standingOf(facts({ mr: "mk/collie!65", disposed: true, owing: true })).landed).toBe(false);
 });
 
-test("a merge request the host says has landed lands the work", () => {
-  expect(standingOf(facts({ mr: "mk/collie!65", mrLanded: true })).landed).toBe(true);
-  expect(standingOf(facts({ mr: "mk/collie!66", mrLanded: false })).landed).toBe(false);
+test("work lands once nothing it owes is left unsettled", () => {
+  expect(standingOf(facts({ mr: "mk/collie!65", owing: false })).landed).toBe(true);
+  expect(standingOf(facts({ mr: "mk/collie!66", owing: true })).landed).toBe(false);
+  expect(standingOf(facts({ branch: "mk/thing", owing: false })).landed).toBe(true);
+  expect(standingOf(facts({ mr: "mk/collie!65", settled: false })).landed).toBe(false);
 });
 
 test("an open question is something to file, so work waiting on one is not landed", () => {
