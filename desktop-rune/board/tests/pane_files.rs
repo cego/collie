@@ -207,6 +207,40 @@ fn a_paste_with_files_stages_places_and_types_their_quoted_paths_on_the_machine(
     assert!(!said(&runtime, "Placing files"), "the status stayed up");
 }
 
+/// The pane's grid, as the app's emulator has it.
+fn grid(runtime: &Runtime<App>) -> (u16, u16) {
+    runtime.state.terminal.as_ref().expect("the pane").size()
+}
+
+// A grid that shrinks and grows back under a running program shifts what it drew by a row:
+// a paste's status must leave the pane its size.
+#[test]
+fn a_paste_and_what_it_says_leave_the_pane_its_size() {
+    let harness = Harness::new();
+    let (mut runtime, _, _) = shown(&harness);
+    let size = grid(&runtime);
+    will_place(&harness);
+    runtime.paste_content(ClipboardContent::new("shot.png").with_files(files()));
+    runtime.frame(0.1);
+    assert!(said(&runtime, "Placing files"));
+    assert_eq!(grid(&runtime), size, "while placing");
+    runtime.frame(1.5);
+    settle(&harness, &mut runtime);
+    assert_eq!(grid(&runtime), size, "once typed");
+
+    harness
+        .fake
+        .will_answer("stagePaths", Ok(json!([staged("aa/shot.png", "shot.png")])));
+    harness
+        .fake
+        .will_answer("placeFiles", Err(CallError("the disk is full".into())));
+    runtime.paste_content(ClipboardContent::new("").with_files(files()[..1].to_vec()));
+    runtime.frame(2.5);
+    settle(&harness, &mut runtime);
+    assert!(said(&runtime, "Nothing was pasted"));
+    assert_eq!(grid(&runtime), size, "while it says why");
+}
+
 #[test]
 fn files_dropped_on_the_shown_pane_are_typed_as_their_paths_on_its_machine() {
     let harness = Harness::new();

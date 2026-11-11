@@ -3145,6 +3145,18 @@ fn terminal_tab(app: &App, record: &Record, k: &Kit) -> El {
                 .truncate()
                 .min_w(0.0)
         });
+    // In the bar: a line of its own would take a row from the pane under its program.
+    let files_said = app.record.terminal_said.clone().map(|said| {
+        text(said.clone())
+            .key("terminal-said")
+            .role("status")
+            .label(said)
+            .font(k.ty.small)
+            .color(k.c.text_muted)
+            .truncate()
+            .shrink()
+            .min_w(0.0)
+    });
     let bar = row()
         .key("terminal-bar")
         .gap(12.0)
@@ -3154,6 +3166,7 @@ fn terminal_tab(app: &App, record: &Record, k: &Kit) -> El {
         .children(switcher)
         .children(one)
         .children(place)
+        .children(files_said)
         .child(rune::spacer())
         .children(away)
         .child(status);
@@ -3194,14 +3207,6 @@ fn terminal_tab(app: &App, record: &Record, k: &Kit) -> El {
                     .key("terminal-reconnect"),
             )
     });
-    let files_said = app.record.terminal_said.clone().map(|said| {
-        text(said)
-            .key("terminal-said")
-            .role("status")
-            .font(k.ty.small)
-            .color(k.c.text_muted)
-            .wrap()
-    });
     let waiting = |key: &str, said: &str| {
         col()
             .key(key.to_string())
@@ -3241,7 +3246,6 @@ fn terminal_tab(app: &App, record: &Record, k: &Kit) -> El {
         .transition(Transition::none())
         .child(bar)
         .children(ended)
-        .children(files_said)
         .child(
             col()
                 .key("terminal-body")
