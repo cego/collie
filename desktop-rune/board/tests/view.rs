@@ -27,7 +27,7 @@ fn within(node: &Value) -> Vec<&Value> {
 }
 
 #[test]
-fn each_machine_says_its_status_and_shows_its_cards_by_name() {
+fn the_board_says_its_sections_in_order_with_their_cards_by_name() {
     let mut runtime = Runtime::new(
         board(),
         view,
@@ -40,56 +40,59 @@ fn each_machine_says_its_status_and_shows_its_cards_by_name() {
     runtime.frame(0.0);
     let tree = runtime.accessibility_json();
     let nodes = within(&tree);
-    let machines: [(&str, &str, &str, &[&str]); 4] = [
-        (
-            "machine-local",
-            "Local: Live, 3 cards",
-            "Live",
-            &[
-                "Strapi prod seeder",
-                "Fix the login redirect",
-                "Release 0.119.0",
-            ],
-        ),
-        (
-            "machine-build",
-            "Build box: Live, 2 cards",
-            "Live",
-            &["Nightly evidence sweep", "Bump effect to 4.2"],
-        ),
-        (
-            "machine-laptop",
-            "Laptop: Out of reach, no cards",
-            "Out of reach",
-            &[],
-        ),
-        (
-            "machine-studio",
-            "Studio: Showing what it last said, 1 card",
-            "Showing what it last said",
-            &["Port the Flow map"],
-        ),
-    ];
-    for (key, label, status, cards) in machines {
-        let machine = nodes
-            .iter()
-            .find(|node| node["key"] == key)
-            .unwrap_or_else(|| panic!("no {key} in {tree:#}"));
-        assert_eq!(machine["name"], label);
-        let inside = within(machine);
-        let said: Vec<&Value> = inside
-            .iter()
-            .filter(|n| n["role"] == "status")
-            .map(|n| &n["name"])
-            .collect();
-        assert_eq!(said, [status], "{key}'s status");
-        let shown: Vec<&Value> = inside
-            .iter()
-            .filter(|n| n["key"].as_str().is_some_and(|k| k.starts_with("card-")))
-            .map(|n| &n["name"])
-            .collect();
-        assert_eq!(shown, cards, "{key}'s cards");
-    }
+    let header = nodes
+        .iter()
+        .find(|n| n["key"] == "header")
+        .unwrap_or_else(|| panic!("no header in {tree:#}"));
+    assert_eq!(header["role"], "status");
+    assert_eq!(header["name"], "One task is waiting on you. 4 working.");
+    let lost = nodes
+        .iter()
+        .find(|n| n["key"] == "lost-laptop")
+        .unwrap_or_else(|| panic!("no lost-laptop in {tree:#}"));
+    assert_eq!(lost["name"], "Laptop is out of reach");
+
+    let sections: Vec<(&Value, Vec<&Value>)> = nodes
+        .iter()
+        .filter(|n| {
+            ["needs-you", "waiting", "working", "finished"]
+                .iter()
+                .any(|s| n["key"] == *s)
+        })
+        .map(|section| {
+            let cards = within(section)
+                .into_iter()
+                .filter(|n| n["role"] == "button")
+                .filter(|n| {
+                    n["key"]
+                        .as_str()
+                        .is_some_and(|k| k.starts_with("card-") && k.matches('-').count() == 1)
+                })
+                .map(|n| &n["name"])
+                .collect();
+            (&section["name"], cards)
+        })
+        .collect();
+    assert_eq!(
+        sections,
+        [
+            (
+                &"Needs you, 1".into(),
+                vec![&"Fix the login redirect".into()]
+            ),
+            (
+                &"Working, 4".into(),
+                vec![
+                    &"Strapi prod seeder".into(),
+                    &"Nightly evidence sweep".into(),
+                    &"Bump effect to 4.2".into(),
+                    &"Port the Flow map".into(),
+                ]
+            ),
+            // A finished card that has been seen is folded away, as today.
+            (&"Finished, 1".into(), vec![]),
+        ]
+    );
 }
 
 const PATCH: &str = "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-x\n+y\n";
@@ -102,6 +105,20 @@ fn tap(runtime: &mut Runtime<App>, key: &str, at: f64) {
     runtime.frame(at + 50.0);
     runtime.pointer_up(x, y);
     runtime.frame(at + 100.0);
+}
+
+/// A card is opened by a second press; the first selects it.
+fn open(runtime: &mut Runtime<App>, key: &str, at: f64) {
+    let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
+    runtime.pointer_move(x, y);
+    runtime.frame(at);
+    for _ in 0..2 {
+        runtime.pointer_down(x, y);
+        runtime.frame(0.05);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.05);
+    }
+    runtime.frame(1.0);
 }
 
 fn keys(runtime: &Runtime<App>) -> Vec<String> {
@@ -130,7 +147,7 @@ fn pressing_a_card_goes_to_its_runs_pane_and_back_leaves_it_for_the_board() {
         },
     );
     runtime.frame(0.0);
-    tap(&mut runtime, "card-b2", 100.0);
+    open(&mut runtime, "card-b2", 100.0);
     let asked_for = asked.lock().unwrap().clone();
     assert_eq!(
         asked_for,
@@ -195,7 +212,7 @@ fn a_panes_diff_button_asks_for_its_runs_diff_and_shows_it_once_read() {
         },
     );
     runtime.frame(0.0);
-    tap(&mut runtime, "card-b2", 100.0);
+    open(&mut runtime, "card-b2", 100.0);
     tap(&mut runtime, "open-diff", 1000.0);
     assert_eq!(
         *asked.lock().unwrap(),
@@ -226,10 +243,10 @@ fn a_diff_read_for_a_pane_since_left_is_not_shown_over_the_next() {
         },
     );
     runtime.frame(0.0);
-    tap(&mut runtime, "card-b2", 100.0);
+    open(&mut runtime, "card-b2", 100.0);
     tap(&mut runtime, "open-diff", 1000.0);
     tap(&mut runtime, "back", 2000.0);
-    tap(&mut runtime, "card-b1", 3000.0);
+    open(&mut runtime, "card-b1", 3000.0);
     runtime.update(|board, _| board.diff_read(1, PATCH));
     runtime.frame(4000.0);
     let shown = keys(&runtime);
@@ -264,7 +281,7 @@ fn a_panes_run_record_gives_its_flow_map_and_one_since_left_does_not() {
         },
     );
     runtime.frame(0.0);
-    tap(&mut runtime, "card-b2", 100.0);
+    open(&mut runtime, "card-b2", 100.0);
     assert_eq!(
         *asked.lock().unwrap(),
         [("inst-build".to_string(), "r1".to_string(), 1)]
@@ -280,7 +297,7 @@ fn a_panes_run_record_gives_its_flow_map_and_one_since_left_does_not() {
         keys(&runtime).iter().any(|k| k == "flow"),
         "the board keeps it"
     );
-    tap(&mut runtime, "card-b1", 3000.0);
+    open(&mut runtime, "card-b1", 3000.0);
     runtime.update(|board, _| board.flow_read(1, flow("before")));
     runtime.frame(4000.0);
     let shown = keys(&runtime);

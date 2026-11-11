@@ -46,6 +46,8 @@ pub struct App {
     pub read_record: Option<ReadRecord>,
     stop_record: Option<Box<dyn FnOnce()>>,
     pub timing: std::cell::RefCell<timing::Timing>,
+    /// The board's own state: the rest of the Flock, the selection, dialogs and answers.
+    pub board: board::Board,
 }
 
 impl App {
