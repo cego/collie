@@ -544,8 +544,6 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
     dir: run.dir,
     title: runTitle(run),
     status: run.state,
-    ...(run.park === undefined ? {} : { park: run.park }),
-    ...(run.recovery === undefined ? {} : { recovery: run.recovery }),
     inputs: Arr.map(Rec.toEntries(run.settled.inputs), ([name, value]) => ({
       name,
       value,
@@ -630,7 +628,11 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
     diff: parts ? yield* diffOf(run) : null,
     flow: opts.flow ?? undefined,
   };
-  return progress === null ? detail : { ...detail, branchProgress: progress };
+  let shown = detail;
+  if (run.park !== undefined) shown = { ...shown, park: run.park };
+  if (run.recovery !== undefined) shown = { ...shown, recovery: run.recovery };
+  if (progress !== null) shown = { ...shown, branchProgress: progress };
+  return shown;
 });
 
 /** What Settings shows and can write back. No new store: `config.json` and the harness. */
