@@ -255,6 +255,11 @@ pub fn view(app: &App, k: &Kit) -> El {
         .children(layer)
 }
 
+/// The element id of the card keyed `key`, as the board draws it.
+pub(super) fn card_id(app: &App, key: &str) -> Option<String> {
+    card_ids(&app.placed()).remove(key)
+}
+
 /// Each card's element id: `card-<task id>`, or with its installation where two Machines
 /// share a task id.
 fn card_ids(placed: &[Placed<'_>]) -> HashMap<String, String> {
@@ -759,7 +764,7 @@ fn card(
 
     // Its merge requests, where it has several or another Machine holds one too.
     if let Some(mrs) = mrs {
-        let mut list = col().key("mrs").gap(2.0).w_full();
+        let mut list = col().key("mrs").gap(6.0).w_full();
         for (at, one) in mrs.iter().enumerate() {
             let mut line = row()
                 .key(format!("mr-{at}"))
@@ -768,9 +773,10 @@ fn card(
                 .center_y()
                 .child(
                     text(one.mr.line.clone())
-                        .font(k.ty.small)
+                        .font(k.ty.small.lh(16.0))
                         .color(c.text_muted)
-                        .truncate()
+                        .wrap()
+                        .max_lines(2)
                         .grow(1.0)
                         .shrink(),
                 );
@@ -897,12 +903,15 @@ fn card(
             ),
             (None, Some(label)) => {
                 let key = key.clone();
+                // In a row, so it is as wide as its label, not the card.
                 block.child(
-                    small_button(label, ButtonVariant::Contrast)
-                        .disabled(!live)
-                        .on_press(move |app: &mut App| app.answer_questions(&key))
-                        .build(k)
-                        .key(format!("{id}-answer")),
+                    row().child(
+                        small_button(label, ButtonVariant::Contrast)
+                            .disabled(!live)
+                            .on_press(move |app: &mut App| app.answer_questions(&key))
+                            .build(k)
+                            .key(format!("{id}-answer")),
+                    ),
                 )
             }
             (None, None) => block,
@@ -912,11 +921,13 @@ fn card(
         let key = key.clone();
         card = card.child(
             asks("proposal", proposal.text.clone()).child(
-                small_button("Review…".into(), ButtonVariant::Contrast)
-                    .disabled(!live)
-                    .on_press(move |app: &mut App| app.review(&key))
-                    .build(k)
-                    .key(format!("{id}-review")),
+                row().child(
+                    small_button("Review…".into(), ButtonVariant::Contrast)
+                        .disabled(!live)
+                        .on_press(move |app: &mut App| app.review(&key))
+                        .build(k)
+                        .key(format!("{id}-review")),
+                ),
             ),
         );
     }

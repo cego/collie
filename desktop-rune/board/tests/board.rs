@@ -1101,6 +1101,192 @@ fn the_finished_fold_says_whether_it_is_open_and_the_keyboard_opens_it() {
     assert_eq!(cards_in(&runtime, "finished"), ["Read"]);
 }
 
+/// The key of the element that has focus, if any.
+fn focused(runtime: &Runtime<App>) -> Option<String> {
+    let tree = runtime.accessibility_json();
+    within(&tree)
+        .into_iter()
+        .find(|n| has_state(n, "focused"))
+        .and_then(|n| n["key"].as_str().map(String::from))
+}
+
+/// Whether focus is on the node keyed `key` or inside it.
+fn focus_within(runtime: &Runtime<App>, key: &str) -> bool {
+    node(runtime, key).is_some_and(|n| within(&n).into_iter().any(|n| has_state(n, "focused")))
+}
+
+/// The drawn bounds of the first node with `role`: x, y, w, h.
+fn bounds_of_role(runtime: &Runtime<App>, role: &str) -> Option<[f32; 4]> {
+    let tree = runtime.accessibility_json();
+    within(&tree)
+        .into_iter()
+        .find(|n| n["role"] == role)
+        .map(|n| {
+            let b = n["bounds"].as_array().unwrap();
+            [0, 1, 2, 3].map(|i| b[i].as_f64().unwrap() as f32)
+        })
+}
+
+#[test]
+fn p2_a_card_menu_opens_at_its_trigger_on_a_card_scrolled_down_a_long_section() {
+    let harness = Harness::new();
+    let tasks: Vec<Value> = (0..30)
+        .map(|n| task(&format!("t{n}"), &format!("Busy {n}"), "active", json!({})))
+        .collect();
+    let mut runtime = runtime_of(&harness, vec![snapshot(&pc(), tasks)]);
+    let before = runtime.find("card-t28-menu").map(|(_, y)| y);
+    let (x, y) = runtime.find("card-t0").unwrap();
+    runtime.wheel(x, y, -1500.0);
+    runtime.frame(1.0);
+    let (tx, ty) = runtime.find("card-t28-menu").expect("the trigger is drawn");
+    assert_ne!(before, Some(ty), "the board scrolled");
+    assert!(ty > 0.0 && ty < 900.0, "the trigger is on screen: {ty}");
+    press(&mut runtime, "card-t28-menu");
+    let [mx, my, mw, mh] = bounds_of_role(&runtime, "menu").expect("the menu is open");
+    let near_x = tx >= mx - 40.0 && tx <= mx + mw + 40.0;
+    let near_y = (my - ty).abs() < 40.0 || (my + mh - ty).abs() < 40.0;
+    assert!(
+        near_x && near_y,
+        "the menu at {:?} opens at its trigger at {:?}",
+        [mx, my, mw, mh],
+        (tx, ty)
+    );
+}
+
+#[test]
+fn p2_a_steer_dialogs_field_has_focus_when_it_opens() {
+    let harness = Harness::new();
+    let mut runtime = runtime_of(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![task("t1", "Busy", "active", json!({}))],
+        )],
+    );
+    press(&mut runtime, "card-t1-menu");
+    choose(&mut runtime, "Steer…");
+    runtime.frame(1.0);
+    assert!(focus_within(&runtime, "words"), "{:?}", focused(&runtime));
+}
+
+#[test]
+fn p2_an_offers_first_field_has_focus_once_the_offer_is_picked() {
+    let harness = Harness::new();
+    let mut runtime = runtime_of(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![task("t1", "Shipped", "done", json!({}))],
+        )],
+    );
+    runtime.state.do_action(
+        "inst-pc:t1",
+        &collie_desktop_board::board::cards::CardAction::Offers,
+    );
+    harness.fake.answer(
+        "offers",
+        Ok(json!([
+            {"id": "redo", "title": "Do it again", "workflow": "implement",
+                "arguments": {"type": "object", "required": ["goal"], "properties": {
+                    "goal": {"type": "string"}}},
+                "kind": "follow-up", "primary": false, "unavailable": null},
+        ])),
+    );
+    settle(&harness, &mut runtime);
+    press(&mut runtime, "offer-redo");
+    runtime.frame(1.0);
+    assert!(
+        focus_within(&runtime, "field-goal"),
+        "{:?}",
+        focused(&runtime)
+    );
+}
+
+#[test]
+fn p2_focus_goes_back_to_the_card_after_a_steer_is_sent() {
+    let harness = Harness::new();
+    let mut runtime = runtime_of(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![task("t1", "Busy", "active", json!({}))],
+        )],
+    );
+    press(&mut runtime, "card-t1-menu");
+    choose(&mut runtime, "Steer…");
+    if let Some(Dialog::Words { edit, .. }) = &mut runtime.state.board.dialog {
+        *edit = TextEdit::new("look at the tests");
+    }
+    redraw(&mut runtime);
+    press(&mut runtime, "send-words");
+    runtime.frame(1.0);
+    assert!(runtime.state.board.dialog.is_none());
+    assert_eq!(focused(&runtime).as_deref(), Some("card-t1"));
+}
+
+#[test]
+fn p2_a_proposal_decided_elsewhere_closes_its_dialog() {
+    let harness = Harness::new();
+    let proposal = json!({"kind": "proposal", "id": "p1", "hash": "h1",
+        "text": "Merge the branch.", "actions": [{"text": "merge !12", "allowed": true}]});
+    let mut app = app(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![task("t1", "Land", "blocked", json!({"decision": proposal}))],
+        )],
+    );
+    app.review("inst-pc:t1");
+    app.proposal_drawn(Some([0.0, 400.0]), Some(100.0));
+    // Changed while open: what is shown is the new one, read again from the start.
+    let changed = json!({"kind": "proposal", "id": "p1", "hash": "h2",
+        "text": "Merge the branch and tag it.", "actions": []});
+    app.apply(
+        serde_json::from_value(snapshot(
+            &pc(),
+            vec![task("t1", "Land", "blocked", json!({"decision": changed}))],
+        ))
+        .unwrap(),
+    );
+    match &app.board.dialog {
+        Some(Dialog::Proposal { proposal, seen, .. }) => {
+            assert_eq!(proposal.hash, "h2");
+            assert!(!seen, "a changed proposal is read again");
+        }
+        _ => panic!("the proposal dialog stays open on its card's new proposal"),
+    }
+    app.apply(
+        serde_json::from_value(snapshot(
+            &pc(),
+            vec![task("t1", "Land", "active", json!({}))],
+        ))
+        .unwrap(),
+    );
+    assert!(
+        app.board.dialog.is_none(),
+        "the proposal is no longer asked"
+    );
+}
+
+#[test]
+fn p2_a_steer_dialog_closes_when_its_card_leaves_the_board() {
+    let harness = Harness::new();
+    let mut app = app(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![task("t1", "Busy", "active", json!({}))],
+        )],
+    );
+    app.do_action(
+        "inst-pc:t1",
+        &collie_desktop_board::board::cards::CardAction::Steer,
+    );
+    assert!(app.board.dialog.is_some());
+    app.apply(serde_json::from_value(snapshot(&pc(), vec![])).unwrap());
+    assert!(app.board.dialog.is_none());
+}
+
 #[test]
 fn a_toast_goes_after_five_seconds_unless_the_pointer_is_on_it() {
     let harness = Harness::new();
