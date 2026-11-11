@@ -164,6 +164,7 @@ here are in [`src/README.md`](src/README.md).
   [ADR-0055](docs/adr/0055-a-run-never-asks-to-run-its-checks.md),
   [`docs/sdk.md`](docs/sdk.md#reviewing-and-fixing-until-it-converges), `settleRound`, `test/rally.test.ts`.
 - **Lists of work, slices, fan-out** → [ADR-0024](docs/adr/0024-a-list-of-work-is-known-by-its-names.md),
+  waiting on another Run's Change: [ADR-draft-a-change-waits-on-another-runs-change-to-merge](docs/adr/draft-a-change-waits-on-another-runs-change-to-merge.md),
   [`docs/sdk.md`](docs/sdk.md#a-list-of-work-one-item-at-a-time), `src/slices.ts`, `src/plan.ts`, `test/listing.test.ts`.
 - **Cards, offers** → [ADR-0025](docs/adr/0025-a-card-is-facts-and-an-offer-is-a-declaration.md),
   [`docs/sdk.md`](docs/sdk.md#what-a-definition-declares), `src/standing.ts`, `src/offers.ts`, `src/cards.ts`,

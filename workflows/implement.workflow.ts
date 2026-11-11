@@ -24,6 +24,7 @@ import {
   FindingSchema,
   FixOutputSchema,
   IntegrationSchema,
+  PrerequisiteStandingSchema,
   Agents,
   Children,
   Host,
@@ -661,15 +662,72 @@ export default defineWorkflow({
             reviewed: recovery.review,
           };
       }
+      const needing = (one: Slice) => ({
+        runId,
+        cwd,
+        ticket: `${source.value}/issues/${one.file}`,
+      });
+      let prerequisiteReads = 0;
+      const landed = (one: Slice) =>
+        Effect.suspend(() => {
+          prerequisiteReads += 1;
+          return Activity.make({
+            name: `prerequisites.${prerequisiteReads}`,
+            success: PrerequisiteStandingSchema,
+            error: WorkflowError,
+            execute: host.prerequisites(needing(one)),
+          });
+        }).pipe(Effect.map((standing) => standing._tag === "Landed"));
+      let prerequisiteWaits = 0;
+      const awaited = (one: Slice) =>
+        Effect.gen(function* () {
+          prerequisiteWaits += 1;
+          const standing = yield* Activity.make({
+            name: `prerequisites-wait.${prerequisiteWaits}`,
+            success: PrerequisiteStandingSchema,
+            error: WorkflowError,
+            // Suspended inside the Activity, so a resume waits again.
+            execute: Effect.gen(function* () {
+              const standing = yield* host.awaitPrerequisites(needing(one));
+              if (standing._tag === "Held") return yield* Workflow.suspend(yield* WorkflowInstance);
+              return standing;
+            }),
+          });
+          if (standing._tag === "Never")
+            yield* unbuilt(
+              `${one.file}.prerequisites-${prerequisiteWaits}`,
+              `${one.file}: ${standing.why}`,
+            );
+        });
+      // The first unbuilt ticket whose blockers are built and whose Prerequisites have
+      // landed, waiting on the first unbuilt one's while there is none.
+      const pickable = Effect.gen(function* () {
+        for (;;) {
+          const left = Arr.filter(tickets, (one) => !built.has(one.file));
+          if (left.length === 0) return undefined;
+          // Only a blocker ahead of it counts, as `orderedTickets` breaks a cycle in plan order.
+          for (const [at, one] of left.entries())
+            if (
+              Arr.every(
+                one.blockedBy,
+                (id) => !Arr.some(left.slice(0, at), (other) => other.number === id),
+              ) &&
+              (one.prerequisites.length === 0 || (yield* landed(one)))
+            )
+              return one;
+          yield* building(awaited(left[0]!), {
+            item: left[0]!.file,
+            items: Arr.map(tickets, (one) => one.file),
+          });
+        }
+      });
       for (; recovery.entry === "Build";) {
         // Identities before work: two tickets nobody can tell apart would share one
         // result, and finding that out after an agent has been paid for is too late.
         const clash = identityProblem(Arr.map(tickets, (ticket) => ticket.file));
         if (clash !== null) return yield* new WorkflowError({ reason: clash });
-        const ticket =
-          whole && built.size === 0
-            ? null
-            : Option.getOrUndefined(Arr.findFirst(tickets, (one) => !built.has(one.file)));
+        const next = yield* pickable;
+        const ticket = whole && built.size === 0 ? null : next;
         if (ticket === undefined) break;
         rallied = null;
         let attempt = 0;
@@ -680,9 +738,11 @@ export default defineWorkflow({
             const operation = attempt === 1 ? item : `${item}-${attempt}`;
             const before = (yield* host.evidence(runId, cwd)).verifications.length;
             if (ticket !== null) yield* checkpoint(place.dir, ticket, "started", []);
+            // A ticket needing another Run's Change is built on the default branch it landed on.
             const merged =
-              ticket !== null && built.size > 0
-                ? yield* integrated(`${ticket.file}.merge`, true)
+              (ticket !== null && built.size > 0) ||
+              Arr.some(ticket === null ? tickets : [ticket], (one) => one.prerequisites.length > 0)
+                ? yield* integrated(`${item}.merge`, true)
                 : null;
             const session = yield* sessionNow;
             // A plan built in one pass answers every ticket's criteria, and words their own.

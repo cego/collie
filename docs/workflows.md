@@ -349,6 +349,23 @@ name git would refuse in a branch name stops the hand-off, quoting the ticket, a
 `schema` in `api` beside a repository called `api--schema`, since both would be run as
 `api--schema`.
 
+A ticket may need a Change another plan's Run is building merged before it is built. It
+names that **Prerequisite** on a `**Needs merged:**` line: Run ids separated by commas, each
+followed by that Run's Change name, or by nothing for its default Change, like
+`**Needs merged:** run-ac644eef card, run-e15f4a62`. The Change is always in the ticket's own
+repository. A ticket of the same plan goes on `**Blocked by:**` instead, and another
+repository's release is cego/collie#338's. The Run building the ticket builds every other
+ticket it can first. Then it waits, and its card reads `Waiting for <run>'s <change> to
+merge.` It checks every 5 minutes, spends no model tokens, and ends on a Hold or a Stop. A
+Prerequisite has landed once its merge request has merged and its merge commit is on the
+default branch. The Run then merges the default branch in and builds the ticket on it. Each
+check reads the ticket again, so taking the entry off the line is how to go on without it.
+The wait needs you only when it can never end by itself: the named Run is not on this host,
+or is this Run or one it came out of, or ended with no merge request for that Change, or that
+merge request closed without merging. The Run then parks as a failed Step that names the Run,
+and resuming it reads the ticket again. A wait past 2 days parks as overdue, as any wait on a
+person does. See [ADR-draft-a-change-waits-on-another-runs-change-to-merge](adr/draft-a-change-waits-on-another-runs-change-to-merge.md).
+
 A plan is single-repository only when its tickets all say `.`, or carry no line at all, and
 are all in one Change. A plan whose tickets all name one repository _by path_ is not one of
 those: that repository is somewhere under the root, and its run has to be rooted there. A

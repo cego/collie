@@ -75,7 +75,7 @@ import type { RunState } from "../../src/runs";
 import { registeredAt, runFacts } from "./records";
 import { readReplies } from "../../src/replies";
 import { disputesIn } from "../../src/proactive";
-import { AwaitingJson } from "../../src/awaiting";
+import { AwaitingJson, awaitingLine } from "../../src/awaiting";
 import { installFakeSkills } from "./defs";
 import { Agents, agentsLayer, type AgentHost } from "../../src/agents";
 import {
@@ -5581,11 +5581,8 @@ const withOrigin = () =>
 
 const PREREQUISITE_MR = `https://${PROJECT.gitlab}/-/merge_requests/41`;
 
-/**
- * Another Run on this host whose recorded merge request is open, a ticket that needs its
- * Change merged, and the fixture that waits on that ticket.
- */
-const awaitingPrerequisite = (runId: string) =>
+/** Another Run on this host whose recorded merge request is open on the fake forge. */
+const prerequisiteOpen = (runId: string) =>
   Effect.gen(function* () {
     const origin = yield* withOrigin();
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
@@ -5603,16 +5600,34 @@ const awaitingPrerequisite = (runId: string) =>
         yield* (yield* Host).mergeRequest(other, PREREQUISITE_MR);
       }),
     );
-    const ticket = `${rig.root}/${runId}-ticket.md`;
-    yield* (yield* FileSystem.FileSystem)
-      .writeFileString(ticket, `# 02: needs the other\n\n**Needs merged:** ${other}\n`)
-      .pipe(Effect.orDie);
     return {
       ...origin,
       bin,
       forge,
       open,
       other,
+      /** The merge request merged as a new commit on origin's master, answering with it. */
+      land: Effect.gen(function* () {
+        const merged = yield* origin.moveMaster("prerequisite.txt", "landed\n");
+        yield* forge.set({
+          ...open,
+          mrs: [{ ...open.mrs[0]!, state: "merged", mergedSha: merged }],
+        });
+        return merged;
+      }),
+    };
+  });
+
+/** The same, with a ticket that needs its Change merged and the fixture that waits on it. */
+const awaitingPrerequisite = (runId: string) =>
+  Effect.gen(function* () {
+    const prerequisite = yield* prerequisiteOpen(runId);
+    const ticket = `${rig.root}/${runId}-ticket.md`;
+    yield* (yield* FileSystem.FileSystem)
+      .writeFileString(ticket, `# 02: needs the other\n\n**Needs merged:** ${prerequisite.other}\n`)
+      .pipe(Effect.orDie);
+    return {
+      ...prerequisite,
       run: {
         entry: `${fixtures}/awaits-prerequisites.workflow.ts`,
         runId,
@@ -5693,6 +5708,171 @@ scenario(
         yield* bin.restore();
         expect(status).toBe("suspended");
         expect(yield* awaitingOn(runId)).toBe("");
+      }),
+    ),
+  120_000,
+);
+
+/**
+ * Implement started over a plan of tickets with these bodies. Each agent is answered from
+ * `outputs`, where null is one the scenario answers with `answer` once it has looked.
+ */
+const implementing = (
+  runId: string,
+  tickets: ReadonlyArray<{ readonly file: string; readonly body: string }>,
+  outputs: ReadonlyArray<Schema.Json | null>,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const plan = yield* planOf(
+      Arr.map(tickets, (one) => ({
+        ...one,
+        title: pipe(one.file, Str.replace(/\.md$/, "")),
+        checks: "unit",
+      })),
+    );
+    yield* approve(runId, ["unit"]);
+    yield* rig.queueOutputs(outputs);
+    const running = yield* Effect.forkChild(
+      ran({ entry: shipped("implement"), runId, input: { plan, ...FINISH } }),
+    );
+    const agents = `${dir}/agents/${runId}`;
+    const logged = () =>
+      fs.readFileString(`${runDir(dir, runId)}/log.txt`).pipe(Effect.orElseSucceed(() => ""));
+    return {
+      logged,
+      launched: (operation: string) =>
+        until(
+          () => fs.readFileString(`${agents}/agents.log`).pipe(Effect.orElseSucceed(() => "")),
+          (said) =>
+            pipe(said, Str.includes(`: launched for ${operation}\n`)) ||
+            pipe(said, Str.includes(`: reattached to ${operation}\n`)),
+        ),
+      answer: (operation: string) =>
+        fs.writeFileString(`${agents}/${operation}.json`, asJson(BUILT)),
+      /** Waits until it parks on opening its merge request, as it does with no forge at origin. */
+      untilParked: Effect.gen(function* () {
+        yield* until(logged, (said) => pipe(said, Str.includes("Cannot open the merge request")));
+        yield* Fiber.interrupt(running);
+        return yield* logged();
+      }),
+      interrupt: Fiber.interrupt(running),
+    };
+  });
+
+scenario(
+  "implement builds the ticket it can, waits for another Run's Change to merge, then builds on it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-prerequisite-build";
+        const { git, bin, other, land } = yield* prerequisiteOpen(runId);
+        const { launched, answer, untilParked } = yield* implementing(
+          runId,
+          [
+            { file: "01-first.md", body: "" },
+            { file: "02-second.md", body: `\n**Needs merged:** ${other}\n` },
+          ],
+          [BUILT, null, CLEAN_SYNTHESIS],
+        );
+        expect(
+          yield* until(
+            () => awaitedLine(runId),
+            (line) => line !== "",
+          ),
+        ).toBe(`Waiting for ${other}'s Change to merge.`);
+        expect(yield* wasAsked(runId, "01-first.md")).toBe(true);
+        expect(yield* wasAsked(runId, "02-second.md")).toBe(false);
+
+        const merged = yield* land;
+        yield* launched("02-second.md");
+        yield* git(rig.projectDir, "merge-base", "--is-ancestor", merged, "HEAD");
+        yield* answer("02-second.md");
+        const log = yield* untilParked;
+        yield* bin.restore();
+        expect(log).toContain(`integrated master@${merged}`);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a ticket needing a Run this host does not have parks once the rest is built, naming both",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-prerequisite-nowhere";
+        const { interrupt } = yield* implementing(
+          runId,
+          [
+            { file: "01-first.md", body: "" },
+            { file: "02-second.md", body: "\n**Needs merged:** run-nowhere\n" },
+          ],
+          [BUILT],
+        );
+        const why = yield* until(
+          () => parkedWhy(runId),
+          (why) => why !== "",
+        );
+        yield* interrupt;
+        expect(yield* wasAsked(runId, "01-first.md")).toBe(true);
+        expect(yield* parkedCause(runId)).toBe("step-failed");
+        expect(why).toContain("run-nowhere");
+        expect(why).toContain("02-second.md");
+        expect(yield* wasAsked(runId, "02-second.md")).toBe(false);
+      }),
+    ),
+  120_000,
+);
+
+scenario("a ticket blocked by one that waits for another Run's Change waits with it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const runId = "r-prerequisite-blocked";
+      const { bin, other } = yield* prerequisiteOpen(runId);
+      const { interrupt } = yield* implementing(
+        runId,
+        [
+          { file: "01-first.md", body: `\n**Needs merged:** ${other}\n` },
+          { file: "02-second.md", body: "\n**Blocked by:** 01\n" },
+        ],
+        [BUILT, BUILT, CLEAN_SYNTHESIS],
+      );
+      yield* until(
+        () => awaitingOn(runId),
+        (on) => on !== "",
+      );
+      yield* interrupt;
+      yield* bin.restore();
+      expect(yield* wasAsked(runId, "02-second.md")).toBe(false);
+    }),
+  ),
+);
+
+scenario(
+  "a one-ticket plan waits for the Change its ticket needs, and is built on top of it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-prerequisite-whole";
+        const { git, bin, other, land } = yield* prerequisiteOpen(runId);
+        const { launched, answer, untilParked } = yield* implementing(
+          runId,
+          [{ file: "01-first.md", body: `\n**Needs merged:** ${other}\n` }],
+          [null, CLEAN_SYNTHESIS],
+        );
+        yield* until(
+          () => awaitingOn(runId),
+          (on) => on !== "",
+        );
+        expect(yield* wasAsked(runId, "build")).toBe(false);
+
+        const merged = yield* land;
+        yield* launched("build");
+        yield* git(rig.projectDir, "merge-base", "--is-ancestor", merged, "HEAD");
+        yield* answer("build");
+        yield* untilParked;
+        yield* bin.restore();
       }),
     ),
   120_000,
@@ -10307,6 +10487,15 @@ const awaitingOn = (runId: string) =>
     Effect.flatMap((fs) => fs.readFileString(controlPath(dir, AWAITING, runId))),
     Effect.flatMap(Schema.decodeUnknownEffect(AwaitingJson)),
     Effect.map((awaiting) => awaiting.on),
+    Effect.orElseSucceed(() => ""),
+  );
+
+/** The line a Run's card shows for what it awaits, or "" while it awaits nothing. */
+const awaitedLine = (runId: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.readFileString(controlPath(dir, AWAITING, runId))),
+    Effect.flatMap(Schema.decodeUnknownEffect(AwaitingJson)),
+    Effect.map(awaitingLine),
     Effect.orElseSucceed(() => ""),
   );
 
