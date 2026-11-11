@@ -3194,6 +3194,14 @@ fn terminal_tab(app: &App, record: &Record, k: &Kit) -> El {
                     .key("terminal-reconnect"),
             )
     });
+    let files_said = app.record.terminal_said.clone().map(|said| {
+        text(said)
+            .key("terminal-said")
+            .role("status")
+            .font(k.ty.small)
+            .color(k.c.text_muted)
+            .wrap()
+    });
     let waiting = |key: &str, said: &str| {
         col()
             .key(key.to_string())
@@ -3233,6 +3241,7 @@ fn terminal_tab(app: &App, record: &Record, k: &Kit) -> El {
         .transition(Transition::none())
         .child(bar)
         .children(ended)
+        .children(files_said)
         .child(
             col()
                 .key("terminal-body")

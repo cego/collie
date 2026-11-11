@@ -358,7 +358,10 @@ fn a_pasted_screenshot_is_staged_in_parts_placed_and_typed_as_its_path() {
 fn files_dropped_on_the_chat_beside_the_pane_go_to_the_chat_not_the_pane() {
     let harness = Harness::new();
     let (mut runtime, _, typed) = shown(&harness);
-    runtime.update(|app, _| app.toggle_chat());
+    assert!(
+        runtime.state.nav.chat.is_open(),
+        "the chat is beside the pane"
+    );
     for at in [3.0, 3.5, 4.0] {
         runtime.frame(at);
     }
