@@ -42,6 +42,7 @@ import {
   commentIssue,
   postReview,
   approveReview,
+  descendsFrom,
   findReviewNote,
   reviewChanges,
   viewerLogin,
@@ -120,7 +121,15 @@ const Approvals = Schema.Struct({
   approved_by: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.Struct({})))),
 });
 const Discussion = Schema.Struct({
-  notes: Schema.Array(Schema.Struct({ resolvable: optionalFlag, resolved: optionalFlag })),
+  notes: Schema.Array(
+    Schema.Struct({
+      id: Schema.optionalKey(Schema.Finite),
+      body: Schema.optionalKey(Schema.String),
+      system: optionalFlag,
+      resolvable: optionalFlag,
+      resolved: optionalFlag,
+    }),
+  ),
 });
 
 /** What GitLab says while it is still working out whether it can merge. */
@@ -209,6 +218,15 @@ export function mrDetails<R>(
           )
         : mr.blocking_discussions_resolved === false,
       notes: mr.user_notes_count ?? 0,
+      ...(discussions.ok && {
+        comments: Arr.flatMap(discussions.value, (one) =>
+          Arr.flatMap(one.notes, (note) =>
+            note.system === true || note.id === undefined
+              ? []
+              : [{ id: String(note.id), body: note.body ?? "" }],
+          ),
+        ),
+      }),
       headSha: pipe(mr.sha ?? "", Str.slice(0, 7)),
       head: mr.sha ?? "",
       mergedSha:
@@ -1378,6 +1396,18 @@ export const gitlab: Forge = {
         glabLoginTo(hostOf(project) ?? "gitlab.com"),
         project,
         ref,
+        head,
+        cwd,
+      );
+    }),
+  descends: (ref, previous, head, cwd, run) =>
+    Effect.gen(function* () {
+      const project = ref.project ?? (yield* projectHere(cwd, run));
+      if (project === null) return { ok: false, reason: `${whereOf(ref)} names no GitLab project` };
+      return yield* descendsFrom(
+        glabLoginTo(hostOf(project) ?? "gitlab.com"),
+        project,
+        previous,
         head,
         cwd,
       );

@@ -28,3 +28,8 @@ test("a wait on a person is overdue past two days", () => {
     "Waiting for a teammate's approval on group/app!3 for over 2 days, which is longer than it should take. See what holds it up.",
   );
 });
+
+test("a wait on the author to change their merge request is never overdue", () => {
+  const wait = { on: "the author to change group/app!3", who: "the author", since };
+  expect(overdueLine(wait, at("2026-12-21T10:00:00.000Z"))).toBeNull();
+});

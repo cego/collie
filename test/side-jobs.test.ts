@@ -59,6 +59,12 @@ const runIdOf = (envelope: { readonly data?: unknown }) =>
     Effect.orDie,
   );
 
+const NO_WATCHES = {
+  list: () => Effect.succeed([]),
+  observe: () => Effect.void,
+  wake: () => Effect.void,
+};
+
 const until = <A, R>(read: Effect.Effect<A, never, R>, done: (a: A) => boolean) =>
   read.pipe(Effect.repeat({ until: done, schedule: Schedule.spaced("250 millis"), times: 120 }));
 
@@ -328,6 +334,7 @@ test("News and the merge watch read the host's latest board, and list no Runs of
         panels: new Map(),
         record: () => Effect.void,
         stop: () => Effect.void,
+        watches: NO_WATCHES,
         sweepers: Effect.succeed([]),
       }).pipe(Effect.timeout("12 seconds"), Effect.ignore, fastForward);
       // Two merge looks and three News looks at least, on one build.
@@ -348,6 +355,7 @@ test("News reads which herdr sessions there are as often as the host does, not o
         panels: new Map(),
         record: () => Effect.void,
         stop: () => Effect.void,
+        watches: NO_WATCHES,
         sweepers: Effect.succeed([]),
       }).pipe(Effect.timeout("12 seconds"), Effect.ignore, fastForward);
       // Three News looks and the Homes' first restating, within one SESSIONS_EVERY.

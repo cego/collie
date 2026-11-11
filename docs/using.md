@@ -658,7 +658,9 @@ teammate's approval, review threads resolved, its turn in a Helle claim's queue,
 carrying a deploy: it stays under Working and says what it waits for and on whom
 (`Waiting for CI and a teammate's approval on group/app!345.`), with no notification and
 nothing in News. Once such a wait outlasts its patience — 2 hours where nobody acts, 2 days
-where a person does — it parks, and the card goes to Needs you. While Collie runs
+where a person does — it parks, and the card goes to Needs you. A Run watching a merge
+request for its author to change it (`Waiting for the author to change group/app!345.`) has
+no patience to outlast: the author owes Collie nothing, so it never parks. While Collie runs
 one of the Run's checks itself, the sentence is about that check rather than the last step:
 which check, which pass and why, how long it has run against the median of its last five
 runs in this repository, and how many other checks this host is running —

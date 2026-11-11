@@ -48,6 +48,7 @@ import {
   commentIssue,
   postReview,
   approveReview,
+  descendsFrom,
   findReviewNote,
   reviewChanges,
   viewerLogin,
@@ -181,7 +182,21 @@ const PanelData = Schema.Struct({
           mergedAt: optionalText,
           mergedBy: Schema.optionalKey(Schema.NullOr(Login)),
           reviewDecision: optionalText,
-          comments: Schema.optionalKey(Schema.NullOr(Schema.Struct({ totalCount: Schema.Finite }))),
+          comments: Schema.optionalKey(
+            Schema.NullOr(
+              Schema.Struct({
+                totalCount: Schema.Finite,
+                nodes: Schema.optionalKey(
+                  Schema.Array(
+                    Schema.Struct({
+                      databaseId: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
+                      body: Schema.optionalKey(Schema.String),
+                    }),
+                  ),
+                ),
+              }),
+            ),
+          ),
           updatedAt: optionalText,
           url: optionalText,
           autoMergeRequest: Schema.optionalKey(Schema.NullOr(Schema.Struct({}))),
@@ -218,7 +233,7 @@ const PANEL = `query($owner: String!, $name: String!, $number: Int!, $after: Str
     pullRequest(number: $number) {
       title state isDraft author { login } assignees(first: 100) { nodes { login } }
       headRefName isCrossRepository baseRefName headRefOid mergeCommit { oid } mergedAt mergedBy { login }
-      reviewDecision comments { totalCount } updatedAt url autoMergeRequest { enabledAt }
+      reviewDecision comments(last: 100) { totalCount nodes { databaseId body } } updatedAt url autoMergeRequest { enabledAt }
       mergeable mergeStateStatus
       commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100, after: $after) {
         nodes { __typename ... on CheckRun { name detailsUrl status conclusion } ... on StatusContext { context targetUrl state } }
@@ -301,6 +316,13 @@ function details(ref: MrRef, cwd: string): Effect.Effect<MrPanel, never, ForgeHt
       approvals: APPROVALS.get(pull.reviewDecision ?? "") ?? "",
       unresolved: false,
       notes: pull.comments?.totalCount ?? 0,
+      ...(pull.comments?.nodes !== undefined && {
+        comments: Arr.flatMap(pull.comments.nodes, (one) =>
+          one.databaseId === undefined || one.databaseId === null
+            ? []
+            : [{ id: String(one.databaseId), body: one.body ?? "" }],
+        ),
+      }),
       headSha: pipe(head, Str.slice(0, 7)),
       head,
       mergedSha: pull.mergeCommit?.oid ?? "",
@@ -1353,6 +1375,10 @@ export const github: Forge = {
     ref.project === null
       ? Effect.succeed({ ok: false, message: `${mrWords(ref).label} names no GitHub project` })
       : approveReview(LOGIN, ref.project, ref, head, cwd),
+  descends: (ref, previous, head, cwd) =>
+    ref.project === null
+      ? Effect.succeed({ ok: false, reason: `${mrWords(ref).label} names no GitHub project` })
+      : descendsFrom(LOGIN, ref.project, previous, head, cwd),
   findNote: (ref, signature, cwd) =>
     ref.project === null
       ? Effect.succeed({ ok: false, reason: `${mrWords(ref).label} names no GitHub project` })

@@ -463,6 +463,12 @@ rather than what the step was doing.
 is shown the same way. A Run can have several at once, and each front door says the one it
 ranks first.
 
+**Watch** — A Run waiting, with no agent and no forge read of its own, until its merge
+request changes in a way that matters: a new head that has stood 5 minutes, a comment that
+is not Collie's, or the head's pipeline ending; a running pipeline is waited for 30 minutes
+at most. Merged or closed ends it. The merge watch judges it on each round from what it
+already read, and wakes the Run. Its card waits on the author, which is never overdue.
+
 **Working** — A Task something is actually doing: a Run the host holds that has not
 settled, or a **Reopened** Run whose agent herdr reports working. A Run whose question a
 human's message superseded is Working while its agent works on that message. The board's third

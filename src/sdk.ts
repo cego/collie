@@ -82,6 +82,7 @@ import type { Integration } from "./integrate";
 import type { BenchmarkPlan, Measurement } from "./measurement-model";
 import type { MergeOutcome, Takeover } from "./landing";
 import type { ReviewHead, ReviewStanding } from "./review-wait";
+import { Woke, type WatchCursor } from "./mr-watch-model";
 import type {
   FastForward,
   MergeRequestRead,
@@ -1089,6 +1090,26 @@ export interface HostApi {
     readonly whileConflicting?: boolean;
   }) => Effect.Effect<ReviewStanding, WorkflowError>;
   /**
+   * Has the merge watch watch the merge request `target` for this Run's wake `name`, from
+   * `cursor`, and says on the card that the Run waits on the author. `watch` takes it.
+   */
+  readonly watching: (options: {
+    readonly runId: string;
+    readonly target: string;
+    readonly name: string;
+    readonly cursor: WatchCursor;
+  }) => Effect.Effect<void, WorkflowError>;
+  /**
+   * Whether `head` descends from `previous` on `target`'s forge; a `previous` the forge no
+   * longer has does not. Take it inside an Activity.
+   */
+  readonly descends: (options: {
+    readonly target: string;
+    readonly cwd: string;
+    readonly previous: string;
+    readonly head: string;
+  }) => Effect.Effect<boolean, WorkflowError>;
+  /**
    * Replies to the comment with id `comment` on the merge request this Run recorded, posting
    * `body` with a last line naming the Run and its Machine, in the comment's thread where it
    * has one. Never resolves a thread. A comment already answered, as after a restart that
@@ -1420,6 +1441,49 @@ export const ask = (question: {
     return yield* DurableDeferred.await(
       DurableDeferred.make(question.name, { success: Schema.String }),
     );
+  });
+
+/**
+ * Suspends this Run until the merge watch reads the merge request `target` changed from
+ * `cursor` in a way that matters, or merged or closed. Nothing runs meanwhile: no agent,
+ * and no forge read beyond the merge watch's own. `name` is its identity, as an `ask`'s is.
+ * A new head is then read once for whether it descends from the cursor's.
+ */
+export const watch = (options: {
+  readonly name: string;
+  readonly target: string;
+  readonly cwd: string;
+  readonly cursor: WatchCursor;
+}): Effect.Effect<Woke, WorkflowError, Run | Host | WorkflowEngine | WorkflowInstance> =>
+  Effect.gen(function* () {
+    const host = yield* Host;
+    const runId = (yield* Run).id;
+    yield* Activity.make({
+      name: `watch.${options.name}`,
+      error: WorkflowError,
+      execute: host.watching({
+        runId,
+        target: options.target,
+        name: options.name,
+        cursor: options.cursor,
+      }),
+    });
+    const woke = yield* DurableDeferred.await(
+      DurableDeferred.make(options.name, { success: Schema.String }),
+    ).pipe(Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(Woke))), Effect.orDie);
+    if (woke._tag === "Ended" || !woke.change.newHead) return woke;
+    const descends = yield* Activity.make({
+      name: `watch.${options.name}.descends`,
+      success: Schema.Boolean,
+      error: WorkflowError,
+      execute: host.descends({
+        target: options.target,
+        cwd: options.cwd,
+        previous: woke.change.previous,
+        head: woke.change.head,
+      }),
+    });
+    return { ...woke, change: { ...woke.change, forcePush: !descends } };
   });
 
 /**

@@ -231,6 +231,36 @@ for (const name of ["gitlab", "github"] as const) {
       );
     });
 
+    test("a head descends from an earlier head it carries, and not from one rewritten or gone", () => {
+      const pushed = "2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c";
+      const rewritten = "3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d";
+      const gone = "4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e";
+      const fake = fakeForge(
+        name,
+        model(name, {
+          mrs: [mr(name, { head: pushed })],
+          ancestry: { [pushed]: [HEAD] },
+          gone: [gone],
+        }),
+      );
+      return runEffect(
+        Effect.gen(function* () {
+          expect(yield* forge.descends(ref(name), HEAD, pushed, "/w", fake.run)).toEqual({
+            ok: true,
+            value: true,
+          });
+          expect(yield* forge.descends(ref(name), rewritten, pushed, "/w", fake.run)).toEqual({
+            ok: true,
+            value: false,
+          });
+          expect(yield* forge.descends(ref(name), gone, pushed, "/w", fake.run)).toEqual({
+            ok: true,
+            value: false,
+          });
+        }).pipe(Effect.provide(fake.layer)),
+      );
+    });
+
     test("lists only issues over HTTP from a cold login", () => {
       const fake = fakeForge(
         name,
@@ -550,6 +580,35 @@ for (const name of ["gitlab", "github"] as const) {
             state: "merged",
             mergedSha: MERGED,
           });
+        }),
+      ));
+
+    test("reads its comments with their ids and bodies, and no system note", () =>
+      runEffect(
+        Effect.gen(function* () {
+          const read = yield* against(
+            name,
+            model(name, {
+              mrs: [
+                mr(name, {
+                  comments: [
+                    { id: 41, author: "ann", at: "2026-11-11T09:00:00Z", body: "Rename it." },
+                    {
+                      id: 42,
+                      author: "ann",
+                      kind: "system",
+                      at: "2026-11-11T09:01:00Z",
+                      body: "added 1 commit",
+                    },
+                  ],
+                }),
+              ],
+            }),
+            (run) => forge.details(ref(name), "/w", run),
+          );
+          expect(read._tag === "Details" && read.comments).toEqual([
+            { id: "41", body: "Rename it." },
+          ]);
         }),
       ));
 

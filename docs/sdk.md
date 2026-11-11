@@ -1030,6 +1030,33 @@ the first.
 - **The question survives a restart**, and so does its answer. What is waiting is in
   `run show`, and `run answer <run> <value> --decision <name>` settles it.
 
+## Waiting on a merge request
+
+`watch({ name, target, cwd, cursor })` suspends the Run until the merge request `target`
+changes in a way that matters since `cursor` — `{ head, seen, pipeline }`: the head it last
+worked from, the comment ids it has seen, and that head's checks (`passed`, `failed`,
+`running`, `unknown` or `none`). Nothing runs meanwhile: no agent, no polling Activity, and
+no forge read beyond the merge watch's own. Each round of the merge watch judges the watch
+on what it just read, or last read, of that merge request:
+
+- **A change** is a new head, a comment whose last line is not a Collie signature, or the
+  head's pipeline reaching `passed` or `failed`.
+- **A new head waits 5 minutes** unchanged before it is one, and a running pipeline is
+  waited for until it ends or for 30 minutes, whichever is first. When the head was first
+  seen and when its pipeline was first seen running are kept on the watch, so a host restart
+  keeps the deadlines.
+- **Merged or closed** ends the wait.
+
+It returns `Woke`: `{ _tag: "Changed", change }`, where `change` says the `head`, the
+`previous` one, whether it is a `newHead`, the new `comments`, the ended `pipeline`, and
+`forcePush` — a new head that does not descend from `previous`, read once after the wake;
+one the forge no longer has does not descend — or `{ _tag: "Ended", state }`. `name` is its
+identity, as an `ask`'s is: watch again under a new name. The watch is a row in `host.db`,
+indexed by MR id, and its wake is durable, so a restart comes back to it. It is forgotten
+when the wake completes or the Run is stopped. While it waits, the card says
+`Waiting for the author to change <mr>.`, which is never overdue and never Needs you, and no
+merge request is recorded on the Run, so no `mr-opened` notification is sent.
+
 ## A workflow made of other workflows
 
 `child({ invocation, workflow, input })` starts another workflow as part of this one and

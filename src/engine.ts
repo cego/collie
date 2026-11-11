@@ -162,7 +162,8 @@ import {
   type ReviewStanding,
 } from "./review-wait";
 import { nothingToLandFile } from "./standing";
-import { AwaitingJson, AwaitingSchema, overdueLine } from "./awaiting";
+import { AwaitingJson, AwaitingSchema, THE_AUTHOR, overdueLine } from "./awaiting";
+import { Woke } from "./mr-watch-model";
 import {
   autoMergingHere,
   forgeHere,
@@ -180,6 +181,7 @@ import type { Metrics, Solution } from "./board-model";
 import {
   forgeOfRef,
   mrId,
+  mrLabel,
   mrRefOf,
   mrRefsIn,
   mrWords,
@@ -1110,6 +1112,20 @@ export const SDK_DECLARATIONS = `declare module "collie" {
        */
       readonly whileConflicting?: boolean;
     }) => Effect.Effect<ReviewStanding, WorkflowError>;
+    /** Has the merge watch watch \`target\` for this Run's wake \`name\` from \`cursor\`; \`watch\` takes it. */
+    readonly watching: (options: {
+      readonly runId: string;
+      readonly target: string;
+      readonly name: string;
+      readonly cursor: WatchCursor;
+    }) => Effect.Effect<void, WorkflowError>;
+    /** Whether \`head\` descends from \`previous\` on \`target\`'s forge; a \`previous\` it no longer has does not. Take it inside an Activity. */
+    readonly descends: (options: {
+      readonly target: string;
+      readonly cwd: string;
+      readonly previous: string;
+      readonly head: string;
+    }) => Effect.Effect<boolean, WorkflowError>;
     /** Replies to comment \`comment\` of the recorded merge request, signed and recorded on the Run, unless it is answered already; a \`disputed\` one is News. Take it inside an Activity. */
     readonly reply: (options: {
       readonly runId: string;
@@ -1467,6 +1483,37 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     /** The answers it takes; none is a question answered in the operator's own words. */
     readonly options?: ReadonlyArray<AskOption>;
   }): Effect.Effect<string, never, Run | Host | WorkflowEngine | WorkflowInstance>;
+
+  /** Where a Run watching a merge request left off: its head, the comments it saw, its head's checks. */
+  export interface WatchCursor {
+    readonly head: string;
+    readonly seen: ReadonlyArray<string>;
+    readonly pipeline: string;
+  }
+  /** What changed on a watched merge request; \`forcePush\` says a new head does not descend from \`previous\`. */
+  export interface WatchChange {
+    readonly head: string;
+    readonly previous: string;
+    readonly newHead: boolean;
+    readonly comments: ReadonlyArray<string>;
+    readonly pipeline: string | null;
+    readonly forcePush: boolean | null;
+  }
+  export type Woke =
+    | { readonly _tag: "Changed"; readonly change: WatchChange }
+    | { readonly _tag: "Ended"; readonly state: "merged" | "closed" };
+
+  /**
+   * Suspends this Run, with no agent and no forge read of its own, until the merge watch reads
+   * \`target\` changed from \`cursor\` in a way that matters, or merged or closed. The name is
+   * its identity, as an \`ask\`'s is.
+   */
+  export function watch(options: {
+    readonly name: string;
+    readonly target: string;
+    readonly cwd: string;
+    readonly cursor: WatchCursor;
+  }): Effect.Effect<Woke, WorkflowError, Run | Host | WorkflowEngine | WorkflowInstance>;
 
   /** What a parent asks for when part of its own work is another workflow. */
   export interface ChildAsk {
@@ -4928,6 +4975,33 @@ export const hostLayer = (options: {
             yield* waitOn(asked.runId, null);
             return standing;
           }),
+        watching: (asked) =>
+          Effect.gen(function* () {
+            const mr = mrId(asked.target);
+            if (mr === null)
+              return yield* new WorkflowError({
+                reason: `${asked.target} names no merge request the merge watch can read`,
+              });
+            yield* store.watch({ run: asked.runId, mr, name: asked.name, cursor: asked.cursor });
+            yield* waitOn(asked.runId, {
+              on: `${THE_AUTHOR} to change ${mrLabel(asked.target)}`,
+              who: THE_AUTHOR,
+            });
+          }),
+        descends: (asked) =>
+          Effect.gen(function* () {
+            const ref = mrRefOf(asked.target);
+            if (ref === null)
+              return yield* new WorkflowError({ reason: `${asked.target} is not a merge request` });
+            const read = yield* under(
+              forgeOf(ref).descends(ref, asked.previous, asked.head, asked.cwd, runShell),
+            );
+            if (!read.ok)
+              return yield* new WorkflowError({
+                reason: `could not read whether ${asked.head} descends from ${asked.previous}: ${read.reason}`,
+              });
+            return read.value;
+          }),
         reply: (asked) =>
           Effect.gen(function* () {
             const { mr, ref, read } = yield* readable(asked);
@@ -5468,6 +5542,8 @@ const untilStopped = (registration: Registration, executionId: string) =>
     Effect.repeat({ until: Option.isSome, schedule: Schedule.spaced(WAKE_INTERVAL) }),
     Effect.asVoid,
   );
+
+const wokeText = flow(Schema.encodeResult(Schema.fromJsonString(Woke)), Result.getOrThrow);
 
 /**
  * The exit a decision is answered with, encoded by the decision's own schema, once the Run
@@ -6313,6 +6389,16 @@ export interface RegistryApi {
     readonly request: string;
     readonly by?: Asker & { readonly schedule?: ScheduledBy | undefined };
   }) => Effect.Effect<typeof Answered.Type, HostRefused, HostServices>;
+  /**
+   * Wakes a Run watching its merge request with what the merge watch judged, once it has
+   * stopped to wait, and then forgets its watch. Kept on the watch first, so a host that
+   * ends before the wake is done leaves it to the next.
+   */
+  readonly wake: (
+    run: string,
+    name: string,
+    woke: Woke,
+  ) => Effect.Effect<void, never, HostServices>;
   /** Sets one open question aside for a human's message, and records it on the Run's trail. */
   readonly supersede: (options: {
     readonly runId: string;
@@ -6673,6 +6759,15 @@ const makeRegistry: (
   // the module as it is now, never restored.
   yield* clearGenerations(dir);
   const waking = yield* Semaphore.make(1);
+  /** The Runs whose watch this host is waking now. */
+  const wakingWatches = new Set<string>();
+  /** A watch's row and the card's wait on the author, once the Run no longer waits on it. */
+  const forgetWatch = (run: string) =>
+    Effect.gen(function* () {
+      if (!(yield* store.unwatch(run))) return;
+      yield* fs.remove(controlPath(dir, AWAITING, run), { force: true }).pipe(Effect.orDie);
+      yield* store.announce;
+    });
   const clearParked = (runId: string) =>
     fs
       .remove(controlPath(dir, PARKED, runId), { force: true })
@@ -8412,6 +8507,7 @@ const makeRegistry: (
     reason?: string,
   ) {
     const { runs } = yield* applyControl(runId, STOP, true, undefined, alone);
+    for (const one of runs) yield* forgetWatch(one);
     // Closing their panes is what stops the agents; the Run only stops looking.
     const agents = yield* Agents;
     const left: string[] = [];
@@ -9227,6 +9323,25 @@ const makeRegistry: (
 
       return { runId: options.runId, decision: name, value, fresh: settled._tag === "accepted" };
     }, waking.withPermits(1)),
+
+    wake: Effect.fn("Engine.Registry.wake")(function* (run: string, name: string, woke: Woke) {
+      yield* store.wake(run, name, woke);
+      if (wakingWatches.has(run)) return;
+      const found = yield* routed(run).pipe(Effect.option);
+      if (Option.isNone(found)) return;
+      wakingWatches.add(run);
+      const { generation, execution } = found.value;
+      yield* answerDecision(generation.registration, {
+        name,
+        executionId: execution,
+        value: wokeText(woke),
+      }).pipe(
+        Effect.andThen(forgetWatch(run)),
+        waking.withPermits(1),
+        Effect.ensuring(Effect.sync(() => wakingWatches.delete(run))),
+        Effect.forkIn(hostScope),
+      );
+    }),
 
     supersede: supersedeQuestion,
 

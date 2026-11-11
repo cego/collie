@@ -104,6 +104,41 @@ const threadRef = (
   number,
 });
 
+/** Whether `head` descends from `previous`; a `previous` the forge no longer has does not. */
+export const descendsFrom = (
+  login: ForgeLogin,
+  project: string,
+  previous: string,
+  head: string,
+  cwd: string,
+) =>
+  Effect.gen(function* () {
+    const repo = threadRepo(login, project);
+    const path = `${repo.owner}/${repo.name}`;
+    if (login.forge === "gitlab") {
+      const base = yield* requestAs(
+        Schema.Struct({ id: Schema.String }),
+        login,
+        cwd,
+        `/projects/${encodeURIComponent(path)}/repository/merge_base?refs[]=${encodeURIComponent(previous)}&refs[]=${encodeURIComponent(head)}`,
+      );
+      if (!base.ok) return base.status === 404 ? { ok: true as const, value: false } : base;
+      return { ok: true as const, value: base.value.id === previous };
+    }
+    const compared = yield* requestAs(
+      Schema.Struct({ status: Schema.String }),
+      login,
+      cwd,
+      `/repos/${path}/compare/${encodeURIComponent(previous)}...${encodeURIComponent(head)}`,
+    );
+    if (!compared.ok)
+      return compared.status === 404 ? { ok: true as const, value: false } : compared;
+    return {
+      ok: true as const,
+      value: compared.value.status === "ahead" || compared.value.status === "identical",
+    };
+  });
+
 export const reviewChanges = (
   login: ForgeLogin,
   project: string,

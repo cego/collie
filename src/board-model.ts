@@ -620,6 +620,10 @@ export const MrDetails = Schema.TaggedStruct("Details", {
   /** Whether a discussion is still blocking, which is the one a reviewer chases. */
   unresolved: Schema.Boolean,
   notes: Schema.Finite,
+  /** Its comments, a person's or a bot's, as read with it: what a watching Run judges. */
+  comments: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ id: Schema.String, body: Schema.String })),
+  ),
   /** Seven characters: enough to tell two heads apart, short enough to read. */
   headSha: Schema.String,
   /** The head revision in full, which evidence is matched against, or "" where unsaid. */

@@ -280,6 +280,8 @@ export const ForgeModel = Schema.Struct({
   refusesNote: Schema.optionalKey(Schema.Finite),
   /** The shas each sha descends from. */
   ancestry: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String))),
+  /** Commits the forge no longer has, as after a force push and garbage collection. */
+  gone: Schema.optionalKey(Schema.Array(Schema.String)),
   /** Repositories gh cannot read, by `owner/repo`. */
   unreadable: Schema.optionalKey(Schema.Array(Schema.String)),
   /** The deploy API does not answer. */
@@ -1126,6 +1128,7 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
     const base = /merge_base\?refs\[\]=([^&]+)&refs\[\]=(.+)$/.exec(route);
     if (base) {
       const [, merged = "", live = ""] = base;
+      if ((model.gone ?? []).includes(merged)) return no();
       const carries = live === merged || (model.ancestry?.[live] ?? []).includes(merged);
       return json({ id: carries ? merged : "0000000" });
     }
@@ -1325,7 +1328,14 @@ const ghPullNode = (model: ForgeModel, pull: FakeMr) => ({
   isCrossRepository: pull.fork === true,
   baseRefName: pull.targetBranch ?? "",
   reviewDecision: decisionOf(model, pull),
-  comments: { totalCount: 0 },
+  comments: {
+    totalCount: 0,
+    nodes: Arr.flatMap(pull.comments ?? [], (one) =>
+      one.kind === "system" || one.thread !== undefined
+        ? []
+        : [{ databaseId: one.id, body: one.body }],
+    ),
+  },
   updatedAt: pull.updatedAt ?? null,
   url: `https://${pull.project}/pull/${pull.iid}`,
   autoMergeRequest: pull.autoMerge === true ? { enabledAt: "2026-10-01T00:00:00Z" } : null,
@@ -1660,6 +1670,7 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
   const compare = /\/compare\/([^.]+)\.\.\.(.+)$/.exec(route);
   if (compare) {
     const [, merged = "", live = ""] = compare;
+    if ((model.gone ?? []).includes(merged)) return no();
     const status =
       merged === live
         ? "identical"

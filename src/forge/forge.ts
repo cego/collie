@@ -354,6 +354,14 @@ export interface Forge {
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<Posted, never, R | ForgeHttp>;
+  /** Whether `head` descends from `previous`; a `previous` the forge no longer has does not. */
+  readonly descends: <R>(
+    ref: MrRef,
+    previous: string,
+    head: string,
+    cwd: string,
+    run: Runner<R>,
+  ) => Effect.Effect<Answered<boolean>, never, R | ForgeHttp>;
   /** Finds a top-level note by its exact last-line signature. */
   readonly findNote: <R>(
     ref: MrRef,
