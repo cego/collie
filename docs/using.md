@@ -606,6 +606,14 @@ Each card carries a strip of its Task's [**Flow**](../CONTEXT.md): the Steps its
 Run has taken and expects, then its merge request's way to production, with each wait drawn
 on the Step it holds up. `collie run show --json` and chat's `collie_run` carry the whole of it.
 
+When a finished Run's pushed branch advances, its card shows the commit count, new head,
+and the head it finished on. A failed record is marked stale; the Run still says failed.
+A succeeded Run can show the same movement. Missing branches, unavailable history, and
+force-pushed or divergent history are named without counting them as forward progress.
+Chat, the CLI, Desktop, and the terminal board read the same facts. The recovery offer
+names where its [implement follow-up enters](workflows.md#implement); taking it reads the
+branch and review evidence again. Sending a message to the old agent starts no follow-up.
+
 It is a board, not an engine: it draws the Runs the host holds, the register of live agents
 and the steering journals, so closing it loses nothing — the host starts it again. The run
 itself is executed by the host, which has no pane at all.

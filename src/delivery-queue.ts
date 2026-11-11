@@ -13,6 +13,7 @@ export const Steered = Schema.Struct({
   queued: Schema.optionalKey(Schema.Boolean),
   gone: Schema.optionalKey(Schema.Boolean),
   finished: Schema.optionalKey(Schema.Boolean),
+  workflowNotice: Schema.optionalKey(Schema.String),
   /** Whether the harness was seen to take the submission, and how. */
   observed: Schema.optionalKey(Schema.Boolean),
   how: Schema.optionalKey(Schema.String),
@@ -28,6 +29,7 @@ const Queued = Schema.Struct({
   operation: Schema.optionalKey(Schema.String),
   agent: Schema.optionalKey(Schema.String),
   actor: Schema.optionalKey(AuditLine.fields.actor.mapFields(Struct.omit(["requestId"]))),
+  workflowNotice: Schema.optionalKey(Schema.String),
   result: Schema.NullOr(Steered),
 });
 export type Queued = typeof Queued.Type;

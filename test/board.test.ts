@@ -79,6 +79,196 @@ import { epochMs } from "../src/time";
 import { seedIntent, writeIntent } from "../src/intent";
 import { approvedFile, encodeApproved } from "../src/verify-spec";
 import { planDirOf } from "../src/run-detail";
+import { connect } from "../src/host";
+import { readCards } from "../src/cards";
+import { toolNamed } from "../src/tools";
+import { fixtures } from "./support/host";
+
+test(
+  "a finished Run shows pushed branch movement without rewriting its failed record",
+  () =>
+    proves(
+      "collie-board-moved-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const clean = {
+            verdict: "clean",
+            summary: "The requested work is complete.",
+            scope_met: true,
+            findings: [],
+            dropped: [],
+            fixed: [],
+          };
+          const outputs = `${world.home}/outputs.json`;
+          yield* fs.writeFileString(
+            outputs,
+            yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))([clean]),
+          );
+          yield* fs.writeFileString(
+            `${world.user}/historical-builder.workflow.ts`,
+            `export { default } from "${fixtures}/reviewed-parent.workflow.ts";\n`,
+          );
+          const origin = `${world.home}/origin.git`;
+          yield* exec(["git", "init", "--bare", "-q", origin], { cwd: world.project });
+          for (const args of [
+            ["init", "-q"],
+            ["config", "user.name", "test"],
+            ["config", "user.email", "test@example.com"],
+            ["remote", "add", "origin", origin],
+            ["remote", "add", "upstream", "https://gitlab.example.com/group/project.git"],
+            ["commit", "--allow-empty", "-qm", "base"],
+            ["push", "-qu", "origin", "HEAD"],
+            ["remote", "set-head", "origin", "-a"],
+          ])
+            yield* exec(["git", ...args], { cwd: world.project });
+          const client = yield* connect(world.state, {
+            hostEnv: { FAKE_HERDR_OUTPUTS: outputs },
+          }).pipe(Effect.orDie);
+          const started = yield* client
+            .start({
+              project: world.project,
+              id: "recovery",
+              request: "failed",
+              taskLabel: "recover work",
+              input: { goal: "recover work" },
+              options: { branch: "feature" },
+              verify: [{ name: "unit", executable: "true", argv: [], cwd: "worktree" }],
+            })
+            .pipe(Effect.orDie);
+          const finished = yield* until(
+            () => client.run({ runId: started.runId }).pipe(Effect.orDie),
+            (view) => view?.status.status === "failed",
+          );
+          expect(finished?.branch).not.toBeNull();
+          const cards = yield* until(
+            () => readCards(`${world.state}/runs/${started.runId}`).pipe(Effect.orDie),
+            (cards) => Arr.some(cards, (card) => card.kind === "final"),
+          );
+          const ended = cards.at(-1)!.revision.head_sha;
+          const cwd = finished!.cwd;
+          yield* exec(["git", "commit", "--allow-empty", "-qm", "finish after the Run"], { cwd });
+          yield* exec(["git", "push", "-qu", "origin", "HEAD"], { cwd });
+          const head = Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd })).stdout);
+          yield* stopHost(world.state);
+          yield* connect(world.state, { hostEnv: { FAKE_HERDR_OUTPUTS: outputs } }).pipe(
+            Effect.orDie,
+          );
+          const board = yield* collie(world, ["board"]);
+          const data = yield* Schema.decodeUnknownEffect(
+            Schema.Struct({
+              tasks: Schema.Array(
+                Schema.Struct({ state: Schema.String, drift: Schema.NullOr(Schema.String) }),
+              ),
+            }),
+          )(board.envelope.data).pipe(Effect.orDie);
+          expect(data.tasks[0]?.state).toBe("failed");
+          expect(data.tasks[0]?.drift).toContain(`1 commit past ${ended}`);
+          expect(data.tasks[0]?.drift).toContain(head);
+          expect(data.tasks[0]?.drift).toContain("failed record is stale");
+          const shown = yield* collie(world, ["run", "show", started.runId]);
+          expect(
+            (yield* Schema.decodeUnknownEffect(Schema.Struct({ branchProgress: Schema.String }))(
+              shown.envelope.data,
+            ).pipe(Effect.orDie)).branchProgress,
+          ).toContain(head);
+          expect(
+            (yield* (yield* connect(world.state).pipe(Effect.orDie))
+              .run({ runId: started.runId })
+              .pipe(Effect.orDie))?.status.status,
+          ).toBe("failed");
+          expect(
+            (yield* readCards(`${world.state}/runs/${started.runId}`)).at(-1)?.revision.head_sha,
+          ).toBe(ended);
+          const env = readEnv({
+            HERDR_PLUGIN_ROOT: world.install,
+            HERDR_PLUGIN_STATE_DIR: world.state,
+            COLLIE_USER_DIR: world.config,
+            HOME: world.home,
+            COLLIE_CWD: world.project,
+          });
+          const answer = yield* toolNamed("collie_run")!.call(env, { run: started.runId });
+          expect(answer).toContain(head);
+          expect(answer).toContain("failed record is stale");
+          let current = yield* connect(world.state).pipe(Effect.orDie);
+          expect(
+            (yield* current.offers({ runId: started.runId }).pipe(Effect.orDie))[0]?.title,
+          ).toContain("Review");
+          const reviewed = yield* current
+            .start({
+              project: world.project,
+              id: "historical-builder",
+              request: "review-advanced",
+              parent: started.runId,
+              task: finished!.task!,
+              input: { plan: "recover work" },
+              options: { workspace: cwd },
+            })
+            .pipe(Effect.orDie);
+          yield* until(
+            () => current.run({ runId: reviewed.runId }).pipe(Effect.orDie),
+            (view) => view?.status.status === "failed",
+          );
+          yield* stopHost(world.state);
+          current = yield* connect(world.state, { hostEnv: { FAKE_HERDR_OUTPUTS: outputs } }).pipe(
+            Effect.orDie,
+          );
+          const offered = yield* current.offers({ runId: started.runId }).pipe(Effect.orDie);
+          expect(offered[0]?.title).toContain("Checks");
+          const child = yield* current
+            .followUp({
+              runId: started.runId,
+              text: "recover work",
+              request: "recover-reviewed-head",
+            })
+            .pipe(Effect.orDie);
+          const checked = yield* until(
+            () => current.run({ runId: child.runId }).pipe(Effect.orDie),
+            (view) => view?.status.status === "complete" || view?.status.status === "failed",
+          );
+          expect(checked?.status).toMatchObject({
+            status: "complete",
+            value: "Checked existing head",
+          });
+          expect(checked?.branch).toBe(finished?.branch);
+          expect(checked?.cwd).toBe(cwd);
+          expect(yield* current.launches({ run: child.runId }).pipe(Effect.orDie)).toHaveLength(0);
+          const records = yield* readVerifications(`${world.state}/evidence/${child.runId}`);
+          expect(records[0]?.end.head_sha).toBe(head);
+          expect(
+            (yield* current.run({ runId: started.runId }).pipe(Effect.orDie))?.status.status,
+          ).toBe("failed");
+          expect(
+            (yield* readCards(`${world.state}/runs/${started.runId}`)).at(-1)?.revision.head_sha,
+          ).toBe(ended);
+          const listed = yield* current.offers({ runId: started.runId }).pipe(Effect.orDie);
+          expect(listed[0]?.title).toContain("Checks");
+          yield* exec(["git", "commit", "--allow-empty", "-qm", "work after the offer"], { cwd });
+          yield* exec(["git", "push", "-q", "origin", "HEAD"], { cwd });
+          const stale = yield* current
+            .invoke({
+              runId: started.runId,
+              offer: "recover",
+              input: {},
+              request: "recheck-stale-offer",
+            })
+            .pipe(Effect.orDie);
+          const refused = yield* until(
+            () => current.run({ runId: stale.runId }).pipe(Effect.orDie),
+            (view) => view?.status.status === "failed" || view?.status.status === "complete",
+          );
+          expect(refused?.status).toMatchObject({
+            status: "failed",
+            reason: "A review is required",
+          });
+          expect(yield* readVerifications(`${world.state}/evidence/${stale.runId}`)).toHaveLength(
+            0,
+          );
+        }),
+      ["recovery.workflow.ts"],
+    ),
+  120_000,
+);
 
 function facts(over: Partial<Sentence> = {}): Sentence {
   return {

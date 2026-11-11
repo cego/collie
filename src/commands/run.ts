@@ -507,6 +507,7 @@ const runShow = Command.make(
             replies = [],
             memory = null,
             flow = null,
+            branchProgress = null,
           } = shown;
           const refused = yield* outOfReach(resolved.env, view, machine, yield* runScope(global));
           if (refused !== null) return refused;
@@ -530,10 +531,12 @@ const runShow = Command.make(
               ready,
               memory,
               flow,
+              branchProgress,
             },
             human: Arr.join(
               [
                 `${view.runId}\t${statusLine(statusOf(view), disposition)}\t${view.workflow}`,
+                ...(branchProgress === null ? [] : [branchProgress]),
                 ...(memory === null ? [] : [`  ${memory}`]),
                 ...(machine === null ? [] : [`  on ${machine}`]),
                 `  in ${view.cwd}${view.provenance["workspace"] === INFERRED ? " (inferred)" : ""}`,
