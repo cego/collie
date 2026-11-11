@@ -35,7 +35,15 @@ import type {
   TagPipelineRead,
   Readiness,
 } from "./forge";
-import { ForgeHttp, pagesAs, request, requestAs, type Answered, type ForgeLogin } from "./http";
+import {
+  ForgeHttp,
+  loginRejected,
+  pagesAs,
+  request,
+  requestAs,
+  type Answered,
+  type ForgeLogin,
+} from "./http";
 import {
   listIssues,
   createIssue,
@@ -293,7 +301,7 @@ export function gitlabForProject<R>(
     if (!host) return { ok: true, reason: "" };
     const auth = yield* run("glab", ["auth", "status", "--hostname", host], cwd);
     if (auth.code === 0) return { ok: true, reason: "" };
-    return (yield* glabLoginTo(host).token(run, cwd)) === null
+    return loginRejected(auth) || (yield* glabLoginTo(host).token(run, cwd)) === null
       ? { ok: false, reason: `glab is not logged in to ${host}`, cause: "login-missing" }
       : {
           ok: false,

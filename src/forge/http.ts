@@ -9,7 +9,13 @@ import { Clock, Config, Context, Effect, Layer, Option, Schema, Semaphore } from
 import { ChildProcessSpawner } from "effect/process";
 import type { FetchLike, ForgeProvider, GitHubProvider } from "forges";
 import type { MrForge } from "../board-model";
-import { shell, type Runner } from "../mr";
+import { shell, whatItSaid, type Ran, type Runner } from "../mr";
+
+// gh also calls tokens invalid when offline; require an explicit authentication refusal.
+export const loginRejected = (status: Ran) =>
+  /\b(?:HTTP\s+401|401\s+Unauthorized|bad credentials|invalid credentials)\b/i.test(
+    whatItSaid(status),
+  );
 
 /**
  * How a host's CLI login is read. Each step is a **credential read**, the only commands

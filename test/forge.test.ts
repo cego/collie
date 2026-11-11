@@ -349,18 +349,45 @@ for (const name of ["gitlab", "github"] as const) {
       runEffect(
         Effect.gen(function* () {
           const fake = fakeForge(name, model(name));
-          const run: Runner = (cmd, args, cwd) =>
-            cmd === CLI[name] && args[0] === "auth" && args[1] === "status"
-              ? Effect.succeed({
-                  code: 1,
-                  stdout: "",
-                  stderr: "dial tcp: network is unreachable",
-                })
-              : fake.run(cmd, args, cwd);
-          expect(yield* forge.ready(PROJECT[name], "/w", run)).toMatchObject({
-            ok: false,
-            cause: "forge-unavailable",
-          });
+          for (const message of [
+            "dial tcp: network is unreachable",
+            "proxyconnect tcp: connection refused\nThe token in GH_TOKEN is invalid.",
+            "HTTP 503: Service Unavailable",
+            "HTTP 403: API rate limit exceeded",
+          ]) {
+            const run: Runner = (cmd, args, cwd) =>
+              cmd === CLI[name] && args[0] === "auth" && args[1] === "status"
+                ? Effect.succeed({ code: 1, stdout: "", stderr: message })
+                : fake.run(cmd, args, cwd);
+            expect(yield* forge.ready(PROJECT[name], "/w", run)).toMatchObject({
+              ok: false,
+              cause: "forge-unavailable",
+            });
+          }
+        }),
+      ));
+
+    test("requires login repair when authentication explicitly rejects a stored token", () =>
+      runEffect(
+        Effect.gen(function* () {
+          const fake = fakeForge(name, model(name));
+          for (const message of [
+            "The token is invalid. HTTP 401",
+            "Token is invalid. GET /api/v4/user: 401 Unauthorized",
+            "Bad credentials",
+            "Invalid credentials",
+          ]) {
+            for (const stream of ["stdout", "stderr"] as const) {
+              const run: Runner = (cmd, args, cwd) =>
+                cmd === CLI[name] && args[0] === "auth" && args[1] === "status"
+                  ? Effect.succeed({ code: 1, stdout: "", [stream]: message })
+                  : fake.run(cmd, args, cwd);
+              expect(yield* forge.ready(PROJECT[name], "/w", run)).toMatchObject({
+                ok: false,
+                cause: "login-missing",
+              });
+            }
+          }
         }),
       ));
 
