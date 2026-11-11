@@ -129,3 +129,22 @@ fn a_read_that_fails_says_why_and_no_machine_says_none_is_connected() {
     assert!(said(&alone, "No Machine is connected"));
     assert_eq!(harness.fake.asked_of("definitions").len(), 1);
 }
+
+#[test]
+fn a_workflows_metadata_is_folded_until_asked_for() {
+    let harness = Harness::<App>::new();
+    let mut app = flock_app(&harness);
+    app.open_page(Page::Workflows);
+    let mut runtime = runtime(app);
+    harness.fake.answer("definitions", Ok(definitions()));
+    settle(&harness, &mut runtime);
+    let mut at = 200.0;
+    tap_label(&mut runtime, "Plan", &mut at);
+    assert!(said(&runtime, "Build it"), "its offers are said in words");
+    assert!(
+        !said(&runtime, "\"followUps\""),
+        "the raw metadata waits to be asked for"
+    );
+    tap_label(&mut runtime, "Show metadata", &mut at);
+    assert!(said(&runtime, "\"followUps\""), "and then shows");
+}

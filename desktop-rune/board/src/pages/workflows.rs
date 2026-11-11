@@ -8,7 +8,10 @@ use collie_desktop_protocol::generated::{
     DefinitionsPayload, DefinitionsSuccess, Layer, Persona, PersonaLayer, Workflow,
 };
 use rune::{El, col, el, row, text};
-use rune_kit::{Badge, BadgeVariant, Kit, Markdown, Tree, TreeItem, TreeModel};
+use rune_kit::{
+    Badge, BadgeVariant, Button, ButtonVariant, ControlSize, Divider, Kit, Markdown, Tree,
+    TreeItem, TreeModel,
+};
 use serde_json::Value;
 
 /// A follow-up or card action a module's metadata declares.
@@ -106,6 +109,8 @@ pub struct Workflows {
     pub read: Option<DefinitionsSuccess>,
     pub failed: Option<String>,
     pub tree: TreeModel<Entry>,
+    /// Whether a Workflow's raw metadata is shown, as today's `<details>` opens it.
+    pub metadata_open: bool,
 }
 
 fn layer_of(layer: &Layer) -> &'static str {
@@ -297,41 +302,66 @@ fn fence(path: &str, source: &str) -> String {
     format!("{ticks}{language}\n{source}\n{ticks}")
 }
 
-fn workflow(k: &Kit, one: &Workflow) -> El {
-    let mut article = col().key("workflow").w_full().gap(24.0).child(
-        col()
-            .gap(8.0)
-            .child(
-                text(one.title.clone())
-                    .role("heading")
-                    .font(
-                        rune::TextStyle {
-                            size: 20.0,
-                            ..k.ty.ui_medium
-                        }
-                        .lh(26.0),
-                    )
-                    .color(k.c.text_strong)
-                    .wrap()
-                    .w_full(),
-            )
-            .child(
-                text(one.description.clone())
-                    .font(k.ty.body)
-                    .color(k.c.text_base)
-                    .wrap()
-                    .w_full(),
-            )
-            .child(
-                row()
-                    .flex_wrap()
-                    .gap(8.0)
-                    .center_y()
-                    .child(badge(k, layer_of(&one.layer)))
-                    .child(code(k, one.id.clone()))
-                    .child(muted(k, one.path.clone()).shrink()),
-            ),
-    );
+/// A Workflow's or Persona's title, what it is for, and where it was read, over a rule.
+fn header(k: &Kit, title: &str, description: &str, facts: El) -> El {
+    col()
+        .w_full()
+        .gap(10.0)
+        .child(
+            text(title.to_string())
+                .role("heading")
+                .font(
+                    rune::TextStyle {
+                        size: 22.0,
+                        ..k.ty.ui_medium
+                    }
+                    .lh(28.0),
+                )
+                .color(k.c.text_strong)
+                .wrap()
+                .w_full(),
+        )
+        .child(
+            text(description.to_string())
+                .font(k.ty.body)
+                .color(k.c.text_base)
+                .wrap()
+                .w_full(),
+        )
+        .child(facts)
+        .child(Divider::horizontal().build(k).mt(8.0))
+}
+
+fn path_text(k: &Kit, path: &str) -> El {
+    text(path.to_string())
+        .font(k.ty.text_small)
+        .color(k.c.text_faint)
+        .wrap_anywhere()
+        .shrink()
+        .selectable(true)
+        .selection_color(k.selection())
+}
+
+fn workflow(k: &Kit, one: &Workflow, metadata_open: bool) -> El {
+    let facts = row()
+        .w_full()
+        .flex_wrap()
+        .gap(8.0)
+        .center_y()
+        .child(badge(k, layer_of(&one.layer)))
+        .child(
+            text(one.id.clone())
+                .font(k.ty.mono)
+                .color(k.c.text_muted),
+        )
+        .child(text("·").font(k.ty.text_small).color(k.c.text_faint))
+        .child(path_text(k, &one.path));
+    let mut article = col().key("workflow").w_full().gap(28.0).child(header(
+        k,
+        &one.title,
+        &one.description,
+        facts,
+    ));
     if let Some(broken) = &one.broken {
         article = article.child(
             col()
@@ -383,8 +413,15 @@ fn workflow(k: &Kit, one: &Workflow) -> El {
                     .color(k.c.text_muted),
             );
         }
+        let about = input
+            .schema
+            .as_ref()
+            .and_then(|s| s.get("description"))
+            .and_then(Value::as_str)
+            .map(|d| muted(k, d.to_string()));
         let mut card = super::common::panel(k, format!("input-{}", input.name), input.name.clone())
             .child(line)
+            .children(about)
             .child(schema(k, &input.schema));
         for limit in &input.limits {
             card = card.child(muted(k, limit.clone()));
@@ -453,10 +490,34 @@ fn workflow(k: &Kit, one: &Workflow) -> El {
     }
     article = article.child(options).child(
         col()
+            .key("metadata")
             .w_full()
             .gap(8.0)
-            .child(heading(k, "Metadata"))
-            .child(schema(k, &Some(one.metadata.clone()))),
+            .child(
+                row()
+                    .w_full()
+                    .gap(8.0)
+                    .center_y()
+                    .child(heading(k, "Metadata"))
+                    .child(
+                        Button::new(if metadata_open { "Hide" } else { "Show" })
+                            .variant(ButtonVariant::GhostMuted)
+                            .control_size(ControlSize::Small)
+                            .expanded(metadata_open)
+                            .on_press(|app: &mut App| {
+                                let state = &mut app.pages.workflows;
+                                state.metadata_open = !state.metadata_open;
+                            })
+                            .build(k)
+                            .key("metadata-toggle")
+                            .label(if metadata_open {
+                                "Hide metadata"
+                            } else {
+                                "Show metadata"
+                            }),
+                    ),
+            )
+            .children(metadata_open.then(|| schema(k, &Some(one.metadata.clone())))),
     );
     for file in &one.files {
         let shown = if is_markdown(&file.path) {
@@ -475,12 +536,13 @@ fn workflow(k: &Kit, one: &Workflow) -> El {
                 .clip_rounded(k.radius.md)
                 .child(
                     el().w_full()
-                        .px(12.0)
+                        .px(14.0)
                         .py(8.0)
                         .fill(k.c.layer_02)
-                        .child(code(k, file.path.clone())),
+                        .child(path_text(k, &file.path)),
                 )
-                .child(col().w_full().padding(12.0).child(shown)),
+                .child(Divider::horizontal().build(k))
+                .child(col().w_full().px(16.0).py(14.0).child(shown)),
         );
     }
     article
@@ -488,46 +550,27 @@ fn workflow(k: &Kit, one: &Workflow) -> El {
 
 fn persona(k: &Kit, one: &Persona) -> El {
     let mut facts = row()
+        .w_full()
         .flex_wrap()
         .gap(8.0)
         .center_y()
         .child(badge(k, persona_layer(&one.layer)))
-        .child(
-            text(one.path.clone())
-                .font(k.ty.text_small)
-                .color(k.c.text_muted),
-        );
+        .child(path_text(k, &one.path));
     if let Some(base) = &one.extends {
-        facts = facts.child(
-            text(format!("extends {base}"))
-                .font(k.ty.text_small)
-                .color(k.c.text_muted),
-        );
+        facts = facts
+            .child(text("·").font(k.ty.text_small).color(k.c.text_faint))
+            .child(
+                text(format!("extends {base}"))
+                    .font(k.ty.text_small)
+                    .color(k.c.text_muted),
+            );
     }
     col()
         .key("persona")
         .w_full()
-        .gap(16.0)
-        .child(
-            text(one.name.clone())
-                .role("heading")
-                .font(
-                    rune::TextStyle {
-                        size: 20.0,
-                        ..k.ty.ui_medium
-                    }
-                    .lh(26.0),
-                )
-                .color(k.c.text_strong),
-        )
-        .child(
-            text(one.description.clone())
-                .font(k.ty.body)
-                .color(k.c.text_base)
-                .wrap()
-                .w_full(),
-        )
-        .child(facts)
+        .max_w(760.0)
+        .gap(20.0)
+        .child(header(k, &one.name, &one.description, facts))
         .child(Markdown::new(one.body.clone()).build(k))
 }
 
@@ -581,7 +624,7 @@ pub fn view(app: &App, k: &Kit, _layer: &mut Vec<El>) -> El {
         )
         .child(tree);
     let detail = match state.chosen() {
-        Some(Chosen::Workflow(one)) => workflow(k, one),
+        Some(Chosen::Workflow(one)) => workflow(k, one, state.metadata_open),
         Some(Chosen::Persona(one)) => persona(k, one),
         Some(Chosen::Problem(path, message)) => col()
             .key("problem")
