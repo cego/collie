@@ -130,6 +130,7 @@ import { findingsIn } from "../../src/output";
 import { FINGERPRINT_MAX_BYTES, collect, fingerprint, readVerifications } from "../../src/verify";
 import { inputsFor, offersFrom } from "../../src/offers";
 import { Store, storeLayer } from "../../src/store";
+import { readStageProof, type ShippingGo } from "../../src/shipping";
 import { recordsAt, type Records } from "../../src/records";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import * as Reactivity from "effect/reactivity/Reactivity";
@@ -4284,7 +4285,13 @@ const stallAsked = (
   run: {
     readonly status: Effect.Effect<typeof RunStatus.Type>;
     readonly asked: Effect.Effect<
-      ReadonlyArray<{ decision: string; prompt: string; options: string; answer: string | null }>
+      ReadonlyArray<{
+        decision: string;
+        prompt: string;
+        options: string;
+        answer: string | null;
+        shipping?: ShippingGo | null;
+      }>
     >;
   },
   name: string,
@@ -10738,7 +10745,13 @@ const driven = <A, E>(
   drive: (run: {
     readonly status: Effect.Effect<typeof RunStatus.Type>;
     readonly asked: Effect.Effect<
-      ReadonlyArray<{ decision: string; prompt: string; options: string; answer: string | null }>
+      ReadonlyArray<{
+        decision: string;
+        prompt: string;
+        options: string;
+        answer: string | null;
+        shipping?: ShippingGo | null;
+      }>
     >;
     readonly answer: (decision: string, value: string) => Effect.Effect<void>;
     /** Whether the engine has done with the answer to `decision`, waking the Run included. */
@@ -10833,7 +10846,13 @@ const answeredEarly = (question: string, over: HostOverride) => {
 /** The go asked under `name`, once it is open. */
 const goAsked = (
   asked: Effect.Effect<
-    ReadonlyArray<{ decision: string; prompt: string; options: string; answer: string | null }>
+    ReadonlyArray<{
+      decision: string;
+      prompt: string;
+      options: string;
+      answer: string | null;
+      shipping?: ShippingGo | null;
+    }>
   >,
   name: string,
 ) =>
@@ -11008,7 +11027,8 @@ scenario(
           },
           (run) =>
             Effect.gen(function* () {
-              yield* goAsked(run.asked, "go-1");
+              const go = yield* goAsked(run.asked, "go-1");
+              expect(go.shipping).toEqual({ action: "merge", head });
               yield* run.answer("go-1", "Finish");
               return yield* ended(run.status);
             }),
@@ -14170,6 +14190,7 @@ for (const name of ["gitlab", "github"] as const) {
           const status = yield* driven(options(runId), (run) =>
             Effect.gen(function* () {
               const go = yield* goAsked(run.asked, "go-1");
+              expect(go.shipping).toEqual({ action: "merge", head });
               expect(optionsOf([go], "go-1")).toEqual(["Merge, tag and stage", "Finish"]);
               expect(recommendedOf([go], "go-1")).toEqual({
                 recommended: "Merge, tag and stage",
@@ -14180,6 +14201,13 @@ for (const name of ["gitlab", "github"] as const) {
               expect(claimed).toEqual([]);
               yield* run.answer("go-1", "Merge, tag and stage");
               const production = yield* goAsked(run.asked, "production");
+              expect(production.shipping).toEqual({ action: "deploy", tag: "v1.2.0" });
+              expect(yield* readStageProof(runDir(dir, runId))).toEqual({
+                head: merged,
+                tag: "v1.2.0",
+                proved: true,
+                why: null,
+              });
               expect(optionsOf([production], "production")).toEqual([
                 "Send to production",
                 "Leave production to me",
@@ -14665,6 +14693,7 @@ for (const name of ["gitlab", "github"] as const) {
           const status = yield* driven(options(runId), (run) =>
             Effect.gen(function* () {
               const go = yield* goAsked(run.asked, "go-1");
+              expect(go.shipping).toEqual({ action: "stage", head });
               expect(optionsOf([go], "go-1")).toEqual(["Stage the merge request", "Finish"]);
               expect(recommendedOf([go], "go-1")).toEqual({
                 recommended: "Stage the merge request",
@@ -14673,6 +14702,13 @@ for (const name of ["gitlab", "github"] as const) {
               expect(go.prompt).toContain("deploys that head to stage for you to test, unmerged");
               yield* run.answer("go-1", "Stage the merge request");
               const production = yield* goAsked(run.asked, "production");
+              expect(production.shipping).toEqual({ action: "deploy", head });
+              expect(yield* readStageProof(runDir(dir, runId))).toEqual({
+                head,
+                tag: null,
+                proved: true,
+                why: null,
+              });
               expect(optionsOf([production], "production")).toEqual([
                 "Send to production",
                 "Leave production to me",

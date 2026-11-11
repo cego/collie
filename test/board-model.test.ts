@@ -723,6 +723,10 @@ test("a card of one merge request has the actions and labels it always had", () 
 const MR = "mr:gitlab.example.com/mk/project!7";
 const HEAD = "1a2b3c4d5e6f";
 const mergeableNow = {
+  now: 1_000_000,
+  read: 1_000_000,
+  head: HEAD,
+  readHead: HEAD,
   succeeded: true,
   mr: MR,
   mrState: "open",
@@ -737,6 +741,21 @@ test("ready to release is mergeable now, and nothing is missing", () => {
   expect(readyToRelease(mergeableNow)).toEqual({ ready: true, missing: [] });
   // No pipeline at all is not a pipeline that has not passed.
   expect(readyToRelease({ ...mergeableNow, ci: { state: "none" } }).ready).toBe(true);
+});
+
+test("freshness revokes ready to release when a forge answer ages or belongs to another head", () => {
+  const now = 1_000_000;
+  for (const freshness of [
+    { now, read: now - 11 * 60_000, head: HEAD, readHead: HEAD },
+    { now, read: now, head: HEAD, readHead: "another-head" },
+    { now, read: null, head: HEAD, readHead: HEAD },
+  ]) {
+    const ready = readyToRelease({ ...mergeableNow, ...freshness });
+    expect(ready.ready).toBe(false);
+    expect(ready.missing).toContainEqual(
+      expect.objectContaining({ fact: "freshness", settling: true }),
+    );
+  }
 });
 
 test("each fact ready to release needs is named when it is missing, and whether it may yet come", () => {

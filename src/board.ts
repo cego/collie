@@ -4,6 +4,7 @@
 // became of a Run's work is the disposition's answer alone — a finished Run with a merge
 // request has not been merged by anyone.
 
+import { readStageProof, type ShippingAction } from "./shipping";
 import { lastOrdered } from "./launches";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -523,6 +524,12 @@ function workingSentence(facts: Sentence): string {
  * the one where nothing moves until someone answers.
  */
 export function sentenceFor(facts: Sentence): string {
+  if (
+    (facts.state === "failed" || facts.state === "stopped" || facts.state === "abandoned") &&
+    facts.disposition === null &&
+    facts.mr !== null
+  )
+    return `${facts.state === "failed" ? failedSentence(facts) : facts.state === "stopped" ? "Stopped by you." : "Its Driver died."} ${doneSentence(null, facts.mr, facts.mrState, false, facts.checks, facts.agent, facts.summary, facts.readiness ?? null)}${answeredLine(facts.answered)}`;
   if (facts.decision !== null) return decisionSentence(facts.decision);
   if (facts.memory != null) return facts.memory;
   switch (facts.state) {
@@ -1162,6 +1169,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   offers?: (runId: string) => Effect.Effect<ReadonlyArray<OfferView>>;
   /** Only the Task this Run belongs to, however long ago it finished. */
   only?: string;
+  /** Include landed Tasks that the visible board folds into History. */
+  includeHistory?: boolean;
   /** Where each Task's whole Flow is put, by the Task's id. */
   flows?: Map<string, Flow>;
   /** The commit a Run's branch is at; read through a minute's cache where not given. */
@@ -1309,7 +1318,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         let issues = 0;
         for (const run of runs) issues = Math.max(issues, yield* planIssuesIn(run.dir));
         let owed: string | null = null;
-        for (const run of runs) owed ??= yield* branchOwed(run);
+        for (const run of everyRun) owed ??= yield* branchOwed(run);
         const ledgers = new Map(
           yield* Effect.forEach(everyRun, (run) =>
             Effect.map(ledgerOf(run, id, cardOf), (lines) => [run.id, lines] as const),
@@ -1339,25 +1348,28 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
             merged: settlement.by === "merged",
           };
         });
-        // A branch, or a merge request no id can be told for, is owed by the Runs that carry it.
-        const unnamed =
-          entries.length > 0 || (owed === null && lead === undefined)
-            ? []
-            : [
-                settlementOf(
-                  {
-                    id: null,
-                    runs: Arr.map(
-                      Arr.filter(runs, (run) => run.branch !== null || mrOf(run) !== null),
-                      (run) => run.id,
-                    ),
-                    forge: null,
-                    read: null,
-                  },
-                  recorded,
-                  leader.id,
-                ),
-              ];
+        const branchKey = (run: RunFacts) => `${run.project}\n${run.branch}`;
+        const withMr = new Set(
+          Arr.map(
+            Arr.filter(carried, (one) => one.mr !== null),
+            (one) => branchKey(one.run),
+          ),
+        );
+        const branches = new Map<string, string[]>();
+        for (const one of carried) {
+          const key = branchKey(one.run);
+          if (
+            ((yield* branchOwed(one.run)) === null || withMr.has(key)) &&
+            (one.mr === null || one.id !== null)
+          )
+            continue;
+          const runs = branches.get(key) ?? [];
+          runs.push(one.run.id);
+          branches.set(key, runs);
+        }
+        const unnamed = Arr.map([...branches.values()], (runs) =>
+          settlementOf({ id: null, runs, forge: null, read: null }, recorded, leader.id),
+        );
         const settlements = [...Arr.map(fates, (one) => one.settlement), ...unnamed];
         const owing =
           Arr.some(settlements, (one) => one.by === null) ||
@@ -1388,11 +1400,12 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         // a report nobody has seen.
         if (
           opts.only === undefined &&
+          !opts.includeHistory &&
           checking.length === 0 &&
           Arr.every(runs, (run) => over(run, runs)) &&
           last < now - FINISHED_FOR_MS &&
           pending.length === 0 &&
-          ((yield* nothingToFile(runs)) ||
+          ((yield* nothingToFile(everyRun)) ||
             standingOf({
               settled: true,
               succeeded: leader.state === "succeeded",
@@ -1557,7 +1570,18 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
               : withForge(checksAt(verified.records, verified.head, verified.approved), forged);
           const mrState = id === null ? null : (mrStates.get(id) ?? null);
           const readiness = readyToRelease({
-            succeeded: merging.state === "succeeded",
+            now,
+            read: forged?.read === undefined ? null : epochMs(forged.read),
+            head: verified?.head ?? null,
+            readHead: forged?.head ?? null,
+            unreadable:
+              forged?.read !== undefined &&
+              epochMs(forged.asked ?? forged.read) > epochMs(forged.read),
+            succeeded:
+              merging.state === "succeeded" ||
+              (decision?.kind === "question" &&
+                decision.run === merging.id &&
+                decision.shipping !== undefined),
             mr,
             mrState,
             draft: forged?.draft ?? false,
@@ -1576,7 +1600,10 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           mr,
           merging,
           check,
-          state === "done" && mr !== null && !landed && (mrState === null || mrState === "open"),
+          (settledNow || (decision?.kind === "question" && decision.shipping !== undefined)) &&
+            mr !== null &&
+            !landed &&
+            (mrState === null || mrState === "open"),
         );
         const each = several
           ? yield* Effect.forEach(fates, (one) =>
@@ -1624,8 +1651,58 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         const shortOf = new Map(Arr.map(mrs, (one) => [one.id, one.short]));
         const finishedAt = settledNow ? endedAt(leader) : 0;
         const unseen = landed && state === "done" && (yield* unseenReport(leader));
-        // Only a ready plan's first action is an offer; asking every card would ask every refresh.
-        const offer = planReady ? primaryOf(yield* offersOfRun(leader.id)) : null;
+        const go =
+          decision?.kind === "question" && questions.length === 1 ? decision.shipping : undefined;
+        let shipping: ShippingAction | null = null;
+        let shippingMr: string | null = null;
+        let shippingFailure: string | null = null;
+        if (go !== undefined) {
+          const owner = Option.getOrThrow(
+            Arr.findFirst(
+              everyRun,
+              (run) => decision?.kind === "question" && run.id === decision.run,
+            ),
+          );
+          const proof = go.action === "deploy" ? yield* readStageProof(owner.dir) : null;
+          const matches =
+            proof !== null && ("tag" in go ? proof.tag === go.tag : proof.head === go.head);
+          const gate = Option.getOrElse(
+            Arr.findFirst(each, (one) => Arr.some(one.runs, (run) => run.id === owner.id)),
+            () => alone,
+          );
+          const current = gate.forged;
+          const fresh =
+            current?.read !== undefined &&
+            now - epochMs(current.read) <= 2 * MERGE_POLL_MS &&
+            epochMs(current.asked ?? current.read) <= epochMs(current.read);
+          if ("head" in go && (!fresh || current?.head !== go.head))
+            shippingFailure = `This Go no longer holds for ${short(go.head)}: the head moved or the forge answer is stale.`;
+          else if (go.action === "deploy" && (!matches || !proof?.proved))
+            shippingFailure = `Stage proof does not hold: ${proof?.why ?? "no stage proof for this head or tag"}.`;
+          else if (go.action !== "deploy" && !gate.readiness.ready)
+            shippingFailure = gate.readiness.missing[0]?.said ?? "the shipping gates do not hold";
+          else if (held !== undefined || check !== null || stalled !== null)
+            shippingFailure = "The Run is held, checking or waiting in an agent's pane.";
+          else {
+            shipping = go.action;
+            shippingMr = mrOf(owner);
+          }
+        } else if (decision === null && state === "done" && !landed && readiness.ready) {
+          shipping = "merge";
+          shippingMr =
+            Arr.findFirst(each, (one) => one.readiness.ready).pipe(Option.getOrUndefined)?.mr ?? mr;
+        }
+        const shippingOwner =
+          Option.getOrUndefined(Arr.findFirst(each, (one) => one.mr === shippingMr))?.owner ??
+          leader;
+        const offered =
+          planReady || (shippingMr !== null && go === undefined)
+            ? primaryOf(yield* offersOfRun(shippingOwner.id))
+            : null;
+        const offer =
+          offered === null || shippingOwner.id === leader.id
+            ? offered
+            : { ...offered, run: shippingOwner.id };
         const holders = new Map<string, string | null>();
         for (const run of everyRun)
           if (waitsOf(run).held) holders.set(run.id, (yield* holderOf(run))?.by ?? null);
@@ -1699,11 +1776,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
             : state;
         const resumed = going ? yield* resumedWith(leader) : null;
         // "Superseded by" is said only by the Run whose line it is, and never as the Task's outcome.
-        const spoken = landed
-          ? told
-          : state === "done"
-            ? null
-            : ((ledgers.get(leader.id) ?? []).at(-1)?.line ?? null);
+        const spoken = landed ? told : null;
         // The answer the card dates: a failed ask first, else the oldest of what is still owed.
         const dated = Arr.flatMap(fates, (one) => {
           const facts = forge.get(one.id);
@@ -1723,54 +1796,57 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
             ? null
             : { forge: dated.forge, ago: agoMs(dated.read, now), failed: dated.failed };
         const sentenceAt = (now: number) =>
-          sentenceFor({
-            answered: answeredAt(now),
-            mr,
-            mrs: several
-              ? Arr.map(each, (one, at) => ({
-                  short: mrs[at]!.short,
-                  state: one.state,
-                  merged: one.merged,
-                  disposed: one.merged ? null : one.settlement.by,
-                  ready: one.readiness.ready,
-                  waitsOn: Arr.map(mrs[at]!.waitsOn, (id) => shortOf.get(id) ?? id),
-                }))
-              : undefined,
-            mrState,
-            state: said,
-            checks,
-            readiness,
-            summary: leader.summary,
-            agent:
-              Option.getOrUndefined(Arr.findFirst(agents, (one) => one.run === leader.id))?.name ??
-              null,
-            planReady,
-            abandoned: abandoned && at > 0 ? agoMs(at, now) : null,
-            decision,
-            step: doing?.step ?? null,
-            // Never the pane's title: a terminal names its harness or file, not the work.
-            verb: doing?.verb ?? null,
-            checking: check?.sentence ?? null,
-            memory: memory === null ? null : waitLine(memory),
-            awaiting: awaiting === null ? null : awaitingLine(awaiting),
-            reopened: state === "active" ? toldNow : null,
-            silent,
-            wave: fan !== null && fanned === leader ? fan.wave : null,
-            failure,
-            note: leader.note,
-            resumed,
-            stalled,
-            disposition:
-              spoken === null
-                ? null
-                : {
-                    kind: spoken.kind,
-                    // Recorded refs vary in shape; the card reads them all the one way.
-                    ref: spoken.ref === "" ? "" : mrLabel(spoken.ref),
-                    ago: ago(spoken.at, now),
-                    by: spoken.by,
-                  },
-          });
+          go !== undefined
+            ? (shippingFailure ??
+              `${shipping === "merge" ? "Merge" : shipping === "stage" ? "Stage" : "Deploy"} ${"tag" in go ? go.tag : short(go.head)}: ready for your go.`)
+            : sentenceFor({
+                answered: answeredAt(now),
+                mr,
+                mrs: several
+                  ? Arr.map(each, (one, at) => ({
+                      short: mrs[at]!.short,
+                      state: one.state,
+                      merged: one.merged,
+                      disposed: one.merged ? null : one.settlement.by,
+                      ready: one.readiness.ready,
+                      waitsOn: Arr.map(mrs[at]!.waitsOn, (id) => shortOf.get(id) ?? id),
+                    }))
+                  : undefined,
+                mrState,
+                state: said,
+                checks,
+                readiness,
+                summary: leader.summary,
+                agent:
+                  Option.getOrUndefined(Arr.findFirst(agents, (one) => one.run === leader.id))
+                    ?.name ?? null,
+                planReady,
+                abandoned: abandoned && at > 0 ? agoMs(at, now) : null,
+                decision,
+                step: doing?.step ?? null,
+                // Never the pane's title: a terminal names its harness or file, not the work.
+                verb: doing?.verb ?? null,
+                checking: check?.sentence ?? null,
+                memory: memory === null ? null : waitLine(memory),
+                awaiting: awaiting === null ? null : awaitingLine(awaiting),
+                reopened: state === "active" ? toldNow : null,
+                silent,
+                wave: fan !== null && fanned === leader ? fan.wave : null,
+                failure,
+                note: leader.note,
+                resumed,
+                stalled,
+                disposition:
+                  spoken === null
+                    ? null
+                    : {
+                        kind: spoken.kind,
+                        // Recorded refs vary in shape; the card reads them all the one way.
+                        ref: spoken.ref === "" ? "" : mrLabel(spoken.ref),
+                        ago: ago(spoken.at, now),
+                        by: spoken.by,
+                      },
+              });
         const bare: TaskView = {
           id,
           name,
@@ -1800,6 +1876,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           mrState,
           checks,
           ready: readiness.ready,
+          shipping,
+          shippingMr,
           readiness,
           check,
           reopened,
@@ -1839,7 +1917,14 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         // said again without reading anything until it leaves the board.
         const quiet =
           settledNow && check === null && decision === null && !busy && pending.length === 0;
-        if (!quiet) return keep(shown, now + GOING_EVERY_MS);
+        if (!quiet || mr !== null) {
+          const expires = Arr.flatMap(each, (one) => {
+            const read = one.forged?.read;
+            const expiry = read === undefined ? 0 : epochMs(read) + 2 * MERGE_POLL_MS + 1;
+            return expiry > now ? [expiry] : [];
+          });
+          return keep(shown, Math.min(now + GOING_EVERY_MS, ...expires));
+        }
         const leaves = last + FINISHED_FOR_MS + 1;
         const retimed = (now: number): Retimed | null =>
           now >= leaves
@@ -1886,7 +1971,7 @@ export function readyRuns(
 ): ReadonlyMap<string, { at: string; sentence: string }> {
   return new Map(
     Arr.flatMap(views, (view) =>
-      view.ready && view.checks?.state === "passed"
+      view.shipping == null && view.ready && view.checks?.state === "passed"
         ? [[view.run, { at: view.checks.at, sentence: view.sentence }] as const]
         : [],
     ),
@@ -1898,7 +1983,9 @@ const primaryOf = (offers: ReadonlyArray<OfferView>): BoardOffer | null => {
   const first = Option.getOrUndefined(
     Arr.findFirst(offers, (one) => one.primary && one.unavailable === null),
   );
-  return first === undefined ? null : { id: first.id, title: first.title };
+  if (first === undefined) return null;
+  const offer = { id: first.id, title: first.title };
+  return first.run === undefined ? offer : { ...offer, run: first.run };
 };
 
 export function waitingLabel(waiting: ReadonlyArray<TaskView>): string {
@@ -1961,6 +2048,7 @@ export function boardLines(
 ): string[] {
   const label: Record<Section, (rows: ReadonlyArray<TaskView>) => string> = {
     "needs-you": () => "Needs you",
+    "ready-to-ship": (rows) => `Ready to ship · ${rows.length}`,
     waiting: waitingLabel,
     working: workingLabel,
     finished: (rows) => finishedLabel(rows, true),
@@ -1978,7 +2066,7 @@ function textSection(
   under: { run: string; lines: ReadonlyArray<string> } | null,
 ): string[] {
   const rows = Arr.flatMap(views, (view) => [
-    `  ${GLYPH_FOR[view.state]} ${view.name} · ${view.project} — ${view.sentence}`,
+    `  ${GLYPH_FOR[view.state]} ${view.name} · ${view.project} — ${view.shipping == null ? "" : `${view.shipping === "merge" ? "Merge" : view.shipping === "stage" ? "Stage" : "Deploy"}: `}${view.sentence}`,
     ...(view.drift === null ? [] : [`    ↯ ${view.drift}`]),
     ...(view.held === null ? [] : [`    ${view.held}`]),
     ...(under !== null && under.run === view.run ? under.lines : []),

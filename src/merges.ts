@@ -9,6 +9,7 @@ import * as Struct from "effect/Struct";
 import * as Rec from "effect/Record";
 import { DateTime, Effect, FileSystem, Option, Path, Schema } from "effect";
 import type { ForgeFacts } from "./board";
+import { readEnv } from "./env";
 import {
   ForgeChecks,
   Mergeability,
@@ -42,7 +43,8 @@ export function mrOf(run: RunFacts): string | null {
 }
 
 /** How long one merge request's answer stands before its forge is asked again. */
-export const MERGE_POLL_MS = 5 * 60_000;
+export { MERGE_POLL_MS } from "./shipping";
+import { MERGE_POLL_MS } from "./shipping";
 
 /** What the merge watch last read of each merge request, by MR id, and when. */
 export type MrPanels = Map<string, { readonly at: number; readonly panel: MrPanel }>;
@@ -130,7 +132,24 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
   const forge = new Map(yield* readForge(opts.stateDir));
   let asked = false;
   const watched: Array<Watched> = [];
-  for (const view of opts.views) {
+  const shown = new Set(
+    Arr.flatMap(opts.views, (view) => [
+      ...view.runs,
+      ...Arr.flatMap(view.children, (child) => (child.run === null ? [] : [child.run])),
+    ]),
+  );
+  const hidden = Arr.some(opts.runs, (run) => !shown.has(run.id))
+    ? yield* (yield* Effect.promise(() => import("./board"))).buildBoard({
+        env: readEnv({ HERDR_PLUGIN_STATE_DIR: opts.stateDir, COLLIE_CWD: opts.cwd }),
+        runs: opts.runs,
+        includeHistory: true,
+        now: opts.now,
+      })
+    : [];
+  for (const view of [
+    ...opts.views,
+    ...Arr.filter(hidden, (view) => !Arr.some(view.runs, (run) => shown.has(run))),
+  ]) {
     const adopted = yield* fromBranches(view, opts);
     const found = view.mr === null ? adopted[0] : undefined;
     const mr = view.mr ?? found?.url ?? null;

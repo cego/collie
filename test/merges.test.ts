@@ -105,6 +105,42 @@ const seeded = Effect.fn("merges.seeded")(function* () {
   };
 });
 
+test("History-folded merge requests are reconciled on the first round and followed when reopened", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const { stateDir, run, board: boardOf } = yield* seeded();
+      yield* recordDisposition(run.dir, {
+        at: "2026-09-17T09:30:00Z",
+        by: "mk",
+        kind: "merged",
+        ref: MR,
+        note: null,
+      });
+      const now = epochMs("2026-09-19T10:00:00Z");
+      const views = yield* boardOf({ now });
+      expect(views).toEqual([]);
+      const states = new Map<string, MrState>();
+      yield* settleMerges({
+        stateDir,
+        cwd: "/project",
+        runs: [run],
+        record: () => Effect.void,
+        stop: () => Effect.die("no running work"),
+        run: gitlab("open"),
+        views,
+        now,
+        checked: new Map(),
+        states,
+        panels: new Map(),
+        making: new Set(),
+      });
+      expect(states.get(`${GITLAB}!65`)).toBe("open");
+      const [returned] = yield* boardOf({ now });
+      expect(returned!.landed).toBe(false);
+      expect(sectionOf(returned!)).toBe("waiting");
+    }),
+  ));
+
 test("a merge GitLab reports lands the work: a disposition by gitlab, and the card moves", () =>
   runWithForge(
     Effect.gen(function* () {

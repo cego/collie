@@ -462,7 +462,7 @@ ranks first.
 
 **Working** — A Task something is actually doing: a Run the host holds that has not
 settled, or a **Reopened** Run whose agent herdr reports working. A Run whose question a
-human's message superseded is Working while its agent works on that message. The board's third
+human's message superseded is Working while its agent works on that message. The board's fourth
 section, under Waiting on you.
 
 **Waiting on you** — A Task whose work has ended without **landing**, and which nobody has
@@ -471,20 +471,29 @@ that is ready to implement, a Run that failed or was stopped with a branch or me
 request behind it and has neither been resumed nor disposed of. It stays here while it owes
 anything, whatever Dispositions its earlier Runs carry and however it was finished: Finish
 ends a Run, not a Task's delivery. Its sentence names the merge request still owed and what
-it lacks — approval, checks at its head, a conflict, or `closed without merging`. The board's second
-section, under Needs you and over Working, because most of it is work a human can ship
-now; **Ready to release** leads it. Not a **Decision**: a Decision is Collie asking; this is work in your hands that
+it lacks — approval, checks at its head, a conflict, or `closed without merging`. The board's third
+section, below Ready to ship and above Working. Work whose shipping gates hold belongs
+in **Ready to ship**. Not a **Decision**: a Decision is Collie asking; this is work in your hands that
 has not been mentioned. A Run that ended with nothing to file — no branch, no merge
 request, no plan, no question — has **Landed** and is not waiting on anyone.
 
-**Ready to release** — A Waiting on you Task whose merge request the forge would merge now:
+**Ready to ship** — The board's second section, below Needs you and above Waiting on you,
+Working and Finished. Only the human's shipping go remains. The card names **Merge**,
+**Stage** or **Deploy**. Merge invokes the existing Release offer or answers a declared Go.
+A declared Go enters only while its action's gates hold at its head or tag; a failed gate
+keeps it in Needs you. The host derives this once for Desktop, the CLI and chat.
+Entering the section raises no notification.
+
+**Ready to release** — The Merge gate: the forge would merge the merge request now:
 its leading Run succeeded; the merge request is open and not a draft; every check approved
 for the Run passed at its head; the forge's pipeline at that head passed, or there is none;
 no blocking review finding is unresolved; and the forge says it can merge. It is one fact,
 computed once in the board model, that the board, `collie run show`, `collie run wait
 --until ready` and chat all read, with each missing fact named and marked as one that may
 still come by itself (CI running, the forge still working it out) or one only a human can
-move. A card leaves Ready to release when CI or mergeability later says no. An open merge
+move. Every forge fact must be read at the current head within two merge-watch rounds.
+A stale, unknown or unreadable fact is missing and marked settling. A moved head or a
+failed gate revokes readiness. An open merge
 request that is not ready is still Waiting on you, and its card says what is missing. A
 Task with several merge requests judges each at its own head, and is Ready to release when
 any one of them is.
@@ -714,7 +723,10 @@ stage, merge, tag), and send one to production. It is asked on the Run once the 
 ready, never at its start. The first holds for one head: a head that moves takes it back.
 The second holds for what it sends. Before a merge, that is the head on stage, so the same
 rule applies. After one, it is one tag and the production jobs that tag names. Who answered
-is recorded, never a reason to refuse. Staging an open merge request without merging it is
+is recorded, never a reason to refuse. A Workflow can declare the Go's action and head
+or tag on `ask`; the host shows it in **Ready to ship** only while its gates hold.
+Merge and Stage from a Release Run use **Ready to release**; Deploy uses the host's
+recorded stage proof for that head or tag. Staging an open merge request without merging it is
 not one: a **Stage Run** asks for no Go, because its rollback takes it back.
 
 **Layer** — Where a definition is looked up, later wins by name. A Workflow is one `*.workflow.ts` entry, found project `.collie/workflows/` first, then the user's `~/.collie/user/workflows/`, then the installation's `workflows/`; a broken override is reported, never fallen through. A Persona is Markdown, found the same way: the project's `.collie/personas/`, then the user's `~/.collie/user/personas/`, then the installation's `personas/`. Forking takes a baseline definition into a later Layer. The user Layer's files are **shared definitions**: every Machine in a Flock holds the latest edit of each, its removal included, so the user Layer is the Flock's rather than one Machine's ([ADR-0061](docs/adr/0061-a-users-definitions-are-the-flocks.md)).

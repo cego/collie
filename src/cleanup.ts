@@ -839,6 +839,7 @@ export const runnersSweeper = (dir: string, running: string): Sweeper => {
 const FINISHED_GRACE_MS = 60 * 60_000;
 const SECTION_SAID: Record<Section, string> = {
   "needs-you": "needs you",
+  "ready-to-ship": "ready to ship",
   waiting: "waiting on you",
   working: "working",
   finished: "Finished",

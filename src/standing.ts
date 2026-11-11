@@ -100,7 +100,7 @@ export function settlementOf(
   const carries = (run: string) => item.runs.includes(run);
   const about = (one: Recorded) =>
     item.id === null
-      ? carries(one.run) || one.run === leader
+      ? carries(one.run) || (one.run === leader && one.line.kind === "abandoned")
       : one.mr === item.id || (one.mr === null && (carries(one.run) || one.run === leader));
   const answers = new Map<string, Recorded>();
   for (const one of recorded) if (about(one)) answers.set(one.run, one);

@@ -1,4 +1,4 @@
-// The card board: a header sentence over three sections of cards. One card per Task, and
+// The card board: a header sentence over five sections of cards. One card per Task, and
 // everything on it is a fact the TaskView already carries — this file decides colour and
 // placement and nothing else.
 
@@ -118,6 +118,7 @@ const LOGO_COLS = 21;
 export function Board(props: BoardProps) {
   const empty = () =>
     props.sections.needs.length +
+      props.sections.ready.length +
       props.sections.working.length +
       props.sections.waiting.length +
       props.sections.finished.length ===
@@ -131,6 +132,23 @@ export function Board(props: BoardProps) {
 
   // Drawn in the board model's one order, which the text board and chat read too.
   const drawn: Record<SectionId, () => JSX.Element> = {
+    "ready-to-ship": () => (
+      <Show when={props.sections.ready.length > 0}>
+        <Section label={`Ready to ship · ${props.sections.ready.length}`}>
+          <Grid
+            views={props.sections.ready}
+            columns={props.columns}
+            width={props.width - 2 * SIDE}
+            open={props.open}
+            onOpen={props.onOpen}
+            onMenu={props.onMenu}
+            onAct={props.onAct}
+            decide={props.decide}
+            batch={props.batch}
+          />
+        </Section>
+      </Show>
+    ),
     "needs-you": () => (
       <>
         <Show when={props.sections.needs.length > 0}>

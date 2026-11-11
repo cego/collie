@@ -861,9 +861,9 @@ collie board --draw
 `--draw` draws the board itself in the terminal it runs in: what the host's `collie-board`
 core terminal runs, and a start made from it is placed as one from the Home. Without it, the first snapshot of the board the host serves
 ([ADR-0038](adr/0038-the-host-builds-and-serves-the-board.md)): every Task on this Herd's
-board, in the order the Home draws them: **Needs you** first, then **Waiting on you** (work
-that ended and has not landed, what is `ready` to release first), then **Working** (`active`
-and `quiet`), then **Finished** (landed), and inside each whatever changed last first. `state: blocked` is what puts a Task in Needs you,
+board, in the order the Home draws them: **Needs you**, **Ready to ship** (only the shipping
+go remains), **Waiting on you** (ended work still owed), **Working** (`active` and `quiet`),
+and **Finished** (landed), and inside each whatever changed last first. `state: blocked` puts a Task in Needs you unless its declared shipping Go still holds,
 and it means one of two things: a `decision` to answer, or an agent waiting for you in its
 own pane — a harness dialog herdr will not answer, or a run that parked because its agent's
 pane would not take a prompt. The `sentence` says which, and for the second kind it says which pane. It is the same model the pane renders, so an agent
@@ -894,7 +894,8 @@ Task of its own; a Repo run of a fan-out is its parent's `children` rather than 
 | `ended`                   | When the leading Run ended, or `null` while it has not.                                                                                                                                                                   |
 | `planReady`, `offer`      | A finished plan nobody has implemented, and the offer its card's first action invokes.                                                                                                                                    |
 | `checks`                  | What checked an open merge request: `passed` or `failed` (with `name`) at revision `at`, `running`, or `unchecked`; else `null`.                                                                                          |
-| `ready`, `readiness`      | Ready to release: the forge would merge it now. `readiness` names each fact missing, as `run show`'s `data.ready` does.                                                                                                   |
+| `ready`, `readiness`      | Ready to release: the forge would merge it now on current-head evidence read within two merge-watch rounds. `readiness` names each fact missing, as `run show`'s `data.ready` does.                                       |
+| `shipping`, `shippingMr`  | The host's next shipping action (`merge`, `stage`, `deploy`) and its merge request, or `null`. A ready Merge invokes Release; a declared Go uses the normal answer path. Both fields are additive.                        |
 | `check`                   | The check Collie is running for the leading Run, as `collie run checks` gives `running` (with its `log` and `lastLines`), or `null`.                                                                                      |
 | `reopened`                | A finished Run whose agent took a steer after it ended: the `delivery`, the `agent`, the first line it was `told` and its `status` now; else `null`.                                                                      |
 | `run`, `runs[]`           | The Run a card acts on, and every Run of the Task.                                                                                                                                                                        |

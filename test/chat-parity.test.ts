@@ -578,6 +578,14 @@ test("chat and the text board list the sections in the board's one order", () =>
   const views = sortBoard([
     task({ id: "done", name: "Landed", state: "done" }),
     task({ id: "working", name: "Building" }),
+    task({
+      id: "ready",
+      name: "Shipping",
+      state: "done",
+      landed: false,
+      shipping: "merge",
+      shippingMr: "mr:gitlab.cego.dk/mk/collie!65",
+    }),
     task({ id: "waiting", name: "Shippable", state: "done", landed: false }),
     task({ id: "blocked", name: "Asking", state: "blocked" }),
   ]);

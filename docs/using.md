@@ -631,11 +631,19 @@ matches a checkout runs there; one that matches none is cloned, as before.
 It is an application ([ADR-0005](adr/0005-collie-tab-is-an-application.md)), and it is a
 **board of Tasks, not a table of Runs**
 ([ADR-0013](adr/0013-the-board-is-cards-of-tasks.md)): one card per
-[Task](../CONTEXT.md), whatever Runs that Task took. A header sentence, then four sections
-that answer four questions in order — what needs you, what is waiting on you, what is
-working, what finished. A decision beats liveness, liveness beats history, and history is
+[Task](../CONTEXT.md), whatever Runs that Task took. A header sentence, then five sections:
+**Needs you**, **Ready to ship**, **Waiting on you**, **Working**, and **Finished**. A decision beats liveness, liveness beats history, and history is
 split by whether the work **landed**. The order is the board model's own, and the text
 board and chat's `collie_herd` list the sections the same way.
+
+**Ready to ship** holds work whose next shipping action has every gate satisfied at its
+current head, on forge answers read within two merge-watch rounds. The card names
+**Merge**, **Stage** or **Deploy**. Merge invokes the existing Release offer, whose Run
+still asks its own Go. A declared Go uses the existing answer buttons. The host checks
+Merge and Stage from an MR against Ready to release, and Deploy against its recorded
+stage proof for that head or tag. A stale answer, moved head or failed gate takes it out;
+a Go that no longer holds appears in Needs you and says why. A Stage Run asks no Go.
+Entering Ready to ship raises no notification. Cards here show the most recent change first.
 
 **Needs you** is one card per Task that has stopped for you: an open decision you answer
 on the card, or an agent waiting for you in its own pane — a harness dialog herdr will not
@@ -674,7 +682,7 @@ following it live (`collie run checks <run> --follow`) until the check ends. A f
 ([ADR-0041](adr/0041-a-finished-run-still-takes-steering.md)): while herdr says that agent
 is working, its card is in Working with `Working on what you told builder: “merge and tag
 it”.`; while it is blocked, the card is in Needs you naming its pane; once it is idle, the
-card stands on its own facts again — Ready to release, Waiting on you or Finished — and
+card stands on its own facts again — Ready to ship, Waiting on you or Finished — and
 chat is told once that it finished what it was told. Nothing records it: the delivery
 ledger says what was sent and when, herdr says what the agent is doing, the step glyphs
 still show the Workflow's steps as they ended, and `run show` still says `succeeded`. A
@@ -696,7 +704,8 @@ forge's last answer is more than two merge-watch rounds old, the card adds when 
 `GitLab last answered 11 minutes ago.`, and where the last ask failed, `GitLab could not be
 read; it last answered 6 minutes ago.` A `merged` recorded by hand is outranked by the forge
 reading the merge request open after it, and the card is owed again. Where
-every check passed it is **Ready to release**, leads the section, and says so: `Ready to
+every gate holds on fresh evidence at its head, it is **Ready to release** and moves
+to **Ready to ship** with Merge. Its sentence says: `Ready to
 release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: merge it, or tell
 builder to.` The agent is named only while it is alive. A GitHub pull request reads as
 `owner/repo#30`, a GitLab merge request as `group/project!42`. A Run that ended with
@@ -706,7 +715,7 @@ action that ends its wait — Open MR (Open PR for a pull request), Resume, Mark
 the first offer its workflow declares, under the title it gave it (the shipped plan's is
 **Implement now**, refused with how to build it for a plan that spans repositories; a plan
 that declares none gets no button) — with Mark merged and Mark
-abandoned beside it in the menu. After what is ready to release, the newest ending is at the top; anything
+abandoned beside it in the menu. Within Waiting on you, the newest ending is at the top; anything
 older than a week folds into one counted line, `▸ 9 older than a week`, and the header
 counts the week's endings while the fold counts the rest. **Finished** is work that landed
 — everything it owes is settled: each merge request merged on its forge, recorded merged,
@@ -927,7 +936,7 @@ Every action says what it did in one line at the foot of the board, which goes w
 anything else.
 
 A pane with no terminal, a dumb `TERM` or one too narrow to render in prints the
-one-screen text view instead, with one line saying why: the same three sections, with the
+one-screen text view instead, with one line saying why: the same five sections, with the
 same sentence on every line.
 
 ```sh
@@ -1087,7 +1096,7 @@ and the keys are shortcuts for what is already on screen. There is no footer of 
 | Key   | What it does                                                  |
 | ----- | ------------------------------------------------------------- |
 | `Tab` | Move the keyboard on: the board, the record over it, then `≡` |
-| `/`   | Search, and narrow all three sections as you type             |
+| `/`   | Search, and narrow all five sections as you type              |
 | `Esc` | Close the record; with none open, clear the search            |
 | `m`   | Read another page of a review or plan the record cut short    |
 | `r`   | Re-read what is on screen, and the merge request behind it    |
@@ -2663,9 +2672,8 @@ every Run are untouched, and Collie does not quietly open the other one instead.
 
 **Collie also speaks first.** When a run ends or blocks, asks you something, drifts from
 its Intent past what Collie may correct, starts repeating itself, or claims to be finished
-without being able to show it, Collie writes that down as news. A Run whose card becomes
-Ready to release is one item, keyed by the Run and the revision its checks passed at and
-saying the card's sentence; a Run ready when it ends is not also reported as ended. Turn it off with
+without being able to show it, Collie writes that down as news. Moving a card into
+Ready to ship adds no news item. Turn it off with
 `"proactive": false` in `config.json`.
 
 What it does **not** do is call a model to find that out. The host looks at each Herd's

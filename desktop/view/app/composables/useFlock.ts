@@ -67,6 +67,7 @@ export const useFlock = () => {
       () =>
         ({
           "needs-you": placed(sections.value.needs),
+          "ready-to-ship": placed(sections.value.ready),
           waiting: placed(sections.value.waiting),
           working: placed(sections.value.working),
           finished: placed(sections.value.finished),

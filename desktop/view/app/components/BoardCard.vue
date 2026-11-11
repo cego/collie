@@ -151,7 +151,10 @@ const doing = (action: CardAction, primary: boolean) => {
     }
     case "offer": {
       const offer = offerKey(action.offer);
-      return { label: action.offer.title, press: () => (offering.value = { offer }) };
+      return {
+        label: primary && view.shipping === "merge" ? "Merge" : action.offer.title,
+        press: () => (offering.value = { offer }),
+      };
     }
     case "offers":
       return { label: "What it offers…", press: () => (offering.value = { offer: null }) };
