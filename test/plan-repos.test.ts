@@ -592,3 +592,43 @@ test("only this Change's tickets are sliced for a Change run", () => {
   expect(Arr.map(orderedTickets(tickets, "api"), (s) => s.file)).toEqual(["01-api", "03-more"]);
   expect(Arr.map(orderedTickets(tickets, "api", "schema"), (s) => s.file)).toEqual(["02-schema"]);
 });
+
+function needing(file: string, line: string, opts: { repo?: string } = {}) {
+  const plain = ticket(file, opts);
+  return { file, text: `${plain.text}**Needs merged:** ${line}\n` };
+}
+
+test("a ticket's Needs merged line is its Prerequisites; None, or no line, is none", () => {
+  const order = orderedTickets([
+    needing("01-a.md", "run-ac644eef card, run-e15f4a62"),
+    ticket("02-b.md"),
+    needing("03-c.md", "None"),
+  ]);
+  expect(Arr.map(order, (slice) => [slice.file, slice.prerequisites])).toEqual([
+    [
+      "01-a.md",
+      [
+        { run: "run-ac644eef", change: "card" },
+        { run: "run-e15f4a62", change: null },
+      ],
+    ],
+    ["02-b.md", []],
+    ["03-c.md", []],
+  ]);
+});
+
+test("a Needs merged line Collie cannot read is refused, naming the ticket", () => {
+  for (const line of [
+    "run-ac644eef card extra",
+    "run-ac644eef card, , run-e15f4a62",
+    "run-ac644eef a..b",
+  ]) {
+    const plan = readPlanRepos([ticket("01-a"), needing("02-b", line)], new Set());
+    expect([line, plan.refusal?.kind]).toEqual([line, "bad-prerequisite"]);
+    expect(plan.refusal?.message).toContain(`02-b (Needs merged: "${line}")`);
+  }
+  expect(
+    readPlanRepos([needing("01-a", "run-ac644eef.implement card, run-e15f4a62")], new Set())
+      .refusal,
+  ).toBeNull();
+});

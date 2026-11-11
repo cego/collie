@@ -212,9 +212,12 @@ const SliceRecord = Schema.Struct({
   title: Schema.String,
   blockedBy: Schema.Array(Schema.String),
   checks: Schema.Array(Schema.String),
-  // A reading journaled before tickets carried their criteria, or their benchmark, has none.
+  // A reading journaled before tickets carried their criteria, benchmark or prerequisites has none.
   criteria: Schema.optionalKey(Schema.Array(Schema.String)),
   benchmark: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  prerequisites: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ run: Schema.String, change: Schema.NullOr(Schema.String) })),
+  ),
 });
 
 /** A ticket's criteria and after-merge outcomes as one reading of its file found them. */
@@ -561,6 +564,7 @@ export default defineWorkflow({
           ...one,
           criteria: one.criteria ?? [],
           benchmark: one.benchmark ?? null,
+          prerequisites: one.prerequisites ?? [],
         }));
       });
       let tickets: ReadonlyArray<Slice> = yield* ticketsNow;

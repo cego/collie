@@ -12,6 +12,7 @@ import { decodeBenchmarkPlan } from "./measurement-model";
 export const REPO_LINE = /^\s*\*\*Repo:\*\*\s*(.*?)\s*$/m;
 const BLOCKED_LINE = /^\s*\*\*Blocked by:\*\*\s*(.*?)\s*$/m;
 export const CHANGE_LINE = /^[ \t]*\*\*Change:\*\*[ \t]*(.*?)[ \t]*$/m;
+const NEEDS_LINE = /^[ \t]*\*\*Needs merged:\*\*[ \t]*(.*?)[ \t]*$/m;
 const CHECKS_LINE = /^\s*\*\*Checks:\*\*\s*(.*?)\s*$/m;
 const BENCHMARK_LINE = /^\s*\*\*Benchmark:\*\*\s*(.*?)\s*$/m;
 
@@ -172,6 +173,32 @@ const refusedInBranch = (name: string) =>
   name === "@" ||
   /[\p{Cc} ~^:?*[\\]|\.\.|@\{|\/\/|^[/.]|\/\.|[/.]$|\.lock(\/|$)/u.test(name);
 
+/** Another Run's Change a ticket needs merged first; `change` is null for that Run's default Change. */
+export interface Prerequisite {
+  run: string;
+  change: string | null;
+}
+
+const needsLineOf = (text: string): string => NEEDS_LINE.exec(text)?.[1] ?? "";
+
+/** The Prerequisites a `**Needs merged:**` line names, `[]` for none, and null where it cannot be read. */
+function prerequisitesIn(said: string): ReadonlyArray<Prerequisite> | null {
+  if (said === "" || /^none\b/i.test(said)) return [];
+  const entries = Arr.map(Str.split(said, ","), (entry) =>
+    Arr.filter(Str.split(Str.trim(entry), /\s+/), (word) => word !== ""),
+  );
+  const readable = Arr.every(
+    entries,
+    (words) => words.length === 1 || (words.length === 2 && !refusedInBranch(words[1]!)),
+  );
+  return readable
+    ? Arr.map(entries, ([run, change]) => ({
+        run: run!,
+        change: change ?? null,
+      }))
+    : null;
+}
+
 /** Why this plan cannot be fanned out. The message is what the human is shown. */
 export interface PlanRefusal {
   kind:
@@ -181,7 +208,8 @@ export interface PlanRefusal {
     | "outside-root"
     | "unknown-blocker"
     | "duplicate-ticket"
-    | "bad-change";
+    | "bad-change"
+    | "bad-prerequisite";
   message: string;
 }
 
@@ -239,6 +267,7 @@ interface Ticket {
   blockedText: string;
   blockedBy: ReadonlyArray<string> | null;
   change: string | null;
+  needsText: string;
 }
 
 /** A ticket past the missing-`Repo:` guard, which every rule after it can rely on. */
@@ -329,6 +358,7 @@ export function readPlanRepos(
       blockedText,
       blockedBy: blockersIn(blockedText),
       change: changeLineOf(ticket.text),
+      needsText: needsLineOf(ticket.text),
     };
   });
 
@@ -354,6 +384,20 @@ export function readPlanRepos(
       "bad-change",
       `These tickets name a Change git will not take as part of a branch name: ${Arr.join(named, ", ")}. ` +
         `A **Change:** name is short and plain, like "schema": no spaces, no "..", and none of ~ ^ : ? * [ \\.`,
+    );
+  }
+
+  const badNeeds = Arr.filter(parsed, (ticket) => prerequisitesIn(ticket.needsText) === null);
+  if (badNeeds.length > 0) {
+    const named = Arr.map(
+      badNeeds,
+      (ticket) => `${ticket.file} (Needs merged: "${ticket.needsText}")`,
+    );
+    return refuse(
+      "bad-prerequisite",
+      `These tickets name a Change to wait for that Collie cannot read: ${Arr.join(named, ", ")}. ` +
+        `A **Needs merged:** line is Run ids separated by commas, each optionally followed by that Run's Change name, ` +
+        `like "run-ac644eef card, run-e15f4a62", or "None".`,
     );
   }
 
@@ -581,6 +625,7 @@ export interface Slice {
   criteria: ReadonlyArray<string>;
   /** The benchmark plan its speed-up criterion is measured by, as `benchmarkIn` reads it. */
   benchmark: string | null;
+  prerequisites: ReadonlyArray<Prerequisite>;
 }
 
 /** The first heading, else the file name without its number — what a hand-off calls it. */
@@ -637,6 +682,7 @@ export function orderedTickets(
     checks: checksIn(ticket.text),
     criteria: criteriaIn(ticket.text),
     benchmark: benchmarkIn(ticket.text),
+    prerequisites: prerequisitesIn(needsLineOf(ticket.text)) ?? [],
   }));
 
   const here = new Set(Arr.map(slices, (slice) => slice.number));

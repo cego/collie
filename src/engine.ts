@@ -2175,6 +2175,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly criteria: ReadonlyArray<string>;
     /** The benchmark plan its speed-up criterion is measured by, as benchmarkIn reads it. */
     readonly benchmark: string | null;
+    readonly prerequisites: ReadonlyArray<Prerequisite>;
+  }
+
+  /** Another Run's Change a ticket needs merged first; change is null for that Run's default Change. */
+  export interface Prerequisite {
+    readonly run: string;
+    readonly change: string | null;
   }
 
   /** The verification names a ticket's **Checks:** line promises. */
@@ -2249,7 +2256,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       | "outside-root"
       | "unknown-blocker"
       | "duplicate-ticket"
-      | "bad-change";
+      | "bad-change"
+      | "bad-prerequisite";
     readonly message: string;
   }
 
