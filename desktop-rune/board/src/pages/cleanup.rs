@@ -470,7 +470,12 @@ impl App {
                     },
                 };
                 let (said, ok) = swept_said(&name, &ended);
-                cleanup(app).sweeps.insert(profile, ended);
+                let state = cleanup(app);
+                state.sweeps.insert(profile, ended);
+                // Once every sweep has cleaned, nothing is left to do in the dialog.
+                if state.sweeps.values().all(|s| matches!(s, Sweep::Done { .. })) {
+                    state.open = false;
+                }
                 app.pages.machines.told.say(said, ok);
             },
         );

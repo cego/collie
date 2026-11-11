@@ -48,6 +48,17 @@ pub enum Which {
     Helle,
 }
 
+/// An edit of the Flock's settings the core has not kept yet.
+struct Pending {
+    ask: u64,
+    /// The settings it changes, which the Flock's settings show changed once it is kept.
+    keys: Vec<String>,
+    /// The rows that say how far it reached, once it is.
+    saves: Vec<String>,
+    /// That it is an agent choice, which the others wait for.
+    choice: bool,
+}
+
 #[derive(Default)]
 pub struct Settings {
     /// The Flock's settings as last read, and why the latest read failed.
@@ -86,6 +97,9 @@ pub struct Settings {
     pub saved: BTreeSet<String>,
     /// The rows whose edit the core is checking now.
     pub saving: BTreeSet<String>,
+    /// Each edit sent of the Flock's settings, by its row's id, until the core has kept it.
+    pending: BTreeMap<String, Pending>,
+    asked_edits: u64,
     /// An agent choice is being saved; the others wait for it.
     pub choosing: bool,
     /// The open Select, by its key.
@@ -107,6 +121,8 @@ pub struct Settings {
     pub host_said: Option<Result<String, String>>,
 
     streams: Vec<Stop>,
+    /// The Machines page's count of onboardings moved on, as Connections were last read for it.
+    pub onboardings_read: u64,
     /// The page's width as last laid out; a narrow page leaves its index out.
     pub width: f32,
 }
@@ -180,6 +196,7 @@ impl Settings {
             ),
         ];
         refresh_catalogues(app);
+        app.pages.settings.onboardings_read = app.pages.machines.onboardings;
         refresh_connections(app);
         refresh_slack(app);
     }
@@ -187,6 +204,7 @@ impl Settings {
     fn flock_read(&mut self, read: Result<FlockSettingsSuccess, CallError>) {
         match read {
             Ok(flock) => {
+                self.kept(&flock);
                 // A draft still showing the old value takes the new one.
                 let before = self.sections(&[]);
                 self.drafts.retain(|id, draft| {
@@ -201,6 +219,60 @@ impl Settings {
             }
             Err(why) => self.trouble = Some(why.0),
         }
+    }
+
+    /// An edit the Flock's settings now show is saved, though the core still gives it to
+    /// every Machine before it answers; how far it reached is said from their syncs.
+    fn kept(&mut self, flock: &FlockSettingsSuccess) {
+        let Some(before) = &self.flock else { return };
+        let changed = |key: &String| before.settings.get(key) != flock.settings.get(key);
+        let kept: Vec<String> = self
+            .pending
+            .iter()
+            .filter(|(_, edit)| edit.keys.iter().any(changed))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in kept {
+            let Some(edit) = self.pending.remove(&id) else {
+                continue;
+            };
+            self.saving.remove(&id);
+            self.drafts.remove(&id);
+            self.saved.extend(edit.saves);
+            if edit.choice {
+                self.choosing = false;
+            }
+        }
+    }
+
+    /// Notes an edit sent for row `id`; its answer is the latest one's only while it is.
+    fn sent(&mut self, id: &str, keys: Vec<String>, saves: Vec<String>, choice: bool) -> u64 {
+        self.asked_edits += 1;
+        let ask = self.asked_edits;
+        self.saving.insert(id.into());
+        self.pending.insert(
+            id.into(),
+            Pending {
+                ask,
+                keys,
+                saves,
+                choice,
+            },
+        );
+        ask
+    }
+
+    /// Whether `ask` is row `id`'s edit still waiting; it no longer is once answered.
+    fn settle(&mut self, id: &str, ask: u64) -> bool {
+        if self.pending.get(id).is_none_or(|edit| edit.ask != ask) {
+            return false;
+        }
+        let edit = self.pending.remove(id);
+        self.saving.remove(id);
+        if edit.is_some_and(|e| e.choice) {
+            self.choosing = false;
+        }
+        true
     }
 
     /// Whether the Flock's settings can be read now; an edit made otherwise would be blind.
@@ -337,6 +409,15 @@ pub fn refresh_catalogues(app: &mut App) {
     );
 }
 
+/// An onboarding that moved on, such as Linear's setup ending, may have connected something.
+pub fn onboarding_moved(app: &mut App) {
+    let moved = app.pages.machines.onboardings;
+    if app.pages.settings.onboardings_read != moved {
+        app.pages.settings.onboardings_read = moved;
+        refresh_connections(app);
+    }
+}
+
 pub fn refresh_connections(app: &mut App) {
     let Some(core) = app.core.clone() else {
         return;
@@ -425,16 +506,16 @@ pub fn set(app: &mut App, row: &Row, typed: &str) {
             page.refusals.insert(id, refused);
             return;
         }
-        page.saving.insert(id.clone());
+        let ask = page.sent(&id, vec![row.key.clone()], vec![id.clone()], false);
         core.request(
             "setFlockSetting",
             json!({ "key": row.key, "value": registry::stored(&row.key, typed) }),
             move |app: &mut App, said: Result<String, CallError>| {
-                app.pages.settings.answered(&id, said.map(|_| ()))
+                app.pages.settings.answered(&id, ask, said.map(|_| ()))
             },
         );
     } else {
-        page.saving.insert(id.clone());
+        let ask = page.sent(&id, Vec::new(), vec![id.clone()], false);
         let on = typed == "on";
         core.request(
             "setSettings",
@@ -444,21 +525,23 @@ pub fn set(app: &mut App, row: &Row, typed: &str) {
                 let kept = kept.map(|desktop| {
                     page.desktop = Some(desktop);
                 });
-                page.answered(&id, kept)
+                page.answered(&id, ask, kept)
             },
         );
     }
 }
 
 impl Settings {
-    fn answered(&mut self, id: &str, said: Result<(), CallError>) {
-        self.saving.remove(id);
+    fn answered(&mut self, id: &str, ask: u64, said: Result<(), CallError>) {
+        let waiting = self.settle(id, ask);
         match said {
-            Ok(()) => {
+            Ok(()) if waiting => {
                 self.drafts.remove(id);
                 self.saved.insert(id.into());
             }
+            Ok(()) => {}
             Err(why) => {
+                self.saved.remove(id);
                 self.refusals.insert(id.into(), why.0);
             }
         }
@@ -510,17 +593,21 @@ pub fn choose_agent(app: &mut App, key: &str, value: &str, reset: bool) {
         .iter()
         .filter_map(|k| page.row(k).map(|r| r.id()))
         .collect();
+    let keys = changes
+        .iter()
+        .filter_map(|c| c["key"].as_str().map(String::from))
+        .collect();
     page.choosing = true;
-    page.saving.insert(id.clone());
+    let ask = page.sent(&id, keys, ids.clone(), true);
     core.request(
         "setFlockSettings",
         json!({ "changes": changes }),
         move |app: &mut App, said: Result<String, CallError>| {
             let page = &mut app.pages.settings;
-            page.choosing = false;
-            page.saving.remove(&id);
+            let waiting = page.settle(&id, ask);
             match said {
-                Ok(_) => page.saved.extend(ids),
+                Ok(_) if waiting => page.saved.extend(ids),
+                Ok(_) => {}
                 Err(why) => {
                     page.refusals.insert(id, why.0);
                 }

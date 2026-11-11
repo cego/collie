@@ -1208,3 +1208,122 @@ fn setting_up_linear_shows_the_job_it_started_as_an_onboarding() {
         "its onboarding dialog shows on Settings"
     );
 }
+
+/// The `[x, y, w, h]` an element with `key` is drawn at.
+fn rect_of(runtime: &Runtime<App>, key: &str) -> [f32; 4] {
+    element(runtime, key)
+        .unwrap_or_else(|| panic!("no {key}"))
+        .rect
+}
+
+#[test]
+fn a_select_opens_its_list_at_its_field_not_the_windows_corner() {
+    let (_harness, mut runtime) = opened();
+    tap(&mut runtime, "flock-harness", 1000.0);
+    runtime.frame(1400.0);
+    let [fx, fy, fw, fh] = rect_of(&runtime, "flock-harness-trigger");
+    let [lx, ly, lw, _] = rect_of(&runtime, "flock-harness-content");
+    assert!(fy > 40.0, "the field is down the page, at {fy}");
+    assert!(
+        lx < fx + fw && fx < lx + lw && (ly - (fy + fh)).abs() < 12.0,
+        "the list at ({lx}, {ly}) opens under its field at ({fx}, {})",
+        fy + fh
+    );
+}
+
+#[test]
+fn a_setting_the_flock_has_kept_says_how_far_it_reached_while_the_core_gives_it_out() {
+    let (harness, mut runtime) = opened();
+    tap(&mut runtime, "flock-max_iterations", 1000.0);
+    type_text(&mut runtime, "7", 1100.0);
+    press(&mut runtime, Key::Enter, 1200.0);
+    assert_eq!(
+        said(&runtime, "flock-max_iterations-said").as_deref(),
+        Some("Saving…")
+    );
+    // The core keeps it at once, then waits on each Machine's sync before it answers.
+    harness.fake.push(
+        "flockSettings",
+        Ok(json!({ "settings": {
+            "quiet_ms": edit(json!(90000), "2026-11-11T09:30:00.000Z", "vm"),
+            "trust": edit(json!("never"), "2026-11-11T09:30:00.000Z", "vm"),
+            "max_iterations": edit(json!(7), "2026-11-11T10:00:00.000Z", "laptop"),
+        }, "synced": [] })),
+    );
+    settle(&harness, &mut runtime, 1400.0);
+    assert_eq!(
+        said(&runtime, "flock-max_iterations-said").as_deref(),
+        Some("Given to all 2 Machines"),
+        "kept, it is no longer saving"
+    );
+    assert!(runtime.state.pages.settings.saving.is_empty());
+    type_text(&mut runtime, "0", 1500.0);
+    harness
+        .fake
+        .answer("setFlockSetting", Ok(json!("max_iterations is now 7")));
+    settle(&harness, &mut runtime, 1600.0);
+    assert!(
+        runtime
+            .state
+            .pages
+            .settings
+            .drafts
+            .contains_key("flock-max_iterations"),
+        "the late answer leaves a new edit alone"
+    );
+}
+
+#[test]
+fn connections_are_read_again_when_an_onboarding_such_as_linears_setup_ends() {
+    let (harness, mut runtime) = opened();
+    let read = harness.fake.asked_of("connectionReadings").len();
+    let ended: collie_desktop_protocol::generated::FlockItem = serde_json::from_value(json!({
+        "_tag": "Onboarding", "job": "job-linear",
+        "machine": { "profile": "vm", "name": "vm" },
+        "run": { "steps": [{ "step": "linear", "title": "Linear", "status": "done" }],
+            "asked": null, "ready": true, "reason": null, "at": 9 } }))
+    .unwrap();
+    runtime.state.apply(ended.clone());
+    settle(&harness, &mut runtime, 1000.0);
+    runtime.frame(1100.0);
+    assert_eq!(
+        harness.fake.asked_of("connectionReadings").len(),
+        read + 1,
+        "Linear may be connected now"
+    );
+    runtime.state.apply(ended);
+    settle(&harness, &mut runtime, 1200.0);
+    runtime.frame(1300.0);
+    assert_eq!(
+        harness.fake.asked_of("connectionReadings").len(),
+        read + 1,
+        "the same run told again is not read again"
+    );
+}
+
+#[test]
+fn the_harness_select_lists_a_harness_no_machine_reports_and_choosing_it_does_nothing() {
+    let (harness, mut runtime) = opened();
+    tap(&mut runtime, "flock-harness", 1000.0);
+    runtime.frame(1400.0);
+    let options: Vec<rune::ElementInfo> = runtime
+        .elements()
+        .into_iter()
+        .filter(|e| e.role == "option" && e.path.contains("flock-harness-content"))
+        .collect();
+    let names: Vec<&str> = options.iter().filter_map(|o| o.label.as_deref()).collect();
+    assert_eq!(names, ["Claude Code", "Codex", "OpenCode", "Pi"]);
+    let pi = options.iter().find(|o| o.label.as_deref() == Some("Pi")).unwrap();
+    let [x, y, w, h] = pi.rect;
+    let (x, y) = (x + w / 2.0, y + h / 2.0);
+    runtime.pointer_move(x, y);
+    runtime.frame(1500.0);
+    runtime.pointer_down(x, y);
+    runtime.frame(1550.0);
+    runtime.pointer_up(x, y);
+    runtime.frame(1600.0);
+    assert!(
+        harness.fake.asked_of("setFlockSettings").is_empty(),
+        "a harness no Machine has is not chosen"
+    );
+}

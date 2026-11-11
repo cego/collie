@@ -306,6 +306,10 @@ pub struct Moving {
     pub to: Option<String>,
     pub checkout: TextEdit,
     pub choosing: bool,
+    /// The move is asked; the dialog stays until it is answered.
+    pub busy: bool,
+    /// Why the move was refused, said in the dialog.
+    pub refused: Option<String>,
 }
 
 #[derive(Default)]
@@ -437,28 +441,49 @@ impl App {
     }
 
     /// Moves the Schedule the dialog names to the Machine chosen there.
+    /// The dialog closes once the move is done, or stays saying why not.
     pub fn move_schedule(&mut self) {
-        let Some(moving) = self.pages.schedules.moving.take() else {
+        let Some(core) = &self.core else { return };
+        let Some(moving) = self.pages.schedules.moving.as_mut() else {
             return;
         };
-        let Some(to) = moving.to else { return };
-        let Some(core) = &self.core else { return };
+        let Some(to) = moving.to.clone().filter(|_| !moving.busy) else {
+            return;
+        };
+        moving.busy = true;
+        moving.refused = None;
         let payload = MoveSchedulePayload {
-            from: moving.from,
+            from: moving.from.clone(),
             to,
-            name: moving.name,
+            name: moving.name.clone(),
             checkout: Some(Some(moving.checkout.text.trim().to_string())),
             request: None,
         };
-        core.request("moveSchedule", payload, |app: &mut App, said| {
-            app.schedule_said(said)
-        });
+        core.request(
+            "moveSchedule",
+            payload,
+            |app: &mut App, said: Result<String, crate::calls::CallError>| {
+                match (said, schedules(app).moving.as_mut()) {
+                    (Err(why), Some(moving)) => {
+                        moving.busy = false;
+                        moving.refused = Some(why.0);
+                    }
+                    (said, _) => {
+                        schedules(app).moving = None;
+                        app.schedule_said(said);
+                    }
+                }
+            },
+        );
     }
 }
 
 fn move_dialog(state: &Schedules, k: &Kit, layer: &mut Vec<El>) {
     let Some(moving) = &state.moving else { return };
     let targets = state.targets(&moving.from);
+    // The Select's list goes above the dialog that holds its field: an anchored overlay is
+    // placed against an element laid out before it.
+    let mut above = Vec::new();
     let body = if targets.is_empty() {
         col()
             .px(16.0)
@@ -492,8 +517,9 @@ fn move_dialog(state: &Schedules, k: &Kit, layer: &mut Vec<El>) {
                     m.choosing = false;
                 }
             })
-            .build(k, layer)
-            .key("move-to");
+            .build(k, &mut above);
+        // Its field keeps the `move-to-trigger` key its list is anchored to.
+        let select = el().key("move-to").child(select);
         col()
             .key("move-form")
             .w_full()
@@ -526,11 +552,17 @@ fn move_dialog(state: &Schedules, k: &Kit, layer: &mut Vec<El>) {
                 k,
                 "Its absolute path on that Machine, where it differs; empty keeps the same path.",
             ))
+            .children(moving.refused.as_ref().map(|why| {
+                toned(k, why.clone(), Tone::Bad)
+                    .key("move-refused")
+                    .role("alert")
+                    .label(why.clone())
+            }))
             .child(
                 row().w_full().child(el().grow(1.0)).child(
-                    Button::new("Move")
+                    Button::new(if moving.busy { "Moving…" } else { "Move" })
                         .variant(ButtonVariant::Contrast)
-                        .disabled(moving.to.is_none())
+                        .disabled(moving.busy || moving.to.is_none())
                         .on_press(|app: &mut App| app.move_schedule())
                         .build(k)
                         .key("move-submit"),
@@ -544,6 +576,7 @@ fn move_dialog(state: &Schedules, k: &Kit, layer: &mut Vec<El>) {
         .child(body)
         .on_close(|app: &mut App| app.pages.schedules.moving = None)
         .build(k, layer);
+    layer.extend(above);
 }
 
 fn action_button(k: &Kit, row: &RowView, action: Action) -> El {
