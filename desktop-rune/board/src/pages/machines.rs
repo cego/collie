@@ -102,7 +102,10 @@ fn bare(app: &App, shown: &Shown) -> MachineRow {
         (None, Some(_)) => RowState::Connecting,
         (None, None) => RowState::Live,
     };
-    MachineRow::bare(&shown.machine.profile, &shown.machine.name, state)
+    let mut row = MachineRow::bare(&shown.machine.profile, &shown.machine.name, state);
+    row.target = shown.machine.target.clone();
+    row.settings = app.board.flock.synced.get(&shown.machine.profile).cloned();
+    row
 }
 
 fn credentials_held(held: &CredentialsSuccess) -> Vec<&'static str> {

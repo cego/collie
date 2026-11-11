@@ -11,8 +11,8 @@ use collie_desktop_protocol::generated::{Id, News};
 use rune::{Color, El, Key, LiveRegion, ScrollSpec, TextEdit, Tx, col, el, row as across, text};
 use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, Combobox, ComboboxOption, ComboboxState,
-    ControlSize, Divider, Field, IconButton, Kit, SegmentedControl, Select, Spinner, Switch,
-    TextArea, TextInput,
+    ControlSize, Divider, Field, IconButton, Kit, SegmentedControl, Select, SelectAppearance,
+    Spinner, Switch, TextArea, TextInput,
 };
 use serde_json::json;
 
@@ -20,6 +20,9 @@ const CONNECTION_WORDS: &str =
     "connections gitlab github gh linear host token helle slack credentials glab gitlab_host";
 const OWN_WORDS: &str = "each machine's own projects.root chat_harness harnesses found remembered linear.team gitlab.assignee";
 const ABOUT_WORDS: &str = "about version update collie desktop";
+
+/// The width of every control beside a setting's words, so each row's control lines up.
+const CONTROL: f32 = 260.0;
 
 fn lead_of(group: &str) -> Option<&'static str> {
     match group {
@@ -232,7 +235,8 @@ fn choice_select(
         .current(current.as_deref())
         .placeholder(placeholder)
         .label(name)
-        .width(280.0)
+        .appearance(SelectAppearance::Field)
+        .width(CONTROL)
         .open(page.open_select.as_deref() == Some(&key))
         .disabled(disabled)
         .on_toggle(select_toggle(key.clone()))
@@ -295,7 +299,7 @@ fn combo(
     .current(current)
     .placeholder(placeholder)
     .search_placeholder("Search, or type an id")
-    .width(340.0)
+    .width(CONTROL)
     .disabled(disabled)
     .on_choose(move |app: &mut App, id: &str, _: &mut Tx| {
         if let Some(state) = app.pages.settings.combos.get_mut(key) {
@@ -305,7 +309,7 @@ fn combo(
         choose(app, id)
     })
     .build(k, layer);
-    el().key(key).w(300.0).child(built)
+    el().key(key).w(CONTROL).child(built)
 }
 
 /// The colour a row's line under its control is said in.
@@ -458,11 +462,21 @@ fn text_control(page: &Settings, row: &Row, k: &Kit) -> El {
             .on_key(escape_reverts(row))
             .build(k)
             .key(id.clone());
+        let help = (row.key == "standing_direction").then(|| {
+            Button::new("Help me write it")
+                .icon(&crate::icons::SPARKLES)
+                .variant(ButtonVariant::Outline)
+                .on_press(|app: &mut App| app.open_standing_setup())
+                .build(k)
+                .key("standing-setup-help")
+        });
         return col().gap(8.0).w_full().child(area).child(
             across()
                 .gap(8.0)
                 .w_full()
-                .justify_end()
+                .center_y()
+                .children(help)
+                .child(el().grow(1.0))
                 .children(discard)
                 .child(set),
         );
@@ -677,7 +691,7 @@ fn inline_control(
             Some(
                 col()
                     .gap(4.0)
-                    .items_end()
+                    .w(CONTROL)
                     .child(control)
                     .children(warning.map(|w| {
                         text(w)
@@ -685,7 +699,7 @@ fn inline_control(
                             .font(k.ty.text_small)
                             .color(k.c.warning.fg)
                             .wrap()
-                            .max_w(340.0)
+                            .w_full()
                     })),
             )
         }
@@ -744,6 +758,11 @@ fn inline_control(
                     false,
                     move |app: &mut App, v: String| super::set(app, &r, &v),
                 ))
+            }
+            Kind::Text | Kind::Number | Kind::List
+                if !row.multiline && row.sub != "Who does the work" =>
+            {
+                Some(text_control(page, row, k).w(CONTROL))
             }
             _ => None,
         },
@@ -814,16 +833,18 @@ fn setting_row(app: &App, page: &Settings, row: &Row, k: &Kit, layer: &mut Vec<E
         .min_w(0.0)
         .child(words)
         .child(muted(k, row.description.clone()).a11y_hidden());
-    let mut head = across().gap(16.0).w_full().items_start().child(about);
+    // Every row's control keeps one column at the right.
+    let mut head = across().gap(24.0).w_full().items_start().child(about);
     if let Some(control) = inline_control(app, page, row, k, layer) {
-        head = head.child(control);
+        head = head.child(across().w(CONTROL).justify_end().child(control));
     }
     let block = match row.key.as_str() {
         "fallbacks" => Some(fallbacks_control(app, page, row, k, layer)),
         "release.approval_channel" | "slack.notification_channel" => {
             Some(destination_control(page, row, k, layer, id.clone()))
         }
-        _ if row.sub != "Who does the work"
+        _ if row.multiline
+            && row.sub != "Who does the work"
             && matches!(
                 row.kind,
                 Kind::Text | Kind::Number | Kind::List | Kind::Json
@@ -1777,28 +1798,195 @@ fn about_view(page: &Settings, k: &Kit) -> El {
     ))
 }
 
-fn own_view(k: &Kit) -> El {
+/// Each Machine's own settings, one row a Machine, as `MachineOwnTable.vue` lays them out.
+fn own_view(app: &App, k: &Kit) -> El {
+    let readings: std::collections::HashMap<String, collie_desktop_protocol::generated::Reading> =
+        app.board
+            .flock
+            .own
+            .iter()
+            .map(|(profile, reading)| (profile.to_string(), reading.clone()))
+            .collect();
+    let owned = crate::pages::flock::own_rows(
+        &crate::pages::machines::rows(app),
+        &readings,
+        collie_desktop_protocol::epoch_ms(),
+        &crate::pages::clock::Zone::local(),
+    );
+    const COLUMNS: [(&str, f32); 6] = [
+        ("Machine", 0.19),
+        ("Settings sync", 0.19),
+        ("projects.root", 0.16),
+        ("chat_harness", 0.13),
+        ("Harnesses found", 0.14),
+        ("Remembered", 0.19),
+    ];
+    let cell = |at: usize, body: El| {
+        col()
+            .w_frac(COLUMNS[at].1)
+            .min_w(0.0)
+            .px(12.0)
+            .py(10.0)
+            .gap(2.0)
+            .child(body)
+    };
+    let small = |s: String, color: Color| {
+        text(s)
+            .font(k.ty.text_small)
+            .color(color)
+            .wrap()
+            .w_full()
+    };
+    let mono = |s: String, color: Color| {
+        text(s)
+            .font(k.ty.mono)
+            .color(color)
+            .wrap_anywhere()
+            .w_full()
+            .selectable(true)
+            .selection_color(k.selection())
+    };
+    let none = || small("—".into(), k.c.text_faint);
+    let header = COLUMNS.iter().enumerate().fold(
+        across()
+            .w_full()
+            .role("row")
+            .fill(k.c.surface_raised_base),
+        |row, (at, (title, _))| {
+            row.child(
+                cell(
+                    at,
+                    text(title.to_string())
+                        .role("columnheader")
+                        .font(k.ty.text_xsmall_medium)
+                        .color(k.c.text_faint),
+                )
+                .py(8.0),
+            )
+        },
+    );
+    let mut table = col()
+        .key("own-table")
+        .role("table")
+        .label("What each Machine keeps for itself")
+        .w_full()
+        .radius(k.radius.lg)
+        .border(1.0, k.c.border_weak)
+        .clip_rounded(k.radius.lg)
+        .child(header)
+        .child(Divider::horizontal().build(k));
+    if owned.is_empty() {
+        table = table.child(
+            el().px(12.0)
+                .py(12.0)
+                .child(muted(k, "No Machines yet. Open Machines to add one.")),
+        );
+    }
+    let n = owned.len();
+    for (i, one) in owned.iter().enumerate() {
+        let value = |v: &Option<String>| match v {
+            None => none(),
+            Some(v) if v == "Not set" => small(v.clone(), k.c.text_faint),
+            Some(v) => mono(v.clone(), k.c.text_base),
+        };
+        let remembered = if one.remembered.is_empty() {
+            none()
+        } else {
+            col().w_full().gap(2.0).children(
+                one.remembered
+                    .iter()
+                    .map(|(key, v)| mono(format!("{key} = {v}"), k.c.text_muted)),
+            )
+        };
+        let line = across()
+            .key(format!("own-{}", one.profile))
+            .role("row")
+            .label(format!("{}: {}", one.name, one.sync))
+            .w_full()
+            .items_start()
+            .child(cell(
+                0,
+                col()
+                    .w_full()
+                    .gap(2.0)
+                    .child(
+                        text(one.name.clone())
+                            .font(k.ty.ui_medium)
+                            .color(k.c.text_strong)
+                            .truncate(),
+                    )
+                    .child(small(one.where_.clone(), k.c.text_faint)),
+            ))
+            .child(cell(
+                1,
+                col()
+                    .w_full()
+                    .gap(2.0)
+                    .child(
+                        across()
+                            .gap(6.0)
+                            .center_y()
+                            .child(el().size(7.0, 7.0).radius(3.5).fill(if one.sync_ok {
+                                k.c.success.icon
+                            } else {
+                                k.c.warning.icon
+                            }))
+                            .child(text(one.sync).font(k.ty.text_small_medium).color(
+                                if one.sync_ok {
+                                    k.c.text_base
+                                } else {
+                                    k.c.warning.fg
+                                },
+                            )),
+                    )
+                    .children(
+                        one.detail
+                            .clone()
+                            .map(|d| small(d, k.c.text_faint).key("own-detail")),
+                    ),
+            ))
+            .child(cell(2, value(&one.projects_root)))
+            .child(cell(3, value(&one.chat_harness)))
+            .child(cell(
+                4,
+                if one.harnesses.is_empty() {
+                    none()
+                } else {
+                    small(one.harnesses.join(", "), k.c.text_muted)
+                },
+            ))
+            .child(cell(5, remembered));
+        table = table.child(line);
+        if i + 1 < n {
+            table = table.child(Divider::horizontal().build(k));
+        }
+    }
     col()
         .key("machine-own")
         .role("group")
         .label("Each Machine's own")
         .gap(10.0)
         .w_full()
-        .child(heading(k, "Each Machine's own"))
+        .child(
+            across()
+                .w_full()
+                .gap(8.0)
+                .center_y()
+                .child(heading(k, "Each Machine's own").grow(1.0))
+                .child(
+                    Button::new("Open Machines")
+                        .variant(ButtonVariant::GhostMuted)
+                        .control_size(ControlSize::Small)
+                        .on_press(|app: &mut App| app.open_page(Page::Machines))
+                        .build(k)
+                        .key("open-machines"),
+                ),
+        )
         .child(muted(
             k,
-            "Where its projects live, its Native chat's harness, its terminal backend, its worktrees and the answers it remembered stay in that Machine's config.json. Change them in that Machine's TUI Settings.",
+            "Kept in each Machine's config.json, not shared: where its projects live, its Native chat's harness, its terminal backend, its worktrees and the answers it remembered. Edit them in that Machine's TUI Settings.",
         ))
-        .child(
-            across().child(
-                Button::new("Open Machines")
-                    .variant(ButtonVariant::Outline)
-                    .control_size(ControlSize::Small)
-                    .on_press(|app: &mut App| app.open_page(Page::Machines))
-                    .build(k)
-                    .key("open-machines"),
-            ),
-        )
+        .child(table)
 }
 
 fn index_view(shown: &[Shown], connections: Option<usize>, own: bool, about: bool, k: &Kit) -> El {
@@ -2035,7 +2223,7 @@ pub fn view(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         main = main.child(band);
     }
     if show_own {
-        main = main.child(own_view(k));
+        main = main.child(own_view(app, k));
     }
     if show_about {
         main = main.child(about_view(page, k));

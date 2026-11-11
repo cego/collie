@@ -1114,3 +1114,49 @@ fn the_search_keeps_the_rows_it_names_and_says_how_many() {
         Some("1 of 41 settings shown")
     );
 }
+
+/// Every text drawn inside the element keyed `key`.
+fn texts_in(runtime: &Runtime<App>, key: &str) -> Vec<String> {
+    let tree = runtime.elements();
+    let Some(at) = tree.iter().find(|e| e.key.as_deref() == Some(key)) else {
+        return Vec::new();
+    };
+    let inside = format!("{}/", at.path);
+    tree.iter()
+        .filter(|e| e.path.starts_with(&inside))
+        .filter_map(|e| e.text.clone())
+        .collect()
+}
+
+#[test]
+fn each_machines_own_settings_are_a_row_a_machine_with_what_it_read() {
+    let (harness, mut runtime) = opened();
+    let read: collie_desktop_protocol::generated::FlockItem = serde_json::from_value(json!({
+        "_tag": "OwnRead", "machine": { "profile": "vm", "name": "vm" },
+        "reading": { "values": { "projectsRoot": "/work", "chatHarness": "pi",
+            "harnesses": ["codex", "claude"],
+            "remembered": [{ "key": "linear.team", "value": "TOOLS" }] },
+            "at": 1_793_273_400_000.0, "problem": null, "unsupported": false },
+    }))
+    .unwrap();
+    runtime.state.apply(read);
+    settle(&harness, &mut runtime, 900.0);
+    let vm = texts_in(&runtime, "own-vm");
+    for shown in ["vm", "/work", "pi", "codex, claude", "linear.team = TOOLS", "In sync"] {
+        assert!(vm.iter().any(|t| t == shown), "{shown} is in vm's row: {vm:?}");
+    }
+    let laptop = texts_in(&runtime, "own-laptop");
+    assert!(
+        laptop.iter().any(|t| t == "Not read yet"),
+        "a Machine not read yet says so: {laptop:?}"
+    );
+}
+
+#[test]
+fn help_me_write_it_opens_the_standing_direction_dialog_and_reads_the_sessions() {
+    let (harness, mut runtime) = opened();
+    assert!(!runtime.state.standing.open);
+    tap(&mut runtime, "standing-setup-help", 900.0);
+    assert!(runtime.state.standing.open, "the dialog is open");
+    assert_eq!(harness.fake.asked_of("setupInventory").len(), 1);
+}
