@@ -347,7 +347,11 @@ fn a_draft_under_its_line_is_edited_and_removed_there() {
     press(&mut runtime, "note-edit-d1", 700.0);
     typed(&mut runtime, "!!", 750.0);
     key(&mut runtime, Key::Escape, 800.0);
-    assert_eq!(drafts(&runtime), ["First and more"], "Escape keeps it as it was");
+    assert_eq!(
+        drafts(&runtime),
+        ["First and more"],
+        "Escape keeps it as it was"
+    );
     assert!(!shown(&runtime, "draft-text-d1"));
 
     press(&mut runtime, "note-remove-d1", 900.0);
@@ -362,7 +366,9 @@ fn sent_drafts_go_once_the_core_takes_them() {
     key(&mut runtime, Key::Enter, 400.0);
     press(&mut runtime, "send-review", 500.0);
     assert_eq!(drafts(&runtime), ["First"], "kept until taken");
-    harness.fake.answer("act", Ok(json!("Delivered to build-1.")));
+    harness
+        .fake
+        .answer("act", Ok(json!("Delivered to build-1.")));
     settle(&mut runtime, &harness, 600.0);
     assert!(drafts(&runtime).is_empty());
     assert!(!shown(&runtime, "note-d1"));

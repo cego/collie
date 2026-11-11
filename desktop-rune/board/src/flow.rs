@@ -154,7 +154,11 @@ pub fn active(flow: &DetailFlow) -> Option<Spot> {
         })
         .collect();
     let state = |spot: &Spot| node_at(flow, spot).map(|n| n.state.clone());
-    let first = |wanted: GlyphState| all.iter().find(|s| state(s) == Some(wanted.clone())).cloned();
+    let first = |wanted: GlyphState| {
+        all.iter()
+            .find(|s| state(s) == Some(wanted.clone()))
+            .cloned()
+    };
     spot_of(&flow.current)
         .filter(|spot| node_at(flow, spot).is_some())
         .or_else(|| first(GlyphState::Running))

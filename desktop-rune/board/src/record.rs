@@ -230,7 +230,11 @@ impl App {
     /// Goes to a Run's pane: its record, on Terminal while its Machine is reached; on Flow for
     /// a card's Flow strip, which never attaches to the agent.
     pub fn go_to_pane(&mut self, installation: String, run: String, machine: String) {
-        let tab = if self.record.to_flow { "flow" } else { "terminal" };
+        let tab = if self.record.to_flow {
+            "flow"
+        } else {
+            "terminal"
+        };
         self.open_record(installation, run, machine, Some(tab));
     }
 

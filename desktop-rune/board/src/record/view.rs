@@ -317,25 +317,32 @@ pub fn draft_note(app: &App, draft: &Draft, k: &Kit) -> El {
         .fill(k.c.layer_03)
         .on_press(|_: &mut App| {})
         .child(text("Draft").font(k.ty.small_medium).color(k.c.info.icon))
-        .child(col().gap(4.0).grow(1.0).min_w(0.0).child(body).children(editing.is_none().then(|| {
-            row()
-                .gap(2.0)
-                .ml(-10.0)
-                .child(
-                    Button::new("Edit")
-                        .variant(ButtonVariant::Ghost)
-                        .on_press(move |app: &mut App| app.edit_draft(&edit))
-                        .build(k)
-                        .key(format!("note-edit-{}", draft.id)),
-                )
-                .child(
-                    Button::new("Remove")
-                        .variant(ButtonVariant::Ghost)
-                        .on_press(move |app: &mut App| app.remove_draft(&gone))
-                        .build(k)
-                        .key(format!("note-remove-{}", draft.id)),
-                )
-        })))
+        .child(
+            col()
+                .gap(4.0)
+                .grow(1.0)
+                .min_w(0.0)
+                .child(body)
+                .children(editing.is_none().then(|| {
+                    row()
+                        .gap(2.0)
+                        .ml(-10.0)
+                        .child(
+                            Button::new("Edit")
+                                .variant(ButtonVariant::Ghost)
+                                .on_press(move |app: &mut App| app.edit_draft(&edit))
+                                .build(k)
+                                .key(format!("note-edit-{}", draft.id)),
+                        )
+                        .child(
+                            Button::new("Remove")
+                                .variant(ButtonVariant::Ghost)
+                                .on_press(move |app: &mut App| app.remove_draft(&gone))
+                                .build(k)
+                                .key(format!("note-remove-{}", draft.id)),
+                        )
+                })),
+        )
 }
 
 /// A draft's words open to edit: Save, or Escape and Cancel to leave them as they were.
@@ -2197,9 +2204,8 @@ fn with_drafts(app: &App, record: &Record, tab: El, k: &Kit) -> El {
 /// The drafts, who they go to, and Send: one message, as ADR-0051 has it.
 fn review_panel(app: &App, record: &Record, drafts: &[Draft], k: &Kit) -> El {
     // A diff's draft is edited under its line while the Diff is shown.
-    let inline = |draft: &Draft| {
-        matches!(draft.anchor, Anchor::Diff { .. }) && app.record_tab() == "diff"
-    };
+    let inline =
+        |draft: &Draft| matches!(draft.anchor, Anchor::Diff { .. }) && app.record_tab() == "diff";
     let rows = drafts.iter().map(|draft| {
         let (edit, gone) = (draft.id.clone(), draft.id.clone());
         let editing = record.editing.as_deref() == Some(draft.id.as_str());

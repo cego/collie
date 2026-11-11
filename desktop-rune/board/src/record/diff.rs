@@ -1045,11 +1045,13 @@ pub fn view(app: &App, k: &Kit) -> El {
         .key("diff-tree")
         .role("group")
         .label("Changed files")
-        .w(if record.width > 0.0 && record.width < super::view::BESIDE_W {
-            220.0
-        } else {
-            280.0
-        })
+        .w(
+            if record.width > 0.0 && record.width < super::view::BESIDE_W {
+                220.0
+            } else {
+                280.0
+            },
+        )
         .gap(6.0)
         .min_h(0.0)
         .child(filter)
