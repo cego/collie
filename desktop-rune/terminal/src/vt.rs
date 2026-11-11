@@ -1,13 +1,13 @@
 //! A pane's terminal state: libghostty-vt fed the bytes the `terminal` stream brings, read back
 //! as frames to draw, and asked to encode keys and mouse input where the pane takes raw bytes.
 //! Adapted from herdr-app's `src/vt.rs` (Apache-2.0; see THIRD-PARTY-NOTICES), without its
-//! search, selection, links and images.
+//! search and images.
 
 use ghostty_sys::*;
 use std::ffi::c_void;
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
 impl From<GhosttyColorRgb> for Rgb {
@@ -16,7 +16,8 @@ impl From<GhosttyColorRgb> for Rgb {
     }
 }
 
-/// xterm.js's default theme, which Desktop's Terminal tab draws with today.
+/// The colours a terminal starts with, before a program sets its own.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Theme {
     pub fg: Rgb,
     pub bg: Rgb,
@@ -24,48 +25,58 @@ pub struct Theme {
     pub palette16: [Rgb; 16],
 }
 
-pub const XTERM_JS: Theme = Theme {
-    fg: Rgb(0xff, 0xff, 0xff),
-    bg: Rgb(0x00, 0x00, 0x00),
-    cursor: Rgb(0xff, 0xff, 0xff),
-    palette16: [
-        Rgb(0x00, 0x00, 0x00),
-        Rgb(0xcd, 0x31, 0x31),
-        Rgb(0x0d, 0xbc, 0x79),
-        Rgb(0xe5, 0xe5, 0x10),
-        Rgb(0x24, 0x72, 0xc8),
-        Rgb(0xbc, 0x3f, 0xbc),
-        Rgb(0x11, 0xa8, 0xcd),
-        Rgb(0xe5, 0xe5, 0xe5),
-        Rgb(0x66, 0x66, 0x66),
-        Rgb(0xf1, 0x4c, 0x4c),
-        Rgb(0x23, 0xd1, 0x8b),
-        Rgb(0xf5, 0xf5, 0x43),
-        Rgb(0x3b, 0x8e, 0xea),
-        Rgb(0xd6, 0x70, 0xd6),
-        Rgb(0x29, 0xb8, 0xdb),
-        Rgb(0xe5, 0xe5, 0xe5),
-    ],
-};
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Underline {
+    #[default]
+    None,
+    Single,
+    Double,
+    Curly,
+    Dotted,
+    Dashed,
+}
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Cell {
-    /// Empty for blank cells and for the tail half of a wide character.
+    /// Empty for blank cells, hidden text, and the tail half of a wide character.
     pub text: String,
+    /// After inverse video is applied.
     pub fg: Rgb,
     pub bg: Option<Rgb>,
     pub bold: bool,
     pub italic: bool,
-    pub underline: bool,
+    pub faint: bool,
+    pub blink: bool,
+    pub strikethrough: bool,
+    pub overline: bool,
+    pub underline: Underline,
+    /// SGR 58's colour; the text's colour when not set.
+    pub underline_color: Option<Rgb>,
     pub wide: bool,
     /// The second column of a wide character, drawn by the cell before it.
     pub spacer: bool,
+    /// Part of an OSC 8 hyperlink.
+    pub link: bool,
+    pub selected: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CursorStyle {
+    Block,
+    Bar,
+    Underline,
+    BlockHollow,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Cursor {
     pub x: u16,
     pub y: u16,
+    pub style: CursorStyle,
+    /// Whether the program wants it blinking.
+    pub blinking: bool,
+    /// Over a wide character, so two cells wide.
+    pub wide: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -73,7 +84,10 @@ pub struct Frame {
     pub rows: Vec<Vec<Cell>>,
     /// Where the cursor shows, unless the program hides it.
     pub cursor: Option<Cursor>,
+    pub fg: Rgb,
     pub bg: Rgb,
+    /// The cursor's colour when a program set one (OSC 12).
+    pub cursor_color: Option<Rgb>,
 }
 
 impl Frame {
@@ -97,6 +111,21 @@ impl Frame {
     pub fn cell(&self, x: usize, y: usize) -> &Cell {
         &self.rows[y][x]
     }
+}
+
+/// A cell of the whole screen, scrollback included, which stays put while the viewport moves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ScreenPoint {
+    pub y: u32,
+    pub x: u16,
+}
+
+/// How a drag selects: by cell, by word (double click) or by line (triple click).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unit {
+    Cell,
+    Word,
+    Line,
 }
 
 /// What the terminal's callbacks write into; boxed so its address is stable.
@@ -153,7 +182,9 @@ unsafe extern "C" fn on_write_pty(
 const SYNC_OUTPUT: GhosttyMode = 2026;
 /// On from the start, as in Ghostty: VS16 makes ✍️ two cells wide.
 const GRAPHEME_CLUSTER: GhosttyMode = 2027;
-const BRACKETED_PASTE: GhosttyMode = 2004;
+pub const BRACKETED_PASTE: GhosttyMode = 2004;
+pub const FOCUS_EVENTS: GhosttyMode = 1004;
+pub const ALT_SCROLL: GhosttyMode = 1007;
 /// How long a program may hold synchronized output before its frame is drawn anyway.
 const MAX_HOLD: Duration = Duration::from_millis(1000);
 const SCROLLBACK_MAX_LINES: usize = 10_000;
@@ -170,7 +201,6 @@ pub struct Vt {
     mouse_event: GhosttyMouseEvent,
     pub cols: u16,
     pub rows: u16,
-    bg: Rgb,
 }
 
 impl Vt {
@@ -189,6 +219,16 @@ impl Vt {
                 term,
                 GHOSTTY_TERMINAL_OPT_MODE_DEFAULT,
                 &cluster as *const _ as *const c_void,
+            );
+            // As in Ghostty, the wheel sends arrow keys to a full-screen program not tracking the mouse.
+            let alt_scroll = GhosttyTerminalModeConfig {
+                mode: ALT_SCROLL,
+                value: true,
+            };
+            ghostty_terminal_set(
+                term,
+                GHOSTTY_TERMINAL_OPT_MODE_DEFAULT,
+                &alt_scroll as *const _ as *const c_void,
             );
             let mut state = std::ptr::null_mut();
             ok(
@@ -326,7 +366,6 @@ impl Vt {
                 mouse_event,
                 cols,
                 rows,
-                bg: theme.bg,
             }
         }
     }
@@ -355,7 +394,8 @@ impl Vt {
         unsafe { ghostty_terminal_resize(self.term, cols, rows, cell_w.max(1), cell_h.max(1)) };
     }
 
-    fn mode(&self, mode: GhosttyMode) -> bool {
+    /// Whether the program has DEC private mode `mode` set.
+    pub fn mode(&self, mode: GhosttyMode) -> bool {
         let mut config = GhosttyTerminalModeConfig { mode, value: false };
         unsafe {
             ghostty_terminal_get(
@@ -461,7 +501,8 @@ impl Vt {
                 GHOSTTY_RENDER_STATE_DATA_COLORS,
                 &mut colors as *mut _ as *mut c_void,
             );
-            let fg_default = Rgb::from(colors.foreground);
+            let (fg, bg) = (Rgb::from(colors.foreground), Rgb::from(colors.background));
+            let palette = colors.palette;
             let mut rows = Vec::with_capacity(self.rows as usize);
             ghostty_render_state_get(
                 state,
@@ -469,6 +510,16 @@ impl Vt {
                 &mut self.rows_it as *mut _ as *mut c_void,
             );
             while ghostty_render_state_row_iterator_next(self.rows_it) {
+                let mut selection = GhosttyRenderStateRowSelection {
+                    size: std::mem::size_of::<GhosttyRenderStateRowSelection>(),
+                    ..Default::default()
+                };
+                let selected = (ghostty_render_state_row_get(
+                    self.rows_it,
+                    GHOSTTY_RENDER_STATE_ROW_DATA_SELECTION,
+                    &mut selection as *mut _ as *mut c_void,
+                ) == GHOSTTY_SUCCESS)
+                    .then_some(selection.start_x..=selection.end_x);
                 ghostty_render_state_row_get(
                     self.rows_it,
                     GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
@@ -476,7 +527,11 @@ impl Vt {
                 );
                 let mut row = Vec::with_capacity(self.cols as usize);
                 while ghostty_render_state_row_cells_next(self.cells) {
-                    row.push(self.read_cell(fg_default));
+                    let mut cell = self.read_cell(fg, bg, &palette);
+                    cell.selected = selected
+                        .as_ref()
+                        .is_some_and(|range| range.contains(&(row.len() as u16)));
+                    row.push(cell);
                 }
                 rows.push(row);
             }
@@ -489,24 +544,50 @@ impl Vt {
                 GHOSTTY_RENDER_STATE_DATA_CURSOR,
                 &mut cur as *mut _ as *mut c_void,
             );
-            let cursor = (cur.visible && cur.viewport_has_value).then(|| Cursor {
-                x: if cur.wide_tail {
+            let cursor = (cur.visible && cur.viewport_has_value).then(|| {
+                let x = if cur.wide_tail {
                     cur.viewport_x.saturating_sub(1)
                 } else {
                     cur.viewport_x
-                },
-                y: cur.viewport_y,
+                };
+                let wide = rows
+                    .get(cur.viewport_y as usize)
+                    .and_then(|row: &Vec<Cell>| row.get(x as usize))
+                    .is_some_and(|cell| cell.wide);
+                Cursor {
+                    x,
+                    y: cur.viewport_y,
+                    style: match cur.visual_style {
+                        GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR => CursorStyle::Bar,
+                        GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE => {
+                            CursorStyle::Underline
+                        }
+                        GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW => {
+                            CursorStyle::BlockHollow
+                        }
+                        _ => CursorStyle::Block,
+                    },
+                    blinking: cur.blinking,
+                    wide,
+                }
             });
             ghostty_render_state_clean(state);
             Frame {
                 rows,
                 cursor,
-                bg: self.bg,
+                fg,
+                bg,
+                cursor_color: colors.cursor_has_value.then(|| Rgb::from(colors.cursor)),
             }
         }
     }
 
-    unsafe fn read_cell(&mut self, fg_default: Rgb) -> Cell {
+    unsafe fn read_cell(
+        &mut self,
+        fg_default: Rgb,
+        bg_default: Rgb,
+        palette: &[GhosttyColorRgb; 256],
+    ) -> Cell {
         unsafe {
             let c = self.cells;
             let mut raw: GhosttyCell = Default::default();
@@ -520,6 +601,12 @@ impl Vt {
                 raw,
                 GHOSTTY_CELL_DATA_WIDE,
                 &mut wide as *mut _ as *mut c_void,
+            );
+            let mut link = false;
+            ghostty_cell_get(
+                raw,
+                GHOSTTY_CELL_DATA_HAS_HYPERLINK,
+                &mut link as *mut _ as *mut c_void,
             );
             let mut style = GhosttyStyle {
                 size: std::mem::size_of::<GhosttyStyle>(),
@@ -549,9 +636,16 @@ impl Vt {
             ) == GHOSTTY_SUCCESS)
                 .then(|| Rgb::from(bg));
             let (fg, bg) = if style.inverse {
-                (bg.unwrap_or(self.bg), Some(fg))
+                (bg.unwrap_or(bg_default), Some(fg))
             } else {
                 (fg, bg)
+            };
+            let underline_color = match style.underline_color.tag {
+                GHOSTTY_STYLE_COLOR_RGB => Some(Rgb::from(style.underline_color.value.rgb)),
+                GHOSTTY_STYLE_COLOR_PALETTE => Some(Rgb::from(
+                    palette[style.underline_color.value.palette as usize],
+                )),
+                _ => None,
             };
             let mut text = String::new();
             if wide != GHOSTTY_CELL_WIDE_SPACER_TAIL
@@ -580,12 +674,236 @@ impl Vt {
                 bg,
                 bold: style.bold,
                 italic: style.italic,
-                underline: style.underline != 0,
+                faint: style.faint,
+                blink: style.blink,
+                strikethrough: style.strikethrough,
+                overline: style.overline,
+                underline: match style.underline as GhosttySgrUnderline {
+                    GHOSTTY_SGR_UNDERLINE_SINGLE => Underline::Single,
+                    GHOSTTY_SGR_UNDERLINE_DOUBLE => Underline::Double,
+                    GHOSTTY_SGR_UNDERLINE_CURLY => Underline::Curly,
+                    GHOSTTY_SGR_UNDERLINE_DOTTED => Underline::Dotted,
+                    GHOSTTY_SGR_UNDERLINE_DASHED => Underline::Dashed,
+                    _ => Underline::None,
+                },
+                underline_color,
                 wide: wide == GHOSTTY_CELL_WIDE_WIDE,
                 spacer: wide == GHOSTTY_CELL_WIDE_SPACER_TAIL
                     || wide == GHOSTTY_CELL_WIDE_SPACER_HEAD,
+                link,
+                selected: false,
             }
         }
+    }
+
+    fn grid_ref(&self, tag: GhosttyPointTag, x: u16, y: u32) -> Option<GhosttyGridRef> {
+        let point = GhosttyPoint {
+            tag,
+            value: GhosttyPointValue {
+                coordinate: GhosttyPointCoordinate { x, y },
+            },
+        };
+        let mut grid = GhosttyGridRef {
+            size: std::mem::size_of::<GhosttyGridRef>(),
+            node: std::ptr::null_mut(),
+            x: 0,
+            y: 0,
+        };
+        let r = unsafe { ghostty_terminal_grid_ref(self.term, point, &mut grid) };
+        (r == GHOSTTY_SUCCESS && !grid.node.is_null()).then_some(grid)
+    }
+
+    fn screen_of(&self, grid: &GhosttyGridRef) -> Option<ScreenPoint> {
+        let mut out = GhosttyPointCoordinate::default();
+        let r = unsafe {
+            ghostty_terminal_point_from_grid_ref(
+                self.term,
+                grid,
+                GHOSTTY_POINT_TAG_SCREEN,
+                &mut out,
+            )
+        };
+        (r == GHOSTTY_SUCCESS).then_some(ScreenPoint { y: out.y, x: out.x })
+    }
+
+    /// The screen cell under column `x` of viewport row `y`.
+    pub fn screen_point(&self, x: u16, y: u16) -> Option<ScreenPoint> {
+        let grid = self.grid_ref(GHOSTTY_POINT_TAG_VIEWPORT, x, u32::from(y))?;
+        self.screen_of(&grid)
+    }
+
+    /// Where `point` shows in the viewport, if it does.
+    pub fn viewport_point(&self, point: ScreenPoint) -> Option<(u16, u16)> {
+        let grid = self.grid_ref(GHOSTTY_POINT_TAG_SCREEN, point.x, point.y)?;
+        let mut out = GhosttyPointCoordinate::default();
+        let r = unsafe {
+            ghostty_terminal_point_from_grid_ref(
+                self.term,
+                &grid,
+                GHOSTTY_POINT_TAG_VIEWPORT,
+                &mut out,
+            )
+        };
+        (r == GHOSTTY_SUCCESS).then_some((out.x, out.y as u16))
+    }
+
+    /// The word or line around `at`, as Ghostty's double and triple click find it.
+    fn around(&self, at: ScreenPoint, unit: Unit) -> Option<(ScreenPoint, ScreenPoint)> {
+        let grid = self.grid_ref(GHOSTTY_POINT_TAG_SCREEN, at.x, at.y)?;
+        let mut sel = GhosttySelection {
+            size: std::mem::size_of::<GhosttySelection>(),
+            start: grid,
+            end: grid,
+            rectangle: false,
+        };
+        let r = unsafe {
+            match unit {
+                Unit::Cell => return Some((at, at)),
+                Unit::Word => {
+                    let options = GhosttyTerminalSelectWordOptions {
+                        size: std::mem::size_of::<GhosttyTerminalSelectWordOptions>(),
+                        ref_: grid,
+                        boundary_codepoints: std::ptr::null(),
+                        boundary_codepoints_len: 0,
+                    };
+                    ghostty_terminal_select_word(self.term, &options, &mut sel)
+                }
+                Unit::Line => {
+                    let options = GhosttyTerminalSelectLineOptions {
+                        size: std::mem::size_of::<GhosttyTerminalSelectLineOptions>(),
+                        ref_: grid,
+                        whitespace: std::ptr::null(),
+                        whitespace_len: 0,
+                        semantic_prompt_boundary: false,
+                    };
+                    ghostty_terminal_select_line(self.term, &options, &mut sel)
+                }
+            }
+        };
+        if r != GHOSTTY_SUCCESS {
+            return Some((at, at));
+        }
+        let (a, b) = (self.screen_of(&sel.start)?, self.screen_of(&sel.end)?);
+        Some((a.min(b), a.max(b)))
+    }
+
+    /// Selects from `anchor` to `head` by `unit`, both ends included, as the terminal's
+    /// selection, which the next frame shows.
+    pub fn select(&mut self, anchor: ScreenPoint, head: ScreenPoint, unit: Unit) {
+        let (Some(a), Some(b)) = (self.around(anchor, unit), self.around(head, unit)) else {
+            return self.clear_selection();
+        };
+        let (start, end) = (a.0.min(b.0), a.1.max(b.1));
+        let (Some(start), Some(end)) = (
+            self.grid_ref(GHOSTTY_POINT_TAG_SCREEN, start.x, start.y),
+            self.grid_ref(GHOSTTY_POINT_TAG_SCREEN, end.x, end.y),
+        ) else {
+            return self.clear_selection();
+        };
+        let sel = GhosttySelection {
+            size: std::mem::size_of::<GhosttySelection>(),
+            start,
+            end,
+            rectangle: false,
+        };
+        unsafe {
+            ghostty_terminal_set(
+                self.term,
+                GHOSTTY_TERMINAL_OPT_SELECTION,
+                &sel as *const _ as *const c_void,
+            )
+        };
+    }
+
+    pub fn clear_selection(&mut self) {
+        unsafe {
+            ghostty_terminal_set(self.term, GHOSTTY_TERMINAL_OPT_SELECTION, std::ptr::null())
+        };
+    }
+
+    /// The selected text, soft wraps joined and trailing spaces trimmed, as Ghostty copies it.
+    pub fn selection_text(&self) -> Option<String> {
+        let options = GhosttyTerminalSelectionFormatOptions {
+            size: std::mem::size_of::<GhosttyTerminalSelectionFormatOptions>(),
+            emit: GHOSTTY_FORMATTER_FORMAT_PLAIN,
+            unwrap: true,
+            trim: true,
+            selection: std::ptr::null(),
+        };
+        let mut ptr: *mut u8 = std::ptr::null_mut();
+        let mut len = 0usize;
+        let r = unsafe {
+            ghostty_terminal_selection_format_alloc(
+                self.term,
+                std::ptr::null(),
+                options,
+                &mut ptr,
+                &mut len,
+            )
+        };
+        if r != GHOSTTY_SUCCESS || ptr.is_null() {
+            return None;
+        }
+        let text =
+            String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(ptr, len) }).into_owned();
+        unsafe { ghostty_free(std::ptr::null(), ptr, len) };
+        (!text.is_empty()).then_some(text)
+    }
+
+    /// The OSC 8 hyperlink under column `x` of viewport row `y`.
+    pub fn hyperlink_at(&self, x: u16, y: u16) -> Option<String> {
+        let grid = self.grid_ref(GHOSTTY_POINT_TAG_VIEWPORT, x, u32::from(y))?;
+        let mut len = 0usize;
+        unsafe { ghostty_grid_ref_hyperlink_uri(&grid, std::ptr::null_mut(), 0, &mut len) };
+        if len == 0 {
+            return None;
+        }
+        let mut buf = vec![0u8; len];
+        let r = unsafe { ghostty_grid_ref_hyperlink_uri(&grid, buf.as_mut_ptr(), len, &mut len) };
+        (r == GHOSTTY_SUCCESS).then(|| String::from_utf8_lossy(&buf[..len]).into_owned())
+    }
+
+    /// What to tell the program when the terminal gains or loses focus, if it asked (mode 1004).
+    pub fn focus_report(&self, gained: bool) -> Vec<u8> {
+        if !self.mode(FOCUS_EVENTS) {
+            return Vec::new();
+        }
+        let mut buf = [0u8; 8];
+        let mut len = 0usize;
+        let event = if gained {
+            GHOSTTY_FOCUS_GAINED
+        } else {
+            GHOSTTY_FOCUS_LOST
+        };
+        let r =
+            unsafe { ghostty_focus_encode(event, buf.as_mut_ptr() as *mut _, buf.len(), &mut len) };
+        if r != GHOSTTY_SUCCESS {
+            return Vec::new();
+        }
+        buf[..len].to_vec()
+    }
+
+    /// The cursor a program gets when it resets it (`CSI 0 q`), and starts with.
+    pub fn set_default_cursor(&mut self, style: CursorStyle, blink: bool) {
+        let style: GhosttyTerminalCursorStyle = match style {
+            CursorStyle::Bar => GHOSTTY_TERMINAL_CURSOR_STYLE_BAR,
+            CursorStyle::Underline => GHOSTTY_TERMINAL_CURSOR_STYLE_UNDERLINE,
+            CursorStyle::BlockHollow => GHOSTTY_TERMINAL_CURSOR_STYLE_BLOCK_HOLLOW,
+            CursorStyle::Block => GHOSTTY_TERMINAL_CURSOR_STYLE_BLOCK,
+        };
+        unsafe {
+            ghostty_terminal_set(
+                self.term,
+                GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_STYLE,
+                &style as *const _ as *const c_void,
+            );
+            ghostty_terminal_set(
+                self.term,
+                GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_BLINK,
+                &blink as *const _ as *const c_void,
+            );
+        }
+        self.write(b"\x1b[0 q");
     }
 
     /// One key press, as the program's keyboard modes want it.

@@ -1,7 +1,8 @@
 //! Keys as the bytes a pane is typed, in the program's keyboard modes.
 
+use collie_desktop_terminal::config::GHOSTTY;
 use collie_desktop_terminal::keys::typed;
-use collie_desktop_terminal::vt::{Vt, XTERM_JS};
+use collie_desktop_terminal::vt::Vt;
 use rune::{Key, KeyEvent, Mods};
 
 fn press(key: Key, mods: Mods) -> KeyEvent {
@@ -14,7 +15,7 @@ fn plain(key: Key) -> KeyEvent {
 
 #[test]
 fn named_keys_type_their_sequences_and_the_arrows_follow_application_cursor_mode() {
-    let mut vt = Vt::new(80, 24, &XTERM_JS);
+    let mut vt = Vt::new(80, 24, &GHOSTTY);
     assert_eq!(typed(&mut vt, &plain(Key::Enter)), Some(b"\r".to_vec()));
     assert_eq!(
         typed(&mut vt, &plain(Key::Backspace)),
@@ -33,7 +34,7 @@ fn named_keys_type_their_sequences_and_the_arrows_follow_application_cursor_mode
 
 #[test]
 fn text_types_itself_and_ctrl_or_alt_with_a_letter_types_its_control_byte_or_escape() {
-    let mut vt = Vt::new(80, 24, &XTERM_JS);
+    let mut vt = Vt::new(80, 24, &GHOSTTY);
     assert_eq!(
         typed(&mut vt, &plain(Key::Text("é".into()))),
         Some("é".as_bytes().to_vec())

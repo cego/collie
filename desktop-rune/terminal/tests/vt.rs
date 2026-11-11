@@ -1,10 +1,11 @@
 //! The VT state beyond the recorded streams: wide glyphs and the scrollback.
 
-use collie_desktop_terminal::vt::{Vt, XTERM_JS};
+use collie_desktop_terminal::config::GHOSTTY;
+use collie_desktop_terminal::vt::Vt;
 
 #[test]
 fn a_wide_glyph_takes_two_columns_and_the_text_after_it_keeps_its_column() {
-    let mut vt = Vt::new(20, 4, &XTERM_JS);
+    let mut vt = Vt::new(20, 4, &GHOSTTY);
     vt.write("日本 ok".as_bytes());
     let frame = vt.frame();
     assert_eq!(frame.line(0), "日本 ok");
@@ -15,7 +16,7 @@ fn a_wide_glyph_takes_two_columns_and_the_text_after_it_keeps_its_column() {
 
 #[test]
 fn the_viewport_scrolls_back_through_what_left_the_screen_and_returns() {
-    let mut vt = Vt::new(20, 10, &XTERM_JS);
+    let mut vt = Vt::new(20, 10, &GHOSTTY);
     for n in 1..=30 {
         vt.write(format!("line {n}\r\n").as_bytes());
     }

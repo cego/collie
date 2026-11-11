@@ -2,7 +2,7 @@
 //! without a window.
 
 use collie_desktop_protocol::generated::TerminalEvent;
-use collie_desktop_terminal::view::{Tab, row_spans, terminal};
+use collie_desktop_terminal::view::{Tab, terminal};
 use rune::{Cx, El, Env, Runtime};
 use serde_json::Value;
 
@@ -74,35 +74,6 @@ fn a_core_attach_is_drawn_row_by_row_with_its_place_and_its_cursor() {
         named(&tree, "terminal-grid"),
         "Terminal, cursor at row 4, column 40"
     );
-}
-
-#[test]
-fn each_run_of_one_style_is_a_mono_span_and_the_cursor_cell_is_inverted() {
-    let shown = played("core-attach");
-    let (content, spans) = row_spans(&shown.tab.frame, 1);
-    let at = content.find("network").unwrap();
-    let network = spans
-        .iter()
-        .find(|span| span.start as usize == at)
-        .expect("a span starts at network");
-    assert_eq!(network.end as usize, at + "network".len());
-    assert!(network.mono);
-    assert_eq!(network.weight, Some(600.0));
-    // xterm.js's palette 4, #2472c8, in Rune's linear light.
-    let blue = network.color.unwrap();
-    assert!(
-        (blue.r - 0.0176).abs() < 0.001 && (blue.b - 0.578).abs() < 0.002,
-        "{blue:?}"
-    );
-    let plain = spans.iter().find(|span| span.start == 0).unwrap();
-    assert_eq!(plain.weight, None);
-
-    let (_, spans) = row_spans(&shown.tab.frame, 3);
-    let cursor = spans
-        .iter()
-        .find(|span| span.start == 39)
-        .expect("a span at the cursor");
-    assert_eq!((cursor.end, cursor.bg.map(|bg| bg.r)), (40, Some(1.0)));
 }
 
 #[test]

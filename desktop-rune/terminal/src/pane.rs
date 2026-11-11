@@ -5,8 +5,8 @@
 use crate::size::{SettledResizes, Size};
 use collie_desktop_protocol::client::{Client, Release, Subscription};
 use collie_desktop_protocol::generated::{
-    ActionFailed, Command, TerminalEvent, TerminalPayload, TerminalResize, TerminalResizeType,
-    TerminalSendPayload,
+    ActionFailed, Command, OpenLinkPayload, TerminalEvent, TerminalPayload, TerminalResize,
+    TerminalResizeType, TerminalSendPayload,
 };
 use serde_json::Value;
 use std::sync::mpsc::{Sender, channel};
@@ -15,9 +15,15 @@ use std::time::Duration;
 
 pub type Frames = Subscription<TerminalEvent, ActionFailed>;
 
+/// What goes to the core for the pane, in the order done.
+enum Out {
+    Send(Command),
+    OpenLink(String),
+}
+
 pub struct Pane {
     sizes: SettledResizes,
-    commands: Sender<Command>,
+    commands: Sender<Out>,
     sender: JoinHandle<()>,
     release: Release,
 }
@@ -33,15 +39,23 @@ fn resize((cols, rows): Size) -> Command {
 impl Pane {
     pub fn open(client: &Client, payload: TerminalPayload) -> (Pane, Frames) {
         let frames = client.stream("terminal", payload);
-        let (commands, queued) = channel::<Command>();
+        let (commands, queued) = channel::<Out>();
         let core = client.clone();
         // Off the view's thread, which each send would otherwise wait on.
         let sender = std::thread::spawn(move || {
-            for command in queued {
-                let _ = core.request::<_, Value, ActionFailed>(
-                    "terminalSend",
-                    TerminalSendPayload { command },
-                );
+            for out in queued {
+                match out {
+                    Out::Send(command) => {
+                        let _ = core.request::<_, Value, ActionFailed>(
+                            "terminalSend",
+                            TerminalSendPayload { command },
+                        );
+                    }
+                    Out::OpenLink(url) => {
+                        let _ =
+                            core.request::<_, Value, Value>("openLink", OpenLinkPayload { url });
+                    }
+                }
             }
         });
         let pane = Pane {
@@ -54,7 +68,12 @@ impl Pane {
     }
 
     pub fn send(&self, command: Command) {
-        let _ = self.commands.send(command);
+        let _ = self.commands.send(Out::Send(command));
+    }
+
+    /// Opens `url` in the human's own browser, through the core.
+    pub fn open_link(&self, url: String) {
+        let _ = self.commands.send(Out::OpenLink(url));
     }
 
     /// The core opened the controller, which takes its size at once.

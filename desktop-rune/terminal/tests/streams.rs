@@ -3,18 +3,19 @@
 
 use base64::Engine;
 use collie_desktop_protocol::generated::TerminalEvent;
-use collie_desktop_terminal::vt::{Cursor, Frame, Rgb, Vt, XTERM_JS};
+use collie_desktop_terminal::config::GHOSTTY;
+use collie_desktop_terminal::vt::{Frame, Rgb, Vt};
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/terminal");
 
 const WHITE: Rgb = Rgb(0xff, 0xff, 0xff);
-/// xterm.js's palette 2, 4 and 14.
-const GREEN: Rgb = Rgb(0x0d, 0xbc, 0x79);
-const BLUE: Rgb = Rgb(0x24, 0x72, 0xc8);
-const BRIGHT_CYAN: Rgb = Rgb(0x29, 0xb8, 0xdb);
+/// Ghostty's palette 2, 4 and 14.
+const GREEN: Rgb = Rgb(0xb5, 0xbd, 0x68);
+const BLUE: Rgb = Rgb(0x81, 0xa2, 0xbe);
+const BRIGHT_CYAN: Rgb = Rgb(0x70, 0xc0, 0xb1);
 
 fn played(name: &str) -> (Vt, Frame) {
-    let mut vt = Vt::new(100, 30, &XTERM_JS);
+    let mut vt = Vt::new(100, 30, &GHOSTTY);
     let recorded = std::fs::read_to_string(format!("{FIXTURES}/{name}.ndjson")).unwrap();
     for line in recorded.lines() {
         if let TerminalEvent::Frame(frame) = serde_json::from_str(line).unwrap() {
@@ -46,7 +47,7 @@ fn a_herdr_pane_running_ls_color_shows_its_listing_coloured_and_the_prompt_after
     assert_eq!((plain.fg, plain.bold), (WHITE, false));
     let user = frame.cell(0, 3);
     assert_eq!((user.fg, user.bold), (GREEN, true));
-    assert_eq!(frame.cursor, Some(Cursor { x: 39, y: 3 }));
+    assert_eq!(frame.cursor.map(|c| (c.x, c.y)), Some((39, 3)));
 }
 
 #[test]
@@ -62,7 +63,7 @@ fn vim_in_a_herdr_pane_fills_the_screen_with_its_coloured_file_and_its_status_li
     );
     assert_eq!(frame.cell(82, 29).text, "1");
     assert!(status.ends_with("Top"), "{status:?}");
-    assert_eq!(frame.cursor, Some(Cursor { x: 0, y: 0 }));
+    assert_eq!(frame.cursor.map(|c| (c.x, c.y)), Some((0, 0)));
 }
 
 #[test]
@@ -84,5 +85,5 @@ fn a_core_attachs_first_paint_brings_the_terminal_as_it_was_and_its_prompt_redra
     );
     let user = frame.cell(0, 3);
     assert_eq!((user.fg, user.bold), (GREEN, true));
-    assert_eq!(frame.cursor, Some(Cursor { x: 39, y: 3 }));
+    assert_eq!(frame.cursor.map(|c| (c.x, c.y)), Some((39, 3)));
 }
