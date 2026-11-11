@@ -349,7 +349,7 @@ Collie's. A tool from a configured server or connector is allowed without asking
 are (on a Claude Code too old to say which server a tool is from, by its `mcp__<server>__` or
 `mcp__claude_ai_` name), and what it returns is data, as any tool's answer is. Project- and local-scope servers
 are left out: Desktop's working directory is its own state directory, which no project
-configures. Pi and Codex are unchanged.
+configures. Pi and Codex are unchanged (Pi since: "Amended 2026-11-11").
 
 Helle has no MCP server on a computer that never installed its wrapper, and Collie's agents
 reach it through Collie's own client (`src/helle.ts`). The Flock chat gets that client as
@@ -358,6 +358,41 @@ queue, the human's own marked, and a claim or a release of a slug, or both in on
 the release first, to move from one project to another. It signs in with the
 Helle token Desktop already keeps for its Machines. Helle is the team's and no Machine's,
 so no host answers it.
+
+## Amended 2026-11-11: the Pi chat reaches them too
+
+The human's chat ran on Pi, asked to create a Linear issue, and started a Run to do it: Pi was
+given only Collie's server, and its `--tools` entry for that server dropped every other MCP
+tool. Linear was configured and signed in, for Claude Code.
+
+On Pi, Desktop now hands the same user-scope servers it reads for Claude to the generated
+extension, which registers each with `deferred` exposure; `builtin:tool-search` is loaded and
+`--tools` keeps `tool_search` and every `mcp__` tool, so the servers in Pi's own `mcp.json`
+reach the chat as well, and a same-named one there wins as Pi decides. The servers travel in
+the child's environment, as the endpoint token does, and the extension deletes them from its
+environment once read, so the model's shell cannot print a header the human wrote. A server
+Pi cannot run is left out and named with why: one called `collie`, a name Pi refuses, SSE, a
+`headersHelper`, or a name Pi reads as an earlier one's. One Pi refuses at registration is
+reported and does not stop the rest.
+
+Pi signs in to an OAuth server with its own client and keeps the tokens in its own
+`mcp-auth.json`; Claude Code's are not read or copied. The human signs in once by typing
+`/mcp login <server>` in the chat: a message that is a `/mcp` command goes to Pi as written,
+and Pi's notices during it are the turn's reply. Pi's other notices, such as a server that
+needs sign-in, go with the next message's note as data. Pi's prompt names what it was given
+and left out, says that a server with no tools found most often needs that sign-in, and that
+claude.ai's connectors, Slack among them, reach only the Claude harness. Collie's own Slack
+sign-in, made for toasts, gets no chat tool. GitLab and GitHub are reached on either harness
+with `glab` and `gh` in the shell, as the human is signed in.
+
+Servers are read when a session opens: one added later reaches a new conversation, a
+harness switch or the next Desktop start, never the session under way.
+
+Proven 2026-11-11 on mk-laptop, Pi **1.5.0**, through the drivers in a disposable state
+directory with the human's own `.claude.json` and logins: on Pi `/mcp` lists `linear-server`
+as needing sign-in and the chat answers that `/mcp login linear-server` opens it, starting
+no Run; on Claude the chat reads FRO-828 with `mcp__linear-server__get_issue`. Pi's read
+after sign-in waits for the human's own sign-in.
 
 ## What has actually been proven
 
