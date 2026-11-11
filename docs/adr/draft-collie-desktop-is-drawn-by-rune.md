@@ -69,7 +69,9 @@ has no work-around stops that ticket until upstream fixes it.
 human on run-f0d81d1d, 2026-11-11, after trying the spike: it is built to today's Desktop's
 features in full (board, record and its tabs, the Flock chat, Workflows, Machines,
 Schedules, Usage, Settings), in a Rune-native design rather than a copy of the Vue view's
-look. Today's view is the feature spec. Go to pane's terminal draws as Ghostty does, from the
+look. Today's view is the feature spec. The design has Collie's own palette, asked for by the
+human because the OpenCode kit's greys were dull: Collie green, faintly green surfaces, and a
+hue for each state, every text and fill pair checked against WCAG AA. Go to pane's terminal draws as Ghostty does, from the
 human's Ghostty config over Ghostty's defaults, since the look asked for is the terminal
 they use. D2's three required items are built: selection and copy with every mouse button
 reaching the pane (Rune reports a secondary press and release together, so a right-button
