@@ -51,8 +51,6 @@ pub struct Machines {
     pub flock: Fold,
     /// Desktop's own version, once `updates` has said it.
     pub version: Option<String>,
-    /// Which credentials Desktop holds for every Machine, once `credentials` has said.
-    pub credentials: Option<Vec<&'static str>>,
     stops: Vec<Stop>,
     pub cleanup: Cleanup,
     pub adding: Option<Adding>,
@@ -76,10 +74,11 @@ impl Machines {
         app.listen_machines();
     }
 
-    fn holds(&self) -> Option<DesktopHolds> {
+    /// What Desktop holds for every Machine, once its version and the board's `credentials` have said.
+    fn holds(&self, app: &App) -> Option<DesktopHolds> {
         Some(DesktopHolds {
             version: self.version.clone()?,
-            credentials: self.credentials.clone()?,
+            credentials: credentials_held(app.board.credentials.as_ref()?),
         })
     }
 
@@ -94,16 +93,16 @@ pub fn rows(app: &App) -> Vec<MachineRow> {
     if !fold.routes.is_empty() {
         return fold.rows();
     }
-    app.machines.iter().map(bare).collect()
+    app.machines.iter().map(|shown| bare(app, shown)).collect()
 }
 
-fn bare(shown: &Shown) -> MachineRow {
-    let state = match (&shown.lost, shown.as_of) {
+fn bare(app: &App, shown: &Shown) -> MachineRow {
+    let state = match (app.lost_of(&shown.machine.profile), shown.as_of) {
         (Some(lost), _) => RowState::NotLive(lost.clone()),
         (None, Some(_)) => RowState::Connecting,
         (None, None) => RowState::Live,
     };
-    MachineRow::bare(&shown.profile, &shown.name, state)
+    MachineRow::bare(&shown.machine.profile, &shown.machine.name, state)
 }
 
 fn credentials_held(held: &CredentialsSuccess) -> Vec<&'static str> {
@@ -143,7 +142,7 @@ fn told(app: &mut App) -> &mut Told {
 }
 
 impl App {
-    /// Hears Desktop's version and credentials, once, for the In sync verdicts.
+    /// Hears Desktop's version, once, for the In sync verdicts.
     pub fn listen_machines(&mut self) {
         let Some(core) = &self.core else { return };
         if !self.pages.machines.stops.is_empty() {
@@ -158,16 +157,7 @@ impl App {
                 }
             },
         );
-        let credentials = core.stream(
-            "credentials",
-            (),
-            |app: &mut App, said: Result<CredentialsSuccess, _>| {
-                if let Ok(held) = said {
-                    app.pages.machines.credentials = Some(credentials_held(&held));
-                }
-            },
-        );
-        self.pages.machines.stops = vec![updates, credentials];
+        self.pages.machines.stops = vec![updates];
     }
 
     pub fn open_add_machine(&mut self) {
@@ -550,8 +540,10 @@ fn add_dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
 pub fn view(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
     let machines = &app.pages.machines;
     let rows = rows(app);
-    let summary = machines.holds().map(|holds| flock_in_sync(&rows, &holds));
-    let holds = machines.holds().unwrap_or(DesktopHolds {
+    let summary = machines
+        .holds(app)
+        .map(|holds| flock_in_sync(&rows, &holds));
+    let holds = machines.holds(app).unwrap_or(DesktopHolds {
         version: String::new(),
         credentials: vec![],
     });

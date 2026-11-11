@@ -5,8 +5,7 @@ use super::common::{Tone, code, muted, toned};
 use super::flock::settled;
 use crate::App;
 use collie_desktop_protocol::generated::{
-    AnswerHerdrPayload, OnboardPayload, OpenLinkPayload, PasteCodePayload, RunStep, SkipItem,
-    Status,
+    AnswerHerdrPayload, OnboardPayload, PasteCodePayload, RunStep, SkipItem, Status,
 };
 use rune::{El, TextEdit, col, el, row, text};
 use rune_kit::{Button, ButtonVariant, ControlSize, Dialog, Kit, Spinner, TextInput};
@@ -106,7 +105,7 @@ pub fn steps(
             any = true;
             actions = actions.child(
                 small("Open", ButtonVariant::Outline)
-                    .on_press(move |app: &mut App| app.open_link(&url))
+                    .on_press(move |app: &mut App| app.open_link(url.clone()))
                     .build(k)
                     .key("open"),
             );
@@ -227,15 +226,6 @@ impl App {
             "claudeLogin",
             json!({ "profile": profile }),
             |app: &mut App, job| app.shown_job(job),
-        );
-    }
-
-    pub fn open_link(&mut self, url: &str) {
-        let Some(core) = &self.core else { return };
-        core.request(
-            "openLink",
-            OpenLinkPayload { url: url.into() },
-            |_: &mut App, _: Result<serde_json::Value, _>| {},
         );
     }
 

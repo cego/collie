@@ -111,7 +111,7 @@ fn nav_row(app: &App, page: Page, k: &Kit) -> El {
 
 fn page_pane(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
     match app.nav.page {
-        Page::Board => board_pane(app, k),
+        Page::Board => board_pane(app, k, layer),
         Page::Workflows => pages::workflows::view(app, k, layer),
         Page::Machines => pages::machines::view(app, k, layer),
         Page::Schedules => pages::schedules::view(app, k, layer),

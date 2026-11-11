@@ -282,20 +282,19 @@ impl Settings {
 pub fn reached(app: &App) -> Vec<Reached> {
     app.machines
         .iter()
-        .map(|m| {
-            let live = m.lost.is_none() && m.as_of.is_none();
-            Reached {
-                name: m.name.clone(),
-                live,
-                // The board does not fold `Synced` yet, so a live Machine counts as synced.
-                synced: live.then_some(None),
-            }
+        .map(|m| Reached {
+            name: m.machine.name.clone(),
+            live: app.is_live(m),
+            synced: app.board.flock.synced.get(&m.machine.profile).cloned(),
         })
         .collect()
 }
 
 fn profiles(app: &App) -> Vec<String> {
-    app.machines.iter().map(|m| m.profile.clone()).collect()
+    app.machines
+        .iter()
+        .map(|m| m.machine.profile.clone())
+        .collect()
 }
 
 pub fn refresh_catalogues(app: &mut App) {
@@ -314,9 +313,9 @@ pub fn refresh_catalogues(app: &mut App) {
                 .iter()
                 .map(|m| {
                     (
-                        m.profile.clone(),
-                        m.name.clone(),
-                        m.lost.is_none() && m.as_of.is_none(),
+                        m.machine.profile.clone(),
+                        m.machine.name.clone(),
+                        app.is_live(m),
                     )
                 })
                 .collect();
@@ -392,10 +391,10 @@ pub fn connection_cards(app: &App) -> Vec<connections::Card> {
         .machines
         .iter()
         .map(|m| connections::Machine {
-            profile: &m.profile,
-            name: &m.name,
-            live: m.lost.is_none() && m.as_of.is_none(),
-            reason: m.lost.as_ref().map(|lost| match lost {
+            profile: &m.machine.profile,
+            name: &m.machine.name,
+            live: app.is_live(m),
+            reason: app.lost_of(&m.machine.profile).map(|lost| match lost {
                 LostState::Unreachable => "Out of reach",
                 LostState::Sso => "Waiting for SSO",
                 LostState::NoCollie => "Collie isn't installed",

@@ -11,6 +11,7 @@ pub mod model;
 pub mod questionnaire;
 mod view;
 
+use collie_desktop_protocol::generated::LostState;
 pub use model::{Flock, Placed, Shown};
 pub use view::{view, view_in};
 
@@ -289,6 +290,7 @@ pub fn offer_input(arguments: Option<&Value>, typed: &[(String, String)]) -> Val
 impl App {
     /// One `flock` item: folded into the Flock, and what the board holds settled against it.
     pub fn apply(&mut self, item: FlockItem) {
+        self.pages.machines.heard(&item);
         model::apply_item(&mut self.machines, &mut self.board.flock, item);
         self.settle_answers();
         self.read_credentials();
@@ -709,6 +711,16 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Why a Machine's route is not live, by herdr profile; none while it is.
+    pub fn lost_of(&self, profile: &str) -> Option<&LostState> {
+        self.board.flock.lost.get(profile).map(|lost| &lost.state)
+    }
+
+    /// Whether a Machine is live: its route reached and its board its own, not a saved one.
+    pub fn is_live(&self, shown: &Shown) -> bool {
+        self.lost_of(&shown.machine.profile).is_none() && shown.as_of.is_none()
     }
 
     pub fn open_link(&mut self, url: String) {

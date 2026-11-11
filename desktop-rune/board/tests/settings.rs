@@ -9,6 +9,7 @@ use collie_desktop_board::pages::settings::connections::{self, Primary};
 use collie_desktop_board::pages::settings::model::{self, Reached, Tone};
 use collie_desktop_board::pages::settings::{registry, time};
 use collie_desktop_board::{App, Shown, view};
+use collie_desktop_protocol::generated::Machine;
 use collie_desktop_protocol::generated::{
     CataloguesSuccessItem, ConnectionReadingsSuccessItem, FlockSettingsSuccess, News,
     SettingsSuccess, SlackUserChannelsSuccessItem,
@@ -713,12 +714,20 @@ fn the_settings_listed_are_src_settings_ts_own() {
 
 fn machine(name: &str) -> Shown {
     Shown {
-        installation: Some(format!("{name}-install")),
-        profile: name.into(),
-        name: name.into(),
+        machine: Machine {
+            installation: format!("{name}-install"),
+            profile: name.into(),
+            name: name.into(),
+            target: None,
+            route: None,
+        },
+        herds: Vec::new(),
         cards: Vec::new(),
         as_of: None,
-        lost: None,
+        build: None,
+        development: None,
+        protocol: None,
+        files: false,
     }
 }
 
@@ -727,6 +736,9 @@ fn opened() -> (Harness<App>, Runtime<App>) {
     let mut app = App::default();
     app.core = Some(harness.core.clone());
     app.machines = vec![machine("laptop"), machine("vm")];
+    for profile in ["laptop", "vm"] {
+        app.board.flock.synced.set(profile, None);
+    }
     harness.fake.will_answer(
         "catalogues",
         Ok(serde_json::to_value(catalogues()).unwrap()),

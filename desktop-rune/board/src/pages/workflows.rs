@@ -206,9 +206,8 @@ impl Workflows {
         let from = app
             .machines
             .iter()
-            .filter(|m| m.installation.is_some())
-            .min_by_key(|m| m.profile != "local")
-            .map(|m| (m.installation.clone().unwrap(), m.name.clone()));
+            .min_by_key(|m| m.machine.profile != "local")
+            .map(|m| (m.machine.installation.clone(), m.machine.name.clone()));
         let state = &mut app.pages.workflows;
         state.read = None;
         state.from = from.clone();

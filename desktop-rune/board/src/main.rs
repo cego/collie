@@ -1,6 +1,7 @@
 //! The spike app: starts Desktop's main process as its core, speaks `DesktopRpcs` to it over
 //! stdio, draws the board `flock` streams, and a pressed card's pane on the `terminal` stream.
 
+use collie_desktop_board::calls::{Answer, Calls, Each, Live, Stop};
 use collie_desktop_board::notify::deliver;
 use collie_desktop_board::timing::Mark;
 use collie_desktop_board::{App, frame_drawn, run_diff, view};
@@ -15,6 +16,7 @@ use collie_desktop_terminal::pane::Pane;
 use collie_desktop_terminal::view::Tab;
 use rune::{AppHandle, AppSpec};
 use serde_json::Value;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Opens a pressed card's pane: its frames are read off the view's thread into the open Tab,
@@ -228,6 +230,40 @@ fn update_at_launch() -> Vec<(&'static str, std::ffi::OsString)> {
     ]
 }
 
+/// The live core, saying once when the board's `flock` first brings a Machine's own board.
+struct FirstLive {
+    calls: Live,
+    live: std::sync::Mutex<Option<std::sync::mpsc::Sender<()>>>,
+}
+
+impl Calls for FirstLive {
+    fn request(&self, tag: &str, payload: Value, answer: Answer) {
+        self.calls.request(tag, payload, answer)
+    }
+
+    fn stream(&self, tag: &str, payload: Value, mut each: Each) -> Stop {
+        if tag != "flock" {
+            return self.calls.stream(tag, payload, each);
+        }
+        let live = self.live.lock().unwrap().take();
+        self.calls.stream(
+            tag,
+            payload,
+            Box::new(move |item| {
+                let board = matches!(
+                    item.as_ref()
+                        .map(|v| serde_json::from_value::<FlockItem>(v.clone())),
+                    Ok(Ok(FlockItem::MachineMessage(_)))
+                );
+                if board && let Some(live) = &live {
+                    let _ = live.send(());
+                }
+                each(item)
+            }),
+        )
+    }
+}
+
 fn main() {
     let staging = update_at_launch();
     let env: Vec<(&str, &std::ffi::OsStr)> = staging
@@ -248,9 +284,13 @@ fn main() {
     .on_frame_drawn(marks(&client));
     let handle = app.handle();
     let poster = std::sync::Mutex::new(handle.clone());
+    let (live, first_live) = std::sync::mpsc::channel();
     let calls = collie_desktop_board::calls::Core::new(
-        std::sync::Arc::new(collie_desktop_board::calls::Live(client.clone())),
-        std::sync::Arc::new(move |change| {
+        Arc::new(FirstLive {
+            calls: Live(client.clone()),
+            live: std::sync::Mutex::new(Some(live)),
+        }),
+        Arc::new(move |change| {
             poster
                 .lock()
                 .unwrap()
@@ -260,6 +300,7 @@ fn main() {
     handle.update(move |app, _| {
         app.core = Some(calls);
         app.listen_setup();
+        app.follow_flock();
     });
     go_to_panes(&handle, &client);
     chat(&handle, &client);
@@ -267,24 +308,6 @@ fn main() {
     records(&handle, &client);
     files_in(&handle, &client);
     notifications(&handle, &client);
-    let (live, first_live) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        for item in client.stream::<_, FlockItem, Value>("flock", ()) {
-            match item {
-                Ok(item) => {
-                    let board = matches!(item, FlockItem::MachineMessage(_));
-                    handle.update(move |shown, _| shown.apply(item));
-                    if board {
-                        let _ = live.send(());
-                    }
-                }
-                Err(error) => {
-                    let said = error.to_string();
-                    handle.update(move |shown, _| shown.ended = Some(said));
-                }
-            }
-        }
-    });
     // A headless render runs on a virtual clock, so it waits for a live board first.
     if std::env::args().any(|arg| ["--snap", "--tree", "--script"].contains(&arg.as_str())) {
         let _ = first_live.recv_timeout(Duration::from_secs(60));

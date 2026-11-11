@@ -104,8 +104,8 @@ fn chat_of(board: &mut App) -> &mut Chat {
 }
 
 /// The Board page's pane: the open Run, else the board.
-pub fn board_pane(board: &App, k: &Kit) -> El {
-    record::view(board, k).unwrap_or_else(|| board::view(board, k))
+pub fn board_pane(board: &App, k: &Kit, layer: &mut Vec<El>) -> El {
+    record::view(board, k).unwrap_or_else(|| board::view_in(board, k, layer))
 }
 
 /// The chat as the window's trailing pane.
