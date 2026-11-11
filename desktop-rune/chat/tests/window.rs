@@ -71,3 +71,41 @@ fn the_chat_in_its_own_window_reads_the_conversation_and_puts_itself_back() {
     rt.update(closed);
     assert_eq!(*back.lock().unwrap(), 1, "the board's window is told");
 }
+
+#[test]
+fn p2_pressing_the_card_in_the_chats_own_window_asks_the_boards_window_to_open_it() {
+    use collie_desktop_protocol::generated::{About, TranscriptSuccessItem};
+    let about = serde_json::json!({ "machine": "Build box", "task": "b2", "run": "r1", "name": "Nightly evidence sweep" });
+    let items: Vec<TranscriptSuccessItem> = serde_json::from_value(serde_json::json!([{
+        "id": "u1", "role": "user",
+        "parts": [{ "type": "text", "content": "What needs me?" }],
+        "metadata": { "about": about }
+    }]))
+    .unwrap();
+    let asked: Arc<Mutex<Vec<About>>> = Arc::default();
+    let mut alone = Alone::default();
+    let told = asked.clone();
+    alone.about = Some(Box::new(move |about| told.lock().unwrap().push(about)));
+    alone.chat.transcript.replace(items);
+    alone.chat.loaded = true;
+    let mut rt = Runtime::new(
+        alone,
+        view,
+        (480.0, 760.0),
+        Env {
+            system_dark: false,
+            scale: 1.0,
+        },
+    );
+    rt.frame(0.0);
+    let (x, y) = rt.find("chat-about").expect("the message's card");
+    rt.pointer_move(x, y);
+    rt.frame(100.0);
+    rt.pointer_down(x, y);
+    rt.frame(150.0);
+    rt.pointer_up(x, y);
+    rt.frame(250.0);
+    let asked = asked.lock().unwrap();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].task, "b2");
+}

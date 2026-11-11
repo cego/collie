@@ -478,11 +478,11 @@ fn a_harness_model_or_effort_is_saved_through_settings_and_a_refusal_is_said() {
     );
     window.refuse("setSettings", "Codex is not signed in.");
     assert_eq!(
-        window.node("chat-choice-refused")["name"],
+        window.node("chat-failed")["name"],
         "Codex is not signed in. Nothing was saved."
     );
-    window.tap("chat-choice-dismiss");
-    assert!(!window.has("chat-choice-refused"));
+    window.tap("chat-failed-dismiss");
+    assert!(!window.has("chat-failed"));
 
     window.tap("chat-model");
     window.rt.update(|board, _| {
@@ -1100,4 +1100,79 @@ fn a_reply_under_way_is_not_popped_out() {
     assert!(states(&pop).contains(&"disabled".to_string()), "{pop}");
     window.tap("chat-pop");
     assert!(popped.lock().unwrap().is_empty());
+}
+
+
+#[test]
+fn p2_the_composer_is_cleared_and_keeps_focus_after_send() {
+    let mut window = Window::reading(json!([]));
+    window.type_in("What needs me?");
+    window.tap("send");
+    assert_eq!(window.asked("say")[0]["text"], "What needs me?");
+    assert_eq!(window.composer(), "");
+    assert!(
+        window.flag(|b| b.chat.composer.focused),
+        "the composer has the focus back for the next message"
+    );
+}
+
+#[test]
+fn p2_a_refused_action_in_the_chat_is_said_not_swallowed() {
+    let mut window = Window::reading(conversation());
+    window.tap("chat-new");
+    window.refuse("reopen", "Codex is not signed in.");
+    assert_eq!(window.node("chat-failed")["name"], "Codex is not signed in.");
+    assert!(
+        !window.has("chat-trouble"),
+        "a refusal is not the chat reconnecting"
+    );
+    window.tap("chat-failed-dismiss");
+    assert!(!window.has("chat-failed"));
+
+    window.tap("chat-proactive");
+    window.refuse("setFlockSetting", "The Flock's settings are read-only here.");
+    assert_eq!(
+        window.node("chat-proactive")["name"],
+        "Speaks first about News that matters",
+        "the bell is back as it was"
+    );
+    assert_eq!(
+        window.node("chat-failed")["name"],
+        "The Flock's settings are read-only here."
+    );
+
+    let mut window = Window::reading(json!([]));
+    ask(&mut window, false);
+    window.tap("question-ask-1-0-1");
+    window.refuse("answer", "The question was already answered.");
+    assert_eq!(
+        window.node("chat-failed")["name"],
+        "The question was already answered."
+    );
+    assert_eq!(
+        window.node("question-ask-1-0-0")["disabled"],
+        Value::Null,
+        "the question can be answered again: {}",
+        window.node("question-ask-1-0-0")
+    );
+
+    let mut window = Window::reading(json!([]));
+    window.push("setupOffer", json!(true));
+    window.tap("setup-not-now");
+    window.refuse("declineSetup", "Settings could not be written.");
+    assert_eq!(
+        window.node("chat-failed")["name"],
+        "Settings could not be written."
+    );
+}
+
+
+#[test]
+fn p2_pressing_the_card_of_a_task_gone_from_the_board_says_so() {
+    let mut window = Window::reading(conversation());
+    window.tap("chat-about");
+    assert_eq!(
+        window.node("chat-failed")["name"],
+        "That Task is no longer on the board"
+    );
 }

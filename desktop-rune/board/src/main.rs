@@ -5,6 +5,7 @@ use collie_desktop_board::calls::{Answer, CallError, Calls, Each, Live, Stop};
 use collie_desktop_board::notify::deliver;
 use collie_desktop_board::timing::Mark;
 use collie_desktop_board::{App, frame_drawn, view};
+use collie_desktop_chat::Host;
 use collie_desktop_chat::window::{self as chat_window, Alone};
 use collie_desktop_protocol::client::Client;
 use collie_desktop_protocol::core::Core;
@@ -153,6 +154,18 @@ fn chat_window(app: &mut rune::App<App>, handle: &AppHandle<App>, client: &Clien
             } else {
                 std::thread::spawn(ask);
             }
+        }));
+    });
+    let main = handle.clone();
+    let told = alone.clone();
+    alone.update(move |a, _| {
+        a.about = Some(Box::new(move |about| {
+            let told = told.clone();
+            main.update(move |board, _| {
+                if let Some(why) = board.open_about(&about) {
+                    told.update(move |a, _| a.chat.failed = Some(why));
+                }
+            });
         }));
     });
     let shows = alone.clone();

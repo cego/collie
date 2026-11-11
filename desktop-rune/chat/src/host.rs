@@ -23,8 +23,10 @@ pub trait Host: Sized + 'static {
     fn stream(&self, tag: &str, payload: Value, each: Each<Self>) -> Option<Stop>;
     /// A text delta of the `turn`th turn arrived, for the app's timing marks.
     fn heard_chunk(&mut self, _turn: u64) {}
-    /// The human pressed the card a message was sent about.
-    fn open_about(&mut self, _about: &About) {}
+    /// The human pressed the card a message was sent about; why it could not be opened, if not.
+    fn open_about(&mut self, _about: &About) -> Option<String> {
+        None
+    }
     /// The chat went to its own window (`out`) or came back beside the board.
     fn popped(&mut self, _out: bool) {}
 }

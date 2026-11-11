@@ -4,6 +4,7 @@
 use crate::chat::{self, Chat};
 use crate::host::{Done, Each, Host, Stop};
 use rune::{Cx, El, Tx};
+use collie_desktop_protocol::generated::About;
 use serde_json::Value;
 
 pub type Request = Box<dyn Fn(&str, Value, Done<Alone>)>;
@@ -16,6 +17,8 @@ pub struct Alone {
     pub stream: Option<Streams>,
     /// Tells the board's window that the chat is back beside it.
     pub back: Option<Box<dyn Fn()>>,
+    /// Asks the board's window to open the card a message is about; only it opens one.
+    pub about: Option<Box<dyn Fn(About)>>,
 }
 
 impl Host for Alone {
@@ -37,6 +40,13 @@ impl Host for Alone {
         self.stream
             .as_ref()
             .map(|stream| stream(tag, payload, each))
+    }
+
+    fn open_about(&mut self, about: &About) -> Option<String> {
+        if let Some(open) = &self.about {
+            open(about.clone());
+        }
+        None
     }
 }
 

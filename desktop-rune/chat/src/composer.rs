@@ -81,10 +81,10 @@ pub(crate) fn footer<S: Host>(chat: &Chat, k: &Kit, layer: &mut Vec<El>) -> El {
                 .shrink(),
             )
     });
-    let refused_choice = chat.choice_refused.as_ref().map(|why| {
+    let failed = chat.failed.as_ref().map(|why| {
         notice(
             k,
-            "chat-choice-refused",
+            "chat-failed",
             &icons::ALERT,
             k.c.danger,
             why,
@@ -93,9 +93,9 @@ pub(crate) fn footer<S: Host>(chat: &Chat, k: &Kit, layer: &mut Vec<El>) -> El {
                 Button::new("Dismiss")
                     .control_size(ControlSize::Small)
                     .variant(ButtonVariant::Ghost)
-                    .on_press(|s: &mut S| s.chat_mut().choice_refused = None)
+                    .on_press(|s: &mut S| s.chat_mut().failed = None)
                     .build(k)
-                    .key("chat-choice-dismiss"),
+                    .key("chat-failed-dismiss"),
             ),
         )
     });
@@ -106,7 +106,7 @@ pub(crate) fn footer<S: Host>(chat: &Chat, k: &Kit, layer: &mut Vec<El>) -> El {
         .px(12.0)
         .pt(4.0)
         .pb(12.0)
-        .children(refused_choice)
+        .children(failed)
         .children(waiting)
         .children(reply)
         .child(prompt::<S>(chat, k, layer))
