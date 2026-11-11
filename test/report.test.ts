@@ -2,7 +2,7 @@
 
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { BunServices } from "@effect/platform-bun";
+import { runEffect } from "./support/effect";
 import { Effect, FileSystem, Schema } from "effect";
 import type * as Types from "effect/Types";
 import { HOLD, STOP, type RunView } from "../src/engine";
@@ -460,40 +460,43 @@ test("a human resume after the Run moved on from its park is not counted against
   ]);
 });
 
-test("the Step progress a human resume makes while it runs still counts that resume against the park", async () => {
-  const counted = await Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-resume-" });
-    const parked = yield* nowIso;
-    yield* Effect.sleep("5 millis");
-    let progress = "";
-    yield* once(
-      dir,
-      { operation: "resume", request: "resume-1", origin: "desktop", result: Schema.Boolean },
-      Effect.gen(function* () {
-        yield* Effect.sleep("5 millis");
-        progress = yield* nowIso;
-        yield* Effect.sleep("5 millis");
-        return true;
-      }),
-    );
-    return reportOf(
-      [view({ runId: "a" })],
-      new Map(),
-      null,
-      new Map([
-        [
-          "a",
-          {
-            records: records({ moved: [progress], resumes: resumesIn(yield* readAudit(dir)) }),
-            metrics: [halt(parked, "ci-job-absent")],
-          },
-        ],
-      ]),
-    ).measures.parks.byCause;
-  }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.runPromise);
-  expect(counted).toMatchObject([{ cause: "ci-job-absent", humanResumes: 1 }]);
-});
+test("the Step progress a human resume makes while it runs still counts that resume against the park", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-resume-" });
+      const parked = yield* nowIso;
+      yield* Effect.sleep("5 millis");
+      let progress = "";
+      yield* once(
+        dir,
+        { operation: "resume", request: "resume-1", origin: "desktop", result: Schema.Boolean },
+        Effect.gen(function* () {
+          yield* Effect.sleep("5 millis");
+          progress = yield* nowIso;
+          yield* Effect.sleep("5 millis");
+          return true;
+        }),
+      );
+      const report = reportOf(
+        [view({ runId: "a" })],
+        new Map(),
+        null,
+        new Map([
+          [
+            "a",
+            {
+              records: records({ moved: [progress], resumes: resumesIn(yield* readAudit(dir)) }),
+              metrics: [halt(parked, "ci-job-absent")],
+            },
+          ],
+        ]),
+      );
+      expect(report.measures.parks.byCause).toMatchObject([
+        { cause: "ci-job-absent", humanResumes: 1 },
+      ]);
+    }),
+  ));
 
 const reminded = (outcome: NonNullable<Metric["outcome"]>, waitedMs: number): Metric => ({
   at: "2026-09-30T10:00:00.000Z",

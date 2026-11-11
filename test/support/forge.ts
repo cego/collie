@@ -2108,7 +2108,12 @@ export function httpFace(
     if (fault !== undefined)
       return answered(
         fault.status,
-        JSON.stringify({ message: fault.message ?? String(fault.status) }),
+        flow(
+          Schema.encodeResult(Json),
+          Result.getOrThrow,
+        )({
+          message: fault.message ?? String(fault.status),
+        }),
         fault.headers,
       );
     const url = new URL(input);

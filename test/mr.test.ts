@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
@@ -307,7 +308,7 @@ test("a step pointed at a project needs glab logged in to that host, not a check
       const ready = yield* gitlabForProject("gitlab.cego.dk/cego/x", "/not/a/repo", fake.run);
 
       expect(ready.ok).toBe(true);
-      expect(Arr.filter(fake.calls, (call) => call.startsWith("git "))).toEqual([]);
+      expect(Arr.filter(fake.calls, Str.startsWith("git "))).toEqual([]);
     }).pipe(Effect.provide(fake.layer)),
   );
 });
