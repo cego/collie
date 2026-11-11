@@ -281,7 +281,11 @@ export interface Sentence {
   /** A live agent of the Run's, which the next move can be handed to. */
   agent: string | null;
   /** When the forge last answered about what is owed, once that is old or its last ask failed. */
-  answered?: { readonly forge: string; readonly ago: string; readonly failed: boolean } | null;
+  answered?: {
+    readonly forge: string;
+    readonly ago: string | null;
+    readonly failed: boolean;
+  } | null;
   /**
    * Where a human is being waited for, when no Decision says: the pane of the agent
    * herdr will not prompt, or the step the Driver recorded itself waiting on. Null
@@ -568,6 +572,8 @@ export function sentenceFor(facts: Sentence): string {
 
 function answeredLine(answered: Sentence["answered"]): string {
   if (answered == null) return "";
+  if (answered.ago === null)
+    return ` ${answered.forge} could not be read; it has not answered yet.`;
   return answered.failed
     ? ` ${answered.forge} could not be read; it last answered ${answered.ago}.`
     : ` ${answered.forge} last answered ${answered.ago}.`;
@@ -1180,6 +1186,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   cards?: KeptCards;
 }) {
   const { stateDir } = opts.env;
+  const fs = yield* FileSystem.FileSystem;
   const { boundary } = yield* Foreground;
   const wall = yield* Clock.currentTimeMillis;
   const now = opts.now ?? wall;
@@ -1236,6 +1243,16 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         const everyRun = [...runs, ...children];
         if (opts.only !== undefined && !Arr.some(everyRun, (run) => run.id === opts.only))
           return null;
+        const missingCheckouts = new Map(
+          yield* Effect.forEach(everyRun, (run) =>
+            Effect.gen(function* () {
+              const missing =
+                run.worktree !== null &&
+                !(yield* fs.exists(run.worktree.path).pipe(Effect.orElseSucceed(() => true)));
+              return [run.id, missing] as const;
+            }),
+          ),
+        );
         const pending = Arr.flatMap(everyRun, (run) => pendingFor(proposals, run.id, now));
         const cards = opts.only === undefined ? opts.cards : undefined;
         const carried = yield* Effect.forEach(everyRun, (run) =>
@@ -1265,6 +1282,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
                 ),
                 since,
                 quietMs,
+                [...missingCheckouts],
               ]);
         const kept = cards?.kept.get(id);
         if (kept !== undefined && kept.key === key) {
@@ -1675,6 +1693,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           const current = gate.forged;
           const fresh =
             current?.read !== undefined &&
+            epochMs(current.read) <= now &&
             now - epochMs(current.read) <= 2 * MERGE_POLL_MS &&
             epochMs(current.asked ?? current.read) <= epochMs(current.read);
           if ("head" in go && (!fresh || current?.head !== go.head))
@@ -1699,7 +1718,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           leader;
         const offered =
           planReady || (shippingMr !== null && go === undefined)
-            ? primaryOf(yield* offersOfRun(shippingOwner.id))
+            ? offerOf(yield* offersOfRun(shippingOwner.id), planReady ? undefined : "release")
             : null;
         const offer =
           offered === null || shippingOwner.id === leader.id
@@ -1783,21 +1802,39 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         const dated = Arr.flatMap(fates, (one) => {
           const facts = forge.get(one.id);
           const ref = readMrRef(one.mr);
-          if (one.settlement.by !== null || facts?.read === undefined || ref === null) return [];
-          const read = epochMs(facts.read);
+          if (
+            one.settlement.by !== null ||
+            facts === undefined ||
+            ref === null ||
+            (facts.read === undefined && facts.asked === undefined)
+          )
+            return [];
+          const read = facts.read === undefined ? null : epochMs(facts.read);
           return [
             {
               forge: forgeOfRef(ref) === "github" ? "GitHub" : "GitLab",
               read,
-              failed: epochMs(facts.asked ?? facts.read) > read,
+              failed: read === null || (facts.asked !== undefined && epochMs(facts.asked) > read),
             },
           ];
-        }).sort((a, b) => Number(b.failed) - Number(a.failed) || a.read - b.read)[0];
+        }).sort((a, b) => Number(b.failed) - Number(a.failed) || (a.read ?? 0) - (b.read ?? 0))[0];
         const answeredAt = (now: number) =>
-          dated === undefined || (!dated.failed && now - dated.read <= 2 * MERGE_POLL_MS)
+          dated === undefined ||
+          (!dated.failed && dated.read !== null && now - dated.read <= 2 * MERGE_POLL_MS)
             ? null
-            : { forge: dated.forge, ago: agoMs(dated.read, now), failed: dated.failed };
-        const sentenceAt = (now: number) =>
+            : {
+                forge: dated.forge,
+                ago: dated.read === null ? null : agoMs(dated.read, now),
+                failed: dated.failed,
+              };
+        const missingCheckout =
+          !landed &&
+          (missingCheckouts.get(leader.id) === true ||
+            Arr.some(
+              each,
+              (one) => one.settlement.by === null && missingCheckouts.get(one.owner.id) === true,
+            ));
+        const saidAt = (now: number) =>
           go !== undefined
             ? (shippingFailure ??
               `${shipping === "merge" ? "Merge" : shipping === "stage" ? "Stage" : "Deploy"} ${"tag" in go ? go.tag : short(go.head)}: ready for your go.`)
@@ -1849,6 +1886,12 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
                         by: spoken.by,
                       },
               });
+        const sentenceAt = (now: number) =>
+          `${saidAt(now)}${
+            missingCheckout
+              ? " This work has no checkout; a follow-up recreates it from the pushed branch."
+              : ""
+          }`;
         const bare: TaskView = {
           id,
           name,
@@ -1982,10 +2025,14 @@ export function readyRuns(
   );
 }
 
-/** The offer a card presents first: the one its module marks primary and can make now. */
-const primaryOf = (offers: ReadonlyArray<OfferView>): BoardOffer | null => {
+const offerOf = (offers: ReadonlyArray<OfferView>, id?: string): BoardOffer | null => {
   const first = Option.getOrUndefined(
-    Arr.findFirst(offers, (one) => one.primary && one.unavailable === null),
+    Arr.findFirst(
+      offers,
+      (one) =>
+        one.unavailable === null &&
+        (id === undefined ? one.primary : one.id === id && one.kind === "follow-up"),
+    ),
   );
   if (first === undefined) return null;
   const offer = { id: first.id, title: first.title };

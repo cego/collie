@@ -1893,5 +1893,8 @@ the host sends the requester the status, summary or failure reason and
 `collie run show <id>` for the full Output. The Delivery uses the agent's sender line and
 a request id derived from the started Run. A restart reuses that Delivery. Delivery uses
 `boundary`, supported by all harnesses. A gone agent, an unpaired Machine or a Machine
-that does not answer within fifteen seconds leaves an undelivered report with its reason;
-there is no retry queue. `run show` and the drawer show the requester and report.
+that does not answer within fifteen seconds leaves an undelivered report with its reason.
+A report that did not reach its Machine is sent again, with the same request id and text,
+each time that Machine's link comes back, so the agent is told once; a gone agent or an
+unpaired Machine is final. The report's `tries` keep the earlier tries. `run show` and the
+drawer show the requester and report.

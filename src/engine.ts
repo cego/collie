@@ -124,7 +124,7 @@ import { currentEnv } from "./env";
 import { waitForMemory } from "./memory-wait";
 import { measure, readMeasurements } from "./measurement";
 import { finalMeasurementLine, type Measurement } from "./measurement-model";
-import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
+import { PROJECTS_ROOT_OPTION, projectsRoot, repositoryCheckout } from "./projects";
 import { gitDirOf, publicationCheckouts, throughAliases, remoteOf } from "./issue-privacy";
 import {
   HelleClaimSchema,
@@ -761,7 +761,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export const StageReadSchema: Schema.Codec<StageRead, unknown, never, never>;
   /** A merge request as its forge reads it now: its state and the branches it merges, and its plan's wave where a fan-out's Change run opened it. */
   export type MergeRequestRead =
-    | { readonly _tag: "Read"; readonly state: string; readonly source: string; readonly target: string; readonly wave?: { readonly plan: string; readonly at: number } }
+    | { readonly _tag: "Read"; readonly state: string; readonly source: string; readonly target: string; readonly merged?: string; readonly checkout?: string; readonly wave?: { readonly plan: string; readonly at: number } }
     | { readonly _tag: "Unreadable"; readonly why: string };
   export const MergeRequestReadSchema: Schema.Codec<MergeRequestRead, unknown, never, never>;
   /** A set's merge requests, blockers first, each with those of the set it waits on, by branch and by its plan's earlier waves; or those waiting on each other. */
@@ -1154,6 +1154,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly readMergeRequest: (options: {
       readonly cwd: string;
       readonly mr: string;
+      readonly checkout?: boolean;
     }) => Effect.Effect<MergeRequestRead>;
     /** Whether stage is shown back on what production carries, and off \`off\`, in \`environments\` where named. Take it inside an Activity. */
     readonly readRollback: (options: {
@@ -5130,7 +5131,21 @@ export const hostLayer = (options: {
                 why: `${asked.mr} is not a merge request`,
               } satisfies MergeRequestRead)
             : Effect.gen(function* () {
-                const read = yield* under(readMergeRequest({ ref, cwd: asked.cwd, run: runShell }));
+                let read: MergeRequestRead = yield* under(
+                  readMergeRequest({ ref, cwd: asked.cwd, run: runShell }),
+                );
+                if (
+                  read._tag === "Read" &&
+                  asked.checkout === true &&
+                  ref.project !== null &&
+                  (yield* under(projectHere(asked.cwd, runShell))) !== ref.project
+                ) {
+                  const { env } = yield* placing;
+                  const found = yield* under(
+                    repositoryCheckout({ ...env, cwd: asked.cwd }, `https://${ref.project}`),
+                  ).pipe(Effect.orDie);
+                  if (found !== null && "path" in found) read = { ...read, checkout: found.path };
+                }
                 const id = mrId(asked.mr);
                 const wave =
                   read._tag === "Read" && id !== null ? yield* planWaveOf(id) : undefined;

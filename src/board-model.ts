@@ -362,12 +362,6 @@ export function readyToRelease(facts: ReleaseFacts): ReadyToRelease {
     else if (facts.ci.state === "failed") lack("ci", `${facts.ci.name} failed in CI`);
     else if (facts.ci.state === "running") lack("ci", "CI is still running", true);
     else if (facts.ci.state === "unknown") lack("ci", "its pipeline has not passed at its head");
-    if (facts.mergeable === null)
-      lack("mergeable", "the forge has not said whether it can merge", true);
-    else if (facts.mergeable.state === "blocked")
-      lack("mergeable", `the forge says it cannot merge: ${facts.mergeable.said}`);
-    else if (facts.mergeable.state === "unknown")
-      lack("mergeable", "the forge is still working out whether it can merge", true);
     if (
       facts.unreadable ||
       facts.read === null ||
@@ -377,8 +371,13 @@ export function readyToRelease(facts: ReleaseFacts): ReadyToRelease {
       facts.head === null ||
       facts.head !== facts.readHead
     )
-      if (!Arr.some(missing, (one) => one.fact === "mergeable"))
-        lack("mergeable", "the forge answer is stale, unreadable or not at the current head", true);
+      lack("mergeable", "the forge answer is stale, unreadable or not at the current head", true);
+    else if (facts.mergeable === null)
+      lack("mergeable", "the forge has not said whether it can merge", true);
+    else if (facts.mergeable.state === "blocked")
+      lack("mergeable", `the forge says it cannot merge: ${facts.mergeable.said}`);
+    else if (facts.mergeable.state === "unknown")
+      lack("mergeable", "the forge is still working out whether it can merge", true);
   }
   if (facts.blocking > 0)
     lack("review", `${facts.blocking} blocking review finding(s) are unresolved`);
@@ -787,10 +786,17 @@ export type RequestedBy = typeof RequestedBy.Type;
 export const requestedByLine = (who: RequestedBy) =>
   `Started by ${who.agent} of ${who.run} on ${who.machine.name}`;
 
-export const RunReport = Schema.Struct({
+const ReportTry = Schema.Struct({
   state: Schema.Literals(["delivered", "undelivered"]),
   at: Schema.String,
   note: Schema.String,
+});
+export const RunReport = Schema.Struct({
+  ...ReportTry.fields,
+  /** Undelivered because the requesting Machine could not be reached, so sent again once it is. */
+  unreached: Schema.optionalKey(Schema.Boolean),
+  /** The tries before this one, oldest first. */
+  tries: Schema.optionalKey(Schema.Array(ReportTry)),
   closed: Schema.Boolean,
   closure: Schema.optionalKey(Schema.String),
 });

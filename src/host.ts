@@ -4172,6 +4172,8 @@ const own = (
     const declared: Declared = new Map();
     const stamp = yield* (yield* SecureRandom.SecureRandom).uuidV4();
     const toasted = yield* PubSub.unbounded<Toasted>();
+    // Kept until the reports layer takes them, so a link up before it starts is not missed.
+    const linked = yield* Queue.unbounded<Peer>();
     const peers = yield* startPeers({
       dir,
       userDir: env.userDir,
@@ -4198,6 +4200,7 @@ const own = (
         Effect.map((backend) => backend === "herdr"),
         Effect.provideContext(bun),
       ),
+      linked: (peer) => Queue.offer(linked, peer).pipe(Effect.asVoid),
       tell: (peer) =>
         Effect.scoped(
           connectPeer(dir, peer.name, { as: "host", client: machineName(), stamp }).pipe(
@@ -4223,7 +4226,9 @@ const own = (
             Layer.effectDiscard(
               Effect.gen(function* () {
                 const { reportsLayer } = yield* Effect.promise(() => import("./reports"));
-                yield* Layer.build(reportsLayer({ env, installation, stamp, crashAt }));
+                yield* Layer.build(
+                  reportsLayer({ env, installation, stamp, crashAt, linked, live: peers.live }),
+                );
               }),
             ),
           ).pipe(
