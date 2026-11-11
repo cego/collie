@@ -103,6 +103,20 @@ fn runtime() -> Runtime<App> {
     runtime
 }
 
+/// A card is opened by a second press; the first selects it.
+fn open(runtime: &mut Runtime<App>, key: &str, at: f64) {
+    let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
+    runtime.pointer_move(x, y);
+    runtime.frame(at);
+    for _ in 0..2 {
+        runtime.pointer_down(x, y);
+        runtime.frame(0.05);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.05);
+    }
+    runtime.frame(1.0);
+}
+
 fn tap(runtime: &mut Runtime<App>, key: &str, at: f64) {
     let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
     runtime.pointer_move(x, y);
@@ -127,7 +141,7 @@ fn the_first_frame_with_cards_marks_the_board_usable() {
 fn a_key_sent_to_the_pane_and_the_frame_after_its_output_mark_the_echo() {
     let mut runtime = runtime();
     frame_drawn(&runtime, 10.0);
-    tap(&mut runtime, "card-b2", 100.0);
+    open(&mut runtime, "card-b2", 100.0);
     runtime.update(|board, _| board.terminal.as_ref().unwrap().keyed_at.set(Some(600.0)));
     assert_eq!(
         frame_drawn(&runtime, 605.0),
@@ -144,7 +158,7 @@ fn a_key_sent_to_the_pane_and_the_frame_after_its_output_mark_the_echo() {
 fn keys_before_presentation_keep_the_first_timestamp_until_its_echo_is_drawn() {
     let mut runtime = runtime();
     frame_drawn(&runtime, 10.0);
-    tap(&mut runtime, "card-b2", 100.0);
+    open(&mut runtime, "card-b2", 100.0);
     tap(&mut runtime, "terminal-grid", 200.0);
     let key = || rune::KeyEvent {
         key: rune::Key::Text("a".into()),
@@ -295,7 +309,7 @@ fn non_text_events_and_transport_errors_do_not_start_chat_timing() {
 fn each_frame_of_a_scrolled_diff_is_marked() {
     let mut runtime = runtime();
     frame_drawn(&runtime, 10.0);
-    tap(&mut runtime, "card-b2", 100.0);
+    open(&mut runtime, "card-b2", 100.0);
     let lines: String = (0..400).map(|n| format!("+line {n}\n")).collect();
     let patch = format!("diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -0,0 +1,400 @@\n{lines}");
     runtime.update(move |board, _| board.diff_read(1, &patch));

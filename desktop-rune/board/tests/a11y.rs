@@ -78,10 +78,17 @@ fn a_card_a_flow_node_and_the_chat_log_say_what_they_are() {
     let tree = runtime().accessibility_json();
     let card = within(&tree)
         .into_iter()
-        .find(|node| node["name"] == "Release 0.119.0")
+        .find(|node| node["name"] == "Fix the login redirect")
         .unwrap_or_else(|| panic!("no card in {tree:#}"));
     assert!(card["key"].as_str().unwrap().starts_with("card-"));
-    assert_eq!(card["role"], "button", "a card goes to its pane");
+    assert_eq!(
+        card["role"], "button",
+        "a card is pressed to select it and opened twice"
+    );
+    assert_eq!(
+        card["description"], "Fixing the review findings, round 2 of 5.",
+        "a card says its sentence"
+    );
 
     let map = keyed(&tree, "flow");
     assert_eq!(
