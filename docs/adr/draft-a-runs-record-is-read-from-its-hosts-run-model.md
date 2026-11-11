@@ -62,9 +62,10 @@ Cleanup sweep or a Measurement. Background work yields in bounded slices:
 - A pass over many Runs (the model's fill, a re-derive, the engine's sweep, Cleanup) takes a slice
   boundary before each Run. While any front-door answer is being served, a boundary
   holds its pass, for at most 250 ms, so a busy front door cannot starve the board.
-- Every RPC handler is served through the shared wrapper. A stream is served only until its
-  first value, including a memory-wait sentence; later output and its producer lose foreground
-  priority. `bench/front-door-wait.ts` measures `verify` first values, `read` answers and board builds
+- Every RPC handler is served through the shared wrapper. A stream's lease ends on its first
+  value, termination or after 250 ms, whichever comes first. Expiry clears its producer's
+  foreground priority without cancelling it or changing its values or errors. Idle notifications
+  and ongoing Measurements stay background. `bench/front-door-wait.ts` measures `verify` first values, `read` answers and board builds
   on the record-open fixture's host.
 - The host's scheduler ends a turn of the event loop once it has run fibers for 8 ms, so a request
   waiting behind background fibers is read at the next turn. A fiber serving a read queues its

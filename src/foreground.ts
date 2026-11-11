@@ -3,8 +3,8 @@
 
 import { Context, Effect, Fiber, Latch, Layer } from "effect";
 
-/** The longest a slice boundary holds a pass for interactive work, so a busy door starves nothing. */
-const PATIENCE = "250 millis";
+/** The longest a slice boundary or a stream's first value holds a pass. */
+export const PATIENCE = "250 millis";
 
 export interface ForegroundApi {
   /** `effect`, with every background pass held at its next slice boundary until it ends. */

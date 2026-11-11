@@ -36,6 +36,7 @@ import {
   Duration,
   Effect,
   Exit,
+  Fiber,
   FileSystem,
   Layer,
   Logger,
@@ -78,7 +79,7 @@ import { markFirst } from "./record-marks";
 import { doorThread, engineEnd, type EngineEnd, type Listed, type Opened } from "./door";
 import { SLOW_RPC_MS, firstValueTimed } from "./first-value";
 import { TurnScheduler } from "./turns";
-import { Foreground, foregroundLayer, servedNow } from "./foreground";
+import { Foreground, PATIENCE, foregroundLayer, servedNow } from "./foreground";
 import { tracingLayer } from "./tracing";
 import * as Scheduler from "effect/Scheduler";
 import {
@@ -648,13 +649,22 @@ const serveAnswer = <A, E, R>(
       firstValueTimed(answer, (ms) =>
         Effect.logWarning(`the ${name} stream took ${ms} ms to send its first value`),
       ),
-      (pull) =>
+      (pull, scope) =>
         Effect.map(Foreground, ({ serve }) => {
           let first = true;
           return Effect.suspend(() => {
             if (!first) return pull;
             first = false;
-            return serve(pull);
+            return Effect.flatMap(
+              serve(
+                Effect.gen(function* () {
+                  const pulling = yield* Effect.forkIn(pull, scope);
+                  yield* Fiber.await(pulling).pipe(Effect.timeoutOption(PATIENCE));
+                  return pulling;
+                }),
+              ),
+              Fiber.join,
+            );
           });
         }),
     );

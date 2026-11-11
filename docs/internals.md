@@ -98,9 +98,10 @@ start, since renaming a file the process still writes to would not move its writ
 ### Tracing the host
 
 Every front-door answer is served before background passes, through the shared RPC handler
-wrapper. A stream is served until its first value, including a memory-wait sentence, then
-background passes resume and its producer loses foreground priority. Slice boundaries hold
-for at most 250 ms. `bench/front-door-wait.ts` measures `verify` first values and `read` answers
+wrapper. A stream's lease ends on its first value, termination or after 250 ms, whichever
+comes first. Its producer then loses foreground priority and continues with the same values
+and errors. Idle notifications and ongoing Measurements stay background. Slice boundaries
+hold for at most 250 ms. `bench/front-door-wait.ts` measures `verify` first values and `read` answers
 against the record-open fixture's host while its live Runs keep the board building.
 The harness disables OTLP and records every board-build duration through `COLLIE_RECORD_MARKS`,
 including builds below the warning threshold. Missing marks invalidate a sample.
@@ -2019,8 +2020,8 @@ its time.
   none. The Run views are kept the same way once their execution has finished (`KeptViews`
   in `src/engine.ts`). A pass over many Runs (the model's fill, a board re-derive, the
   engine's sweep, `tendQuestions`, Cleanup) takes `Foreground`'s `boundary` before each Run
-  (`src/foreground.ts`). Every front-door answer runs under `serve`, a stream only until
-  its first value, and while one does, every boundary holds its pass, for at most 250 ms.
+  (`src/foreground.ts`). Every front-door answer runs under `serve`, a stream until its
+  first value, termination or 250 ms. While one does, every boundary holds its pass, for at most 250 ms.
   The host runs on `TurnScheduler` (`src/turns.ts`), which ends a turn of the event
   loop once its fibers have run for 8 ms. A fiber under `serve` queues its tasks ahead of
   every other fiber's, and the others yield while one waits, so a Run start's work steps

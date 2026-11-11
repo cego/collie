@@ -1,6 +1,6 @@
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { Clock, Deferred, Effect, Fiber, Queue, Scheduler, Stream } from "effect";
+import { Clock, Deferred, Effect, Fiber, Queue, Result, Scheduler, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { Foreground, makeForeground, servedNow } from "../src/foreground";
 import { timingFirstValues } from "../src/host";
@@ -111,3 +111,61 @@ test("verify and read answers hold background slices only until their first valu
       }),
     ),
   ));
+
+test.each(["toasts", "measure"] as const)(
+  "%s releases its stream lease while its producer continues with the same values and error",
+  (name) =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const foreground = yield* makeForeground;
+          const clock = yield* TestClock.make();
+          return yield* Effect.gen(function* () {
+            const entered = yield* Deferred.make<void>();
+            const release = yield* Deferred.make<void>();
+            const slices = yield* Queue.unbounded<void>();
+            let boundaries = 0;
+            yield* Effect.forever(
+              Queue.take(slices).pipe(
+                Effect.andThen(foreground.boundary),
+                Effect.andThen(Effect.sync(() => boundaries++)),
+              ),
+            ).pipe(Effect.forkScoped);
+            const source = Stream.callback<string, string>((queue) =>
+              Effect.gen(function* () {
+                yield* Deferred.succeed(entered, undefined);
+                yield* Deferred.await(release);
+                expect(servedNow()).toBe(false);
+                yield* Queue.offer(queue, "message");
+                yield* Queue.fail(queue, "late failure");
+              }),
+            );
+            const handlers = timingFirstValues({ toasts: () => source, measure: () => source });
+            const seen: string[] = [];
+            const following = yield* handlers[name]().pipe(
+              Stream.tap((value) => Effect.sync(() => seen.push(value))),
+              Stream.runDrain,
+              Effect.result,
+              Effect.forkScoped,
+            );
+            yield* Deferred.await(entered);
+            yield* Queue.offer(slices, undefined);
+            yield* clock.adjust("1 millis");
+            expect(boundaries).toBe(0);
+            yield* clock.adjust("250 millis");
+            expect(boundaries).toBe(1);
+            yield* Queue.offer(slices, undefined);
+            yield* clock.adjust("1 millis");
+            expect(boundaries).toBe(2);
+            expect(following.pollUnsafe()).toBeUndefined();
+            yield* Deferred.succeed(release, undefined);
+            expect(yield* Fiber.join(following)).toEqual(Result.fail("late failure"));
+            expect(seen).toEqual(["message"]);
+          }).pipe(
+            Effect.provideService(Foreground, foreground),
+            Effect.provideService(Clock.Clock, clock),
+          );
+        }),
+      ),
+    ),
+);
