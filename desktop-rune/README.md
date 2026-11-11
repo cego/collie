@@ -56,6 +56,7 @@ cargo run -p collie-desktop-board      # the window, with the live board of this
 cargo run -p collie-desktop-board -- --snap board.png --tree board.json   # headless
 cargo run -p collie-desktop-board -- --script s.json --frames N --out frames/   # headless input, after the first live board
 COLLIE_RUNE_SNAP_AT_START=1 cargo run -p collie-desktop-board -- --script s.json --frames N --out frames/   # the same, from the start
+cargo run -p collie-desktop-board --example scenes -- --scene record --snap record.png --theme light   # the test Flock and a record, on a fake core
 cargo run -p collie-desktop-chat --bin record-say -- --out x.ndjson --say 'hello'   # record a turn
 cargo run -p collie-desktop-chat --bin corpus -- <dir of .md> [--png <dir>]  # the corpus table
 cargo run --release -p collie-desktop-chat --example highlight-cost -- <dir of .md>
