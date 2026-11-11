@@ -72,6 +72,6 @@ test("the chat is told what Pi was given, what was left out and how a server is 
 
 test("with nothing configured the chat is told so rather than promised tools", () => {
   const told = piConnections(piServers({}));
-  expect(told).toContain("none");
+  expect(told).toContain("this chat has none, beside");
   expect(told).not.toContain("Left out");
 });
