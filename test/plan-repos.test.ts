@@ -622,6 +622,7 @@ test("a Needs merged line Collie cannot read is refused, naming the ticket", () 
     "run-ac644eef card extra",
     "run-ac644eef card, , run-e15f4a62",
     "run-ac644eef a..b",
+    "None, run-ac644eef card extra",
   ]) {
     const plan = readPlanRepos([ticket("01-a"), needing("02-b", line)], new Set());
     expect([line, plan.refusal?.kind]).toEqual([line, "bad-prerequisite"]);
