@@ -1,9 +1,15 @@
 import * as Arr from "effect/Array";
-import { expect, test } from "bun:test";
+import { beforeEach, expect, test } from "bun:test";
 import type { Question } from "../src/board-model";
 import { ActionFailed, type DesktopAction } from "../desktop/src/shared/flock";
 import { HOLD, questionnaireView } from "../desktop/src/shared/questionnaire";
 import { type Act, useAnswering } from "../desktop/view/app/composables/useAnswering";
+
+beforeEach(() => {
+  const answering = useAnswering();
+  answering.asking.value = new Map();
+  answering.settle([]);
+});
 
 const asked = (id: string): Question => ({
   kind: "question",
