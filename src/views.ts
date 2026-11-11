@@ -535,7 +535,9 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
     : { review: { _tag: "None", reason: "" } satisfies Panel, plan: null };
   const attention = yield* attentionFor(run);
   const log = parts && opts.tail ? yield* tailOf(run) : null;
+  const progress = yield* branchMovement(run);
   return {
+    ...(progress === null ? {} : { branchProgress: progress }),
     id: run.id,
     requestedBy: run.requestedBy,
     startedBy: startedBy(yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => [])), run),
@@ -626,7 +628,6 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
     agents: yield* runAgents(run.id),
     diff: parts ? yield* diffOf(run) : null,
     flow: opts.flow ?? undefined,
-    branchProgress: yield* branchMovement(run),
   } satisfies RunDetail;
 });
 
