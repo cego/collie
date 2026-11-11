@@ -1678,7 +1678,9 @@ test("no gh, or a gh nobody logged in to, leaves the card unchecked and disclose
       for (const over of [{ installed: false }, { loggedIn: [] }]) {
         const { card } = yield* cardAfter(PR, github("open", [], over));
         expect(card.checks).toEqual({ state: "unchecked" });
-        expect(card.sentence).toBe("cego/collie#30 is open; nothing has checked it. GitHub could not be read; it has not answered yet.");
+        expect(card.sentence).toBe(
+          "cego/collie#30 is open; nothing has checked it. GitHub could not be read; it has not answered yet.",
+        );
       }
     }),
   ));

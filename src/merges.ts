@@ -551,9 +551,11 @@ const answers = Effect.fn("Merges.answers")(function* (stateDir: string) {
 
 /** Each merge request's state, as the last watch learned it. */
 export const readMrStates = Effect.fn("Merges.read")(function* (stateDir: string) {
-  return new Map(Arr.flatMap(yield* answers(stateDir), ([label, entry]) =>
-    entry.state === undefined ? [] : [[label, entry.state] as const],
-  ));
+  return new Map(
+    Arr.flatMap(yield* answers(stateDir), ([label, entry]) =>
+      entry.state === undefined ? [] : [[label, entry.state] as const],
+    ),
+  );
 });
 
 /** What the forge said of each merge request's checks; an entry in the old shape has none. */

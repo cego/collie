@@ -1575,25 +1575,92 @@ for (const state of ["failed", "stopped"] as const)
       }),
     ));
 
+test("an owed Task discloses a removed checkout and refreshes when it is restored", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const fs = yield* FileSystem.FileSystem;
+      const path = `${dir}/removed-checkout`;
+      const run = yield* madeRun(dir, {
+        task: TASK.id,
+        state: "succeeded",
+        branch: "mk/recovered",
+        mr: M,
+        worktree: {
+          path,
+          branch: "mk/recovered",
+          created_by_collie: true,
+          created_branch: false,
+          created_on: null,
+          managed_by: "git",
+          workspace_id: null,
+          made_at: null,
+          root_tab_id: null,
+          root_pane_id: null,
+        },
+      });
+      const cards = { revision: () => 1, kept: new Map(), markers: new Map() };
+      const read = () => board(env, [run], { ...unapproved(), cards });
+      const [missing] = yield* read();
+      expect(sectionOf(missing!)).toBe("waiting");
+      expect(missing!.sentence).toContain("no checkout");
+      expect(missing!.sentence).toContain("mk/support!279");
+      expect(yield* fs.exists(path)).toBe(false);
+      const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(TaskView))(missing!);
+      const received = yield* Schema.decodeEffect(Schema.fromJsonString(TaskView))(encoded);
+      expect(Arr.join(boardLines([received]), "\n")).toContain("no checkout");
+      expect(herdLines([received], epochMs("2026-09-14T10:05:00Z"))).toContain("no checkout");
+      yield* fs.makeDirectory(path);
+      const [restored] = yield* read();
+      expect(restored!.sentence).not.toContain("no checkout");
+      yield* fs.remove(path, { recursive: true });
+      const [removed] = yield* read();
+      expect(removed!.sentence).toContain("no checkout");
+      const [landed] = yield* board(env, [run], { ...unapproved("merged"), cards });
+      expect(landed!.sentence).not.toContain("no checkout");
+    }),
+  ));
+
 test("Merge uses the Release offer even when an unrelated follow-up is primary", () =>
   runEffect(
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
       const { second } = yield* supersededChain(dir);
       const release: OfferView = {
-        id: "release", title: "Release", workflow: "renamed-delivery", arguments: null,
-        kind: "follow-up" as const, primary: false, unavailable: null,
+        id: "release",
+        title: "Release",
+        workflow: "renamed-delivery",
+        arguments: null,
+        kind: "follow-up" as const,
+        primary: false,
+        unavailable: null,
       };
       const unrelated = { ...release, id: "follow-up", title: "Keep going on this", primary: true };
-      const read = (offers: ReadonlyArray<typeof release>) => board(env, [second], {
-        ...unapproved(),
-        forge: new Map([[M_ID, { ...unapproved().forge.get(M_ID)!,
-          mergeable: { state: "mergeable", said: "approved" } }]]),
-        head: () => Effect.succeed(M_HEAD), offers: () => Effect.succeed(offers),
-      });
+      const read = (offers: ReadonlyArray<typeof release>) =>
+        board(env, [second], {
+          ...unapproved(),
+          forge: new Map([
+            [
+              M_ID,
+              {
+                ...unapproved().forge.get(M_ID)!,
+                mergeable: { state: "mergeable", said: "approved" },
+              },
+            ],
+          ]),
+          head: () => Effect.succeed(M_HEAD),
+          offers: () => Effect.succeed(offers),
+        });
       const [ready] = yield* read([unrelated, release]);
-      expect(primaryAction(ready!)).toEqual({ kind: "offer", offer: { id: "release", title: "Release" } });
-      for (const offers of [[unrelated], [unrelated, { ...release, unavailable: "not connected" }], []]) {
+      expect(primaryAction(ready!)).toEqual({
+        kind: "offer",
+        offer: { id: "release", title: "Release" },
+      });
+      for (const offers of [
+        [unrelated],
+        [unrelated, { ...release, unavailable: "not connected" }],
+        [],
+      ]) {
         const [card] = yield* read(offers);
         expect(card!.offer).toBeNull();
         expect(primaryAction(card!)?.kind).toBe("open-mr");
