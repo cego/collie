@@ -209,6 +209,7 @@ export const ForgeModel = Schema.Struct({
       Schema.Struct({
         name: Schema.String,
         tier: Schema.String,
+        project: Schema.optionalKey(Schema.String),
         deployed: Schema.optionalKey(Schema.String),
         /** A newer deployment there that failed, which is not what is live. */
         failed: Schema.optionalKey(Schema.String),
@@ -335,6 +336,16 @@ export const ForgeModel = Schema.Struct({
         fields: Schema.Array(Schema.String),
         by: Schema.String,
         at: Schema.String,
+      }),
+    ),
+  ),
+  tags: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        project: Schema.String,
+        run: Schema.String,
+        sha: Schema.String,
+        merged: Schema.Array(Schema.String),
       }),
     ),
   ),
@@ -942,7 +953,11 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
             ),
           );
     if (model.deploysDown === true) return no();
-    const environments = model.environments ?? [];
+    const project = `${flag(args, "--hostname")}/${decodeURIComponent(/^projects\/([^/]+)/.exec(route)?.[1] ?? "")}`;
+    const environments = Arr.filter(
+      model.environments ?? [],
+      (one) => one.project === undefined || one.project === project,
+    );
     if (/\/environments(\?|$)/.test(route))
       return json(
         pageOf(
@@ -955,7 +970,7 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
         pageOf(
           route,
           Arr.map(
-            deploymentsAsked(model, route),
+            deploymentsAsked({ ...model, environments }, route),
             ({ sha, status, environment, job, pipeline }) => ({
               sha,
               status,
