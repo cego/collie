@@ -100,8 +100,14 @@ start, since renaming a file the process still writes to would not move its writ
 Every front-door answer is served before background passes, through the shared RPC handler
 wrapper. A stream's lease ends on its first value, termination or after 250 ms, whichever
 comes first. Its producer then loses foreground priority and continues with the same values
-and errors. Idle notifications and ongoing Measurements stay background. Slice boundaries
-hold for at most 250 ms. `bench/front-door-wait.ts` measures `verify` first values and `read` answers
+and errors. Idle notifications and ongoing Measurements stay background.
+
+A read awaiting a fresh board temporarily suspends only its own lease, so the build can
+advance. The lease is restored only while live, including after errors or cancellation.
+The answer keeps the board's read-your-writes coverage and updated readiness and merge-request facts.
+Slice boundaries hold for at most 250 ms.
+
+`bench/front-door-wait.ts` measures `verify` first values and `read` answers
 against the record-open fixture's host while its live Runs keep the board building.
 The harness disables OTLP and records every board-build duration through `COLLIE_RECORD_MARKS`,
 including builds below the warning threshold. Missing marks invalidate a sample.

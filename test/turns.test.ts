@@ -210,3 +210,91 @@ test.each(["read", "verify"] as const)(
       ),
     ),
 );
+
+test("waiting for a dependency cannot restore an expired stream lease", () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const foreground = yield* makeForeground;
+        const clock = yield* TestClock.make();
+        return yield* Effect.gen(function* () {
+          const entered = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const handlers = timingFirstValues({
+            verify: () =>
+              Stream.fromEffect(
+                Effect.gen(function* () {
+                  yield* Deferred.succeed(entered, undefined);
+                  yield* foreground.wait(Deferred.await(release));
+                  expect(servedNow()).toBe(false);
+                  return "Result";
+                }),
+              ),
+          });
+          const following = yield* handlers.verify().pipe(Stream.runCollect, Effect.forkScoped);
+          yield* Deferred.await(entered);
+          yield* clock.adjust("1 millis");
+          const before = yield* foreground.boundary.pipe(Effect.forkScoped);
+          yield* clock.adjust("1 millis");
+          expect(before.pollUnsafe()).toBeDefined();
+          yield* clock.adjust("250 millis");
+          expect(following.pollUnsafe()).toBeUndefined();
+          yield* Deferred.succeed(release, undefined);
+          expect(yield* Fiber.join(following)).toEqual(["Result"]);
+          const after = yield* foreground.boundary.pipe(Effect.forkScoped);
+          yield* clock.adjust("1 millis");
+          expect(after.pollUnsafe()).toBeDefined();
+        }).pipe(
+          Effect.provideService(Foreground, foreground),
+          Effect.provideService(Clock.Clock, clock),
+        );
+      }),
+    ),
+  ));
+
+test.each(["failure", "cancel"] as const)(
+  "a dependency wait cleans up its lease after %s",
+  (outcome) =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const foreground = yield* makeForeground;
+          const clock = yield* TestClock.make();
+          return yield* Effect.gen(function* () {
+            const entered = yield* Deferred.make<void>();
+            const release = yield* Deferred.make<void>();
+            const handlers = timingFirstValues({
+              read: () =>
+                Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(
+                    foreground.wait(
+                      Deferred.await(release).pipe(
+                        Effect.andThen(Effect.fail("dependency failed")),
+                      ),
+                    ),
+                  ),
+                  Effect.tapError(() => Effect.sync(() => expect(servedNow()).toBe(true))),
+                ),
+            });
+            const reading = yield* handlers.read().pipe(Effect.result, Effect.forkScoped);
+            yield* Deferred.await(entered);
+            yield* clock.adjust("1 millis");
+            const before = yield* foreground.boundary.pipe(Effect.forkScoped);
+            yield* clock.adjust("1 millis");
+            expect(before.pollUnsafe()).toBeDefined();
+            if (outcome === "cancel") yield* Fiber.interrupt(reading);
+            else {
+              yield* Deferred.succeed(release, undefined);
+              expect(yield* Fiber.join(reading)).toEqual(Result.fail("dependency failed"));
+            }
+            const after = yield* foreground.boundary.pipe(Effect.forkScoped);
+            yield* clock.adjust("1 millis");
+            expect(after.pollUnsafe()).toBeDefined();
+          }).pipe(
+            Effect.provideService(Foreground, foreground),
+            Effect.provideService(Clock.Clock, clock),
+          );
+        }),
+      ),
+    ),
+);

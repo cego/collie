@@ -6,6 +6,7 @@ import * as Arr from "effect/Array";
 import { Cause, Clock, Effect, Option, type Scope, Stream, SubscriptionRef } from "effect";
 import type { BoardMessage, BoardSnapshot, TaskView } from "./board-model";
 import { recordMarks } from "./record-marks";
+import { Foreground } from "./foreground";
 
 /** How long a build may take before the host log says so. */
 const SLOW_BUILD_MS = 2_000;
@@ -63,18 +64,21 @@ export const shareBoard = <A, E, R, R2>(options: {
       ),
       Effect.forkScoped,
     );
-    const boards = Stream.unwrap(
-      Effect.sync(() => {
-        const since = seen;
-        return SubscriptionRef.changes(latest).pipe(
-          // A reader that reads slowly skips to the latest board; a client is told by diff.
-          Stream.buffer({ capacity: 1, strategy: "sliding" }),
-          Stream.filter(Option.isSome),
-          Stream.map((built) => built.value),
-          Stream.filter((built) => built.covers >= since),
-          Stream.map((built) => built.board),
-        );
-      }),
+    const boards = Stream.transformPull(
+      Stream.unwrap(
+        Effect.sync(() => {
+          const since = seen;
+          return SubscriptionRef.changes(latest).pipe(
+            // A reader that reads slowly skips to the latest board; a client is told by diff.
+            Stream.buffer({ capacity: 1, strategy: "sliding" }),
+            Stream.filter(Option.isSome),
+            Stream.map((built) => built.value),
+            Stream.filter((built) => built.covers >= since),
+            Stream.map((built) => built.board),
+          );
+        }),
+      ),
+      (pull) => Effect.map(Foreground, ({ wait }) => wait(pull)),
     );
     const latestBoard = SubscriptionRef.changes(latest).pipe(
       Stream.filter(Option.isSome),
@@ -83,6 +87,7 @@ export const shareBoard = <A, E, R, R2>(options: {
       Effect.flatMap((board) =>
         Option.isSome(board) ? Effect.succeed(board.value) : Effect.never,
       ),
+      (effect) => Effect.flatMap(Foreground, ({ wait }) => wait(effect)),
     );
     return { boards, latest: latestBoard };
   });

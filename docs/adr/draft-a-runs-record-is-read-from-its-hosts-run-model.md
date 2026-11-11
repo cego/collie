@@ -52,8 +52,8 @@ shows: an act on a Step is stale only where that Step finished after the revisio
 and a Step shown going again finishes anew. Read-your-writes keeps the board's rule: after a write, a reader sees that write's revision
 or a later one.
 
-**D6. Interactive reads come first.** No front-door answer waits on a board derivation, the
-Cleanup sweep or a Measurement. Background work yields in bounded slices:
+**D6. Interactive reads come first.** Every front-door answer is served first, ahead of board
+derivations, the Cleanup sweep and Measurements. Background work yields in bounded slices:
 
 - The board is derived incrementally. A Task's card is kept with the key it was derived from: its
   Runs' revisions, their markers, its agents, its pending work and its merge requests' states. It is
@@ -67,6 +67,9 @@ Cleanup sweep or a Measurement. Background work yields in bounded slices:
   foreground priority without cancelling it or changing its values or errors. Idle notifications
   and ongoing Measurements stay background. `bench/front-door-wait.ts` measures `verify` first values, `read` answers and board builds
   on the record-open fixture's host.
+- A read awaiting a fresh board suspends only its own lease, so the build can advance. It
+  restores that lease only while live, including after errors or cancellation. The board still
+  covers the writes seen before the read; readiness and merge-request facts are not taken from an older board.
 - The host's scheduler ends a turn of the event loop once it has run fibers for 8 ms, so a request
   waiting behind background fibers is read at the next turn. A fiber serving a read queues its
   tasks ahead of every other fiber's, and the others yield while one waits, so a Run start steps
