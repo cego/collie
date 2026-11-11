@@ -457,23 +457,14 @@ rather than what the step was doing.
 
 **Park cause** — Why a Run parked, from one closed list: what the host may do about it.
 A cause either asks the Run's own agent something, or rechecks the fact it parked on, or
-needs you and says why. A cause only a person can act on never gets a **Heal**. An
-unclassified park is `unknown`, never a guess. Counted per cause
-in `collie run report`. A cause that recurs is one `self-improve` issue, keyed `park-<cause>`
-(ADR-draft-a-run-recovers-where-it-parks).
+needs you and says why. An unclassified park is `unknown`, never a guess. Counted per cause
+in `collie run report` (ADR-draft-a-run-recovers-where-it-parks).
 
 **Recovery** — What the host does about a park, without being asked: an **Output reminder**
-to an agent whose turn ended without writing its Output, a resume once a recheck shows the
-cause has cleared, and then a **Heal** before the park needs you. Bounded per Run and cause, recorded with its outcome, and proved only by the
+to an agent whose turn ended without writing its Output, and a resume once a recheck shows the
+cause has cleared. Bounded per Run and cause, recorded with its outcome, and proved only by the
 fact the park waited for, never by inactivity or an acknowledgement. It never answers a
 **Decision**, lifts a **Hold**, undoes a **Stop** or passes a gate.
-
-**Heal** — A Run the host starts for one park its other **Recovery** could not clear,
-before the park needs you. Its agent reads the parked Run's record and may only message
-that Run's agents and resume it. What it says is a claim: the park is recovered only when
-the Run leaves it. It hands you its diagnosis and why a person is needed, and hands
-`self-improve` a finding about Collie, written for everyone who runs it. A Heal is never
-healed itself (ADR-draft-a-run-recovers-where-it-parks).
 
 **Wait** — What holds a Run up at a moment: a **Decision** on it, **Stalled**, a **Hold**,
 **Short of memory**, or something it awaits that ends by itself. A Check Collie runs for it

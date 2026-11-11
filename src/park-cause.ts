@@ -38,12 +38,7 @@ export type Park = typeof Park.Type;
 type Entry =
   | { readonly kind: "asks-agent"; readonly message: string }
   | { readonly kind: "rechecks" }
-  | {
-      readonly kind: "needs-you";
-      readonly reason: string;
-      /** Only a person can act on it, so no Heal is started for it. */
-      readonly neverHeals?: true;
-    };
+  | { readonly kind: "needs-you"; readonly reason: string };
 
 export const PARK_CAUSES: Readonly<Record<ParkCause, Entry>> = {
   "output-absent": {
@@ -61,17 +56,14 @@ export const PARK_CAUSES: Readonly<Record<ParkCause, Entry>> = {
   "checkout-dirty-human": {
     kind: "needs-you",
     reason: "its checkout holds changes Collie did not make, and only you may keep or drop them",
-    neverHeals: true,
   },
   "login-missing": {
     kind: "needs-you",
     reason: "a login it needs is missing, and only you can log in",
-    neverHeals: true,
   },
   "branch-force-pushed": {
     kind: "needs-you",
     reason: "its branch was pushed over, and only you may say which history stands",
-    neverHeals: true,
   },
   "release-failed": { kind: "needs-you", reason: "its release did not complete" },
   "gate-fix-unproved": {
