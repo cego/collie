@@ -567,7 +567,8 @@ beside every module's own inputs as one of the names the host settles. It names 
    **you or an agent gave** names, cut from its remote tip, so the run's commits land on
    it and its `mr` step updates it. The work names one when its whole text is one
    reference (`!42`, `#30`, `owner/repo#30` or a merge or pull request URL) or when it holds
-   exactly one merge or pull request URL; a bare `!42` inside prose is not read. A merged
+   exactly one merge or pull request URL, read whole, so a longer URL that only holds one's
+   path names none; a bare `!42` inside prose is not read. A merged
    or closed one, one of another project, or two URLs are context, and the order goes on.
    One of this project the forge will not describe, with no source branch, or from a fork
    refuses the run. Work Collie inferred never counts.

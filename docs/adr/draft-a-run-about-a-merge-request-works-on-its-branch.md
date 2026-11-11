@@ -19,7 +19,9 @@ its remote tip, as a review fix's is.
 
 **D2. Naming one is either the whole text being one reference, or prose holding exactly
 one merge or pull request URL.** A bare `!42` or `#30` inside prose is not read: `#1` and
-issue numbers make it a guess.
+issue numbers make it a guess. A URL is read whole, word by word, never found inside a longer
+one: `…/pull/30.json` or `docs.example.com/github.com/…/pull/30` names no merge request, and a
+word holding two URLs is two.
 
 **D3. A merged, closed or other project's merge request, or two of them, is context and not a
 target**, so the Run gets a fresh branch as before. One of this project that the forge
