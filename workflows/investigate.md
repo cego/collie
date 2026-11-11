@@ -8,6 +8,8 @@ Investigate this goal on this Machine:
 
 {{goal}}
 
+{{measure}}
+
 Reproduce the behaviour where you can and trace it to its cause. Report what you found
 with concrete evidence: files, observations and the commands you ran. Distinguish a fact
 from an inference and say what you could not check. Change only what the goal asks you
