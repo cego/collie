@@ -382,6 +382,12 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     description:
       "The Slack channel a release Run posts its merge request in for approval. Empty shares nothing. Earlier #names work until picked again.",
   }),
+  of("review.follow_through", "boolean", "false", {
+    group: "Runs",
+    label: "Follow a reviewed merge request to approval",
+    description:
+      "Whether a review of a merge request posts its findings, waits for the author's changes with no agent, reviews each new head, and asks you only whether to approve. Read at each round: off, a running one asks what to do next as before.",
+  }),
   of("slack.notification_channel", "text", "", {
     group: "Notifications",
     label: "Post notifications to",

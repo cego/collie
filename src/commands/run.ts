@@ -373,16 +373,23 @@ const runStart = Command.make(
                   attachments: yield* absolute(attach),
                 });
                 if (!started.ok) return started;
+                const data = {
+                  runId: started.runId,
+                  workflow,
+                  registration: started.registration,
+                  fresh: started.fresh,
+                  ...redactedField(started.redacted),
+                };
                 return {
                   ok: true,
-                  data: {
-                    runId: started.runId,
-                    workflow,
-                    registration: started.registration,
-                    fresh: started.fresh,
-                    ...redactedField(started.redacted),
-                  },
-                  human: withNotice(`Started run ${started.runId}.`, started.redacted),
+                  data:
+                    started.followed === undefined ? data : { ...data, followed: started.followed },
+                  human: withNotice(
+                    started.followed === undefined
+                      ? `Started run ${started.runId}.`
+                      : `Run ${started.runId} already follows ${started.followed}.`,
+                    started.redacted,
+                  ),
                 };
               }
               // Nothing else runs work. An id with no module is a workflow this

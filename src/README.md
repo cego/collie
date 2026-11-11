@@ -135,6 +135,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `mr.ts`                | What a merge request step needs: assignee, template, the Linear tickets a branch answers                                    |
 | `mr-watch-model.ts`    | What wakes a Run watching a merge request, judged from what the merge watch read: pure                                      |
 | `mr-watch.ts`          | Judges each watched merge request on the merge watch's round and wakes its Run                                              |
+| `follow-through.ts`    | The claim a followed merge request's start is made under: one Run per merge request and login                               |
 | `forge/forge.ts`       | The forge interface, and which adapter a merge request is on (ADR-0050)                                                     |
 | `forge/issues.ts`      | Shared issue values and the created issue URL decoded from an adapter's answer                                              |
 | `forge/review.ts`      | A merge request's review read and merge answer, and the one rule for external and answered comments                         |

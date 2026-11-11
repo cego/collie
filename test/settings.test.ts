@@ -82,6 +82,14 @@ describe("Collie's settings", () => {
     expect(parseSetting("harness", "  ")).toEqual({ value: null });
   });
 
+  test("a review follows its merge request through only once turned on", () => {
+    expect(settingOf("review.follow_through")).toMatchObject({
+      kind: "boolean",
+      fallback: "false",
+    });
+    expect(parseSetting("review.follow_through", "true")).toEqual({ value: true });
+  });
+
   test("share a release for approval only once turned on, and in the channel named", () => {
     expect(settingOf("release.share_for_approval")).toMatchObject({
       kind: "boolean",
@@ -200,6 +208,7 @@ describe("Each setting explains itself", () => {
       "memory_hold",
       "release.share_for_approval",
       "release.approval_channel",
+      "review.follow_through",
     ],
     Board: ["scope", "density", "board_quiet_ms", "run_model"],
     Chat: ["flock_chat.proactive", "machine_rule", "standing_direction", "proactive"],

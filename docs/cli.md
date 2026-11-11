@@ -285,6 +285,12 @@ collie --json run start <workflow> --inputs-json '{"goal":"ship it"}'
 | `--attach <file>` | Repeatable. A file to give the Run — see [Attachments](#attachments).       |
 | `--request-id`    | Idempotency key — see [Retrying safely](#retrying-safely).                  |
 
+A start of a merge request whose workflow follows merge requests, with that setting on, is
+claimed by the merge request and your forge login: a second start, from any door and with
+any inputs, answers the Run already following it with `fresh: false` and `followed`, the
+merge request's id (`gitlab.example.com/mk/project!7`). See [Following it to an
+approval](using.md#following-it-to-an-approval).
+
 `--harness`, `--model` and `--effort` reach every agent the Run starts, and its children,
 without the workflow doing anything for them; a piece of work that names its own still
 wins. They are resolved together before anything starts, so a model the harness does not

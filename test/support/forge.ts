@@ -1217,7 +1217,10 @@ function glabOnMr(
   if (rest === "approvals") {
     const rules = rulesOf(mr);
     const named = mr.approvers ?? [...new Set(Arr.flatMap(rules, (rule) => rule.approvers))];
-    const approvers = named.length === 0 && mr.approved === true ? ["a-reviewer"] : named;
+    const others = named.length === 0 && mr.approved === true ? ["a-reviewer"] : named;
+    const approvers = (model.approved ?? []).includes(keyOf("gitlab", mr))
+      ? [...others, model.login ?? "me"]
+      : others;
     const required = mr.required ?? Math.max(0, ...Arr.map(rules, (rule) => rule.required));
     return json({
       approvals_required: required,
@@ -1252,7 +1255,13 @@ function glabOnMr(
 }
 
 /** `gh api` on one pull request: its comments and reviews, a reply and the merge. */
-function ghOnPull(pull: FakeMr, kind: string, rest: string, args: ReadonlyArray<string>): Answer {
+function ghOnPull(
+  model: ForgeModel,
+  pull: FakeMr,
+  kind: string,
+  rest: string,
+  args: ReadonlyArray<string>,
+): Answer {
   const url = `https://${pull.project}/pull/${pull.iid}`;
   const method = flag(args, "-X") ?? "GET";
   if (kind === "pulls" && pipe(rest, Str.startsWith("files?")))
@@ -1304,7 +1313,7 @@ function ghOnPull(pull: FakeMr, kind: string, rest: string, args: ReadonlyArray<
     );
   if (kind === "pulls" && pipe(rest, Str.startsWith("reviews?")))
     return pagesOf(
-      Arr.map(pull.reviews ?? [], (one) => ({
+      Arr.map(approvedAs(model, pull), (one) => ({
         id: one.id,
         html_url: `${url}#pullrequestreview-${one.id}`,
         user: userOf(one.author, one.bot),
@@ -1318,6 +1327,15 @@ function ghOnPull(pull: FakeMr, kind: string, rest: string, args: ReadonlyArray<
     return mergeAnswer("github", pull, args);
   return no();
 }
+
+/** A pull request's reviews, with the login's own approval once the fake approved it. */
+const approvedAs = (model: ForgeModel, pull: FakeMr): ReadonlyArray<FakeReview> =>
+  (model.approved ?? []).includes(keyOf("github", pull))
+    ? [
+        ...(pull.reviews ?? []),
+        { id: 1, author: model.login ?? "me", state: "APPROVED", at: "2026-11-11T10:00:00Z" },
+      ]
+    : (pull.reviews ?? []);
 
 /** A pull request as GitHub's GraphQL answers the panel's query. */
 const ghPullNode = (model: ForgeModel, pull: FakeMr) => ({
@@ -1605,10 +1623,10 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
       flag(args, "-X") === "POST"
     )
       return {
-        ...ghOnPull(pull, kind, rest, args),
+        ...ghOnPull(model, pull, kind, rest, args),
         noted: { key: keyOf("github", pull), body: field(args, "body") ?? "" },
       };
-    return pull === undefined ? no() : ghOnPull(pull, kind, rest, args);
+    return pull === undefined ? no() : ghOnPull(model, pull, kind, rest, args);
   }
   if (route === "graphql")
     return model.protectionDown === true

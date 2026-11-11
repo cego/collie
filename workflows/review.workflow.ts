@@ -19,9 +19,15 @@ import {
   REVIEW_FILE,
   Run,
   WorkflowError,
+  MrRead,
+  PinnedHead,
   agentWork,
   ask,
+  askWhileWatching,
   defineWorkflow,
+  isBlocking,
+  mrLabel,
+  watch,
   formatFindings,
   findingsIn,
   leaveReview,
@@ -41,6 +47,7 @@ import {
   targetKind,
   type Finding,
   type SynthesisReport,
+  type Woke,
 } from "collie";
 import { Effect, FileSystem, Schema } from "effect";
 import { connection } from "./connections.ts";
@@ -48,6 +55,7 @@ import * as Activity from "effect/workflow/Activity";
 import {
   DEFAULT_BASE,
   FIX_PROMPT,
+  HEAD_MOVED,
   IMPLEMENTER,
   NO_MR,
   REVIEWER,
@@ -60,6 +68,9 @@ const FIX = "Fix findings";
 const IMPLEMENT = "Fix findings in a full implement run";
 const DONE = "Don't post";
 const AGAIN = "Review again";
+const FOLLOW = "review.follow_through";
+const APPROVE = "Approve";
+const NOT_NOW = "Not now";
 const Posted = Schema.Struct({
   ok: Schema.Boolean,
   message: Schema.String,
@@ -129,6 +140,7 @@ export default defineWorkflow({
   agents: { roles: { implementer: IMPLEMENTER, reviewer: REVIEWER } },
   path: [reviewRound, menu],
   hints: { target: "diff-target" },
+  follows: FOLLOW,
   // A review proves it wrote a review a human can read; nobody chooses that.
   outcome: { fixed: "review" },
   // What a finished review offers to do next. Declared here because it is this workflow
@@ -219,26 +231,213 @@ export default defineWorkflow({
                 head,
               }),
             });
-      const changes = yield* changesAt(1, earlierHead);
+      // Journaled, so a replay takes the road the round took whatever the setting says now.
+      const following = (round: number) =>
+        kind !== "mr"
+          ? Effect.succeed(false)
+          : Activity.make({
+              name: `follow-through-${round}`,
+              success: Schema.Boolean,
+              execute: host.config(FOLLOW).pipe(Effect.map((value) => Str.trim(value) === "true")),
+            });
+      const fact = (name: string, line: string) =>
+        Activity.make({ name, execute: host.record(run.id, line) });
+      // Null where the head moved under it and `carry` keeps the findings for the next round.
+      const roundAt = (round: number, changes: string, carry: boolean) =>
+        Effect.gen(function* () {
+          const previous =
+            round === 1
+              ? before
+              : yield* fs
+                  .readFileString(`${place.dir}/${REVIEW_FILE}`)
+                  .pipe(Effect.orElseSucceed(() => ""));
+          return yield* reviewRound(
+            reviewPass({
+              target: asked.target,
+              plan: asked.plan ?? "",
+              proves: asked.proves ?? "",
+              previous,
+              ledger: ledger ?? [],
+              head,
+              changes,
+              answered: "",
+              risks: place.options.risks ?? "",
+              at: round,
+              of: round,
+              disputed: [],
+            }).pipe(
+              Effect.catchIf(
+                (failure) => carry && Str.startsWith(HEAD_MOVED)(failure.reason),
+                () => Effect.succeed(null),
+              ),
+            ),
+            { round },
+          );
+        });
+      const postedAt = (review: SynthesisReport, round: number) =>
+        Effect.gen(function* () {
+          const note = reviewNote(review, ledger, head);
+          if (note === "") {
+            yield* fact(`follow-posted-${round}`, "no findings changed; no review note posted");
+            return review;
+          }
+          const noteFile = `${place.dir}/review-note-${round}.md`;
+          yield* fs.writeFileString(noteFile, note).pipe(Effect.orDie);
+          const answer = yield* Activity.make({
+            name: `follow-post-${round}`,
+            success: Posted,
+            execute: host.post({
+              runId: run.id,
+              target: asked.target,
+              cwd: place.cwd,
+              file: noteFile,
+              head,
+              round,
+            }),
+          });
+          yield* fact(`follow-posted-${round}`, answer.message);
+          const signature = answer.ok ? answer.signature : undefined;
+          if (signature === undefined) return review;
+          const signed = {
+            ...review,
+            findings: Arr.map(review.findings, (one) => ({ ...one, note: one.note || signature })),
+          };
+          yield* leaveReview(place.dir, signed);
+          return signed;
+        });
+      const cleanAt = (review: SynthesisReport) =>
+        head !== "" &&
+        Arr.every(
+          review.findings,
+          (one) =>
+            one.status === "fixed" ||
+            one.status === "obsolete" ||
+            (one.status !== "disputed" && !isBlocking(one)),
+        );
+
+      const followThrough = Effect.gen(function* () {
+        const label = mrLabel(asked.target);
+        const readAt = (round: number) =>
+          Activity.make({
+            name: `follow-read-${round}`,
+            success: MrRead,
+            error: WorkflowError,
+            execute: host.mrReading({ target: asked.target, cwd: place.cwd }),
+          });
+        let reading = yield* readAt(1);
+        let reviewedAt = earlierHead;
+        let forcePush = false;
+        let last: SynthesisReport | null = null;
+        for (let round = 1; ; round += 1) {
+          if (reading.state !== "open") return { done: `${label} is ${reading.state}` };
+          head = reading.head;
+          const changes = (at: number) =>
+            forcePush || reviewedAt === "" ? Effect.succeed("") : changesAt(at, reviewedAt);
+          if (round > 1 && !(yield* following(round))) {
+            yield* fact(`follow-off-${round}`, `${FOLLOW} is off: back to asking what next`);
+            const review = yield* roundAt(round, yield* changes(round), false);
+            return { menu: review ?? last, at: round };
+          }
+          const pinned = yield* Activity.make({
+            name: `follow-pin-${round}`,
+            success: PinnedHead,
+            error: WorkflowError,
+            execute: host.pinHead({ runId: run.id, target: asked.target, head }),
+          });
+          if ("refused" in pinned)
+            return yield* new WorkflowError({
+              reason: `no checkout of ${label} at ${head}: ${pinned.refused}`,
+            });
+          const reviewed =
+            "moved" in pinned ? null : yield* roundAt(round, yield* changes(round), true);
+          yield* Activity.make({
+            name: `follow-close-${round}`,
+            execute: Agents.pipe(
+              Effect.flatMap((agents) => agents.halt(run.id, "its round of review is done")),
+              Effect.asVoid,
+            ),
+          });
+          if (reviewed === null)
+            yield* fact(
+              `follow-moved-${round}`,
+              `the head of ${label} moved while reviewing ${head}; nothing posted, the findings carry to the next round`,
+            );
+          else {
+            last = yield* postedAt(reviewed, round);
+            ledger = last.findings;
+            reviewedAt = head;
+          }
+          const watching = {
+            name: `follow-${round}`,
+            target: asked.target,
+            cwd: place.cwd,
+            cursor: { head, seen: reading.comments, pipeline: reading.pipeline },
+            author: `@${reading.author}`,
+          };
+          let woke: Woke;
+          if (reviewed === null || !cleanAt(reviewed)) woke = yield* watch(watching);
+          else if (
+            yield* Activity.make({
+              name: `follow-approved-${round}`,
+              success: Schema.Boolean,
+              error: WorkflowError,
+              execute: host.approvedAt({ target: asked.target, cwd: place.cwd, head }),
+            })
+          )
+            woke = yield* watch({ ...watching, approved: head });
+          else {
+            const said = yield* askWhileWatching(
+              {
+                prompt: `Approve ${label} at ${head}?`,
+                options: [{ id: APPROVE, recommended: true }, NOT_NOW],
+              },
+              { ...watching, name: `approve-${round}` },
+            );
+            if (said._tag !== "Answered") woke = said;
+            else {
+              const approved =
+                said.answer === APPROVE
+                  ? yield* Activity.make({
+                      name: `follow-approve-${round}`,
+                      success: Posted,
+                      execute: host.approveReview({ target: asked.target, cwd: place.cwd, head }),
+                    })
+                  : null;
+              if (approved !== null) yield* fact(`approve-said-${round}`, approved.message);
+              woke = yield* watch(
+                approved?.ok === true ? { ...watching, approved: head } : watching,
+              );
+            }
+          }
+          if (woke._tag === "Ended") return { done: `${label} was ${woke.state}` };
+          forcePush = woke.change.forcePush === true;
+          reading = yield* readAt(round + 1);
+        }
+      });
 
       // The first review; "Fix findings" below rallies from it.
-      let synthesis = yield* reviewRound(
-        reviewPass({
-          target: asked.target,
-          plan: asked.plan ?? "",
-          proves: asked.proves ?? "",
-          previous: before,
-          ledger: kind === "mr" ? (ledger ?? []) : undefined,
-          head,
-          changes,
-          answered: "",
-          risks: place.options.risks ?? "",
-          at: 1,
-          of: 1,
-          disputed: [],
-        }),
-        { round: 1 },
-      );
+      const followed = (yield* following(1)) ? yield* followThrough : null;
+      if (followed?.done !== undefined) return followed.done;
+      let synthesis: SynthesisReport =
+        followed?.menu ??
+        null ??
+        (yield* reviewRound(
+          reviewPass({
+            target: asked.target,
+            plan: asked.plan ?? "",
+            proves: asked.proves ?? "",
+            previous: before,
+            ledger: kind === "mr" ? (ledger ?? []) : undefined,
+            head,
+            changes: yield* changesAt(1, earlierHead),
+            answered: "",
+            risks: place.options.risks ?? "",
+            at: 1,
+            of: 1,
+            disputed: [],
+          }),
+          { round: 1 },
+        ));
 
       const inputs = {
         target: asked.target,
@@ -313,7 +512,7 @@ export default defineWorkflow({
 
       let handed = false;
       // Reviews are numbered by how many there have been, not by how often the menu came.
-      let reviews = 1;
+      let reviews = followed?.at ?? 1;
       let fixes = 0;
       let asks = 0;
       // Set by the human's "Fix findings": the rally then goes on by itself, through the

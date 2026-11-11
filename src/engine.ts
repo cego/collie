@@ -139,6 +139,7 @@ import { skillDirs, skillFile, type CheckoutKind, type InputStrategy } from "./d
 import { EXCLUSIVE_STRATEGIES } from "./strategies";
 import { appendMetric, noteVerification, metricsOf, readMetrics } from "./metrics";
 import { ForgeHttp, forgeHttpLayer } from "./forge/http";
+import { followRequest } from "./follow-through";
 import { EngineTouches, engineTouchesLayer, touching } from "./engine-touches";
 import { ciJob } from "./ci-job";
 import { land, LandingSchema, readLanding, takeOver } from "./landing";
@@ -165,6 +166,7 @@ import {
 import { nothingToLandFile } from "./standing";
 import { AwaitingJson, AwaitingSchema, THE_AUTHOR, overdueLine } from "./awaiting";
 import { Woke } from "./mr-watch-model";
+import { readingOf } from "./mr-watch";
 import {
   autoMergingHere,
   forgeHere,
@@ -265,6 +267,7 @@ import {
   checkoutFor,
   checkoutRefusal,
   defaultStart,
+  pinnedCheckout,
   repositoryName,
   workOf,
   type BranchAsk,
@@ -839,6 +842,20 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   /** The reviewed branch, or why there is none. */
   export type ReviewedBranch = { readonly branch: string } | { readonly refused: string };
+  /** A merge request as a round reads it before it starts: where its watch takes up from. */
+  export interface MrRead {
+    readonly state: "open" | "merged" | "closed";
+    readonly head: string;
+    readonly author: string;
+    readonly pipeline: string;
+    readonly comments: ReadonlyArray<string>;
+  }
+  export const MrRead: Schema.Codec<MrRead, unknown, never, never>;
+  export type PinnedHead =
+    | { readonly cwd: string }
+    | { readonly moved: string }
+    | { readonly refused: string };
+  export const PinnedHead: Schema.Codec<PinnedHead, unknown, never, never>;
 
   /** What opening a merge request from here needs, and what it would be filled in with. */
   export interface MrReady {
@@ -1119,7 +1136,28 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly target: string;
       readonly name: string;
       readonly cursor: WatchCursor;
+      readonly author?: string;
+      readonly approved?: string;
+      /** A question shares the wake, so the card waits on whoever answers that. */
+      readonly asking?: boolean;
     }) => Effect.Effect<void, WorkflowError>;
+    /** The merge request \`target\` as the forge reads it now: what a watch's cursor starts from. Take it inside an Activity. */
+    readonly mrReading: (options: {
+      readonly target: string;
+      readonly cwd: string;
+    }) => Effect.Effect<MrRead, WorkflowError>;
+    /** Whether this login's approval of \`target\` stands while its head is \`head\`. Take it inside an Activity. */
+    readonly approvedAt: (options: {
+      readonly target: string;
+      readonly cwd: string;
+      readonly head: string;
+    }) => Effect.Effect<boolean, WorkflowError>;
+    /** Makes this Run's checkout \`target\`'s head, detached and Collie's, from the forge's own ref; \`moved\` where that is no longer \`head\`. Take it inside an Activity. */
+    readonly pinHead: (options: {
+      readonly runId: string;
+      readonly target: string;
+      readonly head: string;
+    }) => Effect.Effect<PinnedHead, WorkflowError>;
     /** Whether \`head\` descends from \`previous\` on \`target\`'s forge; a \`previous\` it no longer has does not. Take it inside an Activity. */
     readonly descends: (options: {
       readonly target: string;
@@ -1402,6 +1440,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly closes?: "reported";
     readonly followUps?: ReadonlyArray<FollowUp>;
     readonly actions?: ReadonlyArray<ActionProvider>;
+    /** The boolean setting that, on, makes a start on a merge request its login's one Run of it. */
+    readonly follows?: string;
   }
 
   export interface WorkflowConnections {
@@ -1515,12 +1555,33 @@ export const SDK_DECLARATIONS = `declare module "collie" {
    * \`target\` changed from \`cursor\` in a way that matters, or merged or closed. The name is
    * its identity, as an \`ask\`'s is.
    */
-  export function watch(options: {
+  export function watch(options: Watching): Effect.Effect<Woke, WorkflowError, Run | Host | WorkflowEngine | WorkflowInstance>;
+  export interface Watching {
     readonly name: string;
     readonly target: string;
     readonly cwd: string;
     readonly cursor: WatchCursor;
-  }): Effect.Effect<Woke, WorkflowError, Run | Host | WorkflowEngine | WorkflowInstance>;
+    /** Who the card names as waited on, the author by default. */
+    readonly author?: string;
+    /** The head this login's approval stands at, which the card says beside the wait. */
+    readonly approved?: string;
+  }
+  export interface Answered {
+    readonly _tag: "Answered";
+    readonly answer: string;
+  }
+  /**
+   * Asks \`question\` while watching as \`watch\` does, under the watch's name: whichever comes
+   * first, its answer or a change that matters, is what this returns. A change closes the
+   * question unanswered.
+   */
+  export function askWhileWatching(
+    question: {
+      readonly prompt?: string;
+      readonly options?: ReadonlyArray<AskOption>;
+    },
+    options: Watching,
+  ): Effect.Effect<Woke | Answered, WorkflowError, Run | Host | WorkflowEngine | WorkflowInstance>;
 
   /** What a parent asks for when part of its own work is another workflow. */
   export interface ChildAsk {
@@ -2092,6 +2153,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function readMrRef(text: string): MrRef | null;
   /** Where a merge request is read in a browser, where its reference says which project. */
   export function mrUrlOf(ref: MrRef): string | null;
+  /** \`group/app!345\` or \`owner/repo#30\` rather than the whole URL. */
+  export function mrLabel(mr: string): string;
   /** The forge a merge request is on. */
   export function forgeOfRef(ref: MrRef): "gitlab" | "github";
   /** The merge requests a set names, each once by MR id, or the first reference naming none; null for one or none. */
@@ -2612,7 +2675,7 @@ const isWritten = (exported: unknown): exported is WrittenDefinition =>
 
 /** A definition as the entry the rest of the host reads. */
 const entryOf = (definition: WorkflowDefinition): WorkflowEntry => {
-  const { outcome, checkout, closes, followUps, actions, connections } = definition;
+  const { outcome, checkout, closes, followUps, actions, connections, follows } = definition;
   const path = Option.getOrUndefined(
     Option.map(Option.fromNullishOr(definition.path), (present) =>
       Arr.map(present, (one) => one.meta),
@@ -2629,7 +2692,17 @@ const entryOf = (definition: WorkflowDefinition): WorkflowEntry => {
         );
   const declared = Rec.fromEntries(
     Arr.filter(
-      Rec.toEntries({ hints, outcome, checkout, closes, followUps, actions, path, connections }),
+      Rec.toEntries({
+        hints,
+        outcome,
+        checkout,
+        closes,
+        followUps,
+        actions,
+        path,
+        connections,
+        follows,
+      }),
       ([, value]) => value !== undefined,
     ),
   );
@@ -4991,11 +5064,83 @@ export const hostLayer = (options: {
                 reason: `${asked.target} names no merge request the merge watch can read`,
               });
             yield* store.watch({ run: asked.runId, mr, name: asked.name, cursor: asked.cursor });
+            // A question sharing the wake is what the card shows: it waits on whoever answers.
+            if (asked.asking === true) return;
             yield* waitOn(asked.runId, {
-              on: `${THE_AUTHOR} to change ${mrLabel(asked.target)}`,
+              on: `${asked.author ?? THE_AUTHOR} to change ${mrLabel(asked.target)}${asked.approved === undefined ? "" : `, approved at ${Str.slice(0, 7)(asked.approved)}`}`,
               who: THE_AUTHOR,
             });
           }),
+        mrReading: (asked) =>
+          Effect.gen(function* () {
+            const ref = mrRefOf(asked.target);
+            if (ref === null)
+              return yield* new WorkflowError({ reason: `${asked.target} is not a merge request` });
+            const panel = yield* under(forgeOf(ref).details(ref, asked.cwd, runShell));
+            if (panel._tag !== "Details")
+              return yield* new WorkflowError({
+                reason: `could not read ${mrLabel(asked.target)}: ${panel.reason}`,
+              });
+            const read = readingOf(panel);
+            return {
+              state: read.state,
+              head: read.head,
+              author: panel.author,
+              pipeline: read.pipeline,
+              comments: Arr.map(read.comments, (one) => one.id),
+            };
+          }),
+        approvedAt: (asked) =>
+          Effect.gen(function* () {
+            const ref = mrRefOf(asked.target);
+            if (ref === null)
+              return yield* new WorkflowError({ reason: `${asked.target} is not a merge request` });
+            const forge = forgeOf(ref);
+            const me = yield* under(forge.login(asked.cwd, runShell, ref.project));
+            if (me === null)
+              return yield* new WorkflowError({
+                reason: `the forge did not say who is logged in to read ${mrLabel(asked.target)}'s approval`,
+              });
+            const read = yield* under(forge.approvedAt(ref, me, asked.head, asked.cwd, runShell));
+            if (!read.ok)
+              return yield* new WorkflowError({
+                reason: `could not read ${mrLabel(asked.target)}'s approval: ${read.reason}`,
+              });
+            return read.value;
+          }),
+        pinHead: (asked) =>
+          Effect.gen(function* () {
+            const ref = mrRefOf(asked.target);
+            const row = yield* store.run(asked.runId);
+            if (ref === null || row === null)
+              return { refused: `${asked.target} is not a merge request of a Run here` };
+            const { env } = yield* placing;
+            const pinned = yield* pinnedCheckout({
+              repo: row.project,
+              worktrees: yield* worktreesDirectory(env),
+              runId: asked.runId,
+              forge: forgeOf(ref).name,
+              iid: ref.iid,
+              head: asked.head,
+              run: runShell,
+            });
+            if (pinned.refused !== undefined) return { refused: pinned.refused };
+            if (pinned.moved !== undefined) return { moved: pinned.moved };
+            const launch = yield* decodeStrings(row.options ?? "{}").pipe(
+              Effect.orElseSucceed((): Record<string, string> => ({})),
+            );
+            const placed = placedOf(row, launch);
+            yield* store.place(asked.runId, {
+              checkout: encodePlaced({
+                ...placed,
+                cwd: pinned.cwd,
+                branch: null,
+                worktree: pinned.worktree,
+              }),
+              task: null,
+            });
+            return { cwd: pinned.cwd };
+          }).pipe(Effect.provideContext(bun)),
         descends: (asked) =>
           Effect.gen(function* () {
             const ref = mrRefOf(asked.target);
@@ -6334,6 +6479,8 @@ export interface Generation {
   /** What it needs of the repository, which is what the host places a Run of it on. */
   readonly checkout: CheckoutKind;
   readonly closes?: "reported";
+  /** The setting that makes a start on a merge request its login's one Run of it. */
+  readonly follows?: string;
   /** The file and the revision this was built from: what makes a later start the same code. */
   readonly source: string;
   readonly metadata: Schema.Json;
@@ -6583,6 +6730,8 @@ export interface Admitted {
   readonly execution: string;
   /** False when the request had already been admitted: a retry, not a second run. */
   readonly fresh: boolean;
+  /** The merge request a Run of this login already follows, which this start became. */
+  readonly followed?: string;
 }
 
 /**
@@ -6792,9 +6941,9 @@ const makeRegistry: (
   /** The Runs whose watch this host is waking now. */
   const wakingWatches = new Set<string>();
   /** A watch's row and the card's wait on the author, once the Run no longer waits on it. */
-  const forgetWatch = (run: string) =>
+  const forgetWatch = (run: string, name?: string) =>
     Effect.gen(function* () {
-      if (!(yield* store.unwatch(run))) return;
+      if (!(yield* store.unwatch(run, name))) return;
       yield* fs.remove(controlPath(dir, AWAITING, run), { force: true }).pipe(Effect.orDie);
       yield* store.announce;
     });
@@ -6905,6 +7054,7 @@ const makeRegistry: (
       hints: entry.metadata?.hints ?? {},
       fixedOutcome: entry.metadata?.outcome?.fixed ?? null,
       closes: entry.metadata?.closes,
+      follows: entry.metadata?.follows,
       checkout: entry.metadata?.checkout ?? "none",
       source,
       metadata: describeMetadata(entry.metadata),
@@ -8878,8 +9028,30 @@ const makeRegistry: (
       options,
       runId,
     );
+    const following = yield* followRequest({
+      workflow: generation.id,
+      setting: generation.follows,
+      target: pointedAt(generation, settled.input),
+      userDir,
+      cwd: options.project,
+    }).pipe(
+      Effect.provideService(ForgeHttp, Context.get(hostServices, ForgeHttp)),
+      Effect.provideContext(bun),
+    );
+    const followed =
+      following === null
+        ? null
+        : yield* claimingOf(following.request).withPermits(1)(store.requested(following.request));
+    if (following !== null && followed !== null)
+      return {
+        runId: followed.run,
+        registration: followed.generation,
+        execution: followed.execution,
+        fresh: false,
+        followed: following.mr,
+      };
     const claimed = yield* claimAndPlace({
-      request: options.request,
+      request: following?.request ?? options.request,
       run: runId,
       workflow: generation.id,
       project: options.project,
@@ -9360,6 +9532,16 @@ const makeRegistry: (
     wake: Effect.fn("Engine.Registry.wake")(function* (run: string, name: string, woke: Woke) {
       yield* store.wake(run, name, woke);
       if (wakingWatches.has(run)) return;
+      // A question asked under the watch's name is the watch's to close, unless it was answered.
+      if (Arr.some(yield* store.asked(run), (row) => row.decision === name)) {
+        const closed = yield* store.settle({
+          run,
+          decision: name,
+          value: wokeText(woke),
+          request: `${run}-${name}-woke`,
+        });
+        if (closed._tag === "refused") return yield* forgetWatch(run, name);
+      }
       const found = yield* routed(run).pipe(Effect.option);
       if (Option.isNone(found)) return;
       wakingWatches.add(run);
@@ -9369,7 +9551,7 @@ const makeRegistry: (
         executionId: execution,
         value: wokeText(woke),
       }).pipe(
-        Effect.andThen(forgetWatch(run)),
+        Effect.andThen(forgetWatch(run, name)),
         waking.withPermits(1),
         Effect.ensuring(Effect.sync(() => wakingWatches.delete(run))),
         Effect.forkIn(hostScope),

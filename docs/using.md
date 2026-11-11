@@ -2889,6 +2889,36 @@ An unchanged, previously posted ledger posts nothing. Findings you chose not to 
 still appear in full when you first post them. Fixed and obsolete findings stay in the record;
 obsolete means the finding no longer applies, not that its bug was fixed.
 
+### Following it to an approval
+
+With **Follow a reviewed merge request to approval** (`review.follow_through`) on, a review
+of a merge request follows it until it merges or closes, and the approval is the one thing
+it asks you. It is off unless you turn it on. There is one such Run per merge request and
+forge login: starting it again, from the CLI, chat or the board, answers that Run and says
+it already follows the merge request.
+
+Each round reviews the merge request's head in a detached checkout Collie keeps for the
+Run, reset to that head each round and removed when the Run ends or is stopped. It posts
+one signed note when the findings changed since the last one posted, then waits on the
+author with no agent running: a new head, a comment that is not Collie's, or the head's
+pipeline ending starts the next round, as a [Watch](../CONTEXT.md) does. If the head moves
+while the reviewer reads it, that round posts nothing, and the next round reviews the newer
+head with the findings carried over.
+
+When nothing open blocks and nothing is disputed, it asks **Approve `<mr>` at `<sha>`?**.
+**Approve** approves that head, as **Post and approve** does, and the Run goes on waiting;
+**Not now** waits without approving. A push while the question is open withdraws it: the
+next round reviews the new head and asks again, and the old head is never approved.
+A head you already approved is not asked about again. Merged or closed finishes the Run.
+Turned off while it waits, its next round goes back to the menu above. A Hold while it waits
+starts no round and posts nothing until you let it go. A forge that cannot be read fails the
+Run.
+
+Its card says, in turn: **Reviewing, round N.** at the head being reviewed; **Waiting for
+@author to change `<mr>`.**, with **approved at `<short sha>`** once approved, which is never
+overdue; the approval question, which is the only time it is Needs you; and `<mr> was
+merged` (or closed) when it finishes.
+
 Fixing one is a different matter. A fix round is an `implement` run, and a mutating run
 works in a checkout of its own branch — which `herdr worktree` can only cut from the
 repository it is asked in. The fix round works on the merge request's source branch, or the

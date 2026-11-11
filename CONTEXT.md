@@ -467,7 +467,13 @@ ranks first.
 request changes in a way that matters: a new head that has stood 5 minutes, a comment that
 is not Collie's, or the head's pipeline ending; a running pipeline is waited for 30 minutes
 at most. Merged or closed ends it. The merge watch judges it on each round from what it
-already read, and wakes the Run. Its card waits on the author, which is never overdue.
+already read, and wakes the Run. Its card waits on the author, which is never overdue. A
+question asked while watching shares the Watch's name, and a wake withdraws it.
+
+**Follow-through** — A `review` of a merge request that, with `review.follow_through` on,
+follows it until it merges or closes: one Run per merge request and forge login, a signed
+note per round whose findings changed, a **Watch** between rounds, and a **Decision** to
+approve the reviewed head as the one thing it asks.
 
 **Working** — A Task something is actually doing: a Run the host holds that has not
 settled, or a **Reopened** Run whose agent herdr reports working. A Run whose question a

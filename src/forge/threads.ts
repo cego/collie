@@ -139,6 +139,75 @@ export const descendsFrom = (
     };
   });
 
+/** Whether `me`'s approval stands on the merge request while its head is `head`. */
+export const approvedAt = (
+  login: ForgeLogin,
+  project: string,
+  ref: MrRef,
+  me: string,
+  head: string,
+  cwd: string,
+) =>
+  Effect.gen(function* () {
+    const repo = threadRepo(login, project);
+    const path = `${repo.owner}/${repo.name}`;
+    if (login.forge === "gitlab") {
+      const route = `/projects/${encodeURIComponent(path)}/merge_requests/${ref.iid}`;
+      const mr = yield* requestAs(Schema.Struct({ sha: Schema.String }), login, cwd, route);
+      if (!mr.ok) return mr;
+      const approvals = yield* requestAs(
+        Schema.Struct({
+          approved_by: Schema.NullOr(
+            Schema.Array(Schema.Struct({ user: Schema.Struct({ username: Schema.String }) })),
+          ),
+        }),
+        login,
+        cwd,
+        `${route}/approvals`,
+      );
+      if (!approvals.ok) return approvals;
+      return {
+        ok: true as const,
+        value:
+          mr.value.sha === head &&
+          Arr.some(approvals.value.approved_by ?? [], (one) => one.user.username === me),
+      };
+    }
+    const pull = `/repos/${path}/pulls/${ref.iid}`;
+    const current = yield* requestAs(
+      Schema.Struct({ head: Schema.Struct({ sha: Schema.String }) }),
+      login,
+      cwd,
+      pull,
+    );
+    if (!current.ok) return current;
+    const reviews = yield* requestAs(
+      Schema.Array(
+        Schema.Struct({
+          user: Schema.NullOr(Schema.Struct({ login: Schema.String })),
+          state: Schema.String,
+        }),
+      ),
+      login,
+      cwd,
+      `${pull}/reviews?per_page=100`,
+    );
+    if (!reviews.ok) return reviews;
+    const latest = Arr.last(
+      Arr.filter(
+        reviews.value,
+        (one) => one.user?.login === me && (one.state === "APPROVED" || one.state === "DISMISSED"),
+      ),
+    );
+    return {
+      ok: true as const,
+      value:
+        current.value.head.sha === head &&
+        latest._tag === "Some" &&
+        latest.value.state === "APPROVED",
+    };
+  });
+
 export const reviewChanges = (
   login: ForgeLogin,
   project: string,

@@ -362,6 +362,14 @@ export interface Forge {
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<Answered<boolean>, never, R | ForgeHttp>;
+  /** Whether `login`'s approval stands while the head is `head`. */
+  readonly approvedAt: <R>(
+    ref: MrRef,
+    login: string,
+    head: string,
+    cwd: string,
+    run: Runner<R>,
+  ) => Effect.Effect<Answered<boolean>, never, R | ForgeHttp>;
   /** Finds a top-level note by its exact last-line signature. */
   readonly findNote: <R>(
     ref: MrRef,

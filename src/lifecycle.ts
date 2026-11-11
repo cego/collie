@@ -626,6 +626,7 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
             runId: answered.value.runId,
             registration: answered.value.registration,
             fresh: answered.value.fresh,
+            followed: answered.value.followed,
             redacted: answered.value.redacted ?? [],
           }
         : answered,

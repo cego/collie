@@ -261,6 +261,23 @@ for (const name of ["gitlab", "github"] as const) {
       );
     });
 
+    test("reads whether the login's approval stands at the head, and not at another or another's", () => {
+      const pushed = "2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c";
+      const key = name === "gitlab" ? `${PROJECT[name]}!30` : `${PROJECT[name]}#30`;
+      const at = (approved: ReadonlyArray<string>, head = HEAD) =>
+        fakeForge(name, model(name, { mrs: [mr(name, { head })], approved }));
+      const read = (fake: ReturnType<typeof at>, login: string) =>
+        forge.approvedAt(ref(name), login, HEAD, "/w", fake.run).pipe(Effect.provide(fake.layer));
+      return runEffect(
+        Effect.gen(function* () {
+          expect(yield* read(at([]), "me")).toEqual({ ok: true, value: false });
+          expect(yield* read(at([key]), "me")).toEqual({ ok: true, value: true });
+          expect(yield* read(at([key]), "someone-else")).toEqual({ ok: true, value: false });
+          expect(yield* read(at([key], pushed), "me")).toEqual({ ok: true, value: false });
+        }),
+      );
+    });
+
     test("lists only issues over HTTP from a cold login", () => {
       const fake = fakeForge(
         name,

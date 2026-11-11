@@ -43,6 +43,7 @@ import {
   postReview,
   approveReview,
   descendsFrom,
+  approvedAt,
   findReviewNote,
   reviewChanges,
   viewerLogin,
@@ -1408,6 +1409,19 @@ export const gitlab: Forge = {
         glabLoginTo(hostOf(project) ?? "gitlab.com"),
         project,
         previous,
+        head,
+        cwd,
+      );
+    }),
+  approvedAt: (ref, login, head, cwd, run) =>
+    Effect.gen(function* () {
+      const project = ref.project ?? (yield* projectHere(cwd, run));
+      if (project === null) return { ok: false, reason: `${whereOf(ref)} names no GitLab project` };
+      return yield* approvedAt(
+        glabLoginTo(hostOf(project) ?? "gitlab.com"),
+        project,
+        ref,
+        login,
         head,
         cwd,
       );

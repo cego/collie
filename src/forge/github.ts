@@ -49,6 +49,7 @@ import {
   postReview,
   approveReview,
   descendsFrom,
+  approvedAt,
   findReviewNote,
   reviewChanges,
   viewerLogin,
@@ -1379,6 +1380,10 @@ export const github: Forge = {
     ref.project === null
       ? Effect.succeed({ ok: false, reason: `${mrWords(ref).label} names no GitHub project` })
       : descendsFrom(LOGIN, ref.project, previous, head, cwd),
+  approvedAt: (ref, login, head, cwd) =>
+    ref.project === null
+      ? Effect.succeed({ ok: false, reason: `${mrWords(ref).label} names no GitHub project` })
+      : approvedAt(LOGIN, ref.project, ref, login, head, cwd),
   findNote: (ref, signature, cwd) =>
     ref.project === null
       ? Effect.succeed({ ok: false, reason: `${mrWords(ref).label} names no GitHub project` })

@@ -57,6 +57,9 @@ const change = {
   base: text,
 };
 
+/** How a review whose merge request's head moved under it fails, so a caller can carry on. */
+export const HEAD_MOVED = "reviewed head changed while reviewing";
+
 /** What a prompt is told of a target that is not a merge request. */
 export const NO_MR = { forge: "", noun: "", diff: "", view: "", checkout: "" };
 
@@ -211,7 +214,7 @@ export const reviewPass = (ask: ReviewAsk) =>
                 (head) => head === ask.head,
                 () =>
                   new WorkflowError({
-                    reason: `reviewed head changed while reviewing ${ask.head}; review again before posting`,
+                    reason: `${HEAD_MOVED} ${ask.head}; review again before posting`,
                   }),
               ),
             ),

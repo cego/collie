@@ -1067,6 +1067,23 @@ when the wake completes or the Run is stopped. While it waits, the card says
 `Waiting for the author to change <mr>.`, which is never overdue and never Needs you, and no
 merge request is recorded on the Run, so no `mr-opened` notification is sent.
 
+`watch` also takes `author`, the name its card waits on instead of "the author", and
+`approved`, a head the card says was approved. `askWhileWatching(question, watching)` asks a
+question and watches at once, under the watch's name: the first of the answer and the wake
+settles it, and a wake first closes the question, so a late answer is refused. It returns
+the wake, or `{ _tag: "Answered", answer }`.
+
+A workflow that declares `follows: "<setting>"` follows the merge requests it is started
+on while that boolean setting is on: the start is claimed by the merge request and the
+forge login, so every door's second start answers the first Run with `followed`. The
+host gives such a workflow what a round needs without an agent:
+`host.mrReading({ target, cwd })` (state, head, author, pipeline and comment ids, as a
+watch's cursor wants them), `host.approvedAt({ target, cwd, head })` (whether your login's
+approval stands at that head), and `host.pinHead({ runId, target, head })`, a detached
+checkout of the merge request's own ref at `head` that is the Run's, or `moved` when the
+ref is somewhere else. The shipped `review` is the example: each round reads, pins, reviews,
+posts, then watches, or asks for approval while it watches.
+
 ## A workflow made of other workflows
 
 `child({ invocation, workflow, input })` starts another workflow as part of this one and

@@ -1839,6 +1839,11 @@ const unpushedWork = Effect.fn("worktree.unpushedWork")(function* (
   return keepIt(`${count} commit(s) on no remote`);
 });
 
+const REVIEWING = "reviewing-";
+
+/** Where a review pins a merge request's head: detached, Collie's, and re-pinned each round. */
+export const reviewingDir = (runId: string) => `${REVIEWING}${runId}`;
+
 /**
  * What the Runs say about the worktrees of this machine: the ones Collie made, by path,
  * and the ones a Run is still working in. A checkout a human made appears in no Run, so
@@ -1871,9 +1876,13 @@ function fromRuns(
     const landed =
       (run.worktree !== null && settling.landedAt.has(run.worktree.path)) ||
       settling.landedOn.has(onBranch(run.project, run.branch ?? run.worktree?.branch ?? ""));
+    // A pinned review checkout is made again at its next round, so nothing resumes in it.
+    const pinned =
+      worktree !== null && Str.startsWith(REVIEWING)(Str.split(worktree.path, "/").at(-1) ?? "");
     const resumable =
       (run.state === "stopped" || (run.state === "failed" && !roaming.includes(at ?? ""))) &&
-      !landed;
+      !landed &&
+      !pinned;
     if (going) paths.set(run.cwd, "a run is still working in it");
     else if (checking.has(run.id)) paths.set(run.cwd, "its check is still running in it");
     else if (resumable) paths.set(run.cwd, `a ${run.state} run can resume in it`);
@@ -2272,4 +2281,65 @@ const sweep = Effect.fn("worktree.sweep")(function* (opts: PruneOptions) {
     judged.push(...round.judged);
   }
   return { lines, judged, busy: false };
+});
+
+/**
+ * A Run's own checkout of a merge request's `head`: detached, Collie's, and forced there each
+ * round, from the ref the forge keeps for the merge request rather than a bare sha, which a
+ * fork's merge request does not have on origin. `moved` is the head that ref has instead.
+ */
+export const pinnedCheckout = Effect.fn("worktree.pinnedCheckout")(function* (opts: {
+  readonly repo: string;
+  readonly worktrees: string;
+  readonly runId: string;
+  readonly forge: "gitlab" | "github";
+  readonly iid: string;
+  readonly head: string;
+  readonly run: Runner<ChildProcessSpawner.ChildProcessSpawner>;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const { run } = opts;
+  const listing = yield* gitWorktrees(run, opts.repo);
+  if (!listing) return { refused: `${opts.repo} is not a git checkout` };
+  const kept =
+    opts.forge === "gitlab" ? `merge-requests/${opts.iid}/head` : `pull/${opts.iid}/head`;
+  const tracking = `refs/remotes/origin/${kept}`;
+  const fetched = yield* run(
+    "git",
+    ["fetch", "--quiet", "origin", `+refs/${kept}:${tracking}`],
+    listing.repo,
+  );
+  if (fetched.code !== 0)
+    return { refused: `could not fetch ${kept} from origin: ${whatItSaid(fetched)}` };
+  const at = yield* run("git", ["rev-parse", tracking], listing.repo);
+  const now = Str.trim(at.stdout);
+  if (at.code !== 0 || now === "") return { refused: `could not read ${tracking}` };
+  if (now !== opts.head) return { moved: now };
+  const where = path.join(opts.worktrees, path.basename(listing.repo), reviewingDir(opts.runId));
+  const there = yield* fs.exists(where).pipe(Effect.orElseSucceed(() => false));
+  const steps: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = there
+    ? [
+        [where, ["checkout", "--quiet", "--detach", "--force", opts.head]],
+        [where, ["clean", "-fdq"]],
+      ]
+    : [[listing.repo, ["worktree", "add", "--quiet", "--detach", where, opts.head]]];
+  for (const [cwd, args] of steps) {
+    const done = yield* run("git", [...args], cwd);
+    if (done.code !== 0)
+      return { refused: `could not check ${opts.head} out in ${where}: ${whatItSaid(done)}` };
+  }
+  const worktree = {
+    path: where,
+    branch: "",
+    managed_by: "git",
+    workspace_id: null,
+    created_by_collie: true,
+    created_branch: false,
+    created_on: null,
+    made_at: yield* madeAt(where),
+    root_tab_id: null,
+    root_pane_id: null,
+  } satisfies WorktreeRecord;
+  return { cwd: where, worktree };
 });

@@ -1319,6 +1319,8 @@ export const Started = Schema.Struct({
   registration: Schema.String,
   execution: Schema.String,
   fresh: Schema.Boolean,
+  /** The merge request a Run of this login already follows, which this start became. */
+  followed: Schema.optionalKey(Schema.String),
   /** The kind of each credential-shaped value taken out before anything was written. */
   redacted: Schema.optionalKey(Schema.Array(Schema.String)),
 });

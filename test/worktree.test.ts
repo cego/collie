@@ -39,7 +39,7 @@ import { recordDisposition } from "../src/disposition";
 import type { TaskRecord } from "../src/task";
 import { epochMs } from "../src/time";
 import { withLock } from "../src/lock";
-import { NOTHING_SETTLING, onBranch, type Settling } from "../src/worktree";
+import { NOTHING_SETTLING, onBranch, reviewingDir, type Settling } from "../src/worktree";
 import { encodeCheckRecord, runningChecksDir } from "../src/check-processes";
 import { shell } from "../src/mr";
 import { Herdr } from "../src/herdr";
@@ -892,6 +892,25 @@ test("a failed Run's clean roaming checkout is pruned, failed Runs inside it or 
       yield* settledGit({ "rev-parse --abbrev-ref --symbolic-full-name @{u}": "" });
 
       expect(yield* prune()).toEqual(["♻ removed roaming · its Run is over and it holds nothing"]);
+    }),
+  ));
+
+test("a stopped review's checkout pinned at a merge request's head is pruned, as its next round pins one again", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const at = join(rig.root, "worktrees", "project", reviewingDir("r-follow"));
+      yield* collieWorktree("", {
+        workflow: "review",
+        at,
+        managedBy: "git",
+        workspaceId: null,
+        state: "stopped",
+      });
+      yield* settledGit({ "rev-parse --abbrev-ref --symbolic-full-name @{u}": "" });
+
+      expect(yield* prune()).toEqual([
+        `♻ removed ${reviewingDir("r-follow")} · its Run is over and it holds nothing`,
+      ]);
     }),
   ));
 

@@ -371,7 +371,7 @@ export interface StoreApi {
   /** Keeps what a watch is woken with; false where it was already woken. */
   readonly wake: (run: string, name: string, woke: Woke) => Effect.Effect<boolean>;
   /** Forgets the Run's watch; false where it had none. */
-  readonly unwatch: (run: string) => Effect.Effect<boolean>;
+  readonly unwatch: (run: string, name?: string) => Effect.Effect<boolean>;
 }
 
 export class Store extends Context.Service<Store, StoreApi>()("collie/Store") {}
@@ -1159,10 +1159,12 @@ function makeStore(
           Effect.map((rows) => rows.length > 0),
           Effect.orDie,
         ),
-      unwatch: (run) =>
-        sql<{
-          readonly run: string;
-        }>`DELETE FROM collie_watches WHERE run = ${run} RETURNING run`.pipe(
+      unwatch: (run, name) =>
+        sql<{ readonly run: string }>`
+          DELETE FROM collie_watches
+          WHERE run = ${run} AND (${name ?? null} IS NULL OR name = ${name ?? null})
+          RETURNING run
+        `.pipe(
           Effect.map((rows) => rows.length > 0),
           Effect.orDie,
         ),
