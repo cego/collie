@@ -4,7 +4,7 @@
 
 use crate::record::when::{epoch_ms, minutes};
 use collie_desktop_protocol::generated::{
-    GlyphState, Node, NodeKind, NodeRun, Note, Place, Produces, Review, Verification, Wait,
+    Agent, GlyphState, Node, NodeKind, NodeRun, Note, Place, Produces, Review, Verification, Wait,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +51,21 @@ pub fn inspector_part(node: &NodeRun, live: bool) -> Part {
 pub struct PartTab {
     pub value: Part,
     pub label: String,
+}
+
+/// Whether a Step's agent's terminal can be shown: its Machine is reached and the card lists its
+/// agent, as `live` in `StepWork.vue`.
+pub fn step_live(node: &NodeRun, reached: bool, agents: &[Agent]) -> bool {
+    let agent = node.agent.clone().flatten();
+    reached && agent.is_some_and(|agent| agents.iter().any(|one| one.name == agent))
+}
+
+/// Whether a Step is still at its work, so its agent's pane is drawn in its Terminal part.
+pub fn at_work(node: &NodeRun) -> bool {
+    matches!(
+        node.state,
+        GlyphState::Running | GlyphState::NeedsYou | GlyphState::Waiting
+    )
 }
 
 pub fn inspector_parts(node: &NodeRun, live: bool, logs: usize, proofs: usize) -> Vec<PartTab> {

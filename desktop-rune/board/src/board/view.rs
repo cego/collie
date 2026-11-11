@@ -181,7 +181,11 @@ pub fn view_in(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         })
         .role("main")
         .label("Board")
-        .children(app.flow.as_ref().map(|map| flow::flow_map(map, flow_of, k)))
+        .children(
+            app.flow
+                .as_ref()
+                .map(|map| flow::flow_map(map, flow_of, App::step_chosen, k)),
+        )
         .child(body);
     let scroll = smooth::<App>(scroll, "board-scroll");
     dialogs::dialog(app, k, layer);

@@ -318,9 +318,35 @@ fn turn(cols: usize, each: f32, to: &Node, k: &Kit) -> El {
     canvas(shape).size(width, TURN).a11y_hidden()
 }
 
+/// Where the app keeps its Flow map, and what it does once another Step is chosen.
+struct Lens<S> {
+    map: fn(&mut S) -> &mut FlowMap,
+    chosen: fn(&mut S),
+}
+
+impl<S> Clone for Lens<S> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<S> Copy for Lens<S> {}
+
+impl<S> Lens<S> {
+    /// Chooses `spot`, telling the app if it is another Step.
+    fn choose(self, s: &mut S, spot: Spot) {
+        let map = (self.map)(s);
+        let other = map.selected.as_ref() != Some(&spot);
+        map.selected = Some(spot);
+        if other {
+            (self.chosen)(s);
+        }
+    }
+}
+
 fn step<S: 'static>(
     map: &FlowMap,
-    lens: fn(&mut S) -> &mut FlowMap,
+    lens: Lens<S>,
     run: &str,
     node: &Node,
     each: f32,
@@ -395,16 +421,15 @@ fn step<S: 'static>(
         .border(if strong { 1.5 } else { 1.0 }, edge)
         .hover(k.c.surface_hover)
         .on_press(move |s: &mut S| {
-            let map = lens(s);
-            map.focus = Some(spot.clone());
-            map.selected = Some(spot.clone());
+            (lens.map)(s).focus = Some(spot.clone());
+            lens.choose(s, spot.clone());
         })
         .child(glyph::glyph(&node.state, 16.0, k))
         .child(words);
     match revealed {
         // Once laid out, it is scrolled to, and only the once.
         Some(key) => step.on_layout_tx(move |s: &mut S, _, tx| {
-            if lens(s).reveal.take().is_some() {
+            if (lens.map)(s).reveal.take().is_some() {
                 tx.scroll_into_view(key.clone());
             }
         }),
@@ -415,7 +440,7 @@ fn step<S: 'static>(
 /// One lane: its title, its Machine and how it runs, then its Steps, line after line.
 fn lane<S: 'static>(
     map: &FlowMap,
-    lens: fn(&mut S) -> &mut FlowMap,
+    lens: Lens<S>,
     lane: Row<'_>,
     current: Option<&Spot>,
     k: &Kit,
@@ -465,7 +490,14 @@ fn lane<S: 'static>(
 }
 
 /// The Flow as a map: each lane's Steps as cards joined by arrows, wrapping line after line.
-pub fn flow_map<S: 'static>(map: &FlowMap, lens: fn(&mut S) -> &mut FlowMap, k: &Kit) -> El {
+/// `chosen` runs once another Step is chosen.
+pub fn flow_map<S: 'static>(
+    map: &FlowMap,
+    lens: fn(&mut S) -> &mut FlowMap,
+    chosen: fn(&mut S),
+    k: &Kit,
+) -> El {
+    let lens = Lens { map: lens, chosen };
     let current = spot_of(&map.flow.current);
     let lanes: Vec<El> = rows(&map.flow)
         .into_iter()
@@ -473,12 +505,12 @@ pub fn flow_map<S: 'static>(map: &FlowMap, lens: fn(&mut S) -> &mut FlowMap, k: 
         .collect();
     // Rune's own roving is linear; this runs first and moves the map's stop, which focus follows.
     let keys = move |s: &mut S, ev: &KeyEvent, _: &mut rune::Tx| {
-        let map = lens(s);
+        let map = (lens.map)(s);
         let Some(focus) = map.focus.clone().filter(|_| ev.mods == Mods::default()) else {
             return false;
         };
         if ev.key == Key::Enter {
-            map.selected = Some(focus);
+            lens.choose(s, focus);
             return true;
         }
         let Some(spot) = moved(&map.flow, &focus, &ev.key) else {
@@ -504,7 +536,7 @@ pub fn flow_map<S: 'static>(map: &FlowMap, lens: fn(&mut S) -> &mut FlowMap, k: 
         .w_full()
         // Inside a scroll this hears every frame of it; only a new width runs the view.
         .on_layout_tx(move |s: &mut S, [_, _, w, _], tx| {
-            let map = lens(s);
+            let map = (lens.map)(s);
             if (map.width - w).abs() > 0.5 {
                 map.width = w;
             } else {

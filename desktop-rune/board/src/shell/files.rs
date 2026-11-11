@@ -67,9 +67,9 @@ pub fn is_ctrl_v(key: &KeyEvent) -> bool {
 }
 
 impl App {
-    /// The pane the record shows, while its Terminal tab is up.
+    /// The pane the record shows, on its Terminal tab or in a Flow Step's Terminal part.
     pub(crate) fn shown_pane(&mut self) -> Option<&mut collie_desktop_terminal::view::Tab> {
-        let shown = self.record.open.is_some() && self.record_tab() == "terminal";
+        let shown = self.pane_shown();
         self.terminal.as_mut().filter(|_| shown)
     }
 

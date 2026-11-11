@@ -11,7 +11,7 @@ use crate::flow::actions::{ActionView, Tone, lane_actions, next_move, step_actio
 use crate::flow::inspector::{self, Part};
 use crate::{App, flow, icons};
 use collie_desktop_protocol::generated::{
-    Category, DetailMr, EvidenceItem, Lane, Node, NodeRun, Review, VerificationResult,
+    Category, DetailMr, EvidenceItem, GlyphState, Lane, Node, NodeRun, Review, VerificationResult,
 };
 use collie_desktop_terminal::view::{Link, rgb_of, terminal};
 use rune::{El, Key, KeyEvent, ScrollSpec, SurfaceFit, Transition, Tx, col, row, text};
@@ -859,7 +859,7 @@ fn flow_tab(app: &App, record: &Record, k: &Kit) -> El {
         .w_full()
         .child(lead)
         .children(lane_row);
-    let inspector = inspector_view(app, record, map, k);
+    let inspector = inspector_view(app, record, map.width, k);
     let form = form_view(app, record, k);
     let inspected = inspector.is_some();
     let tab = col()
@@ -874,7 +874,7 @@ fn flow_tab(app: &App, record: &Record, k: &Kit) -> El {
         .scroll_anchor()
         .scroll_edge_fade(16.0)
         .child(toolbar)
-        .child(flow::flow_map(map, super::flow_of, k))
+        .child(flow::flow_map(map, super::flow_of, App::step_chosen, k))
         .children(inspector)
         .children(form.filter(|_| !inspected));
     collie_desktop_chat::glide::smooth::<App>(tab, "flow-tab")
@@ -1053,13 +1053,12 @@ fn step_context(
                         )
                         .hover(k.c.surface_hover)
                         .on_press(move |app: &mut App| {
-                            if let Some(record) = &mut app.record.open {
-                                record.entry = if record.entry.as_deref() == Some(id.as_str()) {
-                                    None
-                                } else {
-                                    Some(id.clone())
-                                };
-                            }
+                            let again = app
+                                .record
+                                .open
+                                .as_ref()
+                                .is_some_and(|r| r.entry.as_deref() == Some(id.as_str()));
+                            app.choose_entry((!again).then(|| id.clone()));
                         })
                         .child(crate::flow::glyph::glyph(&one.state, 12.0, k))
                         .child(
@@ -1105,44 +1104,19 @@ fn map_selected(app: &App) -> bool {
     app.flow.as_ref().is_some_and(|m| m.selected.is_some())
 }
 
-fn inspector_view(app: &App, record: &Record, map: &flow::FlowMap, k: &Kit) -> Option<El> {
-    let spot = map.selected.clone().or_else(|| {
-        map.flow.current.as_ref().map(|c| flow::Spot {
-            run: c.run.clone(),
-            node: c.node.clone(),
-        })
-    })?;
-    let parent: &Node = flow::node_at(&map.flow, &spot)?;
-    let entries = inspector::entries_of(parent);
-    let node: NodeRun = record
-        .entry
-        .as_ref()
-        .and_then(|id| entries.iter().find(|e| &e.id == id).cloned())
-        .unwrap_or_else(|| crate::flow::actions::as_run(parent));
-    let lane: Option<&Lane> = map.flow.lanes.iter().find(|l| l.run == spot.run);
-    let live = app.record_live();
-    let detail = record.detail();
+fn inspector_view(app: &App, record: &Record, width: f32, k: &Kit) -> Option<El> {
+    let super::StepWork {
+        spot,
+        parent,
+        node,
+        lane,
+        live,
+        log,
+        proofs,
+        parts,
+        part,
+    } = app.step_work()?;
     let steering = inspector::step_steering(&node);
-    let starts: Vec<i64> = map
-        .flow
-        .lanes
-        .iter()
-        .flat_map(|l| &l.nodes)
-        .filter_map(|n| n.log.flatten())
-        .collect();
-    let log = inspector::step_lines(
-        detail.and_then(|d| d.tail.as_ref()),
-        detail.and_then(|d| d.log_start.flatten()).unwrap_or(0),
-        node.log.flatten(),
-        &starts,
-    );
-    let checks = detail.map(|d| d.verifications.as_slice()).unwrap_or(&[]);
-    let proofs = inspector::step_evidence(checks, &parent.id, record.entry.as_ref().map(|_| &node));
-    let parts = inspector::inspector_parts(&node, live, log.count, proofs.len());
-    let chosen = record
-        .part
-        .unwrap_or_else(|| inspector::inspector_part(&node, live));
-    let part = inspector::shown_part(chosen, &parts);
     let part_tabs = (parts.len() > 1).then(|| {
         segments(k)
             .key("inspector-parts")
@@ -1152,51 +1126,15 @@ fn inspector_view(app: &App, record: &Record, map: &flow::FlowMap, k: &Kit) -> O
             .children(parts.iter().map(|p| {
                 let value = p.value;
                 segment(p.label.clone(), value == part, k)
-                    .on_press(move |app: &mut App| {
-                        if let Some(record) = &mut app.record.open {
-                            record.part = Some(value);
-                        }
-                    })
+                    .on_press(move |app: &mut App| app.choose_part(value))
                     .key(format!("part-{}", slug(&format!("{value:?}"))))
                     .role("tab")
                     .label(p.label.clone())
             }))
     });
     let work = match part {
-        Part::Terminal => {
-            let agent = node.agent.clone().flatten();
-            row()
-                .gap(12.0)
-                .center_y()
-                .padding(14.0)
-                .w_full()
-                .radius(k.radius.md)
-                .fill(k.c.layer_01)
-                .border(1.0, k.c.border_weak)
-                .child(rune::icon(&icons::TERMINAL, 16.0).color(k.c.icon_muted))
-                .child(
-                    text(match &agent {
-                        Some(agent) => format!("{agent} is working in its terminal."),
-                        None => "Its work is in the Run's terminal.".into(),
-                    })
-                    .font(k.ty.text_xsmall)
-                    .color(k.c.text_muted)
-                    .grow(1.0)
-                    .min_w(0.0),
-                )
-                .child(
-                    Button::new("Watch it")
-                        .variant(ButtonVariant::Outline)
-                        .on_press(move |app: &mut App| {
-                            if let Some(agent) = &agent {
-                                app.pick_agent(agent.clone());
-                            }
-                            app.show_tab("terminal");
-                        })
-                        .build(k)
-                        .key("inspector-terminal"),
-                )
-        }
+        Part::Terminal if live && inspector::at_work(&node) => step_terminal(app, record, k),
+        Part::Terminal => step_finished(&node, k),
         Part::Log => match &log.text {
             Some(lines) => col()
                 .gap(6.0)
@@ -1250,7 +1188,7 @@ fn inspector_view(app: &App, record: &Record, map: &flow::FlowMap, k: &Kit) -> O
         .children(part_tabs.map(|tabs| row().child(tabs)))
         .child(work);
     let context = step_context(app, record, &spot, parent, &node, lane, k);
-    let beside = map.width >= SIDE_BY_SIDE;
+    let beside = width >= SIDE_BY_SIDE;
     let body = if beside {
         row()
             .gap(24.0)
@@ -3053,65 +2991,49 @@ fn log_tab(record: &Record, k: &Kit) -> El {
         ))
 }
 
-fn terminal_tab(app: &App, record: &Record, k: &Kit) -> El {
-    let agents = app
-        .task_of_record()
-        .map(|t| t.agents.clone())
-        .unwrap_or_default();
-    let shown = app.record.terminal_agent.clone();
-    let shown_agent = agents.iter().find(|a| Some(&a.name) == shown.as_ref());
-    let tabs = agent_tabs(&agents, shown_agent);
-    let dot = |state: &str| {
-        rune::el()
-            .size(6.0, 6.0)
-            .radius(3.0)
-            .fill(status_tone(state, k).icon)
-            .a11y_hidden()
-    };
-    let switcher = (tabs.len() > 1).then(|| {
-        segments(k)
-            .key("agent-tabs")
-            .role("tablist")
-            .label("Agents")
-            .focus_group()
-            .children(tabs.iter().map(|tab| {
-                let name = tab.name.clone();
-                let chosen = Some(&tab.name) == shown.as_ref();
-                segment(tab.label.clone(), chosen, k)
-                    .gap(6.0)
-                    .child(dot(&tab.state))
-                    .on_press(move |app: &mut App| app.pick_agent(name.clone()))
-                    .key(format!("agent-{}", tab.name))
-                    .role("tab")
-                    .label(match &tab.now {
-                        Some(now) => format!("{}, {}: {now}", tab.label, tab.state),
-                        None => format!("{}, {}", tab.label, tab.state),
-                    })
-            }))
-    });
-    let one = (tabs.len() == 1).then(|| {
-        let tab = &tabs[0];
-        row()
-            .key("agent-one")
-            .gap(8.0)
-            .center_y()
-            .child(dot(&tab.state))
-            .child(
-                text(tab.label.clone())
-                    .font(k.ty.text_xsmall_medium)
-                    .color(k.c.text_base),
-            )
-            .child(
-                text(match &tab.now {
-                    Some(now) => format!("{} · {now}", tab.state),
-                    None => tab.state.clone(),
-                })
-                .font(k.ty.text_xsmall)
-                .color(k.c.text_faint)
-                .truncate()
-                .min_w(0.0),
-            )
-    });
+/// The agent shown, as one line: its state and what it is doing now.
+fn agent_one(tab: &super::agents::AgentTab, k: &Kit) -> El {
+    row()
+        .key("agent-one")
+        .gap(8.0)
+        .center_y()
+        .min_w(0.0)
+        .child(agent_dot(&tab.state, k))
+        .child(
+            text(tab.label.clone())
+                .font(k.ty.text_xsmall_medium)
+                .color(k.c.text_base),
+        )
+        .child(
+            text(match &tab.now {
+                Some(now) => format!("{} · {now}", tab.state),
+                None => tab.state.clone(),
+            })
+            .font(k.ty.text_xsmall)
+            .color(k.c.text_faint)
+            .truncate()
+            .min_w(0.0),
+        )
+}
+
+fn agent_dot(state: &str, k: &Kit) -> El {
+    rune::el()
+        .size(6.0, 6.0)
+        .radius(3.0)
+        .fill(status_tone(state, k).icon)
+        .a11y_hidden()
+}
+
+/// How far the open pane got; Connecting until one is asked for.
+fn pane_link(app: &App) -> Link {
+    app.terminal
+        .as_ref()
+        .map_or(Link::Connecting, |tab| tab.link())
+}
+
+/// The bar's pieces after its lead: where the pane is, what became of files given to it, and
+/// how far it got.
+fn pane_facts(app: &App, link: &Link, k: &Kit) -> Vec<El> {
     let away = (!app.record_live()).then(|| {
         pill(
             "terminal-away",
@@ -3121,11 +3043,7 @@ fn terminal_tab(app: &App, record: &Record, k: &Kit) -> El {
             k,
         )
     });
-    let link = app
-        .terminal
-        .as_ref()
-        .map_or(Link::Connecting, |tab| tab.link());
-    let (said, tone) = match &link {
+    let (said, tone) = match link {
         Link::Connecting => ("Connecting…", status_tone("", k)),
         Link::Live => ("Connected", k.c.success),
         Link::NoPane => ("No pane", k.c.warning),
@@ -3157,28 +3075,26 @@ fn terminal_tab(app: &App, record: &Record, k: &Kit) -> El {
             .shrink()
             .min_w(0.0)
     });
-    let bar = row()
-        .key("terminal-bar")
-        .gap(12.0)
-        .center_y()
-        .w_full()
-        .h(32.0)
-        .children(switcher)
-        .children(one)
-        .children(place)
-        .children(files_said)
-        .child(rune::spacer())
-        .children(away)
-        .child(status);
+    place
+        .into_iter()
+        .chain(files_said)
+        .chain([rune::spacer()])
+        .chain(away)
+        .chain([status])
+        .collect()
+}
+
+/// Why the pane is not live, with Reconnect; none while it connects or is live.
+fn pane_ended(link: &Link, record: &Record, k: &Kit) -> Option<El> {
     let plain = |why: &str| crate::shell::panes::plainly(why, &record.machine);
-    let why = match &link {
-        Link::Failed(why) => Some(format!("Couldn't connect to the pane: {}", plain(why))),
-        Link::Ended(why) => Some(format!("The pane disconnected: {}", plain(why))),
-        Link::NoPane => Some("This Run has no live agent's pane to show here.".to_string()),
-        Link::Connecting | Link::Live => None,
+    let why = match link {
+        Link::Failed(why) => format!("Couldn't connect to the pane: {}", plain(why)),
+        Link::Ended(why) => format!("The pane disconnected: {}", plain(why)),
+        Link::NoPane => "This Run has no live agent's pane to show here.".to_string(),
+        Link::Connecting | Link::Live => return None,
     };
-    let ended = why.map(|why| {
-        let danger = !matches!(link, Link::NoPane);
+    let danger = !matches!(link, Link::NoPane);
+    Some(
         row()
             .key("terminal-ended")
             .role(if danger { "alert" } else { "status" })
@@ -3205,8 +3121,12 @@ fn terminal_tab(app: &App, record: &Record, k: &Kit) -> El {
                     .on_press(|app: &mut App| app.reconnect())
                     .build(k)
                     .key("terminal-reconnect"),
-            )
-    });
+            ),
+    )
+}
+
+/// The pane's grid, and what is said over it while there is nothing to draw.
+fn pane_grid(app: &App, link: &Link, k: &Kit) -> Vec<El> {
     let waiting = |key: &str, said: &str| {
         col()
             .key(key.to_string())
@@ -3225,7 +3145,7 @@ fn terminal_tab(app: &App, record: &Record, k: &Kit) -> El {
                     .a11y_hidden(),
             )
     };
-    let over = match &link {
+    let over = match link {
         Link::Connecting => Some(waiting("terminal-connecting", "Connecting to the pane…")),
         Link::NoPane => Some(waiting("terminal-no-pane", "No pane to show")),
         Link::Failed(_) => Some(waiting("terminal-not-connected", "Not connected")),
@@ -3236,6 +3156,49 @@ fn terminal_tab(app: &App, record: &Record, k: &Kit) -> El {
         tab.set_surface(rgb_of(k.c.text_base), rgb_of(k.c.bg_base));
         terminal(tab, |app: &mut App| app.terminal.as_mut())
     });
+    grid.into_iter().chain(over).collect()
+}
+
+fn terminal_tab(app: &App, record: &Record, k: &Kit) -> El {
+    let agents = app
+        .task_of_record()
+        .map(|t| t.agents.clone())
+        .unwrap_or_default();
+    let shown = app.record.terminal_agent.clone();
+    let shown_agent = agents.iter().find(|a| Some(&a.name) == shown.as_ref());
+    let tabs = agent_tabs(&agents, shown_agent);
+    let switcher = (tabs.len() > 1).then(|| {
+        segments(k)
+            .key("agent-tabs")
+            .role("tablist")
+            .label("Agents")
+            .focus_group()
+            .children(tabs.iter().map(|tab| {
+                let name = tab.name.clone();
+                let chosen = Some(&tab.name) == shown.as_ref();
+                segment(tab.label.clone(), chosen, k)
+                    .gap(6.0)
+                    .child(agent_dot(&tab.state, k))
+                    .on_press(move |app: &mut App| app.pick_agent(name.clone()))
+                    .key(format!("agent-{}", tab.name))
+                    .role("tab")
+                    .label(match &tab.now {
+                        Some(now) => format!("{}, {}: {now}", tab.label, tab.state),
+                        None => format!("{}, {}", tab.label, tab.state),
+                    })
+            }))
+    });
+    let one = (tabs.len() == 1).then(|| agent_one(&tabs[0], k));
+    let link = pane_link(app);
+    let bar = row()
+        .key("terminal-bar")
+        .gap(12.0)
+        .center_y()
+        .w_full()
+        .h(32.0)
+        .children(switcher)
+        .children(one)
+        .children(pane_facts(app, &link, k));
     col()
         .key("terminal-tab")
         .grow(1.0)
@@ -3245,16 +3208,105 @@ fn terminal_tab(app: &App, record: &Record, k: &Kit) -> El {
         .instant_changes()
         .transition(Transition::none())
         .child(bar)
-        .children(ended)
+        .children(pane_ended(&link, record, k))
         .child(
             col()
                 .key("terminal-body")
                 .grow(1.0)
                 .min_h(0.0)
                 .w_full()
-                .children(grid)
-                .children(over),
+                .children(pane_grid(app, &link, k)),
         )
+}
+
+/// How tall a Step's terminal is drawn on Flow: steady, so its program's rows never shift.
+const STEP_PANE_H: f32 = 420.0;
+
+/// A working Step's own pane, drawn in its Terminal part with a way to the full Terminal tab.
+fn step_terminal(app: &App, record: &Record, k: &Kit) -> El {
+    let agents = app
+        .task_of_record()
+        .map(|t| t.agents.as_slice())
+        .unwrap_or_default();
+    let shown = app.record.terminal_agent.as_deref();
+    let one = agent_tabs(agents, None)
+        .into_iter()
+        .find(|tab| Some(tab.name.as_str()) == shown)
+        .map(|tab| agent_one(&tab, k));
+    let link = pane_link(app);
+    let open = Button::new("Open in Terminal tab")
+        .variant(ButtonVariant::Ghost)
+        .on_press(|app: &mut App| app.show_tab("terminal"))
+        .build(k)
+        .key("inspector-terminal");
+    let bar = row()
+        .key("terminal-bar")
+        .gap(12.0)
+        .center_y()
+        .w_full()
+        .h(32.0)
+        .children(one)
+        .children(pane_facts(app, &link, k))
+        .child(open);
+    col()
+        .key("step-terminal")
+        .gap(8.0)
+        .w_full()
+        .instant_changes()
+        .transition(Transition::none())
+        .child(bar)
+        .children(pane_ended(&link, record, k))
+        .child(
+            col()
+                .key("terminal-body")
+                .h(STEP_PANE_H)
+                .w_full()
+                .radius(k.radius.md)
+                .border(1.0, k.c.border_weak)
+                .clip_rounded(k.radius.md)
+                .children(pane_grid(app, &link, k)),
+        )
+}
+
+/// A Step that has finished keeps no pane here: it says so, calmly, with the way to the
+/// Terminal tab, where its agent can still be watched.
+fn step_finished(node: &NodeRun, k: &Kit) -> El {
+    let agent = node.agent.clone().flatten();
+    let said = match (&agent, node.state == GlyphState::Expected) {
+        (_, true) => inspector::quiet_work(node).to_string(),
+        (Some(agent), false) => {
+            format!("This Step is over; {agent}'s terminal shows here only while it works.")
+        }
+        (None, false) => "This Step is over, so it has no terminal to show here.".to_string(),
+    };
+    row()
+        .key("step-finished")
+        .gap(12.0)
+        .center_y()
+        .padding(14.0)
+        .w_full()
+        .radius(k.radius.md)
+        .fill(k.c.layer_01)
+        .border(1.0, k.c.border_weak)
+        .child(rune::icon(&icons::TERMINAL, 16.0).color(k.c.icon_muted))
+        .child(
+            text(said)
+                .font(k.ty.text_xsmall)
+                .color(k.c.text_muted)
+                .wrap()
+                .grow(1.0)
+                .min_w(0.0),
+        )
+        .children(agent.map(|agent| {
+            Button::new("Open in Terminal tab")
+                .variant(ButtonVariant::Ghost)
+                .on_press(move |app: &mut App| {
+                    app.pick_agent(agent.clone());
+                    app.show_tab("terminal");
+                })
+                .build(k)
+                .key("inspector-terminal")
+        }))
 }
 
 /// A small rounded status, in `tone`.
