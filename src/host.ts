@@ -152,7 +152,8 @@ import { readDefinitions } from "./authoring";
 import { SharedDefinition } from "./definitions-model";
 import { DefinitionRefused, sharedDefinitions, takeDefinitions } from "./shared-definitions";
 import { sideJobs } from "./side-jobs";
-import { recoverParks } from "./park-recovery";
+import { healParks, recoverParks } from "./park-recovery";
+import { Notifier } from "./notify";
 import { machineMemory } from "./memory";
 import { Usage, usageLayer } from "./usage";
 import { HarnessCatalogues, catalogueLayer } from "./catalogue";
@@ -662,6 +663,117 @@ export const timingFirstValues = <
       : answer;
   }) as H;
 
+/** What an agent of a Heal may ask beyond acting: reading, and declaring who it is. */
+const HEALER_READS = new Set([
+  "declare",
+  "identity",
+  "runDetail",
+  "board",
+  "toasts",
+  "progress",
+  "runFile",
+  "offers",
+  "workflows",
+  "definitions",
+  "settings",
+  "machineOwn",
+  "ownInventory",
+  "ownWords",
+  "sharedDefinitions",
+  "usage",
+  "models",
+  "connections",
+  "slackChoices",
+  "schedules",
+  "claimedInHelle",
+  "read",
+  "readFile",
+  "glob",
+  "grep",
+  "verifyFollow",
+  "registrations",
+  "discover",
+  "status",
+  "run",
+  "runMetrics",
+  "runCards",
+  "runDrift",
+  "runIntent",
+  "runDispositions",
+  "runOutcomes",
+  "runOutputs",
+  "runChecks",
+  "checkLog",
+  "deliveries",
+  "overridden",
+  "tasks",
+  "proposals",
+  "runProposals",
+  "proposal",
+  "registered",
+  "launches",
+  "runs",
+  "watch",
+  "shown",
+  "peers",
+  "agentRun",
+]);
+const TargetsOne = Schema.Struct({ runId: Schema.String });
+const ActsOn = Schema.Struct({
+  actions: Schema.Array(
+    Schema.Struct({ kind: Schema.String, run: Schema.optional(Schema.String) }),
+  ),
+});
+
+/**
+ * Holds an agent of a Heal to the two things a Heal does: deliver to the healed Run's agents
+ * and resume it. What it prevents is an agent nobody asked answering for a person, lifting
+ * their Hold or undoing their Stop (ADR-draft-a-run-recovers-where-it-parks D7).
+ */
+const healerBound =
+  (declared: Declared) =>
+  <H extends Record<string, (...args: ReadonlyArray<never>) => object>>(handlers: H) =>
+    Effect.map(
+      Registry,
+      (registry) =>
+        // SAFETY: each handler is replaced by one taking its arguments and answering its type.
+        Rec.map(handlers, (handler, name) =>
+          HEALER_READS.has(name)
+            ? handler
+            : (payload: never, options: never) => {
+                const refusal = Effect.gen(function* () {
+                  // SAFETY: every RPC handler is called with the options carrying its client.
+                  const who = stampIn(declared, (options as { client: { id: number } }).client);
+                  if (who.origin !== "agent" || who.from?.run === undefined) return;
+                  const heals = (yield* registry
+                    .view(who.from.run)
+                    .pipe(Effect.orElseSucceed(() => null)))?.heals;
+                  if (heals === undefined) return;
+                  const targets =
+                    name === "act"
+                      ? Option.map(Schema.decodeOption(ActsOn)(payload), (asked) =>
+                          Arr.map(asked.actions, (one) =>
+                            one.kind === "deliver" || one.kind === "resume" ? one.run : undefined,
+                          ),
+                        )
+                      : name === "steer" || name === "resume"
+                        ? Option.map(Schema.decodeOption(TargetsOne)(payload), (one) => [one.runId])
+                        : Option.none();
+                  if (Option.isSome(targets) && Arr.every(targets.value, (run) => run === heals))
+                    return;
+                  return yield* new HostRefused({
+                    reason: `${who.from.run} is a Heal of ${heals}: its agents may only deliver to ${heals}'s agents and resume it`,
+                  });
+                });
+                const answer = handler(payload, options);
+                return Stream.isStream(answer)
+                  ? Stream.unwrap(Effect.as(refusal, answer))
+                  : // SAFETY: a handler that answers no Stream answers an Effect.
+                    Effect.andThen(refusal, answer as Effect.Effect<object, HostRefused>);
+              },
+        ) as H,
+    );
+
 export type HostClient = RpcClient.RpcClient<
   RpcGroup.Rpcs<typeof AllRpcs>,
   RpcClientError.RpcClientError
@@ -1066,7 +1178,7 @@ const handlers = (
           );
         },
       });
-    }).pipe(Effect.map(timingFirstValues)),
+    }).pipe(Effect.map(timingFirstValues), Effect.flatMap(healerBound(declared))),
   );
 
 /** What a steer's request has to ask again, as `AskedFor` is a start's. */
@@ -2184,6 +2296,46 @@ const frontDoorHandlers = (
                   };
                 return yield* takeUp(view.runId, park);
               }).pipe(Effect.mapError((cause) => new HostRefused({ reason: reason(cause) }))),
+            ),
+        }).pipe(Effect.provideContext(hosted)),
+      );
+      yield* Effect.forkScoped(
+        healParks({
+          env,
+          herdr,
+          views: registry.views(null),
+          start: (view, healer, request, park) =>
+            Effect.gen(function* () {
+              const admitted = yield* registry.start({
+                generation: yield* registry.resolve({ project: view.project, id: healer }),
+                request,
+                project: view.project,
+                input: { run: view.runId, park },
+                task: view.task,
+                heals: view.runId,
+              });
+              const trail = runDir(env.stateDir, admitted.runId);
+              const recorded = Arr.some(
+                yield* readAudit(trail).pipe(Effect.orElseSucceed(() => [])),
+                (line) => line.request === request,
+              );
+              if (!recorded)
+                yield* recordAudit(trail, {
+                  operation: "start",
+                  request,
+                  origin: "host",
+                  result: Started,
+                  value: admitted,
+                }).pipe(Effect.orDie);
+              return admitted.runId;
+            }),
+          notify: (runId, kind, body, key) =>
+            Effect.serviceOption(Notifier).pipe(
+              Effect.flatMap((notifier) =>
+                Option.isNone(notifier)
+                  ? Effect.void
+                  : notifier.value.notify(runId, kind, body, { key }),
+              ),
             ),
         }).pipe(Effect.provideContext(hosted)),
       );
@@ -3821,7 +3973,7 @@ const frontDoorHandlers = (
             ),
           ).pipe(Stream.orDie),
       });
-    }).pipe(Effect.map(timingFirstValues)),
+    }).pipe(Effect.map(timingFirstValues), Effect.flatMap(healerBound(declared))),
   );
 
 /** The state directory's own id, made the first time a host owns it and kept from then on. */

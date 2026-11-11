@@ -82,6 +82,10 @@ here are in [`src/README.md`](src/README.md).
   [`docs/using.md`](docs/using.md#self-improve), `workflows/self-improve.workflow.ts`,
   `workflows/retrospective.ts`, `personas/retrospective.md`, `test/support/baseline.ts`.
   Its triage uses the installed `retro` skill.
+- **Parks, recovery, the Heal** → [ADR-draft-a-run-recovers-where-it-parks](docs/adr/draft-a-run-recovers-where-it-parks.md),
+  [`docs/cli.md`](docs/cli.md#stop-and-resume), `src/park-cause.ts`, `src/park-recovery.ts`,
+  `src/heal.ts`, `healerBound` in `src/host.ts`, `workflows/heal.workflow.ts`,
+  `test/recovery.test.ts`, `test/heal.test.ts`.
 - **Settings** → [ADR-0043](docs/adr/0043-a-shared-setting-is-its-latest-edit.md), `src/settings.ts`,
   `setSetting` and `takeShared` in `src/config.ts`. The user Layer's files are shared by the same rule:
   [ADR-0061](docs/adr/0061-a-users-definitions-are-the-flocks.md),

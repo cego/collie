@@ -1,6 +1,6 @@
 # Workflows
 
-Collie ships eleven workflows. This page is the "which one do I want" level: what each is
+Collie ships twelve workflows. This page is the "which one do I want" level: what each is
 for, what it needs from you, and how they chain. The files under
 [`workflows/`](../workflows) are canonical for step-by-step behavior: each is a TypeScript
 module with its Markdown beside it as content ([the SDK](sdk.md)). Any of them is a fork
@@ -1345,3 +1345,29 @@ Review, Checks, Merge request and External report.
 Module: [`workflows/tune-up.workflow.ts`](../workflows/tune-up.workflow.ts), with its
 prompts in [`workflows/tune-up.md`](../workflows/tune-up.md) and its agent's Persona in
 [`personas/tuner.md`](../personas/tuner.md).
+
+## `heal`
+
+**For:** a parked Run Collie's own recovery could not move. You never start it: the host
+does, once per park, before the park would tell you it needs you. See
+[Stop and resume](cli.md#stop-and-resume) for when.
+
+**Input:** `run` and `park`, the parked Run and the park it is for.
+
+**What happens:** one healer reads everything about the parked Run (its record, its agents'
+panes and transcripts, its checks and pipeline), tells the agent that missed something what
+it missed, and resumes the Run. It never does the Run's work. The host refuses everything
+else from it: answering a Decision, lifting a Hold, undoing a Stop, taking an offer, and
+anything on another Run. It returns `{ diagnosis, actions, result, needs_person, finding }`,
+where `result` is `resumed` or `escalate` and `finding` is required: `collie_defect`, `key`,
+`root_cause`, `fix` and `regression`, stated for everyone who runs Collie. An Output without
+a finding is sent back for repair. The host judges the parked Run's facts, never `result`.
+
+The host finds it by its declaration, `heals: true`, never by its id; a project's fork that
+declares it replaces the shipped one.
+
+Its Flow forecasts one Step, Heal, which produces evidence.
+
+Module: [`workflows/heal.workflow.ts`](../workflows/heal.workflow.ts), with its prompt in
+[`workflows/heal.md`](../workflows/heal.md) and its agent's Persona in
+[`personas/healer.md`](../personas/healer.md).
