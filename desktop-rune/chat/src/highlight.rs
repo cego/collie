@@ -1,6 +1,6 @@
-//! Code blocks coloured by syntect with `two-face`'s grammars, plugged into rune-kit's
-//! Markdown beside its built-in scanners, so the gate can choose between them. Scopes become
-//! rune-kit's token kinds, so the kit's theme colours both alike.
+//! Code blocks coloured by rune-kit's built-in scanners where they know the language, else by
+//! syntect with `two-face`'s grammars. Scopes become rune-kit's token kinds, so the kit's theme
+//! colours both alike.
 
 use rune_kit::syntax::{Highlight, Paint, Syntax};
 use std::sync::LazyLock;
@@ -95,4 +95,13 @@ pub fn syntect(lang: Option<&str>, code: &str) -> Vec<Highlight> {
 /// Whether a two-face grammar names `lang`.
 pub fn knows(lang: &str) -> bool {
     SYNTAXES.find_syntax_by_token(lang).is_some()
+}
+
+/// rune-kit's scanners for a language they know, else syntect's grammars (ADR-draft D2).
+pub fn colours(lang: Option<&str>, code: &str) -> Vec<Highlight> {
+    if lang.is_some_and(rune_kit::syntax::known) {
+        rune_kit::syntax::builtin(lang, code)
+    } else {
+        syntect(lang, code)
+    }
 }

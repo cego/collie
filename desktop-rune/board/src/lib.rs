@@ -12,11 +12,14 @@ pub mod timing;
 
 pub use shell::view;
 
-use collie_desktop_chat::view::{Chat, DiffTab, chat};
-use collie_desktop_protocol::generated::AguiEvent;
+use collie_desktop_chat::host::{Done, Each, Stop};
+use collie_desktop_chat::view::DiffTab;
+use collie_desktop_chat::{Chat, Host};
+use collie_desktop_protocol::generated::{About, AguiEvent};
 use collie_desktop_terminal::view::Tab;
 use rune::{El, col};
 use rune_kit::Kit;
+use serde_json::Value;
 
 pub use board::Shown;
 pub use record::{GoTo, LoadDiff, ReadRecord, run_diff, run_file};
@@ -56,6 +59,11 @@ impl App {
             self.timing.get_mut().chunk(&format!("turn-{turn}"), at);
         }
     }
+
+    /// Opens the chat on the core, once the app has one.
+    pub fn open_chat(&mut self) {
+        collie_desktop_chat::chat::open(self);
+    }
 }
 
 /// The marks a frame drawn at `at` ends or starts, read from the board it drew.
@@ -94,8 +102,62 @@ pub fn frame_drawn(drawn: &rune::Runtime<App>, at: f64) -> Vec<timing::Mark> {
     std::mem::take(&mut timing.marks)
 }
 
-fn chat_of(board: &mut App) -> &mut Chat {
-    &mut board.chat
+fn epoch_ms() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64() * 1000.0)
+}
+
+impl Host for App {
+    fn chat(&self) -> &Chat {
+        &self.chat
+    }
+
+    fn chat_mut(&mut self) -> &mut Chat {
+        &mut self.chat
+    }
+
+    fn request(&self, tag: &str, payload: Value, done: Done<App>) {
+        if let Some(core) = &self.core {
+            core.request(
+                tag,
+                payload,
+                move |app, answer: Result<Value, calls::CallError>| {
+                    done(app, answer.map_err(|e| e.0))
+                },
+            );
+        }
+    }
+
+    fn stream(&self, tag: &str, payload: Value, mut each: Each<App>) -> Option<Stop> {
+        let core = self.core.as_ref()?;
+        Some(core.stream(
+            tag,
+            payload,
+            move |app, value: Result<Value, calls::CallError>| each(app, value.map_err(|e| e.0)),
+        ))
+    }
+
+    fn heard_chunk(&mut self, turn: u64) {
+        self.timing
+            .get_mut()
+            .chunk(&format!("turn-{turn}"), epoch_ms());
+    }
+
+    fn open_about(&mut self, about: &About) {
+        let found = self
+            .machines
+            .iter()
+            .filter(|m| m.name == about.machine)
+            .find_map(|shown| {
+                let installation = shown.installation.clone()?;
+                let card = shown.cards.iter().find(|c| c.run == about.run)?;
+                Some((installation, card.run.clone(), shown.name.clone()))
+            });
+        if let Some((installation, run, machine)) = found {
+            self.go_to_pane(installation, run, machine);
+        }
+    }
 }
 
 /// The Board page's pane: the open Run, else the board.
@@ -103,11 +165,26 @@ pub fn board_pane(board: &App, k: &Kit) -> El {
     record::view(board, k).unwrap_or_else(|| board::view(board, k))
 }
 
-/// The chat as the window's trailing pane.
+/// The chat as the window's trailing pane, its menus drawn inside it.
 pub fn chat_pane(board: &App, k: &Kit) -> El {
-    col()
-        .padding(12.0)
+    let mut layer = Vec::new();
+    let pane = chat_pane_in(board, k, &mut layer);
+    rune::el()
+        .w_full()
         .grow(1.0)
         .min_h(0.0)
-        .child(chat(&board.chat, chat_of, k))
+        .child(pane.w_full().h_full())
+        .children(layer)
+}
+
+/// The chat as the window's trailing pane, its menus on the window's `layer`.
+pub fn chat_pane_in(board: &App, k: &Kit, layer: &mut Vec<El>) -> El {
+    col()
+        .grow(1.0)
+        .min_h(0.0)
+        .child(collie_desktop_chat::pane::chat::<App>(
+            &board.chat,
+            k,
+            layer,
+        ))
 }

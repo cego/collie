@@ -313,7 +313,7 @@ fn the_chats_controls_stay_inside_its_panel_and_leave_the_composer_the_most_room
         };
         let [px, py, pw, ph] = rect("chat");
         let action = if running { "stop" } else { "send" };
-        for key in ["attach", "composer", action, "highlighter"] {
+        for key in ["attach", "composer", action, "chat-choices"] {
             let [x, y, w, h] = rect(key);
             assert!(
                 x >= px && y >= py && x + w <= px + pw && y + h <= py + ph,
@@ -323,7 +323,7 @@ fn the_chats_controls_stay_inside_its_panel_and_leave_the_composer_the_most_room
             );
         }
         let composer = rect("composer")[2];
-        for key in ["attach", action, "highlighter"] {
+        for key in ["attach", action, "chat-choices"] {
             assert!(
                 composer > rect(key)[2],
                 "the composer, {composer} wide, is narrower than {key} (running: {running})"
