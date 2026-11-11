@@ -339,6 +339,7 @@ const sweeping = Effect.gen(function* () {
       installation: "this-machine",
       stamp: "test",
       linked: yield* Queue.unbounded<Peer>(),
+      live: () => Effect.succeed(false),
     }).pipe(
       Layer.provide(
         Layer.succeed(Registry)({

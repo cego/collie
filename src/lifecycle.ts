@@ -190,6 +190,15 @@ type Client = FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner;
 
 /** A refusal as the front doors say one, with the host's own sentence inside it. */
 export const refusal = (cause: HostFailure): Failure => {
+  const failure = refused(cause);
+  return cause._tag === "HostUnavailable" ||
+    cause._tag === "MachineUnreachable" ||
+    cause._tag === "RpcClientError"
+    ? { ...failure, unreached: true }
+    : failure;
+};
+
+const refused = (cause: HostFailure): Failure => {
   switch (cause._tag) {
     case "HostRefused":
       // The host says so first where the input is why, and that is exit 2, not exit 1.

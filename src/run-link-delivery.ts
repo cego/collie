@@ -106,20 +106,21 @@ export const notifyRunLink = Effect.fn("RunLinks.notify")(function* (
   yield* send(env, dir, peer, notice);
 });
 
-/** Sends `view`'s undelivered notices to `peer` again; returns how many. */
-export const resendRunLinks = Effect.fn("RunLinks.resend")(function* (
+/** `view`'s notices to `peer` not yet delivered. */
+export const owedRunLinks = Effect.fn("RunLinks.owed")(function* (
   env: PluginEnv,
   view: RunView,
   peer: Peer,
 ) {
   const dir = `${env.stateDir}/runs/${view.runId}`;
   const tries = yield* readLinkDeliveries(dir);
-  const owed = Arr.filter(
+  return Arr.filter(
     yield* readSentNotices(dir),
     (notice) =>
       notice.requestedBy.machine.installation === peer.installation &&
       !Arr.some(tries, (one) => one.phase === notice.phase && one.state === "delivered"),
   );
-  for (const notice of owed) yield* send(env, dir, peer, notice);
-  return owed.length;
 });
+
+export const resendRunLink = (env: PluginEnv, view: RunView, peer: Peer, notice: RunLinkNotice) =>
+  send(env, `${env.stateDir}/runs/${view.runId}`, peer, notice);

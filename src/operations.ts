@@ -115,7 +115,12 @@ export const ExpectedError = Schema.Struct({
 });
 export interface ExpectedError extends Schema.Schema.Type<typeof ExpectedError> {}
 
-export type Failure = { ok: false; error: ExpectedError };
+export type Failure = {
+  ok: false;
+  error: ExpectedError;
+  /** The Machine or its host was not reached, so nothing it would say is known. */
+  readonly unreached?: true;
+};
 
 /** This Machine's host could not be asked, which is not the same as it having nothing. */
 export class HostUnread extends Data.TaggedError("HostUnread")<{

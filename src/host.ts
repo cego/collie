@@ -4207,7 +4207,9 @@ const own = (
             Layer.effectDiscard(
               Effect.gen(function* () {
                 const { reportsLayer } = yield* Effect.promise(() => import("./reports"));
-                yield* Layer.build(reportsLayer({ env, installation, stamp, crashAt, linked }));
+                yield* Layer.build(
+                  reportsLayer({ env, installation, stamp, crashAt, linked, live: peers.live }),
+                );
               }),
             ),
           ).pipe(

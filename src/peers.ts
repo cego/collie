@@ -402,6 +402,7 @@ export interface Peers {
   readonly list: Effect.Effect<ReadonlyArray<PeerView>>;
   /** Ends the backoff of the link to the peer this Machine dials by that name. */
   readonly wake: (name: string) => Effect.Effect<void>;
+  readonly live: (installation: string) => Effect.Effect<boolean>;
 }
 
 /** One line answering a relay connection's header: open, or why not. */
@@ -1305,6 +1306,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
         ]);
       }).pipe(pairing.withPermits(1)),
     forget,
+    live: (installation) => Effect.sync(() => standings.get(installation)?.state === "live"),
     list: reconcileMachines.pipe(
       Effect.andThen(pairing.withPermits(1)(settle)),
       Effect.andThen(() =>
