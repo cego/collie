@@ -92,3 +92,18 @@ icon!(
     "collie-close",
     r#"<path d="M4 4L12 12M12 4L4 12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/>"#
 );
+icon!(
+    MACHINE,
+    "collie-machine",
+    r#"<rect x="2" y="3" width="12" height="8" rx="1.25" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M5.5 13.5H10.5M8 11V13.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>"#
+);
+icon!(
+    TERMINAL,
+    "collie-terminal",
+    r#"<rect x="2" y="2.5" width="12" height="11" rx="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M4.75 6L6.75 8L4.75 10M8.5 10.25H11.25" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#
+);
+icon!(
+    FORWARD,
+    "collie-forward",
+    r#"<path d="M6.5 3.5L11 8L6.5 12.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#
+);

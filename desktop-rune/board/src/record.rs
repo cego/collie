@@ -52,6 +52,8 @@ impl Item {
 }
 
 /// The form a Flow action opens, filled before it is sent.
+// One form is open at a time, so its largest variant costs nothing worth a box.
+#[allow(clippy::large_enum_variant)]
 pub enum Form {
     /// A note, a word to an agent, or a follow-up Run's ask.
     Text {
@@ -64,21 +66,39 @@ pub enum Form {
         withdraw: Option<String>,
         edit: TextEdit,
     },
-    /// An open question of a Step, answered by an option or in words.
+    /// A Step's open questions, each answered on its own by an option or in words, one at a time.
     Answer {
         installation: String,
         run: String,
-        id: String,
-        asked: String,
-        options: Vec<collie_desktop_protocol::generated::QuestionOption>,
-        picked: Option<String>,
-        edit: TextEdit,
+        questions: Vec<Asked>,
+        /// The question shown.
+        at: usize,
+    },
+    /// What a Step's Start offers, asked of the Run now, and the inputs it takes.
+    Offer {
+        installation: String,
+        run: String,
+        /// The offer the Step named, by key or id.
+        chosen: String,
+        /// None until the Run has said what it offers.
+        offer: Option<collie_desktop_protocol::generated::OffersSuccessItem>,
+        fields: Vec<(String, bool, TextEdit)>,
     },
     /// A proposal waiting for a yes or a no.
     Proposal {
         installation: String,
         proposal: collie_desktop_protocol::generated::Proposal,
     },
+}
+
+/// One question of an answer form, and what was sent for it once it was.
+pub struct Asked {
+    pub id: String,
+    pub asked: String,
+    pub options: Vec<collie_desktop_protocol::generated::QuestionOption>,
+    pub picked: Option<String>,
+    pub edit: TextEdit,
+    pub sent: Option<String>,
 }
 
 pub struct Record {
@@ -359,6 +379,18 @@ impl App {
         self.tab_opened();
     }
 
+    /// Shows `tab`; back on Diff, the file read last is scrolled to again.
+    pub fn show_tab_tx(&mut self, tab: &str, tx: &mut rune::Tx) {
+        let was = self.record_tab();
+        if was == "diff" && tab != "diff" {
+            self.diff_left();
+        }
+        self.show_tab(tab);
+        if tab == "diff" && was != "diff" {
+            self.diff_returned(tx);
+        }
+    }
+
     /// Reads what the tab shown needs and has not got: its terminal, its diff, its plan file.
     fn tab_opened(&mut self) {
         match self.record_tab().as_str() {
@@ -484,7 +516,7 @@ impl App {
             record.items.insert(item.into(), read);
         }
         if item.starts_with("diff:") {
-            self.diff_part_read();
+            self.diff_part_read(item);
         }
         self.opened_aside(item);
     }

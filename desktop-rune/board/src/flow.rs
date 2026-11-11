@@ -4,11 +4,12 @@
 //! `desktop/src/shared/flow.ts`, which stays their owner.
 
 pub mod actions;
+pub mod glyph;
 pub mod inspector;
 
 use collie_desktop_protocol::generated::{DetailFlow, DetailFlowCurrent, GlyphState, Node};
-use rune::{El, Key, KeyEvent, LiveRegion, Mods, col, row, text};
-use rune_kit::{Button, ButtonVariant, Kit};
+use rune::{El, Key, KeyEvent, LineCap, LiveRegion, Mods, Path, Shape, canvas, col, row, text};
+use rune_kit::Kit;
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,6 +21,9 @@ pub struct Spot {
 pub struct Row<'a> {
     pub run: &'a str,
     pub name: String,
+    /// The lane's title and what is said under it: its Machine and how it runs.
+    pub title: String,
+    pub meta: String,
     pub nodes: &'a [Node],
 }
 
@@ -41,11 +45,15 @@ pub fn rows(flow: &DetailFlow) -> Vec<Row<'_>> {
             lane.machine,
             written(&lane.execution)
         ),
+        title: lane.title.clone(),
+        meta: format!("{} · {}", lane.machine, written(&lane.execution)),
         nodes: &lane.nodes,
     });
     let release = flow.release.iter().map(|nodes| Row {
         run: "release",
         name: "Release".into(),
+        title: "Release".into(),
+        meta: String::new(),
         nodes,
     });
     lanes.chain(release).collect()
@@ -140,6 +148,8 @@ pub struct FlowMap {
     pub selected: Option<Spot>,
     /// What the live region last said.
     pub announcement: String,
+    /// How wide the map was laid out, which decides how many Steps go on a line.
+    pub width: f32,
 }
 
 impl FlowMap {
@@ -155,6 +165,7 @@ impl FlowMap {
             flow,
             selected: None,
             announcement: String::new(),
+            width: 0.0,
         }
     }
 
@@ -171,64 +182,237 @@ impl FlowMap {
             .cloned();
         let fresh = FlowMap::new(flow);
         self.focus = kept.or(fresh.focus);
+        self.selected = self
+            .selected
+            .take()
+            .filter(|spot| node_at(&fresh.flow, spot).is_some());
         self.flow = fresh.flow;
     }
 }
 
-/// A Step's state as one mark before its title; its name says the state in words.
-fn glyph(state: &GlyphState) -> &'static str {
-    match state {
-        GlyphState::Done => "✓",
-        GlyphState::Running => "●",
-        GlyphState::NeedsYou => "!",
-        GlyphState::Waiting => "◌",
-        GlyphState::Failed => "✗",
-        GlyphState::Stopped => "■",
-        GlyphState::NotRun => "–",
-        GlyphState::Expected => "○",
-    }
+/// A Step's card, at least this wide.
+const STEP_MIN: f32 = 176.0;
+/// And at most this wide, where a lane has few Steps.
+const STEP_MAX: f32 = 248.0;
+const STEP_H: f32 = 52.0;
+/// The run of an arrow between two Steps on a line.
+const LINK: f32 = 28.0;
+/// The height of the turn from the end of one line to the start of the next.
+const TURN: f32 = 24.0;
+
+/// How many Steps go on a line of a map `width` points wide, and how wide each is.
+pub fn columns(width: f32, steps: usize) -> (usize, f32) {
+    let width = if width > 0.0 { width } else { 960.0 };
+    let fit = ((width + LINK) / (STEP_MIN + LINK)).floor().max(1.0) as usize;
+    let cols = fit.min(steps.max(1));
+    let each = ((width - LINK * (cols - 1) as f32) / cols as f32).min(STEP_MAX);
+    (cols, each.max(1.0))
 }
 
+/// The arrow between two Steps on a line; dashed where the next is still to come.
+fn link(to: &Node, k: &Kit) -> El {
+    let ahead = to.state == GlyphState::Expected;
+    let ink = if ahead {
+        k.c.border_base
+    } else {
+        k.c.border_strong
+    };
+    let y = STEP_H / 2.0;
+    let shape = if ahead {
+        (0..4).fold(Shape::new(), |s, i| {
+            let x = 3.0 + i as f32 * 5.5;
+            s.line([x, y], [x + 2.5, y], 1.25, LineCap::Round, ink)
+        })
+    } else {
+        Shape::new().line([3.0, y], [LINK - 5.0, y], 1.25, LineCap::Round, ink)
+    }
+    .stroke(
+        vec![
+            [LINK - 7.5, y - 3.0],
+            [LINK - 4.0, y],
+            [LINK - 7.5, y + 3.0],
+        ],
+        1.25,
+        ink,
+    );
+    canvas(shape).size(LINK, STEP_H).a11y_hidden()
+}
+
+/// The turn from the last Step of one line down to the first of the next.
+fn turn(cols: usize, each: f32, to: &Node, k: &Kit) -> El {
+    let ink = if to.state == GlyphState::Expected {
+        k.c.border_base
+    } else {
+        k.c.border_strong
+    };
+    let from = (cols - 1) as f32 * (each + LINK) + each / 2.0;
+    let back = each / 2.0;
+    let mid = TURN / 2.0;
+    let r = 6.0_f32.min(mid);
+    let path = Path::new()
+        .move_to([from, 0.0])
+        .line_to([from, mid - r])
+        .quad_to([from, mid], [from - r, mid])
+        .line_to([back + r, mid])
+        .quad_to([back, mid], [back, mid + r])
+        .line_to([back, TURN - 3.0]);
+    let width = cols as f32 * each + (cols - 1) as f32 * LINK;
+    let shape = Shape::new()
+        .stroke_path(&path, 1.25, LineCap::Round, ink)
+        .stroke(
+            vec![
+                [back - 3.0, TURN - 6.0],
+                [back, TURN - 2.5],
+                [back + 3.0, TURN - 6.0],
+            ],
+            1.25,
+            ink,
+        );
+    canvas(shape).size(width, TURN).a11y_hidden()
+}
+
+fn step<S: 'static>(
+    map: &FlowMap,
+    lens: fn(&mut S) -> &mut FlowMap,
+    run: &str,
+    node: &Node,
+    each: f32,
+    current: bool,
+    k: &Kit,
+) -> El {
+    let spot = Spot {
+        run: run.into(),
+        node: node.id.clone(),
+    };
+    let focused = map.focus.as_ref() == Some(&spot);
+    let chosen = map.selected.as_ref() == Some(&spot);
+    let key = format!("flow-{}-{}", spot.run, spot.node);
+    let ahead = node.state == GlyphState::Expected;
+    let edge = match node.state {
+        GlyphState::Failed => k.c.danger.icon,
+        GlyphState::NeedsYou => k.c.warning.icon,
+        _ if current => k.c.info.icon,
+        _ if chosen => k.c.border_strong,
+        _ => k.c.border_weak,
+    };
+    let strong = matches!(node.state, GlyphState::Failed | GlyphState::NeedsYou) || current;
+    let said = node
+        .said
+        .clone()
+        .filter(|s| !s.is_empty() && (!ahead || node.pause.clone().flatten().is_some()));
+    let title = text(node.title.clone())
+        .font(k.ty.ui_medium)
+        .color(if ahead {
+            k.c.text_muted
+        } else {
+            k.c.text_strong
+        })
+        .truncate()
+        .a11y_hidden();
+    let words = col()
+        .gap(1.0)
+        .grow(1.0)
+        .min_w(0.0)
+        .child(title)
+        .children(said.map(|said| {
+            text(said)
+                .font(k.ty.text_xsmall)
+                .color(k.c.text_muted)
+                .truncate()
+                .a11y_hidden()
+        }));
+    let linked = node.link.clone().flatten().is_some();
+    row()
+        .key(key)
+        .role("button")
+        .label(node_name(node))
+        .focusable(true)
+        .focus_selected(focused)
+        // ARIA's aria-pressed; Rune has no aria-current for the current Step.
+        .checked(chosen)
+        .w(each)
+        .h(STEP_H)
+        .px(10.0)
+        .gap(9.0)
+        .center_y()
+        .radius(k.radius.md)
+        .fill(if chosen {
+            k.c.layer_03
+        } else if linked {
+            k.c.layer_01
+        } else {
+            k.c.layer_02
+        })
+        .border(if strong { 1.5 } else { 1.0 }, edge)
+        .hover(k.c.surface_hover)
+        .on_press(move |s: &mut S| {
+            let map = lens(s);
+            map.focus = Some(spot.clone());
+            map.selected = Some(spot.clone());
+        })
+        .child(glyph::glyph(&node.state, 16.0, k))
+        .child(words)
+}
+
+/// One lane: its title, its Machine and how it runs, then its Steps, line after line.
+fn lane<S: 'static>(
+    map: &FlowMap,
+    lens: fn(&mut S) -> &mut FlowMap,
+    lane: Row<'_>,
+    current: Option<&Spot>,
+    k: &Kit,
+) -> El {
+    let (cols, each) = columns(map.width, lane.nodes.len());
+    let mut lines = col().gap(0.0);
+    let chunks: Vec<&[Node]> = lane.nodes.chunks(cols).collect();
+    for (at, chunk) in chunks.iter().enumerate() {
+        let mut line = row().key(format!("flow-line-{}-{at}", lane.run)).center_y();
+        for (i, node) in chunk.iter().enumerate() {
+            if i > 0 {
+                line = line.child(link(node, k));
+            }
+            let here = current.is_some_and(|c| c.run == lane.run && c.node == node.id);
+            line = line.child(step(map, lens, lane.run, node, each, here, k));
+        }
+        lines = lines.child(line);
+        if let Some(next) = chunks.get(at + 1).and_then(|c| c.first()) {
+            lines = lines.child(turn(cols, each, next, k));
+        }
+    }
+    let header = row()
+        .gap(8.0)
+        .center_y()
+        .child(
+            text(lane.title.clone())
+                .font(k.ty.text_small_medium)
+                .color(k.c.text_strong)
+                .truncate()
+                .a11y_hidden(),
+        )
+        .children((!lane.meta.is_empty()).then(|| {
+            text(lane.meta.clone())
+                .font(k.ty.text_xsmall)
+                .color(k.c.text_faint)
+                .truncate()
+                .a11y_hidden()
+        }));
+    col()
+        .key(format!("flow-row-{}", lane.run))
+        .role("group")
+        .label(lane.name)
+        .gap(8.0)
+        .w_full()
+        .child(header)
+        .children((!lane.nodes.is_empty()).then_some(lines))
+}
+
+/// The Flow as a map: each lane's Steps as cards joined by arrows, wrapping line after line.
 pub fn flow_map<S: 'static>(map: &FlowMap, lens: fn(&mut S) -> &mut FlowMap, k: &Kit) -> El {
     let current = spot_of(&map.flow.current);
-    let lanes = rows(&map.flow).into_iter().map(|lane| {
-        let nodes = lane.nodes.iter().map(|node| {
-            let spot = Spot {
-                run: lane.run.into(),
-                node: node.id.clone(),
-            };
-            let variant = if current.as_ref() == Some(&spot) {
-                ButtonVariant::Contrast
-            } else if map.selected.as_ref() == Some(&spot) {
-                ButtonVariant::Outline
-            } else {
-                ButtonVariant::Ghost
-            };
-            let focused = map.focus.as_ref() == Some(&spot);
-            let chosen = map.selected.as_ref() == Some(&spot);
-            let key = format!("flow-{}-{}", spot.run, spot.node);
-            Button::new(format!("{} {}", glyph(&node.state), node.title))
-                .variant(variant)
-                .on_press(move |s: &mut S| {
-                    let map = lens(s);
-                    map.focus = Some(spot.clone());
-                    map.selected = Some(spot.clone());
-                })
-                .build(k)
-                .key(key)
-                .label(node_name(node))
-                .focus_selected(focused)
-                // ARIA's aria-pressed; Rune has no aria-current for the current Step.
-                .checked(chosen)
-        });
-        row()
-            .key(format!("flow-row-{}", lane.run))
-            .role("group")
-            .label(lane.name)
-            .gap(4.0)
-            .center_y()
-            .children(nodes)
-    });
+    let lanes: Vec<El> = rows(&map.flow)
+        .into_iter()
+        .map(|row| lane(map, lens, row, current.as_ref(), k))
+        .collect();
     // Rune's own roving is linear; this runs first and moves the map's stop, which focus follows.
     let keys = move |s: &mut S, ev: &KeyEvent, _: &mut rune::Tx| {
         let map = lens(s);
@@ -245,6 +429,13 @@ pub fn flow_map<S: 'static>(map: &FlowMap, lens: fn(&mut S) -> &mut FlowMap, k: 
         map.focus = Some(spot);
         true
     };
+    let mut body = col().gap(20.0).w_full();
+    for (at, lane) in lanes.into_iter().enumerate() {
+        if at > 0 {
+            body = body.child(rune::el().h(1.0).w_full().fill(k.c.border_weak));
+        }
+        body = body.child(lane);
+    }
     col()
         .key("flow")
         .role("group")
@@ -252,8 +443,14 @@ pub fn flow_map<S: 'static>(map: &FlowMap, lens: fn(&mut S) -> &mut FlowMap, k: 
         .focus_group()
         .focus_follows()
         .on_key(keys)
-        .gap(6.0)
-        .children(lanes)
+        .w_full()
+        .on_layout(move |s: &mut S, [_, _, w, _]| {
+            let map = lens(s);
+            if (map.width - w).abs() > 0.5 {
+                map.width = w;
+            }
+        })
+        .child(body)
         .child(
             text(map.announcement.clone())
                 .key("flow-announcement")
