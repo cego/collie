@@ -2866,9 +2866,11 @@ directory that is not a checkout of it, will review and comment fine, but chaini
 **Fix findings** is refused the same way, with the menu back. Clone that project and start
 the fix round from there.
 
-A step pointed at a merge request needs its forge's CLI logged in to its host: `glab` and
-`glab auth status --hostname <host>` on GitLab, `gh` and `gh auth status --hostname
-github.com` on GitHub. In a directory that is not a checkout there is no branch and no
+A step pointed at a merge request needs its forge's CLI installed (`glab` on GitLab, `gh` on
+GitHub) and a login its host accepts: Collie asks the forge who the CLI's token belongs to.
+No token, or a 401, parks the Run as `login-missing`, for you to log in again; a forge that
+cannot be reached or fails to answer parks it as `forge-unavailable`, which clears by
+itself. In a directory that is not a checkout there is no branch and no
 working tree to review, so the target menu is one entry — **Type it…**.
 
 ## Releasing a merge request

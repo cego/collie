@@ -295,50 +295,35 @@ test("a project is read out of either remote shape", () => {
   expect(projectFromRemote("/srv/git/bare.git")).toBeNull();
 });
 
-test("a step pointed at a project needs glab logged in to that host, not a checkout", () =>
-  runEffect(
+test("a step pointed at a project needs glab logged in to that host, not a checkout", () => {
+  const fake = fakeForge("gitlab", {
+    installed: true,
+    loggedIn: ["gitlab.cego.dk"],
+    login: "me",
+    mrs: [],
+  });
+  return runEffect(
     Effect.gen(function* () {
-      const calls: string[][] = [];
-      const run = (cmd: string, args: string[]) =>
-        Effect.succeed(
-          (() => {
-            calls.push([cmd, ...args]);
-            if (cmd === "glab" && args[0] === "--version") return { code: 0, stdout: "glab 1.0" };
-            if (cmd === "glab" && args[0] === "auth") return { code: 0, stdout: "logged in" };
-            // No git remotes here at all: the point is that it is never asked.
-            return { code: 1, stdout: "" };
-          })(),
-        );
-
-      const ready = yield* gitlabForProject("gitlab.cego.dk/cego/x", "/not/a/repo", run);
+      const ready = yield* gitlabForProject("gitlab.cego.dk/cego/x", "/not/a/repo", fake.run);
 
       expect(ready.ok).toBe(true);
-      expect(calls).toEqual([
-        ["glab", "--version"],
-        ["glab", "auth", "status", "--hostname", "gitlab.cego.dk"],
-      ]);
-    }),
-  ));
+      expect(Arr.filter(fake.calls, (call) => call.startsWith("git "))).toEqual([]);
+    }).pipe(Effect.provide(fake.layer)),
+  );
+});
 
-test("not logged in to that host says so, and no project leaves the checkout to detection", () =>
-  runEffect(
+test("not logged in to that host says so, and no project leaves the checkout to detection", () => {
+  const fake = fakeForge("gitlab", { installed: true, loggedIn: [], login: null, mrs: [] });
+  return runEffect(
     Effect.gen(function* () {
-      const run = (cmd: string, args: string[]) =>
-        Effect.succeed(
-          (() => {
-            if (cmd === "glab" && args[0] === "--version") return { code: 0, stdout: "glab 1.0" };
-            if (cmd === "glab" && args[0] === "auth") return { code: 1, stdout: "" };
-            return { code: 1, stdout: "" };
-          })(),
-        );
-
-      expect((yield* gitlabForProject("gitlab.cego.dk/cego/x", "/x", run)).reason).toBe(
+      expect((yield* gitlabForProject("gitlab.cego.dk/cego/x", "/x", fake.run)).reason).toBe(
         "glab is not logged in to gitlab.cego.dk",
       );
       // A target with no project is judged by its checkout's forge, before the adapter is asked.
-      expect(yield* gitlabForProject(null, "/x", run)).toEqual({ ok: true, reason: "" });
-    }),
-  ));
+      expect(yield* gitlabForProject(null, "/x", fake.run)).toEqual({ ok: true, reason: "" });
+    }).pipe(Effect.provide(fake.layer)),
+  );
+});
 
 /** Every field a GitLab version or a token might not answer, nulled rather than absent. */
 const ALL_NULL = `{

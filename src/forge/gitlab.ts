@@ -37,7 +37,7 @@ import type {
 } from "./forge";
 import {
   ForgeHttp,
-  loginRejected,
+  loginReadiness,
   pagesAs,
   request,
   requestAs,
@@ -292,22 +292,14 @@ export function gitlabForProject<R>(
   project: string | null,
   cwd: string,
   run: Runner<R>,
-): Effect.Effect<Readiness, never, R> {
+): Effect.Effect<Readiness, never, R | ForgeHttp> {
   return Effect.gen(function* () {
     const glab = yield* run("glab", ["--version"], cwd);
     if (glab.code !== 0) return { ok: false, reason: "glab is not installed" };
 
     const host = hostOf(project);
     if (!host) return { ok: true, reason: "" };
-    const auth = yield* run("glab", ["auth", "status", "--hostname", host], cwd);
-    if (auth.code === 0) return { ok: true, reason: "" };
-    return loginRejected(auth) || (yield* glabLoginTo(host).token(run, cwd)) === null
-      ? { ok: false, reason: `glab is not logged in to ${host}`, cause: "login-missing" }
-      : {
-          ok: false,
-          reason: `glab could not verify its login to ${host}`,
-          cause: "forge-unavailable",
-        };
+    return yield* loginReadiness(glabLoginTo(host), cwd, run);
   });
 }
 

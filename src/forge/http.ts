@@ -9,13 +9,8 @@ import { Clock, Config, Context, Effect, Layer, Option, Schema, Semaphore } from
 import { ChildProcessSpawner } from "effect/process";
 import type { FetchLike, ForgeProvider, GitHubProvider } from "forges";
 import type { MrForge } from "../board-model";
-import { shell, whatItSaid, type Ran, type Runner } from "../mr";
-
-// gh also calls tokens invalid when offline; require an explicit authentication refusal.
-export const loginRejected = (status: Ran) =>
-  /\b(?:HTTP\s+401|401\s+Unauthorized|bad credentials|invalid credentials)\b/i.test(
-    whatItSaid(status),
-  );
+import { shell, type Runner } from "../mr";
+import type { Readiness } from "./forge";
 
 /**
  * How a host's CLI login is read. Each step is a **credential read**, the only commands
@@ -199,10 +194,30 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
         return {
           ok: false,
           reason: `${login.display} refused ${login.cli}'s login for ${login.host}: run ${login.relogin}`,
+          status: 401,
         } as const;
       });
 
     return { ask };
+  });
+
+/** Whether the forge takes the CLI's login, by asking who it is: only a refusal needs a human. */
+export const loginReadiness = <R>(
+  login: ForgeLogin,
+  cwd: string,
+  run: Runner<R>,
+): Effect.Effect<Readiness, never, R | ForgeHttp> =>
+  Effect.gen(function* () {
+    const http = yield* ForgeHttp;
+    const me = yield* http.ask(login, cwd, (provider, signal) => provider.users.me({ signal }));
+    if (me.ok) return { ok: true, reason: "" };
+    return me.status === 401 || (yield* login.token(run, cwd)) === null
+      ? { ok: false, reason: login.notReady, cause: "login-missing" }
+      : {
+          ok: false,
+          reason: `${login.cli} could not verify its login to ${login.host}: ${me.reason}`,
+          cause: "forge-unavailable",
+        };
   });
 
 /** One request to the login's host, as `<cli> api` sent it: its parsed body, or why not. */

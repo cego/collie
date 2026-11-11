@@ -330,8 +330,10 @@ for (const name of ["gitlab", "github"] as const) {
     test("is ready only with its CLI installed and logged in to the host", () =>
       runEffect(
         Effect.gen(function* () {
-          const ask = (over: Partial<ForgeModel>) =>
-            forge.ready(PROJECT[name], "/w", fakeForge(name, model(name, over)).run);
+          const ask = (over: Partial<ForgeModel>) => {
+            const fake = fakeForge(name, model(name, over));
+            return forge.ready(PROJECT[name], "/w", fake.run).pipe(Effect.provide(fake.layer));
+          };
           expect(yield* ask({})).toEqual({ ok: true, reason: "" });
           expect(yield* ask({ installed: false })).toEqual({
             ok: false,
@@ -345,48 +347,30 @@ for (const name of ["gitlab", "github"] as const) {
         }),
       ));
 
-    test("keeps an unavailable authentication check recoverable when credentials exist", () =>
-      runEffect(
-        Effect.gen(function* () {
-          const fake = fakeForge(name, model(name));
-          for (const message of [
-            "dial tcp: network is unreachable",
-            "proxyconnect tcp: connection refused\nThe token in GH_TOKEN is invalid.",
-            "HTTP 503: Service Unavailable",
-            "HTTP 403: API rate limit exceeded",
-          ]) {
-            const run: Runner = (cmd, args, cwd) =>
-              cmd === CLI[name] && args[0] === "auth" && args[1] === "status"
-                ? Effect.succeed({ code: 1, stdout: "", stderr: message })
-                : fake.run(cmd, args, cwd);
-            expect(yield* forge.ready(PROJECT[name], "/w", run)).toMatchObject({
+    test("needs login repair when the forge refuses the token its CLI holds", () => {
+      const fake = fakeForge(name, model(name, { revoked: true }));
+      return runEffect(
+        forge.ready(PROJECT[name], "/w", fake.run).pipe(
+          Effect.provide(fake.layer),
+          Effect.map((ready) =>
+            expect(ready).toEqual({
               ok: false,
-              cause: "forge-unavailable",
-            });
-          }
-        }),
-      ));
+              reason: `${CLI[name]} is not logged in to ${host}`,
+              cause: "login-missing",
+            }),
+          ),
+        ),
+      );
+    });
 
-    test("requires login repair when authentication explicitly rejects a stored token", () =>
+    test("stays recoverable when the forge cannot be reached or fails to answer", () =>
       runEffect(
         Effect.gen(function* () {
-          const fake = fakeForge(name, model(name));
-          for (const message of [
-            "The token is invalid. HTTP 401",
-            "Token is invalid. GET /api/v4/user: 401 Unauthorized",
-            "Bad credentials",
-            "Invalid credentials",
-          ]) {
-            for (const stream of ["stdout", "stderr"] as const) {
-              const run: Runner = (cmd, args, cwd) =>
-                cmd === CLI[name] && args[0] === "auth" && args[1] === "status"
-                  ? Effect.succeed({ code: 1, stdout: "", [stream]: message })
-                  : fake.run(cmd, args, cwd);
-              expect(yield* forge.ready(PROJECT[name], "/w", run)).toMatchObject({
-                ok: false,
-                cause: "login-missing",
-              });
-            }
+          for (const httpFault of ["network", { status: 503 }, { status: 403 }] as const) {
+            const fake = fakeForge(name, model(name, { httpFault }));
+            expect(
+              yield* forge.ready(PROJECT[name], "/w", fake.run).pipe(Effect.provide(fake.layer)),
+            ).toMatchObject({ ok: false, cause: "forge-unavailable" });
           }
         }),
       ));

@@ -35,7 +35,7 @@ import type {
 } from "./forge";
 import {
   ForgeHttp,
-  loginRejected,
+  loginReadiness,
   graphqlAs,
   pagesAs,
   request,
@@ -318,15 +318,12 @@ function ready<R>(
   project: string | null,
   cwd: string,
   run: Runner<R>,
-): Effect.Effect<Readiness, never, R> {
+): Effect.Effect<Readiness, never, R | ForgeHttp> {
   return Effect.gen(function* () {
     const no = (reason: string) => ({ ok: false, reason });
     if ((yield* run("gh", ["--version"], cwd)).code !== 0) return no("gh is not installed");
-    const auth = yield* run("gh", ["auth", "status", "--hostname", HOST], cwd);
-    if (auth.code !== 0)
-      return loginRejected(auth) || (yield* LOGIN.token(run, cwd)) === null
-        ? { ...no(`gh is not logged in to ${HOST}`), cause: "login-missing" }
-        : { ...no(`gh could not verify its GitHub login`), cause: "forge-unavailable" };
+    const login = yield* loginReadiness(LOGIN, cwd, run);
+    if (!login.ok) return login;
     const repository = project === null ? "" : mrPath({ project, iid: "" });
     if (repository === "" || repository === project) return { ok: true, reason: "" };
     const repo = yield* run("gh", ["repo", "view", repository, "--json", "nameWithOwner"], cwd);
