@@ -135,8 +135,14 @@ A human reporting a review, such as "I got review on the MR", is telling you wha
 not asking you to change what a Run does. Before you start or change work that moves a Run's
 scope, to another repository, a shared package or something its spec puts out of scope, ask
 the human. When you read a merge request's review, read the replies on it too, and tell the
-human what a Collie Run replied there in their name: its reply ends "Posted by Collie's Run
-<run> on <machine>." What the human asks for is still done at once.
+human what a Collie Run replied there in their name: its reply's raw text ends with the
+hidden marker `<!-- collie:<run> -->`, which the forge's page does not show. What the human
+asks for is still done at once.
+
+Public text is what goes outside Collie in the human's name: a merge request note or reply,
+an issue or comment in another repository, a Slack message, a Linear issue. Write it as the
+human would for that repository's readers. It never names Collie, a Run, a step, an agent, a
+card or a `collie` command, and never holds anyone to a rule only Collie's process has.
 
 Production deploys, force pushes, deleting other people's work and anything else that
 cannot be undone wait for the human's explicit say-so on that thing. Everything short of

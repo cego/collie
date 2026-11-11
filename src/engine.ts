@@ -27,7 +27,6 @@ import {
 import { LinkDelivery, readLinkDeliveries } from "./run-links";
 import { appendLogLine } from "./run-log";
 import { readReplies, recordReply } from "./replies";
-import { hostname } from "node:os";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import {
   Cache,
@@ -175,6 +174,8 @@ import {
   shell as runShell,
 } from "./mr";
 import { redact } from "./redact";
+import { leaksIn, marker, ownRepository, refusal } from "./public-text";
+import { releasesOf } from "./releases";
 import { reportOf, type Recorded } from "./report";
 import { outcomeRecordsOf, type OutcomeRecords } from "./outcomes";
 import type { Metrics, Solution } from "./board-model";
@@ -3867,6 +3868,14 @@ export const hostLayer = (options: {
             Effect.map((env) => ({ herdr: new Herdr(env), env })),
             Effect.orDie,
           );
+      /** Why Public text bound for `project` is refused, or null; Collie's own repository takes any. */
+      const publicRefusal = <E, R>(text: string, project: Effect.Effect<string | null, E, R>) =>
+        Effect.gen(function* () {
+          const leaks = leaksIn(text);
+          if (leaks.length === 0) return null;
+          const { env } = yield* placing;
+          return (yield* project) === ownRepository(releasesOf(env.raw)) ? null : refusal(leaks);
+        });
       /** What resolving a Run's reviewed branch needs, as a build of the review's findings is placed (ADR-0054). */
       const reviewing = (runId: string) =>
         Effect.gen(function* () {
@@ -4232,10 +4241,17 @@ export const hostLayer = (options: {
               yield* unstopped(asked.runId, "files no issue");
               const here = yield* issueCheckout(asked.runId);
               yield* checkIssueText(here, `${asked.title}\n${asked.body}`);
+              const title = redact(asked.title);
+              const body = redact(asked.body);
+              const refused = yield* publicRefusal(
+                `${title}\n${body}`,
+                Effect.succeed(here.project),
+              );
+              if (refused !== null) return yield* new WorkflowError({ reason: refused });
               const filed = yield* here.forge.fileIssue(
                 here.project,
-                redact(asked.title),
-                redact(asked.body),
+                title,
+                body,
                 here.cwd,
                 runShell,
               );
@@ -4249,10 +4265,13 @@ export const hostLayer = (options: {
               yield* unstopped(asked.runId, "comments on no issue");
               const here = yield* issueCheckout(asked.runId);
               yield* checkIssueText(here, asked.body);
+              const body = redact(asked.body);
+              const refused = yield* publicRefusal(body, Effect.succeed(here.project));
+              if (refused !== null) return yield* new WorkflowError({ reason: refused });
               const commented = yield* here.forge.commentIssue(
                 here.project,
                 asked.number,
-                redact(asked.body),
+                body,
                 here.cwd,
                 runShell,
               );
@@ -4537,11 +4556,13 @@ export const hostLayer = (options: {
               const ref = mr === null ? null : mrRefOf(mr);
               if (mr === null || ref === null)
                 return { posted: false, why: "this Run recorded no merge request to share" };
+              const details = yield* forgeOf(ref).details(ref, asked.cwd, runShell);
+              if (details._tag !== "Details") return { posted: false, why: details.reason };
+              const refused = yield* publicRefusal(details.title, Effect.succeed(ref.project));
+              if (refused !== null) return { posted: false, why: refused };
               const { env } = yield* placing;
               const slack = options.slack ?? slackApi;
               const api = slack(yield* slackUserToken(env, slack));
-              const details = yield* forgeOf(ref).details(ref, asked.cwd, runShell);
-              if (details._tag !== "Details") return { posted: false, why: details.reason };
               const posted = yield* api.post(asked.channel, `<${mr}|${slackText(details.title)}>`);
               const link = yield* api.permalink(posted.channel, posted.ts).pipe(Effect.result);
               return link._tag === "Success"
@@ -4671,6 +4692,8 @@ export const hostLayer = (options: {
             Effect.gen(function* () {
               const ref = mrRefOf(yield* mergeRequestOf(fs, dir, asked.runId));
               if (ref === null) return { ok: false, message: "this Run has no merge request" };
+              const refused = yield* publicRefusal(asked.body, Effect.succeed(ref.project));
+              if (refused !== null) return { ok: false, message: refused };
               return yield* forgeOf(ref).post(ref, asked.body, false, asked.cwd, runShell);
             }),
           ).pipe(Effect.orDie),
@@ -4922,7 +4945,7 @@ export const hostLayer = (options: {
               return yield* new WorkflowError({
                 reason: `${mr} has no comment ${asked.comment} to reply to`,
               });
-            const signature = `Posted by Collie's Run ${asked.runId} on `;
+            const signature = marker(asked.runId);
             const record = (body: string, at: string) =>
               under(
                 recordReply(runDir(dir, asked.runId), {
@@ -4955,7 +4978,10 @@ export const hostLayer = (options: {
                 yield* record(posted.body, posted.at);
               return "already" as const;
             }
-            const body = redact(`${asked.body}\n\n${signature}${hostname()}.`);
+            const said = redact(asked.body);
+            const refused = yield* publicRefusal(said, Effect.succeed(ref.project));
+            if (refused !== null) return yield* new WorkflowError({ reason: refused });
+            const body = `${said}\n\n${signature}`;
             const replied = yield* under(
               forgeOf(ref).reply(ref, comment, body, asked.cwd, runShell),
             );
@@ -5120,16 +5146,31 @@ export const hostLayer = (options: {
             fs.readFileString(asked.file).pipe(
               Effect.flatMap((body) =>
                 Effect.flatMap(loadDefaults(options.userDir ?? dir), (defaults) =>
-                  postNote(
-                    {
-                      target: asked.target,
-                      cwd: asked.cwd,
+                  Effect.gen(function* () {
+                    const refused = yield* publicRefusal(
                       body,
-                      approve: asked.approve === true,
-                      gitlabHost: defaults.gitlabHost,
-                    },
-                    runShell,
-                  ),
+                      Effect.suspend(() => {
+                        const project = parseMrTarget(asked.target)?.project ?? null;
+                        return project !== null
+                          ? Effect.succeed(project)
+                          : Effect.map(
+                              forgeHere(asked.cwd, runShell, defaults.gitlabHost),
+                              (here) => (here.ok ? here.project : null),
+                            );
+                      }),
+                    );
+                    if (refused !== null) return { ok: false, message: refused };
+                    return yield* postNote(
+                      {
+                        target: asked.target,
+                        cwd: asked.cwd,
+                        body,
+                        approve: asked.approve === true,
+                        gitlabHost: defaults.gitlabHost,
+                      },
+                      runShell,
+                    );
+                  }),
                 ),
               ),
               Effect.orElseSucceed(() => ({

@@ -614,9 +614,12 @@ new external comment, or a reply in a thread after Collie's, starts a comment ro
 `answer-<n>`: the agent checks each against the code, fixes what holds test first and
 pushes with a plain push, and disputes what it judges wrong, with a reason. Collie then
 replies to each comment on the forge, linking it: "Fixed in `<sha>`: …" once the merge
-request's head carries that commit, or "Not changed: …" with the reason. Each reply ends
-with a line naming the Run and its Machine ("Posted by Collie's Run … on …"), so a reviewer
-can tell it from your own words though it is posted as your login. The host records every
+request's head carries that commit, or "Not changed: …" with the reason. A reply reads as
+yours: nothing on the page names Collie. Its raw text ends with a hidden marker,
+`<!-- collie:<run> -->`, by which Collie finds its own reply after a crash and chat tells you
+which replies a Run posted. The host refuses a reply, note, review, issue or Slack share
+that names Collie or its process (Public text, in `CONTEXT.md`), and says which phrase it
+found; nothing is rewritten, and Collie's own repository takes any text. The host records every
 reply on the Run, where `collie run show`, the drawer and Desktop's record list it, and a
 reply that disputes a comment reaches the board and chat as News; nothing waits for you. It
 never resolves a thread, and a restart never posts a reply twice. A comment a round left out,

@@ -719,6 +719,14 @@ fix — and the message says whether the approval landed. Its refusal is its mes
 merge request, no CLI or login for its forge, or one assigned to whoever is running this —
 whose findings are theirs to fix rather than to post to themselves.
 
+Every host operation that sends **Public text** (`CONTEXT.md`) checks it first: `host.post`,
+`host.note`, `host.reply`, `host.fileIssue`, `host.commentIssue` and
+`host.shareForApproval`, whose text is the merge request's title. Text that names Collie, a
+Run or its id, a `collie` command, a plan ticket or Collie's own paths and vocabulary is
+refused, naming each phrase and why; it is never rewritten. Each refuses in its usual way:
+a message, a `why`, or a `WorkflowError`. A target in the repository the installation's
+releases come from takes any text. The phrases are data in `src/public-text.ts`.
+
 `mrForgeFacts(target)` is pure: for an `mr:` target it gives the forge's name and noun and
 the `diff`, `view` and `checkout` command lines a prompt hands a reviewer, written by that
 forge's adapter, and null for any other target. `target_repo` is still filled in for a
@@ -898,10 +906,10 @@ Call it inside a journaled Activity after the operator agrees to share.
 The shipped release workflow asks the operator to share the address themselves when Slack is unavailable.
 
 `host.reply({ runId, cwd, comment, body })` replies to the comment with id `comment` on
-the merge request the Run recorded, posting `body` as it is, in the comment's thread where
-it has one. It never resolves a thread. It answers `posted`, or `already` where the forge
+the merge request the Run recorded, posting `body` with only a hidden marker,
+`<!-- collie:<run> -->`, after it, in the comment's thread where it has one. It never resolves a thread. It answers `posted`, or `already` where the forge
 reads the comment as answered — as after a restart that posted the reply before its
-Activity was journaled — and fails with `WorkflowError` when the forge refuses. Take each
+Activity was journaled, a reply it finds by that marker — and fails with `WorkflowError` when the forge refuses. Take each
 reply inside an Activity of its own. `host.reviewHead({ runId, cwd, commits })` reads the
 merge request's `head` as the forge reports it, which of `commits` it `carries` once
 origin is fetched, and the ids of its external comments still `open`. `settleAnswers`

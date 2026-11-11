@@ -740,7 +740,6 @@ const bodyOf = (got: {
   readonly original: Measurement | null;
   readonly finals: ReadonlyArray<Measurement>;
   readonly plans: ReadonlyArray<string>;
-  readonly planFile: string;
   readonly written: Harnessed;
   readonly found: Discovered;
   readonly cycles: ReadonlyArray<Cycled>;
@@ -886,10 +885,9 @@ const bodyOf = (got: {
           "",
           "```sh",
           `git checkout ${final.candidate.head_sha}`,
-          `collie measure --run ${got.runId} --base ${final.base.commit} --plan ${got.planFile} --pass final`,
+          ...(plan.prepare === null ? [] : [commandLine(plan.prepare)]),
+          ...Arr.map(plan.commands, commandLine),
           "```",
-          "",
-          `The full record is kept with Run ${got.runId}.`,
           "",
           "</details>",
           "",
@@ -2164,20 +2162,12 @@ export default defineWorkflow({
             reason: "no `final` Measurement against the merge base to write the merge request from",
           });
         const fs = yield* FileSystem.FileSystem;
-        const planFile = `${place.dir}/handoffs/tune-up-plan.json`;
-        yield* fs.writeFileString(
-          planFile,
-          yield* Schema.encodeEffect(Schema.fromJsonString(Planned.fields.plan))(plan).pipe(
-            Effect.orDie,
-          ),
-        );
         const body = bodyOf({
           runId,
           final,
           original: proved.original,
           finals: taken,
           plans: reasons,
-          planFile,
           written,
           found,
           cycles: cycled,

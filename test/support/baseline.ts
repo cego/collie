@@ -93,6 +93,7 @@ import { measuresOf } from "../../src/outcomes";
 import { redact } from "../../src/redact";
 import { slackApi } from "../../src/slack";
 import { botLeftOver, fakeSlack, signedInToSlack } from "./slack";
+import leakingReview from "../fixtures/public-text/mr-522-note-1839712.md" with { type: "text" };
 import { INTENT_FILE, IntentSchema, amend, seedIntent } from "../../src/intent";
 import selfImprove from "../../workflows/self-improve.workflow";
 import { invocationFor } from "../../workflows/staging";
@@ -6671,7 +6672,7 @@ scenario(
         });
         yield* bin.restore();
         expect(said(result)).toBe(CI_MR);
-        const line = `nuxi: job nuxi-job also fails at ${pipe(CI_BASE, Str.slice(0, 12))}, where this branch leaves its target branch, so it failed before this Run's changes`;
+        const line = `nuxi: job nuxi-job also fails at ${pipe(CI_BASE, Str.slice(0, 12))}, where this branch leaves its target branch, so it failed before this branch's changes`;
         expect(Arr.join(yield* ciNotes(forge), "\n")).toContain(line);
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(line);
@@ -6712,7 +6713,7 @@ scenario(
         });
         yield* bin.restore();
         expect(said(result)).toBe(CI_MR);
-        const line = `nuxi: job nuxi-job failed on ${pipe(head, Str.slice(0, 12))}, then passed when retried — a Flake, so this Run has not settled it.`;
+        const line = `nuxi: job nuxi-job failed on ${pipe(head, Str.slice(0, 12))}, then passed when retried — a flake, so it is not settled.`;
         expect(Arr.join(yield* ciNotes(forge), "\n")).toContain(line);
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(line);
@@ -10987,7 +10988,7 @@ const POSTED = { posted: true, link: "https://example.slack.com/archives/D123/p1
 /** The replies Collie posted on the merge request, in order. */
 const repliesOf = (model: ForgeModel) => Rec.values(model.replies ?? {}).flat();
 
-const signed = (runId: string) => `\n\nPosted by Collie's Run ${runId} on ${hostname()}.`;
+const signed = (runId: string) => `\n\n<!-- collie:${runId} -->`;
 
 /** Collie's own Checks: `check`, left to CI's `test` job, counting any local run. */
 const ownCheck = (runId: string) =>
@@ -12533,6 +12534,101 @@ for (const name of ["gitlab", "github"] as const) {
               on,
             })),
           ).toEqual([{ comment: commentUrl(name, 47), kind: "disputed", body, on: mr }]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `public text on ${name}: the !522 review note is refused before it reaches the merge request`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge } = yield* releasable(name);
+          const fs = yield* FileSystem.FileSystem;
+          const runId = `r-leak-review-${name}`;
+          const file = `${rig.root}/review-${name}.md`;
+          yield* fs.writeFileString(file, leakingReview);
+          const posted = yield* session(
+            Effect.flatMap(Host, (host) =>
+              host.post({ runId, target, cwd: rig.projectDir, file, approve: false }),
+            ),
+          );
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(posted.ok).toBe(false);
+          for (const phrase of ["this Run", "collie verify", "review-step", "Tautologies"])
+            expect(posted.message).toContain(`"${phrase}"`);
+          expect(model.notes ?? {}).toEqual({});
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `public text on ${name}: a note or reply naming Collie's process reaches no one`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const comment = { id: 47, author: "bob", at: "2026-10-20T11:00:00Z", body: "rename it" };
+          const { bin, forge } = yield* releasable(name, { comments: [comment] });
+          const runId = `r-leak-reply-${name}`;
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
+          yield* fs.writeFileString(`${runDir(dir, runId)}/merge-request`, `${mr}\n`);
+          const [noted, replied] = yield* session(
+            Effect.gen(function* () {
+              const host = yield* Host;
+              return [
+                yield* host.note({
+                  runId,
+                  cwd: rig.projectDir,
+                  body: "This Run left it unsettled.",
+                }),
+                yield* host
+                  .reply({
+                    runId,
+                    cwd: rig.projectDir,
+                    comment: "47",
+                    body: "Not changed: the review-step rule keeps it.",
+                    kind: "disputed",
+                  })
+                  .pipe(Effect.flip),
+              ] as const;
+            }),
+          );
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(noted).toEqual({ ok: false, message: expect.stringContaining('"This Run"') });
+          expect(replied.reason).toContain('"review-step"');
+          expect(model.notes ?? {}).toEqual({});
+          expect(repliesOf(model)).toEqual([]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `public text on ${name}: an MR title naming Collie's process is not shared to Slack`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, changed } = yield* releasable(name);
+          yield* changed({ title: "Fix what run-67a6e669 found" });
+          slack = fakeSlack();
+          yield* signedInToSlack(hostOf().env, "U456").pipe(Effect.orDie);
+          const runId = `r-leak-share-${name}`;
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
+          yield* fs.writeFileString(`${runDir(dir, runId)}/merge-request`, `${mr}\n`);
+          const shared = yield* session(
+            Effect.flatMap(Host, (host) =>
+              host.shareForApproval({ runId, cwd: rig.projectDir, channel: "C123" }),
+            ),
+          );
+          yield* bin.restore();
+          expect(shared).toEqual({ posted: false, why: expect.stringContaining('"run-67a6e669"') });
+          expect(slack.calls).toEqual([]);
         }),
       ),
     120_000,

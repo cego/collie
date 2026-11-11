@@ -15,15 +15,18 @@ import { until } from "./support/host";
 import { nowIso } from "../src/time";
 import { agentsLayer } from "../src/agents";
 import { WorkflowError } from "../src/sdk";
+import { RELEASES } from "../src/releases";
 import * as Layer from "effect/Layer";
 
 let rig: Rig;
 let forgeApi = "";
+let releases = RELEASES;
 beforeEach(() =>
   runEffect(
     Effect.gen(function* () {
       rig = yield* Rig.make();
       forgeApi = "";
+      releases = RELEASES;
     }),
   ),
 );
@@ -51,7 +54,10 @@ const withMachine = <A, E, R>(
         userDir: rig.userDir,
         placing: {
           herdr: new FakeHerdr(rig.pluginEnv()),
-          env: rig.pluginEnv({ GITLAB_HOST: FORGE_HOST.gitlab }),
+          env: rig.pluginEnv({
+            GITLAB_HOST: FORGE_HOST.gitlab,
+            COLLIE_RELEASES: releases,
+          }),
         },
       }).pipe(
         Layer.provideMerge(fakeAgents()),
@@ -61,7 +67,10 @@ const withMachine = <A, E, R>(
             userDir: rig.userDir,
             placing: {
               herdr: new FakeHerdr(rig.pluginEnv()),
-              env: rig.pluginEnv({ GITLAB_HOST: FORGE_HOST.gitlab }),
+              env: rig.pluginEnv({
+                GITLAB_HOST: FORGE_HOST.gitlab,
+                COLLIE_RELEASES: releases,
+              }),
             },
             issuePrivacyBudget,
           }),
@@ -671,6 +680,71 @@ test(
             [],
           );
           expect((yield* fake.model()).issues ?? []).toEqual([]);
+        } finally {
+          yield* bin.restore();
+        }
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "issue text naming Collie's process is refused before filing or commenting, except in Collie's own repository",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* repository(rig.projectDir, `https://${PROJECT.github}.git`);
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        try {
+          const fake = yield* forgeOnPath(bin, "github", {
+            installed: true,
+            loggedIn: [FORGE_HOST.github],
+            login: "me",
+            mrs: [],
+            issues: [
+              {
+                project: PROJECT.github,
+                number: 1,
+                title: "Existing",
+                body: "Earlier",
+                state: "open",
+              },
+            ],
+          });
+          forgeApi = yield* serveForges(fake);
+          const leaking = "Found while run-67a6e669 built the change.";
+          const each = Effect.gen(function* () {
+            const registry = yield* Registry;
+            const generation = yield* registry.load(
+              new URL("./fixtures/workflows/issues.workflow.ts", import.meta.url).pathname,
+            );
+            return yield* Effect.forEach(["file", "comment"], (operation) =>
+              Effect.gen(function* () {
+                const run = yield* registry.start({
+                  generation,
+                  request: `${operation}-${releases === RELEASES ? "elsewhere" : "own"}`,
+                  project: rig.projectDir,
+                  input: { operation, text: leaking },
+                  handsOver: true,
+                });
+                return yield* registry.result(run.runId).pipe(Effect.result);
+              }),
+            );
+          });
+          const refused = yield* each.pipe(withMachine);
+          for (const answer of refused) {
+            expect(Result.isFailure(answer)).toBe(true);
+            if (Result.isFailure(answer)) expect(answer.failure.reason).toContain('"run-67a6e669"');
+          }
+          expect(Arr.filter(fake.requests(), (one) => /\/issues(?:[/?]|$)/.test(one.url))).toEqual(
+            [],
+          );
+          releases = `https://${PROJECT.github}/releases`;
+          const own = yield* each.pipe(withMachine);
+          expect(Arr.map(own, Result.isSuccess)).toEqual([true, true]);
+          const model = yield* fake.model();
+          expect(Arr.map(model.issues ?? [], (one) => one.body)).toEqual(["Earlier", leaking]);
+          expect(model.issueNotes).toEqual({ [`${PROJECT.github}#1`]: [leaking] });
         } finally {
           yield* bin.restore();
         }

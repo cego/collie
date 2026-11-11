@@ -2562,8 +2562,8 @@ review on the MR") is news to chat, not an instruction to change what a Run does
 it starts or changes work that would move a Run to another repository, a shared package or
 something the Run's spec puts out of scope, it asks you. When it reads a merge request's
 review it reads the replies too, and tells you what a Collie Run replied there in your
-name, which it knows by the reply's last line, "Posted by Collie's Run … on …". What you
-ask for yourself is still done at once.
+name, which it knows by the hidden marker the reply's raw text ends with,
+`<!-- collie:<run> -->`. What you ask for yourself is still done at once.
 
 **Chat knows which card you have open.** Every message you send carries one line naming
 the open card, attached as you send it and never when you click — so opening ten cards and

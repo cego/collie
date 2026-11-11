@@ -198,6 +198,11 @@ marker. File exactly one issue for it with the Linear MCP server, in team {{team
 - Description: the finding as above, then `{{marker}}` exactly, on a line of its own, so a
   later search finds this issue rather than filing another.
 
+Public text is what goes outside Collie in the human's name: a merge request note or reply,
+an issue or comment in another repository, a Slack message, a Linear issue. Write it as the
+human would for that repository's readers. It never names Collie, a Run, a step, an agent, a
+card or a `collie` command, and never holds anyone to a rule only Collie's process has.
+
 Create it once. Where Linear refuses, do not try again: answer `url` as `null` with Linear's
 own words under `refused`. Otherwise answer the issue's URL.
 

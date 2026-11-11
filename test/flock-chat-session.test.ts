@@ -416,7 +416,7 @@ test("the system prompt has the chat take a reported review as a report, ask bef
     "Before you start or change work that moves a Run's scope, to another repository, a shared package or something its spec puts out of scope, ask the human.",
   );
   expect(prompt).toContain(
-    `When you read a merge request's review, read the replies on it too, and tell the human what a Collie Run replied there in their name: its reply ends "Posted by Collie's Run <run> on <machine>."`,
+    "When you read a merge request's review, read the replies on it too, and tell the human what a Collie Run replied there in their name: its reply's raw text ends with the hidden marker `<!-- collie:<run> -->`, which the forge's page does not show.",
   );
 });
 

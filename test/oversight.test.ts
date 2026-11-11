@@ -1489,7 +1489,7 @@ test("Runs in other Tasks and repositories about one merge request are judged to
           mr: MR_223,
           comment: `${MR_223}#note_1`,
           kind: "disputed",
-          body: "Not changed: moving this into core is the human's call.\n\nPosted by Collie's Run r1 on vm-mk.",
+          body: "Not changed: moving this into core is the human's call.\n\n<!-- collie:r1 -->",
         });
         const core = `${rig.root}/repo-r2`;
         yield* repositoryAt(core, { "src/core.ts": "export const moved = true;\n" });

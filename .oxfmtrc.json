@@ -17,6 +17,8 @@
     "plans/**",
     // Exported brand assets stay byte-identical to the kit and its checksum manifest.
     "assets/brand/**",
+    // Merge request notes as their forge holds them.
+    "test/fixtures/public-text/**",
     // herdr prints this; `bun run contract:regen` writes it verbatim and CI diffs it.
     "herdr-api-schema.json",
     // herdr-core's released.openrpc.json, copied verbatim for the pin.
