@@ -9670,7 +9670,8 @@ scenario(
             Effect.gen(function* () {
               const first = yield* until(
                 () => Effect.zip(run.status, parkedWhy(runId)),
-                ([got, why]) => why !== "" || got.status === "failed",
+                ([got, why]) =>
+                  (got.status === "suspended" && why !== "") || got.status === "failed",
               );
               expect(first[1]).toContain("push denied");
               yield* run.resume;
