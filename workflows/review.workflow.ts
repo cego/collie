@@ -23,6 +23,9 @@ import {
   ask,
   defineWorkflow,
   formatFindings,
+  findingsIn,
+  leaveReview,
+  renderReview,
   forgeOfRef,
   handOffWork,
   mrForgeFacts,
@@ -37,6 +40,7 @@ import {
   step,
   targetKind,
   type Finding,
+  type SynthesisReport,
 } from "collie";
 import { Effect, FileSystem, Schema } from "effect";
 import { connection } from "./connections.ts";
@@ -56,7 +60,11 @@ const FIX = "Fix findings";
 const IMPLEMENT = "Fix findings in a full implement run";
 const DONE = "Don't post";
 const AGAIN = "Review again";
-const Posted = Schema.Struct({ ok: Schema.Boolean, message: Schema.String });
+const Posted = Schema.Struct({
+  ok: Schema.Boolean,
+  message: Schema.String,
+  signature: Schema.optionalKey(Schema.String),
+});
 
 /** How many fix rounds one "Fix findings" may run before the human is asked again. */
 const ROUNDS = 4;
@@ -139,7 +147,7 @@ export default defineWorkflow({
       title: "Review again",
       workflow: "self",
       arguments: {},
-      inputs: { target: "diff-target" },
+      inputs: { target: "diff-target", previous: "run-id" },
       eligible: (facts) => facts.diffTarget !== null,
     },
   ],
@@ -176,12 +184,42 @@ export default defineWorkflow({
       // to the work rather than declaring them here, and `previous` names the Run whose
       // review this one is a follow-up to.
       const previous = place.options.previous ?? "";
+      const earlierPlace = previous === "" ? null : yield* host.place(previous);
       const before =
-        previous === ""
+        earlierPlace === null
           ? ""
           : yield* fs
-              .readFileString(`${(yield* host.place(previous)).dir}/${REVIEW_FILE}`)
+              .readFileString(`${earlierPlace.dir}/${REVIEW_FILE}`)
               .pipe(Effect.orElseSucceed(() => ""));
+      let ledger: ReadonlyArray<Finding> | undefined =
+        earlierPlace === null
+          ? undefined
+          : Arr.map(yield* findingsIn(earlierPlace.dir), (one, index) => ({
+              ...one,
+              id: one.id ?? `${previous}-F${index + 1}`,
+              status: one.status ?? "open",
+            }));
+      const earlierHead =
+        earlierPlace === null
+          ? ""
+          : yield* fs
+              .readFileString(`${earlierPlace.dir}/review-head`)
+              .pipe(Effect.orElseSucceed(() => ledger?.[0]?.head ?? ""));
+      const changesAt = (round: number, earlier: string) =>
+        earlier === "" || kind !== "mr"
+          ? Effect.succeed("")
+          : Activity.make({
+              name: `review-changes-${round}`,
+              success: Schema.String,
+              error: WorkflowError,
+              execute: host.reviewChanges({
+                target: asked.target,
+                cwd: place.cwd,
+                previous: earlier,
+                head,
+              }),
+            });
+      const changes = yield* changesAt(1, earlierHead);
 
       // The first review; "Fix findings" below rallies from it.
       let synthesis = yield* reviewRound(
@@ -190,6 +228,9 @@ export default defineWorkflow({
           plan: asked.plan ?? "",
           proves: asked.proves ?? "",
           previous: before,
+          ledger: kind === "mr" ? (ledger ?? []) : undefined,
+          head,
+          changes,
           answered: "",
           risks: place.options.risks ?? "",
           at: 1,
@@ -224,7 +265,10 @@ export default defineWorkflow({
       // watch waits for the human to say it is ready to look at.
       const reviewedAgain = (at: number, answered: string) =>
         Effect.gen(function* () {
+          ledger = synthesis.findings;
+          const earlier = head;
           head = kind === "mr" ? yield* headAt(at) : "";
+          const changes = yield* changesAt(at, earlier);
           const last = yield* fs
             .readFileString(`${place.dir}/${REVIEW_FILE}`)
             .pipe(Effect.orElseSucceed(() => ""));
@@ -234,6 +278,9 @@ export default defineWorkflow({
               plan: asked.plan ?? "",
               proves: asked.proves ?? "",
               previous: last,
+              ledger: kind === "mr" ? ledger : undefined,
+              head,
+              changes,
               answered,
               risks: place.options.risks ?? "",
               at,
@@ -278,9 +325,30 @@ export default defineWorkflow({
       // A dispute is carried into the next review rather than re-argued, as in implement.
       let disputed: ReadonlyArray<Finding> = [];
       for (;;) {
+        const resolved = new Set(
+          Arr.map(
+            Arr.filter(
+              synthesis.findings,
+              (one) => one.status === "fixed" || one.status === "obsolete",
+            ),
+            findingKey,
+          ),
+        );
+        disputed = Arr.filter(disputed, (one) => !resolved.has(findingKey(one)));
         const split = splitDisputed(synthesis.findings, disputed);
-        const round = settleRound({ live: split.live, disputed, at: reviews, seen });
-        const approve = synthesis.findings.length === 0 && disputed.length === 0 && head !== "";
+        const round = settleRound({
+          live: split.live,
+          disputed: [...disputed, ...split.settled],
+          at: reviews,
+          seen,
+        });
+        const approve =
+          Arr.every(
+            synthesis.findings,
+            (one) => one.status === "fixed" || one.status === "obsolete",
+          ) &&
+          disputed.length === 0 &&
+          head !== "";
         const POST = approve ? `Post and approve ${Str.slice(0, 7)(head)}` : "Post";
         let chosen: string = FIX;
         if (fixing) {
@@ -339,18 +407,35 @@ export default defineWorkflow({
         if (chosen === DONE) return `${synthesis.findings.length} finding(s), not posted`;
 
         if (chosen === POST) {
-          const posted = yield* Activity.make({
-            name: `post-review-${reviews}-${asks}`,
-            success: Posted,
-            execute: host.post({
-              runId: run.id,
-              target: asked.target,
-              cwd: place.cwd,
-              file: `${place.dir}/${REVIEW_FILE}`,
-              head,
-              round: reviews,
-            }),
-          });
+          const note = reviewNote(synthesis, ledger, head);
+          const noteFile = `${place.dir}/review-note.md`;
+          if (note !== "") yield* fs.writeFileString(noteFile, note).pipe(Effect.orDie);
+          const posted =
+            note === ""
+              ? { ok: true, message: "no findings changed; no review note posted" }
+              : yield* Activity.make({
+                  name: `post-review-${reviews}-${asks}`,
+                  success: Posted,
+                  execute: host.post({
+                    runId: run.id,
+                    target: asked.target,
+                    cwd: place.cwd,
+                    file: noteFile,
+                    head,
+                    round: reviews,
+                  }),
+                });
+          if (posted.ok && "signature" in posted && posted.signature !== undefined) {
+            const signature = posted.signature;
+            synthesis = {
+              ...synthesis,
+              findings: Arr.map(synthesis.findings, (one) => ({
+                ...one,
+                note: one.note || signature,
+              })),
+            };
+            yield* leaveReview(place.dir, synthesis);
+          }
           yield* host.record(run.id, posted.message);
           if (posted.ok) {
             if (!approve) return posted.message;
@@ -458,6 +543,41 @@ export default defineWorkflow({
       }
     }),
 });
+
+const reviewNote = (
+  review: SynthesisReport,
+  previous: ReadonlyArray<Finding> | undefined,
+  head: string,
+): string => {
+  if (previous === undefined) return renderReview(review);
+  const added = Arr.filter(
+    review.findings,
+    (one) => !Arr.some(previous, (old) => old.id === one.id),
+  );
+  const changed = Arr.filter(review.findings, (one) =>
+    Arr.some(previous, (old) => old.id === one.id && old.status !== one.status),
+  );
+  if (added.length === 0 && changed.length === 0) return "";
+  const stillOpen = Arr.filter(
+    review.findings,
+    (one) =>
+      one.status === "open" &&
+      Arr.some(previous, (old) => old.id === one.id && old.status === "open"),
+  );
+  return (
+    Arr.join(
+      [
+        ...(added.length === 0 ? [] : [formatFindings(added)]),
+        ...Arr.map(changed, (one) => `- ${one.id}: ${one.status}`),
+        ...Arr.map(stillOpen, (one) => `- ${one.id}: still open`),
+        ...(Arr.every(review.findings, (one) => one.status === "fixed" || one.status === "obsolete")
+          ? [`all findings fixed at \`${head}\``]
+          : []),
+      ],
+      "\n\n",
+    ) + "\n"
+  );
+};
 
 /** What the live implementer is told: where the review is, and that this is a fix round. */
 const handOffText = (dir: string) =>

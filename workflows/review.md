@@ -28,6 +28,17 @@ Iteration {{iteration}} of at most {{max_iterations}}.
 
 {{previous.review}}
 
+{{ledger}}
+
+{{changes}}
+
+When a ledger is supplied, keep each finding's `id` and return it in `findings` with a
+`status`: `open`, `fixed`, `disputed`, or `obsolete`. Return every earlier finding,
+including resolved ones, plus new findings with new ids. Verify fixes against the code;
+code removed by a force push is `obsolete`, not `fixed`. An unresolved dispute stays
+`disputed`. Use the supplied diff for this round; do not reread the full diff when an
+interdiff is supplied. The head and posted-note anchors are recorded by Collie.
+
 The first review of a change — iteration 1, with no earlier review above — is the
 comprehensive one: both review skills, the whole spec, the whole change, and the code
 around it. A later iteration is a follow-up, and so is any review with an earlier review
@@ -65,7 +76,7 @@ worth raising; name the file it is about and say why the change puts it wrong.
 
 You may be the only reviewer of this change, in which case your review is the review the
 human reads: write `summary` — two sentences, what this change does and what is wrong with
-it — `dropped: []`, and `fixed`: each finding of the review above that is gone, as
+it — `dropped: []`, and, without a ledger, `fixed`: each finding of the review above that is gone, as
 `{"file": "path", "title": "its title", "note": "how it was fixed"}`, alongside the fields
 below. Write them whether or not anyone else is reviewing; they cost a line and they are
 what makes your review readable on its own.
@@ -145,7 +156,15 @@ gets — the review a careful colleague would leave on it.
 
 {{previous.review}}
 
-Where a review of this target appears above, every finding it raised is accounted for:
+{{ledger}}
+
+{{changes}}
+
+When a ledger is supplied, reconcile every earlier id into `findings` with its current
+`status` (`open`, `fixed`, `disputed`, or `obsolete`), plus any new findings. Keep resolved
+findings in the ledger. Code made irrelevant by a force push is `obsolete`, not `fixed`.
+
+Where a review of this target appears above without a ledger, every finding it raised is accounted for:
 carried with its own words if it is still there, or listed under `fixed` if it is not.
 The human is watching a rally, not a new list every time.
 

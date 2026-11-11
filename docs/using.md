@@ -2842,12 +2842,19 @@ from a GitHub checkout refuses that target. Use `#42` or the pull request URL th
 
 **Post** puts the review on the merge request as one signed note per round, including after
 a host restart. The note names the reviewed head, your forge login, the Run, and the round.
-When no findings remain, the menu offers **Post and approve `<short sha>`**. Approval follows
+When no open or disputed findings remain, the menu offers **Post and approve `<short sha>`**. Approval follows
 the post as a separate request pinned to that head. A forge refusal, including a moved head
 or a self-approval rule, ends the Run with its reason on the card and is not retried.
 With findings left, **Post** sends only the note. It refuses a merge request assigned to
 you, on either forge: those findings are yours to fix. On GitLab, that comparison uses
 your login on the target's own host.
+
+**Review again** carries the earlier findings, with stable ids and their
+[Finding status](../CONTEXT.md), into the next review. The reviewer reads the interdiff
+since the last reviewed head, or the full diff after a force push. The next note lists
+new findings and status changes, with unchanged open findings listed by id only.
+An unchanged ledger posts nothing. Fixed and obsolete findings stay in the record;
+obsolete means the finding no longer applies, not that its bug was fixed.
 
 Fixing one is a different matter. A fix round is an `implement` run, and a mutating run
 works in a checkout of its own branch — which `herdr worktree` can only cut from the

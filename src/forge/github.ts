@@ -49,6 +49,7 @@ import {
   postReview,
   approveReview,
   findReviewNote,
+  reviewChanges,
   viewerLogin,
   myMergeRequests,
 } from "./threads";
@@ -1302,6 +1303,10 @@ function clone<R>(
 
 export const github: Forge = {
   name: "github",
+  reviewChanges: (ref, previous, head, cwd) =>
+    ref.project === null
+      ? Effect.succeed({ ok: false, reason: `${mrWords(ref).label} names no GitHub project` })
+      : reviewChanges(LOGIN, ref.project, ref, previous, head, cwd),
   issues: (project, cwd, _run, numbers) => listIssues(LOGIN, project, cwd, numbers),
   fileIssue: (project, title, body, cwd) => createIssue(LOGIN, project, title, body, cwd),
   commentIssue: (project, number, body, cwd) => commentIssue(LOGIN, project, number, body, cwd),

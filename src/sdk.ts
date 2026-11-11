@@ -1251,6 +1251,12 @@ export interface HostApi {
     readonly target: string;
     readonly cwd: string;
   }) => Effect.Effect<string>;
+  readonly reviewChanges: (options: {
+    readonly target: string;
+    readonly cwd: string;
+    readonly previous: string;
+    readonly head: string;
+  }) => Effect.Effect<string, WorkflowError>;
   /** Approves the reviewed head after posting. Take it inside a separate Activity. */
   readonly approveReview: (options: {
     readonly target: string;
@@ -1328,6 +1334,7 @@ export interface MrReady {
 export interface Posted {
   readonly ok: boolean;
   readonly message: string;
+  readonly signature?: string;
 }
 
 // oxlint-disable-next-line effecttsgo/lazy-effect -- Host serves the published HostApi.usage() method unchanged.

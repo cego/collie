@@ -2489,6 +2489,181 @@ for (const name of ["gitlab", "github"] as const) {
       return { said: said(result), model: yield* forge.model(), requests: forge.requests() };
     });
 
+  for (const mode of ["partial", "force push", "unchanged", "resolved", "clean start"] as const)
+    scenario(
+      `review ledger on ${name}: ${mode === "partial" ? "Review again carries earlier findings and posts the interdiff's status changes" : mode}`,
+      () =>
+        runEffect(
+          Effect.gen(function* () {
+            const { bin, forge } = yield* reviewing();
+            const first = `r-ledger-${name}-first`;
+            const next = `r-ledger-${name}-next`;
+            const findings = [
+              {
+                id: "F1",
+                status: "open",
+                severity: "major",
+                file: "src/a.ts",
+                title: "guard the input",
+                detail: "An empty input crashes the request.",
+              },
+              {
+                id: "F2",
+                status: "open",
+                severity: "major",
+                file: "src/b.ts",
+                title: "close the handle",
+                detail: "The unchanged handle leaks after every request.",
+              },
+            ];
+            yield* rig.queueOutputs([
+              {
+                ...SYNTHESIS,
+                verdict: mode === "clean start" ? "clean" : "findings",
+                findings: mode === "clean start" ? [] : findings,
+              },
+              {
+                ...SYNTHESIS,
+                findings: Arr.map(findings, (one) => ({
+                  ...one,
+                  status:
+                    one.id === "F1"
+                      ? mode === "force push"
+                        ? "obsolete"
+                        : mode === "unchanged" || mode === "clean start"
+                          ? "open"
+                          : "fixed"
+                      : mode === "resolved"
+                        ? "obsolete"
+                        : "open",
+                })),
+              },
+            ]);
+            const entry = shipped("review");
+            yield* parked({ entry, runId: first, input: { target }, decision: "post-1" });
+            yield* answered({
+              entry,
+              runId: first,
+              input: { target },
+              decision: "post-1",
+              value: mode === "clean start" ? "Post and approve 1234567" : "Post",
+            });
+            const ledger = yield* findingsIn(runDir(dir, first));
+            expect(ledger).toMatchObject(
+              mode === "clean start"
+                ? []
+                : [
+                    {
+                      id: "F1",
+                      status: "open",
+                      head: REVIEW_HEAD,
+                      note: `Review by Collie for @tester · ${first} round 1 at ${REVIEW_HEAD}`,
+                    },
+                    {
+                      id: "F2",
+                      status: "open",
+                      head: REVIEW_HEAD,
+                      note: `Review by Collie for @tester · ${first} round 1 at ${REVIEW_HEAD}`,
+                    },
+                  ],
+            );
+            const head = "abcdef1234567890abcdef1234567890abcdef12";
+            const model = yield* forge.model();
+            yield* forge.set({
+              ...model,
+              ancestry: { [head]: mode === "force push" ? [] : [REVIEW_HEAD] },
+              mrs: Arr.map(model.mrs, (one) => ({
+                ...one,
+                head,
+                interdiff: "@@ -1 +1 @@\n-crash()\n+guard()",
+                diff: "@@ -1 +1 @@\n-full_old()\n+full_new()",
+              })),
+            });
+            const declared = declaredByModule((yield* loadEntry(entry)).metadata);
+            const facts: ActionFacts = {
+              outcome: "review",
+              succeeded: true,
+              branch: null,
+              mrUrl: null,
+              planIssues: 0,
+              disposed: false,
+              openFindings: 2,
+              diffTarget: target,
+              claim: null,
+            };
+            const offer = Option.getOrThrow(
+              Arr.findFirst(
+                offersFrom(declared, facts, { self: idOf("review") }),
+                (one) => one.title === "Review again",
+              ),
+            );
+            const filled = inputsFor(offer, {
+              runId: first,
+              runDir: runDir(dir, first),
+              facts,
+              input: { target },
+            });
+            expect(filled.previous).toBe(first);
+            const previous = yield* Schema.decodeUnknownEffect(Schema.String)(filled.previous).pipe(
+              Effect.orDie,
+            );
+            const rows = yield* parked({
+              entry,
+              runId: next,
+              input: { target },
+              options: { previous },
+              decision: "post-1",
+            });
+            const prompt = yield* asked(next, "review-1");
+            if (mode === "clean start") expect(prompt).toContain("Earlier findings ledger:\n[]");
+            else {
+              expect(prompt).toContain('"id": "F1"');
+              expect(prompt).toContain('"id": "F2"');
+              expect(prompt).toContain('"status": "open"');
+            }
+            if (mode === "force push") {
+              expect(prompt).toContain("+full_new()");
+              expect(prompt).not.toContain("+guard()");
+            } else {
+              expect(prompt).toContain("+guard()");
+              expect(prompt).not.toContain("+full_new()");
+            }
+            expect(prompt).not.toContain(REVIEWED[name].diff);
+            const choice = mode === "resolved" ? "Post and approve abcdef1" : "Post";
+            expect(optionsOf(rows, "post-1")).toContain(choice);
+            expect(optionsOf(rows, "post-1")).not.toContain(
+              mode === "resolved" ? "Post" : "Post and approve abcdef1",
+            );
+            yield* answered({
+              entry,
+              runId: next,
+              input: { target },
+              decision: "post-1",
+              value: choice,
+            });
+            const notes = Rec.values((yield* forge.model()).notes ?? {}).flat();
+            expect(notes).toHaveLength(mode === "unchanged" ? 1 : 2);
+            if (mode === "clean start") {
+              expect(notes[1]).toContain("F1: open");
+              expect(notes[1]).toContain("An empty input crashes the request.");
+            } else if (mode !== "unchanged") {
+              expect(notes[1]).toContain(mode === "force push" ? "F1: obsolete" : "F1: fixed");
+              expect(notes[1]).toContain(mode === "resolved" ? "F2: obsolete" : "F2: still open");
+              expect(notes[1]).not.toContain("The unchanged handle leaks");
+              expect(notes[1]).not.toContain("close the handle");
+              if (mode === "force push") expect(notes[1]).not.toContain("F1: fixed");
+              if (mode === "resolved")
+                expect(notes[1]).toContain(`all findings fixed at \`${head}\``);
+            }
+            expect((yield* forge.model()).approved ?? []).toHaveLength(
+              mode === "resolved" || mode === "clean start" ? 1 : 0,
+            );
+            yield* bin.restore();
+          }),
+        ),
+      120_000,
+    );
+
   scenario(
     `a review of a ${name} ${noun} reads it with that forge's commands, and posting a clean one approves it`,
     () =>
@@ -3089,7 +3264,9 @@ scenario("implement offers Stage as a follow-up on a succeeded Run with its merg
         "stage",
       ]);
       const stage = Option.getOrUndefined(Arr.findFirst(offered, (offer) => offer.id === "stage"))!;
-      expect(inputsFor(stage, { runDir: "/r", facts, input: {} })).toEqual({ mr: OPENED.mr_url });
+      expect(inputsFor(stage, { runId: "r", runDir: "/r", facts, input: {} })).toEqual({
+        mr: OPENED.mr_url,
+      });
       for (const over of [{ succeeded: false }, { mrUrl: null }, { disposed: true }])
         expect(
           Arr.map(offersFrom(declared, { ...facts, ...over }), (offer) => offer.id),
@@ -3160,7 +3337,9 @@ scenario("what a finished Run of each shipped module offers is the module's own 
         ["stage", "Stage", "stage"],
         ["follow-up", "Keep going on this", idOf("implement")],
       ]);
-      expect(inputsFor(offered[0]!, { runDir: "/r", facts: delivered, input: {} })).toEqual({
+      expect(
+        inputsFor(offered[0]!, { runId: "r", runDir: "/r", facts: delivered, input: {} }),
+      ).toEqual({
         mr: mrUrl,
       });
       expect(offersFrom(implement, { ...delivered, disposed: true })).toEqual([]);
@@ -3203,10 +3382,10 @@ scenario("what a finished Run of each shipped module offers is the module's own 
       expect(offersFrom(renovate, facts({ succeeded: true }))).toEqual([]);
       const repository = "https://gitlab.example.com/team/project";
       expect(
-        inputsFor(recovery[0]!, { runDir: "/r", facts: failed, input: { repository } }),
+        inputsFor(recovery[0]!, { runId: "r", runDir: "/r", facts: failed, input: { repository } }),
       ).toEqual({ repository });
       expect(
-        inputsFor(again[0]!, { runDir: "/r", facts: unclaimed, input: { repository } }),
+        inputsFor(again[0]!, { runId: "r", runDir: "/r", facts: unclaimed, input: { repository } }),
       ).toEqual({ repository });
     }),
   ),
@@ -11395,6 +11574,7 @@ scenario(
             ),
             (offer) =>
               inputsFor(offer, {
+                runId: "r",
                 runDir: "/r",
                 facts: facts(diffTarget, succeeded),
                 input: { mr: diffTarget },
@@ -12340,7 +12520,9 @@ for (const name of ["gitlab", "github"] as const) {
           expect(Arr.map(offered, (offer) => [offer.id, offer.title, offer.workflow])).toEqual([
             ["release-again", "Release again", idOf("release")],
           ]);
-          expect(inputsFor(offered[0]!, { runDir: "/r", facts, input: { mr: target } })).toEqual({
+          expect(
+            inputsFor(offered[0]!, { runId: "r", runDir: "/r", facts, input: { mr: target } }),
+          ).toEqual({
             mr: target,
           });
 

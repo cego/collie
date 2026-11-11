@@ -718,6 +718,11 @@ It signs the note and reads back that signature before posting, so a replay send
 Journal posting in its own Activity. Its refusal is its message: not a
 merge request, no CLI or login for its forge, or one assigned to whoever is running this —
 whose findings are theirs to fix rather than to post to themselves.
+On success, its `signature` identifies the posted note for the findings ledger.
+
+`host.reviewChanges({ target, cwd, previous, head })` reads the interdiff from the previous
+reviewed head when the new head descends from it. Otherwise it reads the full diff.
+Journal it in an Activity with `error: WorkflowError`; an unreadable forge fails the read.
 
 `host.approveReview({ target, cwd, head })` approves that reviewed head, independently of posting.
 Journal it in a separate Activity after the post succeeds. The shipped review offers approval
@@ -1702,7 +1707,7 @@ export default defineWorkflow({
 - **`followUps` and `actions`** carry an `id` that is stable and a `title` a human reads.
   Two fields, because a retitled action is the same action and a card matching on the
   title would start a different one. `workflow` is a public id or `"self"` for the one
-  declaring it; `inputs` names what Collie fills in from the Run — `run-dir`, `plan-dir`,
+  declaring it; `inputs` names what Collie fills in from the Run — `run-id`, `run-dir`, `plan-dir`,
   `diff-target`, `branch`, `merge-request`, or `started-with` for what the Run was started
   with under the same input name — so a card makes the offer without asking a human to type
   a path. `arguments` is the child's schema; eligibility is decided from facts, never from a
@@ -1747,6 +1752,19 @@ before anything exists: `new`, or the absolute path of a directory. Anything els
 `PlanOutputSchema` are exported so a step you write declares the same contract the engine
 reads, rather than a copy of it. `FindingSchema`, `FixedSchema` and `CheckSchema` are the
 pieces they are built from.
+
+A standalone MR review keeps its findings ledger in `findings.json`, including resolved
+findings. Each finding carries a stable `id`, a [Finding status](../CONTEXT.md), the reviewed
+`head`, and the posted note's `note` signature. Before posting, `note` is empty for new
+findings and changed statuses. These fields are optional in the shared Output schema so
+older Outputs remain readable; a supplied status outside the four values is refused.
+The reviewer returns every earlier id with its current status, plus new findings.
+
+The **Review again** offer passes the earlier Run id as the host's `previous` option.
+The next reviewer receives its ledger and an interdiff, or the full diff after a force push.
+The posted note lists new findings and status changes; unchanged open findings appear by
+id only. An unchanged ledger posts nothing. `fixed` and `obsolete` findings stay in the
+record without blocking a fix or approval; unresolved disputes still require a decision.
 
 `CriterionSchema` is how a builder answers one of its ticket's acceptance criteria:
 `criterion`, copied from the ticket, and `met`, the test or file that shows it, or

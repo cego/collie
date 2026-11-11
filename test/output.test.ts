@@ -8,6 +8,7 @@ import {
   parseReviewOutput,
   parseSynthesis,
   renderReview,
+  settleRound,
   settleFinalFix,
   splitDisputed,
   substantiated,
@@ -43,6 +44,47 @@ function record(over: Partial<Verification> & { name: string }): Verification {
   };
 }
 const PASSED = { verifications: [record({ name: "bun test" })], final: FINAL };
+
+test("carrying a maintained dispute counts the finding once", () => {
+  const dispute: Finding = { severity: "major", title: "keep the behavior" };
+  const split = splitDisputed([dispute], [dispute]);
+  expect(
+    settleRound({ live: split.live, disputed: [dispute, ...split.settled], at: 2 }),
+  ).toMatchObject({
+    go: "halt",
+    reason: "1 disputed blocking finding(s) stand unanswered — your call, not the loop's",
+    outstanding: [dispute],
+  });
+});
+
+test("resolved ledger findings leave the rally clean and a dispute remains the human's call", () => {
+  const fixed: Finding = { id: "F1", status: "fixed", severity: "major", title: "guard the input" };
+  const obsolete: Finding = {
+    id: "F2",
+    status: "obsolete",
+    severity: "blocker",
+    title: "removed handler",
+  };
+  const dispute: Finding = {
+    id: "F3",
+    status: "disputed",
+    severity: "major",
+    title: "keep the behavior",
+  };
+  const split = splitDisputed([fixed, obsolete, dispute], []);
+  expect(split.live).toEqual([]);
+  expect(split.settled).toEqual([dispute]);
+  expect(settleRound({ live: [fixed, obsolete], disputed: [], at: 2 })).toEqual({
+    go: "clean",
+    remaining: [],
+  });
+  expect(settleRound({ live: [], disputed: [dispute], at: 2 })).toMatchObject({
+    go: "halt",
+    halt: "dispute_unresolved",
+  });
+  expect(isBlocking(fixed)).toBe(false);
+  expect(isBlocking(obsolete)).toBe(false);
+});
 
 const ok = (text: string) => {
   const r = parseReviewOutput(text, "review.json");

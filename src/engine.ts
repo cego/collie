@@ -780,6 +780,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export interface Posted {
     readonly ok: boolean;
     readonly message: string;
+    readonly signature?: string;
   }
 
   /** A pipeline job's state; \`missing\` is a pipeline without it. */
@@ -944,6 +945,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly target: string;
       readonly cwd: string;
     }) => Effect.Effect<string>;
+    readonly reviewChanges: (options: {
+      readonly target: string;
+      readonly cwd: string;
+      readonly previous: string;
+      readonly head: string;
+    }) => Effect.Effect<string, WorkflowError>;
     /** Approves the reviewed head after posting. Take it inside a separate Activity. */
     readonly approveReview: (options: {
       readonly target: string;
@@ -1770,6 +1777,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
    * list: Collie fills these in, and anything else is the caller's to give.
    */
   export type Source =
+    | "run-id"
     | "run-dir"
     | "plan-dir"
     | "diff-target"
@@ -1825,6 +1833,10 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export const EXCLUSIVE_STRATEGIES: ReadonlyArray<string>;
 
   export interface Finding {
+    id?: string;
+    status?: "open" | "fixed" | "disputed" | "obsolete";
+    head?: string;
+    note?: string;
     file?: string;
     line?: number;
     severity: string;
@@ -1985,7 +1997,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     fix: FixReport,
     evidence: CheckEvidence,
   ): FinalFix;
-  export function renderReview(synthesis: Synthesis): string;
+  export function renderReview(synthesis: SynthesisReport): string;
   export function formatFindings(findings: ReadonlyArray<Finding>): string;
 
   /** The prose a human reads, and the findings a card counts, where both are looked for. */
@@ -5127,6 +5139,22 @@ export const hostLayer = (options: {
               if (ref === null) return "";
               const details = yield* forgeOf(ref).details(ref, asked.cwd, runShell);
               return details._tag === "Details" ? (details.head ?? "") : "";
+            }),
+          ),
+        reviewChanges: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const ref = parseMrTarget(asked.target);
+              if (ref === null) return "";
+              const changes = yield* forgeOf(ref).reviewChanges(
+                ref,
+                asked.previous,
+                asked.head,
+                asked.cwd,
+                runShell,
+              );
+              if (!changes.ok) return yield* new WorkflowError({ reason: changes.reason });
+              return changes.value;
             }),
           ),
         approveReview: (asked) =>
@@ -9031,7 +9059,11 @@ const makeRegistry: (
             }),
             (offer) =>
               offer.kind === "follow-up"
-                ? unfilled(offer, row.project, inputsFor(offer, { runDir: where, facts, input }))
+                ? unfilled(
+                    offer,
+                    row.project,
+                    inputsFor(offer, { runId: row.run, runDir: where, facts, input }),
+                  )
                 : Effect.succeed(offer),
           ),
         ),
@@ -9067,23 +9099,30 @@ const makeRegistry: (
       // What the offer said Collie fills in, filled from the Run it is about. The
       // caller's own values win: an offer names where a value comes from, and a caller
       // that has a better one for the same field is not overruled by a default.
-      const filled = { ...inputsFor(offer, { runDir: where, facts, input }), ...options.input };
+      const filled = {
+        ...inputsFor(offer, { runId: row.run, runDir: where, facts, input }),
+        ...options.input,
+      };
       // Held to what its parent was, grants included, where the parent had anything.
       const inherited = yield* approvedOf(dir, row.run);
+      const launch = Rec.map(
+        Rec.filter(filled, (_, name) => name in RESERVED_INPUTS),
+        (value) => (Predicate.isString(value) ? value : asJsonText(value)),
+      );
+      if (offer.kind === "follow-up" && facts.branch !== null) launch.branch = facts.branch;
       // The offer's own workflow settles what it was given, so arguments it will not
       // take are refused here and nothing is started.
       return yield* startWork({
         generation: starting,
         request: options.request,
         project: row.project,
-        input: filled,
+        input: Rec.filter(filled, (_, name) => !(name in RESERVED_INPUTS)),
         task: row.task,
         parent: row.run,
         verify: inherited,
         attachments: options.attachments,
         // A follow-up carries on the parent's work, so it is on the parent's branch.
-        options:
-          offer.kind === "follow-up" && facts.branch !== null ? { branch: facts.branch } : {},
+        options: launch,
       });
     }),
 

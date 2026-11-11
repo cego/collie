@@ -80,6 +80,26 @@ for (const name of ["gitlab", "github"] as const) {
   const host = FORGE_HOST[name];
 
   describe(`the ${name} forge`, () => {
+    test("a re-review reads only the interdiff of a descendant head", () =>
+      runEffect(
+        Effect.gen(function* () {
+          const fake = fakeForge(
+            name,
+            model(name, {
+              mrs: [mr(name, { interdiff: "@@ -1 +1 @@\n-old()\n+guard()" })],
+              ancestry: { [HEAD]: [MERGED] },
+            }),
+          );
+          const diff = yield* FORGES[name]
+            .reviewChanges(ref(name), MERGED, HEAD, "/w", fake.run)
+            .pipe(Effect.provide(fake.layer));
+          expect(diff).toEqual({
+            ok: true,
+            value: `Interdiff ${MERGED}..${HEAD}:\n\nsrc/a.ts\n@@ -1 +1 @@\n-old()\n+guard()`,
+          });
+        }),
+      ));
+
     test("pins approval to the reviewed head", () => {
       const fake = fakeForge(name, model(name));
       return runEffect(

@@ -159,6 +159,13 @@ export interface Commands {
 /** What Collie asks a forge. Every answer is a value: a forge that cannot be asked says why. */
 export interface Forge {
   readonly name: MrForge;
+  readonly reviewChanges: <R>(
+    ref: MrRef,
+    previous: string,
+    head: string,
+    cwd: string,
+    run: Runner<R>,
+  ) => Effect.Effect<Answered<string>, never, R | ForgeHttp>;
   /** The open issues, or with `numbers` those issues read one by one: a listing can lag a filing. */
   readonly issues: <R>(
     project: string,

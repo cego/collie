@@ -103,6 +103,8 @@ export const FakeMr = Schema.Struct({
   author: Schema.optionalKey(Schema.String),
   assignees: Schema.optionalKey(Schema.Array(Schema.String)),
   head: Schema.optionalKey(Schema.String),
+  diff: Schema.optionalKey(Schema.String),
+  interdiff: Schema.optionalKey(Schema.String),
   /** The revision its pipeline ran on, where that is not its head. */
   pipelineAt: Schema.optionalKey(Schema.String),
   checksUrl: Schema.optionalKey(Schema.String),
@@ -1108,6 +1110,18 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
         ? no()
         : json({ status: said.status, ref: said.ref ?? "main", sha: said.sha ?? "" });
     }
+    const comparison = /repository\/compare\?from=([^&]+)&to=([^&]+)&straight=true$/.exec(route);
+    if (comparison) {
+      const mr = Option.getOrUndefined(
+        Arr.findFirst(model.mrs, (one) => one.head === comparison[2]),
+      );
+      return mr === undefined
+        ? no()
+        : json({
+            diffs: [{ new_path: "src/a.ts", diff: mr.interdiff ?? "" }],
+            compare_timeout: false,
+          });
+    }
     const base = /merge_base\?refs\[\]=([^&]+)&refs\[\]=(.+)$/.exec(route);
     if (base) {
       const [, merged = "", live = ""] = base;
@@ -1160,6 +1174,10 @@ function glabOnMr(
   args: ReadonlyArray<string>,
 ): Answer {
   const method = flag(args, "-X") ?? "GET";
+  if (pipe(rest, Str.startsWith("diffs?")) && method === "GET")
+    return json(
+      pageOf(rest, [{ old_path: "src/a.ts", new_path: "src/a.ts", diff: mr.diff ?? "" }]),
+    );
   if (pipe(rest, Str.startsWith("notes?")) && method === "GET")
     return json(pageOf(rest, mr.comments ?? []));
   if (rest === "notes" && method === "POST" && model.refusesNote !== undefined)
@@ -1231,6 +1249,10 @@ function glabOnMr(
 function ghOnPull(pull: FakeMr, kind: string, rest: string, args: ReadonlyArray<string>): Answer {
   const url = `https://${pull.project}/pull/${pull.iid}`;
   const method = flag(args, "-X") ?? "GET";
+  if (kind === "pulls" && pipe(rest, Str.startsWith("files?")))
+    return json(
+      pageOf(rest, [{ filename: "src/a.ts", status: "modified", patch: pull.diff ?? "" }]),
+    );
   const comments = pull.comments ?? [];
   const body = field(args, "body") ?? "";
   if (kind === "issues" && rest === "comments" && method === "POST")
@@ -1650,6 +1672,14 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
     return json({
       status,
       merge_base_commit: pull?.base === undefined ? null : { sha: pull.base.at },
+      files: [
+        {
+          filename: "src/a.ts",
+          patch:
+            Option.getOrUndefined(Arr.findFirst(model.mrs, (one) => one.head === live))
+              ?.interdiff ?? "",
+        },
+      ],
     });
   }
   const checkRuns =

@@ -65,6 +65,32 @@ const REVIEWS = [
   `[]`,
 ];
 
+test("a review decodes the finding ledger and names an invalid status", () => {
+  const findings = Arr.map(["open", "fixed", "disputed", "obsolete"], (status, index) => ({
+    id: `F${index + 1}`,
+    status,
+    head: "abc123",
+    note: "Review by Collie for @tester · r1 round 1 at abc123",
+    severity: "major",
+    title: "guard the input",
+  }));
+  const output = { verdict: "findings", findings };
+  expect(Result.getOrThrow(Schema.decodeUnknownResult(ReviewOutputSchema)(output))).toMatchObject({
+    findings,
+  });
+  expect(parseReviewOutput(JSON.stringify(output), "review.json")).toMatchObject({
+    ok: true,
+    value: { findings },
+  });
+  const invalid = { ...output, findings: [{ ...findings[0], status: "ignored" }] };
+  const decoded = Schema.decodeUnknownResult(ReviewOutputSchema)(invalid);
+  expect(decoded._tag).toBe("Failure");
+  if (decoded._tag === "Failure") expect(String(decoded.failure)).toContain("status");
+  const parsed = parseReviewOutput(JSON.stringify(invalid), "review.json");
+  expect(parsed.ok).toBe(false);
+  if (!parsed.ok) expect(parsed.error).toContain("findings[0].status");
+});
+
 const SYNTHESES = [
   `{"verdict": "clean", "summary": "s"}`,
   `{"verdict": "findings", "summary": "Adds a flag. It exits wrong.",

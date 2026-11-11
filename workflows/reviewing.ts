@@ -40,7 +40,7 @@ import {
   type Integration,
   type SynthesisReport,
 } from "collie";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Option, Schema } from "effect";
 import { type WorkflowEngine, type WorkflowInstance } from "effect/workflow/WorkflowEngine";
 import markdown from "./review.md" with { type: "text" };
 import type { Reviewed } from "./delivering.ts";
@@ -67,6 +67,8 @@ export const REVIEW = content.template("review", {
   ...change,
   run: Schema.Struct({ dir: text, id: text }),
   previous: Schema.Struct({ review: text, fix: text }),
+  ledger: text,
+  changes: text,
   iteration: text,
   max_iterations: text,
   disputed: text,
@@ -81,6 +83,8 @@ const SYNTHESIZE = content.template("synthesize", {
   ...change,
   run: Schema.Struct({ dir: text, id: text }),
   previous: Schema.Struct({ review: text }),
+  ledger: text,
+  changes: text,
   fan_in: text,
   obstacle: text,
 });
@@ -135,6 +139,9 @@ export interface ReviewAsk {
   readonly proves: string;
   /** The review before this one, for the reviewers to read rather than repeat. */
   readonly previous: string;
+  readonly ledger?: ReadonlyArray<Finding>;
+  readonly head?: string;
+  readonly changes?: string;
   /** Where the implementer's account of that review is; empty where nobody fixed one. */
   readonly answered: string;
   /** The extra axes a human asked for, where they asked for any. */
@@ -163,12 +170,19 @@ export const told = (ask: ReviewAsk, run: { readonly dir: string; readonly id: s
   },
   run,
   previous: { review: ask.previous, fix: ask.answered },
+  ledger:
+    ask.ledger === undefined
+      ? ""
+      : `Earlier findings ledger:\n${JSON.stringify(ask.ledger, null, 2)}`,
+  changes: ask.changes ?? "",
   iteration: String(ask.at),
   max_iterations: String(ask.of),
   disputed: formatFindings(ask.disputed),
   risks: riskLine(ask.risks),
   target_repo: Arr.join(repoArgs(parseMrTarget(ask.target)?.project ?? null), " "),
-  mr: mrForgeFacts(ask.target) ?? NO_MR,
+  mr: ask.changes
+    ? { ...(mrForgeFacts(ask.target) ?? NO_MR), diff: "the supplied diff below" }
+    : (mrForgeFacts(ask.target) ?? NO_MR),
   base: ask.base || DEFAULT_BASE,
   obstacle: ask.obstacle ?? "",
 });
@@ -184,6 +198,58 @@ export const reviewPass = (ask: ReviewAsk) =>
     const host = yield* Host;
     const { dir, cwd } = yield* host.place(id);
     const input = told(ask, { dir, id });
+    const record = (report: SynthesisReport) =>
+      Effect.gen(function* () {
+        if (ask.ledger === undefined) {
+          yield* leaveReview(dir, report);
+          return report;
+        }
+        const before = ask.ledger;
+        const findings: Finding[] = [];
+        const ids = new Set<string>();
+        for (const [index, finding] of report.findings.entries()) {
+          const earlier = Option.getOrUndefined(
+            Arr.findFirst(before, (one) =>
+              finding.id === undefined
+                ? findingKey(one) === findingKey(finding)
+                : one.id === finding.id,
+            ),
+          );
+          const identity = finding.id ?? earlier?.id ?? `${id}-F${index + 1}`;
+          if (ids.has(identity))
+            return yield* new WorkflowError({ reason: `duplicate finding id ${identity}` });
+          ids.add(identity);
+          const status = finding.status ?? "open";
+          findings.push({
+            ...finding,
+            id: identity,
+            status,
+            head: ask.head ?? "",
+            note: status === earlier?.status ? (earlier.note ?? "") : "",
+          });
+        }
+        for (const earlier of before) {
+          if (Arr.some(findings, (one) => one.id === earlier.id)) continue;
+          if (Arr.some(report.fixed, (one) => findingKey(one) === findingKey(earlier)))
+            findings.push({ ...earlier, status: "fixed", head: ask.head ?? "", note: "" });
+          else
+            return yield* new WorkflowError({
+              reason: `review omitted earlier finding ${earlier.id ?? earlier.title}; return its status`,
+            });
+        }
+        const recorded: SynthesisReport = {
+          ...report,
+          findings,
+          verdict: Arr.some(findings, (one) => one.status === "open" || one.status === "disputed")
+            ? "findings"
+            : "clean",
+        };
+        yield* leaveReview(dir, recorded);
+        yield* (yield* FileSystem.FileSystem)
+          .writeFileString(`${dir}/review-head`, ask.head ?? "")
+          .pipe(Effect.orDie);
+        return recorded;
+      });
     // A check left to CI is read from the forge where the Run has a merge request, never run.
     const leftToCi = yield* Effect.forEach(
       Arr.filter(yield* host.approved(id), (spec) => spec.ci !== undefined),
@@ -218,8 +284,7 @@ export const reviewPass = (ask: ReviewAsk) =>
         input: { ...input, checks, criteria: ask.criteria ?? "" },
         output: SynthesisSchema,
       });
-      yield* leaveReview(dir, alone);
-      return alone;
+      return yield* record(alone);
     }
     yield* Effect.forEach(
       seats,
@@ -251,8 +316,7 @@ export const reviewPass = (ask: ReviewAsk) =>
       }),
     );
     // The prose a human reads and the findings a card counts, where both are looked for.
-    yield* leaveReview(dir, reconciled);
-    return reconciled;
+    return yield* record(reconciled);
   });
 
 /** At most four rounds per rally; it leaves at the first review with nothing blocking. */
@@ -338,7 +402,12 @@ export const rally = (ask: {
             disputed,
           });
           const split = splitDisputed(synthesis.findings, disputed);
-          const round = settleRound({ live: split.live, disputed, at, seen });
+          const round = settleRound({
+            live: split.live,
+            disputed: [...disputed, ...split.settled],
+            at,
+            seen,
+          });
           if (round.go === "halt" && round.halt === "dispute_unresolved") {
             return {
               halted: null,
