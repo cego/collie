@@ -3755,6 +3755,8 @@ export const hostLayer = (options: {
       yield* ensureStepDurations(dir, yield* store.runs);
       const toast = options.toast;
       const notifying = yield* Semaphore.make(1);
+      const claiming = yield* Semaphore.make(1);
+      const hostScope = yield* Effect.scope;
       /** Why this needs-you park goes straight to a person, or null where a Heal takes it first. */
       const passedOverHere = (runId: string, cause: ParkCause, recoveries: ReadonlyArray<Metric>) =>
         Effect.gen(function* () {
@@ -4628,44 +4630,53 @@ export const hostLayer = (options: {
                       });
                     }),
                   );
-                  const recoveries = recoveriesIn(
-                    yield* readMetrics(evidenceDir(dir, runId)).pipe(Effect.provideContext(bun)),
-                  );
-                  const park = parkWithRecovery(info, recoveries);
-                  if (park.kind === "rechecks") return;
-                  if (
-                    Arr.some(
-                      recoveries,
-                      (line) => line.action === "healed" && line.park === park.id,
+                  const parkedAs = info;
+                  // Forked, so the Run suspends at once: a resume that came while it was still
+                  // here would be lost.
+                  yield* Effect.gen(function* () {
+                    const recoveries = recoveriesIn(
+                      yield* readMetrics(evidenceDir(dir, runId)).pipe(Effect.provideContext(bun)),
+                    );
+                    const park = parkWithRecovery(parkedAs, recoveries);
+                    if (park.kind === "rechecks") return;
+                    if (
+                      Arr.some(
+                        recoveries,
+                        (line) => line.action === "healed" && line.park === park.id,
+                      )
                     )
-                  )
-                    return;
-                  // A park its Heal caused again is that Heal's to settle.
-                  const healing = Arr.findFirst(recoveries, healInFlight);
-                  if (healing._tag === "Some" && healing.value.cause === cause) return;
-                  const passed = yield* passedOverHere(runId, cause, recoveries);
-                  yield* under(
-                    appendMetric(evidenceDir(dir, runId), {
-                      at: yield* nowIso,
-                      kind: "recovery",
-                      subject: runId,
-                      value: 0,
-                      note: passed ?? why,
-                      cause,
-                      build: manifest.version,
-                      action: "healed",
-                      outcome: passed === null ? "claimed" : "skipped",
-                      recoveryId: healRequest(runId, park.id!),
-                      park: park.id,
-                      since: park.since,
-                    }),
-                  );
-                  if (passed === null) return;
-                  yield* notify(
-                    runId,
-                    "needs-you",
-                    Arr.join([why, ...(park.history ?? [])], "\n"),
-                    { key: `parked:${cause}` },
+                      return;
+                    // A park its Heal caused again is that Heal's to settle.
+                    const healing = Arr.findFirst(recoveries, healInFlight);
+                    if (healing._tag === "Some" && healing.value.cause === cause) return;
+                    const passed = yield* passedOverHere(runId, cause, recoveries);
+                    yield* under(
+                      appendMetric(evidenceDir(dir, runId), {
+                        at: yield* nowIso,
+                        kind: "recovery",
+                        subject: runId,
+                        value: 0,
+                        note: passed ?? why,
+                        cause,
+                        build: manifest.version,
+                        action: "healed",
+                        outcome: passed === null ? "claimed" : "skipped",
+                        recoveryId: healRequest(runId, park.id!),
+                        park: park.id,
+                        since: park.since,
+                      }),
+                    );
+                    if (passed === null) return;
+                    yield* notify(
+                      runId,
+                      "needs-you",
+                      Arr.join([why, ...(park.history ?? [])], "\n"),
+                      { key: `parked:${cause}` },
+                    );
+                  }).pipe(
+                    claiming.withPermits(1),
+                    Effect.catchCause((failed) => Effect.logWarning("park claim failed", failed)),
+                    Effect.forkIn(hostScope),
                   );
                 })
           ).pipe(Effect.andThen(store.announce));
