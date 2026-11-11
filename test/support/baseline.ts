@@ -5396,6 +5396,40 @@ for (const [kind, plan] of [
     120_000,
   );
 
+for (const workflow of ["general", "investigate"] as const)
+  scenario(
+    `a ${workflow} agent writes a speed-up criterion's benchmark plan in its handoffs and takes it with collie measure`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const runId = `r-measure-${workflow}`;
+          yield* rig.queueOutputs([{ summary: "Search measured", findings: [] }]);
+          yield* ran({
+            entry: shipped(workflow),
+            runId,
+            input: { goal: "Compare search speed against the default branch" },
+          });
+
+          const work = pipe(
+            yield* asked(runId, workflow === "general" ? "task" : "investigate"),
+            Str.replace(/\s+/g, " "),
+          );
+          const benchmark = `${runDir(dir, runId)}/handoffs/<slug>.benchmark.json`;
+          expect(work).toContain(`\`${benchmark}\``);
+          expect(work).toContain("exactly one `primary`");
+          for (const pass of ["calibration", "final"])
+            expect(work).toContain(
+              `collie measure --base <merge-base> --plan ${benchmark} --pass ${pass}`,
+            );
+          expect(work).toContain("Time no A/B comparison yourself");
+          expect(work).toContain("answer it with the `final` Measurement's id and those verdicts");
+          expect(work).not.toContain("beside its ticket");
+          expect(work).not.toContain("{{benchmark}}");
+        }),
+      ),
+    120_000,
+  );
+
 for (const kind of ["typed text", "Linear issue", "follow-up", "review"] as const)
   scenario(
     `a ${kind} builder writes a speed-up criterion's benchmark plan beside its ticket and takes it with collie measure`,

@@ -86,10 +86,11 @@ const story = (mode: Case, harness = "claude") =>
             `${root}workflows/investigate.workflow.ts`,
             `${first.world.install}/workflows/investigate.workflow.ts`,
           );
-          yield* fs.copyFile(
-            `${root}workflows/investigate.md`,
-            `${first.world.install}/workflows/investigate.md`,
-          );
+          for (const name of ["investigate.md", "measuring.ts", "measuring.md"])
+            yield* fs.copyFile(
+              `${root}workflows/${name}`,
+              `${first.world.install}/workflows/${name}`,
+            );
           yield* fs.makeDirectory(`${first.world.install}/personas`, { recursive: true });
           yield* fs.copyFile(
             `${root}personas/investigator.md`,

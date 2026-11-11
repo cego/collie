@@ -78,6 +78,7 @@ import * as Workflow from "effect/workflow/Workflow";
 import * as Activity from "effect/workflow/Activity";
 import { connection } from "./connections.ts";
 import markdown from "./implement.md" with { type: "text" };
+import { measuredBy } from "./measuring.ts";
 import {
   IMPLEMENTER,
   REVIEWER,
@@ -1235,12 +1236,6 @@ const asCheckpoint = flow(
   ),
   Result.getOrThrow,
 );
-
-const measuredBy = (lead: string, benchmark: string) =>
-  `\n\n${pipe_(
-    `${Str.trim(content.sections.get(lead) ?? "")}\n${Str.trim(content.sections.get("measure.steps") ?? "")}`,
-    Str.replaceAll("{{benchmark}}", benchmark),
-  )}`;
 
 /** A ticket's criteria as its builder is given them. */
 const renderCriteria = (criteria: ReadonlyArray<string>) =>

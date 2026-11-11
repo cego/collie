@@ -977,6 +977,11 @@ Where it changed code and nothing names the run's checks, it names them with
 `collie run intent verification` — with `--cwd` naming the repository, at the Projects
 root — and Collie runs the named checks there when the run ends.
 
+For a speed comparison, the agent takes a Measurement. It writes the benchmark plan in
+the Run's `handoffs/<slug>.benchmark.json`, calibrates the base against itself with
+`collie measure --pass calibration`, then measures the candidate with `--pass final`.
+It reports the host's verdicts and Measurement id; see [`collie measure`](cli.md#measure).
+
 **Ends:** when the agent writes its Output. Its `summary` is the run's result and what the
 card says, as `Completed. It reported: “…”` — its status, then its claim, shown as one. A `blocked` reason fails the run with that reason. There
 is no menu, and the agent takes steering after the run has ended.
@@ -1081,9 +1086,14 @@ optionally, the branch with `branch`. A remote start can name the repository by 
 
 **What happens:** one investigator works in the Run's own checkout and returns
 `{ summary, findings: [{ what, evidence }] }`. It changes only what the goal asks,
-proves nothing beyond its decoded Output and offers no next steps. The host reports
+has no proof gate and offers no next steps. The host reports
 the result to the agent that started it, then closes the investigator and its Task
 workspace unless another Run or a human pane needs it (`closes: "reported"`).
+
+For a speed comparison, the investigator takes a Measurement. It writes the benchmark
+plan in the Run's `handoffs/<slug>.benchmark.json`, calibrates the base against itself
+with `collie measure --pass calibration`, then measures the candidate with `--pass final`.
+It reports the host's verdicts and Measurement id; see [`collie measure`](cli.md#measure).
 
 Its Flow forecasts one Step, Investigate, which produces evidence.
 
