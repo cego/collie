@@ -104,9 +104,21 @@ Collie's own notes never count as a change, so the loop cannot feed itself. A re
 forge reads of its own beyond the merge watch's.
 
 **D7. Posting never approves silently.** A review note is signed and is posted at most once per
-round; Collie reads it back by its signature before posting. Approval is a separate act, pinned
-to the head it was decided at, so the forge refuses it once the head has moved. This applies to
-today's menu as well: its Post says when it approves.
+round; Collie reads it back by its signature before posting. Approval is a separate act on both
+forges, naming the reviewed head. This applies to today's menu as well: its Post says when it approves.
+
+GitLab atomically rejects a moved `sha`. GitHub's `commit_id` identifies the reviewed commit
+without a head-match precondition. Collie checks the head before and after approval and attempts
+dismissal if it moved or cannot be read afterward. A detected race fails the Run and reports
+whether dismissal succeeded. If dismissal fails, the message identifies the review and says
+approval may still be active. Approval and dismissal are not blindly retried.
+
+This deliberately retains GitHub automatic approval rather than disabling it or adding a required
+merge check. A racing push can leave stale approval effective before detection; a refused dismissal
+can leave it active indefinitely and satisfy merge requirements despite the failed Run.
+The human explicitly accepted that limitation in Desktop on November 11, 2026 at 12:08 UTC,
+amending the original "an approval is never stale" promise for GitHub. The decision is recorded
+in posting Run `run-a27c9329.implement.implement-.--posting`, attachment `message-9a4ff25e.md`.
 
 **D8. A maintained dispute is the human's to settle.** The reviewer may keep a finding against
 the author's dispute once. After that the finding stops driving rounds and becomes a decision:

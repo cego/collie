@@ -100,28 +100,21 @@ for (const name of ["gitlab", "github"] as const) {
         }),
       ));
 
-    test(
-      name === "gitlab"
-        ? "pins approval to the reviewed head"
-        : "refuses approval without an atomic head guard",
-      () => {
-        const fake = fakeForge(name, model(name));
-        return runEffect(
-          Effect.gen(function* () {
-            expect((yield* forge.approve(ref(name), HEAD, "/w", fake.run)).ok).toBe(
-              name === "gitlab",
-            );
-            expect(
-              Arr.map(
-                Arr.filter(fake.requests, (one) => one.method === "POST"),
-                (one) => one.body,
-              ),
-            ).toEqual(name === "gitlab" ? [{ sha: HEAD }] : []);
-            expect(fake.model().approved ?? []).toHaveLength(name === "gitlab" ? 1 : 0);
-          }).pipe(Effect.provide(fake.layer)),
-        );
-      },
-    );
+    test("pins approval to the reviewed head", () => {
+      const fake = fakeForge(name, model(name));
+      return runEffect(
+        Effect.gen(function* () {
+          expect((yield* forge.approve(ref(name), HEAD, "/w", fake.run)).ok).toBe(true);
+          expect(
+            Arr.map(
+              Arr.filter(fake.requests, (one) => one.method === "POST"),
+              (one) => one.body,
+            ),
+          ).toEqual([name === "gitlab" ? { sha: HEAD } : { event: "APPROVE", commit_id: HEAD }]);
+          expect(fake.model().approved ?? []).toHaveLength(1);
+        }).pipe(Effect.provide(fake.layer)),
+      );
+    });
 
     test("refuses an approval after the reviewed head has changed", () => {
       const fake = fakeForge(name, model(name, { mrs: [mr(name, { head: MERGED })] }));
@@ -129,22 +122,44 @@ for (const name of ["gitlab", "github"] as const) {
         Effect.gen(function* () {
           const approved = yield* forge.approve(ref(name), HEAD, "/w", fake.run);
           expect(approved.ok).toBe(false);
-          expect(approved.message).toContain(
-            name === "gitlab"
-              ? "SHA does not match HEAD"
-              : "GitHub cannot atomically guard the reviewed head",
-          );
+          expect(approved.message).toContain("SHA does not match HEAD");
           expect(fake.model().approved ?? []).toEqual([]);
         }).pipe(Effect.provide(fake.layer)),
       );
     });
 
     if (name === "github")
-      test("fails closed without creating an approval even when dismissal would be forbidden", () => {
+      test("withdraws an approval if a push races with GitHub accepting it", () => {
         const fake = fakeForge(name, model(name));
+        const layer = forgeHttpTest(fake.run, (url, init) =>
+          fake.fetch(url, init).then((response) => {
+            if (Str.endsWith("/reviews")(url) && init?.method === "POST")
+              fake.set({ ...fake.model(), mrs: [mr(name, { head: MERGED })] });
+            return response;
+          }),
+        );
+        return runEffect(
+          Effect.gen(function* () {
+            const approved = yield* forge.approve(ref(name), HEAD, "/w", fake.run);
+            expect(approved.ok).toBe(false);
+            expect(approved.message).toContain("SHA does not match HEAD");
+            expect(approved.message).toContain("approval withdrawn");
+            expect(fake.model().approved ?? []).toEqual([]);
+            expect(Arr.filter(fake.requests, (one) => one.method === "POST")).toHaveLength(1);
+            expect(Arr.filter(fake.requests, (one) => one.method === "PUT")).toHaveLength(1);
+          }).pipe(Effect.provide(layer)),
+        );
+      });
+
+    if (name === "github")
+      test("reports a still-active approval and its review id when a racing push cannot be dismissed", () => {
+        const fake = fakeForge(name, model(name));
+        const dismissals: string[] = [];
         const layer = forgeHttpTest(fake.run, (url, init) => {
-          if (Str.endsWith("/dismissals")(url))
+          if (Str.endsWith("/dismissals")(url)) {
+            dismissals.push(url);
             return Promise.resolve(new Response("Forbidden", { status: 403 }));
+          }
           return fake.fetch(url, init).then((response) => {
             if (Str.endsWith("/reviews")(url) && init?.method === "POST")
               fake.set({ ...fake.model(), mrs: [mr(name, { head: MERGED })] });
@@ -155,9 +170,14 @@ for (const name of ["gitlab", "github"] as const) {
           Effect.gen(function* () {
             const approved = yield* forge.approve(ref(name), HEAD, "/w", fake.run);
             expect(approved.ok).toBe(false);
-            expect(fake.model().approved ?? []).toEqual([]);
-            expect(approved.message).toContain("GitHub cannot atomically guard the reviewed head");
-            expect(Arr.filter(fake.requests, (one) => one.method === "POST")).toEqual([]);
+            expect(fake.model().approved ?? []).toHaveLength(1);
+            expect(approved.message).toContain("SHA does not match HEAD");
+            expect(approved.message).toContain("approval may still be active");
+            expect(approved.message).toContain("review 1");
+            expect(approved.message).toContain("403");
+            expect(dismissals).toHaveLength(1);
+            expect(dismissals[0]).toEndWith("/pulls/30/reviews/1/dismissals");
+            expect(Arr.filter(fake.requests, (one) => one.method === "POST")).toHaveLength(1);
           }).pipe(Effect.provide(layer)),
         );
       });
@@ -663,45 +683,43 @@ for (const name of ["gitlab", "github"] as const) {
       );
     });
 
-    if (name === "gitlab")
-      for (const [failure, fault] of [
-        ["5xx", { status: 503 }],
-        ["network", "network"],
-      ] as const)
-        test(`keeps the posted note when approval has a ${failure} failure, without sending it again`, () => {
-          const fake = fakeForge(name, model(name));
-          const layer = forgeHttpTest(fake.run, (url, init) => {
-            if (pipe(url, Str.endsWith("/approve")))
-              fake.set({ ...fake.model(), httpFault: fault });
-            return fake.fetch(url, init);
-          });
-          return runEffect(
-            Effect.gen(function* () {
-              expect((yield* forge.post(ref(name), "Clean", "/w", fake.run)).ok).toBe(true);
-              const approved = yield* forge.approve(ref(name), HEAD, "/w", fake.run);
-              expect(approved.ok).toBe(false);
-              expect(approved.message).toContain("did not approve");
-              expect(Rec.values(fake.model().notes ?? {})).toEqual([["Clean"]]);
-              expect(fake.model().approved ?? []).toEqual([]);
-              expect(Arr.filter(fake.requests, (one) => one.method === "POST")).toHaveLength(2);
-            }).pipe(Effect.provide(layer)),
-          );
+    for (const [failure, fault] of [
+      ["5xx", { status: 503 }],
+      ["network", "network"],
+    ] as const)
+      test(`keeps the posted note when approval has a ${failure} failure, without sending it again`, () => {
+        const fake = fakeForge(name, model(name));
+        const layer = forgeHttpTest(fake.run, (url, init) => {
+          if (pipe(url, Str.endsWith(name === "github" ? "/reviews" : "/approve")))
+            fake.set({ ...fake.model(), httpFault: fault });
+          return fake.fetch(url, init);
         });
-
-    if (name === "gitlab")
-      test("reports an approval the forge refuses, with the note still posted", () => {
-        const fake = fakeForge(name, model(name, { refusesApproval: true }));
         return runEffect(
           Effect.gen(function* () {
-            yield* forge.post(ref(name), "Clean", "/w", fake.run);
+            expect((yield* forge.post(ref(name), "Clean", "/w", fake.run)).ok).toBe(true);
             const approved = yield* forge.approve(ref(name), HEAD, "/w", fake.run);
             expect(approved.ok).toBe(false);
             expect(approved.message).toContain("did not approve");
-            expect(approved.message).toContain("403 Forbidden");
             expect(Rec.values(fake.model().notes ?? {})).toEqual([["Clean"]]);
-          }).pipe(Effect.provide(fake.layer)),
+            expect(fake.model().approved ?? []).toEqual([]);
+            expect(Arr.filter(fake.requests, (one) => one.method === "POST")).toHaveLength(2);
+          }).pipe(Effect.provide(layer)),
         );
       });
+
+    test("reports an approval the forge refuses, with the note still posted", () => {
+      const fake = fakeForge(name, model(name, { refusesApproval: true }));
+      return runEffect(
+        Effect.gen(function* () {
+          yield* forge.post(ref(name), "Clean", "/w", fake.run);
+          const approved = yield* forge.approve(ref(name), HEAD, "/w", fake.run);
+          expect(approved.ok).toBe(false);
+          expect(approved.message).toContain("did not approve");
+          expect(approved.message).toContain("403 Forbidden");
+          expect(Rec.values(fake.model().notes ?? {})).toEqual([["Clean"]]);
+        }).pipe(Effect.provide(fake.layer)),
+      );
+    });
 
     test("lists my merge requests over HTTP from a cold login", () => {
       const fake = fakeForge(

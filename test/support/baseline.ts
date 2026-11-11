@@ -2583,10 +2583,8 @@ for (const name of ["gitlab", "github"] as const) {
             decision: "post-2",
             value: "Post and approve 1234567",
           });
-          expect(said(result) || refusedWith(result)).toContain(
-            name === "gitlab" ? "approved" : "GitHub cannot atomically guard the reviewed head",
-          );
-          expect((yield* forge.model()).approved ?? []).toHaveLength(name === "gitlab" ? 1 : 0);
+          expect(said(result)).toContain("approved");
+          expect((yield* forge.model()).approved ?? []).toHaveLength(1);
           yield* bin.restore();
         }),
       ),
@@ -2782,7 +2780,7 @@ for (const name of ["gitlab", "github"] as const) {
                 expect(notes[1]).toContain(`all findings fixed at \`${head}\``);
             }
             expect((yield* forge.model()).approved ?? []).toHaveLength(
-              name === "gitlab" && (mode === "resolved" || mode === "clean start") ? 1 : 0,
+              mode === "resolved" || mode === "clean start" ? 1 : 0,
             );
             yield* bin.restore();
           }),
@@ -2791,23 +2789,21 @@ for (const name of ["gitlab", "github"] as const) {
     );
 
   scenario(
-    `a review of a ${name} ${noun} reads it with that forge's commands, and posting a clean one ${name === "gitlab" ? "approves it" : "refuses approval without an atomic head guard"}`,
+    `a review of a ${name} ${noun} reads it with that forge's commands, and posting a clean one approves it`,
     () =>
       runEffect(
         Effect.gen(function* () {
           const clean = { ...SYNTHESIS, verdict: "clean", findings: [] };
           const runId = `r-review-${name}-clean`;
           const { said: message, model, requests } = yield* posted(runId, clean);
-          expect(message).toContain(
-            name === "gitlab" ? "approved" : "GitHub cannot atomically guard the reviewed head",
-          );
+          expect(message).toContain("approved");
           const notes = Rec.values(model.notes ?? {}).flat();
           expect(notes).toHaveLength(1);
           expect(notes[0]).toStartWith(`Review at ${REVIEW_HEAD}\n`);
           expect(Str.split(notes[0] ?? "", "\n").at(-1)).toBe(
             `Review by Collie for @tester · ${runId} round 1 at ${REVIEW_HEAD}`,
           );
-          expect(model.approved ?? []).toHaveLength(name === "gitlab" ? 1 : 0);
+          expect(model.approved ?? []).toHaveLength(1);
           expect(
             Arr.map(
               Arr.filter(
@@ -2816,11 +2812,10 @@ for (const name of ["gitlab", "github"] as const) {
               ),
               (one) => one.body,
             ),
-          ).toEqual(
-            name === "gitlab"
-              ? [{ body: notes[0] ?? "" }, { sha: REVIEW_HEAD }]
-              : [{ body: notes[0] ?? "" }],
-          );
+          ).toEqual([
+            { body: notes[0] ?? "" },
+            name === "gitlab" ? { sha: REVIEW_HEAD } : { event: "APPROVE", commit_id: REVIEW_HEAD },
+          ]);
         }),
       ),
     120_000,
@@ -2902,11 +2897,9 @@ for (const name of ["gitlab", "github"] as const) {
             yield* rig.queueOutputs([{ ...SYNTHESIS, verdict: "clean", findings: [] }]);
             yield* parked({ ...options, decision: "post-1" });
             const reason =
-              name === "github"
-                ? "GitHub cannot atomically guard the reviewed head"
-                : refusal === "stale head"
-                  ? "SHA does not match HEAD"
-                  : "You cannot approve your own merge request";
+              refusal === "stale head"
+                ? "SHA does not match HEAD"
+                : "You cannot approve your own merge request";
             const before = yield* forge.model();
             yield* forge.set({
               ...before,
@@ -2957,7 +2950,14 @@ for (const name of ["gitlab", "github"] as const) {
                   Str.endsWith(name === "gitlab" ? "/approve" : "/reviews")(one.url) &&
                   one.method === "POST",
               );
-            const expected: Schema.Json[] = name === "github" ? [] : [{ sha: REVIEW_HEAD }];
+            const expected: Schema.Json[] =
+              name === "github" && refusal === "stale head"
+                ? []
+                : [
+                    name === "gitlab"
+                      ? { sha: REVIEW_HEAD }
+                      : { event: "APPROVE", commit_id: REVIEW_HEAD },
+                  ];
             expect(Arr.map(approvals(), (one) => one.body)).toEqual(expected);
             const restarted = yield* driven({ ...options, restarted: true }, (run) =>
               ended(run.status),

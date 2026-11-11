@@ -2847,8 +2847,11 @@ to post. Start another review of the new head.
 When no open or disputed findings remain, the menu offers **Post and approve `<short sha>`**. Approval follows
 the post as a separate act. On GitLab, the approval request carries the reviewed `sha`,
 which GitLab rejects atomically if the head has moved.
-On GitHub, Collie posts the signed note but refuses approval because GitHub cannot atomically
-guard the reviewed head. No approval request is sent.
+On GitHub, approval names the reviewed `commit_id`. Collie checks the head before and after
+approval, and attempts to dismiss the approval if the head moved or cannot be read afterward.
+GitHub cannot atomically guard the head: approval can briefly stand during a racing push.
+If dismissal fails, stale approval can remain active and satisfy merge requirements despite
+the failed Run. The card names the review to dismiss and reports that it may still be active.
 An approval refusal ends the Run with its reason on the card and is not retried.
 With findings left, **Post** sends only the note. It refuses a merge request assigned to
 you, on either forge: those findings are yours to fix. On GitLab, that comparison uses
