@@ -1359,7 +1359,7 @@ panes and transcripts, its checks and pipeline), tells the agent that missed som
 it missed, and resumes the Run. It never does the Run's work. The host refuses everything
 else from it: answering a Decision, lifting a Hold, undoing a Stop, taking an offer, and
 anything on another Run. Its resume applies only while the Run is still at the park the
-Heal was started for and has no Stop, checked as one change with any Stop. It returns `{ diagnosis, actions, result, needs_person, finding }`,
+Heal was started for and neither it nor a Run under it has a Stop, checked as one change with any Stop. It returns `{ diagnosis, actions, result, needs_person, finding }`,
 where `result` is `resumed` or `escalate`, `needs_person` says why only a person can move
 the Run and is required with `escalate`, and `finding` is required: `collie_defect`, `key`,
 `root_cause`, `fix` and `regression`, stated for everyone who runs Collie. An Output without

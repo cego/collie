@@ -3,7 +3,7 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
-import { Effect, FileSystem, Layer, type Scope } from "effect";
+import { Array as Arr, Effect, FileSystem, Layer, Option, type Scope } from "effect";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
@@ -87,6 +87,45 @@ test(
             detail: expect.stringContaining("a person stopped it"),
           });
           expect((yield* registry.view(runId))?.controls).toContain(STOP);
+        }),
+      ),
+    ),
+  60_000,
+);
+
+test(
+  "a resume that keeps a Stop is refused while a Run under it is stopped, and that Stop stands",
+  () =>
+    runEffect(
+      hosted(
+        Effect.gen(function* () {
+          const registry = yield* Registry;
+          const generation = yield* registry.load(`${fixtures}/parks-over-child.workflow.ts`);
+          const { runId } = yield* registry.start({
+            generation,
+            request: "r1",
+            project: rig.projectDir,
+            input: { role: "parent" },
+            text: {},
+            task: null,
+          });
+          const parked = yield* until(
+            () => registry.view(runId),
+            (view) => (view?.park ?? null) !== null,
+          );
+          const kid = yield* until(
+            () =>
+              registry
+                .views(null)
+                .pipe(Effect.map((runs) => Arr.findFirst(runs, (run) => run.parent === runId))),
+            Option.isSome,
+          ).pipe(Effect.map((found) => Option.getOrThrow(found).runId));
+          yield* registry.control({ runId: kid, control: STOP, set: true });
+          expect(yield* registry.resume(runId, undefined, parked!.park!.id)).toMatchObject({
+            applied: false,
+            detail: expect.stringContaining(`${kid}: a person stopped it`),
+          });
+          expect((yield* registry.view(kid))?.controls).toContain(STOP);
         }),
       ),
     ),

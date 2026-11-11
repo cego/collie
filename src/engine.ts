@@ -6639,7 +6639,7 @@ export interface RegistryApi {
     recoveryPark?: string,
     /**
      * The park a Heal's resume was started for: it applies only while the Run is still there
-     * and has no Stop, which a Heal must never undo.
+     * and neither it nor a Run under it has a Stop, which a Heal must never undo.
      */
     healing?: string,
   ) => Effect.Effect<typeof Controlled.Type, HostRefused, HostServices>;
@@ -8723,19 +8723,21 @@ const makeRegistry: (
     alone = false,
     healing?: string,
   ) {
+    // A stop reaches the children a Run started: they are its work too.
+    const runs =
+      control === STOP && !alone ? [runId, ...descendantsOf(yield* store.runs, runId)] : [runId];
     if (healing !== undefined && control === STOP && !set) {
-      if ((yield* controlsOf(runId)).includes(STOP))
-        return yield* new HostRefused({
-          reason: `${runId}: a person stopped it, and only a person resumes it`,
-        });
+      for (const one of runs) {
+        if ((yield* controlsOf(one)).includes(STOP))
+          return yield* new HostRefused({
+            reason: `${one}: a person stopped it, and only a person resumes it`,
+          });
+      }
       if ((yield* view(runId))?.park?.id !== healing)
         return yield* new HostRefused({
           reason: `${runId} has left park ${healing}, the one its Heal was started for`,
         });
     }
-    // A stop reaches the children a Run started: they are its work too.
-    const runs =
-      control === STOP && !alone ? [runId, ...descendantsOf(yield* store.runs, runId)] : [runId];
     // Written before anything is woken, so a run that wakes up never finds the request
     // that stopped it still there.
     const stopped = new Set<string>();
