@@ -313,6 +313,16 @@ record (`runDetail`) and the Flow map follows that record's Flow, above the pane
 after Back, until another card is pressed. Rune has no
 `aria-current`, so the current Step is only drawn differently.
 
+### Machines, Workflows, Schedules, Usage and the Standing setup
+
+`board/src/pages/` ports Desktop's Machines page (`flock.rs` folds `flock` as `applyItem` does,
+`in_sync.rs`, `cleanup.rs`, `onboard.rs`, Add Machine and each Machine's own settings), the
+Workflows page (a Tree of what this computer's host read), Schedules (one Table, its actions
+on the chosen row, Move to…), and Usage (one section per Subscription account, ADR-0049).
+`clock.rs` reads ISO times and the local zone without a date crate. `board/src/standing.rs`
+is the Standing setup's offer, consent dialog and choice. `board/tests/{machines,schedules,
+usage,workflows,standing}.rs` drive them through the fake core.
+
 ### Desktop's marks
 
 The shell takes the marks Desktop's view takes (`desktopTiming`, ticket 01), ported in
