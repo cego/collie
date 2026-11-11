@@ -1,7 +1,7 @@
 //! The board as Rune builds it from the test Flock (`fixtures/flock.ndjson`), read through
 //! its accessibility tree, without a window.
 
-use collie_desktop_board::{Board, view};
+use collie_desktop_board::{App, view};
 use collie_desktop_protocol::generated::{DetailFlow, TerminalPayload};
 use collie_desktop_terminal::view::Tab;
 use rune::{Env, Runtime};
@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 
 const FLOCK: &str = include_str!("../../fixtures/flock.ndjson");
 
-fn board() -> Board {
-    let mut board = Board::default();
+fn board() -> App {
+    let mut board = App::default();
     for line in FLOCK.lines() {
         board.apply(serde_json::from_str(line).unwrap());
     }
@@ -94,7 +94,7 @@ fn each_machine_says_its_status_and_shows_its_cards_by_name() {
 
 const PATCH: &str = "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-x\n+y\n";
 
-fn tap(runtime: &mut Runtime<Board>, key: &str, at: f64) {
+fn tap(runtime: &mut Runtime<App>, key: &str, at: f64) {
     let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
     runtime.pointer_move(x, y);
     runtime.frame(at);
@@ -104,7 +104,7 @@ fn tap(runtime: &mut Runtime<Board>, key: &str, at: f64) {
     runtime.frame(at + 100.0);
 }
 
-fn keys(runtime: &Runtime<Board>) -> Vec<String> {
+fn keys(runtime: &Runtime<App>) -> Vec<String> {
     within(&runtime.accessibility_json())
         .iter()
         .filter_map(|node| node["key"].as_str().map(String::from))
@@ -291,7 +291,7 @@ fn a_panes_run_record_gives_its_flow_map_and_one_since_left_does_not() {
 fn the_chats_controls_stay_inside_its_panel_and_leave_the_composer_the_most_room() {
     for running in [false, true] {
         let mut board = board();
-        board.chatting = true;
+        board.nav.chat.set_open(true);
         board.chat.transcript.running = running;
         let mut runtime = Runtime::new(
             board,

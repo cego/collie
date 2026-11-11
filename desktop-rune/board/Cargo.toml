@@ -14,6 +14,7 @@ base64 = "0.22"
 rune = { workspace = true, features = ["native-file-dialog"] }
 rune-mac.workspace = true
 rune-kit.workspace = true
+rune-theme-opencode.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

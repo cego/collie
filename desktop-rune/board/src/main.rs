@@ -3,7 +3,7 @@
 
 use collie_desktop_board::notify::deliver;
 use collie_desktop_board::timing::Mark;
-use collie_desktop_board::{Board, frame_drawn, run_diff, view};
+use collie_desktop_board::{App, frame_drawn, run_diff, view};
 use collie_desktop_protocol::client::Client;
 use collie_desktop_protocol::core::Core;
 use collie_desktop_protocol::epoch_ms;
@@ -13,13 +13,13 @@ use collie_desktop_protocol::generated::{
 };
 use collie_desktop_terminal::pane::Pane;
 use collie_desktop_terminal::view::Tab;
-use rune::{App, AppHandle, AppSpec};
+use rune::{AppHandle, AppSpec};
 use serde_json::Value;
 use std::time::Duration;
 
 /// Opens a pressed card's pane: its frames are read off the view's thread into the open Tab,
 /// and a tick sends each size once it has settled.
-fn go_to_panes(handle: &AppHandle<Board>, client: &Client) {
+fn go_to_panes(handle: &AppHandle<App>, client: &Client) {
     let (opener, shows) = (client.clone(), handle.clone());
     handle.update(move |board, _| {
         board.go_to = Some(Box::new(move |payload, machine, opened| {
@@ -58,7 +58,7 @@ fn go_to_panes(handle: &AppHandle<Board>, client: &Client) {
 }
 
 /// Sends the chat's turns on `say`, its events read off the view's thread into the transcript.
-fn chat(handle: &AppHandle<Board>, client: &Client) {
+fn chat(handle: &AppHandle<App>, client: &Client) {
     let (sayer, shows) = (client.clone(), handle.clone());
     handle.update(move |board, _| {
         board.chat.say = Some(Box::new(move |payload, turn| {
@@ -78,7 +78,7 @@ fn chat(handle: &AppHandle<Board>, client: &Client) {
 }
 
 /// Reads the open Run's diff: its files from `runDetail`, each file's patch from `runFile`.
-fn diffs(handle: &AppHandle<Board>, client: &Client) {
+fn diffs(handle: &AppHandle<App>, client: &Client) {
     let (reader, shows) = (client.clone(), handle.clone());
     handle.update(move |board, _| {
         board.load_diff = Some(Box::new(move |installation, run, opened| {
@@ -93,7 +93,7 @@ fn diffs(handle: &AppHandle<Board>, client: &Client) {
 }
 
 /// Reads the open pane's Run record off the view's thread, its Flow into the Flow map.
-fn records(handle: &AppHandle<Board>, client: &Client) {
+fn records(handle: &AppHandle<App>, client: &Client) {
     let (reader, shows) = (client.clone(), handle.clone());
     handle.update(move |board, _| {
         board.read_record = Some(Box::new(move |installation, run_id, opened| {
@@ -119,7 +119,7 @@ fn records(handle: &AppHandle<Board>, client: &Client) {
 }
 
 /// Hands the chat's files to `stagePaths`; what it copied in rides on the next turn.
-fn files_in(handle: &AppHandle<Board>, client: &Client) {
+fn files_in(handle: &AppHandle<App>, client: &Client) {
     let (stager, shows) = (client.clone(), handle.clone());
     handle.update(move |board, _| {
         // winit 0.30 reports no file drags on Wayland.
@@ -153,7 +153,7 @@ fn files_in(handle: &AppHandle<Board>, client: &Client) {
 }
 
 /// Posts what the main process asks to notify; a click brings the window forward.
-fn notifications(handle: &AppHandle<Board>, client: &Client) {
+fn notifications(handle: &AppHandle<App>, client: &Client) {
     let Some(notices) = client.notices() else {
         return;
     };
@@ -171,7 +171,7 @@ fn notifications(handle: &AppHandle<Board>, client: &Client) {
 
 /// Hands each frame's marks to the main process's `recordMark`, which logs them while Record
 /// timing is on.
-fn marks(client: &Client) -> impl FnMut(&rune::Runtime<Board>) + 'static {
+fn marks(client: &Client) -> impl FnMut(&rune::Runtime<App>) + 'static {
     let (marked, marks) = std::sync::mpsc::channel::<Mark>();
     let client = client.clone();
     std::thread::spawn(move || {
@@ -239,14 +239,25 @@ fn main() {
 
     // The desktop entry's name, so the window is shown as its launcher's, never stable Desktop's.
     rune::set_app_id("dk.cego.collie.desktop.rune");
-    let app = App::new(AppSpec::new(
-        "Collie (Rune spike)",
-        (1280.0, 900.0),
-        Board::default,
-        view,
-    ))
+    let app = rune::App::new(AppSpec {
+        fonts: rune_theme_opencode::FONTS,
+        families: rune_theme_opencode::FAMILIES,
+        min_size: Some((720.0, 480.0)),
+        ..AppSpec::new("Collie", (1280.0, 860.0), App::default, view)
+    })
     .on_frame_drawn(marks(&client));
     let handle = app.handle();
+    let poster = std::sync::Mutex::new(handle.clone());
+    let calls = collie_desktop_board::calls::Core::new(
+        std::sync::Arc::new(collie_desktop_board::calls::Live(client.clone())),
+        std::sync::Arc::new(move |change| {
+            poster
+                .lock()
+                .unwrap()
+                .update(move |app: &mut App, _| change(app))
+        }),
+    );
+    handle.update(move |app, _| app.core = Some(calls));
     go_to_panes(&handle, &client);
     chat(&handle, &client);
     diffs(&handle, &client);

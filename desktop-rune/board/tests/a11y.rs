@@ -3,7 +3,7 @@
 //! accessibility tree.
 
 use collie_desktop_board::flow::FlowMap;
-use collie_desktop_board::{Board, view};
+use collie_desktop_board::{App, view};
 use collie_desktop_protocol::generated::DetailFlow;
 use rune::{Env, Key, KeyEvent, Mods, Runtime};
 use serde_json::Value;
@@ -16,12 +16,12 @@ fn flow(name: &str) -> DetailFlow {
     serde_json::from_value(flows[name].clone()).unwrap()
 }
 
-fn runtime() -> Runtime<Board> {
-    let mut board = Board::default();
+fn runtime() -> Runtime<App> {
+    let mut board = App::default();
     for line in FLOCK.lines() {
         board.apply(serde_json::from_str(line).unwrap());
     }
-    board.chatting = true;
+    board.nav.chat.set_open(true);
     board.flow = Some(FlowMap::new(flow("before")));
     let mut runtime = Runtime::new(
         board,
@@ -52,7 +52,7 @@ fn keyed(tree: &Value, key: &str) -> Value {
         .clone()
 }
 
-fn focused(runtime: &Runtime<Board>) -> Option<String> {
+fn focused(runtime: &Runtime<App>) -> Option<String> {
     let tree = runtime.accessibility_json();
     within(&tree)
         .into_iter()
@@ -64,7 +64,7 @@ fn focused(runtime: &Runtime<Board>) -> Option<String> {
         .and_then(|node| node["key"].as_str().map(String::from))
 }
 
-fn press(runtime: &mut Runtime<Board>, key: Key, at: &mut f64) {
+fn press(runtime: &mut Runtime<App>, key: Key, at: &mut f64) {
     runtime.key(KeyEvent {
         key,
         mods: Mods::default(),
@@ -153,7 +153,7 @@ fn arrows_move_about_the_flow_map_as_flow_key_does() {
 #[test]
 fn a_new_current_step_and_a_step_that_asks_are_announced_politely() {
     let mut runtime = runtime();
-    let announced = |runtime: &Runtime<Board>| {
+    let announced = |runtime: &Runtime<App>| {
         let said = keyed(&runtime.accessibility_json(), "flow-announcement");
         assert!(
             said["states"]

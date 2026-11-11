@@ -2,7 +2,7 @@
 //! `test/desktop-record.test.ts`, then the marks the board reads off its drawn frames.
 
 use collie_desktop_board::timing::{Mark, Timing};
-use collie_desktop_board::{Board, frame_drawn, view};
+use collie_desktop_board::{App, frame_drawn, view};
 use collie_desktop_protocol::generated::AguiEvent;
 use collie_desktop_terminal::view::Tab;
 use rune::{Env, Runtime};
@@ -83,8 +83,8 @@ fn marks_each_frame_of_a_scroll_under_one_name_until_it_settles_and_the_next_und
     );
 }
 
-fn runtime() -> Runtime<Board> {
-    let mut board = Board::default();
+fn runtime() -> Runtime<App> {
+    let mut board = App::default();
     for line in FLOCK.lines() {
         board.apply(serde_json::from_str(line).unwrap());
     }
@@ -103,7 +103,7 @@ fn runtime() -> Runtime<Board> {
     runtime
 }
 
-fn tap(runtime: &mut Runtime<Board>, key: &str, at: f64) {
+fn tap(runtime: &mut Runtime<App>, key: &str, at: f64) {
     let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
     runtime.pointer_move(x, y);
     runtime.frame(at);
@@ -211,7 +211,7 @@ fn a_heard_chunk_of_the_live_turn_and_the_frame_that_draws_it_are_marked() {
     runtime.update(|board, _| board.chat_heard(1, Ok(event(3)), 700.0));
     assert_eq!(frame_drawn(&runtime, 709.0), [], "no turn is live");
     runtime.update(|board, _| {
-        board.chatting = true;
+        board.nav.chat.set_open(true);
         board.chat.say = Some(Box::new(|_, _| Box::new(|| {})));
         board.chat.composer = rune::edit::TextEdit::new("hi");
         board.chat.send();
@@ -234,14 +234,14 @@ fn a_pending_chunk_waits_for_a_frame_with_the_chat_after_it_is_hidden() {
         let mut runtime = runtime();
         frame_drawn(&runtime, 10.0);
         runtime.update(|board, _| {
-            board.chatting = true;
+            board.nav.chat.set_open(true);
             board.chat.say = Some(Box::new(|_, _| Box::new(|| {})));
             board.chat.composer = rune::edit::TextEdit::new("hi");
             board.chat.send();
             board.chat_heard(1, Ok(event(2)), 710.0);
             board.chat_heard(1, Ok(event(3)), 720.0);
             if hidden == "closed" {
-                board.chatting = false;
+                board.nav.chat.set_open(false);
             } else {
                 board.go_to_pane("i1".into(), "r1".into(), "Local".into());
                 if hidden == "diff" {
@@ -258,7 +258,7 @@ fn a_pending_chunk_waits_for_a_frame_with_the_chat_after_it_is_hidden() {
         runtime.frame(0.0);
         assert_eq!(frame_drawn(&runtime, 735.0), []);
         runtime.update(|board, _| {
-            board.chatting = true;
+            board.nav.chat.set_open(true);
             board.back();
         });
         runtime.frame(0.0);
@@ -273,7 +273,7 @@ fn a_pending_chunk_waits_for_a_frame_with_the_chat_after_it_is_hidden() {
 
 #[test]
 fn non_text_events_and_transport_errors_do_not_start_chat_timing() {
-    let mut board = Board::default();
+    let mut board = App::default();
     board.chat.say = Some(Box::new(|_, _| Box::new(|| {})));
     board.chat.composer = rune::edit::TextEdit::new("hi");
     board.chat.send();

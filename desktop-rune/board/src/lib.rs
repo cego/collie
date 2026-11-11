@@ -4,9 +4,15 @@
 //! draw; the TypeScript stays its owner.
 
 use base64::Engine;
+pub mod calls;
 pub mod flow;
+pub mod icons;
 pub mod notify;
+pub mod pages;
+pub mod shell;
 pub mod timing;
+
+pub use shell::view;
 
 use collie_desktop_chat::view::{Chat, DiffTab, chat, diff_tab};
 use collie_desktop_protocol::client::Client;
@@ -15,7 +21,7 @@ use collie_desktop_protocol::generated::{
     RunFile, RunFilePayload, Task, TerminalPayload,
 };
 use collie_desktop_terminal::view::{Tab, terminal};
-use rune::{Cx, El, col, row, text};
+use rune::{El, col, row, text};
 use rune_kit::{Badge, Button, Card, Kit};
 use serde_json::Value;
 
@@ -57,7 +63,7 @@ impl Shown {
 pub type GoTo = Box<dyn Fn(TerminalPayload, String, u64) -> Tab>;
 
 #[derive(Default)]
-pub struct Board {
+pub struct App {
     pub machines: Vec<Shown>,
     /// Why the board stopped hearing from the core, once it has.
     pub ended: Option<String>,
@@ -66,7 +72,10 @@ pub struct Board {
     pub opened: u64,
     pub go_to: Option<GoTo>,
     pub chat: Chat,
-    pub chatting: bool,
+    pub nav: shell::Nav,
+    pub pages: pages::Pages,
+    /// The Desktop core, once the app has one; a test gives it a fake.
+    pub core: Option<calls::Core<App>>,
     /// The open pane's Run, by installation and id.
     pub open_run: Option<(String, String)>,
     /// Reads a Run's diff from the core for the `opened`th pane, handing it to `diff_read`.
@@ -86,7 +95,7 @@ pub type ReadRecord = Box<dyn Fn(String, String, u64) -> Box<dyn FnOnce()>>;
 /// The cols and rows a terminal opens at, until its layout says otherwise.
 const OPEN_AT: (i64, i64) = (100, 30);
 
-impl Board {
+impl App {
     pub fn go_to_pane(&mut self, installation: String, run: String, machine: String) {
         let Some(go_to) = &self.go_to else { return };
         if let Some(open) = self.terminal.take() {
@@ -284,7 +293,7 @@ pub fn run_diff(client: &Client, installation: &str, run: &str) -> Result<String
 }
 
 /// The marks a frame drawn at `at` ends or starts, read from the board it drew.
-pub fn frame_drawn(drawn: &rune::Runtime<Board>, at: f64) -> Vec<timing::Mark> {
+pub fn frame_drawn(drawn: &rune::Runtime<App>, at: f64) -> Vec<timing::Mark> {
     let board = &drawn.state;
     let mut timing = board.timing.borrow_mut();
     if board.machines.iter().any(|m| !m.cards.is_empty()) {
@@ -300,7 +309,7 @@ pub fn frame_drawn(drawn: &rune::Runtime<Board>, at: f64) -> Vec<timing::Mark> {
             timing.echoed(at);
         }
     }
-    if board.chatting && board.terminal.is_none() && board.diff.is_none() {
+    if board.nav.chat.is_open() && board.terminal.is_none() && board.diff.is_none() {
         timing.chat_drawn(at);
     }
     // rune-kit's Diff says nothing of its scrolling, so a move of its rows is read as one.
@@ -343,7 +352,7 @@ fn card(k: &Kit, shown: &Shown, task: &Task) -> El {
     match shown.installation.clone() {
         Some(installation) => {
             let (run, machine) = (task.run.clone(), shown.name.clone());
-            card.focusable(true).on_press(move |board: &mut Board| {
+            card.focusable(true).on_press(move |board: &mut App| {
                 board.go_to_pane(installation.clone(), run.clone(), machine.clone())
             })
         }
@@ -377,99 +386,92 @@ fn machine(k: &Kit, shown: &Shown) -> El {
         )
 }
 
-fn tab_of(board: &mut Board) -> Option<&mut Tab> {
+fn tab_of(board: &mut App) -> Option<&mut Tab> {
     board.terminal.as_mut()
 }
 
-fn chat_of(board: &mut Board) -> &mut Chat {
+fn chat_of(board: &mut App) -> &mut Chat {
     &mut board.chat
 }
 
-fn flow_of(board: &mut Board) -> &mut flow::FlowMap {
+fn flow_of(board: &mut App) -> &mut flow::FlowMap {
     board.flow.as_mut().expect("a Flow map")
 }
 
-fn diff_of(board: &Board) -> &DiffTab {
+fn diff_of(board: &App) -> &DiffTab {
     board.diff.as_ref().expect("an open diff")
 }
 
-fn diff_of_mut(board: &mut Board) -> &mut DiffTab {
+fn diff_of_mut(board: &mut App) -> &mut DiffTab {
     board.diff.as_mut().expect("an open diff")
 }
 
-pub fn view(board: &Board, cx: &mut Cx<Board>) -> El {
-    let k = Kit::neutral(cx.system_dark());
+/// The Board page's pane: the open Run's diff or pane, else each Machine and its cards.
+pub fn board_pane(board: &App, k: &Kit) -> El {
     if board.diff.is_some() {
         let back = Button::new("Back to the pane")
-            .on_press(|board: &mut Board| board.diff = None)
-            .build(&k)
+            .on_press(|board: &mut App| board.diff = None)
+            .build(k)
             .key("close-diff");
-        let body = col()
+        return col()
             .padding(16.0)
             .gap(8.0)
-            .fill(k.c.bg_base)
+            .grow(1.0)
+            .min_h(0.0)
             .child(back)
-            .child(diff_tab(board, diff_of, diff_of_mut, &k));
-        return rune_kit::root(body, []);
+            .child(diff_tab(board, diff_of, diff_of_mut, k));
     }
     if let Some(tab) = &board.terminal {
         let back = Button::new("Back to the board")
-            .on_press(Board::back)
-            .build(&k)
+            .on_press(App::back)
+            .build(k)
             .key("back");
         let diff = Button::new("Diff")
-            .on_press(Board::show_diff)
-            .build(&k)
+            .on_press(App::show_diff)
+            .build(k)
             .key("open-diff");
-        let body = col()
+        return col()
             .padding(16.0)
             .gap(8.0)
-            .fill(k.c.bg_base)
+            .grow(1.0)
+            .min_h(0.0)
             .child(row().gap(8.0).child(back).child(diff))
             .children(
                 board
                     .flow
                     .as_ref()
-                    .map(|map| flow::flow_map(map, flow_of, &k)),
+                    .map(|map| flow::flow_map(map, flow_of, k)),
             )
             .child(terminal(tab, tab_of));
-        return rune_kit::root(body, []);
     }
-    let machines = board.machines.iter().map(|shown| machine(&k, shown));
+    let machines = board.machines.iter().map(|shown| machine(k, shown));
     let ended = board
         .ended
         .iter()
         .map(|why| text(why.clone()).color(k.c.text_strong).role("alert"));
-    let open_chat = Button::new(if board.chatting { "Close chat" } else { "Chat" })
-        .on_press(|board: &mut Board| board.chatting = !board.chatting)
-        .build(&k)
-        .key("open-chat");
-    let machines = col().gap(20.0).grow(1.0).children(ended).children(machines);
-    let chat_panel = board.chatting.then(|| {
-        col()
-            .w(440.0)
-            .self_stretch()
-            .child(chat(&board.chat, chat_of, &k))
-    });
-    let body = col()
+    col()
         .padding(16.0)
-        .gap(12.0)
-        .fill(k.c.bg_base)
-        .child(open_chat)
+        .gap(20.0)
+        .grow(1.0)
+        .min_h(0.0)
+        .scroll(rune::ScrollSpec {
+            stick_bottom: false,
+        })
+        .children(ended)
         .children(
             board
                 .flow
                 .as_ref()
-                .map(|map| flow::flow_map(map, flow_of, &k)),
+                .map(|map| flow::flow_map(map, flow_of, k)),
         )
-        .child(
-            row()
-                .gap(16.0)
-                .items_start()
-                .grow(1.0)
-                .min_h(0.0)
-                .child(machines)
-                .children(chat_panel),
-        );
-    rune_kit::root(body, [])
+        .children(machines)
+}
+
+/// The chat as the window's trailing pane.
+pub fn chat_pane(board: &App, k: &Kit) -> El {
+    col()
+        .padding(12.0)
+        .grow(1.0)
+        .min_h(0.0)
+        .child(chat(&board.chat, chat_of, k))
 }
