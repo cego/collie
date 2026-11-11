@@ -70,8 +70,17 @@ human on run-f0d81d1d, 2026-11-11, after trying the spike: it is built to today'
 features in full (board, record and its tabs, the Flock chat, Workflows, Machines,
 Schedules, Usage, Settings), in a Rune-native design rather than a copy of the Vue view's
 look. Today's view is the feature spec. The design has Collie's own palette, asked for by the
-human because the OpenCode kit's greys were dull: Collie green, faintly green surfaces, and a
-hue for each state, every text and fill pair checked against WCAG AA. Go to pane's terminal
+human because the OpenCode kit's greys were dull. Its first form, Collie green on faintly green
+surfaces, the human did not like: green tint under a green accent read as one colour, and the
+accent was the same green as "done". The palette is now paper and ink: warm cream surfaces in
+light and a faintly violet near-black in dark, with cards a step lighter than the board they
+lie on. The accent is iris, kept for what the human acts on or has chosen (a primary button,
+focus, the mark, their own words), and no state borrows it: amber needs you, sky blue is
+working, orchid is ready and waiting, red failed, green done. Two tests hold it
+(`desktop-rune/theme/tests/contrast.rs`): every text and fill pair meets WCAG AA, and the
+brand and the states are each at least 25 degrees of hue from one another. The fields
+OpenCode's kit left grey or blank (a hovered surface, a disabled control, the scrim, the inks
+of menus, switches and checkboxes) take Collie's colours too. Go to pane's terminal
 draws as Ghostty does, from the human's Ghostty config over Ghostty's defaults (font, cursor
 and palette), since the look asked for is the terminal they use; its default foreground and
 background are the app's own text and surface, so the pane sits in the record with no frame

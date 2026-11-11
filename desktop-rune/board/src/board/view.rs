@@ -756,9 +756,13 @@ fn card(
         .child(el().mt(-3.0).mr(-4.0).child(menu));
 
     let (fill, edge) = if task.state == State::Blocked {
-        (k.alpha(c.warning.bg, 0.35), k.alpha(c.warning.border, 0.7))
+        // Opaque, so the card's shadow does not show through its wash.
+        (
+            collie_desktop_theme::flat(c.warning.bg.alpha(0.5), c.surface_raised),
+            k.alpha(c.warning.border, 0.7),
+        )
     } else {
-        (c.layer_01, c.border_weak)
+        (c.surface_raised, c.border_weak)
     };
     let mut card = col()
         .w_full()
@@ -773,6 +777,8 @@ fn card(
             if selected { 1.5 } else { 1.0 },
             if selected { c.border_focus } else { edge },
         )
+        // A card sits a step above the board it is laid on.
+        .shadow(1.0, 3.0, c.black.alpha(if k.dark { 0.3 } else { 0.07 }))
         .hover(c.surface_hover)
         .focus_ring(2.0, 2.0, c.border_focus)
         .child(head)

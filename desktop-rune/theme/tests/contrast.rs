@@ -51,8 +51,13 @@ fn pairs(k: &Kit, t: &Tones, side: &Kit) -> Vec<(String, Color, Color, f32)> {
         add(format!("{role}.icon on {role}.bg"), s.icon, s.bg, MARK);
     }
     // A card that needs the human, and the board's callouts, are washed in warning.
-    for (name, wash) in [("needs-you card", 0.35), ("callout", 0.45)] {
-        let fill = flat(k.alpha(c.warning.bg, wash), c.bg_base);
+    for (name, fill) in [
+        (
+            "needs-you card",
+            flat(c.warning.bg.alpha(0.5), c.surface_raised),
+        ),
+        ("callout", flat(k.alpha(c.warning.bg, 0.45), c.bg_base)),
+    ] {
         add(format!("text_strong on {name}"), c.text_strong, fill, TEXT);
         add(format!("text_muted on {name}"), c.text_muted, fill, TEXT);
         add(format!("warning.fg on {name}"), c.warning.fg, fill, TEXT);
@@ -165,11 +170,54 @@ fn collie_has_a_colour_of_its_own_in_both_appearances() {
             k.c.bg_base, stock.c.bg_base,
             "surfaces are tinted, not flat grey"
         );
-        let b = tones(dark).brand.icon;
-        assert!(
-            b.g > b.r && b.g > b.b,
-            "Collie's brand is green: {}",
-            b.hex()
-        );
+    }
+}
+
+/// A colour's hue in degrees, from its sRGB channels.
+fn hue(c: Color) -> f32 {
+    use rune::color::srgb_encode as enc;
+    let (r, g, b) = (enc(c.r), enc(c.g), enc(c.b));
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let d = max - min;
+    assert!(d > 0.2, "{} is too grey to mean anything", c.hex());
+    let h = if max == r {
+        (g - b) / d
+    } else if max == g {
+        2.0 + (b - r) / d
+    } else {
+        4.0 + (r - g) / d
+    };
+    (h * 60.0).rem_euclid(360.0)
+}
+
+/// The brand and each state are told apart by hue alone: no two share one, so the accent never
+/// reads as "done" and a waiting card never reads as a failed one.
+#[test]
+fn the_brand_and_every_state_have_a_hue_of_their_own() {
+    const APART: f32 = 25.0;
+    for dark in [false, true] {
+        let (c, t) = (&kit(dark).c, tones(dark));
+        let roles = [
+            ("brand", t.brand),
+            ("ready", t.ready),
+            ("success", c.success),
+            ("warning", c.warning),
+            ("danger", c.danger),
+            ("info", c.info),
+        ];
+        for (i, (a, x)) in roles.iter().enumerate() {
+            for (b, y) in &roles[i + 1..] {
+                for (part, p, q) in [("icon", x.icon, y.icon), ("fg", x.fg, y.fg)] {
+                    let gap = (hue(p) - hue(q)).abs();
+                    let gap = gap.min(360.0 - gap);
+                    assert!(
+                        gap >= APART,
+                        "dark={dark}: {a}.{part} {} and {b}.{part} {} are {gap:.0} degrees apart",
+                        p.hex(),
+                        q.hex()
+                    );
+                }
+            }
+        }
     }
 }
