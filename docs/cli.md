@@ -563,25 +563,34 @@ beside every module's own inputs as one of the names the host settles. It names 
 1. `--input branch=<name>`, which wins over everything below. A follow-up is given its
    parent's branch this way.
 2. The branch the reviewed work is already on, for a run fixing a review.
-3. The `<name>` of a `branch:<base>...<name>` target **you gave** (`--input target=` takes a
+3. The source branch of an open merge request of this checkout's project that the work
+   **you or an agent gave** names, cut from its remote tip, so the run's commits land on
+   it and its `mr` step updates it. The work names one when its whole text is one
+   reference (`!42`, `#30`, `owner/repo#30` or a merge or pull request URL) or when it holds
+   exactly one merge or pull request URL, read whole, so a longer URL that only holds one's
+   path names none; a bare `!42` inside prose is not read. A merged
+   or closed one, one of another project, or two URLs are context, and the order goes on.
+   One of this project the forge will not describe, with no source branch, or from a fork
+   refuses the run. Work Collie inferred never counts.
+4. The `<name>` of a `branch:<base>...<name>` target **you gave** (`--input target=` takes a
    bare ref too, and turns it into one) — so the checkout and the review target agree. A
    target Collie inferred does not count: it names the branch you are standing on, and
    building that would hand the run your own checkout.
 
-Those three are branches that already exist, or that you named, and are used exactly as
+Those four are branches that already exist, or that you named, and are used exactly as
 they came. Everything else is new work, and gets a new branch called
 `<your GitLab login>/<the task>`:
 
-4. `--input task=<slug>`, which is also what `plan` and `architecture` forward when you
+5. `--input task=<slug>`, which is also what `plan` and `architecture` forward when you
    choose **Implement now**, and what a fan-out gives every repository run.
-5. For a run given another Run's own plan directory (`<state>/runs/<id>/plan`), the branch
+6. For a run given another Run's own plan directory (`<state>/runs/<id>/plan`), the branch
    that Run's Task was placed on, used as it is and cut from its remote tip, so the run
    joins that Task. Not once its merge request has merged or closed: the run's own name
    then names a fresh branch.
-6. The plan directory's own name, for a run given a plan directory that is no Run's own.
-7. A slug of the work itself — the description, or the issue id. Never a Run's own plan
+7. The plan directory's own name, for a run given a plan directory that is no Run's own.
+8. A slug of the work itself — the description, or the issue id. Never a Run's own plan
    directory, whose path names nothing.
-8. Otherwise a slug of the run's own name.
+9. Otherwise a slug of the run's own name.
 
 The login is the checkout's forge's (ADR-0050 D5). On GitLab it is `GITLAB_USER_LOGIN`
 where the environment sets it, and otherwise whoever `glab` is logged in as for this

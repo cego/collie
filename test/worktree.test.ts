@@ -6,7 +6,7 @@ import * as Rec from "effect/Record";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Clock, DateTime, Effect, FileSystem, Layer, Option, Schema, flow, Result } from "effect";
-import { forgeHttpOnPath, forgeOnPath, runOnPath } from "./support/forge";
+import { forgeHttpOnPath, forgeOnPath, runOnPath, type FakeMr } from "./support/forge";
 import { Rig, TEST_LOGIN as LOGIN } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import {
@@ -20,6 +20,7 @@ import {
   roams,
   worktreeFor,
   type BranchAsk,
+  type BranchSource,
 } from "../src/worktree";
 import type { AgentEntry } from "../src/registry";
 import type { RunFacts } from "../src/runs";
@@ -1475,6 +1476,331 @@ test("a review of a pull request is fixed on its head branch, read through gh", 
       ).toBe(
         "cego/collie#30 is in github.com/cego/collie, and this is a checkout of github.com/acme/app",
       );
+    }),
+  ));
+
+const MR_42 = "https://gitlab.example.com/acme/app/-/merge_requests/42";
+
+const gitlabMrs = (mr: Partial<FakeMr> = {}, ...others: FakeMr[]) =>
+  forgeOnPath(bin, "gitlab", {
+    installed: true,
+    loggedIn: ["gitlab.example.com"],
+    login: LOGIN,
+    mrs: [
+      {
+        project: "gitlab.example.com/acme/app",
+        iid: "42",
+        state: "open",
+        sourceBranch: "fix-the-parser",
+        ...mr,
+      },
+      ...others,
+    ],
+  });
+
+test("work that names an open merge request of this project is built on its branch", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs();
+
+      expect(
+        yield* plan({ plan: `The pipeline on ${MR_42} fails; fix it.`, plan_kind: "text" }),
+      ).toEqual({
+        branch: "fix-the-parser",
+        task: "fix-the-parser",
+        base: "origin/fix-the-parser",
+        refused: null,
+        source: "from the merge request",
+      });
+    }),
+  ));
+
+test("work that is only a reference to a merge request of this checkout is built on its branch", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs();
+
+      expect(yield* plan({ plan: " !42 ", plan_kind: "text" })).toEqual({
+        branch: "fix-the-parser",
+        task: "fix-the-parser",
+        base: "origin/fix-the-parser",
+        refused: null,
+        source: "from the merge request",
+      });
+    }),
+  ));
+
+const githubPull = (pull: Partial<FakeMr> = {}) =>
+  Effect.gen(function* () {
+    yield* fakeGitAnswering({
+      ...gitAnswers("somewhere-else", ["fix-the-parser"]),
+      "remote get-url origin": "git@github.com:acme/app.git",
+    });
+    yield* forgeOnPath(bin, "github", {
+      installed: true,
+      loggedIn: ["github.com"],
+      login: LOGIN,
+      mrs: [
+        {
+          project: "github.com/acme/app",
+          iid: "30",
+          state: "open",
+          sourceBranch: "fix-the-parser",
+          ...pull,
+        },
+      ],
+    });
+  });
+
+test("work that names a pull request is built on its head branch, read through gh", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* githubPull();
+
+      expect(
+        yield* plan({ plan: "Fix (https://github.com/acme/app/pull/30).", plan_kind: "text" }),
+      ).toMatchObject({
+        branch: "fix-the-parser",
+        base: "origin/fix-the-parser",
+        refused: null,
+        source: "from the merge request",
+      });
+    }),
+  ));
+
+test("a fork's pull request named as the work is refused, not given a fresh branch", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* githubPull({ fork: true });
+
+      expect(
+        yield* plan({ plan: "https://github.com/acme/app/pull/30", plan_kind: "text" }),
+      ).toMatchObject({
+        branch: "",
+        refused: "acme/app#30 comes from a fork, so its branch is not in this checkout",
+      });
+    }),
+  ));
+
+const fresh = (source: BranchSource) => ({
+  branch: expect.stringMatching(new RegExp(`^${LOGIN}/`)),
+  base: "origin/master",
+  refused: null,
+  source,
+});
+
+test("a merged merge request the work names is context, so the work gets a fresh branch", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs({ state: "merged" });
+
+      expect(
+        yield* plan({ plan: `Do for the lexer what ${MR_42} did.`, plan_kind: "text" }),
+      ).toMatchObject(fresh("from the work"));
+    }),
+  ));
+
+test("an open merge request of another project the work names gets it a fresh branch", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs({ project: "gitlab.example.com/acme/lib" });
+
+      expect(
+        yield* plan({
+          plan: "Adopt https://gitlab.example.com/acme/lib/-/merge_requests/42 here.",
+          plan_kind: "text",
+        }),
+      ).toMatchObject(fresh("from the work"));
+    }),
+  ));
+
+test("work naming two open merge requests is about neither's branch", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser", "fix-the-lexer"]);
+      yield* gitlabMrs(
+        {},
+        {
+          project: "gitlab.example.com/acme/app",
+          iid: "43",
+          state: "open",
+          sourceBranch: "fix-the-lexer",
+        },
+      );
+
+      expect(
+        yield* plan({
+          plan: `Merge ${MR_42} into https://gitlab.example.com/acme/app/-/merge_requests/43`,
+          plan_kind: "text",
+        }),
+      ).toMatchObject(fresh("from the work"));
+    }),
+  ));
+
+test("work that opens with one merge request's link and names another is about neither", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser", "fix-the-lexer"]);
+      yield* gitlabMrs(
+        {},
+        {
+          project: "gitlab.example.com/acme/app",
+          iid: "43",
+          state: "open",
+          sourceBranch: "fix-the-lexer",
+        },
+      );
+
+      for (const link of [`${MR_42}/diffs`, `${MR_42}?tab=pipelines`, `${MR_42}#note_1`]) {
+        expect(
+          yield* plan({
+            plan: `${link} compared with https://gitlab.example.com/acme/app/-/merge_requests/43`,
+            plan_kind: "text",
+          }),
+        ).toMatchObject(fresh("from the work"));
+      }
+    }),
+  ));
+
+test("merge request URLs with no space between them are still two URLs", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser", "fix-the-lexer"]);
+      yield* gitlabMrs(
+        {},
+        {
+          project: "gitlab.example.com/acme/app",
+          iid: "43",
+          state: "open",
+          sourceBranch: "fix-the-lexer",
+        },
+      );
+      const MR_43 = "https://gitlab.example.com/acme/app/-/merge_requests/43";
+
+      for (const work of [
+        `Compare <${MR_42}/diffs>,<${MR_43}>`,
+        `${MR_42},${MR_43}`,
+        `${MR_42}?tab=pipelines,${MR_43}`,
+        `See [${MR_42}](${MR_42})`,
+      ]) {
+        expect(yield* plan({ plan: work, plan_kind: "text" })).toMatchObject(
+          fresh("from the work"),
+        );
+      }
+    }),
+  ));
+
+test("a URL that only ends like a merge request's names none", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs();
+      for (const work of [`${MR_42}x`, `Fix ${MR_42}-old.`]) {
+        expect(yield* plan({ plan: work, plan_kind: "text" })).toMatchObject(
+          fresh("from the work"),
+        );
+      }
+    }),
+  ));
+
+test("a URL that only starts or ends like a pull request's names none", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* githubPull();
+      for (const work of [
+        "https://github.com/acme/app/pull/30x",
+        "Fix https://notgithub.com/acme/app/pull/30 now",
+      ]) {
+        expect(yield* plan({ plan: work, plan_kind: "text" })).toMatchObject(
+          fresh("from the work"),
+        );
+      }
+    }),
+  ));
+
+test("a longer URL that holds a merge request's path names none", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs();
+      expect(yield* plan({ plan: `${MR_42}.json`, plan_kind: "text" })).toMatchObject(
+        fresh("from the work"),
+      );
+    }),
+  ));
+
+test("a longer URL that holds a pull request's path names none", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* githubPull();
+      for (const work of [
+        "https://github.com/acme/app/pull/30.json",
+        "https://docs.example.com/github.com/acme/app/pull/30",
+        "Read https://example.org/github.com/acme/app/pull/30 first",
+        "https://docs.example.com/(github.com/acme/app/pull/30)",
+        "Fix https://docs.example.com/r?to=https://github.com/acme/app/pull/30",
+      ]) {
+        expect(yield* plan({ plan: work, plan_kind: "text" })).toMatchObject(
+          fresh("from the work"),
+        );
+      }
+    }),
+  ));
+
+test("a merge request URL set off by brackets or punctuation is still read", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs();
+      for (const work of [`Fix <${MR_42}>.`, `Fix [the parser](${MR_42}/diffs)!`, `"${MR_42}"`]) {
+        expect(yield* plan({ plan: work, plan_kind: "text" })).toMatchObject({
+          branch: "fix-the-parser",
+          source: "from the merge request",
+        });
+      }
+    }),
+  ));
+
+test("work giving one merge request's URL twice holds two URLs, so it gets a fresh branch", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs();
+
+      expect(
+        yield* plan({ plan: `Compare ${MR_42} with ${MR_42}`, plan_kind: "text" }),
+      ).toMatchObject(fresh("from the work"));
+    }),
+  ));
+
+test("work Collie inferred never moves a Run onto the branch of a merge request it names", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs();
+
+      expect(
+        yield* plan({ plan: MR_42, plan_kind: "text" }, undefined, {
+          sources: { plan: "branch somewhere-else", plan_kind: "branch somewhere-else" },
+        }),
+      ).toMatchObject(fresh("from the run name"));
+    }),
+  ));
+
+test("--input branch= beats work that names an open merge request", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs();
+
+      expect(yield* plan({ plan: MR_42, plan_kind: "text" }, "mine")).toMatchObject({
+        branch: "mine",
+        source: "explicit",
+      });
     }),
   ));
 
