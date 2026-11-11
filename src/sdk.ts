@@ -184,6 +184,7 @@ export {
   answerFor,
   blockingKeys,
   findingKey,
+  sameFinding,
   formatFindings,
   isBlocking,
   renderReview,

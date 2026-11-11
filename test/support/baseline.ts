@@ -2534,6 +2534,54 @@ for (const name of ["gitlab", "github"] as const) {
     120_000,
   );
 
+  scenario(
+    `review ledger on ${name}: resolving a renamed dispute by id permits approval`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          yield* reviewedBranch();
+          yield* exec(["git", "remote", "set-url", "upstream", `https://${PROJECT[name]}.git`], {
+            cwd: rig.projectDir,
+          });
+          const { bin, forge } = yield* reviewing();
+          const model = yield* forge.model();
+          yield* forge.set({
+            ...model,
+            mrs: Arr.map(model.mrs, (one) => ({ ...one, sourceBranch: "feature" })),
+          });
+          const finding = { id: "F1", severity: "major", file: "src/old.ts", title: "guard input" };
+          yield* rig.queueOutputs([
+            { ...SYNTHESIS, findings: [finding] },
+            {
+              verdict: "clean",
+              fixed: [],
+              disputed: [{ ...finding, reason: "the caller guards it" }],
+              checks: [],
+            },
+            { ...SYNTHESIS, findings: [{ ...finding, file: "src/new.ts", status: "fixed" }] },
+          ]);
+          const run = {
+            entry: shipped("review"),
+            runId: `r-dispute-id-${name}`,
+            input: { target },
+          };
+          const first = yield* parked({ ...run, decision: "post-1" });
+          expect(optionsOf(first, "post-1")).toContain("Fix findings");
+          const next = yield* answeredThen({
+            ...run,
+            decision: "post-1",
+            value: "Fix findings",
+            until: "post-2",
+          });
+          expect(optionsOf(next, "post-2")).toContain("Post and approve 1234567");
+          yield* answered({ ...run, decision: "post-2", value: "Post and approve 1234567" });
+          expect((yield* forge.model()).approved).toHaveLength(1);
+          yield* bin.restore();
+        }),
+      ),
+    120_000,
+  );
+
   for (const mode of [
     "partial",
     "force push",

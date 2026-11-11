@@ -469,6 +469,12 @@ export function findingKey(f: Pick<Finding, "file" | "title">): string {
   return `${f.file ?? ""}::${Str.toLowerCase(Str.trim(f.title))}`;
 }
 
+export function sameFinding(left: Finding, right: Finding): boolean {
+  return left.id !== undefined && right.id !== undefined
+    ? left.id === right.id
+    : findingKey(left) === findingKey(right);
+}
+
 /**
  * A review of reviews: everything `review.json` has, plus the summary a human reads
  * first and the findings this synthesis decided not to carry.
@@ -703,7 +709,7 @@ export function settleRound(round: {
     // raised it again or left it out.
     const standing = Arr.dedupeWith(
       Arr.filter(round.disputed, isBlocking),
-      (left: Finding, right: Finding) => findingKey(left) === findingKey(right),
+      (left: Finding, right: Finding) => sameFinding(left, right),
     );
     if (standing.length > 0) {
       return {
@@ -971,13 +977,12 @@ export function splitDisputed(
   findings: ReadonlyArray<Finding>,
   disputed: ReadonlyArray<Finding>,
 ): Split {
-  const known = new Set(Arr.map(disputed, findingKey));
   const split: Split = { live: [], settled: [], rebutted: [] };
   for (const finding of findings) {
     if (finding.status === "fixed" || finding.status === "obsolete") continue;
     if (finding.status === "disputed" && !finding.rebuttal) {
       split.settled.push(finding);
-    } else if (!known.has(findingKey(finding))) {
+    } else if (!Arr.some(disputed, (one) => sameFinding(one, finding))) {
       split.live.push(finding);
     } else if (finding.rebuttal) {
       split.live.push(finding);

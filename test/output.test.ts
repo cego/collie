@@ -57,6 +57,23 @@ test("carrying a maintained dispute counts the finding once", () => {
   });
 });
 
+test("a dispute survives a rename by id and counts once across ledger versions", () => {
+  const before: Finding = { id: "F1", file: "src/old.ts", title: "guard input", severity: "major" };
+  const renamed: Finding = { ...before, file: "src/new.ts", title: "guard renamed input" };
+  const split = splitDisputed([renamed], [before]);
+  expect(split.live).toEqual([]);
+  expect(split.settled).toEqual([renamed]);
+  expect(
+    settleRound({ live: split.live, disputed: [before, ...split.settled], at: 2 }),
+  ).toMatchObject({
+    reason: "1 disputed blocking finding(s) stand unanswered — your call, not the loop's",
+    outstanding: [before],
+  });
+  expect(splitDisputed([{ ...renamed, id: "F2" }], [renamed]).live).toHaveLength(1);
+  const legacy = { file: renamed.file, title: renamed.title, severity: "major" };
+  expect(splitDisputed([renamed], [legacy]).settled).toEqual([renamed]);
+});
+
 test("resolved ledger findings leave the rally clean and a dispute remains the human's call", () => {
   const fixed: Finding = { id: "F1", status: "fixed", severity: "major", title: "guard the input" };
   const obsolete: Finding = {

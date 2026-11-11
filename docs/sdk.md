@@ -1759,6 +1759,8 @@ findings. Each finding carries a stable `id`, a [Finding status](../CONTEXT.md),
 findings and changed statuses. These fields are optional in the shared Output schema so
 older Outputs remain readable; a supplied status outside the four values is refused.
 The reviewer returns every earlier id with its current status, plus new findings.
+Disputes match by id across file and title changes. Older records without ids still
+match by file and title.
 
 The **Review again** offer passes the earlier Run id as the host's `previous` option.
 The next reviewer receives its ledger and an interdiff, or the full diff after a force push.

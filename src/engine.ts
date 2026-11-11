@@ -1966,6 +1966,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** Minor is the one severity not worth blocking on; anything else fails closed. */
   export function isBlocking(finding: Finding): boolean;
   export function findingKey(finding: Pick<Finding, "file" | "title">): string;
+  export function sameFinding(left: Finding, right: Finding): boolean;
   export function blockingKeys(findings: ReadonlyArray<Finding>): string[];
   /** Whether a blocking finding says where and why, so it can be acted on. */
   export function substantiated(finding: Finding): boolean;

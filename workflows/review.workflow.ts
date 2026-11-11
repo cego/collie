@@ -32,7 +32,7 @@ import {
   parseMrTarget,
   repoArgs,
   riskLine,
-  findingKey,
+  sameFinding,
   forecast,
   panelOf,
   settleRound,
@@ -325,16 +325,14 @@ export default defineWorkflow({
       // A dispute is carried into the next review rather than re-argued, as in implement.
       let disputed: ReadonlyArray<Finding> = [];
       for (;;) {
-        const resolved = new Set(
-          Arr.map(
-            Arr.filter(
-              synthesis.findings,
-              (one) => one.status === "fixed" || one.status === "obsolete",
-            ),
-            findingKey,
-          ),
+        const resolved = Arr.filter(
+          synthesis.findings,
+          (one) => one.status === "fixed" || one.status === "obsolete",
         );
-        disputed = Arr.filter(disputed, (one) => !resolved.has(findingKey(one)));
+        disputed = Arr.filter(
+          disputed,
+          (one) => !Arr.some(resolved, (old) => sameFinding(old, one)),
+        );
         const split = splitDisputed(synthesis.findings, disputed);
         const round = settleRound({
           live: split.live,
@@ -534,10 +532,12 @@ export default defineWorkflow({
           run.id,
           `${operation}: fixed ${fixed.fixed.length}, disputed ${fixed.disputed.length}`,
         );
-        const known = new Set(Arr.map(disputed, findingKey));
         disputed = [
           ...disputed,
-          ...Arr.filter(fixed.disputed, (one) => !known.has(findingKey(one))),
+          ...Arr.filter(
+            fixed.disputed,
+            (one) => !Arr.some(disputed, (old) => sameFinding(old, one)),
+          ),
         ];
         synthesis = yield* reviewedAgain((reviews += 1), agents.outputFor(run.id, operation));
       }
