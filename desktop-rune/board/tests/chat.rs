@@ -1275,3 +1275,15 @@ fn the_chats_pickers_open_at_their_trigger_in_its_own_window() {
         frame(&mut rt);
     }
 }
+
+#[test]
+fn p2_a_conversation_changed_under_a_stopped_reply_is_read_again() {
+    let mut window = Window::reading(conversation());
+    window.type_in("hello");
+    window.tap("send");
+    window.push("conversationChanges", json!("changed"));
+    assert_eq!(window.asked("transcript").len(), 1, "not while a reply streams");
+    window.tap("stop");
+    assert!(!window.has("stop"), "the reply is no longer under way");
+    assert_eq!(window.asked("transcript").len(), 2, "read once it is stopped");
+}

@@ -239,7 +239,7 @@ fn prompt<S: Host>(chat: &Chat, k: &Kit, layer: &mut Vec<El>) -> El {
             .variant(IconButtonVariant::Contrast)
             .label(button.name)
             .help(button.name)
-            .on_press(|s: &mut S| s.chat_mut().stop())
+            .on_press(|s: &mut S| crate::chat::stop(s))
             .build(k)
             .key("stop")
     } else {

@@ -448,6 +448,12 @@ pub fn send<S: Host>(s: &mut S, now: bool) {
     start(s, begun);
 }
 
+/// Stop pressed: the reply ends, and a conversation that changed under it is read again.
+pub fn stop<S: Host>(s: &mut S) {
+    s.chat_mut().stop();
+    maybe_reload(s);
+}
+
 /// Sends the failed turn's message again.
 pub fn retry<S: Host>(s: &mut S) {
     let chat = s.chat_mut();
