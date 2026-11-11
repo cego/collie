@@ -1171,7 +1171,7 @@ export default defineWorkflow({
               const reason = `${failed.reason}. Correct it, then resume ${runId}.`;
               yield* host.record(runId, reason);
               yield* stepFailed(reason);
-              yield* host.parked(runId, reason);
+              yield* host.parked(runId, reason, "step-failed");
               return yield* Workflow.suspend(yield* WorkflowInstance);
             }),
           ),
@@ -1439,7 +1439,7 @@ export default defineWorkflow({
                 yield* fs.writeFileString(marker, "").pipe(Effect.orDie);
                 yield* host.record(runId, reason);
                 yield* stepFailed(reason);
-                yield* host.parked(runId, reason);
+                yield* host.parked(runId, reason, "step-failed");
                 return yield* Workflow.suspend(yield* WorkflowInstance);
               }),
             }),

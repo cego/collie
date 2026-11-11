@@ -1282,7 +1282,7 @@ export const agentWork = <
           const resumed = yield* agents.resumedOutput(current, round);
           if (resumed !== null) return resumed;
           yield* stepFailed(why);
-          yield* host.parked(runId, why);
+          yield* host.parked(runId, why, "step-failed");
           return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
         }),
       });

@@ -1567,6 +1567,7 @@ const resumeImplementPark = (
       );
       expect(status.status).toBe("suspended");
       expect(why).toContain(reason);
+      expect(yield* parkedCause(options.runId)).toBe("step-failed");
       expect(why).not.toContain("follow-up Run");
       const branch = yield* exec(["git", "branch", "--show-current"], { cwd: rig.projectDir });
       const worktrees = yield* exec(["git", "worktree", "list", "--porcelain"], {
@@ -9532,6 +9533,7 @@ scenario(
         ])
           expect(why).toContain(undone);
         expect(why).toEndWith(`resume ${runId}.`);
+        expect(yield* parkedCause(runId)).toBe("step-failed");
         expect(yield* prompts()).toHaveLength(3);
       }),
     ),
@@ -19067,6 +19069,7 @@ scenario(
         expect(why).toContain("harness.json again: Missing key");
         expect(why).toContain(`at ["harness"]["commits"][0]`);
         expect(why).toContain(`Correct it, then resume ${runId}.`);
+        expect(yield* parkedCause(runId)).toBe("step-failed");
         expect(yield* runLog(runId)).not.toContain("benchmark plan 1");
         expect(yield* calibrations(runId)).toEqual([]);
       }),

@@ -856,6 +856,7 @@ test("an Output still unusable after its repair parks the Step, saying what to c
       expect(why).toContain(outputPath("r1"));
       expect(why).toContain(`["note"]`);
       expect(why).toEndWith("Correct it, then resume r1.");
+      expect(yield* read(controlPath(dir, PARK_CAUSE, "r1"))).toBe("step-failed");
       expect(Arr.last(yield* readStepLines(runDir(dir, "r1")))).toEqual(
         Option.some(expect.objectContaining({ kind: "fail", key: "review", why })),
       );

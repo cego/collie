@@ -438,7 +438,7 @@ export default defineWorkflow({
             yield* fs.writeFileString(marker, "").pipe(Effect.orDie);
             yield* host.record(runId, why);
             yield* stepFailed(why);
-            yield* host.parked(runId, why);
+            yield* host.parked(runId, why, "step-failed");
             return yield* Workflow.suspend(yield* WorkflowInstance);
           }),
         });

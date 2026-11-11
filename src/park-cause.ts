@@ -18,6 +18,7 @@ export const ParkCause = Schema.Literals([
   "branch-force-pushed",
   "release-failed",
   "gate-fix-unproved",
+  "step-failed",
   "unknown",
 ]);
 export type ParkCause = typeof ParkCause.Type;
@@ -69,6 +70,10 @@ export const PARK_CAUSES: Readonly<Record<ParkCause, Entry>> = {
   "gate-fix-unproved": {
     kind: "needs-you",
     reason: "its gate fixes ran out without proving the outcome",
+  },
+  "step-failed": {
+    kind: "needs-you",
+    reason: "a Step failed on something to correct, and a resume enters it again",
   },
   unknown: { kind: "needs-you", reason: "nothing names why it parked" },
 };

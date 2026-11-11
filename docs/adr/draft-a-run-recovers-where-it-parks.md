@@ -91,7 +91,9 @@ As of `cego/collie@c3005804` (0.123.1), on vm-mk:
     `test` in the pipeline at this head now?", "does the forge answer?" or "is the checkout
     clean?".
   - **`needs you`:** what the host cannot do about it alone, such as an Output still
-    absent after two reminders, or an `unknown` cause.
+    absent after two reminders, a failure that parks its Step for correcting (`step-failed`,
+    [ADR-draft-a-fixable-failure-parks-its-step](draft-a-fixable-failure-parks-its-step.md)),
+    or an `unknown` cause.
   - **`never heals`:** set on a cause only a person can act on, such as a missing login, a
     force-push or a human's dirty checkout. That park goes straight to you, without a Heal
     (D7).

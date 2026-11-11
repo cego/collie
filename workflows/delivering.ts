@@ -715,7 +715,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           yield* fs.writeFileString(parkedAt(attempt), "").pipe(Effect.orDie);
           yield* host.record(runId, reason);
           yield* stepFailed(reason);
-          yield* host.parked(runId, reason);
+          yield* host.parked(runId, reason, "step-failed");
           return yield* Workflow.suspend(yield* WorkflowInstance);
         }
         yield* host.mergeRequest(runId, opened.mr_url);

@@ -1598,7 +1598,10 @@ for (const spec of (yield * host.approved(runId)).filter((one) => one.ci !== und
 
 `host.parked`'s third argument is the park's **Park cause**, one of `ParkCause`'s closed
 list ([ADR-draft-a-run-recovers-where-it-parks](adr/draft-a-run-recovers-where-it-parks.md)).
-A park that names none is recorded as `unknown`; it is never refused.
+A park that names none is recorded as `unknown`; it is never refused. A failure that parks its
+Step for someone to correct
+([ADR-draft-a-fixable-failure-parks-its-step](adr/draft-a-fixable-failure-parks-its-step.md))
+names `step-failed`.
 
 A speed-up is proved by a **Measurement**, which compares two trees rather than passing one:
 `host.measure({ runId, base, cwd, plan, pass, reason })`. The host makes a base tree at `base` with
