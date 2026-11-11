@@ -1,6 +1,5 @@
 // Interactive reads come first (ADR-draft-a-runs-record-is-read-from-its-hosts-run-model, D6):
-// a background pass that walks many Runs waits at each slice boundary while a record frame,
-// an offer or an act is being served.
+// a background pass waits at each slice boundary while a front-door answer is being served.
 
 import { Context, Effect, Fiber, Latch, Layer } from "effect";
 
@@ -19,27 +18,43 @@ export const Foreground = Context.Reference<ForegroundApi>("collie/Foreground", 
   defaultValue: () => ({ serve: (effect) => effect, boundary: Effect.yieldNow }),
 });
 
-/** What interactive work sees of it: what it calls is served too, and holds for nothing. */
-const served: ForegroundApi = { serve: (effect) => effect, boundary: Effect.void };
+const active = new WeakSet<ForegroundApi>();
 
 /** Whether the running fiber is serving interactive work. */
-export const servedNow = () => Fiber.getCurrent()?.getRef(Foreground) === served;
+export const servedNow = () => {
+  const foreground = Fiber.getCurrent()?.getRef(Foreground);
+  return foreground !== undefined && active.has(foreground);
+};
 
 export const makeForeground = Effect.gen(function* () {
   const idle = yield* Latch.make(true);
   let serving = 0;
-  return {
+  const foreground: ForegroundApi = {
     serve: (effect) =>
       Effect.acquireUseRelease(
-        Effect.suspend(() => (++serving === 1 ? idle.close : Effect.void)),
-        () => Effect.provideService(effect, Foreground, served),
-        () => Effect.suspend(() => (--serving === 0 ? idle.open : Effect.void)),
+        Effect.suspend(() => {
+          const served: ForegroundApi = {
+            serve: (effect) => (active.has(served) ? effect : foreground.serve(effect)),
+            boundary: Effect.suspend(() =>
+              active.has(served) ? Effect.void : foreground.boundary,
+            ),
+          };
+          active.add(served);
+          return (++serving === 1 ? idle.close : Effect.void).pipe(Effect.as(served));
+        }),
+        (served) => Effect.provideService(effect, Foreground, served),
+        (served) =>
+          Effect.suspend(() => {
+            active.delete(served);
+            return --serving === 0 ? idle.open : Effect.void;
+          }),
       ),
     boundary: Effect.andThen(
       Effect.yieldNow,
       idle.await.pipe(Effect.timeoutOption(PATIENCE), Effect.asVoid),
     ),
-  } satisfies ForegroundApi;
+  };
+  return foreground;
 });
 
 /** Every pass in scope holds for the interactive work served in it. */

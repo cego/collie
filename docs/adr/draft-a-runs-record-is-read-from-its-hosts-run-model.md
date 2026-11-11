@@ -52,7 +52,7 @@ shows: an act on a Step is stale only where that Step finished after the revisio
 and a Step shown going again finishes anew. Read-your-writes keeps the board's rule: after a write, a reader sees that write's revision
 or a later one.
 
-**D6. Interactive reads come first.** No record frame, offer or act waits on a board derivation, the
+**D6. Interactive reads come first.** No front-door answer waits on a board derivation, the
 Cleanup sweep or a Measurement. Background work yields in bounded slices:
 
 - The board is derived incrementally. A Task's card is kept with the key it was derived from: its
@@ -60,8 +60,12 @@ Cleanup sweep or a Measurement. Background work yields in bounded slices:
   derived again only when that key moves, or when the time it shows is due to change. A tick that
   moves nothing derives nothing.
 - A pass over many Runs (the model's fill, a re-derive, the engine's sweep, Cleanup) takes a slice
-  boundary before each Run. While a record frame, an offer or an act is being served, a boundary
+  boundary before each Run. While any front-door answer is being served, a boundary
   holds its pass, for at most 250 ms, so a busy front door cannot starve the board.
+- Every RPC handler is served through the shared wrapper. A stream is served only until its
+  first value, including a memory-wait sentence; later output and its producer lose foreground
+  priority. `bench/front-door-wait.ts` measures `verify` first values, `read` answers and board builds
+  on the record-open fixture's host.
 - The host's scheduler ends a turn of the event loop once it has run fibers for 8 ms, so a request
   waiting behind background fibers is read at the next turn. A fiber serving a read queues its
   tasks ahead of every other fiber's, and the others yield while one waits, so a Run start steps

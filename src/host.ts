@@ -639,7 +639,29 @@ export const slowRpcsLayer = Layer.succeed(SlowRpcs)((effect, { rpc }) =>
       }),
 );
 
-/** Logs each stream among `handlers` that is slow to send its first value. */
+const serveAnswer = <A, E, R>(
+  answer: Effect.Effect<A, E, R> | Stream.Stream<A, E, R>,
+  name: string,
+) => {
+  if (Stream.isStream(answer))
+    return Stream.transformPull(
+      firstValueTimed(answer, (ms) =>
+        Effect.logWarning(`the ${name} stream took ${ms} ms to send its first value`),
+      ),
+      (pull) =>
+        Effect.map(Foreground, ({ serve }) => {
+          let first = true;
+          return Effect.suspend(() => {
+            if (!first) return pull;
+            first = false;
+            return serve(pull);
+          });
+        }),
+    );
+  return Effect.flatMap(Foreground, ({ serve }) => serve(answer));
+};
+
+/** Serves each answer first, timing streams only until their first value. */
 export const timingFirstValues = <
   H extends Record<string, (...args: ReadonlyArray<never>) => object>,
 >(
@@ -648,11 +670,7 @@ export const timingFirstValues = <
   // SAFETY: each handler is replaced by one taking its arguments and answering its type.
   Rec.map(handlers, (handler, name) => (...args: ReadonlyArray<never>) => {
     const answer = handler(...args);
-    return Stream.isStream(answer)
-      ? firstValueTimed(answer, (ms) =>
-          Effect.logWarning(`the ${name} stream took ${ms} ms to send its first value`),
-        )
-      : answer;
+    return Stream.isStream(answer) || Effect.isEffect(answer) ? serveAnswer(answer, name) : answer;
   }) as H;
 
 export type HostClient = RpcClient.RpcClient<
