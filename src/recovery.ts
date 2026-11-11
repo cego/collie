@@ -122,7 +122,7 @@ export const recoverParks = <E, R>(opts: {
               const event = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))([
                 reconnects,
                 forge.get(mrId(view.mr ?? "") ?? "") ?? null,
-                opts.panels.get(mrId(view.mr ?? "") ?? "")?.at ?? null,
+                opts.panels.get(mrId(view.mr ?? "") ?? "")?.panel ?? null,
               ]).pipe(Effect.orDie);
               const wait = waits.get(key) ?? {
                 next: epochMs(view.park.since ?? view.created) + base,
