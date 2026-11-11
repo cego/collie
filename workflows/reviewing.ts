@@ -41,6 +41,7 @@ import {
   type SynthesisReport,
 } from "collie";
 import { Effect, FileSystem, Option, Schema } from "effect";
+import * as Activity from "effect/workflow/Activity";
 import { type WorkflowEngine, type WorkflowInstance } from "effect/workflow/WorkflowEngine";
 import markdown from "./review.md" with { type: "text" };
 import type { Reviewed } from "./delivering.ts";
@@ -174,7 +175,7 @@ export const told = (ask: ReviewAsk, run: { readonly dir: string; readonly id: s
     ask.ledger === undefined
       ? ""
       : `Earlier findings ledger:\n${JSON.stringify(ask.ledger, null, 2)}`,
-  changes: ask.changes ?? "",
+  changes: `${ask.head ? `Review head: ${ask.head}\n\n` : ""}${ask.changes ?? ""}`,
   iteration: String(ask.at),
   max_iterations: String(ask.of),
   disputed: formatFindings(ask.disputed),
@@ -200,6 +201,21 @@ export const reviewPass = (ask: ReviewAsk) =>
     const input = told(ask, { dir, id });
     const record = (report: SynthesisReport) =>
       Effect.gen(function* () {
+        if (ask.head)
+          yield* Activity.make({
+            name: `${ask.prefix ?? ""}review-head-confirmed-${ask.at}`,
+            success: Schema.String,
+            error: WorkflowError,
+            execute: host.reviewedHead({ target: ask.target, cwd }).pipe(
+              Effect.filterOrFail(
+                (head) => head === ask.head,
+                () =>
+                  new WorkflowError({
+                    reason: `reviewed head changed while reviewing ${ask.head}; review again before posting`,
+                  }),
+              ),
+            ),
+          });
         if (ask.ledger === undefined) {
           yield* leaveReview(dir, report);
           return report;

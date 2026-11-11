@@ -2489,6 +2489,51 @@ for (const name of ["gitlab", "github"] as const) {
       return { said: said(result), model: yield* forge.model(), requests: forge.requests() };
     });
 
+  scenario(
+    `review input on ${name}: a push while the initial reviewer reads invalidates its attribution`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge } = yield* reviewing();
+          const runId = `r-review-input-${name}`;
+          yield* rig.queueOutputs([null]);
+          const status = yield* driven(
+            { entry: shipped("review"), runId, input: { target } },
+            (run) =>
+              Effect.gen(function* () {
+                const fs = yield* FileSystem.FileSystem;
+                const output = `${dir}/agents/${runId}/review-1.json`;
+                yield* until(
+                  () => fs.exists(`${dir}/agents/${runId}/review-1.prompt.md`).pipe(Effect.orDie),
+                  (ready) => ready,
+                );
+                const before = yield* forge.model();
+                yield* forge.set({
+                  ...before,
+                  mrs: Arr.map(before.mrs, (one) => ({
+                    ...one,
+                    head: "abcdef1234567890abcdef1234567890abcdef12",
+                  })),
+                });
+                yield* fs.writeFileString(output, asJson(SYNTHESIS)).pipe(Effect.orDie);
+                yield* until(
+                  () => Effect.all([run.status, run.asked]),
+                  ([status, rows]) =>
+                    status.status === "failed" ||
+                    Arr.some(rows, (row) => row.decision === "post-1"),
+                );
+                return yield* run.status;
+              }),
+          );
+          expect(status.status).toBe("failed");
+          expect(outcomeText(status)).toContain("reviewed head changed");
+          expect(Rec.values((yield* forge.model()).notes ?? {})).toEqual([]);
+          yield* bin.restore();
+        }),
+      ),
+    120_000,
+  );
+
   for (const mode of ["partial", "force push", "unchanged", "resolved", "clean start"] as const)
     scenario(
       `review ledger on ${name}: ${mode === "partial" ? "Review again carries earlier findings and posts the interdiff's status changes" : mode}`,

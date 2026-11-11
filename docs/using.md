@@ -2842,6 +2842,8 @@ from a GitHub checkout refuses that target. Use `#42` or the pull request URL th
 
 **Post** puts the review on the merge request as one signed note per round, including after
 a host restart. The note names the reviewed head, your forge login, the Run, and the round.
+If the head changes while the reviewer reads the change, the Run fails before offering
+to post. Start another review of the new head.
 When no open or disputed findings remain, the menu offers **Post and approve `<short sha>`**. Approval follows
 the post as a separate request pinned to that head. A forge refusal, including a moved head
 or a self-approval rule, ends the Run with its reason on the card and is not retried.
