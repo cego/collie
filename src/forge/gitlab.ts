@@ -292,9 +292,14 @@ export function gitlabForProject<R>(
     const host = hostOf(project);
     if (!host) return { ok: true, reason: "" };
     const auth = yield* run("glab", ["auth", "status", "--hostname", host], cwd);
-    return auth.code === 0
-      ? { ok: true, reason: "" }
-      : { ok: false, reason: `glab is not logged in to ${host}`, cause: "login-missing" };
+    if (auth.code === 0) return { ok: true, reason: "" };
+    return (yield* glabLoginTo(host).token(run, cwd)) === null
+      ? { ok: false, reason: `glab is not logged in to ${host}`, cause: "login-missing" }
+      : {
+          ok: false,
+          reason: `glab could not verify its login to ${host}`,
+          cause: "forge-unavailable",
+        };
   });
 }
 

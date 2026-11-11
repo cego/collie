@@ -322,7 +322,9 @@ function ready<R>(
     const no = (reason: string) => ({ ok: false, reason });
     if ((yield* run("gh", ["--version"], cwd)).code !== 0) return no("gh is not installed");
     if ((yield* run("gh", ["auth", "status", "--hostname", HOST], cwd)).code !== 0)
-      return { ...no(`gh is not logged in to ${HOST}`), cause: "login-missing" };
+      return (yield* LOGIN.token(run, cwd)) === null
+        ? { ...no(`gh is not logged in to ${HOST}`), cause: "login-missing" }
+        : { ...no(`gh could not verify its GitHub login`), cause: "forge-unavailable" };
     const repository = project === null ? "" : mrPath({ project, iid: "" });
     if (repository === "" || repository === project) return { ok: true, reason: "" };
     const repo = yield* run("gh", ["repo", "view", repository, "--json", "nameWithOwner"], cwd);

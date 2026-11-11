@@ -235,6 +235,18 @@ for (const name of ["gitlab", "github"] as const) {
         });
       }),
     ));
+
+  test(`a ${name} login lookup outage keeps delivery recoverable`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        for (const httpFault of ["network", { status: 503 }] as const) {
+          expect(yield* prepare(checkout({ httpFault }))).toMatchObject({
+            ok: false,
+            cause: "forge-unavailable",
+          });
+        }
+      }),
+    ));
 }
 
 test("an MR url names its project and iid", () => {

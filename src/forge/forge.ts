@@ -19,7 +19,7 @@ import type { ForgeComment, MergeAnswer, ReviewRead } from "./review";
 
 export interface Readiness {
   readonly ok: boolean;
-  readonly cause?: "login-missing";
+  readonly cause?: "login-missing" | "forge-unavailable";
   /** Why not, phrased for the runner's skip note. */
   readonly reason: string;
 }

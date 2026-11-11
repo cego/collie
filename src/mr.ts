@@ -420,7 +420,7 @@ export function prepareMergeRequest<R>(
       project,
     );
     if (assignee === null && forge.name === "github")
-      return unavailable("gh did not report a GitHub login", "login-missing");
+      return unavailable("gh did not report a GitHub login", "forge-unavailable");
     const branch = Str.trim(
       (yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], opts.cwd)).stdout,
     );

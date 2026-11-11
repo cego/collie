@@ -345,6 +345,25 @@ for (const name of ["gitlab", "github"] as const) {
         }),
       ));
 
+    test("keeps an unavailable authentication check recoverable when credentials exist", () =>
+      runEffect(
+        Effect.gen(function* () {
+          const fake = fakeForge(name, model(name));
+          const run: Runner = (cmd, args, cwd) =>
+            cmd === CLI[name] && args[0] === "auth" && args[1] === "status"
+              ? Effect.succeed({
+                  code: 1,
+                  stdout: "",
+                  stderr: "dial tcp: network is unreachable",
+                })
+              : fake.run(cmd, args, cwd);
+          expect(yield* forge.ready(PROJECT[name], "/w", run)).toMatchObject({
+            ok: false,
+            cause: "forge-unavailable",
+          });
+        }),
+      ));
+
     test("reads the login over HTTP from a cold login", () => {
       const fake = fakeForge(name, model(name));
       return runEffect(
