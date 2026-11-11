@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { ConfigProvider, Effect } from "effect";
 import type { RunView } from "../src/engine";
-import { recoverParks } from "../src/recovery";
+import { recoverParks } from "../src/park-recovery";
 import { readMetrics } from "../src/metrics";
 import { mrId } from "../src/board-model";
 import type { MrPanels } from "../src/merges";

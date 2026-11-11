@@ -168,6 +168,16 @@ the file that asked.
 What the host lends is `Run`, `Host`, `Agents`, `Children`, the workflow engine, the file
 system, paths and the process spawner. Everything else is yours.
 
+`Host.reviewScope(run, source, outcome, risks)` captures the requirements, Intent, target head,
+and checkout revision before a review. `Host.recordReview(run, scope, base, review)` records
+the completed review only while that scope still holds. Journal the scope before launching
+the reviewers, and journal the association after collection, in separate Activities per pass.
+Replaying a review then retains its original scope and cannot supersede a newer judgement.
+`Host.recovery(run, parent, source)`
+takes the pushed branch by a guarded fast-forward and reads durable implementation and
+review facts. The module chooses its entry from those facts; the host doesn't select a
+workflow by name. Missing associations never authorise skipping review.
+
 ### Two projects, two implementations
 
 A shared contract with more than one implementation is an ordinary service with more than
@@ -1734,6 +1744,10 @@ export default defineWorkflow({
   checkout. A
   follow-up declares no `arguments`: it takes whatever inputs its workflow has that
   `inputs` does not fill, and a front door asks for those.
+  An optional `entry(facts)` names its entry in the offer's title. `facts.recovery` holds
+  implementation and review facts where the module declares that entry and hints a work
+  source. A filled work source remains the destination of a text follow-up's new words;
+  changing those words doesn't inherit the original source's review.
 
 Both are what a finished Run offers to do next, and both front doors make the same offer:
 `collie run actions <run>` lists them and `collie run action <run> <id> --input k=v` does

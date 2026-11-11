@@ -17,6 +17,7 @@
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as Num from "effect/Number";
 import * as Arr from "effect/Array";
+import { branchMovement } from "./recovery";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
 import { pipe } from "effect/Function";
@@ -151,7 +152,7 @@ import { readDefinitions } from "./authoring";
 import { SharedDefinition } from "./definitions-model";
 import { DefinitionRefused, sharedDefinitions, takeDefinitions } from "./shared-definitions";
 import { sideJobs } from "./side-jobs";
-import { recoverParks } from "./recovery";
+import { recoverParks } from "./park-recovery";
 import { machineMemory } from "./memory";
 import { Usage, usageLayer } from "./usage";
 import { HarnessCatalogues, catalogueLayer } from "./catalogue";
@@ -422,6 +423,7 @@ export class HostVersionMismatch extends Data.TaggedError("HostVersionMismatch")
 }> {}
 
 const RunShown = Schema.Struct({
+  branchProgress: Schema.optionalKey(Schema.NullOr(Schema.String)),
   view: RunView,
   agents: Schema.Array(RunAgent),
   disposition: Schema.NullOr(Disposition),
@@ -906,6 +908,12 @@ const handlers = (
             const hosted = yield* Effect.context<HostServices>();
             return {
               view,
+              branchProgress: yield* branchMovement({
+                cwd: view.cwd,
+                dir: runDir(dir, runId),
+                branch: view.branch,
+                state: view.status.status === "complete" ? "succeeded" : view.status.status,
+              }),
               agents: yield* runAgents(runId),
               disposition: latest(
                 yield* readDispositions(runDir(dir, runId)).pipe(Effect.orElseSucceed(() => [])),
@@ -3646,7 +3654,10 @@ const frontDoorHandlers = (
                   return yield* new HostRefused({
                     reason: `${runId} declares no follow-up, so there is nothing to carry on with`,
                   });
-                const into = followUpField(offered.arguments);
+                const into =
+                  offered.textField === undefined
+                    ? followUpField(offered.arguments)
+                    : { field: offered.textField };
                 if ("refused" in into)
                   return yield* new HostRefused({
                     reason: `${runId}'s follow-up "${offered.id}" ${into.refused}`,

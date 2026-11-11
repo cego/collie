@@ -35,7 +35,7 @@ import {
   SchemaRepresentation,
   flow,
 } from "effect";
-import type { CheckEvidence } from "./output";
+import type { CheckEvidence, SynthesisSchema } from "./output";
 import type { FailedTest, Snapshot, Verification } from "./verify";
 import type { Issue, IssueRef } from "./forge/issues";
 export type { Issue, IssueRef } from "./forge/issues";
@@ -81,6 +81,8 @@ import {
 } from "./steps";
 import type { Asker } from "./proposals";
 import type { UsageReading } from "./usage-model";
+import { Recovery, ReviewScope } from "./recovery";
+export { Recovery, ReviewScope } from "./recovery";
 import type { Integration } from "./integrate";
 import type { BenchmarkPlan, Measurement } from "./measurement-model";
 import type { MergeOutcome, Takeover } from "./landing";
@@ -737,6 +739,23 @@ const SingleClaim = Schema.NullOr(Schema.Struct({ slug: Schema.String })).pipe(
 export const ClaimedSchema = Schema.Union([Holding, SingleClaim]);
 
 export interface HostApi {
+  readonly reviewScope: (
+    runId: string,
+    source: string,
+    outcome: string,
+    risks: string,
+  ) => Effect.Effect<ReviewScope | null>;
+  readonly recordReview: (
+    runId: string,
+    scope: ReviewScope | null,
+    base: string,
+    review: typeof SynthesisSchema.Type,
+  ) => Effect.Effect<void>;
+  readonly recovery: (
+    runId: string,
+    parent: string,
+    source: string,
+  ) => Effect.Effect<Recovery, WorkflowError>;
   readonly dir: string;
   /** The Collie release this host runs, as its tag names it. */
   readonly build: string;
@@ -1705,6 +1724,7 @@ export interface OutcomeContract {
 
 /** What a finished Run offers next, named by the public id of the workflow it starts. */
 export interface FollowUp {
+  readonly entry?: (facts: ActionFacts) => string;
   readonly connections?: ReadonlyArray<ConnectionId>;
   readonly id: string;
   readonly title: string;
@@ -1721,6 +1741,7 @@ export interface FollowUp {
  * user-authored workflow offers what its own results earn, exactly as a shipped one does.
  */
 export interface ActionFacts {
+  readonly recovery?: Recovery;
   readonly outcome: Outcome;
   readonly succeeded: boolean;
   readonly branch: string | null;
@@ -1823,6 +1844,7 @@ const DeclaredMetadata = Schema.Struct({
         ...OfferFields,
         when: Schema.Literals(["succeeded", "failed", "always"]),
         eligible: Schema.optionalKey(Callable),
+        entry: Schema.optionalKey(Callable),
       }),
     ),
   ),

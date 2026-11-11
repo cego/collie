@@ -999,6 +999,7 @@ export const RecordPart = Schema.Literals(["diff", "tail", "mr", "texts"]);
 export type RecordPart = typeof RecordPart.Type;
 
 export const RunDetail = Schema.Struct({
+  branchProgress: Schema.optionalKey(Schema.NullOr(Schema.String)),
   id: Schema.String,
   park: Schema.optionalKey(Schema.NullOr(Park)),
   recovery: Schema.optionalKey(Schema.Array(Schema.String)),
@@ -1106,6 +1107,7 @@ export const recordIn = (value: RunDetail | RecordUnchanged | null): RunDetail |
 
 /** One offer as a front door shows it, over the wire. */
 export const OfferView = Schema.Struct({
+  textField: Schema.optionalKey(Schema.String),
   id: Schema.String,
   title: Schema.String,
   /** The workflow it starts, by public id. */

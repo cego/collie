@@ -1,231 +1,332 @@
-import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
-import { Clock, Config, Duration, Effect, Schedule, Schema } from "effect";
-import type { RunView } from "./engine";
-import type { PluginEnv } from "./env";
-import { configValue, readConfig } from "./config";
-import { appendMetric, readMetrics, recoveriesIn, type Metric } from "./metrics";
-import { recheckPark } from "./park-recheck";
-import { PARK_CAUSES } from "./park-cause";
-import type { Herdr } from "./herdr";
-import manifest from "../herdr-plugin.toml";
-import { currentPid, signalProcess } from "./lock";
-import { machineMemory } from "./memory";
-import { appendJournal, readJournal } from "./journal";
-import { machineName } from "./peers";
-import { machineHerd } from "./steering";
-import { liveHerds } from "./herds";
-import { append as appendNews, newsPath, supersede } from "./news";
-import { epochMs, isoAt, nowIso } from "./time";
-import { mrId } from "./board-model";
-import { readForge, type MrPanels } from "./merges";
-import { isSetAside, isUnanswered } from "./store";
-import { readStepLines } from "./steps";
+import * as Str from "effect/String";
+import * as Order from "effect/Order";
+import { Effect, FileSystem, Schema, flow, Result } from "effect";
+import { defaultBase, classifyWorkSource } from "./inputs";
+import { readIntent } from "./intent";
+import { isBlocking, SynthesisSchema, FindingSchema } from "./output";
+import { sameTree, treeOf } from "./verify";
+import { appendJournal, readJournalWhole } from "./journal";
+import { readCards } from "./cards";
+import { shell } from "./mr";
+import { nowIso } from "./time";
 
-const RoundJson = Schema.fromJsonString(
-  Schema.Struct({ at: Schema.String, failed: Schema.Boolean }),
+export const ReviewScope = Schema.Struct({
+  source: Schema.String,
+  requirements: Schema.String,
+  target: Schema.String,
+  head: Schema.String,
+  fingerprint: Schema.String,
+  outcome: Schema.String,
+  risks: Schema.String,
+});
+export type ReviewScope = typeof ReviewScope.Type;
+const ReviewedWork = Schema.Struct({
+  ...ReviewScope.fields,
+  base: Schema.String,
+  at: Schema.String,
+  review: SynthesisSchema,
+});
+const ReviewedJson = Schema.fromJsonString(ReviewedWork);
+export const Recovery = Schema.Struct({
+  implementation: Schema.Boolean,
+  reason: Schema.String,
+  previous: Schema.String,
+  commits: Schema.String,
+  review: Schema.NullOr(SynthesisSchema),
+});
+export type Recovery = typeof Recovery.Type;
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
+
+export const reviewScope = Effect.fn("Recovery.reviewScope")(
+  function* (cwd: string, dir: string, source: string, outcome = "", risks = "") {
+    const fs = yield* FileSystem.FileSystem;
+    const classified = yield* classifyWorkSource(source);
+    let content = source;
+    if (classified.kind === "plan-dir" || classified.kind === "review") {
+      const names =
+        classified.kind === "review"
+          ? ["review.md", "findings.json"]
+          : [
+              "SPEC.md",
+              ...Arr.map(
+                Arr.sort(
+                  yield* fs.readDirectory(`${source}/issues`).pipe(Effect.orElseSucceed(() => [])),
+                  Str.Order,
+                ),
+                (name) => `issues/${name}`,
+              ),
+            ];
+      content = encode(
+        yield* Effect.forEach(names, (name) =>
+          fs.readFileString(`${source}/${name}`).pipe(Effect.map((text) => [name, text])),
+        ),
+      );
+    }
+    const intent = yield* readIntent(dir);
+    const proves = intent?.outcome ?? (outcome || "unspecified");
+    const requirements = encode({
+      source,
+      content,
+      goal: intent?.goal ?? null,
+      outcome: proves,
+      risks,
+      constraints: Arr.map(intent?.constraints ?? [], (one) => [one.text, one.severity]),
+    });
+    const branch = yield* defaultBase(shell, cwd);
+    const target =
+      branch === null
+        ? null
+        : yield* shell("git", ["ls-remote", "--exit-code", "origin", `refs/heads/${branch}`], cwd);
+    const tree = yield* treeOf(cwd);
+    if (tree.dirty || target === null || target.code !== 0) return null;
+    const targetHead = Str.split(Str.trim(target.stdout), /\s/)[0] ?? "";
+    if ((yield* shell("git", ["fetch", "-q", "origin", targetHead], cwd)).code !== 0) return null;
+    return {
+      source,
+      requirements,
+      target: targetHead,
+      head: tree.head_sha,
+      fingerprint: tree.fingerprint,
+      outcome: proves,
+      risks,
+    } satisfies ReviewScope;
+  },
+  Effect.orElseSucceed(() => null),
 );
 
-export const canRecover = (view: RunView) =>
-  view.status.status === "suspended" &&
-  view.parked !== null &&
-  view.controls.length === 0 &&
-  !Arr.some(
-    view.waiting,
-    (one) =>
-      isUnanswered(one) ||
-      isSetAside(view.waiting, one) ||
-      (one.asker != null && one.answer === null),
-  );
-
-export const recoverParks = <E, R>(opts: {
-  readonly env: PluginEnv;
-  readonly herdr: Herdr;
-  readonly views: Effect.Effect<ReadonlyArray<RunView>, E, R>;
-  readonly reconnects: Effect.Effect<number>;
-  readonly panels: MrPanels;
-  readonly resume: (
-    view: RunView,
-    request: string,
-    park: string,
-  ) => Effect.Effect<{ readonly applied: boolean }, E, R>;
-}) =>
-  Effect.gen(function* () {
-    const every = yield* Config.Duration("COLLIE_RECOVERY_EVERY").pipe(
-      Config.withDefault(Duration.minutes(1)),
-    );
-    const crashAt = yield* Config.String("COLLIE_RECOVERY_CRASH_AT").pipe(Config.withDefault(""));
-    const base = Duration.toMillis(every);
-    const waits = new Map<string, { next: number; delay: number; event: string }>();
-    const roundsFile = `${opts.env.stateDir}/recovery-rounds.jsonl`;
-    const prior = yield* readJournal(roundsFile, RoundJson).pipe(Effect.orElseSucceed(() => []));
-    let failures = 0;
-    for (const line of Arr.reverse(prior)) {
-      if (!line.failed) break;
-      failures += 1;
-    }
-    const noteRound = (failed: boolean, run: string) =>
-      Effect.gen(function* () {
-        yield* appendJournal(roundsFile, RoundJson, { at: yield* nowIso, failed });
-        failures = failed ? failures + 1 : 0;
-        if (failed && failures < 3) return;
-        const own = yield* machineHerd(opts.env).pipe(Effect.orElseSucceed(() => null));
-        const herds = yield* liveHerds(opts.herdr, opts.env).pipe(Effect.orElseSucceed(() => []));
-        const key = `recovery-failing:${machineName()}`;
-        for (const herd of new Set([own, ...Arr.map(herds, (one) => one.herd)])) {
-          if (herd === null) continue;
-          const file = yield* newsPath(opts.env.stateDir, herd);
-          if (failed)
-            yield* appendNews(file, {
-              key,
-              run,
-              text: `Recovery is failing on ${machineName()}: ${failures} recheck rounds failed in a row. Runs are waiting for people.`,
-              significance: "consequential",
-            });
-          else yield* supersede(file, (item) => item.key !== key);
-        }
-      });
-    yield* Effect.sleep(every);
-    yield* Effect.gen(function* () {
-      let failed = false;
-      let checked = false;
-      const candidates: Array<{ view: RunView; claimed: Metric; fresh: boolean }> = [];
-      const reconnects = yield* opts.reconnects;
-      const forge = yield* readForge(opts.env.stateDir);
-      const views = yield* opts.views;
-      const present = new Set<string>();
-      yield* Effect.forEach(
-        views,
-        (view) =>
-          Effect.gen(function* () {
-            const dir = `${opts.env.stateDir}/evidence/${view.runId}`;
-            const lines = yield* readMetrics(dir);
-            const actions = recoveriesIn(lines);
-            let claimed = Option.getOrUndefined(
-              Arr.findFirst(
-                actions,
-                (line) => line.action === "resumed" && line.outcome === "claimed",
-              ),
-            );
-            const at = yield* nowIso;
-            if (claimed === undefined) {
-              if (
-                !canRecover(view) ||
-                view.park == null ||
-                view.park.kind !== "rechecks" ||
-                PARK_CAUSES[view.park.cause].kind !== "rechecks"
-              )
-                return;
-              const key = `${view.runId}:${view.park.id ?? view.created}`;
-              present.add(key);
-              const now = yield* Clock.currentTimeMillis;
-              const event = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))([
-                reconnects,
-                forge.get(mrId(view.mr ?? "") ?? "") ?? null,
-                opts.panels.get(mrId(view.mr ?? "") ?? "")?.panel ?? null,
-              ]).pipe(Effect.orDie);
-              const wait = waits.get(key) ?? {
-                next: epochMs(view.park.since ?? view.created) + base,
-                delay: base,
-                event,
-              };
-              if (wait.event !== event) {
-                wait.next = now + base;
-                wait.delay = base;
-                wait.event = event;
-              }
-              waits.set(key, wait);
-              if (now < wait.next) return;
-              checked = true;
-              const { cleared, note, error } = yield* recheckPark(
-                view,
-                opts.env.stateDir,
-                opts.herdr,
-              );
-              failed ||= error;
-              const line: Metric = {
-                at,
-                kind: "recovery",
-                subject: view.runId,
-                note,
-                value: wait.delay,
-                cause: view.park.cause,
-                build: manifest.version,
-                action: "rechecked",
-                outcome: error ? "error" : cleared ? "cleared" : "uncleared",
-                park: view.park.id,
-              };
-              wait.delay = Math.min(wait.delay * 2, base * 60);
-              wait.next = now + wait.delay;
-              yield* appendMetric(dir, line);
-              if (!cleared) return;
-              const attempt =
-                Arr.filter(
-                  actions,
-                  (line) => line.action === "resumed" && line.cause === view.park!.cause,
-                ).length + 1;
-              const park =
-                view.park.id ??
-                Option.getOrUndefined(Arr.findLast(lines, (line) => line.kind === "halt"))?.at ??
-                view.created;
-              claimed = {
-                ...line,
-                action: "resumed",
-                outcome: "claimed",
-                recoveryId: `recover:${view.runId}:${park}:${attempt}`,
-                park,
-                since: view.park.since ?? at,
-                entries: Arr.filter(
-                  yield* readStepLines(`${opts.env.stateDir}/runs/${view.runId}`),
-                  (line) => line.kind === "entry",
-                ).length,
-              };
-              candidates.push({ view, claimed, fresh: true });
-            } else {
-              candidates.push({ view, claimed, fresh: false });
-            }
-          }),
-        { concurrency: 2, discard: true },
-      );
-      for (const key of waits.keys()) if (!present.has(key)) waits.delete(key);
-      if (failed) {
-        yield* noteRound(true, candidates[0]?.view.runId ?? "");
-        return;
-      }
-      yield* Effect.forEach(
-        candidates,
-        ({ view, claimed, fresh }) =>
-          Effect.gen(function* () {
-            if (
-              configValue(yield* readConfig(opts.env.userDir), "recovery.resume") === false ||
-              (yield* machineMemory(opts.env)).short
-            )
-              return;
-            const dir = `${opts.env.stateDir}/evidence/${view.runId}`;
-            if (fresh) {
-              yield* appendMetric(dir, { ...claimed, at: yield* nowIso });
-              if (crashAt === "claimed") yield* signalProcess(yield* currentPid, "SIGKILL");
-            }
-            const result = yield* opts.resume(view, claimed.recoveryId!, claimed.park!);
-            const ended = yield* Clock.currentTimeMillis;
-            yield* appendMetric(dir, {
-              ...claimed,
-              at: isoAt(ended),
-              value: Math.max(0, ended - epochMs(claimed.since ?? claimed.at)),
-              outcome: result.applied ? "resumed" : "skipped",
-            });
-          }),
-        { concurrency: 2, discard: true },
-      );
-      if (checked || candidates.length > 0)
-        yield* noteRound(false, candidates[0]?.view.runId ?? "");
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("recovery round failed", cause).pipe(
-          Effect.andThen(noteRound(true, "")),
-          Effect.ignore,
-        ),
-      ),
-      Effect.repeat(Schedule.spaced(every)),
-    );
+export const recordReview = Effect.fn("Recovery.recordReview")(function* (
+  cwd: string,
+  dir: string,
+  scope: ReviewScope | null,
+  base: string,
+  review: typeof SynthesisSchema.Type,
+) {
+  if (scope === null) return;
+  const now = yield* reviewScope(cwd, dir, scope.source, scope.outcome, scope.risks);
+  if (
+    now === null ||
+    now.requirements !== scope.requirements ||
+    now.target !== scope.target ||
+    now.head !== scope.head ||
+    !sameTree(now, scope)
+  )
+    return;
+  yield* appendJournal(`${dir}/reviews.jsonl`, ReviewedJson, {
+    ...scope,
+    base,
+    review,
+    at: yield* nowIso,
   });
+});
+
+export const takePushed = Effect.fn("Recovery.takePushed")(function* (cwd: string) {
+  const tree = yield* treeOf(cwd);
+  if (tree.dirty || tree.branch === null || tree.branch === "HEAD")
+    return "Recovery needs a clean checkout on its branch.";
+  const git = (...args: string[]) => shell("git", args, cwd);
+  const read = yield* git("ls-remote", "--exit-code", "origin", `refs/heads/${tree.branch}`);
+  if (read.code !== 0) return "The pushed branch cannot be read.";
+  const head = Str.split(Str.trim(read.stdout), /\s/)[0] ?? "";
+  if (head === tree.head_sha) return null;
+  if ((yield* git("fetch", "-q", "origin", head)).code !== 0)
+    return "The pushed branch could not be fetched.";
+  if ((yield* git("merge-base", "--is-ancestor", tree.head_sha, head)).code !== 0)
+    return "The checkout and pushed branch diverged, or the checkout has unpublished commits; recovery cannot take the pushed head safely.";
+  const moved = yield* git("merge", "--ff-only", head);
+  return moved.code === 0 ? null : "The checkout could not fast-forward to the pushed head.";
+});
+
+export const recoveryFrom = Effect.fn("Recovery.from")(
+  function* (options: {
+    readonly cwd: string;
+    readonly dir: string;
+    readonly parent: string;
+    readonly candidates: ReadonlyArray<string>;
+    readonly source: string;
+    readonly outcome: string;
+    readonly risks: string;
+  }) {
+    const build: Recovery = {
+      implementation: false,
+      reason: "No implementation is established safely.",
+      previous: "",
+      commits: "",
+      review: null,
+    };
+    let current = yield* reviewScope(
+      options.cwd,
+      options.dir,
+      options.source,
+      options.outcome,
+      options.risks,
+    );
+    if (current === null) return build;
+    const git = (...args: string[]) => shell("git", args, options.cwd);
+    const pushed = yield* git(
+      "ls-remote",
+      "--exit-code",
+      "origin",
+      `refs/heads/${Str.trim((yield* git("branch", "--show-current")).stdout)}`,
+    );
+    const remote = Str.split(Str.trim(pushed.stdout), /\s/)[0] ?? "";
+    if (pushed.code !== 0) return { ...build, reason: "The pushed branch cannot be read." };
+    if (remote !== current.head) {
+      if (
+        (yield* git("fetch", "-q", "origin", remote)).code !== 0 ||
+        (yield* git("merge-base", "--is-ancestor", current.head, remote)).code !== 0
+      )
+        return {
+          ...build,
+          reason: "The checkout and pushed branch diverged or contain unpublished work.",
+        };
+      const tree = yield* git("rev-parse", `${remote}^{tree}`);
+      if (tree.code !== 0) return build;
+      current = { ...current, head: remote, fingerprint: Str.trim(tree.stdout) };
+    }
+    const readings = yield* Effect.forEach(options.candidates, (dir) =>
+      readJournalWhole(`${dir}/reviews.jsonl`, ReviewedJson),
+    );
+    const records = Arr.sort(
+      Arr.flatMap(readings, (one) => one.lines),
+      Order.mapInput(Str.Order, (one: typeof ReviewedWork.Type) => one.at),
+    );
+    const finals = yield* readCards(options.parent).pipe(Effect.orElseSucceed(() => []));
+    const final = Arr.findLast(finals, (one) => one.kind === "final");
+    const prior = Arr.findLast(records, (one) => one.source === options.source);
+    const previous =
+      prior._tag === "Some"
+        ? prior.value.head
+        : final._tag === "Some"
+          ? final.value.revision.head_sha
+          : "";
+    if (
+      final._tag === "Some" &&
+      (yield* git("merge-base", "--is-ancestor", final.value.revision.head_sha, current.head))
+        .code !== 0
+    )
+      return { ...build, reason: "The finished branch history diverged or was force-pushed." };
+    if (
+      previous !== "" &&
+      (yield* git("merge-base", "--is-ancestor", previous, current.head)).code !== 0
+    )
+      return {
+        ...build,
+        reason: "The branch diverged or was force-pushed; forward progress is unproved.",
+      };
+    const diff = yield* git("rev-list", "--count", `${current.target}..${current.head}`);
+    if (diff.code !== 0 || Number(Str.trim(diff.stdout)) < 1) return build;
+    const commits =
+      previous === ""
+        ? ""
+        : Str.trim((yield* git("log", "--format=%H %s", `${previous}..${current.head}`)).stdout);
+    const clean = Arr.findLast(
+      records,
+      (one) =>
+        one.source === options.source &&
+        one.requirements === current.requirements &&
+        one.head === current.head &&
+        one.fingerprint === current.fingerprint &&
+        one.target === current.target,
+    );
+    const fs = yield* FileSystem.FileSystem;
+    const findings = `${options.parent}/findings.json`;
+    const blocking = (yield* fs.exists(findings))
+      ? Arr.some(
+          yield* fs
+            .readFileString(findings)
+            .pipe(
+              Effect.flatMap(
+                Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(FindingSchema))),
+              ),
+            ),
+          isBlocking,
+        )
+      : false;
+    // shortcut: external issue bodies need review until the host can snapshot them.
+    const external = (yield* classifyWorkSource(options.source)).kind === "linear";
+    const judgement = (review: typeof SynthesisSchema.Type) => {
+      switch (current.outcome) {
+        case "feature":
+          return review.scope_met === true;
+        case "refactor":
+          return review.behavior_preserved === true;
+        case "investigation":
+          return review.supported === true;
+        case "docs":
+          return review.accurate === true;
+        case "migration":
+          return review.compatible === true;
+        default:
+          return review.scope_met !== false;
+      }
+    };
+    if (
+      clean._tag === "Some" &&
+      !external &&
+      Arr.every(readings, (one) => one.corrupt === 0) &&
+      !blocking &&
+      clean.value.review.verdict === "clean" &&
+      judgement(clean.value.review) &&
+      !Arr.some(
+        [...clean.value.review.findings, ...(clean.value.review.disputed ?? [])],
+        isBlocking,
+      )
+    )
+      return {
+        implementation: true,
+        reason: "A completed clean review settles these requirements at the pushed head.",
+        previous,
+        commits,
+        review: clean.value.review,
+      } satisfies Recovery;
+    return {
+      implementation: true,
+      reason: "Implementation is pushed; its current requirements and diff need review.",
+      previous,
+      commits,
+      review: null,
+    } satisfies Recovery;
+  },
+  Effect.orElseSucceed((): Recovery => ({
+    implementation: false,
+    reason: "Branch or review records are unreadable.",
+    previous: "",
+    commits: "",
+    review: null,
+  })),
+);
+
+export const branchMovement = Effect.fn("Recovery.branchMovement")(function* (run: {
+  readonly cwd: string;
+  readonly dir: string;
+  readonly branch: string | null;
+  readonly state: string;
+}) {
+  if (run.branch === null || !["succeeded", "failed"].includes(run.state)) return null;
+  const final = Arr.findLast(
+    yield* readCards(run.dir).pipe(Effect.orElseSucceed(() => [])),
+    (card) => card.kind === "final",
+  );
+  if (final._tag === "None" || final.value.revision.head_sha === "") return null;
+  const finished = final.value.revision.head_sha;
+  const read = yield* shell(
+    "git",
+    ["ls-remote", "--exit-code", "origin", `refs/heads/${run.branch}`],
+    run.cwd,
+  );
+  if (read.code !== 0) return "Pushed branch head unavailable; the finished record is unchanged.";
+  const head = Str.split(Str.trim(read.stdout), /\s/)[0] ?? "";
+  if (head === finished) return null;
+  const fetched = yield* shell("git", ["fetch", "-q", "origin", head], run.cwd);
+  const ancestry =
+    fetched.code === 0
+      ? yield* shell("git", ["merge-base", "--is-ancestor", finished, head], run.cwd)
+      : fetched;
+  if (ancestry.code !== 0)
+    return `Pushed branch diverged or was force-pushed: ${finished} → ${head}; forward progress is unproved.`;
+  const count = yield* shell("git", ["rev-list", "--count", `${finished}..${head}`], run.cwd);
+  if (count.code !== 0) return `Pushed branch history unavailable at ${head}.`;
+  const n = Str.trim(count.stdout);
+  return `Pushed branch: ${n} commit${n === "1" ? "" : "s"} past ${finished}, now ${head}.${run.state === "failed" ? " The failed record is stale." : " The succeeded record describes the earlier head."}`;
+});

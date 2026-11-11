@@ -512,6 +512,7 @@ export interface AgentsApi {
     readonly agent?: string;
     readonly mode?: DeliveryMode;
     readonly actor?: Asker;
+    readonly workflowNotice?: string;
   }) => Effect.Effect<Steered>;
   /** The agent a steer that names none reaches, which is whose work a correction is about. */
   readonly atWork: (runId: string) => Effect.Effect<Launched | null>;
@@ -1865,6 +1866,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       /** The session the agent is in, where it is not the host's own. */
       readonly herdr?: DeliveringHerdr;
       readonly idleOnly?: boolean;
+      readonly workflowNotice?: string;
     },
   ) {
     const through = delivery.herdr === undefined ? deps : { ...deps, herdr: delivery.herdr };
@@ -1886,6 +1888,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             `${dispatch.DELIVERY_TOKEN}${requestId}-${attempt}`,
             text,
             delivery.actor,
+            delivery.workflowNotice,
           )
         : { words: text, actor: delivery.actor, kept: null };
     const draft: dispatch.DeliveryDraft = {
@@ -1895,6 +1898,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       cause: { kind: delivery.kind, ref: delivery.ref },
       mode: delivery.mode ?? "boundary",
       idleOnly: delivery.idleOnly,
+      workflowNotice: delivery.workflowNotice,
       human: delivery.kind === "steer" ? humanOf(fitted.actor) : null,
       // Work, a repair and a steer share a causal key per thing they are about, which is
       // what makes the second copy refusable; a correction's is its constraint's.
@@ -3744,6 +3748,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     readonly agent?: string;
     readonly mode?: DeliveryMode;
     readonly actor?: Asker;
+    readonly workflowNotice?: string;
   }) =>
     under(
       Effect.gen(function* () {
@@ -3795,6 +3800,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           ...(pinned ? { agent: launched.agent } : { operation: launched.operation }),
           result: null,
         };
+        if (options.workflowNotice !== undefined && queued === undefined)
+          pending.workflowNotice = options.workflowNotice;
         if (options.actor !== undefined && queued === undefined) {
           pending.actor = Struct.omit(actorOf(options.actor, options.request), ["requestId"]);
         }
@@ -3850,6 +3857,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           mode: fallback ? "boundary" : options.mode,
           idleOnly: fallback,
           actor: pending.actor,
+          workflowNotice: pending.workflowNotice,
         });
         yield* log(
           options.runId,

@@ -5,6 +5,7 @@
 // the tab slow the day it became useful.
 
 import * as Arr from "effect/Array";
+import { branchMovement } from "./recovery";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
@@ -534,7 +535,8 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
     : { review: { _tag: "None", reason: "" } satisfies Panel, plan: null };
   const attention = yield* attentionFor(run);
   const log = parts && opts.tail ? yield* tailOf(run) : null;
-  return {
+  const progress = yield* branchMovement(run);
+  const detail: RunDetail = {
     id: run.id,
     requestedBy: run.requestedBy,
     startedBy: startedBy(yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => [])), run),
@@ -627,7 +629,8 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
     agents: yield* runAgents(run.id),
     diff: parts ? yield* diffOf(run) : null,
     flow: opts.flow ?? undefined,
-  } satisfies RunDetail;
+  };
+  return progress === null ? detail : { ...detail, branchProgress: progress };
 });
 
 /** What Settings shows and can write back. No new store: `config.json` and the harness. */
