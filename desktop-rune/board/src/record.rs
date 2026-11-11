@@ -183,8 +183,12 @@ pub struct Records {
     pub made: u64,
     pub notice: Option<Notice>,
     pub sending: bool,
-    /// The agent the open terminal was asked for; none for the Run's newest.
+    /// The agent the open terminal shows: the one asked for, then the one the core focused.
     pub terminal_agent: Option<String>,
+    /// The cols and rows the last terminal was laid out at, which the next one opens at.
+    pub terminal_size: Option<(u16, u16)>,
+    /// What Open in herdr did, or why it could not.
+    pub terminal_said: Option<String>,
     images: Option<rune::ImageCache>,
 }
 
@@ -259,9 +263,7 @@ impl App {
 
     /// Closes the open record and leaves its terminal.
     fn close_record(&mut self) {
-        if let Some(open) = self.terminal.take() {
-            open.leave();
-        }
+        self.leave_terminal();
         if let Some(stop) = self.stop_record.take() {
             stop();
         }
@@ -393,7 +395,12 @@ impl App {
 
     /// Reads what the tab shown needs and has not got: its terminal, its diff, its plan file.
     fn tab_opened(&mut self) {
-        match self.record_tab().as_str() {
+        let tab = self.record_tab();
+        // The pane is held only while its tab is shown, as Desktop holds it.
+        if tab != "terminal" {
+            self.leave_terminal();
+        }
+        match tab.as_str() {
             "terminal" => self.open_terminal(),
             "diff" => self.read_diff(),
             "plan" => self.read_plan_file(),
@@ -402,33 +409,61 @@ impl App {
         }
     }
 
-    /// Opens the shown record's terminal on the agent asked for, unless it is open on it.
+    /// Opens the shown record's terminal, unless one is open: an agent that starts or stops
+    /// work leaves the pane shown where it is, as Desktop does.
     pub fn open_terminal(&mut self) {
+        if self.terminal.is_none() {
+            self.attach_terminal();
+        }
+    }
+
+    /// Opens the shown record's terminal again, on the agent picked or the one at work.
+    pub fn reconnect(&mut self) {
+        self.attach_terminal();
+    }
+
+    /// Gives the open terminal's pane back, keeping its size for the next.
+    fn leave_terminal(&mut self) {
+        if let Some(open) = self.terminal.take() {
+            self.record.terminal_size = Some(open.size());
+            open.leave();
+        }
+    }
+
+    /// Asks for the agent's own Run's pane, as `askedFor` does: an agent of a Run under the
+    /// card's is found only under its own.
+    fn attach_terminal(&mut self) {
         let Some(record) = &self.record.open else {
             return;
         };
-        let Some(go_to) = &self.go_to else { return };
-        let asked = self.task_of_record().and_then(|task| {
-            agents::asked_for(&task.agents, &record.run, record.picked.as_deref())
-                .map(|tab| tab.name)
-        });
-        let payload = TerminalPayload {
-            installation: record.installation.clone(),
-            run_id: record.run.clone(),
-            agent: asked.clone(),
-            cols: OPEN_AT.0,
-            rows: OPEN_AT.1,
-        };
-        if self.terminal.is_some() && self.record.terminal_agent == asked {
+        if self.go_to.is_none() {
             return;
         }
+        let asked = self.task_of_record().and_then(|task| {
+            agents::asked_for(&task.agents, &record.run, record.picked.as_deref())
+        });
+        let (cols, rows) = self
+            .terminal
+            .as_ref()
+            .map(Tab::size)
+            .or(self.record.terminal_size)
+            .map_or(OPEN_AT, |(cols, rows)| (cols.into(), rows.into()));
+        let payload = TerminalPayload {
+            installation: record.installation.clone(),
+            run_id: asked
+                .as_ref()
+                .map_or_else(|| record.run.clone(), |tab| tab.run.clone()),
+            agent: asked.as_ref().map(|tab| tab.name.clone()),
+            cols,
+            rows,
+        };
         let machine = record.machine.clone();
-        if let Some(open) = self.terminal.take() {
-            open.leave();
-        }
+        self.leave_terminal();
         self.opened += 1;
+        let Some(go_to) = &self.go_to else { return };
         self.terminal = Some(go_to(payload, machine, self.opened));
-        self.record.terminal_agent = asked;
+        self.record.terminal_agent = asked.map(|tab| tab.name);
+        self.record.terminal_said = None;
     }
 
     /// Switches the terminal to another of the Task's agents.
@@ -436,7 +471,7 @@ impl App {
         if let Some(record) = &mut self.record.open {
             record.picked = Some(agent);
         }
-        self.open_terminal();
+        self.reconnect();
     }
 
     /// Reads `item` of the open record once, in parts from offset 0, as `run_file` does.

@@ -139,14 +139,29 @@ on lavapipe. Its first frame took 387 ms. The live board was one Snapshot of 21 
 ### Go to pane's terminal
 
 The terminal keeps today's transport: the `terminal` stream brings frames, and `terminalSend`
-carries input, resizes, scrolls and mouse presses. Leaving the terminal interrupts the stream,
-which has the core send `terminal.release`.
+carries input, resizes, scrolls and mouse presses. Leaving the Terminal tab interrupts the
+stream, which has the core send `terminal.release`.
+
+**Go to pane** (`board/src/shell/panes.rs`, `open_terminal` in `record.rs`) asks for the agent at
+work under its own Run, as `askedFor` does: an agent of a Run under the card's is found only
+there. The pane stays on the agent it opened on while agents start and stop work; picking an
+agent or Reconnect opens it again. Until the core says `Opened`, what is typed waits and no
+size is sent, since `terminalSend` would reach the terminal shown before. The tab says how far
+the pane got: Connecting, Connected, No pane (with Open in herdr, the core's `goToPane`), Not
+connected or Disconnected with the core's reason and Reconnect; a stream that ends without a
+word says so. Only a live pane draws a cursor. The pane lands at once, with no fade or glide.
+While nothing has focus, the window's `on_key` (`shell::on_key`) types into the shown pane, as
+stable Desktop's pane takes the keys once Go to pane opens it; Tab still moves focus into the
+app, and nothing is typed into a pane under a dialog. `examples/terminal-tab.rs` draws the tab
+from a recording in each state (`STATE=connecting|ended|failed|nopane`, snapped with `--at 0.6`
+so the recording has arrived).
 
 **Drawn as Ghostty draws.** The view paints each row into pixels on the CPU and shows it with
 `El::pixels`; the cursor is its own image laid over the row. It follows the human's Ghostty
 config (`config.rs`: `font-family`, `font-size`, colours, `palette`, `cursor-style`,
 `cursor-style-blink`, `faint-opacity`) over Ghostty's own defaults, so with no config it is
-JetBrains Mono Nerd Font at 12 pt (embedded, as Ghostty embeds it) on `#282c34`.
+JetBrains Mono Nerd Font at 12 pt (embedded, as Ghostty embeds it). Its default foreground
+and background are the app's text and surface, which the view sets (`Tab::set_surface`).
 
 - `font.rs`: the cell from the face's metrics as Ghostty's `Metrics.calc` derives it (10 by
   21 px for the default at scale 1, as Ghostty 1.3.1 measures), shaping with ligatures that

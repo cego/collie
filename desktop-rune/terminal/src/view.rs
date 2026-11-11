@@ -18,8 +18,8 @@ use collie_desktop_protocol::generated::{
 };
 use ghostty_sys::*;
 use rune::{
-    Color, Cursor as Pointing, Drag, El, KeyEvent, Live, Mods, Phase, Pixels, PointerButton,
-    WheelEvent, col, el, text,
+    Anim, Color, Cursor as Pointing, Drag, El, KeyEvent, Live, Mods, Phase, Pixels, PointerButton,
+    Transition, WheelEvent, el,
 };
 use std::cell::{Cell as Shared, RefCell};
 use std::collections::HashMap;
@@ -141,6 +141,21 @@ pub struct Grid {
     pub scale: f32,
 }
 
+/// How far a pane's terminal got: what the record says over it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Link {
+    /// Asked for; the core has not opened the pane yet.
+    Connecting,
+    /// Opened, and drawing the pane's frames.
+    Live,
+    /// The core found no pane to show, only where the Run is.
+    NoPane,
+    /// Never opened, for this reason.
+    Failed(String),
+    /// Opened, then ended, for this reason.
+    Ended(String),
+}
+
 /// One pane's terminal: its VT state, what was drawn of it, and its pane on the core.
 pub struct Tab {
     vt: RefCell<Vt>,
@@ -149,6 +164,14 @@ pub struct Tab {
     pub at: Option<At>,
     pub machine: String,
     pub ended: Option<String>,
+    /// The core found no pane to show.
+    pub no_pane: bool,
+    /// Whether the core opened the pane before it ended.
+    opened: bool,
+    /// The default colours of the surface it sits on, which the view sets.
+    surface: Shared<Option<(Rgb, Rgb)>>,
+    /// The surface the VT was last given.
+    applied: Shared<Option<(Rgb, Rgb)>>,
     /// Whether it is core's raw stream, whose history and mouse reports are this view's own.
     on_core: bool,
     clock: Instant,
@@ -204,6 +227,10 @@ impl Tab {
             at: None,
             machine,
             ended: None,
+            no_pane: false,
+            opened: false,
+            surface: Shared::new(None),
+            applied: Shared::new(None),
             on_core: false,
             clock: Instant::now(),
             laid_out: [0.0, 0.0],
@@ -245,10 +272,81 @@ impl Tab {
 
     /// Why the `terminal` stream failed.
     pub fn failed(&mut self, error: RpcError<ActionFailed>) {
-        self.ended = Some(match error {
+        self.failed_with(match error {
             RpcError::Failed(failed) => failed.reason,
             other => other.to_string(),
         });
+    }
+
+    /// Why the `terminal` stream failed, in the core's words.
+    pub fn failed_with(&mut self, reason: String) {
+        if self.ended.is_none() {
+            self.ended = Some(reason);
+        }
+    }
+
+    /// The `terminal` stream ended; one that said nothing of why says so here.
+    pub fn closed(&mut self) {
+        if self.ended.is_none() && !self.no_pane {
+            self.ended = Some("the core closed the pane's stream".into());
+        }
+    }
+
+    /// How far the pane got, as the record says it.
+    pub fn link(&self) -> Link {
+        match (&self.ended, self.no_pane) {
+            (_, true) => Link::NoPane,
+            (Some(why), _) if self.opened => Link::Ended(why.clone()),
+            (Some(why), _) => Link::Failed(why.clone()),
+            (None, _) if self.opened => Link::Live,
+            (None, _) => Link::Connecting,
+        }
+    }
+
+    /// Where the pane is: its Machine, workspace and tab, once the core has said.
+    pub fn place(&self) -> Option<String> {
+        self.at.as_ref().map(|at| pane_where(&self.machine, at))
+    }
+
+    /// Its cols and rows.
+    pub fn size(&self) -> (u16, u16) {
+        let vt = self.vt.borrow();
+        (vt.cols, vt.rows)
+    }
+
+    /// The colours of the surface the terminal sits on, for what a program leaves default.
+    pub fn set_surface(&self, fg: Rgb, bg: Rgb) {
+        self.surface.set(Some((fg, bg)));
+    }
+
+    /// The look drawn with: Ghostty's, on the surface's own colours.
+    fn look(&self) -> Look {
+        let mut look = self.look.clone();
+        if let Some((fg, bg)) = self.surface.get() {
+            look.theme.fg = fg;
+            look.theme.bg = bg;
+            look.theme.cursor = fg;
+        }
+        look
+    }
+
+    /// Gives the VT and the painter the surface's colours, once they change.
+    fn surfaced(&self) {
+        let surface = self.surface.get();
+        if surface.is_none() || surface == self.applied.get() {
+            return;
+        }
+        self.applied.set(surface);
+        let look = self.look();
+        let theme = look.theme;
+        self.vt
+            .borrow_mut()
+            .set_colors(theme.fg, theme.bg, theme.cursor);
+        let mut drawn = self.drawn.borrow_mut();
+        drawn.stale = true;
+        drawn.painter = None;
+        drawn.rows.clear();
+        drawn.cursor.1 = 0;
     }
 
     /// One event of the `terminal` stream. Its frame is read when it is next drawn, so a
@@ -258,8 +356,13 @@ impl Tab {
             TerminalEvent::Opened(opened) => {
                 self.on_core = opened.at.core.is_some();
                 self.at = Some(opened.at);
+                self.opened = true;
                 let (cols, rows) = (self.vt.get_mut().cols, self.vt.get_mut().rows);
-                let mut vt = fresh_vt(cols, rows, &self.look);
+                let look = self.look();
+                let mut vt = fresh_vt(cols, rows, &look);
+                if self.surface.get().is_some() {
+                    vt.set_colors(look.theme.fg, look.theme.bg, look.theme.cursor);
+                }
                 if let Some(grid) = self.grid() {
                     vt.resize(cols, rows, grid.cell_px.0, grid.cell_px.1);
                 }
@@ -280,10 +383,7 @@ impl Tab {
             }
             TerminalEvent::Ended(ended) => self.ended = Some(ended.reason),
             TerminalEvent::NoPane(no_pane) => {
-                self.ended = Some(format!(
-                    "No pane to show: focused {}",
-                    pane_where(&self.machine, &no_pane.at)
-                ));
+                self.no_pane = true;
                 self.at = Some(no_pane.at);
             }
         }
@@ -296,6 +396,7 @@ impl Tab {
     }
 
     fn refreshed(&self) {
+        self.surfaced();
         let mut drawn = self.drawn.borrow_mut();
         if drawn.stale {
             drawn.frame = self.vt.borrow_mut().frame();
@@ -312,7 +413,7 @@ impl Tab {
         // A synchronized frame a program never finished is drawn after a while.
         self.drawn.get_mut().stale = true;
         let blinking = self.focused
-            && self.ended.is_none()
+            && self.link() == Link::Live
             && self
                 .drawn
                 .get_mut()
@@ -340,7 +441,7 @@ impl Tab {
         let mut drawn = self.drawn.borrow_mut();
         let scale = self.scale.get();
         if drawn.painter.as_ref().is_none_or(|p| p.scale() != scale) {
-            drawn.painter = Some(Painter::new(&self.look, scale));
+            drawn.painter = Some(Painter::new(&self.look(), scale));
             drawn.rows.clear();
             drawn.cursor.1 = 0;
         }
@@ -800,6 +901,7 @@ impl Tab {
 
     /// Paints what changed since the last draw, and says where it all goes.
     fn draw(&self) -> Option<Drawing> {
+        self.surfaced();
         let grid = self.grid()?;
         self.refreshed();
         let mut drawn = self.drawn.borrow_mut();
@@ -843,7 +945,7 @@ impl Tab {
             });
             rows.push((pixels.clone(), hash));
         }
-        let shown_cursor = frame.cursor.filter(|_| self.ended.is_none());
+        let shown_cursor = frame.cursor.filter(|_| self.link() == Link::Live);
         if let Some(at) = shown_cursor {
             let mut hasher = std::hash::DefaultHasher::new();
             let under = frame
@@ -909,6 +1011,12 @@ fn mods_of(mods: Mods) -> GhosttyMods {
         bits |= GHOSTTY_MODS_SUPER;
     }
     bits as GhosttyMods
+}
+
+/// Rune's linear colour as sRGB, alpha dropped.
+pub fn rgb_of(color: Color) -> Rgb {
+    let hex = color.hex();
+    crate::config::color(&hex[..7]).unwrap_or(Rgb(0, 0, 0))
 }
 
 /// An sRGB colour as Rune's linear one.
@@ -989,10 +1097,14 @@ pub fn terminal<S: 'static>(tab: &Tab, lens: fn(&mut S) -> Option<&mut Tab>) -> 
                     .pixels(&pixels)
                     .live_opacity(&tab.blink)
             }));
-        if tab.ended.is_some() {
-            grid = grid.opacity(0.5);
-        }
     }
+    // A connecting pane is blank and cursorless but takes focus and keys, which wait for it to
+    // open; an ended one stays dimmed; one that never opened is not drawn.
+    grid = grid.opacity(match tab.link() {
+        Link::Live | Link::Connecting => 1.0,
+        Link::Ended(_) => 0.4,
+        Link::NoPane | Link::Failed(_) => 0.0,
+    });
     let grid = grid
         .pointer_buttons([
             PointerButton::Middle,
@@ -1054,28 +1166,8 @@ pub fn terminal<S: 'static>(tab: &Tab, lens: fn(&mut S) -> Option<&mut Tab>) -> 
                 tab.left();
             }
         });
-    let place = tab.at.as_ref().map(|at| pane_where(&tab.machine, at));
-    // The lines over the grid take the pane's colours, whatever the app's theme.
-    let (fg, bg) = (color(tab.look.theme.fg), color(tab.look.theme.bg));
-    col()
-        .w_full()
-        .h_full()
-        .fill(bg)
-        .children(place.map(|place| {
-            text(place)
-                .color(fg)
-                .opacity(0.7)
-                .px(tab.look.padding)
-                .py(4.0)
-                .key("terminal-where")
-        }))
-        .children(tab.ended.clone().map(|why| {
-            text(why)
-                .color(fg)
-                .px(tab.look.padding)
-                .py(4.0)
-                .key("terminal-ended")
-                .role("alert")
-        }))
-        .child(grid)
+    // As Ghostty's own window: what the pane draws lands at once, never on a spring.
+    grid.instant_changes()
+        .transition(Transition::none())
+        .opacity_motion(Anim::INSTANT)
 }

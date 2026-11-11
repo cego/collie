@@ -13,8 +13,8 @@ use crate::{App, flow, icons};
 use collie_desktop_protocol::generated::{
     Category, DetailMr, EvidenceItem, Lane, Node, NodeRun, Review, VerificationResult,
 };
-use collie_desktop_terminal::view::terminal;
-use rune::{El, Key, KeyEvent, ScrollSpec, SurfaceFit, Tx, col, row, text};
+use collie_desktop_terminal::view::{Link, rgb_of, terminal};
+use rune::{El, Key, KeyEvent, ScrollSpec, SurfaceFit, Transition, Tx, col, row, text};
 use rune_kit::markdown::Markdown;
 use rune_kit::{Badge, Button, ButtonVariant, IconButton, Kit, TextArea, TextInput};
 
@@ -365,11 +365,23 @@ pub fn view(app: &App, k: &Kit) -> Option<El> {
         "facts" => scrolled(facts_tab(record, k)),
         mr => scrolled(mr_tab(record, mr, k)),
     };
+    let mut panel = col()
+        .key(format!("tabpanel-{shown}"))
+        .role("tabpanel")
+        .grow(1.0)
+        .min_h(0.0)
+        .w_full();
+    // A pane is shown the frame it is asked for, as Ghostty shows one.
+    if shown == "terminal" {
+        panel = panel.transition(Transition::none());
+    }
     Some(
         col()
             .key("record")
             .role("group")
             .label(format!("Run {}", record.run))
+            // Go to pane opens the record on its pane at once.
+            .transition(Transition::none())
             .padding(20.0)
             .pt(16.0)
             .gap(14.0)
@@ -381,15 +393,7 @@ pub fn view(app: &App, k: &Kit) -> Option<El> {
             .children(standing(app, record, k))
             .children(notice(app, k))
             .child(tab_bar(&tabs, &shown, k))
-            .child(
-                col()
-                    .key(format!("tabpanel-{shown}"))
-                    .role("tabpanel")
-                    .grow(1.0)
-                    .min_h(0.0)
-                    .w_full()
-                    .child(body),
-            ),
+            .child(panel.child(body)),
     )
 }
 
@@ -2540,68 +2544,173 @@ fn terminal_tab(app: &App, record: &Record, k: &Kit) -> El {
             )
     });
     let away = (!app.record_live()).then(|| {
-        row()
-            .key("terminal-away")
-            .role("status")
-            .label("Its Machine is out of reach; this is what the pane last drew.")
-            .gap(6.0)
-            .center_y()
-            .h(24.0)
-            .px(10.0)
-            .radius(12.0)
-            .fill(k.c.warning.bg)
-            .child(
-                text("Out of reach · last drawn")
-                    .font(k.ty.text_xsmall_medium)
-                    .color(k.c.warning.fg)
-                    .a11y_hidden(),
-            )
+        pill(
+            "terminal-away",
+            "Out of reach · last drawn",
+            "Its Machine is out of reach; this is what the pane last drew.",
+            k.c.warning,
+            k,
+        )
     });
-    let pane = match &app.terminal {
-        Some(tab) => terminal(tab, |app: &mut App| app.terminal.as_mut()),
-        None => col()
-            .key("terminal-opening")
-            .grow(1.0)
-            .w_full()
-            .center()
-            .gap(8.0)
-            .child(rune::icon(&icons::TERMINAL, 20.0).color(k.c.icon_faint))
-            .child(
-                text("Opening the terminal…")
-                    .font(k.ty.text_xsmall)
-                    .color(k.c.text_muted),
-            ),
+    let link = app
+        .terminal
+        .as_ref()
+        .map_or(Link::Connecting, |tab| tab.link());
+    let (said, tone) = match &link {
+        Link::Connecting => ("Connecting…", status_tone("", k)),
+        Link::Live => ("Connected", k.c.success),
+        Link::NoPane => ("No pane", k.c.warning),
+        Link::Failed(_) => ("Not connected", k.c.danger),
+        Link::Ended(_) => ("Disconnected", k.c.danger),
     };
-    let _ = record;
+    let status = pill("terminal-link", said, &format!("Pane: {said}"), tone, k);
+    let place = app
+        .terminal
+        .as_ref()
+        .and_then(|tab| tab.place())
+        .map(|place| {
+            text(place)
+                .key("terminal-where")
+                .font(k.ty.text_xsmall)
+                .color(k.c.text_muted)
+                .truncate()
+                .min_w(0.0)
+        });
+    let herdr = Button::new("Open in herdr")
+        .variant(ButtonVariant::GhostMuted)
+        .on_press(|app: &mut App| app.open_in_herdr())
+        .build(k)
+        .key("open-in-herdr");
     let bar = row()
         .key("terminal-bar")
         .gap(12.0)
         .center_y()
         .w_full()
-        .h(44.0)
-        .px(8.0)
+        .h(32.0)
         .children(switcher)
         .children(one)
+        .children(place)
         .child(rune::spacer())
-        .children(away);
+        .children(away)
+        .child(status)
+        .child(herdr);
+    let plain = |why: &str| crate::shell::panes::plainly(why, &record.machine);
+    let why = match &link {
+        Link::Failed(why) => Some(format!("Couldn't connect to the pane: {}", plain(why))),
+        Link::Ended(why) => Some(format!("The pane disconnected: {}", plain(why))),
+        Link::NoPane => Some(
+            "This Run has no live agent's pane to show here; Open in herdr shows its workspace."
+                .to_string(),
+        ),
+        Link::Connecting | Link::Live => None,
+    };
+    let ended = why.map(|why| {
+        let danger = !matches!(link, Link::NoPane);
+        row()
+            .key("terminal-ended")
+            .role(if danger { "alert" } else { "status" })
+            .label(why.clone())
+            .gap(12.0)
+            .center_y()
+            .w_full()
+            .child(
+                text(why)
+                    .font(k.ty.small)
+                    .color(if danger {
+                        k.c.danger.fg
+                    } else {
+                        k.c.text_muted
+                    })
+                    .wrap()
+                    .grow(1.0)
+                    .min_w(0.0)
+                    .a11y_hidden(),
+            )
+            .child(
+                Button::new("Reconnect")
+                    .variant(ButtonVariant::Outline)
+                    .on_press(|app: &mut App| app.reconnect())
+                    .build(k)
+                    .key("terminal-reconnect"),
+            )
+    });
+    let herdr_said = app.record.terminal_said.clone().map(|said| {
+        text(said)
+            .key("terminal-said")
+            .role("status")
+            .font(k.ty.small)
+            .color(k.c.text_muted)
+            .wrap()
+    });
+    let waiting = |key: &str, said: &str| {
+        col()
+            .key(key.to_string())
+            .role("status")
+            .label(said.to_string())
+            .absolute(0.0, 0.0)
+            .w_full()
+            .h_full()
+            .center()
+            .gap(8.0)
+            .child(rune::icon(&icons::TERMINAL, 20.0).color(k.c.icon_faint))
+            .child(
+                text(said.to_string())
+                    .font(k.ty.small)
+                    .color(k.c.text_muted)
+                    .a11y_hidden(),
+            )
+    };
+    let over = match &link {
+        Link::Connecting => Some(waiting("terminal-connecting", "Connecting to the pane…")),
+        Link::NoPane => Some(waiting("terminal-no-pane", "No pane to show")),
+        Link::Failed(_) => Some(waiting("terminal-not-connected", "Not connected")),
+        Link::Live | Link::Ended(_) => None,
+    };
+    let grid = app.terminal.as_ref().map(|tab| {
+        // The pane sits on the record's own surface: what a program leaves default is the app's.
+        tab.set_surface(rgb_of(k.c.text_base), rgb_of(k.c.bg_base));
+        terminal(tab, |app: &mut App| app.terminal.as_mut())
+    });
     col()
         .key("terminal-tab")
         .grow(1.0)
         .min_h(0.0)
         .w_full()
-        .radius(k.radius.lg)
-        .border(1.0, k.c.border_weak)
-        .fill(k.c.layer_01)
-        .clip_rounded(k.radius.lg)
+        .gap(8.0)
+        .instant_changes()
+        .transition(Transition::none())
         .child(bar)
+        .children(ended)
+        .children(herdr_said)
         .child(
-            rune::el()
-                .h(1.0)
+            col()
+                .key("terminal-body")
+                .grow(1.0)
+                .min_h(0.0)
                 .w_full()
-                .fill(k.c.border_weak)
+                .children(grid)
+                .children(over),
+        )
+}
+
+/// A small rounded status, in `tone`.
+fn pill(key: &str, said: &str, label: &str, tone: rune_kit::StateColors, k: &Kit) -> El {
+    row()
+        .key(key.to_string())
+        .role("status")
+        .label(label.to_string())
+        .gap(6.0)
+        .center_y()
+        .h(22.0)
+        .px(8.0)
+        .radius(11.0)
+        .fill(tone.bg)
+        .child(
+            text(said.to_string())
+                .font(k.ty.text_xsmall_medium)
+                .color(tone.fg)
                 .a11y_hidden(),
         )
-        .child(col().grow(1.0).min_h(0.0).w_full().child(pane))
 }
 
 fn facts_tab(record: &Record, k: &Kit) -> El {
