@@ -1673,11 +1673,12 @@ export default defineWorkflow({
   [read the Connection inside an Activity](#where-your-run-is-and-what-it-was-given) to branch without it.
   Both texts must be nonempty, and an id cannot be both needed and used.
   The definitions view carries these declarations with their text.
-  Give an offer or action its own `connections: ["linear"]` list to hide it when that
-  Connection isn't `ok`. Every listed id must also appear in the declaring workflow's
-  `uses` or `needs`. An offer with no list stays shown, even when another offer's
-  Connection is absent. Invocation reads availability again. The target's `needs`
-  are checked when starting it and refuse with their fix; they don't hide the offer.
+  Give an offer or action its own `connections: ["linear"]` list to refuse it, listed with
+  that Connection's reason and fix, when that Connection isn't `ok`. Every listed id must
+  also appear in the declaring workflow's `uses` or `needs`. An offer with no list stays
+  available, even when another offer's Connection is absent. Invocation reads availability
+  again. The target's `needs` are checked when starting it and refuse with their fix; they
+  don't change the offer's listing.
   On GitHub repositories, `github`
   stands in for a declared `gitlab` forge requirement.
 
@@ -1720,7 +1721,22 @@ one. Everything is decided again at that moment — that your module still decla
 offer, what your `eligible` says about the facts as they are now, and whether the child
 takes the arguments — so an offer edited away, one whose facts have moved, and arguments
 the child refuses each start nothing at all. A `followUp` is hidden once somebody has said
-what became of the work; an `action` is given `disposed` and decides for itself.
+what became of the work, unless the host lists a refusal below. An `action` is given
+`disposed` and decides for itself.
+
+The host also refuses an offer whatever your `eligible` says, and lists it with the reason
+rather than dropping it; invoking it from any door is refused with that same sentence
+([ADR-draft-an-offer-is-made-on-the-run-that-owns-its-work-and-not-twice](adr/draft-an-offer-is-made-on-the-run-that-owns-its-work-and-not-twice.md)):
+
+- **while its earlier Run is going**: a Run of the workflow it starts has not ended. It
+  either started from this Run or carries the merge request the offer fills under the same
+  input name. The reason names it: `a Release of <mr> is still going: run-5185c272`. Once
+  that Run fails, an otherwise eligible offer is open again. This is read from the store,
+  so a restart keeps it across every Run carrying the same merge request;
+- **once its merge request is merged**: an offer that fills `merge-request` is refused as
+  `<mr> is merged` when the merge watch last read it merged. An unknown answer refuses
+  nothing;
+- **when a connection it needs is unusable**: it says which connection, why, and the fix.
 
 A conflict is refused at load — before a Run, a worktree or an agent exists — and the
 refusal names every one of them rather than the first:

@@ -1101,6 +1101,157 @@ test(
 
 const UNIT = { name: "unit", executable: "true", argv: [], cwd: "worktree" } as const;
 
+for (const following of ["finish", "release"]) {
+  test(
+    `implement then=${following} refuses another Release while its first is pending`,
+    () =>
+      runLive(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          yield* approvedByOperator;
+          yield* withOrigin;
+          yield* committing(rig.projectDir, "checkout", "-q", "-b", "built");
+          yield* committing(rig.projectDir, "commit", "-q", "--allow-empty", "-m", "the change");
+          yield* committing(rig.projectDir, "checkout", "-q", "master");
+          const plan = `${rig.root}/plan`;
+          yield* fs.makeDirectory(`${plan}/issues`, { recursive: true });
+          yield* fs.writeFileString(`${plan}/SPEC.md`, "# The spec\n");
+          yield* fs.writeFileString(
+            `${plan}/issues/01-only.md`,
+            "# Build it\n\n**Checks:** unit\n",
+          );
+          const release = `${rig.userDir}/workflows/release.workflow.ts`;
+          yield* fs.makeDirectory(`${rig.userDir}/workflows`, { recursive: true });
+          yield* fs.writeFileString(
+            release,
+            `
+            import { defineWorkflow } from "collie";
+            import ships from "${fixtures}/ships.workflow.ts";
+            export default defineWorkflow({ ...ships, id: "release" });
+          `,
+          );
+          const bin = yield* Effect.acquireRelease(FakeBin.make(`${rig.root}/bin`), (bin) =>
+            bin.restore(),
+          );
+          const api = yield* serveForges(
+            yield* forgeOnPath(bin, "gitlab", {
+              installed: true,
+              loggedIn: [FORGE_HOST.gitlab],
+              login: LOGIN,
+              mrs: [],
+            }),
+          );
+          const mr = "https://gitlab.example.com/group/app/-/merge_requests/7";
+          yield* rig.queueOutputs([
+            {
+              verdict: "clean",
+              findings: [],
+              branch: "mk/delivery",
+              pushed: true,
+              tickets_done: ["Build it"],
+              commits: ["build"],
+              tests: "unit: pass",
+            },
+            {
+              verdict: "clean",
+              findings: [],
+              dropped: [],
+              fixed: [],
+              scope_met: true,
+              summary: "Built it",
+            },
+            {
+              verdict: "clean",
+              findings: [],
+              mr_url: mr,
+              linear_issues: [],
+              branch: "mk/delivery",
+              pushed: true,
+            },
+          ]);
+          yield* hosted(
+            Effect.gen(function* () {
+              const registry = yield* Registry;
+              const store = yield* Store;
+              const [implement] = yield* loaded(registry, [shipped("implement"), release]);
+              const started = yield* registry
+                .start({
+                  generation: implement!,
+                  project: rig.projectDir,
+                  request: "delivery",
+                  branchBase: "built",
+                  // oxlint-disable-next-line unicorn/no-thenable -- implement's input is named then
+                  input: { plan, then: following },
+                })
+                .pipe(Effect.result);
+              if (started._tag === "Failure") return yield* Effect.die(started.failure);
+              const runId = started.success.runId;
+              if (following === "finish") {
+                expect((yield* finished(runId))?.status.status).toBe("complete");
+                yield* registry.invoke({
+                  runId,
+                  offer: "release",
+                  input: {},
+                  request: "first-release",
+                });
+              }
+              const rows = yield* until(
+                () =>
+                  store.runs.pipe(
+                    Effect.map((rows) => Arr.filter(rows, (row) => row.workflow === "release")),
+                  ),
+                (rows) => rows.length === 1,
+              );
+              const child = rows[0]!.run;
+              yield* until(
+                () => registry.view(child),
+                (view) => Arr.some(view?.waiting ?? [], (one) => one.name === "go"),
+              );
+              const going = `a Release of ${mr} is still going: ${child}`;
+              expect(yield* registry.offers(runId)).toContainEqual(
+                expect.objectContaining({ id: "release", unavailable: going }),
+              );
+              const refused = yield* registry
+                .invoke({ runId, offer: "release", input: {}, request: "second-release" })
+                .pipe(Effect.flip);
+              expect(refused.reason).toContain(going);
+              expect(
+                Arr.filter(yield* store.runs, (row) => row.workflow === "release"),
+              ).toHaveLength(1);
+              if (following === "finish") {
+                yield* registry.answer({
+                  runId: child,
+                  decision: "go",
+                  value: "no",
+                  request: "no",
+                });
+                expect((yield* finished(child))?.status.status).toBe("failed");
+                expect((yield* registry.view(runId))?.status.status).toBe("complete");
+                expect(yield* registry.offers(runId)).toContainEqual(
+                  expect.objectContaining({ id: "release", unavailable: null }),
+                );
+                yield* registry.invoke({
+                  runId,
+                  offer: "release",
+                  input: {},
+                  request: "retry-release",
+                });
+                expect(
+                  Arr.filter(yield* store.runs, (row) => row.workflow === "release"),
+                ).toHaveLength(2);
+              }
+            }),
+          ).pipe(
+            Effect.provide(
+              ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: api })),
+            ),
+          );
+        }).pipe(Effect.scoped),
+      ),
+    120_000,
+  );
+}
+
 /** A repository's checks file committed, since a start reads it where its checkout starts. */
 const checksCommitted = (at: string) =>
   committing(at, "add", ".collie/verify.json").pipe(
