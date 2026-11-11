@@ -9,6 +9,7 @@
 // `docs/adr/0014-native-workflows-run-on-effects-own-engine.md` records why each of the
 // pieces below is upstream's rather than Collie's.
 
+import { ShippingGo, writeStageProof } from "./shipping";
 import * as Struct from "effect/Struct";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
@@ -121,7 +122,7 @@ import { currentEnv } from "./env";
 import { waitForMemory } from "./memory-wait";
 import { measure, readMeasurements } from "./measurement";
 import { finalMeasurementLine, type Measurement } from "./measurement-model";
-import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
+import { PROJECTS_ROOT_OPTION, projectsRoot, repositoryCheckout } from "./projects";
 import { gitDirOf, publicationCheckouts, throughAliases, remoteOf } from "./issue-privacy";
 import {
   HelleClaimSchema,
@@ -754,7 +755,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export const StageReadSchema: Schema.Codec<StageRead, unknown, never, never>;
   /** A merge request as its forge reads it now: its state and the branches it merges, and its plan's wave where a fan-out's Change run opened it. */
   export type MergeRequestRead =
-    | { readonly _tag: "Read"; readonly state: string; readonly source: string; readonly target: string; readonly wave?: { readonly plan: string; readonly at: number } }
+    | { readonly _tag: "Read"; readonly state: string; readonly source: string; readonly target: string; readonly merged?: string; readonly checkout?: string; readonly wave?: { readonly plan: string; readonly at: number } }
     | { readonly _tag: "Unreadable"; readonly why: string };
   export const MergeRequestReadSchema: Schema.Codec<MergeRequestRead, unknown, never, never>;
   /** A set's merge requests, blockers first, each with those of the set it waits on, by branch and by its plan's earlier waves; or those waiting on each other. */
@@ -1144,6 +1145,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly readMergeRequest: (options: {
       readonly cwd: string;
       readonly mr: string;
+      readonly checkout?: boolean;
     }) => Effect.Effect<MergeRequestRead>;
     /** Whether stage is shown back on what production carries, and off \`off\`, in \`environments\` where named. Take it inside an Activity. */
     readonly readRollback: (options: {
@@ -1419,7 +1421,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   }
 
   /** A question as the host records it: its identity, what it asks, what it takes. */
+  export type ShippingGo =
+    | { readonly action: "merge" | "stage" | "deploy"; readonly head: string }
+    | { readonly action: "deploy"; readonly tag: string };
+
   export interface DecisionSpec {
+    readonly shipping?: ShippingGo;
     readonly name: string;
     readonly prompt: string;
     readonly options: ReadonlyArray<string | Solution>;
@@ -1444,6 +1451,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
    * than one is posted unmarked with a shortfall, and the Run goes on.
    */
   export function ask(question: {
+    readonly shipping?: ShippingGo;
     readonly name: string;
     readonly prompt?: string;
     /** The answers it takes; none is a question answered in the operator's own words. */
@@ -4447,6 +4455,7 @@ export const hostLayer = (options: {
               options: question.options,
               asker,
               shortfall: question.shortfall,
+              shipping: question.shipping,
             })
             .pipe(
               Effect.andThen(
@@ -4984,7 +4993,7 @@ export const hostLayer = (options: {
           ).pipe(Effect.orDie),
         readTag: (asked) =>
           Effect.gen(function* () {
-            return yield* under(
+            const read = yield* under(
               readTag({
                 cwd: asked.cwd,
                 tag: asked.tag,
@@ -4997,6 +5006,16 @@ export const hostLayer = (options: {
                 run: runShell,
               }),
             );
+            if (asked.proves === "staged")
+              yield* under(
+                writeStageProof(runDir(dir, asked.runId), {
+                  head: asked.merged,
+                  tag: asked.tag,
+                  proved: read._tag === "Proved" || read._tag === "InProduction",
+                  why: "why" in read ? read.why : null,
+                }),
+              );
+            return read;
           }),
         readMergeRequest: (asked) => {
           const ref = readMrRef(asked.mr);
@@ -5006,7 +5025,21 @@ export const hostLayer = (options: {
                 why: `${asked.mr} is not a merge request`,
               } satisfies MergeRequestRead)
             : Effect.gen(function* () {
-                const read = yield* under(readMergeRequest({ ref, cwd: asked.cwd, run: runShell }));
+                let read: MergeRequestRead = yield* under(
+                  readMergeRequest({ ref, cwd: asked.cwd, run: runShell }),
+                );
+                if (
+                  read._tag === "Read" &&
+                  asked.checkout === true &&
+                  ref.project !== null &&
+                  (yield* under(projectHere(asked.cwd, runShell))) !== ref.project
+                ) {
+                  const { env } = yield* placing;
+                  const found = yield* under(
+                    repositoryCheckout({ ...env, cwd: asked.cwd }, `https://${ref.project}`),
+                  ).pipe(Effect.orDie);
+                  if (found !== null && "path" in found) read = { ...read, checkout: found.path };
+                }
                 const id = mrId(asked.mr);
                 const wave =
                   read._tag === "Read" && id !== null ? yield* planWaveOf(id) : undefined;
@@ -5022,8 +5055,19 @@ export const hostLayer = (options: {
         readStage: (asked) =>
           Effect.gen(function* () {
             const ref = yield* recordedRef(asked.runId);
-            if (ref === null) return { _tag: "Failed", why: unrecorded } satisfies StageRead;
-            return yield* under(readStage({ ...asked, ref, run: runShell }));
+            const read: StageRead =
+              ref === null
+                ? { _tag: "Failed", why: unrecorded }
+                : yield* under(readStage({ ...asked, ref, run: runShell }));
+            yield* under(
+              writeStageProof(runDir(dir, asked.runId), {
+                head: asked.head,
+                tag: null,
+                proved: read._tag === "Staged",
+                why: "why" in read ? read.why : read._tag === "Moved" ? "stage head moved" : null,
+              }),
+            );
+            return read;
           }),
         readRollback: (asked) =>
           Effect.gen(function* () {
@@ -6022,6 +6066,7 @@ const launchOptions = (generation: Generation, asked: Readonly<Record<string, st
  */
 /** A question a run has been asked, as a front door shows it. */
 export const OpenDecision = Schema.Struct({
+  shipping: Schema.optionalKey(Schema.NullOr(ShippingGo)),
   name: Schema.String,
   prompt: Schema.String,
   /** The solutions it takes, recommended first; empty is a question answered in words. */
@@ -7865,21 +7910,24 @@ const makeRegistry: (
     return yield* Effect.forEach(rows, (row) =>
       decodeOptions(row.options).pipe(
         Effect.orElseSucceed(() => none),
-        Effect.map((options) => ({
-          name: row.decision,
-          prompt: row.prompt,
-          options: recommendedFirst(options),
-          answer: row.answer,
-          asked: row.asked,
-          answered: row.answered,
-          by: row.answerer === null ? null : whoActed(row.answerer),
-          asker: row.asker,
-          superseded: row.superseded,
-          cause: row.cause,
-          messaged: Arr.map(row.messaged ?? [], (one) => one.agent),
-          revises: row.revises,
-          shortfall: row.shortfall,
-        })),
+        Effect.map((options) => {
+          const question = {
+            name: row.decision,
+            prompt: row.prompt,
+            options: recommendedFirst(options),
+            answer: row.answer,
+            asked: row.asked,
+            answered: row.answered,
+            by: row.answerer === null ? null : whoActed(row.answerer),
+            asker: row.asker,
+            superseded: row.superseded,
+            cause: row.cause,
+            messaged: Arr.map(row.messaged ?? [], (one) => one.agent),
+            revises: row.revises,
+            shortfall: row.shortfall,
+          };
+          return row.shipping === null ? question : { ...question, shipping: row.shipping };
+        }),
       ),
     );
   });

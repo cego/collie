@@ -24,14 +24,20 @@ import {
 } from "../src/worktree";
 import type { AgentEntry } from "../src/registry";
 import type { RunFacts } from "../src/runs";
-import { runFacts } from "./support/records";
+import { madeRun, runFacts } from "./support/records";
 import {
   measurementTreesSweeper,
   renovateClonesSweeper,
   settlingOf,
   sweep,
+  taskWorkspacesSweeper,
   worktreesSweeper,
 } from "../src/cleanup";
+import { buildBoard } from "../src/board";
+import { readEnv } from "../src/env";
+import { recordDisposition } from "../src/disposition";
+import type { TaskRecord } from "../src/task";
+import { epochMs } from "../src/time";
 import { withLock } from "../src/lock";
 import { NOTHING_SETTLING, onBranch, type Settling } from "../src/worktree";
 import { encodeCheckRecord, runningChecksDir } from "../src/check-processes";
@@ -3509,11 +3515,12 @@ test("a merge the merge watch recorded on GitHub settles a branch still on the r
       yield* fs.makeDirectory(`${rig.stateDir}/board`, { recursive: true });
       yield* fs.writeFileString(
         `${rig.stateDir}/board/mr-states.json`,
-        '{"github.com/o/r#5":{"state":"merged","checks":{"state":"passed"},"head":"abc"}}',
+        '{"github.com/o/r#5":{"state":"merged","checks":{"state":"passed"},"head":"abc","read":"2026-09-14T09:00:00Z"}}',
       );
       settling = yield* settlingOf({
         stateDir: rig.stateDir,
         runs: recorded,
+        views: [],
         tasks: [],
         sessions: [new Herdr(rig.pluginEnv())],
         protect: [],
@@ -3547,11 +3554,12 @@ test("a legacy bare mr: target is settled as the merge request of its checkout's
       yield* fs.makeDirectory(`${rig.stateDir}/board`, { recursive: true });
       yield* fs.writeFileString(
         `${rig.stateDir}/board/mr-states.json`,
-        '{"gitlab.example.com/group/app!42":{"state":"merged"},"gitlab.example.com/group/web!42":{"state":"open"}}',
+        '{"gitlab.example.com/group/app!42":{"state":"merged","read":"2026-09-14T09:00:00Z"},"gitlab.example.com/group/web!42":{"state":"open","read":"2026-09-14T09:00:00Z"}}',
       );
       settling = yield* settlingOf({
         stateDir: rig.stateDir,
         runs: recorded,
+        views: [],
         tasks: [],
         sessions: [new Herdr(rig.pluginEnv())],
         protect: [],
@@ -3616,6 +3624,193 @@ test("the plugin root is never removed, even where a Run recorded it", () =>
 
       expect(yield* prune()).toEqual([]);
       expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
+    }),
+  ));
+
+const OWED_MR = "https://gitlab.cego.dk/mk/support/-/merge_requests/279";
+const SHARED_TASK: TaskRecord = {
+  id: "task-1",
+  workspace: "w7",
+  label: "support | nuxt ci",
+  cwd: "/project",
+  root_pane: "w7-p1",
+  created_at: "2026-09-14T07:00:00.000Z",
+};
+const AFTER_ENDING = epochMs("2026-09-14T11:00:00Z");
+
+/**
+ * A failed Run and its follow-up in one Task, on one checkout of `wt` and one merge request
+ * the forge reads as `state`, the first saying the second superseded it; `abandoned` records
+ * that on the follow-up too. Settles what Cleanup reads from the board built over them.
+ */
+const sharedCheckout = Effect.fn("worktreeTest.sharedCheckout")(function* (
+  state: "open" | "merged",
+  abandoned = false,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const at = yield* collieWorktree("wt", { state: "failed" });
+  yield* settledGit({ "ls-remote --heads origin": "deadbeef refs/heads/wt" });
+  const shared = {
+    task: SHARED_TASK.id,
+    mr: OWED_MR,
+    branch: "wt",
+    worktree: recorded[0]!.worktree,
+    project: rig.projectDir,
+    cwd: at,
+  };
+  const first = yield* madeRun(rig.stateDir, {
+    ...shared,
+    id: "run-first",
+    state: "failed",
+    created: "2026-09-14T08:00:00Z",
+    finished: "2026-09-14T08:30:00Z",
+  });
+  const second = yield* madeRun(rig.stateDir, {
+    ...shared,
+    id: "run-second",
+    state: "succeeded",
+    created: "2026-09-14T08:40:00Z",
+    finished: "2026-09-14T09:30:00Z",
+  });
+  yield* recordDisposition(first.dir, {
+    at: "2026-09-14T09:00:00Z",
+    by: "cli:recovery",
+    kind: "superseded",
+    ref: `${second.id}; ${OWED_MR}`,
+    note: null,
+  });
+  if (abandoned)
+    yield* recordDisposition(second.dir, {
+      at: "2026-09-14T09:40:00Z",
+      by: "mk",
+      kind: "abandoned",
+      ref: "",
+      note: null,
+    });
+  recorded = [first, second];
+  yield* fs.makeDirectory(`${rig.stateDir}/board`, { recursive: true });
+  yield* fs.writeFileString(
+    `${rig.stateDir}/board/mr-states.json`,
+    `{"gitlab.cego.dk/mk/support!279":{"state":"${state}","read":"2026-09-14T09:00:00Z"}}`,
+  );
+  const views = yield* buildBoard({
+    env: readEnv({ HERDR_PLUGIN_STATE_DIR: rig.stateDir, COLLIE_CWD: rig.projectDir }),
+    runs: recorded,
+    tasks: [SHARED_TASK],
+    registered: [],
+    proposals: [],
+    now: AFTER_ENDING,
+    head: () => Effect.succeed(null),
+  });
+  settling = yield* settlingOf({
+    stateDir: rig.stateDir,
+    runs: recorded,
+    views,
+    tasks: [],
+    sessions: [new Herdr(rig.pluginEnv())],
+    protect: [],
+  });
+  yield* rig.addWorkspace("w7", SHARED_TASK.label, at);
+  yield* rig.addPane("w7-p1", "w7-t1", at, null, "w7");
+  const workspaces = taskWorkspacesSweeper({
+    stateDir: rig.stateDir,
+    sessions: [{ herd: null, herdr: new Herdr(rig.pluginEnv()) }],
+    tasks: [SHARED_TASK],
+    views,
+    runs: recorded,
+    seen: new Map([[SHARED_TASK.id, (yield* Clock.currentTimeMillis) - 2 * 60 * 60_000]]),
+  });
+  return { at, workspaces };
+});
+
+test("a follow-up's open merge request keeps the checkout and workspace its superseded predecessor shared", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const { workspaces } = yield* sharedCheckout("open");
+
+      const pruned = yield* prune();
+      expect(pruned).toHaveLength(1);
+      expect(pruned[0]).toStartWith("kept wt · ");
+      expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
+      expect((yield* rig.cmds()).includes("branch -d")).toBe(false);
+      const judged = yield* workspaces.judge;
+      expect(judged.remove).toEqual([]);
+      expect(judged.keep).toEqual([{ kind: "workspace", target: "w7", reason: "waiting on you" }]);
+    }),
+  ));
+
+test("a shared checkout whose merge request the forge read merged goes, saying it merged", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* sharedCheckout("merged");
+
+      expect(yield* prune()).toEqual(["♻ removed wt · merged in mk/support!279"]);
+    }),
+  ));
+
+for (const taskless of [false, true])
+  for (const answer of ["closed", "unknown", "board-failed"])
+    test(`owed ${taskless ? "virtual" : "recorded"} Task keeps its checkout with ${answer} evidence and a deleted remote branch`, () =>
+      runOnPath(
+        Effect.gen(function* () {
+          const { at } = yield* sharedCheckout("open");
+          yield* settledGit({ "ls-remote --heads origin": "" });
+          recorded = [{ ...recorded[1]!, task: taskless ? null : SHARED_TASK.id }];
+          if (answer === "unknown")
+            yield* recordDisposition(recorded[0]!.dir, {
+              at: "2026-09-14T09:40:00Z",
+              by: "mk",
+              kind: "superseded",
+              ref: "a later attempt",
+              note: null,
+            });
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.writeFileString(
+            `${rig.stateDir}/board/mr-states.json`,
+            answer === "closed"
+              ? '{"gitlab.cego.dk/mk/support!279":{"state":"closed","read":"2026-09-14T10:00:00Z"}}'
+              : "{}",
+          );
+          const views =
+            answer === "board-failed"
+              ? null
+              : yield* buildBoard({
+                  env: readEnv({
+                    HERDR_PLUGIN_STATE_DIR: rig.stateDir,
+                    COLLIE_CWD: rig.projectDir,
+                  }),
+                  runs: recorded,
+                  tasks: [SHARED_TASK],
+                  registered: [],
+                  proposals: [],
+                  now: AFTER_ENDING,
+                  head: () => Effect.succeed(null),
+                });
+          settling = yield* settlingOf({
+            stateDir: rig.stateDir,
+            runs: recorded,
+            views,
+            tasks: [],
+            sessions: [],
+            protect: [],
+          });
+          const lines = yield* prune();
+          expect(lines).toHaveLength(1);
+          expect(lines[0]).toStartWith("kept wt · ");
+          expect((yield* rig.cmds()).includes(`worktree remove ${at}`)).toBe(false);
+        }),
+      ));
+
+test("a Task abandoned on its leading Run gives up its checkout and, after its hour, its workspace", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const { workspaces } = yield* sharedCheckout("open", true);
+
+      expect(yield* prune()).toEqual(["♻ removed wt · abandoned, as recorded"]);
+      const judged = yield* workspaces.judge;
+      expect(judged.remove).toEqual([
+        { kind: "workspace", target: "w7", bytes: 0, reason: "Finished 120 min ago" },
+      ]);
     }),
   ));
 

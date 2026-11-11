@@ -18,8 +18,10 @@ import { writeConfigValue } from "../src/config";
 import { currentEnv } from "../src/env";
 import { pickFlow, type FlowPrompts } from "../src/flows";
 import { Herdr } from "../src/herdr";
-import { connect } from "../src/host";
-import { runView, runViews } from "../src/lifecycle";
+import { HostUnavailable, connect } from "../src/host";
+import { refusal, runView, runViews } from "../src/lifecycle";
+import { HostRefused } from "../src/board-model";
+import { MachineUnreachable } from "../src/peers-model";
 import { runDir, type RunView } from "../src/engine";
 import { readAudit } from "../src/audit";
 import { readDispositions } from "../src/disposition";
@@ -1183,3 +1185,12 @@ test(
     ),
   180_000,
 );
+
+test("a host that was not reached is told apart from one that refused", () => {
+  const dropped = new HostUnavailable({ dir: "/far", reason: "SocketCloseError: 1000" });
+  const away = new MachineUnreachable({ machine: "far", seen: "no control link" });
+  const refused = new HostRefused({ reason: "no Run run-1 here" });
+  expect(refusal(dropped)).toMatchObject({ ok: false, unreached: true });
+  expect(refusal(away)).toMatchObject({ ok: false, unreached: true });
+  expect(refusal(refused)).not.toHaveProperty("unreached");
+});

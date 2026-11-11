@@ -11,6 +11,7 @@
 // merge request merged — the one a Run recorded, else the one opened from the Task's own
 // branch, whoever opened it — and the record says who and when.
 
+import * as Str from "effect/String";
 import { Effect, Path, Schema } from "effect";
 import { Disposition } from "./board-model";
 import { appendJournal, readJournal } from "./journal";
@@ -32,6 +33,9 @@ export const recordDisposition = Effect.fn("Disposition.record")(function* (
 export const readDispositions = Effect.fn("Disposition.read")(function* (runDir: string) {
   return yield* readJournal(yield* dispositionPath(runDir), RecordJson);
 });
+
+/** The words of a ref, any of which may be a Run's id. */
+export const refWords = (ref: string) => Str.split(ref, /[\s;,]+/);
 
 /**
  * The current answer, which is the last one given. A correction is a new line rather than

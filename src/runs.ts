@@ -24,12 +24,14 @@ import type { WorktreeRecord } from "./run";
 import type { Landing } from "./landing";
 import { awaitingLine, type Awaiting } from "./awaiting";
 import type { AskedFact, Execution, UsageWait } from "./flow";
+import type { ShippingGo } from "./shipping";
 
 /** Where a Run is, in the words every board and listing uses. */
 export type RunState = "running" | "waiting" | "succeeded" | "failed" | "stopped";
 
 /** A question a Run is waiting on a human for. */
 export interface Asked {
+  readonly shipping?: ShippingGo;
   readonly name: string;
   readonly prompt: string;
   readonly options: ReadonlyArray<Solution>;
@@ -162,6 +164,7 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
       const hold = holdPath(one, view.controls.includes(HOLD));
       if (hold !== undefined) asked.hold = hold;
       if (one.shortfall != null) asked.shortfall = one.shortfall;
+      if (one.shipping != null) asked.shipping = one.shipping;
       if (one.steer != null) asked.steer = one.steer;
       return asked;
     },

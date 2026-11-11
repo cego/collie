@@ -1013,6 +1013,16 @@ the first.
 - **One answer, whoever sends it.** Two answers racing make one piece of work; the second is
   refused with what the run already has, and retrying one under the same request id is the
   same answer rather than another.
+- **Declare a shipping Go with `shipping`.** Use `{ action: "merge", head }` or
+  `{ action: "stage", head }` for a merge request, and `{ action: "deploy", head }` or
+  `{ action: "deploy", tag }` for production. The head or tag must be nonempty; an unknown
+  action or missing revision is refused before the question is recorded. The declaration
+  survives a restart with the question. Names and option titles decide nothing.
+  The host places it in Ready to ship only while its action's gates hold: Merge and
+  Stage from an MR require Ready to release at that head on fresh forge answers; Deploy
+  requires the host's stage proof for that exact head or tag. A moved head, stale answer
+  or failed gate keeps it in Needs you, naming the failure. Answer it through the normal
+  answer path; the declaration grants no authority and never answers the question.
 - **The question survives a restart**, and so does its answer. What is waiting is in
   `run show`, and `run answer <run> <value> --decision <name>` settles it.
 
@@ -1869,5 +1879,8 @@ the host sends the requester the status, summary or failure reason and
 `collie run show <id>` for the full Output. The Delivery uses the agent's sender line and
 a request id derived from the started Run. A restart reuses that Delivery. Delivery uses
 `boundary`, supported by all harnesses. A gone agent, an unpaired Machine or a Machine
-that does not answer within fifteen seconds leaves an undelivered report with its reason;
-there is no retry queue. `run show` and the drawer show the requester and report.
+that does not answer within fifteen seconds leaves an undelivered report with its reason.
+A report that did not reach its Machine is sent again, with the same request id and text,
+each time that Machine's link comes back, so the agent is told once; a gone agent or an
+unpaired Machine is final. The report's `tries` keep the earlier tries. `run show` and the
+drawer show the requester and report.

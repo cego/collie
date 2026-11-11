@@ -571,13 +571,26 @@ branch is another's source branch waits on it, and so does one a fan-out's Chang
 on each of the set's merge requests whose Change is in an earlier wave of the same plan. A
 waiting one is started only once those Release Runs have merged theirs, costing nothing
 meanwhile. Merge requests that wait on each other are refused.
-Each child is a release as below, of its one merge request: its own Go at its own head,
-withdrawn only when its own head moves; its own production go; its own Helle claims. One
+For merge requests in another repository, the set uses that repository's checkout under
+the Projects root for its merge children and tag Run.
+Each child keeps its own review, Checks, Go at its own head and Helle claims. Its Go is
+withdrawn only when its own head moves. It merges and ends **merged**, without tagging,
+staging the tag or asking for production. Once every child of a repository has ended,
+the set starts one more Release Run for that repository, entering at Tag. It tags once
+over all the children that merged, proves the tag carries every merge and, for an
+application, stages the tag and asks for production once. A repository with nothing merged
+gets no tag. A pending Merge Go or Production Go in one repository does not delay another
+repository's tag Run. Failed or open children do not hold back a tag over the others' merges. One
 waiting on a release that failed, or on a merge request left open, is not started. The Run
 ends saying how many released, failed and were not started, and how many were left open,
 naming each, and fails where one failed. A failed child offers **Release again** with its
 one merge request; the set's Run never offers the whole set again. Picking several Gos in
 one question is not yet offered: each child asks its own.
+
+The set fills `merge_only=true` on its children. Each repository's tag Run starts with
+`together` naming the merged merge requests its tag must carry. These inputs are available through
+every front door; a normal start needs neither. A set's application needs stage deploy
+jobs on its tags. Without them, its merge child refuses to merge.
 
 **Checkout:** its own, of the merge request's source branch (the pull request's head
 branch on GitHub): the one git already has for it, which is the implement Run's worktree
