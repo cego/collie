@@ -2238,6 +2238,17 @@ None of your Pi extensions, skills, prompt templates or context files loads. Its
 `read`, `bash`, `edit`, `write`, `grep`, `find` and `ls` tools reach this computer without
 asking first. Pi missing from PATH is said in the chat.
 
+On Pi the chat has your MCP servers too: those in Pi's own `~/.pi/agent/mcp.json`, and the
+user-scope servers Claude Code has in `~/.claude.json`, which Desktop gives Pi when each
+conversation starts. Their tools are found with `tool_search`. Pi signs in on its own, not
+with Claude Code's sign-in: the first time, type `/mcp login <server>` in the chat, for example
+`/mcp login linear-server`, and approve it in the browser that opens; Pi keeps the sign-in for
+later conversations. `/mcp` alone lists each server and its state. A server Pi cannot run, such
+as an SSE server or one using `headersHelper`, is left out, and the chat says which and why.
+claude.ai connectors, such as Slack, reach only the Claude harness. On both, GitLab and GitHub
+are reached with `glab` and `gh`. A server added while a conversation is open reaches the next
+one: start a new conversation, switch harness, or restart Desktop.
+
 The effort is chosen in its select, or by asking the chat, for example "answer at high
 effort from now on", which `collie_chat_harness` saves. Claude's levels range from `low` to
 `max`; Pi's from `off` to `max`, passed as `--thinking`. Each model offers its own subset.

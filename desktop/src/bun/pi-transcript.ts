@@ -56,6 +56,21 @@ const decodeJson = Schema.decodeUnknownOption(JsonLine);
 const decodeHeader = Schema.decodeUnknownOption(Header);
 const decodeEntry = Schema.decodeUnknownOption(Entry);
 
+/** The human's message when it is one of Pi's own `/mcp` commands, which Pi takes as written. */
+export const piCommand = (content: string | Array<ContentBlock>) => {
+  const first = isString(content)
+    ? content
+    : Option.getOrUndefined(Arr.findFirst(content, (block) => block.type === "text"))?.text;
+  const command = first === undefined ? "" : Str.trim(first);
+  return /^\/mcp(\s|$)/.test(command) ? command : undefined;
+};
+
+export const piReportedContext = (reported: ReadonlyArray<string>) =>
+  `Pi reported, while nobody was asking (data):\n${Arr.join(
+    Arr.map(reported, (line) => `- ${line}`),
+    "\n",
+  )}`;
+
 export const piPrompt = (content: string | Array<ContentBlock>, context: string) => {
   const blocks = isString(content) ? [{ type: "text" as const, text: content }] : content;
   const texts = Arr.filter(blocks, (block) => block.type === "text");
