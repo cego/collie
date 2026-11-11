@@ -19,6 +19,7 @@ import {
 } from "effect";
 import type { PlatformServices } from "./platform";
 import type { Records } from "./records";
+import { readEnv } from "./env";
 import {
   FrontDoor,
   mrLabel,
@@ -401,7 +402,16 @@ export const settlingOf = (opts: {
   Effect.gen(function* () {
     const states = yield* readMrStates(opts.stateDir);
     const forge = yield* readForge(opts.stateDir);
-    const viewOf = new Map(Arr.map(opts.views ?? [], (view) => [view.id, view]));
+    const views =
+      opts.views === null
+        ? []
+        : yield* (yield* Effect.promise(() => import("./board"))).buildBoard({
+            env: readEnv({ HERDR_PLUGIN_STATE_DIR: opts.stateDir }),
+            runs: opts.runs,
+            tasks: opts.tasks,
+            includeHistory: true,
+          });
+    const viewOf = new Map(Arr.map([...views, ...(opts.views ?? [])], (view) => [view.id, view]));
     const landedAt = new Map<string, Landed>();
     const landedOn = new Map<string, Landed>();
     const openOn = new Map<string, string>();
@@ -412,14 +422,14 @@ export const settlingOf = (opts: {
       const id = run.mr === null ? null : yield* mrIdIn(run.mr, run.cwd, shell);
       const state = id === null ? undefined : states.get(id);
       const branch = run.branch ?? run.worktree?.branch ?? "";
-      const view = run.task === null ? undefined : viewOf.get(run.task);
+      const view =
+        viewOf.get(run.task ?? run.id) ??
+        Arr.findFirst(views, (one) => Arr.some(one.children, (child) => child.run === run.id)).pipe(
+          Option.getOrUndefined,
+        );
       const item = Option.getOrUndefined(Arr.findFirst(view?.mrs ?? [], (one) => one.id === id));
       // Whatever a Run's line says, a Task keeps what it still owes on.
-      const owed =
-        run.task !== null &&
-        (opts.views === null ||
-          (view !== undefined &&
-            (item?.settled === undefined ? !view.landed : item.settled === null)));
+      const owed = opts.views === null || (view !== undefined && !view.landed);
       const openLabel = state === "open" && branch !== "" ? label : null;
       if (owed) {
         if (run.worktree !== null) owedAt.add(run.worktree.path);
@@ -460,6 +470,7 @@ export const settlingOf = (opts: {
       else for (const one of listed.value) open.add(one.workspaceId);
     }
     const workspaceHolds = new Map<string, string>();
+    for (const path of owedAt) workspaceHolds.set(path, "its Task still owes work");
     for (const run of opts.runs) {
       if (run.worktree?.created_by_collie !== true || run.task === null) continue;
       const task = Option.getOrUndefined(Arr.findFirst(opts.tasks, (one) => one.id === run.task));
@@ -472,6 +483,8 @@ export const settlingOf = (opts: {
         workspaceHolds.set(run.worktree.path, "its Task's workspace is still open");
     }
     return {
+      owedAt,
+      owedOn,
       landedAt,
       landedOn,
       openOn,
@@ -489,7 +502,7 @@ export const worktreesSweeper = (opts: {
   registered: ReadonlyArray<AgentEntry>;
   cwd: string;
   /** Read when it judges, so a workspace closed earlier in the same sweep counts as closed. */
-  settling?: Effect.Effect<Settling, never, PlatformServices>;
+  settling?: Effect.Effect<Settling, never, PlatformServices | Records>;
 }): Sweeper => {
   const kind = "worktree";
   return {

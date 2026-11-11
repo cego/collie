@@ -3748,6 +3748,59 @@ test("a shared checkout whose merge request the forge read merged goes, saying i
     }),
   ));
 
+for (const taskless of [false, true])
+  for (const answer of ["closed", "unknown", "board-failed"])
+    test(`owed ${taskless ? "virtual" : "recorded"} Task keeps its checkout with ${answer} evidence and a deleted remote branch`, () =>
+      runOnPath(
+        Effect.gen(function* () {
+          const { at } = yield* sharedCheckout("open");
+          yield* settledGit({ "ls-remote --heads origin": "" });
+          recorded = [{ ...recorded[1]!, task: taskless ? null : SHARED_TASK.id }];
+          if (answer === "unknown")
+            yield* recordDisposition(recorded[0]!.dir, {
+              at: "2026-09-14T09:40:00Z",
+              by: "mk",
+              kind: "superseded",
+              ref: "a later attempt",
+              note: null,
+            });
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.writeFileString(
+            `${rig.stateDir}/board/mr-states.json`,
+            answer === "closed"
+              ? '{"gitlab.cego.dk/mk/support!279":{"state":"closed","read":"2026-09-14T10:00:00Z"}}'
+              : "{}",
+          );
+          const views =
+            answer === "board-failed"
+              ? null
+              : yield* buildBoard({
+                  env: readEnv({
+                    HERDR_PLUGIN_STATE_DIR: rig.stateDir,
+                    COLLIE_CWD: rig.projectDir,
+                  }),
+                  runs: recorded,
+                  tasks: [SHARED_TASK],
+                  registered: [],
+                  proposals: [],
+                  now: AFTER_ENDING,
+                  head: () => Effect.succeed(null),
+                });
+          settling = yield* settlingOf({
+            stateDir: rig.stateDir,
+            runs: recorded,
+            views,
+            tasks: [],
+            sessions: [],
+            protect: [],
+          });
+          const lines = yield* prune();
+          expect(lines).toHaveLength(1);
+          expect(lines[0]).toStartWith("kept wt · ");
+          expect((yield* rig.cmds()).includes(`worktree remove ${at}`)).toBe(false);
+        }),
+      ));
+
 test("a Task abandoned on its leading Run gives up its checkout and, after its hour, its workspace", () =>
   runOnPath(
     Effect.gen(function* () {
