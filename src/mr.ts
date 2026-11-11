@@ -134,8 +134,7 @@ export function postNote<R>(
     readonly target: string;
     readonly cwd: string;
     readonly body: string;
-    /** Approve it too, which a review with nothing live left asks for. */
-    readonly approve?: boolean;
+    readonly review?: { readonly runId: string; readonly head: string; readonly round: number };
     /** The Flock's GitLab, which is GitLab whatever its name. */
     readonly gitlabHost?: string;
   },
@@ -165,7 +164,22 @@ export function postNote<R>(
         message: `${options.target} is assigned to you, so its findings are yours to fix rather than to post`,
       };
     }
-    return yield* forge.post(mr, options.body, options.approve === true, options.cwd, run);
+    let body = options.body;
+    if (options.review !== undefined) {
+      const { runId, head, round } = options.review;
+      if (me === null || head === "")
+        return {
+          ok: false,
+          message: `could not sign the review: the forge did not report the login and reviewed head`,
+        };
+      const signature = `Review by Collie for @${me} · ${runId} round ${round} at ${head}`;
+      const found = yield* forge.findNote(mr, signature, options.cwd, run);
+      if (!found.ok)
+        return { ok: false, message: `could not read the review before posting: ${found.reason}` };
+      if (found.value) return { ok: true, message: `posted the review to ${options.target}` };
+      body = `Review at ${head}\n\n${Str.trimEnd(body)}\n\n${signature}`;
+    }
+    return yield* forge.post(mr, body, options.cwd, run);
   });
 }
 

@@ -1235,7 +1235,7 @@ export interface HostApi {
    * written out again by an agent — asking for a file to be repeated verbatim is how
    * verbatim stops being true. The refusal is the message: a target that is not a merge
    * request, no CLI or login for its forge, or one assigned to whoever is running this.
-   * With `approve`, the merge request is approved too, and the message says whether it was.
+   * Reads back the round's signature before posting, so a replay sends no second note.
    */
   readonly post: (options: {
     readonly runId: string;
@@ -1243,8 +1243,19 @@ export interface HostApi {
     readonly cwd: string;
     /** The file to send, as the Run wrote it. */
     readonly file: string;
-    /** Approve the merge request too: a review with nothing live left to fix. */
-    readonly approve?: boolean;
+    readonly head: string;
+    readonly round: number;
+  }) => Effect.Effect<Posted>;
+  /** Reads the target's head before review. Take it inside an Activity. */
+  readonly reviewedHead: (options: {
+    readonly target: string;
+    readonly cwd: string;
+  }) => Effect.Effect<string>;
+  /** Approves the reviewed head after posting. Take it inside a separate Activity. */
+  readonly approveReview: (options: {
+    readonly target: string;
+    readonly cwd: string;
+    readonly head: string;
   }) => Effect.Effect<Posted>;
 }
 

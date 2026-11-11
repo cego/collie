@@ -62,6 +62,7 @@ import { readLanding, takeOver, writeLanding } from "../../src/landing";
 import { shell } from "../../src/mr";
 import { forgeHttpLayer, type ForgeHttp } from "../../src/forge/http";
 import { readCheckpoints } from "../../src/cards";
+import { buildBoard } from "../../src/board";
 import {
   RecordedSolution,
   mrLabel,
@@ -2389,7 +2390,7 @@ scenario(
           input: { target },
           decision: "post-1",
         });
-        expect(optionsOf(rows, "post-1")).toContain("Post to merge request");
+        expect(optionsOf(rows, "post-1")).toContain("Post");
 
         yield* answeredThen({
           entry: shipped("review"),
@@ -2439,6 +2440,8 @@ const REVIEWED = {
   },
 } as const;
 
+const REVIEW_HEAD = "1234567890abcdef1234567890abcdef12345678";
+
 for (const name of ["gitlab", "github"] as const) {
   const noun = name === "gitlab" ? "merge request" : "pull request";
   const target = mrTarget(PROJECT[name], "30");
@@ -2450,7 +2453,9 @@ for (const name of ["gitlab", "github"] as const) {
         installed: true,
         loggedIn: [FORGE_HOST[name]],
         login: "tester",
-        mrs: [{ project: PROJECT[name], iid: "30", state: "open", author: "ann" }],
+        mrs: [
+          { project: PROJECT[name], iid: "30", state: "open", author: "ann", head: REVIEW_HEAD },
+        ],
       });
       return { bin, forge };
     });
@@ -2464,7 +2469,11 @@ for (const name of ["gitlab", "github"] as const) {
         input: { target },
         decision: "post-1",
       });
-      expect(optionsOf(rows, "post-1")).toContain(`Post to ${noun}`);
+      const choice = synthesis.findings.length === 0 ? "Post and approve 1234567" : "Post";
+      expect(optionsOf(rows, "post-1")).toContain(choice);
+      expect(optionsOf(rows, "post-1")).not.toContain(
+        synthesis.findings.length === 0 ? "Post" : "Post and approve 1234567",
+      );
       const review = yield* asked(runId, "review-1");
       expect(review).toContain(REVIEWED[name].diff);
       expect(review).toContain(REVIEWED[name].view);
@@ -2474,10 +2483,10 @@ for (const name of ["gitlab", "github"] as const) {
         runId,
         input: { target },
         decision: "post-1",
-        value: `Post to ${noun}`,
+        value: choice,
       });
       yield* bin.restore();
-      return { said: said(result), model: yield* forge.model() };
+      return { said: said(result), model: yield* forge.model(), requests: forge.requests() };
     });
 
   scenario(
@@ -2486,10 +2495,28 @@ for (const name of ["gitlab", "github"] as const) {
       runEffect(
         Effect.gen(function* () {
           const clean = { ...SYNTHESIS, verdict: "clean", findings: [] };
-          const { said: message, model } = yield* posted(`r-review-${name}-clean`, clean);
-          expect(message).toContain("and approved it");
-          expect(Rec.values(model.notes ?? {})).toHaveLength(1);
+          const runId = `r-review-${name}-clean`;
+          const { said: message, model, requests } = yield* posted(runId, clean);
+          expect(message).toContain("approved");
+          const notes = Rec.values(model.notes ?? {}).flat();
+          expect(notes).toHaveLength(1);
+          expect(notes[0]).toStartWith(`Review at ${REVIEW_HEAD}\n`);
+          expect(Str.split(notes[0] ?? "", "\n").at(-1)).toBe(
+            `Review by Collie for @tester · ${runId} round 1 at ${REVIEW_HEAD}`,
+          );
           expect(model.approved).toHaveLength(1);
+          expect(
+            Arr.map(
+              Arr.filter(
+                requests,
+                (one) => one.method === "POST" && !Str.endsWith("/graphql")(one.url),
+              ),
+              (one) => one.body,
+            ),
+          ).toEqual([
+            { body: notes[0] ?? "" },
+            name === "gitlab" ? { sha: REVIEW_HEAD } : { event: "APPROVE", commit_id: REVIEW_HEAD },
+          ]);
         }),
       ),
     120_000,
@@ -2509,6 +2536,136 @@ for (const name of ["gitlab", "github"] as const) {
       ),
     120_000,
   );
+
+  scenario(
+    `review posting on ${name}: a host restarted after the note landed posts it once`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge } = yield* reviewing();
+          const runId = `r-post-restart-${name}`;
+          const options = { entry: shipped("review"), runId, input: { target } };
+          yield* rig.queueOutputs([SYNTHESIS]);
+          yield* parked({ ...options, decision: "post-1" });
+          const accepted = yield* Deferred.make<void>();
+          const stopping: HostOverride = Layer.effect(Host)(
+            Effect.gen(function* () {
+              const host = yield* Host;
+              return Host.of({
+                ...host,
+                post: (asked) =>
+                  host.post(asked).pipe(
+                    Effect.tap(() => Deferred.succeed(accepted, undefined)),
+                    Effect.andThen(Effect.never),
+                  ),
+              });
+            }),
+          );
+          yield* driven({ ...options, restarted: true, host: stopping }, (run) =>
+            Effect.gen(function* () {
+              yield* run.answer("post-1", "Post");
+              yield* Deferred.await(accepted);
+            }),
+          );
+          const status = yield* driven({ ...options, restarted: true }, (run) => ended(run.status));
+          expect(outcomeText(status)).toContain("posted the review");
+          const notes = Rec.values((yield* forge.model()).notes ?? {}).flat();
+          expect(notes).toHaveLength(1);
+          expect(Str.split(notes[0] ?? "", "\n").at(-1)).toBe(
+            `Review by Collie for @tester · ${runId} round 1 at ${REVIEW_HEAD}`,
+          );
+          expect(
+            Arr.filter(
+              forge.requests(),
+              (one) => one.method === "POST" && !Str.endsWith("/graphql")(one.url),
+            ),
+          ).toHaveLength(1);
+          yield* bin.restore();
+        }),
+      ),
+    120_000,
+  );
+
+  for (const refusal of ["stale head", "self approval"] as const)
+    scenario(
+      `review posting on ${name}: ${refusal} is shown on the card and never retried`,
+      () =>
+        runEffect(
+          Effect.gen(function* () {
+            const { bin, forge } = yield* reviewing();
+            const runId = `r-refused-${name}-${refusal === "stale head" ? "head" : "self"}`;
+            const options = { entry: shipped("review"), runId, input: { target } };
+            yield* rig.queueOutputs([{ ...SYNTHESIS, verdict: "clean", findings: [] }]);
+            yield* parked({ ...options, decision: "post-1" });
+            const reason =
+              refusal === "stale head"
+                ? "SHA does not match HEAD"
+                : "You cannot approve your own merge request";
+            const before = yield* forge.model();
+            yield* forge.set({
+              ...before,
+              mrs: Arr.map(before.mrs, (one) =>
+                refusal === "stale head"
+                  ? { ...one, head: "abcdef1234567890abcdef1234567890abcdef12" }
+                  : { ...one, author: "tester" },
+              ),
+              refusesApproval: refusal === "self approval" ? reason : false,
+            });
+            const status = yield* driven({ ...options, restarted: true }, (run) =>
+              Effect.gen(function* () {
+                yield* run.answer("post-1", "Post and approve 1234567");
+                return yield* ended(run.status);
+              }),
+            );
+            expect(status.status).toBe("failed");
+            expect(outcomeText(status)).toContain(reason);
+            const [card] = yield* buildBoard({
+              env: { ...hostOf().env, stateDir: dir },
+              runs: [
+                runFacts({
+                  id: runId,
+                  workflow: idOf("review"),
+                  dir: runDir(dir, runId),
+                  project: rig.projectDir,
+                  cwd: rig.projectDir,
+                  mr: target,
+                  state: status.status === "failed" ? "failed" : "succeeded",
+                  note: status.status === "failed" ? status.reason : null,
+                  summary: status.status === "complete" ? outcomeText(status) : null,
+                }),
+              ],
+              tasks: [],
+              registered: [],
+              proposals: [],
+              only: runId,
+              offers: () => Effect.succeed([]),
+            });
+            expect(card?.sentence).toContain(reason);
+            const after = yield* forge.model();
+            expect(after.approved ?? []).toEqual([]);
+            expect(Rec.values(after.notes ?? {}).flat()).toHaveLength(1);
+            const approvals = () =>
+              Arr.filter(
+                forge.requests(),
+                (one) =>
+                  Str.endsWith(name === "gitlab" ? "/approve" : "/reviews")(one.url) &&
+                  one.method === "POST",
+              );
+            expect(Arr.map(approvals(), (one) => one.body)).toEqual([
+              name === "gitlab"
+                ? { sha: REVIEW_HEAD }
+                : { event: "APPROVE", commit_id: REVIEW_HEAD },
+            ]);
+            const restarted = yield* driven({ ...options, restarted: true }, (run) =>
+              ended(run.status),
+            );
+            expect(outcomeText(restarted)).toContain(reason);
+            expect(approvals()).toHaveLength(1);
+            yield* bin.restore();
+          }),
+        ),
+      120_000,
+    );
 }
 
 scenario(
@@ -2710,9 +2867,9 @@ scenario(
           decision: "post-1",
         });
 
-        expect(optionsOf(rows, "post-1")).toEqual(["Post to merge request", "Don't post"]);
+        expect(optionsOf(rows, "post-1")).toEqual(["Post", "Don't post"]);
         expect(recommendedOf(rows, "post-1")).toEqual({
-          recommended: "Post to merge request",
+          recommended: "Post",
           shortfall: null,
         });
         expect(

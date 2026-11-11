@@ -289,7 +289,7 @@ export const ForgeModel = Schema.Struct({
   /** Merge requests approved, by the same key. */
   approved: Schema.optionalKey(Schema.Array(Schema.String)),
   /** The forge refuses an approval, as it does one by the author. */
-  refusesApproval: Schema.optionalKey(Schema.Boolean),
+  refusesApproval: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.String])),
   /** The forge refuses a merge, whatever it says of the merge request. */
   refusesMerge: Schema.optionalKey(Schema.Boolean),
   /** `main` where unsaid. */
@@ -1160,6 +1160,8 @@ function glabOnMr(
   args: ReadonlyArray<string>,
 ): Answer {
   const method = flag(args, "-X") ?? "GET";
+  if (pipe(rest, Str.startsWith("notes?")) && method === "GET")
+    return json(pageOf(rest, mr.comments ?? []));
   if (rest === "notes" && method === "POST" && model.refusesNote !== undefined)
     return refused(`${model.refusesNote} Internal Server Error`);
   if (rest === "notes" && method === "POST")
@@ -1168,9 +1170,11 @@ function glabOnMr(
       noted: { key: keyOf("gitlab", mr), body: field(args, "body") ?? "" },
       replied: { mr, thread: null, body: field(args, "body") ?? "" },
     };
+  if (rest === "approve" && method === "POST" && field(args, "sha") !== mr.head)
+    return refused("409 SHA does not match HEAD");
   if (rest === "approve" && method === "POST")
     return model.refusesApproval
-      ? refused("403 Forbidden")
+      ? refused(model.refusesApproval === true ? "403 Forbidden" : `403 ${model.refusesApproval}`)
       : {
           ...json({ approved_by: [{ user: { username: model.login ?? "me", id: 1 } }] }),
           approved: keyOf("gitlab", mr),
@@ -1546,9 +1550,17 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
     const pull = Option.getOrUndefined(
       Arr.findFirst(model.mrs, (one) => one.project === `github.com/${repo}` && one.iid === number),
     );
+    if (
+      pull !== undefined &&
+      kind === "pulls" &&
+      rest === "reviews" &&
+      flag(args, "-X") === "POST" &&
+      field(args, "commit_id") !== pull.head
+    )
+      return refused("422 SHA does not match HEAD");
     if (pull !== undefined && kind === "pulls" && rest === "reviews" && flag(args, "-X") === "POST")
       return model.refusesApproval
-        ? refused("403 Forbidden")
+        ? refused(model.refusesApproval === true ? "403 Forbidden" : `403 ${model.refusesApproval}`)
         : { ...json({ id: 1, state: "APPROVED" }), approved: keyOf("github", pull) };
     if (pull !== undefined && kind === "pulls" && rest === "merge" && model.refusesMerge === true)
       return refused(NOT_MERGEABLE.github);
@@ -2001,6 +2013,7 @@ export interface FakeRequest {
   readonly method: string;
   readonly url: string;
   readonly token: string;
+  readonly body: Schema.Json | null;
 }
 
 const API = { gitlab: "/api/v4/", github: "/" } as const;
@@ -2074,7 +2087,17 @@ export function httpFace(
       new Headers(init.headers).get("authorization") ?? "",
       Str.replace(/^Bearer /, ""),
     );
-    requests.push({ method, url: input, token });
+    requests.push({
+      method,
+      url: input,
+      token,
+      body:
+        init.body === undefined
+          ? null
+          : yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(init.body).pipe(
+              Effect.orDie,
+            ),
+    });
     const model = yield* state.read;
     const fault = model.httpFault;
     if (fault === "network") return yield* Effect.die(new TypeError("fetch failed"));

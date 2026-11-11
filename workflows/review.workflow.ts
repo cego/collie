@@ -9,6 +9,7 @@
 // reviewer is asked for, and what the fix is told about where it stands.
 
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import {
   Agents,
   FINDINGS_FILE,
@@ -17,6 +18,7 @@ import {
   Host,
   REVIEW_FILE,
   Run,
+  WorkflowError,
   agentWork,
   ask,
   defineWorkflow,
@@ -54,6 +56,7 @@ const FIX = "Fix findings";
 const IMPLEMENT = "Fix findings in a full implement run";
 const DONE = "Don't post";
 const AGAIN = "Review again";
+const Posted = Schema.Struct({ ok: Schema.Boolean, message: Schema.String });
 
 /** How many fix rounds one "Fix findings" may run before the human is asked again. */
 const ROUNDS = 4;
@@ -161,8 +164,13 @@ export default defineWorkflow({
       if ((yield* panelOf("reviewer")).length > 1)
         yield* forecast([reviewRound, synthesisStep, menu]);
       const kind = targetKind(asked.target);
-      // The option's label is fixed for the Run, because its target is.
-      const POST = `Post to ${mrForgeFacts(asked.target)?.noun ?? "merge request"}`;
+      const headAt = (round: number) =>
+        Activity.make({
+          name: `reviewed-head-${round}`,
+          success: Schema.String,
+          execute: host.reviewedHead({ target: asked.target, cwd: place.cwd }),
+        });
+      let head = kind === "mr" ? yield* headAt(1) : "";
 
       // The extra axes and the earlier review are the host's own — a caller attaches them
       // to the work rather than declaring them here, and `previous` names the Run whose
@@ -216,6 +224,7 @@ export default defineWorkflow({
       // watch waits for the human to say it is ready to look at.
       const reviewedAgain = (at: number, answered: string) =>
         Effect.gen(function* () {
+          head = kind === "mr" ? yield* headAt(at) : "";
           const last = yield* fs
             .readFileString(`${place.dir}/${REVIEW_FILE}`)
             .pipe(Effect.orElseSucceed(() => ""));
@@ -271,6 +280,8 @@ export default defineWorkflow({
       for (;;) {
         const split = splitDisputed(synthesis.findings, disputed);
         const round = settleRound({ live: split.live, disputed, at: reviews, seen });
+        const approve = synthesis.findings.length === 0 && disputed.length === 0 && head !== "";
+        const POST = approve ? `Post and approve ${Str.slice(0, 7)(head)}` : "Post";
         let chosen: string = FIX;
         if (fixing) {
           if (round.go !== "fix" || rallied >= ROUNDS) {
@@ -328,17 +339,30 @@ export default defineWorkflow({
         if (chosen === DONE) return `${synthesis.findings.length} finding(s), not posted`;
 
         if (chosen === POST) {
-          const posted = yield* host.post({
-            runId: run.id,
-            target: asked.target,
-            cwd: place.cwd,
-            file: `${place.dir}/${REVIEW_FILE}`,
-            // A review that found nothing still live to fix is one the forge should count.
-            approve: split.live.length === 0,
+          const posted = yield* Activity.make({
+            name: `post-review-${reviews}-${asks}`,
+            success: Posted,
+            execute: host.post({
+              runId: run.id,
+              target: asked.target,
+              cwd: place.cwd,
+              file: `${place.dir}/${REVIEW_FILE}`,
+              head,
+              round: reviews,
+            }),
           });
           yield* host.record(run.id, posted.message);
-          // A note that did not land is not an answer, so the menu comes back.
-          if (posted.ok) return posted.message;
+          if (posted.ok) {
+            if (!approve) return posted.message;
+            const approved = yield* Activity.make({
+              name: `approve-review-${reviews}`,
+              success: Posted,
+              execute: host.approveReview({ target: asked.target, cwd: place.cwd, head }),
+            });
+            yield* host.record(run.id, approved.message);
+            if (!approved.ok) return yield* new WorkflowError({ reason: approved.message });
+            return `${posted.message}; ${approved.message}`;
+          }
           continue;
         }
 

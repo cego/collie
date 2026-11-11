@@ -4,7 +4,7 @@ import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import { Effect, Schema, flow, Result } from "effect";
 import type { RepoRef, Thread, ThreadRef } from "forges";
-import { ForgeHttp, type ForgeLogin } from "./http";
+import { ForgeHttp, pagesAs, request, type ForgeLogin } from "./http";
 import { Issue } from "./issues";
 import { mrWords, type MrRef } from "../board-model";
 
@@ -128,7 +128,6 @@ export const postReview = (
   project: string,
   ref: MrRef,
   body: string,
-  approve: boolean,
   cwd: string,
 ) =>
   Effect.gen(function* () {
@@ -143,16 +142,65 @@ export const postReview = (
         ok: false,
         message: `could not post the review to ${where}: ${noted.reason}; inspect the merge request before retrying`,
       };
-    if (!approve) return { ok: true, message: `posted the review to ${where}` };
-    const approved = yield* http.ask(login, cwd, (provider, signal) =>
-      provider.threads.approve(thread, undefined, { signal }),
+    return { ok: true, message: `posted the review to ${where}` };
+  });
+
+export const approveReview = (
+  login: ForgeLogin,
+  project: string,
+  ref: MrRef,
+  head: string,
+  cwd: string,
+) =>
+  Effect.gen(function* () {
+    const where = mrWords(ref).label;
+    if (head === "") return { ok: false, message: `did not approve ${where}: no reviewed head` };
+    const repo = threadRepo(login, project);
+    const path = `${repo.owner}/${repo.name}`;
+    const approved = yield* login.forge === "gitlab"
+      ? request(
+          login,
+          cwd,
+          "POST",
+          `projects/${encodeURIComponent(path)}/merge_requests/${ref.iid}/approve`,
+          { sha: head },
+        )
+      : request(login, cwd, "POST", `repos/${path}/pulls/${ref.iid}/reviews`, {
+          event: "APPROVE",
+          commit_id: head,
+        });
+    return approved.ok
+      ? { ok: true, message: `approved ${where} at ${head}` }
+      : { ok: false, message: `did not approve ${where} at ${head}: ${approved.reason}` };
+  });
+
+export const findReviewNote = (
+  login: ForgeLogin,
+  project: string,
+  ref: MrRef,
+  signature: string,
+  cwd: string,
+) =>
+  Effect.gen(function* () {
+    const repo = threadRepo(login, project);
+    const path = `${repo.owner}/${repo.name}`;
+    const notes = yield* pagesAs(
+      Schema.Struct({ body: Schema.String }),
+      login,
+      cwd,
+      login.forge === "gitlab"
+        ? `projects/${encodeURIComponent(path)}/merge_requests/${ref.iid}/notes`
+        : `repos/${path}/issues/${ref.iid}/comments`,
     );
-    return {
-      ok: true,
-      message: approved.ok
-        ? `posted the review to ${where} and approved it`
-        : `posted the review to ${where} and did not approve it: ${approved.reason}; inspect the merge request before approving again, since the approval may have landed`,
-    };
+    return notes.ok
+      ? {
+          ok: true as const,
+          value: Arr.some(
+            notes.value,
+            (note) => Str.split(Str.trimEnd(note.body), "\n").at(-1) === signature,
+          ),
+        }
+      : notes;
   });
 
 export const myMergeRequests = (login: ForgeLogin, project: string, cwd: string) =>

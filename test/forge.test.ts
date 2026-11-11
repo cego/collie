@@ -80,6 +80,71 @@ for (const name of ["gitlab", "github"] as const) {
   const host = FORGE_HOST[name];
 
   describe(`the ${name} forge`, () => {
+    test("pins approval to the reviewed head", () => {
+      const fake = fakeForge(name, model(name));
+      return runEffect(
+        Effect.gen(function* () {
+          expect((yield* forge.approve(ref(name), HEAD, "/w", fake.run)).ok).toBe(true);
+          expect(
+            Arr.map(
+              Arr.filter(fake.requests, (one) => one.method === "POST"),
+              (one) => one.body,
+            ),
+          ).toEqual([name === "gitlab" ? { sha: HEAD } : { event: "APPROVE", commit_id: HEAD }]);
+          expect(fake.model().approved).toHaveLength(1);
+        }).pipe(Effect.provide(fake.layer)),
+      );
+    });
+
+    test("finds only the note whose last line signs this Run, round and head", () => {
+      const signature = `Review by Collie for @me · run-one round 1 at ${HEAD}`;
+      const fake = fakeForge(
+        name,
+        model(name, {
+          mrs: [
+            mr(name, {
+              comments: [
+                {
+                  id: 1,
+                  author: "me",
+                  at: "2026-11-11T09:00:00Z",
+                  body: `Findings\n\n${signature}`,
+                },
+              ],
+            }),
+          ],
+        }),
+      );
+      return runEffect(
+        Effect.gen(function* () {
+          expect(yield* forge.findNote(ref(name), signature, "/w", fake.run)).toEqual({
+            ok: true,
+            value: true,
+          });
+          expect(
+            yield* forge.findNote(
+              ref(name),
+              Str.replace("run-one", "run-two")(signature),
+              "/w",
+              fake.run,
+            ),
+          ).toEqual({ ok: true, value: false });
+          expect(
+            yield* forge.findNote(
+              ref(name),
+              Str.replace("round 1", "round 2")(signature),
+              "/w",
+              fake.run,
+            ),
+          ).toEqual({ ok: true, value: false });
+          expect(yield* forge.findNote(ref(name), "Findings", "/w", fake.run)).toEqual({
+            ok: true,
+            value: false,
+          });
+        }).pipe(Effect.provide(fake.layer)),
+      );
+    });
+
     test("lists only issues over HTTP from a cold login", () => {
       const fake = fakeForge(
         name,
@@ -515,22 +580,22 @@ for (const name of ["gitlab", "github"] as const) {
         }),
       ));
 
-    for (const approve of [false, true])
-      test(`posts one review note over HTTP from a cold login, approval ${approve}`, () => {
-        const fake = fakeForge(name, model(name));
-        return runEffect(
-          Effect.gen(function* () {
-            const posted = yield* forge.post(ref(name), "Clean", approve, "/w", fake.run);
-            expect(posted.ok).toBe(true);
-            expect(Rec.values(fake.model().notes ?? {})).toEqual([["Clean"]]);
-            expect(fake.model().approved ?? []).toHaveLength(approve ? 1 : 0);
-            expect(Arr.filter(fake.requests, (one) => one.method === "POST")).toHaveLength(
-              approve ? 2 : 1,
-            );
-            expect(fake.calls).toEqual([...READ_ONCE[name]]);
-          }).pipe(Effect.provide(fake.layer)),
-        );
-      });
+    test("posts one review note over HTTP without approving", () => {
+      const fake = fakeForge(name, model(name));
+      return runEffect(
+        Effect.gen(function* () {
+          const posted = yield* forge.post(ref(name), "Clean", "/w", fake.run);
+          expect(posted.ok).toBe(true);
+          expect(Rec.values(fake.model().notes ?? {})).toEqual([["Clean"]]);
+          expect(fake.model().approved ?? []).toEqual([]);
+          expect(Arr.filter(fake.requests, (one) => one.method === "POST")).toHaveLength(1);
+          expect(fake.calls).toEqual([...READ_ONCE[name]]);
+          expect(
+            (yield* forge.post({ project: PROJECT[name], iid: "99" }, "LGTM", "/w", fake.run)).ok,
+          ).toBe(false);
+        }).pipe(Effect.provide(fake.layer)),
+      );
+    });
 
     for (const [failure, fault] of [
       ["5xx", { status: 503 }],
@@ -545,10 +610,10 @@ for (const name of ["gitlab", "github"] as const) {
         });
         return runEffect(
           Effect.gen(function* () {
-            const posted = yield* forge.post(ref(name), "Clean", true, "/w", fake.run);
-            expect(posted.ok).toBe(true);
-            expect(posted.message).toContain("and did not approve it");
-            expect(posted.message).toContain("before approving again");
+            expect((yield* forge.post(ref(name), "Clean", "/w", fake.run)).ok).toBe(true);
+            const approved = yield* forge.approve(ref(name), HEAD, "/w", fake.run);
+            expect(approved.ok).toBe(false);
+            expect(approved.message).toContain("did not approve");
             expect(Rec.values(fake.model().notes ?? {})).toEqual([["Clean"]]);
             expect(fake.model().approved ?? []).toEqual([]);
             expect(Arr.filter(fake.requests, (one) => one.method === "POST")).toHaveLength(2);
@@ -556,41 +621,19 @@ for (const name of ["gitlab", "github"] as const) {
         );
       });
 
-    test("posts one note, and approves only where asked, saying what landed", () =>
-      runEffect(
+    test("reports an approval the forge refuses, with the note still posted", () => {
+      const fake = fakeForge(name, model(name, { refusesApproval: true }));
+      return runEffect(
         Effect.gen(function* () {
-          const fake = fakeForge(name, model(name));
-          const noted = yield* forge
-            .post(ref(name), "LGTM", false, "/w", fake.run)
-            .pipe(Effect.provide(fake.layer));
-          expect(noted.ok).toBe(true);
-          expect(noted.message).not.toContain("approved");
-          expect(fake.model().approved ?? []).toEqual([]);
-          const approved = yield* forge
-            .post(ref(name), "Clean", true, "/w", fake.run)
-            .pipe(Effect.provide(fake.layer));
-          expect(approved.message).toContain("and approved it");
-          expect(Rec.values(fake.model().notes ?? {})).toEqual([["LGTM", "Clean"]]);
-          expect(fake.model().approved?.length).toBe(1);
-          const missed = yield* forge
-            .post({ project: PROJECT[name], iid: "99" }, "LGTM", false, "/w", fake.run)
-            .pipe(Effect.provide(fake.layer));
-          expect(missed.ok).toBe(false);
-        }),
-      ));
-
-    test("reports an approval the forge refuses, with the note still posted", () =>
-      runEffect(
-        Effect.gen(function* () {
-          const fake = fakeForge(name, model(name, { refusesApproval: true }));
-          const posted = yield* forge
-            .post(ref(name), "Clean", true, "/w", fake.run)
-            .pipe(Effect.provide(fake.layer));
-          expect(posted.ok).toBe(true);
-          expect(posted.message).toContain("and did not approve it");
+          yield* forge.post(ref(name), "Clean", "/w", fake.run);
+          const approved = yield* forge.approve(ref(name), HEAD, "/w", fake.run);
+          expect(approved.ok).toBe(false);
+          expect(approved.message).toContain("did not approve");
+          expect(approved.message).toContain("403 Forbidden");
           expect(Rec.values(fake.model().notes ?? {})).toEqual([["Clean"]]);
-        }),
-      ));
+        }).pipe(Effect.provide(fake.layer)),
+      );
+    });
 
     test("lists my merge requests over HTTP from a cold login", () => {
       const fake = fakeForge(
@@ -1474,7 +1517,7 @@ test(
             });
             expect(
               (yield* FORGES[name]
-                .post(ref(name), "LGTM", false, "/", shell)
+                .post(ref(name), "LGTM", "/", shell)
                 .pipe(Effect.provide(forgeHttpOnPath))).ok,
             ).toBe(true);
             expect(Rec.values((yield* onPath.model()).notes ?? {})).toEqual([["LGTM"]]);

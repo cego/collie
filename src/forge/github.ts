@@ -47,6 +47,8 @@ import {
   createIssue,
   commentIssue,
   postReview,
+  approveReview,
+  findReviewNote,
   viewerLogin,
   myMergeRequests,
 } from "./threads";
@@ -1342,10 +1344,18 @@ export const github: Forge = {
   readReview,
   reply,
   merge,
-  post: (ref, body, approve, cwd) =>
+  approve: (ref, head, cwd) =>
     ref.project === null
       ? Effect.succeed({ ok: false, message: `${mrWords(ref).label} names no GitHub project` })
-      : postReview(LOGIN, ref.project, ref, body, approve, cwd),
+      : approveReview(LOGIN, ref.project, ref, head, cwd),
+  findNote: (ref, signature, cwd) =>
+    ref.project === null
+      ? Effect.succeed({ ok: false, reason: `${mrWords(ref).label} names no GitHub project` })
+      : findReviewNote(LOGIN, ref.project, ref, signature, cwd),
+  post: (ref, body, cwd) =>
+    ref.project === null
+      ? Effect.succeed({ ok: false, message: `${mrWords(ref).label} names no GitHub project` })
+      : postReview(LOGIN, ref.project, ref, body, cwd),
   mine: (project, cwd) =>
     project === null ? Effect.succeed([]) : myMergeRequests(LOGIN, project, cwd),
   open: (ref, cwd, run) => run("gh", ["pr", "view", ref.iid, "--repo", mrPath(ref), "--web"], cwd),

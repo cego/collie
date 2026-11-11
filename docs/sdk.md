@@ -712,12 +712,16 @@ an earlier Run to compare against is doing it there, and this is where you read 
 `outcome` is the one that can change while the Run is live, with `run intent set-outcome`:
 read it again, inside an `Activity`, wherever the kind decides something.
 
-`host.post` puts a file on the merge request a Run was pointed at, as one note Collie sends
-rather than an agent writes out again, through the merge request's own forge. With
-`approve`, it approves it too — the shipped review passes it when nothing live is left to
-fix — and the message says whether the approval landed. Its refusal is its message: not a
+`host.reviewedHead({ target, cwd })` reads the head before review; journal it in an Activity.
+Pass that head, the Run id, and the round to `host.post` alongside the file, target, and cwd.
+It signs the note and reads back that signature before posting, so a replay sends no second note.
+Journal posting in its own Activity. Its refusal is its message: not a
 merge request, no CLI or login for its forge, or one assigned to whoever is running this —
 whose findings are theirs to fix rather than to post to themselves.
+
+`host.approveReview({ target, cwd, head })` approves that reviewed head, independently of posting.
+Journal it in a separate Activity after the post succeeds. The shipped review offers approval
+explicitly and ends with the forge's reason on its card when the forge refuses it.
 
 `mrForgeFacts(target)` is pure: for an `mr:` target it gives the forge's name and noun and
 the `diff`, `view` and `checkout` command lines a prompt hands a reviewer, written by that

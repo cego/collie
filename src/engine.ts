@@ -936,8 +936,19 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly target: string;
       readonly cwd: string;
       readonly file: string;
-      /** Approve the merge request too: a review with nothing live left to fix. */
-      readonly approve?: boolean;
+      readonly head: string;
+      readonly round: number;
+    }) => Effect.Effect<Posted>;
+    /** Reads the target's head before review. Take it inside an Activity. */
+    readonly reviewedHead: (options: {
+      readonly target: string;
+      readonly cwd: string;
+    }) => Effect.Effect<string>;
+    /** Approves the reviewed head after posting. Take it inside a separate Activity. */
+    readonly approveReview: (options: {
+      readonly target: string;
+      readonly cwd: string;
+      readonly head: string;
     }) => Effect.Effect<Posted>;
     /** This Run's checks as they stand now, which anyone may add to. */
     readonly approved: (runId: string) => Effect.Effect<ReadonlyArray<VerifySpec>>;
@@ -4663,7 +4674,7 @@ export const hostLayer = (options: {
             Effect.gen(function* () {
               const ref = mrRefOf(yield* mergeRequestOf(fs, dir, asked.runId));
               if (ref === null) return { ok: false, message: "this Run has no merge request" };
-              return yield* forgeOf(ref).post(ref, asked.body, false, asked.cwd, runShell);
+              return yield* forgeOf(ref).post(ref, asked.body, asked.cwd, runShell);
             }),
           ).pipe(Effect.orDie),
         claim: <E, R>(asked: {
@@ -5096,7 +5107,7 @@ export const hostLayer = (options: {
                       target: asked.target,
                       cwd: asked.cwd,
                       body,
-                      approve: asked.approve === true,
+                      review: { runId: asked.runId, head: asked.head, round: asked.round },
                       gitlabHost: defaults.gitlabHost,
                     },
                     runShell,
@@ -5108,6 +5119,24 @@ export const hostLayer = (options: {
                 message: `there is no ${asked.file} to post`,
               })),
             ),
+          ),
+        reviewedHead: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const ref = parseMrTarget(asked.target);
+              if (ref === null) return "";
+              const details = yield* forgeOf(ref).details(ref, asked.cwd, runShell);
+              return details._tag === "Details" ? (details.head ?? "") : "";
+            }),
+          ),
+        approveReview: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const ref = parseMrTarget(asked.target);
+              if (ref === null)
+                return { ok: false, message: `${asked.target} is not a merge request` };
+              return yield* forgeOf(ref).approve(ref, asked.head, asked.cwd, runShell);
+            }),
           ),
       });
       let herdSocket = options.herd?.socketPath ?? null;
