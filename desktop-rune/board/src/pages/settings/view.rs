@@ -1790,12 +1790,14 @@ fn own_view(k: &Kit) -> El {
             "Where its projects live, its Native chat's harness, its terminal backend, its worktrees and the answers it remembered stay in that Machine's config.json. Change them in that Machine's TUI Settings.",
         ))
         .child(
-            Button::new("Open Machines")
-                .variant(ButtonVariant::Outline)
-                .control_size(ControlSize::Small)
-                .on_press(|app: &mut App| app.open_page(Page::Machines))
-                .build(k)
-                .key("open-machines"),
+            across().child(
+                Button::new("Open Machines")
+                    .variant(ButtonVariant::Outline)
+                    .control_size(ControlSize::Small)
+                    .on_press(|app: &mut App| app.open_page(Page::Machines))
+                    .build(k)
+                    .key("open-machines"),
+            ),
         )
 }
 
