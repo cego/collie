@@ -412,6 +412,15 @@ crate. `board/src/standing.rs` is the Standing setup's offer, consent dialog and
 fake core. Zoom is not offered: Rune draws at the monitor's own scale and has no app-wide zoom
 for the setting to change.
 
+### Scrolling
+
+A scroll runs no view: `chat/src/glide.rs`'s `smooth` makes a notched mouse wheel's steps glide
+(`on_wheel` and `scroll_to_with`, `live_only`) while a touchpad still scrolls 1:1, and
+`board/src/quiet.rs` holds the core's changes while such a viewport moves and stops building a
+closed chat once its close has played. Handlers that hear every scroll frame commit only on a
+real change. `board/tests/scroll.rs` and `chat/tests/glide.rs` hold it. rune-kit's Diff keeps
+its own viewport, so its rows scroll unsmoothed and a commit can land on them.
+
 ### Desktop's marks
 
 The shell takes the marks Desktop's view takes (`desktopTiming`, ticket 01), ported in

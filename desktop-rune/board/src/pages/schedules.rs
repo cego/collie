@@ -390,16 +390,19 @@ impl App {
 
     /// The page has drawn with `live` Machines; one that came or went since the listing
     /// was asked for has Schedules of its own, so every Machine is asked again.
-    pub fn schedules_reach(&mut self, live: &str) {
+    /// Reads the schedules again where the Machines live now differ from those asked; whether
+    /// it did.
+    pub fn schedules_reach(&mut self, live: &str) -> bool {
         let state = &self.pages.schedules;
-        if self.nav.page == crate::shell::Page::Schedules
+        let stale = self.nav.page == crate::shell::Page::Schedules
             && state
                 .asked_live
                 .as_deref()
-                .is_some_and(|asked| asked != live)
-        {
+                .is_some_and(|asked| asked != live);
+        if stale {
             self.read_schedules();
         }
+        stale
     }
 
     fn schedule_said(&mut self, said: Result<String, crate::calls::CallError>) {
@@ -741,7 +744,12 @@ pub fn view(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         .key(format!("schedules-reach-{live}"))
         .w_full()
         .h(0.0)
-        .on_layout(move |app: &mut App, _| app.schedules_reach(&reach));
+        // It moves with every frame of a scroll, which asks nothing new.
+        .on_layout_tx(move |app: &mut App, _, tx| {
+            if !app.schedules_reach(&reach) {
+                tx.live_only();
+            }
+        });
     let header = row()
         .w_full()
         .gap(16.0)

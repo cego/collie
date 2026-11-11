@@ -444,10 +444,13 @@ pub fn flow_map<S: 'static>(map: &FlowMap, lens: fn(&mut S) -> &mut FlowMap, k: 
         .focus_follows()
         .on_key(keys)
         .w_full()
-        .on_layout(move |s: &mut S, [_, _, w, _]| {
+        // Inside a scroll this hears every frame of it; only a new width runs the view.
+        .on_layout_tx(move |s: &mut S, [_, _, w, _], tx| {
             let map = lens(s);
             if (map.width - w).abs() > 0.5 {
                 map.width = w;
+            } else {
+                tx.live_only();
             }
         })
         .child(body)

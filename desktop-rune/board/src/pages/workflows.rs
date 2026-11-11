@@ -658,7 +658,7 @@ pub fn view(app: &App, k: &Kit, _layer: &mut Vec<El>) -> El {
         .grow(1.0)
         .min_h(0.0)
         .child(list)
-        .child(
+        .child(collie_desktop_chat::glide::smooth::<App>(
             col()
                 .key("definition")
                 .grow(1.0)
@@ -667,6 +667,8 @@ pub fn view(app: &App, k: &Kit, _layer: &mut Vec<El>) -> El {
                 .scroll(rune::ScrollSpec {
                     stick_bottom: false,
                 })
+                .scroll_edge_fade(16.0)
                 .child(col().w_full().max_w(880.0).px(28.0).py(24.0).child(detail)),
-        )
+            "definition",
+        ))
 }

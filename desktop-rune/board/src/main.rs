@@ -54,7 +54,8 @@ fn go_to_panes(handle: &AppHandle<App>, client: &Client) {
                 board.keep_chat_width();
                 board.ask_usage_when_due(epoch_ms());
                 let expired = board.expire_toasts(epoch_ms());
-                collie_desktop_chat::chat::tick(board, epoch_ms()) || expired
+                let released = board.release_held() | board.rest_closed_chat(epoch_ms());
+                collie_desktop_chat::chat::tick(board, epoch_ms()) || expired || released
             });
         }
     });
@@ -305,6 +306,16 @@ impl Calls for FirstLive {
     }
 }
 
+/// What `setup` does with the app's state before its first frame: hand it the core.
+type Start = Box<dyn FnOnce(&mut App) + Send>;
+static START: std::sync::Mutex<Option<Start>> = std::sync::Mutex::new(None);
+
+fn start(app: &mut App, _: rune::Waker) {
+    if let Some(start) = START.lock().unwrap().take() {
+        start(app);
+    }
+}
+
 fn main() {
     let staging = update_at_launch();
     let env: Vec<(&str, &std::ffi::OsStr)> = staging
@@ -320,6 +331,7 @@ fn main() {
         fonts: rune_theme_opencode::FONTS,
         families: rune_theme_opencode::FAMILIES,
         min_size: Some((720.0, 480.0)),
+        setup: Some(start),
         ..AppSpec::new("Collie", (1280.0, 860.0), App::default, view)
     })
     .on_frame_drawn(marks(&client));
@@ -336,28 +348,27 @@ fn main() {
             poster
                 .lock()
                 .unwrap()
-                .update(move |app: &mut App, _| change(app))
+                .update_if(move |app: &mut App, _| app.take_change(change))
         }),
     );
-    handle.update(move |app, _| {
+    // A headless render runs on a virtual clock, so it waits for a live board first, unless
+    // it is asked to show the start itself; it waits in `setup`, once the flock is followed.
+    let at_start = std::env::var_os("COLLIE_RUNE_SNAP_AT_START").is_some();
+    let headless = !at_start
+        && std::env::args().any(|arg| ["--snap", "--tree", "--script"].contains(&arg.as_str()));
+    *START.lock().unwrap() = Some(Box::new(move |app: &mut App| {
         app.core = Some(calls);
         app.listen_setup();
         app.follow_flock();
-    });
+        if headless {
+            let _ = first_live.recv_timeout(Duration::from_secs(60));
+        }
+    }));
     go_to_panes(&handle, &client);
     chat(&handle);
     chat_window(&mut app, &handle, &client);
     files_in(&handle);
     notifications(&handle, &client);
-    // A headless render runs on a virtual clock, so it waits for a live board first, unless
-    // it is asked to show the start itself.
-    let at_start = std::env::var_os("COLLIE_RUNE_SNAP_AT_START").is_some();
-    if !at_start
-        && std::env::args().any(|arg| ["--snap", "--tree", "--script"].contains(&arg.as_str()))
-    {
-        let _ = first_live.recv_timeout(Duration::from_secs(60));
-    }
-
     let ran = app.try_run();
     core.stop();
     if let Err(error) = ran {

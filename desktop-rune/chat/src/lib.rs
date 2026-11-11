@@ -7,6 +7,7 @@ pub mod choices;
 pub mod composer;
 pub mod corpus;
 pub mod dialog;
+pub mod glide;
 pub mod highlight;
 pub mod host;
 pub mod icons;
