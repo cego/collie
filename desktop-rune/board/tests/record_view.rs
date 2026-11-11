@@ -881,3 +881,30 @@ fn a_record_attaches_its_terminal_only_while_its_terminal_tab_is_shown() {
         "leaving Terminal leaves the pane"
     );
 }
+
+#[test]
+fn a_record_whose_details_are_not_on_its_machine_says_so_rather_than_reading() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    runtime.update(|app, _| {
+        app.open_record("inst-build".into(), "r1".into(), "Build box".into(), None)
+    });
+    harness.fake.push(
+        "runDetail",
+        Ok(json!({"detail": null, "asOf": null, "bytes": 0})),
+    );
+    settle(&mut runtime, &harness, 100.0);
+    let said: Vec<String> = within(&runtime.accessibility_json())
+        .iter()
+        .filter_map(|n| n["name"].as_str().map(String::from))
+        .collect();
+    assert!(
+        said.iter()
+            .any(|s| s == "This Run's details are not on its Machine."),
+        "{said:?}"
+    );
+    assert!(
+        !said.iter().any(|s| s.starts_with("Reading")),
+        "nothing is still reading: {said:?}"
+    );
+}

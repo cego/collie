@@ -571,6 +571,18 @@ fn header(app: &App, record: &Record, k: &Kit) -> El {
         .children(status)
 }
 
+/// What a record the host sent without its details says, as `RunRecord.vue` does.
+const NOT_THERE: &str = "This Run's details are not on its Machine.";
+
+/// `reading` while the record is still coming; once it came without its details, that.
+fn unread(record: &Record, reading: &str, k: &Kit) -> El {
+    if record.kept.is_some() && record.detail().is_none() {
+        quiet(NOT_THERE, k).key("record-not-there")
+    } else {
+        quiet(reading.to_string(), k)
+    }
+}
+
 /// Whether the record is current: still reading, no longer coming, or from a Machine out of
 /// reach.
 fn standing(app: &App, record: &Record, k: &Kit) -> Option<El> {
@@ -578,6 +590,8 @@ fn standing(app: &App, record: &Record, k: &Kit) -> Option<El> {
         format!("The record stopped coming: {why}")
     } else if record.kept.is_none() {
         "Reading the record…".into()
+    } else if record.detail().is_none() {
+        NOT_THERE.into()
     } else if !app.record_live() {
         let as_of = record.kept.as_ref().and_then(|kept| kept.as_of);
         match as_of {
@@ -1748,7 +1762,7 @@ fn board_question(
 
 fn summary_tab(app: &App, record: &Record, k: &Kit) -> El {
     let Some(detail) = record.detail() else {
-        return quiet("Reading the record…", k);
+        return unread(record, "Reading the record…", k);
     };
     let sections = tabs::summary_of(detail).into_iter().map(|one| match one {
         SummarySection::Status(status) => section(
@@ -2210,7 +2224,7 @@ impl App {
 
 fn plan_tab(app: &App, record: &Record, k: &Kit) -> El {
     let Some(plan) = record.detail().and_then(|d| d.plan.as_ref()) else {
-        return quiet("Reading the plan…", k);
+        return unread(record, "Reading the plan…", k);
     };
     let file = record.plan_file.clone().unwrap_or_else(|| "SPEC.md".into());
     let entry = |path: String, said: String, done: Option<bool>| {
@@ -2544,7 +2558,7 @@ fn review_panel(app: &App, record: &Record, drafts: &[Draft], k: &Kit) -> El {
 
 fn review_tab(app: &App, record: &Record, k: &Kit) -> El {
     let Some(detail) = record.detail() else {
-        return quiet("Reading the review…", k);
+        return unread(record, "Reading the review…", k);
     };
     let review = match &detail.review {
         Review::Text(t) => Some(section("review-text", "Review", k, [markdown(&t.text, k)])),
@@ -2860,7 +2874,7 @@ impl App {
 
 fn evidence_tab(record: &Record, k: &Kit) -> El {
     let Some(detail) = record.detail() else {
-        return quiet("Reading the evidence…", k);
+        return unread(record, "Reading the evidence…", k);
     };
     let sorted = sort_evidence(&detail.evidence);
     let checks = (!detail.verifications.is_empty()).then(|| {
@@ -2979,7 +2993,7 @@ fn log_tab(record: &Record, k: &Kit) -> El {
         ),
         (_, Some(Review::Text(t))) => (t.text.clone(), t.truncated.then_some("")),
         (_, Some(Review::None(none))) => return quiet(none.reason.clone(), k),
-        (_, None) => return quiet("Reading the log…", k),
+        (_, None) => return unread(record, "Reading the log…", k),
     };
     let more = cut.map(|note| {
         let bar = row().key("log-bar").gap(12.0).center_y().w_full().child(
