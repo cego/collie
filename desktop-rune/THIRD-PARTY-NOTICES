@@ -39,6 +39,26 @@ License: Apache-2.0 (full text in licenses/Apache-2.0.txt)
 Adapted here, and changed:
 - ghostty-sys/build.rs and ghostty-sys/src/lib.rs, from crates/ghostty-sys: the
   Ghostty source path points at vendor/ghostty.
-- terminal/src/vt.rs, from src/vt.rs: cut to the screen, cursor, scrollback, colours
-  and the key and mouse encoders; search, selection, links and images are left out;
-  frames are read as rows of cells for Rune to draw.
+- terminal/src/vt.rs, from src/vt.rs: cut to the screen, cursor, scrollback, colours,
+  selection, hyperlinks and the key, mouse and focus encoders; search and images are
+  left out; frames are read as rows of cells for Rune to draw.
+
+--------------------------------------------------------------------------------
+Ghostty's renderer, ported
+https://github.com/ghostty-org/ghostty, at the pinned submodule above
+License: MIT (above)
+
+Ported to Rust, and changed:
+- terminal/src/sprite.rs, from src/font/sprite/draw: box drawing, blocks, braille and
+  powerline glyphs drawn to the cell.
+- terminal/src/paint.rs, from src/font/sprite/draw/special.zig and the text shader's
+  linear-corrected blending: underline styles, strikethrough, overline and the cursor.
+- terminal/src/font.rs, from src/font/Metrics.zig and src/font/Collection.zig: the cell's
+  metrics and the size a fallback face is drawn at.
+
+--------------------------------------------------------------------------------
+JetBrains Mono Nerd Font
+As Ghostty vendors it, in vendor/ghostty/src/font/res, and embedded in the terminal
+(terminal/src/font.rs) as Ghostty embeds it.
+Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+License: SIL Open Font License 1.1 (full text in licenses/OFL-1.1.txt)

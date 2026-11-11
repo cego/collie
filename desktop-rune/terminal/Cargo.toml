@@ -12,3 +12,7 @@ ghostty-sys = { path = "../ghostty-sys" }
 base64 = "0.22"
 rune.workspace = true
 rune-kit.workspace = true
+swash = "0.2"
+
+[dev-dependencies]
+rune-theme-opencode.workspace = true

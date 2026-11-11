@@ -20,7 +20,7 @@ review comments. The board's Chat button opens the Flock chat, which streams tur
 | `board/src/pages/settings/`  | Settings: the Flock's settings, each checked by the core, Record timing, Connections and their tokens, About                                       |
 | `protocol/src/core.rs`       | Starts Desktop's main process as the core, for the app and the recorders                                                                           |
 | `chat/`                      | The Flock chat (its state, view, AG-UI reducer, markdown policy, highlighter, file dialog) and the Diff tab's review comments                  |
-| `terminal/`                  | Go to pane's terminal: the VT state, its Rune view, input as `terminal-input` maps it, settled resizes                                             |
+| `terminal/`                  | Go to pane's terminal: the VT state, a renderer drawn as Ghostty draws, input as `terminal-input` maps it, settled resizes                        |
 | `ghostty-sys/`               | Builds libghostty-vt from `vendor/ghostty` with Zig and binds its C API with bindgen                                                               |
 | `vendor/ghostty`             | Ghostty, a submodule at one pinned commit                                                                                                          |
 | `core/`                      | The stdio stand-in for `electrobun/bun`, and the tsconfig that points Desktop's imports at it                                                      |
@@ -132,8 +132,37 @@ on lavapipe. Its first frame took 387 ms. The live board was one Snapshot of 21 
 
 The terminal keeps today's transport: the `terminal` stream brings frames, and `terminalSend`
 carries input, resizes, scrolls and mouse presses. Leaving the terminal interrupts the stream,
-which has the core send `terminal.release`. The view draws one monospaced line a row, a span
-for each run of one style, the cursor's cell inverted.
+which has the core send `terminal.release`.
+
+**Drawn as Ghostty draws.** The view paints each row into pixels on the CPU and shows it with
+`El::pixels`; the cursor is its own image laid over the row. It follows the human's Ghostty
+config (`config.rs`: `font-family`, `font-size`, colours, `palette`, `cursor-style`,
+`cursor-style-blink`, `faint-opacity`) over Ghostty's own defaults, so with no config it is
+JetBrains Mono Nerd Font at 12 pt (embedded, as Ghostty embeds it) on `#282c34`.
+
+- `font.rs`: the cell from the face's metrics as Ghostty's `Metrics.calc` derives it (10 by
+  21 px for the default at scale 1, as Ghostty 1.3.1 measures), shaping with ligatures that
+  stay in their cells, synthetic bold and italic where a family lacks them, and fallback
+  faces from fontconfig sized as Ghostty sizes them (`ic_width`, then ex, cap, line height).
+- `sprite.rs`: box drawing, blocks, braille and powerline drawn to the cell, as Ghostty's
+  sprite font does, so lines meet across cells.
+- `paint.rs`: Ghostty's linear-corrected alpha blending, faint at `faint-opacity`, single,
+  double, curly, dotted and dashed underlines in SGR 58's colour, strikethrough, overline,
+  inverse, invisible, selection as the cell's colours swapped, colour emoji fitted to their
+  cells; block, bar, underline and the hollow block of an unfocused terminal.
+- `view.rs`: a row is found by what it shows, so output that scrolls repaints only its new
+  rows. The mouse goes to a program that tracks it, every button (left, middle, right,
+  back, forward) as its own report, or to herdr's `terminal.mouse`; Shift selects past
+  tracking. A drag selects by cell, a double click by word, a triple click by line
+  (libghostty's selection), and Ctrl+Shift+C or the platform's copy copies it. Pastes are
+  bracketed when asked, focus is reported under mode 1004, a notch scrolls three lines of
+  history, a trackpad its travel, and a full-screen program gets arrows (mode 1007). Links,
+  OSC 8 or written out, are underlined under the pointer and a click opens them through the
+  core's `openLink`.
+- The view needs the display scale: call `terminal_at(tab, lens, cx.env().scale)`.
+  `examples/replay.rs` draws a fixture headlessly (`FONT=<family>` for another face), and
+  `fixtures/terminal/styles.ndjson` holds every attribute and glyph class for comparing with
+  Ghostty on the same bytes.
 
 **Pins.** Ghostty is the submodule `vendor/ghostty` at `291fd050b9e9c293c8adb6a140742649b7e42d3a`,
 built with Zig 0.16.0, its `minimum_zig_version`. `THIRD-PARTY-NOTICES` names Ghostty (MIT)
@@ -159,6 +188,9 @@ cargo run --release -p collie-desktop-terminal --example throughput
 ```
 
 This is evidence for the gate, not a claim of speed: the recordings are small and repeat.
+The same example times painting: in a debug build, on a shared machine, a whole 200 by 60
+screen at scale 2 with every row changed took 15 to 49 ms at p50 over three runs, and the
+view as one line scrolls in 11 ms, since only the new row is painted.
 
 **Translated tests.** Every case in `desktop/test/terminal-input.test.ts` and
 `test/desktop-terminal-size.test.ts` has a cargo test against the Rust mapping
@@ -166,12 +198,9 @@ This is evidence for the gate, not a claim of speed: the recordings are small an
 
 - **xterm.js's own mouse reports.** `isMouseReport` is ported and tested, but Rune never
   types a mouse report, so the view has no use for it.
-- **Copy with a selection.** The spike has no selection, so Ctrl+C always goes to the pane;
-  the mapping's selection case is tested on its own.
-- **Middle and right buttons.** Rune's `on_drag` reports no button, so a press is the left
-  button. `mouse_of` maps all three, and its tests cover them.
-- **Cell metrics.** The view takes a cell as 0.6 em by 20 pt rather than measuring the face,
-  so the columns a width gives are an estimate.
+- **Right button.** Rune reports the secondary button as a press alone, so the pane gets its
+  press and release together and a right-button drag is not reported
+  (`terminal/tests/mouse.rs`).
 
 The `terminal-ended` alert, the `terminal-where` label and the grid's cursor label stand in
 for the screen-reader text xterm.js gives.

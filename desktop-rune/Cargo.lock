@@ -705,7 +705,9 @@ dependencies = [
  "ghostty-sys",
  "rune",
  "rune-kit",
+ "rune-theme-opencode",
  "serde_json",
+ "swash",
 ]
 
 [[package]]
