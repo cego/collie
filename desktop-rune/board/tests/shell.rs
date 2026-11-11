@@ -2,6 +2,7 @@
 
 use collie_desktop_board::calls::CallError;
 use collie_desktop_board::calls::testing::Harness;
+use collie_desktop_board::pages::usage::Level;
 use collie_desktop_board::shell::Page;
 use collie_desktop_board::{App, view};
 use rune::{Env, Runtime};
@@ -176,4 +177,190 @@ fn the_windows_focus_reaches_an_open_terminal_and_its_scale_is_the_displays() {
     let tab = runtime.state.terminal.as_ref().unwrap();
     assert!(!tab.focused());
     assert_eq!(tab.scale(), 1.5);
+}
+
+/// 2026-10-08T08:00:00Z.
+const NOW: f64 = 1_791_446_400_000.0;
+
+fn snapshot(profile: &str, name: &str) -> Value {
+    json!({"machine": {"installation": format!("inst-{name}"), "profile": profile, "name": name},
+        "message": {"_tag": "Snapshot", "installation": format!("inst-{name}"), "build": "0.118.0",
+        "protocol": 7, "files": true, "herds": [{"id": "h1"}], "tasks": [], "seq": 1}})
+}
+
+fn window(used: f64, reached: bool) -> Value {
+    json!({"kind": "session", "label": "Session", "model": null, "usedPercent": used,
+        "resetsAt": "2026-10-08T10:10:00Z", "reached": reached})
+}
+
+fn reading(subscription: &str, account: &str, label: &str, windows: Vec<Value>, at: &str) -> Value {
+    json!({"subscription": subscription, "account": account, "accountLabel": label,
+        "plan": "max", "windows": windows, "at": at, "source": "claude-usage", "problem": null})
+}
+
+fn usage_of(name: &str, readings: Vec<Value>) -> Value {
+    json!({"profile": format!("p-{name}"), "name": name, "readings": readings, "problem": null})
+}
+
+/// An app on a fake core, at `NOW`, whose `machines` are live.
+fn live_app(harness: &Harness<App>, machines: &[&str]) -> App {
+    let mut app = App::default();
+    app.core = Some(harness.core.clone());
+    app.board.clock = Some(NOW);
+    app.board.utc_offset = Some(0);
+    for name in machines {
+        app.apply(serde_json::from_value(snapshot(&format!("p-{name}"), name)).unwrap());
+    }
+    app
+}
+
+fn texts(runtime: &Runtime<App>, prefix: &str) -> Vec<String> {
+    runtime
+        .elements()
+        .iter()
+        .filter(|e| e.key.as_deref().is_some_and(|k| k.starts_with(prefix)))
+        .filter_map(|e| e.text.clone())
+        .collect()
+}
+
+#[test]
+fn the_toolbar_says_each_accounts_busiest_window_and_opens_the_usage_page() {
+    let harness = Harness::<App>::new();
+    let mut app = live_app(&harness, &["mk-pc", "vm-mk"]);
+    app.keep_usage_fresh(NOW);
+    assert_eq!(harness.fake.asked_of("usage").len(), 1);
+    harness.fake.answer(
+        "usage",
+        Ok(json!([
+            usage_of(
+                "mk-pc",
+                vec![reading(
+                    "claude",
+                    "org:acct",
+                    "me@example.com",
+                    vec![window(40.0, false)],
+                    "2026-10-08T07:57:00Z"
+                )]
+            ),
+            usage_of(
+                "vm-mk",
+                vec![
+                    reading(
+                        "claude",
+                        "org:acct",
+                        "me@example.com",
+                        vec![window(72.0, false)],
+                        "2026-10-08T07:59:00Z"
+                    ),
+                    reading(
+                        "chatgpt",
+                        "c-1",
+                        "me@example.com",
+                        vec![window(20.0, true)],
+                        "2026-10-08T07:59:00Z"
+                    ),
+                ]
+            ),
+        ])),
+    );
+    harness.settle(&mut app);
+    let mut runtime = runtime(app);
+    assert_eq!(texts(&runtime, "usage-"), ["Claude 72%", "ChatGPT out"]);
+    let usage = runtime
+        .elements()
+        .iter()
+        .find(|e| e.key.as_deref() == Some("usage"))
+        .map(|e| e.label.clone())
+        .expect("the toolbar's Usage");
+    assert_eq!(usage.as_deref(), Some("Usage: Claude 72%, ChatGPT out"));
+    tap(&mut runtime, "usage", 100.0);
+    assert_eq!(runtime.state.nav.page, Page::Usage);
+}
+
+#[test]
+fn a_machine_that_is_not_live_takes_its_reading_out_of_the_toolbar() {
+    let harness = Harness::<App>::new();
+    let mut app = live_app(&harness, &["mk-pc"]);
+    app.board.clock = Some(NOW);
+    app.pages.usage.machines = serde_json::from_value(json!([
+        usage_of(
+            "mk-pc",
+            vec![reading(
+                "claude",
+                "org:acct",
+                "me@example.com",
+                vec![window(31.0, false)],
+                "2026-10-08T07:57:00Z"
+            )]
+        ),
+        usage_of(
+            "gone",
+            vec![reading(
+                "claude",
+                "org:acct",
+                "me@example.com",
+                vec![window(95.0, false)],
+                "2026-10-08T07:59:00Z"
+            )]
+        ),
+    ]))
+    .unwrap();
+    let entries = app.usage_entries();
+    let said: Vec<(&str, Level)> = entries.iter().map(|e| (e.text.as_str(), e.level)).collect();
+    assert_eq!(said, [("Claude 31%", Level::Ok)]);
+    assert!(
+        entries[0].title.contains("read on mk-pc"),
+        "{}",
+        entries[0].title
+    );
+}
+
+#[test]
+fn usage_is_asked_when_desktop_opens_when_a_machine_comes_live_and_then_each_minute() {
+    let harness = Harness::<App>::new();
+    let mut app = live_app(&harness, &[]);
+    app.keep_usage_fresh(NOW);
+    app.keep_usage_fresh(NOW + 1_000.0);
+    assert_eq!(harness.fake.asked_of("usage").len(), 1, "once at open");
+    app.apply(serde_json::from_value(snapshot("p-mk-pc", "mk-pc")).unwrap());
+    app.keep_usage_fresh(NOW + 2_000.0);
+    assert_eq!(harness.fake.asked_of("usage").len(), 2, "again for mk-pc");
+    app.keep_usage_fresh(NOW + 61_000.0);
+    assert_eq!(
+        harness.fake.asked_of("usage").len(),
+        2,
+        "not before the minute"
+    );
+    app.keep_usage_fresh(NOW + 62_000.0);
+    assert_eq!(harness.fake.asked_of("usage").len(), 3);
+}
+
+#[test]
+fn the_board_row_counts_what_needs_you() {
+    let harness = Harness::<App>::new();
+    let mut app = live_app(&harness, &[]);
+    let mut needs = snapshot("p-mk-pc", "mk-pc");
+    needs["message"]["tasks"] = json!([{
+        "id": "t1", "name": "Ask", "project": "content", "state": "blocked", "steps": [],
+        "sentence": "", "age": "5m", "drift": null, "held": null, "heldBy": null,
+        "decision": null, "agents": [], "children": [], "mr": null, "branch": null,
+        "disposition": null, "landed": false, "ended": null, "mrState": null,
+        "planReady": false, "offer": null, "run": "r-1", "runs": ["r-1"], "at": NOW,
+    }]);
+    app.apply(serde_json::from_value(needs).unwrap());
+    let runtime = runtime(app);
+    let tree = runtime.accessibility_json();
+    let board = keyed(&tree, Page::Board.key()).expect("the Board row");
+    assert_eq!(board["description"], "1", "{board:#}");
+}
+
+fn keyed<'a>(node: &'a Value, key: &str) -> Option<&'a Value> {
+    if node["key"] == key {
+        return Some(node);
+    }
+    node["children"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find_map(|child| keyed(child, key))
 }

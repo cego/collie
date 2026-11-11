@@ -16,7 +16,7 @@ pub use model::{Flock, Placed, Shown};
 pub use view::{view, view_in};
 
 use crate::App;
-use crate::calls::{CallError, Stop};
+use crate::calls::{CallError, Failure, Stop};
 use answers::{Answering, Sitting, answer_key, open_questions};
 use cards::CardAction;
 use clicks::{BoardState, Gesture, Landed};
@@ -102,6 +102,8 @@ pub enum Dialog {
         title: String,
         sitting: Sitting,
     },
+    /// A card's running check: what it is doing and its last lines, read off the live card.
+    Check { card: String },
     Proposal {
         installation: String,
         proposal: Proposal,
@@ -545,7 +547,7 @@ impl App {
         request
     }
 
-    fn offset(&self) -> i32 {
+    pub(crate) fn offset(&self) -> i32 {
         self.board.utc_offset.unwrap_or_else(local_offset)
     }
 
@@ -562,27 +564,30 @@ impl App {
         if let Some(unsent) = &again.unsent {
             payload["unsent"] = Value::String(unsent.clone());
         }
-        core.request(
+        core.request_refusable(
             "act",
             payload,
-            move |app: &mut App, answer: Result<String, CallError>| app.acted(again, answer),
+            move |app: &mut App, answer: Result<String, Failure>| app.acted(again, answer),
         );
     }
 
-    fn acted(&mut self, again: Again, answer: Result<String, CallError>) {
+    /// What came of an act is said; a host's refusal gets no Try again, since the same
+    /// request would be refused again.
+    fn acted(&mut self, again: Again, answer: Result<String, Failure>) {
         match answer {
             Ok(said) => {
                 self.tried(&again.tried, &again.request, Some(Ok(())));
                 self.notify(said, true, None);
             }
             Err(failed) => {
-                self.tried(&again.tried, &again.request, Some(Err(failed.0.clone())));
-                self.notify(failed.0, false, Some(again));
+                self.tried(&again.tried, &again.request, Some(Err(failed.clone())));
+                let again = (!failed.refused).then_some(again);
+                self.notify(failed.said, false, again);
             }
         }
     }
 
-    fn tried(&mut self, tried: &Tried, request: &str, done: Option<Result<(), String>>) {
+    fn tried(&mut self, tried: &Tried, request: &str, done: Option<Result<(), Failure>>) {
         let Tried::Question {
             installation,
             question,
@@ -601,7 +606,7 @@ impl App {
             None => Event::Trying(request.into()),
             Some(outcome) => Event::Replied {
                 request: request.into(),
-                outcome: outcome.map_err(|reason| (false, reason)),
+                outcome: outcome.map_err(|failed| (failed.refused, failed.said)),
             },
         };
         let mut asked = self.questionnaire_of(installation, question);
@@ -662,7 +667,15 @@ impl App {
                     self.open_card(key);
                 }
             }
-            CardAction::CheckOutput | CardAction::Attach => {}
+            CardAction::CheckOutput => {
+                self.board.dialog = Some(Dialog::Check { card: key.into() });
+            }
+            CardAction::Attach => {
+                self.attach_to(key);
+                if let Some(pick) = &self.chat.pick {
+                    pick();
+                }
+            }
             CardAction::Steer => {
                 self.board.dialog = Some(Dialog::Words {
                     kind: Words::Steer,
@@ -737,6 +750,18 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Attaching is the chat's: the card becomes its chip and the chat opens, for the files
+    /// its dialog picks.
+    pub fn attach_to(&mut self, key: &str) {
+        if self.selected_key().as_deref() != Some(key) {
+            self.gesture(Gesture::Click(Landed::Card {
+                card: key.into(),
+                as_of: true,
+            }));
+        }
+        self.nav.chat.set_open(true);
     }
 
     /// Why a Machine's route is not live, by herdr profile; none while it is.

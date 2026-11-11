@@ -561,9 +561,17 @@ pub fn card_flow(flow: Option<&Flow>) -> Option<CardFlow> {
             .collect()
     };
     let (label, name) = match &flow.current {
-        None => (
+        None if done == run.len() => (
             "Done".to_string(),
             format!("Flow: {} of {} Steps done.", run.len(), run.len()),
+        ),
+        // No Step is under way, yet not every Step is done: say how far it got, not "Done".
+        None => (
+            format!("{done} of {} Steps done", run.len()),
+            format!(
+                "Flow: no Step under way. {done} of {} Steps done.",
+                run.len()
+            ),
         ),
         Some(current) => {
             let parts: Vec<&str> = [Some(current.title.as_str()), current.said.as_deref()]

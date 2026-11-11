@@ -2,7 +2,9 @@
 //! of cards, as `FlockBoard.vue` and `BoardCard.vue` lay them out, in Rune's own look.
 
 use super::cards::{self, CardAction};
-use super::model::{Placed, Section, fold_finished, fold_waiting, not_live_title, section_of};
+use super::model::{
+    self, Placed, Section, fold_finished, fold_waiting, not_live_title, section_of,
+};
 use super::{answers, as_of_said, dialogs};
 use crate::record::flow_of;
 use crate::shell::Page;
@@ -10,8 +12,8 @@ use crate::{App, flow, icons};
 use collie_desktop_protocol::generated::{Decision, GlyphState, LostState, State};
 use rune::{Color, El, Icon, Key, LiveRegion, col, el, icon, row, text};
 use rune_kit::{
-    Button, ButtonVariant, Collapsible, ControlSize, IconButton, IconButtonVariant, Kit, Menu,
-    MenuItem, Toast, ToastRegion,
+    Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, Loader, Menu, MenuItem,
+    StateColors, Toast, ToastRegion,
 };
 use std::collections::HashMap;
 
@@ -40,24 +42,22 @@ pub fn view_in(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         )
     };
 
-    let mut body = col().key("board-body").w_full().gap(20.0);
-    body = body.child(header(app, k, &placed));
-    body = body.children(trouble(app, k));
+    let mut body = col().key("board-body").w_full().gap(28.0);
     let connecting = !board.flock.heard
         && app.machines.is_empty()
         && board.trouble.is_none()
         && app.ended.is_none();
     if connecting {
-        body = body.child(
-            text("Connecting…")
-                .key("connecting")
-                .font(k.ty.ui)
-                .color(k.c.text_muted)
-                .role("status"),
-        );
+        body = body.child(connecting_placeholder(k));
     } else {
-        body = body.children(alerts(app, k));
-        if placed.is_empty() {
+        let reaching = model::reaching(&app.machines, &board.flock);
+        let mut top = col().w_full().gap(10.0).child(header(app, k, &placed));
+        if let Some(said) = model::reaching_said(&reaching, app.offset()) {
+            top = top.child(reaching_line(k, said));
+        }
+        top = top.children(trouble(app, k)).children(alerts(app, k));
+        body = body.child(top);
+        if placed.is_empty() && reaching.is_empty() {
             body = body.child(
                 text("Nothing on the board yet.")
                     .key("board-empty")
@@ -84,48 +84,68 @@ pub fn view_in(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
             match section {
                 Section::Finished => {
                     let (unseen, seen) = fold_finished(&all);
-                    part = part.child(section_heading(k, section, all.len()));
-                    if !unseen.is_empty() {
-                        part = part.child(draw(&unseen, layer));
-                    }
-                    if !seen.is_empty() {
-                        let open = board.finished_open;
-                        let title = if unseen.is_empty() {
-                            format!("{} finished", seen.len())
-                        } else {
-                            format!("{} seen", seen.len())
-                        };
-                        part = part.child(fold(
+                    let open = board.finished_open;
+                    let toggle = |app: &mut App| app.board.finished_open ^= true;
+                    if unseen.is_empty() {
+                        part = part.child(disclosure(
                             k,
                             "finished-seen",
-                            title,
+                            section_title(k, section, all.len(), None),
+                            format!("{} finished", seen.len()),
                             open,
-                            |app: &mut App| app.board.finished_open ^= true,
-                            open.then(|| draw(&seen, layer)),
+                            toggle,
                         ));
+                    } else {
+                        part = part
+                            .child(section_heading(
+                                k,
+                                section,
+                                all.len(),
+                                Some(format!("{} unseen", unseen.len())),
+                            ))
+                            .child(draw(&unseen, layer));
+                        if !seen.is_empty() {
+                            let title = format!("{} seen", seen.len());
+                            part = part.child(disclosure(
+                                k,
+                                "finished-seen",
+                                fold_title(k, &title),
+                                title,
+                                open,
+                                toggle,
+                            ));
+                        }
+                    }
+                    if open && !seen.is_empty() {
+                        part = part.child(draw(&seen, layer));
                     }
                 }
                 Section::Waiting => {
                     let (recent, older) = fold_waiting(&all, now);
-                    part = part
-                        .child(section_heading(k, section, recent.len()))
-                        .child(draw(&recent, layer));
+                    part = part.child(section_heading(k, section, recent.len(), None));
+                    if !recent.is_empty() {
+                        part = part.child(draw(&recent, layer));
+                    }
                     if !older.is_empty() {
                         let open = board.older_open;
-                        part = part.child(fold(
+                        let title = format!("{} older than a week", older.len());
+                        part = part.child(disclosure(
                             k,
                             "waiting-older",
-                            format!("{} older than a week", older.len()),
+                            fold_title(k, &title),
+                            title,
                             open,
                             |app: &mut App| app.board.older_open ^= true,
-                            open.then(|| draw(&older, layer)),
                         ));
+                        if open {
+                            part = part.child(draw(&older, layer));
+                        }
                     }
                 }
                 _ => {
                     let every: Vec<&Placed<'_>> = all.iter().collect();
                     part = part
-                        .child(section_heading(k, section, all.len()))
+                        .child(section_heading(k, section, all.len(), None))
                         .child(draw(&every, layer));
                 }
             }
@@ -139,6 +159,7 @@ pub fn view_in(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         .min_h(0.0)
         .w_full()
         .padding(PAD)
+        .pt(20.0)
         .scroll(rune::ScrollSpec {
             stick_bottom: false,
         })
@@ -179,6 +200,50 @@ pub fn view_in(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         .child(scroll)
 }
 
+/// Before the core has said anything: that the board is coming.
+fn connecting_placeholder(k: &Kit) -> El {
+    col()
+        .w_full()
+        .pt(140.0)
+        .gap(12.0)
+        .items_center()
+        .child(Loader::new().size(20.0).build(k).a11y_hidden())
+        .child(
+            text("Connecting to your Flock…")
+                .key("connecting")
+                .font(k.ty.ui_medium)
+                .color(k.c.text_base)
+                .role("status")
+                .live_region(LiveRegion::Polite),
+        )
+        .child(
+            text("Each Machine's saved board shows as soon as Desktop reads it.")
+                .font(k.ty.small)
+                .color(k.c.text_faint),
+        )
+}
+
+/// Which Machines are still being reached, said quietly over what they last showed.
+fn reaching_line(k: &Kit, said: String) -> El {
+    row()
+        .key("reaching")
+        .w_full()
+        .gap(8.0)
+        .center_y()
+        .role("status")
+        .label(said.clone())
+        .live_region(LiveRegion::Polite)
+        .child(Loader::new().size(13.0).build(k).a11y_hidden())
+        .child(
+            text(said)
+                .font(k.ty.small)
+                .color(k.c.text_muted)
+                .truncate()
+                .grow(1.0)
+                .shrink()
+                .a11y_hidden(),
+        )
+}
 /// The board, its overlays drawn over it alone.
 pub fn view(app: &App, k: &Kit) -> El {
     let mut layer = Vec::new();
@@ -221,7 +286,6 @@ fn grid(cards: Vec<El>, columns: usize) -> El {
                 .w_full()
                 .equal_columns(columns)
                 .gap(GAP)
-                .items_start()
                 .children(line),
         );
         at += 1;
@@ -240,23 +304,22 @@ fn header(app: &App, k: &Kit, placed: &[Placed<'_>]) -> El {
     let color = if urgent {
         k.c.warning.fg
     } else {
-        k.c.text_muted
+        k.c.text_base
     };
-    let font = if urgent { k.ty.ui_medium } else { k.ty.ui };
     row()
         .key("board-header")
         .w_full()
         .center_y()
         .gap(8.0)
         .children(urgent.then(|| {
-            icon(&icons::WARNING, 14.0)
-                .color(k.c.warning.icon)
+            icon(&icons::WARNING, 15.0)
+                .color(k.c.warning.fg)
                 .a11y_hidden()
         }))
         .child(
             text(said.clone())
                 .key("header")
-                .font(font)
+                .font(k.ty.body_medium)
                 .color(color)
                 .role("status")
                 .label(said)
@@ -264,7 +327,6 @@ fn header(app: &App, k: &Kit, placed: &[Placed<'_>]) -> El {
                 .truncate(),
         )
 }
-
 fn callout(
     k: &Kit,
     key: String,
@@ -302,8 +364,8 @@ fn callout(
         .gap(10.0)
         .padding(12.0)
         .radius(8.0)
-        .fill(k.c.layer_01)
-        .border(1.0, k.c.border_weak)
+        .fill(k.alpha(k.c.warning.bg, 0.45))
+        .border(1.0, k.alpha(k.c.warning.border, 0.55))
         .child(
             el().size(16.0, 18.0)
                 .center()
@@ -335,7 +397,7 @@ fn trouble(app: &App, k: &Kit) -> Vec<El> {
             k,
             "retrying".into(),
             &icons::REFRESH,
-            k.c.warning.icon,
+            k.c.warning.fg,
             "Desktop is reconnecting to its Flock; showing what it last had".into(),
             format!("{}. {when}", trouble.said),
             Some(retry(k)),
@@ -346,7 +408,7 @@ fn trouble(app: &App, k: &Kit) -> Vec<El> {
             k,
             "flock-ended".into(),
             &icons::REFRESH,
-            k.c.warning.icon,
+            k.c.warning.fg,
             "Desktop stopped hearing from its Flock; showing what it last had".into(),
             why.trim_end_matches('.').to_string(),
             Some(retry(k)),
@@ -362,7 +424,7 @@ fn alerts(app: &App, k: &Kit) -> Vec<El> {
             k,
             "renew-gitlab".into(),
             &icons::KEY,
-            k.c.warning.icon,
+            k.c.warning.fg,
             format!("The GitLab token expires on {expires}"),
             "Make a new one and Renew it, and every Machine gets it.".into(),
             Some(
@@ -393,7 +455,7 @@ fn alerts(app: &App, k: &Kit) -> Vec<El> {
             k,
             format!("lost-{profile}"),
             glyph,
-            k.c.warning.icon,
+            k.c.warning.fg,
             not_live_title(&lost.state, &lost.name),
             lost.reason.clone(),
             onboard,
@@ -402,76 +464,131 @@ fn alerts(app: &App, k: &Kit) -> Vec<El> {
     all
 }
 
-fn section_heading(k: &Kit, section: Section, count: usize) -> El {
+/// A section's name and how many cards it holds, in its tone.
+fn section_title(k: &Kit, section: Section, count: usize, note: Option<String>) -> El {
     let tone = match section {
         Section::NeedsYou => k.c.warning.fg,
-        _ => k.c.text_muted,
+        _ => k.c.text_strong,
     };
     row()
         .gap(8.0)
         .center_y()
         .a11y_hidden()
-        .child(text(section.label()).font(k.ty.small_medium).color(tone))
+        .child(text(section.label()).font(k.ty.ui_medium).color(tone))
         .child(
-            text(count.to_string())
-                .font(k.ty.small)
-                .color(k.c.text_faint),
+            el().px(6.0)
+                .h(18.0)
+                .radius(9.0)
+                .fill(k.c.layer_02)
+                .center()
+                .child(
+                    text(count.to_string())
+                        .font(k.ty.text_xsmall_medium)
+                        .color(k.c.text_muted),
+                ),
         )
+        .children(note.map(|note| text(note).font(k.ty.small).color(k.c.info.fg)))
 }
 
-fn fold(
+fn section_heading(k: &Kit, section: Section, count: usize, note: Option<String>) -> El {
+    row()
+        .h(28.0)
+        .center_y()
+        .child(section_title(k, section, count, note))
+}
+
+/// A fold's own title, quieter than a section's.
+fn fold_title(k: &Kit, title: &str) -> El {
+    text(title.to_string())
+        .font(k.ty.small_medium)
+        .color(k.c.text_muted)
+        .a11y_hidden()
+}
+
+/// A row that opens and closes what follows it, with a chevron that says which.
+fn disclosure(
     k: &Kit,
     key: &str,
-    title: String,
+    title: El,
+    label: String,
     open: bool,
     toggle: impl Fn(&mut App) + 'static,
-    inside: Option<El>,
 ) -> El {
-    let mut fold = Collapsible::new(title, open).ghost().on_toggle(toggle);
-    if let Some(inside) = inside {
-        fold = fold.child(inside);
-    }
-    fold.build(k).key(key.to_string())
+    let chevron = if open {
+        &icons::CHEVRON_DOWN
+    } else {
+        &icons::CHEVRON_RIGHT
+    };
+    row()
+        .key(key.to_string())
+        .role("button")
+        .label(label)
+        .expanded(open)
+        .focusable(true)
+        .focus_ring(2.0, 1.0, k.c.border_focus)
+        .gap(6.0)
+        .h(28.0)
+        .pl(4.0)
+        .pr(10.0)
+        // The chevron hangs in the margin, so the title lines up with the sections' own.
+        .ml(-24.0)
+        .radius(6.0)
+        .center_y()
+        .hover(k.c.hover)
+        .on_press(toggle)
+        .child(icon(chevron, 14.0).color(k.c.icon_muted).a11y_hidden())
+        .child(title)
 }
-
-fn glyph_color(k: &Kit, state: &GlyphState) -> (Color, bool) {
+/// A Step's glyph and its tone, as `FlowGlyph.vue` draws it.
+fn glyph_of(k: &Kit, state: &GlyphState) -> (&'static Icon, Color) {
     match state {
-        GlyphState::Done => (k.c.success.icon, true),
-        GlyphState::Running => (k.c.info.icon, true),
-        GlyphState::NeedsYou => (k.c.warning.icon, true),
-        GlyphState::Failed => (k.c.danger.icon, true),
-        GlyphState::Waiting => (k.c.text_muted, true),
-        GlyphState::Stopped => (k.c.text_muted, false),
-        GlyphState::NotRun | GlyphState::Expected => (k.c.text_faint, false),
+        GlyphState::Done => (&icons::STEP_DONE, k.c.success.fg),
+        GlyphState::Running => (&icons::STEP_RUNNING, k.c.info.fg),
+        GlyphState::NeedsYou => (&icons::STEP_NEEDS_YOU, k.c.warning.fg),
+        GlyphState::Failed => (&icons::STEP_FAILED, k.c.danger.fg),
+        GlyphState::Waiting => (&icons::STEP_WAITING, k.c.text_muted),
+        GlyphState::Stopped => (&icons::STEP_STOPPED, k.c.text_muted),
+        GlyphState::NotRun => (&icons::STEP_NOT_RUN, k.c.text_faint),
+        GlyphState::Expected => (&icons::STEP_EXPECTED, k.c.text_faint),
     }
 }
 
 fn dot(k: &Kit, state: &GlyphState) -> El {
-    let (color, filled) = glyph_color(k, state);
-    let d = el().size(7.0, 7.0).radius(3.5);
-    if filled {
-        d.fill(color)
-    } else {
-        d.border(1.0, color)
+    let (glyph, color) = glyph_of(k, state);
+    icon(glyph, 13.0).color(color)
+}
+/// A card state's tone, as today's badge colours it: warning, info, success, error or none.
+fn state_tone<'k>(k: &'k Kit, state: &State) -> Option<&'k StateColors> {
+    match state {
+        State::Blocked => Some(&k.c.warning),
+        State::Active => Some(&k.c.info),
+        State::Failed => Some(&k.c.danger),
+        State::Done => Some(&k.c.success),
+        State::Quiet | State::Stopped | State::Abandoned => None,
     }
 }
 
-fn state_tone(k: &Kit, state: &State) -> Color {
-    match state {
-        State::Blocked => k.c.warning.icon,
-        State::Active => k.c.info.icon,
-        State::Quiet => k.c.text_muted,
-        State::Failed => k.c.danger.icon,
-        State::Done => k.c.success.icon,
-        State::Stopped | State::Abandoned => k.c.text_faint,
-    }
+/// A small soft pill: a card's state, or Unseen.
+fn pill(k: &Kit, key: &str, said: &str, tone: Option<&StateColors>) -> El {
+    let (fill, ink) = match tone {
+        Some(tone) => (tone.bg, tone.fg),
+        None => (k.c.layer_02, k.c.text_muted),
+    };
+    el().key(key.to_string())
+        .h(18.0)
+        .px(6.0)
+        .radius(4.0)
+        .fill(fill)
+        .center()
+        .child(text(said.to_string()).font(k.ty.small_medium).color(ink))
 }
 
 /// A card action as this board does it, or none where Desktop has no way to yet.
 fn label_of(action: &CardAction, primary: bool) -> Option<String> {
     Some(match action {
         CardAction::GoToTab => "Go to pane".into(),
-        CardAction::CheckOutput | CardAction::Attach => return None,
+        CardAction::CheckOutput => "Check output…".into(),
+        CardAction::Attach => "Attach files…".into(),
         CardAction::Steer => "Steer…".into(),
         CardAction::OpenMr { mr, named } => {
             mr.url()?;
@@ -514,18 +631,7 @@ fn card(
         .is_some_and(|about| about.machine == p.machine && about.task == task.id);
     let c = &k.c;
 
-    // The name, the state and what the card can be asked for.
-    let mut badges = row().gap(6.0).center_y();
-    if task.unseen == Some(true) {
-        badges = badges.child(
-            text("Unseen")
-                .key("unseen")
-                .font(k.ty.small_medium)
-                .color(c.info.fg)
-                .role("status")
-                .label("Unseen"),
-        );
-    }
+    // What the card can be asked for, behind its menu.
     let menu_actions: Vec<(CardAction, String)> = cards::card_actions(task)
         .into_iter()
         .chain(cards::disposition_actions(task))
@@ -533,9 +639,10 @@ fn card(
         .collect();
     let open = app.board.menu.as_deref() == Some(key.as_str());
     let trigger = IconButton::new(&icons::MORE)
-        .variant(IconButtonVariant::Ghost)
+        .variant(IconButtonVariant::GhostMuted)
         .control_size(ControlSize::Small)
         .label(format!("Actions for {}", task.name))
+        .help("Actions")
         .disabled(!live)
         .expanded(open)
         .on_press({
@@ -557,94 +664,101 @@ fn card(
         .on_close(|app: &mut App| app.board.menu = None);
     for (action, label) in menu_actions {
         let key = key.clone();
-        menu = menu.item(
-            MenuItem::new(label)
-                .danger(action == CardAction::Stop)
-                .on_select(move |app: &mut App| app.do_action(&key, &action)),
-        );
+        let item = MenuItem::new(label).danger(action == CardAction::Stop);
+        menu = menu.item(if action == CardAction::Attach {
+            item.on_select_tx(move |app: &mut App, tx| {
+                app.attach_to(&key);
+                collie_desktop_chat::chat::pick(app, tx);
+            })
+        } else {
+            item.on_select(move |app: &mut App| app.do_action(&key, &action))
+        });
     }
     let menu = menu.build(k, layer);
-    let title = row()
-        .w_full()
-        .items_start()
-        .gap(8.0)
-        .child(
-            el().size(8.0, 18.0)
-                .center()
-                .child(
-                    el().size(8.0, 8.0)
-                        .radius(4.0)
-                        .fill(state_tone(k, &task.state)),
-                )
-                .a11y_hidden(),
-        )
-        .child(
-            text(task.name.clone())
-                .key("name")
-                .font(k.ty.ui_medium)
-                .color(c.text_base)
-                .wrap()
-                .max_lines(2)
-                .grow(1.0)
-                .shrink()
-                .a11y_hidden(),
-        )
-        .child(badges)
-        .child(
-            text(cards::state_label(&task.state))
-                .key("state")
-                .font(k.ty.small)
-                .color(c.text_faint)
-                .a11y_hidden(),
-        )
-        .child(menu);
 
-    let mut card = col()
-        .w_full()
-        .gap(8.0)
-        .padding(12.0)
-        .radius(8.0)
-        .fill(if task.state == State::Blocked {
-            k.alpha(c.warning.bg, 0.5)
-        } else {
-            c.layer_01
-        })
-        .border(
-            if selected { 1.5 } else { 1.0 },
-            if selected {
-                c.border_focus
-            } else if task.state == State::Blocked {
-                c.warning.border
-            } else {
-                c.border_weak
-            },
-        )
-        .hover(c.surface_hover)
-        .child(title);
+    // Its name, then how it stands and where its work is.
+    let mut status = row().key("status").w_full().gap(6.0).center_y().child(pill(
+        k,
+        "state",
+        cards::state_label(&task.state),
+        state_tone(k, &task.state),
+    ));
+    if task.unseen == Some(true) {
+        status = status.child(
+            pill(k, "unseen", "Unseen", Some(&c.info))
+                .role("status")
+                .label("Unseen"),
+        );
+    }
     let place = cards::repo_and_branch(task);
     if !place.is_empty() {
-        card = card.child(
+        status = status.child(
             text(place)
                 .key("repo")
                 .font(k.ty.small)
                 .color(c.text_faint)
                 .truncate()
-                .w_full(),
+                .grow(1.0)
+                .shrink(),
         );
     }
-    card = card.child(
-        text(task.sentence.clone())
-            .key("sentence")
-            .font(k.ty.ui)
-            .color(c.text_muted)
-            .wrap()
-            .max_lines(3)
-            .w_full(),
-    );
+    let head = row()
+        .w_full()
+        .items_start()
+        .gap(6.0)
+        .child(
+            col()
+                .grow(1.0)
+                .shrink()
+                .gap(6.0)
+                .child(
+                    text(task.name.clone())
+                        .key("name")
+                        .font(k.ty.ui_medium)
+                        .color(c.text_strong)
+                        .wrap()
+                        .max_lines(2)
+                        .w_full()
+                        .a11y_hidden(),
+                )
+                .child(status.a11y_hidden()),
+        )
+        .child(el().mt(-3.0).mr(-4.0).child(menu));
+
+    let (fill, edge) = if task.state == State::Blocked {
+        (k.alpha(c.warning.bg, 0.35), k.alpha(c.warning.border, 0.7))
+    } else {
+        (c.layer_01, c.border_weak)
+    };
+    let mut card = col()
+        .w_full()
+        .min_w(0.0)
+        .gap(10.0)
+        .pt(12.0)
+        .px(14.0)
+        .pb(10.0)
+        .radius(10.0)
+        .fill(fill)
+        .border(
+            if selected { 1.5 } else { 1.0 },
+            if selected { c.border_focus } else { edge },
+        )
+        .hover(c.surface_hover)
+        .focus_ring(2.0, 2.0, c.border_focus)
+        .child(head)
+        .child(
+            text(task.sentence.clone())
+                .key("sentence")
+                .font(k.ty.ui)
+                .color(c.text_muted)
+                .wrap()
+                .max_lines(3)
+                .w_full(),
+        );
 
     // Its merge requests, where it has several or another Machine holds one too.
     if let Some(mrs) = mrs {
-        let mut list = col().key("mrs").gap(4.0).w_full();
+        let mut list = col().key("mrs").gap(2.0).w_full();
         for (at, one) in mrs.iter().enumerate() {
             let mut line = row()
                 .key(format!("mr-{at}"))
@@ -686,7 +800,7 @@ fn card(
     // Its Flow strip, which opens its record.
     if let Some(strip) = cards::card_flow(task.flow.as_ref()) {
         let glyphs = row()
-            .gap(3.0)
+            .gap(2.0)
             .center_y()
             .a11y_hidden()
             .children(strip.run.iter().map(|(g, folded)| {
@@ -701,7 +815,7 @@ fn card(
             }))
             .children((!strip.release.is_empty()).then(|| {
                 row()
-                    .gap(3.0)
+                    .gap(2.0)
                     .ml(6.0)
                     .center_y()
                     .children(strip.release.iter().map(|g| dot(k, &g.state)))
@@ -712,9 +826,14 @@ fn card(
                 .key(format!("{id}-flow"))
                 .w_full()
                 .gap(8.0)
+                .h(26.0)
+                .px(6.0)
+                .ml(-6.0)
                 .center_y()
-                .radius(4.0)
+                .radius(6.0)
+                .hover(c.hover)
                 .focusable(live)
+                .focus_ring(2.0, 0.0, c.border_focus)
                 .on_press(move |app: &mut App| app.open_card(&open))
                 .role("button")
                 .label(strip.name.clone())
@@ -752,15 +871,18 @@ fn card(
     }
 
     // What it asks: questions, or a proposal to review.
-    if let Some(asked) = answers::card_question(task, p.installation, &app.board.answering) {
-        let mut block = col().key("question").gap(6.0).w_full().child(
-            text(asked.text)
+    let asks = |key: &str, said: String| {
+        col().key(key.to_string()).gap(8.0).w_full().child(
+            text(said)
                 .font(k.ty.ui_medium)
                 .color(c.text_base)
                 .wrap()
                 .max_lines(2)
                 .w_full(),
-        );
+        )
+    };
+    if let Some(asked) = answers::card_question(task, p.installation, &app.board.answering) {
+        let mut block = asks("question", asked.text);
         block = match (asked.pending, asked.label) {
             (Some(pending), _) => block.child(
                 text(pending)
@@ -775,7 +897,7 @@ fn card(
             (None, Some(label)) => {
                 let key = key.clone();
                 block.child(
-                    small_button(label, ButtonVariant::Neutral)
+                    small_button(label, ButtonVariant::Contrast)
                         .disabled(!live)
                         .on_press(move |app: &mut App| app.answer_questions(&key))
                         .build(k)
@@ -788,25 +910,13 @@ fn card(
     } else if let Some(Decision::Proposal(proposal)) = &task.decision {
         let key = key.clone();
         card = card.child(
-            col()
-                .key("proposal")
-                .gap(6.0)
-                .w_full()
-                .child(
-                    text(proposal.text.clone())
-                        .font(k.ty.ui_medium)
-                        .color(c.text_base)
-                        .wrap()
-                        .max_lines(2)
-                        .w_full(),
-                )
-                .child(
-                    small_button("Review…".into(), ButtonVariant::Neutral)
-                        .disabled(!live)
-                        .on_press(move |app: &mut App| app.review(&key))
-                        .build(k)
-                        .key(format!("{id}-review")),
-                ),
+            asks("proposal", proposal.text.clone()).child(
+                small_button("Review…".into(), ButtonVariant::Contrast)
+                    .disabled(!live)
+                    .on_press(move |app: &mut App| app.review(&key))
+                    .build(k)
+                    .key(format!("{id}-review")),
+            ),
         );
     }
 
@@ -816,38 +926,54 @@ fn card(
         1 => Some("1 agent".to_string()),
         n => Some(format!("{n} agents")),
     };
-    let offset = app.board.utc_offset.unwrap_or_else(super::local_offset);
     let foot: Vec<String> = [
         (!p.place.is_empty()).then(|| p.place.clone()),
         Some(task.age.clone()),
-        p.as_of.map(|at| as_of_said(at, offset)),
+        p.as_of.map(|at| as_of_said(at, app.offset())),
         agents,
     ]
     .into_iter()
     .flatten()
     .collect();
-    let mut footer = row().key("footer").w_full().gap(8.0).center_y().child(
-        text(foot.join(" · "))
-            .key("facts")
-            .font(k.ty.small)
-            .color(c.text_faint)
-            .truncate()
-            .grow(1.0)
-            .shrink(),
-    );
+    let mut footer = row()
+        .key("footer")
+        .w_full()
+        .min_h(28.0)
+        .gap(8.0)
+        .center_y()
+        .child(
+            text(foot.join(" · "))
+                .key("facts")
+                .font(k.ty.small)
+                .color(c.text_faint)
+                .truncate()
+                .grow(1.0)
+                .shrink(),
+        );
     if let Some((action, label)) =
         cards::primary_action(task).and_then(|a| label_of(&a, true).map(|l| (a, l)))
     {
         let key = key.clone();
+        let mut button = small_button(label, ButtonVariant::Neutral).disabled(!live);
+        if action == CardAction::GoToTab {
+            button = button.icon(&icons::PANE);
+        }
         footer = footer.child(
-            small_button(label, ButtonVariant::Outline)
-                .disabled(!live)
+            button
                 .on_press(move |app: &mut App| app.do_action(&key, &action))
                 .build(k)
                 .key(format!("{id}-primary")),
         );
     }
-    card = card.child(footer);
+    // Pinned to the card's foot, so a row of cards ends level.
+    card = card.child(
+        col()
+            .w_full()
+            .grow(1.0)
+            .child(el().grow(1.0).a11y_hidden())
+            .child(el().h(1.0).w_full().fill(c.border_weak).a11y_hidden())
+            .child(footer.pt(8.0)),
+    );
 
     let (press, double, enter) = (key.clone(), key.clone(), key.clone());
     let card = card
@@ -867,7 +993,7 @@ fn card(
         .label(task.name.clone())
         .description(task.sentence.clone())
         .checked(selected);
-    if live { card } else { card.opacity(0.55) }
+    if live { card } else { card.opacity(0.6) }
 }
 
 fn notices(app: &App, k: &Kit) -> El {
@@ -877,11 +1003,12 @@ fn notices(app: &App, k: &Kit) -> El {
         let mut toast = Toast::new(format!("notice-{id}"), notice.title.clone())
             .on_close(move |app: &mut App| app.dismiss(id));
         if !notice.ok {
-            toast = toast
-                .lead(icon(&icons::WARNING, 16.0).color(k.c.danger.icon))
-                .action(k, "Try again", true, move |app: &mut App, _| {
-                    app.try_again(id)
-                });
+            toast = toast.lead(icon(&icons::WARNING, 16.0).color(k.c.danger.icon));
+        }
+        if notice.again.is_some() {
+            toast = toast.action(k, "Try again", true, move |app: &mut App, _| {
+                app.try_again(id)
+            });
         }
         region = region.toast(toast.build(k));
     }

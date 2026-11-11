@@ -237,6 +237,7 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                 .on_close(close)
                 .build(k, layer);
         }
+        Dialog::Check { card } => check_output(app, k, card, layer),
         Dialog::Proposal { proposal, seen, .. } => {
             let mut steps = col().gap(6.0).pt(12.0);
             for (at, action) in proposal.actions.iter().enumerate() {
@@ -585,4 +586,101 @@ fn edit_at(which: String) -> impl for<'a> Fn(&'a mut App) -> &'a mut TextEdit {
             .entry(which.clone())
             .or_insert_with(|| TextEdit::new(""))
     }
+}
+
+/// A card's running check as the card says it now: its sentence and the last lines it wrote.
+fn check_output(app: &App, k: &Kit, card: &str, layer: &mut Vec<El>) {
+    let placed = app.placed_by(card);
+    let check = placed.as_ref().and_then(|p| p.task.check.clone().flatten());
+    let name = placed
+        .as_ref()
+        .map_or_else(String::new, |p| p.task.name.clone());
+    let mut body = col().gap(10.0).padding(16.0).pt(0.0).w_full();
+    match &check {
+        Some(check) => {
+            body = body.child(
+                text(check.sentence.clone())
+                    .key("check-sentence")
+                    .font(k.ty.ui)
+                    .color(k.c.text_base)
+                    .role("status")
+                    .live_region(LiveRegion::Polite)
+                    .wrap()
+                    .w_full(),
+            );
+            let lines = if check.last_lines.is_empty() {
+                "It has written nothing yet.".to_string()
+            } else {
+                check.last_lines.join("\n")
+            };
+            body = body.child(
+                col()
+                    .key("check-lines")
+                    .w_full()
+                    .max_h(320.0)
+                    .padding(10.0)
+                    .radius(6.0)
+                    .fill(k.c.layer_02)
+                    .border(1.0, k.c.border_weak)
+                    .scroll(rune::ScrollSpec { stick_bottom: true })
+                    .label("Its last lines")
+                    .child(
+                        text(lines)
+                            .font(k.ty.mono)
+                            .color(k.c.text_muted)
+                            .wrap()
+                            .selectable(true)
+                            .w_full(),
+                    ),
+            );
+            if let Some(log) = &check.log {
+                body = body.child(
+                    text(format!("Written to {log} on its Machine"))
+                        .key("check-log")
+                        .font(k.ty.small)
+                        .color(k.c.text_faint)
+                        .selectable(true)
+                        .wrap()
+                        .w_full(),
+                );
+            }
+        }
+        None => {
+            body = body.child(
+                text("Its check has ended; the record has what came of it.")
+                    .key("check-ended")
+                    .font(k.ty.ui)
+                    .color(k.c.text_muted)
+                    .role("status")
+                    .wrap()
+                    .w_full(),
+            );
+        }
+    }
+    let live = placed.as_ref().is_some_and(|p| p.as_of.is_none());
+    let card = card.to_string();
+    body = body.child(
+        row().w_full().justify_end().child(
+            Button::new("Open record")
+                .variant(ButtonVariant::Outline)
+                .disabled(!live)
+                .on_press(move |app: &mut App| {
+                    app.board.dialog = None;
+                    app.open_card(&card);
+                })
+                .build(k)
+                .key("check-open-record"),
+        ),
+    );
+    let title = match &check {
+        Some(check) => format!("{} · {name}", check.name),
+        None => name,
+    };
+    Modal::new("check-output", title)
+        .open(true)
+        .width(640.0)
+        .fit()
+        .child(body)
+        .on_close(close)
+        .build(k, layer);
 }

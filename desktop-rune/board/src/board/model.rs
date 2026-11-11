@@ -541,3 +541,77 @@ pub fn not_live_title(state: &LostState, name: &str) -> String {
         LostState::UpdateDesktop => format!("Update Desktop to see {name}"),
     }
 }
+
+/// A Machine Desktop is still reaching: its name, and since when the board it shows is saved,
+/// where it shows one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Reaching {
+    pub name: String,
+    pub as_of: Option<f64>,
+}
+
+/// Every route neither live nor lost, in the order Desktop opened them, then any saved board
+/// whose route is not known yet.
+pub fn reaching(machines: &[Shown], flock: &Flock) -> Vec<Reaching> {
+    let live = |profile: &str| {
+        machines
+            .iter()
+            .any(|m| m.machine.profile == profile && m.as_of.is_none())
+    };
+    let saved = |profile: &str| {
+        machines
+            .iter()
+            .filter(|m| m.machine.profile == profile)
+            .filter_map(|m| m.as_of)
+            .reduce(f64::max)
+    };
+    let mut all: Vec<(String, String)> = flock
+        .routes
+        .iter()
+        .map(|(profile, route)| (profile.to_string(), route.name.clone()))
+        .collect();
+    for m in machines {
+        if !all.iter().any(|(profile, _)| *profile == m.machine.profile) {
+            all.push((m.machine.profile.clone(), m.machine.name.clone()));
+        }
+    }
+    all.into_iter()
+        .filter(|(profile, _)| !live(profile) && !flock.lost.has(profile))
+        .map(|(profile, name)| Reaching {
+            as_of: saved(&profile),
+            name,
+        })
+        .collect()
+}
+
+/// `a`, `a and b`, `a, b and c`.
+fn listed(names: &[&str]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => one.to_string(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// What the board says while Machines are still being reached, and what it shows of them.
+pub fn reaching_said(reaching: &[Reaching], offset_minutes: i32) -> Option<String> {
+    let names: Vec<&str> = reaching.iter().map(|r| r.name.as_str()).collect();
+    let saved: Vec<(&str, f64)> = reaching
+        .iter()
+        .filter_map(|r| r.as_of.map(|at| (r.name.as_str(), at)))
+        .collect();
+    let who = listed(&names);
+    Some(match (reaching.len(), saved.as_slice()) {
+        (0, _) => return None,
+        (_, []) => format!("Reaching {who}…"),
+        (1, [(_, at)]) => format!(
+            "Reaching {who}; its cards are {}.",
+            super::as_of_said(*at, offset_minutes)
+        ),
+        (_, [(name, at)]) => format!(
+            "Reaching {who}; {name}'s cards are {}.",
+            super::as_of_said(*at, offset_minutes)
+        ),
+        _ => format!("Reaching {who}; the cards shown are what each last said."),
+    })
+}

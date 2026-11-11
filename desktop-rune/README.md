@@ -10,7 +10,10 @@ terminal from the `terminal` stream, through libghostty-vt, and sends what the h
 on `terminalSend`. The record's other tabs (Flow, Summary, Plan, Review, Diff, Evidence, Log,
 Facts, the merge request) read `runDetail` and `runFile`, and its Diff tab shows the Run's diff
 in rune-kit's Diff, where selected lines become review comments. The board's Chat button opens
-the Flock chat, which streams turns on `say`.
+the Flock chat, which streams turns on `say`. Each Machine's saved board is drawn as soon as
+`flock` sends it, under a line naming the Machines still being reached. A card's menu has Check
+output and Attach files. The toolbar shows each Subscription account's Usage, as today's header
+does. An `act` that the host refused has no Try again.
 
 | Crate or file                | What it owns                                                                                                                                       |
 | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -51,6 +54,7 @@ cargo run --release -p collie-desktop-terminal --example throughput   # VT bytes
 cargo run -p collie-desktop-board      # the window, with the live board of this Machine
 cargo run -p collie-desktop-board -- --snap board.png --tree board.json   # headless
 cargo run -p collie-desktop-board -- --script s.json --frames N --out frames/   # headless input, after the first live board
+COLLIE_RUNE_SNAP_AT_START=1 cargo run -p collie-desktop-board -- --script s.json --frames N --out frames/   # the same, from the start
 cargo run -p collie-desktop-chat --bin record-say -- --out x.ndjson --say 'hello'   # record a turn
 cargo run -p collie-desktop-chat --bin corpus -- <dir of .md> [--png <dir>]  # the corpus table
 cargo run --release -p collie-desktop-chat --example highlight-cost -- <dir of .md>

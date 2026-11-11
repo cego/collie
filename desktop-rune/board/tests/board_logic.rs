@@ -5,11 +5,15 @@
 use collie_desktop_board::board::answers::{
     Answering, Condition, Now, Sitting, answer_key, card_question,
 };
-use collie_desktop_board::board::cards::{CardMr, card_mrs};
-use collie_desktop_board::board::model::{Flock, Shown, apply_item, placed};
+use collie_desktop_board::board::cards::{CardMr, card_flow, card_mrs};
+use collie_desktop_board::board::model::{
+    Flock, Shown, apply_item, placed, reaching, reaching_said,
+};
 use collie_desktop_board::board::questionnaire::{Does, Event, HOLD, Questionnaire, Where};
 use collie_desktop_board::board::{backoff, renewal_due};
-use collie_desktop_protocol::generated::{Question, Task};
+use collie_desktop_board::calls::{Failure, said};
+use collie_desktop_protocol::client::RpcError;
+use collie_desktop_protocol::generated::{Flow, Question, Task};
 use serde_json::{Value, json};
 
 fn task(id: &str, state: &str, more: Value) -> Value {
@@ -550,4 +554,117 @@ fn a_token_is_due_for_renewal_within_fourteen_days_of_expiring() {
     );
     assert!(!renewal_due(None, now));
     assert!(!renewal_due(Some("soon"), now));
+}
+
+fn said_while_reaching(items: Vec<Value>) -> Option<String> {
+    let (mut machines, mut flock): (Vec<Shown>, Flock) = Default::default();
+    for item in items {
+        apply_item(
+            &mut machines,
+            &mut flock,
+            serde_json::from_value(item).unwrap(),
+        );
+    }
+    reaching_said(&reaching(&machines, &flock), 0)
+}
+
+fn routed(machine: Value) -> Value {
+    json!({"_tag": "Routed", "machine": machine})
+}
+
+fn saved(machine: Value, at: f64) -> Value {
+    json!({"_tag": "Saved", "machine": machine, "herds": default_herd(), "tasks": [], "at": at})
+}
+
+#[test]
+fn the_board_names_each_machine_it_is_still_reaching_and_how_old_its_saved_cards_are() {
+    let at = 14.0 * 3_600_000.0 + 5.0 * 60_000.0;
+    assert_eq!(
+        said_while_reaching(vec![routed(pc()), routed(vm())]).as_deref(),
+        Some("Reaching mk-pc and vm-mk…")
+    );
+    assert_eq!(
+        said_while_reaching(vec![routed(pc()), routed(vm()), saved(vm(), at)]).as_deref(),
+        Some("Reaching mk-pc and vm-mk; vm-mk's cards are as of 14:05.")
+    );
+    assert_eq!(
+        said_while_reaching(vec![
+            routed(pc()),
+            routed(vm()),
+            saved(vm(), at),
+            snapshot(pc(), vec![], default_herd()),
+        ])
+        .as_deref(),
+        Some("Reaching vm-mk; its cards are as of 14:05.")
+    );
+    assert_eq!(
+        said_while_reaching(vec![saved(pc(), at), saved(vm(), at)]).as_deref(),
+        Some("Reaching mk-pc and vm-mk; the cards shown are what each last said.")
+    );
+    assert_eq!(
+        said_while_reaching(vec![
+            routed(vm()),
+            saved(vm(), at),
+            snapshot(vm(), vec![], default_herd()),
+        ]),
+        None
+    );
+    assert_eq!(
+        said_while_reaching(vec![
+            routed(vm()),
+            json!({"_tag": "Lost", "machine": {"profile": "p-vm", "name": "vm-mk"},
+                "state": "unreachable", "reason": "gone", "at": at}),
+        ]),
+        None,
+        "a Machine out of reach is said by its alert, not as one being reached"
+    );
+}
+
+fn flow(states: &[&str], current: Value) -> Flow {
+    serde_json::from_value(json!({
+        "glyphs": states.iter().map(|s| json!({"title": s, "state": s})).collect::<Vec<_>>(),
+        "release": 0, "current": current,
+    }))
+    .unwrap()
+}
+
+#[test]
+fn a_flow_with_no_step_under_way_says_done_only_when_every_step_is() {
+    let all = card_flow(Some(&flow(&["done", "done"], Value::Null))).unwrap();
+    assert_eq!(
+        (all.label.as_str(), all.name.as_str()),
+        ("Done", "Flow: 2 of 2 Steps done.")
+    );
+    let failed = card_flow(Some(&flow(&["done", "failed", "not-run"], Value::Null))).unwrap();
+    assert_eq!(
+        (failed.label.as_str(), failed.name.as_str()),
+        (
+            "1 of 3 Steps done",
+            "Flow: no Step under way. 1 of 3 Steps done."
+        )
+    );
+}
+
+#[test]
+fn a_failure_the_host_marks_refused_is_told_from_one_worth_trying_again() {
+    let refused = said(RpcError::Failed(
+        json!({"reason": "the Run has already ended", "refused": true}),
+    ));
+    assert_eq!(
+        refused,
+        Failure {
+            said: "the Run has already ended".into(),
+            refused: true
+        }
+    );
+    let busy = said(RpcError::Failed(
+        json!({"reason": "Collie on mk-pc is busy"}),
+    ));
+    assert_eq!(
+        busy,
+        Failure {
+            said: "Collie on mk-pc is busy".into(),
+            refused: false
+        }
+    );
 }

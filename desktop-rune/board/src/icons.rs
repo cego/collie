@@ -92,3 +92,53 @@ icon!(
     "collie-close",
     r#"<path d="M4 4L12 12M12 4L4 12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/>"#
 );
+icon!(
+    CHEVRON_RIGHT,
+    "collie-chevron-right",
+    r#"<path d="M6 3.5L10.5 8L6 12.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#
+);
+icon!(
+    CHEVRON_DOWN,
+    "collie-chevron-down",
+    r#"<path d="M3.5 6L8 10.5L12.5 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#
+);
+icon!(
+    STEP_DONE,
+    "collie-step-done",
+    r#"<circle cx="8" cy="8" r="6.25" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M5.3 8.2L7.2 10L10.8 6.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#
+);
+icon!(
+    STEP_RUNNING,
+    "collie-step-running",
+    r#"<circle cx="8" cy="8" r="6.25" stroke="currentColor" stroke-width="1.5" fill="none"/><circle cx="8" cy="8" r="2.75" fill="currentColor"/>"#
+);
+icon!(
+    STEP_NEEDS_YOU,
+    "collie-step-needs-you",
+    r#"<circle cx="8" cy="8" r="6.25" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M8 4.8V8.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11" r=".9" fill="currentColor"/>"#
+);
+icon!(
+    STEP_FAILED,
+    "collie-step-failed",
+    r#"<circle cx="8" cy="8" r="6.25" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M5.8 5.8L10.2 10.2M10.2 5.8L5.8 10.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>"#
+);
+icon!(
+    STEP_WAITING,
+    "collie-step-waiting",
+    r#"<circle cx="8" cy="8" r="6.25" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M8 5V8L10 9.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#
+);
+icon!(
+    STEP_STOPPED,
+    "collie-step-stopped",
+    r#"<circle cx="8" cy="8" r="6.25" stroke="currentColor" stroke-width="1.5" fill="none"/><rect x="5.8" y="5.8" width="4.4" height="4.4" rx=".8" fill="currentColor"/>"#
+);
+icon!(
+    STEP_NOT_RUN,
+    "collie-step-not-run",
+    r#"<circle cx="8" cy="8" r="6.25" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M3.8 3.8L12.2 12.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>"#
+);
+icon!(
+    STEP_EXPECTED,
+    "collie-step-expected",
+    r#"<circle cx="8" cy="8" r="6.25" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2.4 2.2" fill="none"/>"#
+);

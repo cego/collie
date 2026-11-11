@@ -51,6 +51,7 @@ fn go_to_panes(handle: &AppHandle<App>, client: &Client) {
                     tab.tick();
                 }
                 board.keep_chat_width();
+                board.keep_usage_fresh(epoch_ms());
                 false
             });
         }
@@ -239,8 +240,12 @@ fn main() {
     chat(&handle);
     files_in(&handle);
     notifications(&handle, &client);
-    // A headless render runs on a virtual clock, so it waits for a live board first.
-    if std::env::args().any(|arg| ["--snap", "--tree", "--script"].contains(&arg.as_str())) {
+    // A headless render runs on a virtual clock, so it waits for a live board first, unless
+    // it is asked to show the start itself.
+    let at_start = std::env::var_os("COLLIE_RUNE_SNAP_AT_START").is_some();
+    if !at_start
+        && std::env::args().any(|arg| ["--snap", "--tree", "--script"].contains(&arg.as_str()))
+    {
         let _ = first_live.recv_timeout(Duration::from_secs(60));
     }
 

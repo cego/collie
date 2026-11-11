@@ -18,8 +18,31 @@ impl fmt::Display for CallError {
     }
 }
 
-pub type Answer = Box<dyn FnOnce(Result<Value, CallError>) + Send>;
-pub type Each = Box<dyn FnMut(Result<Value, CallError>) + Send>;
+/// A call's failure as the core told it: its reason, and whether the host said no, so that
+/// sending the same request again changes nothing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Failure {
+    pub said: String,
+    pub refused: bool,
+}
+
+impl From<CallError> for Failure {
+    fn from(error: CallError) -> Self {
+        Failure {
+            said: error.0,
+            refused: false,
+        }
+    }
+}
+
+impl From<Failure> for CallError {
+    fn from(failure: Failure) -> Self {
+        CallError(failure.said)
+    }
+}
+
+pub type Answer = Box<dyn FnOnce(Result<Value, Failure>) + Send>;
+pub type Each = Box<dyn FnMut(Result<Value, Failure>) + Send>;
 /// Ends a stream; its subscriber hears nothing after.
 pub type Stop = Box<dyn FnOnce() + Send>;
 
@@ -46,12 +69,11 @@ impl<S> Clone for Core<S> {
     }
 }
 
-fn typed<A: DeserializeOwned>(answer: Result<Value, CallError>) -> Result<A, CallError> {
+fn typed<A: DeserializeOwned>(answer: Result<Value, Failure>) -> Result<A, Failure> {
     answer.and_then(|value| {
-        serde_json::from_value(value).map_err(|e| {
-            CallError(format!(
-                "Desktop's core answered in a shape this app can't read: {e}"
-            ))
+        serde_json::from_value(value).map_err(|e| Failure {
+            said: format!("Desktop's core answered in a shape this app can't read: {e}"),
+            refused: false,
         })
     })
 }
@@ -67,6 +89,18 @@ impl<S: 'static> Core<S> {
         tag: &str,
         payload: P,
         done: impl FnOnce(&mut S, Result<A, CallError>) + Send + 'static,
+    ) {
+        self.request_refusable(tag, payload, |s, answer: Result<A, Failure>| {
+            done(s, answer.map_err(CallError::from))
+        });
+    }
+
+    /// Asks `tag` once, as `request` does, telling a host's refusal from any other failure.
+    pub fn request_refusable<P: Serialize, A: DeserializeOwned + Send + 'static>(
+        &self,
+        tag: &str,
+        payload: P,
+        done: impl FnOnce(&mut S, Result<A, Failure>) + Send + 'static,
     ) {
         let post = self.post.clone();
         let payload = serde_json::to_value(payload).unwrap_or(Value::Null);
@@ -95,7 +129,7 @@ impl<S: 'static> Core<S> {
             tag,
             payload,
             Box::new(move |value| {
-                let value = typed(value);
+                let value = typed(value).map_err(CallError::from);
                 let each = each.clone();
                 post(Box::new(move |s| (each.lock().unwrap())(s, value)));
             }),
@@ -103,15 +137,21 @@ impl<S: 'static> Core<S> {
     }
 }
 
-/// An RPC's failure as its reason, where its error carries one.
-fn said(error: RpcError<Value>) -> CallError {
-    CallError(match error {
-        RpcError::Failed(failed) => ["reason", "message"]
-            .iter()
-            .find_map(|key| failed.get(key).and_then(Value::as_str).map(String::from))
-            .unwrap_or_else(|| failed.to_string()),
-        other => other.to_string(),
-    })
+/// An RPC's failure as its reason, where its error carries one, and its `refused`.
+pub fn said(error: RpcError<Value>) -> Failure {
+    match error {
+        RpcError::Failed(failed) => Failure {
+            said: ["reason", "message"]
+                .iter()
+                .find_map(|key| failed.get(key).and_then(Value::as_str).map(String::from))
+                .unwrap_or_else(|| failed.to_string()),
+            refused: failed.get("refused").and_then(Value::as_bool) == Some(true),
+        },
+        other => Failure {
+            said: other.to_string(),
+            refused: false,
+        },
+    }
 }
 
 /// The live core: each call answered on a thread of its own.
@@ -151,7 +191,7 @@ pub mod testing {
     pub struct Fake {
         /// Every call, in order: its tag and payload.
         pub asked: Mutex<Vec<(String, Value)>>,
-        answers: Mutex<HashMap<String, VecDeque<Result<Value, CallError>>>>,
+        answers: Mutex<HashMap<String, VecDeque<Result<Value, Failure>>>>,
         waiting: Mutex<Vec<(String, Answer)>>,
         streams: Mutex<Vec<Subscriber>>,
     }
@@ -160,11 +200,29 @@ pub mod testing {
         /// The answer the next request of `tag` gets, at once.
         pub fn will_answer(&self, tag: &str, answer: Result<Value, CallError>) {
             let mut answers = self.answers.lock().unwrap();
-            answers.entry(tag.into()).or_default().push_back(answer);
+            answers
+                .entry(tag.into())
+                .or_default()
+                .push_back(answer.map_err(Failure::from));
         }
 
         /// Answers the oldest request of `tag` still waiting; false where none is.
         pub fn answer(&self, tag: &str, answer: Result<Value, CallError>) -> bool {
+            self.answer_with(tag, answer.map_err(Failure::from))
+        }
+
+        /// Answers the oldest request of `tag` still waiting with the host's no.
+        pub fn refuse(&self, tag: &str, why: &str) -> bool {
+            self.answer_with(
+                tag,
+                Err(Failure {
+                    said: why.into(),
+                    refused: true,
+                }),
+            )
+        }
+
+        fn answer_with(&self, tag: &str, answer: Result<Value, Failure>) -> bool {
             let mut waiting = self.waiting.lock().unwrap();
             let Some(at) = waiting.iter().position(|(asked, _)| asked == tag) else {
                 return false;
@@ -185,7 +243,7 @@ pub mod testing {
                 .filter(|(t, _)| t == tag)
             {
                 if let Some(each) = each.lock().unwrap().as_mut() {
-                    each(value.clone());
+                    each(value.clone().map_err(Failure::from));
                 }
             }
         }

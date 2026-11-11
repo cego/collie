@@ -1,10 +1,16 @@
 //! The window's frame: the sidebar that picks a page, the page under its toolbar, and the
 //! Flock chat as the trailing pane.
 
+mod usage;
+
+pub use usage::{UsageEntry, usage_due, usage_entries};
+
+use crate::board::model::{Section, section_of};
 use crate::calls::CallError;
+use crate::pages::usage::Level;
 use crate::{App, board_pane, chat_pane_in, icons, pages};
-use rune::{Cx, El, Icon, Tx};
-use rune_kit::shell::{PaneState, Sidebar, SidebarRow, SidebarSection, SplitView, Toolbar};
+use rune::{Cx, El, Icon, Tx, row, text};
+use rune_kit::shell::{PaneState, Sidebar, SidebarRow, SplitView, Toolbar};
 use rune_kit::{IconButton, Kit};
 use serde_json::{Value, json};
 
@@ -70,6 +76,10 @@ pub struct Nav {
     pub chat: PaneState,
     /// The chat's width as settings hold it, once they have been read.
     pub chat_saved: Option<f32>,
+    /// When each Machine was last asked for its Usage (epoch ms).
+    pub usage_asked: Option<f64>,
+    /// The Machines live when Usage was last asked for.
+    pub usage_asked_of: Vec<String>,
 }
 
 impl Default for Nav {
@@ -79,6 +89,8 @@ impl Default for Nav {
             sidebar: PaneState::new(224.0).range(168.0, 360.0),
             chat: PaneState::new(440.0).range(320.0, 820.0).collapsed(),
             chat_saved: None,
+            usage_asked: None,
+            usage_asked_of: Vec::new(),
         }
     }
 }
@@ -133,10 +145,21 @@ impl App {
 }
 
 fn nav_row(app: &App, page: Page, k: &Kit) -> El {
-    SidebarRow::new(page.title())
+    let mut row = SidebarRow::new(page.title())
         .icon(page.icon())
-        .selected(app.nav.page == page)
-        .on_select(move |app: &mut App, _: &mut Tx| app.open_page(page))
+        .selected(app.nav.page == page);
+    // The Board row counts what needs the human, as the board's first section does.
+    if page == Page::Board {
+        let needs = app
+            .placed()
+            .iter()
+            .filter(|p| section_of(p.task) == Section::NeedsYou)
+            .count();
+        if needs > 0 {
+            row = row.badge(needs.to_string());
+        }
+    }
+    row.on_select(move |app: &mut App, _: &mut Tx| app.open_page(page))
         .build(k)
         .key(page.key())
 }
@@ -152,17 +175,72 @@ fn page_pane(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
     }
 }
 
+/// Each account's busiest window, in its level's tone; pressing it opens the Usage page.
+fn usage_button(app: &App, k: &Kit) -> El {
+    let entries = app.usage_entries();
+    let mut words = row().gap(6.0).center_y().a11y_hidden();
+    if entries.is_empty() {
+        words = words.child(text("Usage").font(k.ty.ui).color(k.c.text_muted));
+    }
+    for (at, entry) in entries.iter().enumerate() {
+        if at > 0 {
+            words = words.child(text("·").font(k.ty.ui).color(k.c.text_faint));
+        }
+        let (font, color) = match entry.level {
+            Level::Ok => (k.ty.ui, k.c.text_muted),
+            Level::Warn => (k.ty.ui_medium, k.c.warning.fg),
+            Level::Out => (k.ty.ui_medium, k.c.danger.fg),
+        };
+        words = words.child(
+            text(entry.text.clone())
+                .key(format!("usage-{}", entry.key))
+                .font(font)
+                .color(color),
+        );
+    }
+    let said: Vec<String> = entries.iter().map(|e| e.text.clone()).collect();
+    let titles: Vec<String> = entries
+        .iter()
+        .map(|e| format!("{}: {}", e.text, e.title))
+        .collect();
+    let shown = app.nav.page == Page::Usage;
+    let mut button = row()
+        .key("usage")
+        .role("button")
+        .label(if said.is_empty() {
+            "Usage".to_string()
+        } else {
+            format!("Usage: {}", said.join(", "))
+        })
+        .checked(shown)
+        .focusable(true)
+        .h(28.0)
+        .px(10.0)
+        .radius(6.0)
+        .center_y()
+        .hover(k.c.hover)
+        .on_press(move |app: &mut App| app.open_page(if shown { Page::Board } else { Page::Usage }))
+        .child(words);
+    if shown {
+        button = button.fill(k.c.pressed);
+    }
+    if !titles.is_empty() {
+        button = button.help(titles.join("\n"));
+    }
+    button
+}
+
 pub fn view(app: &App, cx: &mut Cx<App>) -> El {
     let k = rune_theme_opencode::kit(cx.system_dark());
     let mut layer = Vec::new();
     let rows = Page::ALL[..Page::ALL.len() - 1]
         .iter()
         .map(|page| nav_row(app, *page, k));
-    let sidebar = Sidebar::new()
-        .label("Collie")
-        .section(SidebarSection::new("Collie").key("nav").rows(rows))
-        .footer(nav_row(app, Page::Settings, k))
-        .build(k);
+    let mut sidebar = Sidebar::new().label("Pages").row_gap(1.0);
+    for row in rows {
+        sidebar = sidebar.child(row);
+    }
+    let sidebar = sidebar.footer(nav_row(app, Page::Settings, k)).build(k);
     let chat_toggle = IconButton::new(&icons::CHAT)
         .label(if app.nav.chat.is_open() {
             "Hide the chat"
@@ -190,6 +268,7 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
         .toolbar(
             Toolbar::new()
                 .title(app.nav.page.title())
+                .trailing(usage_button(app, k))
                 .trailing(chat_toggle),
         )
         .titlebar_inset(cx.titlebar_inset())

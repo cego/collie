@@ -907,3 +907,176 @@ fn each_machines_settings_sync_and_own_reading_are_kept_by_profile_and_dropped_w
     assert!(!app.board.flock.synced.has("p-vm"));
     assert!(!app.board.flock.own.has("p-vm"));
 }
+
+#[test]
+fn saved_boards_are_drawn_at_once_and_the_machines_still_being_reached_are_named() {
+    let harness = Harness::new();
+    let saved = json!({"_tag": "Saved", "machine": vm(), "herds": [{"id": "h1"}],
+        "tasks": [task("t1", "Busy", "active", json!({}))],
+        "at": 14.0 * 3_600_000.0 + 5.0 * 60_000.0});
+    let mut runtime = runtime_of(&harness, vec![saved]);
+    assert!(node(&runtime, "connecting").is_none());
+    assert_eq!(cards_in(&runtime, "working"), ["Busy"]);
+    assert_eq!(
+        node(&runtime, "reaching").expect("who is still being reached")["name"],
+        "Reaching vm-mk; its cards are as of 14:05."
+    );
+    let live = snapshot(&vm(), vec![task("t1", "Busy", "active", json!({}))]);
+    runtime.state.apply(serde_json::from_value(live).unwrap());
+    redraw(&mut runtime);
+    assert!(node(&runtime, "reaching").is_none());
+    assert_eq!(cards_in(&runtime, "working"), ["Busy"]);
+}
+
+#[test]
+fn a_stop_the_host_refuses_says_why_and_offers_no_try_again() {
+    let harness = Harness::new();
+    let mut runtime = runtime_of(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![task("t1", "Busy", "active", json!({}))],
+        )],
+    );
+    press(&mut runtime, "card-t1-menu");
+    choose(&mut runtime, "Stop run");
+    harness.fake.refuse("act", "the Run has already ended");
+    settle(&harness, &mut runtime);
+    let notice = runtime.state.board.notices[0].clone();
+    assert_eq!(notice.title, "the Run has already ended");
+    let toast = node(&runtime, &format!("notice-{}", notice.id)).expect("the notice");
+    assert!(
+        !within(&toast).iter().any(|n| n["name"] == "Try again"),
+        "{toast:#}"
+    );
+    runtime.state.try_again(notice.id);
+    assert_eq!(acts(&harness).len(), 1);
+}
+
+#[test]
+fn an_answer_the_host_refused_is_sent_again_under_a_new_request() {
+    let harness = Harness::new();
+    let asked = question("r-t1", "c1", "Keep the old path working?");
+    let mut runtime = runtime_of(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![task("t1", "Fix", "blocked", json!({"decision": asked}))],
+        )],
+    );
+    press(&mut runtime, "card-t1-answer");
+    press(&mut runtime, "option-1");
+    press(&mut runtime, "submit-answer");
+    harness
+        .fake
+        .refuse("act", "the question was answered elsewhere");
+    settle(&harness, &mut runtime);
+    assert_eq!(
+        node(&runtime, "answer-state").unwrap()["name"],
+        "the question was answered elsewhere"
+    );
+    press(&mut runtime, "submit-answer");
+    let sent = acts(&harness);
+    assert_eq!(sent.len(), 2);
+    assert_ne!(sent[1]["request"], sent[0]["request"]);
+}
+
+#[test]
+fn check_output_shows_a_running_checks_last_lines_and_opens_its_record() {
+    let harness = Harness::new();
+    let check = json!({"name": "unit", "pass": "gate", "round": null, "revision": "abc",
+        "base": null, "elapsedMs": 60_000, "usualMs": null, "others": 0,
+        "sentence": "Running unit, 1 min.", "log": "/tmp/unit.log",
+        "lastLines": ["ok 1 boards", "ok 2 cards"]});
+    let mut app = app(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![task("t1", "Busy", "active", json!({"check": check}))],
+        )],
+    );
+    record_panes(&mut app);
+    let mut runtime = runtime(app);
+    press(&mut runtime, "card-t1-menu");
+    choose(&mut runtime, "Check output…");
+    assert_eq!(
+        node(&runtime, "check-sentence").unwrap()["name"],
+        "Running unit, 1 min."
+    );
+    let lines = node(&runtime, "check-lines").unwrap();
+    assert_eq!(lines["name"], "Its last lines");
+    assert!(
+        within(&lines)
+            .iter()
+            .any(|n| n["name"] == "ok 1 boards\nok 2 cards"),
+        "{lines:#}"
+    );
+    assert_eq!(
+        node(&runtime, "check-log").unwrap()["name"],
+        "Written to /tmp/unit.log on its Machine"
+    );
+    press(&mut runtime, "check-open-record");
+    assert!(runtime.state.board.dialog.is_none());
+    assert_eq!(runtime.state.board.opened.as_deref(), Some("inst-pc:t1"));
+}
+
+#[test]
+fn attach_files_makes_the_card_the_chats_chip_opens_the_chat_and_its_file_dialog() {
+    let harness = Harness::new();
+    let mut app = app(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![task("t1", "Busy", "active", json!({}))],
+        )],
+    );
+    let picked = Arc::new(Mutex::new(0));
+    let count = picked.clone();
+    app.chat.pick = Some(Box::new(move || *count.lock().unwrap() += 1));
+    let mut runtime = runtime(app);
+    press(&mut runtime, "card-t1-menu");
+    choose(&mut runtime, "Attach files…");
+    assert_eq!(*picked.lock().unwrap(), 1);
+    assert!(runtime.state.nav.chat.is_open());
+    assert_eq!(runtime.state.selected_key().as_deref(), Some("inst-pc:t1"));
+}
+
+#[test]
+fn the_finished_fold_says_whether_it_is_open_and_the_keyboard_opens_it() {
+    let harness = Harness::new();
+    let mut runtime = runtime_of(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![task(
+                "t-seen",
+                "Read",
+                "done",
+                json!({"landed": true, "unseen": false}),
+            )],
+        )],
+    );
+    let fold = node(&runtime, "finished-seen").unwrap();
+    assert_eq!(fold["name"], "1 finished");
+    assert!(has_state(&fold, "collapsed"), "{fold:#}");
+    let mut tabs = 0;
+    while !node(&runtime, "finished-seen").is_some_and(|n| has_state(&n, "focused")) {
+        tabs += 1;
+        assert!(tabs < 40, "Tab never reaches the fold");
+        runtime.key(KeyEvent {
+            key: Key::Tab,
+            mods: Mods::default(),
+        });
+        runtime.frame(1.0);
+    }
+    runtime.key(KeyEvent {
+        key: Key::Text(" ".into()),
+        mods: Mods::default(),
+    });
+    runtime.frame(1.0);
+    assert!(has_state(
+        &node(&runtime, "finished-seen").unwrap(),
+        "expanded"
+    ));
+    assert_eq!(cards_in(&runtime, "finished"), ["Read"]);
+}
