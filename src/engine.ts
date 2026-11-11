@@ -810,6 +810,14 @@ export const SDK_DECLARATIONS = `declare module "collie" {
         readonly conflicts?: true;
       };
 
+  /** What asking for a pipeline on a merge request's head came to. */
+  export type PipelineStart =
+    | { readonly _tag: "Has"; readonly url: string }
+    | { readonly _tag: "Started"; readonly url: string }
+    | { readonly _tag: "Unneeded"; readonly why: string }
+    | { readonly _tag: "NoneByRules"; readonly message: string }
+    | { readonly _tag: "Failed"; readonly reason: string };
+
   /** One of this Run's checks, named by a human, chat or the Run's agent. */
   export interface VerifySpec {
     readonly name: string;
@@ -970,6 +978,16 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly wait?: boolean;
       readonly settle?: boolean;
     }) => Effect.Effect<CiJob>;
+    /**
+     * A pipeline on cwd's HEAD, through the forge of the merge request the Run recorded,
+     * unless that head has one that was not skipped. GitLab starts the merge request's, and
+     * the source branch's where it refuses that with 400; refused both ways with 400 is
+     * NoneByRules, in GitLab's words. GitHub starts nothing.
+     */
+    readonly startPipeline: (options: {
+      readonly runId: string;
+      readonly cwd: string;
+    }) => Effect.Effect<PipelineStart>;
     /** Puts a note on the merge request this Run recorded, sent by Collie. */
     readonly note: (options: {
       readonly runId: string;
@@ -4626,6 +4644,18 @@ export const hostLayer = (options: {
                 }),
                 stopped,
               );
+            }),
+          ).pipe(Effect.orDie),
+        startPipeline: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const ref = mrRefOf(yield* mergeRequestOf(fs, dir, asked.runId));
+              if (ref === null)
+                return { _tag: "Failed", reason: "this Run has no merge request" } as const;
+              const head = (yield* fingerprint(asked.cwd)).head_sha;
+              if (head === "")
+                return { _tag: "Failed", reason: `${asked.cwd}'s HEAD could not be read` } as const;
+              return yield* forgeOf(ref).startPipeline(ref, head, asked.cwd, runShell);
             }),
           ).pipe(Effect.orDie),
         note: (asked) =>

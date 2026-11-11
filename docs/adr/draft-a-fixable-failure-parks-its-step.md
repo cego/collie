@@ -21,7 +21,10 @@ branch and Outputs.
 Run.** The Step is recorded failed with the reason and what to correct, the Run parks, and
 `run resume` (or `retry-noted`) enters that Step again on the same worktree, branch and
 agents. A workflow parks this way already when a merge request cannot be opened or an
-outcome is unproved. Each resume is one more bounded attempt, and only a human or an agent
+outcome is unproved, and when the Merge request step's agent left delivery undone: the
+branch not pushed, no merge request URL, or a blocking finding. A resume asks that agent
+again under a new operation, since its first Output would replay. A finding that does not
+block delivery never stops the step. It is recorded and noted on the merge request. Each resume is one more bounded attempt, and only a human or an agent
 can trigger it, so this adds no automatic retry.
 
 **D2. An Output still unusable after its one repair parks.** It no longer ends the Run

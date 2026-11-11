@@ -118,6 +118,16 @@ export type StagingRead =
   | { readonly ok: true; readonly environments: ReadonlyArray<StagingEnvironment> }
   | { readonly ok: false; readonly reason: string };
 
+/** What asking for a pipeline on a merge request's head came to. */
+export type PipelineStart =
+  | { readonly _tag: "Has"; readonly url: string }
+  | { readonly _tag: "Started"; readonly url: string }
+  /** The forge runs one on every push without being asked. */
+  | { readonly _tag: "Unneeded"; readonly why: string }
+  /** The project's CI gives this head no pipeline, in the forge's words. */
+  | { readonly _tag: "NoneByRules"; readonly message: string }
+  | { readonly _tag: "Failed"; readonly reason: string };
+
 /** The same job where the branch leaves its target, or on the target's latest pipeline. */
 export type BaseJobRead =
   | {
@@ -258,6 +268,13 @@ export interface Forge {
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<Readiness, never, R | ForgeHttp>;
+  /** A pipeline on `head`, the merge request's head, unless one that was not skipped is there. */
+  readonly startPipeline: <R>(
+    ref: MrRef,
+    head: string,
+    cwd: string,
+    run: Runner<R>,
+  ) => Effect.Effect<PipelineStart, never, R | ForgeHttp>;
   /** The command line that prints job `id`'s log, for an agent to run. */
   readonly jobLog: (ref: MrRef, id: string) => string;
   /** The repository's merge request template, relative to the checkout, or null. */

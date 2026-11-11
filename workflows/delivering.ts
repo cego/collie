@@ -25,6 +25,7 @@ import {
   findingsIn,
   flakesOf,
   formatFindings,
+  isBlocking,
   isOutcome,
   leaveOutstanding,
   owedLocally,
@@ -46,11 +47,12 @@ import {
   type Verification,
   type VerifySpec,
 } from "collie";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schema, Stream } from "effect";
 import { connection } from "./connections.ts";
 import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
 import * as Workflow from "effect/workflow/Workflow";
 import * as Activity from "effect/workflow/Activity";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 /** At most four fix rounds at the gate, and four for CI. */
 const ROUNDS = 4;
@@ -89,7 +91,40 @@ const ciFix = step({
   role: "implementer",
 });
 
-type Needs = Run | Agents | Host | WorkflowEngine | WorkflowInstance | FileSystem.FileSystem;
+type Needs =
+  | Run
+  | Agents
+  | Host
+  | WorkflowEngine
+  | WorkflowInstance
+  | FileSystem.FileSystem
+  | ChildProcessSpawner.ChildProcessSpawner;
+
+/** `branch`'s head on origin, null where origin has no such branch, or why origin could not say. */
+const remoteHead = (cwd: string, branch: string) =>
+  Effect.gen(function* () {
+    if (branch === "") return { ok: true, head: null } as const;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const handle = yield* spawner.spawn(
+      ChildProcess.make("git", ["ls-remote", "--exit-code", "origin", `refs/heads/${branch}`], {
+        cwd,
+        extendEnv: true,
+      }),
+    );
+    const text = (stream: typeof handle.stdout) => Stream.mkString(Stream.decodeText(stream));
+    const [listed, said, code] = yield* Effect.all(
+      [text(handle.stdout), text(handle.stderr), handle.exitCode],
+      { concurrency: "unbounded" },
+    );
+    // --exit-code: 2 is "no such ref", anything else but 0 is origin not answering.
+    if (code === 2) return { ok: true, head: null } as const;
+    if (code !== 0)
+      return { ok: false, reason: Str.trim(said) || `git ls-remote exited ${code}` } as const;
+    return { ok: true, head: Str.split(Str.trim(listed), "\t")[0] || null } as const;
+  }).pipe(
+    Effect.scoped,
+    Effect.catch((cause) => Effect.succeed({ ok: false, reason: String(cause) } as const)),
+  );
 
 /** What every prompt here is given beside its own fields. */
 type Told = Readonly<Record<string, Schema.Json>> & {
@@ -610,8 +645,27 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
 
         const settledEvidence = yield* host.evidence(runId, cwd);
         const linear = yield* connection("linear", "connection.mr-linear");
+        const fs = yield* FileSystem.FileSystem;
+        // A park per attempt, so a resume asks again rather than replaying the undone Output.
+        const parkedAt = (attempt: number) => `${dir}/mr-parked-${attempt}`;
+        let attempt = 1;
+        while (yield* fs.exists(parkedAt(attempt)).pipe(Effect.orDie)) attempt += 1;
+        // Where the agent leaves this head, its push sent nothing and started no pipeline.
+        const remoteBefore = yield* Activity.make({
+          name: attempt === 1 ? "mr-remote-head" : `mr-remote-head-${attempt}`,
+          success: Schema.NullOr(Schema.String),
+          execute: Effect.gen(function* () {
+            const read = yield* remoteHead(cwd, ready.branch ?? "");
+            if (read.ok) return read.head;
+            const reason = `Cannot read ${ready.branch}'s head on origin: ${read.reason}. Repair it, then resume ${runId}.`;
+            yield* host.record(runId, reason);
+            yield* stepFailed(reason);
+            yield* host.parked(runId, reason);
+            return yield* Workflow.suspend(yield* WorkflowInstance);
+          }),
+        });
         const opened = yield* agentWork({
-          operation: "mr",
+          operation: attempt === 1 ? "mr" : `mr-${attempt}`,
           agent: ask.agent,
           role: ask.role,
           pushes: true,
@@ -649,22 +703,76 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           },
           output: ask.opened,
         });
-        if (
-          opened.verdict !== "clean" ||
-          !opened.pushed ||
-          !opened.mr_url ||
-          (opened.findings ?? []).length > 0
-        ) {
-          const missing = [
-            ...(!opened.pushed ? ["the branch was not pushed"] : []),
-            ...(!opened.mr_url ? ["no merge request URL was reported"] : []),
-            ...Arr.map(opened.findings ?? [], (finding) => finding.title),
-          ];
-          return yield* new WorkflowError({
-            reason: `Merge request delivery did not finish: ${Arr.join(missing, "; ") || opened.verdict}. Continue with a follow-up Run to finish delivery.`,
-          });
+        const blocking = Arr.filter(opened.findings ?? [], isBlocking);
+        const minor = Arr.filter(opened.findings ?? [], (one) => !isBlocking(one));
+        const undone = [
+          ...(!opened.pushed ? ["the branch was not pushed"] : []),
+          ...(!opened.mr_url ? ["no merge request URL was reported"] : []),
+          ...Arr.map(blocking, (finding) => finding.title),
+        ];
+        if (undone.length > 0 || !opened.mr_url) {
+          const reason = `Merge request delivery is undone: ${Arr.join(undone, "; ")}. Repair it, then resume ${runId}.`;
+          yield* fs.writeFileString(parkedAt(attempt), "").pipe(Effect.orDie);
+          yield* host.record(runId, reason);
+          yield* stepFailed(reason);
+          yield* host.parked(runId, reason);
+          return yield* Workflow.suspend(yield* WorkflowInstance);
         }
         yield* host.mergeRequest(runId, opened.mr_url);
+        if (minor.length > 0) {
+          yield* Activity.make({
+            name: "mr-unsettled",
+            execute: Effect.forEach(minor, (one) => host.record(runId, `unsettled: ${one.title}`), {
+              discard: true,
+            }),
+          });
+          yield* Activity.make({
+            name: "mr-unsettled-note",
+            execute: Effect.gen(function* () {
+              const posted = yield* host.note({
+                runId,
+                cwd,
+                body: `Delivery left these unsettled:\n\n${Arr.join(
+                  Arr.map(minor, (one) => `- ${one.title}${one.detail ? `: ${one.detail}` : ""}`),
+                  "\n",
+                )}`,
+              });
+              if (posted.ok) return yield* host.parked(runId, null);
+              const reason = `Cannot note what delivery left unsettled on ${opened.mr_url}: ${posted.message}. Repair it, then resume ${runId}.`;
+              yield* host.record(runId, reason);
+              yield* stepFailed(reason);
+              yield* host.parked(runId, reason);
+              return yield* Workflow.suspend(yield* WorkflowInstance);
+            }),
+          });
+        }
+        yield* Activity.make({
+          name: "mr-pipeline",
+          execute: Effect.gen(function* () {
+            const head = (yield* host.evidence(runId, cwd)).final.head_sha;
+            if (head !== remoteBefore) return;
+            const at = pipe_(head, Str.slice(0, 12));
+            const answer = yield* host.startPipeline({ runId, cwd });
+            if (answer._tag === "Failed") {
+              const reason = `Cannot start a pipeline on ${at}: ${answer.reason}. Repair it, then resume ${runId}.`;
+              yield* host.record(runId, reason);
+              yield* stepFailed(reason);
+              yield* host.parked(runId, reason);
+              return yield* Workflow.suspend(yield* WorkflowInstance);
+            }
+            yield* host.record(
+              runId,
+              answer._tag === "Started"
+                ? `pipeline: started ${answer.url} on ${at}`
+                : answer._tag === "Has"
+                  ? `pipeline: ${at} already has ${answer.url}`
+                  : answer._tag === "Unneeded"
+                    ? `pipeline: none started on ${at}: ${answer.why}`
+                    : `pipeline: none on ${at}: the project's CI gives it none: ${answer.message}`,
+            );
+            yield* host.parked(runId, null);
+          }),
+        });
         return opened.mr_url;
       }),
     );
