@@ -65,6 +65,17 @@ the revision every spike and this gate assessed. It moves only by ticket.
 Upstream defects are worked around in Collie's own code. A defect that blocks a ticket and
 has no work-around stops that ticket until upstream fixes it.
 
+**D5. The Rune Desktop is the whole of Desktop, in a design of its own.** Decided by the
+human on run-f0d81d1d, 2026-11-11, after trying the spike: it is built to today's Desktop's
+features in full (board, record and its tabs, the Flock chat, Workflows, Machines,
+Schedules, Usage, Settings), in a Rune-native design rather than a copy of the Vue view's
+look. Today's view is the feature spec. Go to pane's terminal draws as Ghostty does, from the
+human's Ghostty config over Ghostty's defaults, since the look asked for is the terminal
+they use. D2's three required items are built: selection and copy with every mouse button
+reaching the pane (Rune reports a secondary press and release together, so a right-button
+drag is not reported), raw HTML keeping its text, and a dialog that picks several files.
+Zoom is still missing. Until the gate, it installs beside stable Desktop as "Collie (Rune)".
+
 ## Prerequisites
 
 The spec's go/no-go prerequisites, each with what settles it:
@@ -73,7 +84,7 @@ The spec's go/no-go prerequisites, each with what settles it:
 | --- | --------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
 | 1   | The team accepts Rust                                     | met                            | D3; the human's answer on run-d9db315d.implement                                                                                     |
 | 2   | A named owner for the Rune pin, and a fork policy         | met                            | D4; the human's answer on run-d9db315d.implement                                                                                     |
-| 3   | Spikes 03–06 pass, or each failure has a product decision | met in tests; live checks open | the Run's `plan/INVESTIGATION.md`, tickets 03–06; D2; `handoffs/rune-board-headless.png`, `evidence/corpus-png-public`               |
+| 3   | Spikes 03–06 pass, or each failure has a product decision | met in tests; live checks open | the Run's `plan/INVESTIGATION.md`, tickets 03–06; D2; D5; `handoffs/rune-board-headless.png`, `evidence/corpus-png-public`           |
 | 4   | No regression on startup, idle RSS and terminal echo      | open                           | no baseline taken yet (D1)                                                                                                           |
 | 5   | Packaging works end to end                                | open                           | `desktop-rune/scripts/bundle.ts` and `rune-bundle.yml` built and argument-tested on Linux; CI, Gatekeeper and a live update are D1's |
 
