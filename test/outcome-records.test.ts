@@ -6,9 +6,9 @@ import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schema, Stream } from "effect";
 import { TaskView } from "../src/board-model";
-import { connect } from "../src/host";
+import { connect, frontDoor, socketOf } from "../src/host";
 import { until } from "./support/host";
 import { collie, collieCommand, proves, type World } from "./support/world";
 import { exec } from "./support/command";
@@ -107,6 +107,13 @@ test(
           expect(human.stdout).toContain("Parked: ci-job-absent · Collie rechecks");
           expect(human.stdout).toContain("Recovery:");
           expect(human.stdout).toContain("rechecked uncleared");
+          const detail = yield* (yield* frontDoor(socketOf(world.state)))
+            .runDetail({ runId, tail: false, pages: 1, refreshMr: false, parts: true })
+            .pipe(Stream.runHead, Effect.map(Option.getOrNull), Effect.orDie);
+          expect(detail).toMatchObject({
+            park,
+            recovery: expect.arrayContaining([expect.stringContaining("rechecked uncleared")]),
+          });
           const printed = yield* collie(world, ["board"]);
           const { tasks } = yield* Schema.decodeUnknownEffect(Board)(printed.envelope.data).pipe(
             Effect.orDie,
