@@ -14,7 +14,6 @@ pub mod timing;
 pub use shell::view;
 
 use collie_desktop_chat::host::{Done, Each, Stop};
-use collie_desktop_chat::view::DiffTab;
 use collie_desktop_chat::{Chat, Host};
 use collie_desktop_protocol::generated::{About, AguiEvent};
 use collie_desktop_terminal::view::Tab;
@@ -23,7 +22,7 @@ use rune_kit::Kit;
 use serde_json::Value;
 
 pub use board::Shown;
-pub use record::{GoTo, LoadDiff, ReadRecord, run_diff, run_file};
+pub use record::{DiffTab, GoTo, run_diff, run_file};
 
 #[derive(Default)]
 pub struct App {
@@ -43,14 +42,11 @@ pub struct App {
     pub core: Option<calls::Core<App>>,
     /// The open pane's Run, by installation and id.
     pub open_run: Option<(String, String)>,
-    /// Reads a Run's diff from the core for the `opened`th pane, handing it to `diff_read`.
-    pub load_diff: Option<LoadDiff>,
     pub diff: Option<DiffTab>,
     pub flow: Option<flow::FlowMap>,
-    /// Reads a Run's record for the `opened`th pane, handing its Flow to `flow_read`; gives
-    /// back what stops reading it.
-    pub read_record: Option<ReadRecord>,
     stop_record: Option<Box<dyn FnOnce()>>,
+    /// The open Run's record, and each Run's review comment drafts and viewed files.
+    pub record: record::Records,
     pub timing: std::cell::RefCell<timing::Timing>,
     /// The board's own state: the rest of the Flock, the selection, dialogs and answers.
     pub board: board::Board,

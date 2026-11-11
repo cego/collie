@@ -5,10 +5,12 @@ shell can draw Desktop's board with today's main process as its core. The app st
 `desktop/src/bun/index.ts` as a child process. `core/electrobun-stdio.ts` stands in for
 `electrobun/bun`, so Desktop's own code is unchanged. It then speaks `DesktopRpcs` to the core
 as Effect RPC over NDJSON on the core's stdio, subscribes to `flock`, and draws each Machine and
-its cards. Pressing a card goes to its Run's pane: Rune draws the pane's terminal from the
-`terminal` stream, through libghostty-vt, and sends what the human does back on `terminalSend`.
-The pane's Diff button opens its Run's diff in rune-kit's Diff, where selected lines become
-review comments. The board's Chat button opens the Flock chat, which streams turns on `say`.
+its cards. Pressing a card opens its Run's record on the Terminal tab: Rune draws the pane's
+terminal from the `terminal` stream, through libghostty-vt, and sends what the human does back
+on `terminalSend`. The record's other tabs (Flow, Summary, Plan, Review, Diff, Evidence, Log,
+Facts, the merge request) read `runDetail` and `runFile`, and its Diff tab shows the Run's diff
+in rune-kit's Diff, where selected lines become review comments. The board's Chat button opens
+the Flock chat, which streams turns on `say`.
 
 | Crate or file                | What it owns                                                                                                                                       |
 | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -18,8 +20,10 @@ review comments. The board's Chat button opens the Flock chat, which streams tur
 | `protocol/src/bin/roundtrip` | Decodes and re-encodes frames through the Rust types, for `test/rune-contract.test.ts`                                                             |
 | `board/`                     | The app, and the board in `board/src/board/`: `applyItem`'s whole fold, today's sections and cards, alerts, actions, offers, questions, proposals |
 | `board/src/pages/settings/`  | Settings: the Flock's settings, each checked by the core, Record timing, Connections and their tokens, About                                       |
+| `board/src/record/`          | An open Run's record: its tabs, the Diff tab and review comments, evidence, acting through `act`                                                   |
+| `board/src/flow/`            | The Flow map's actions, next move and inspector, ported from Desktop's `flow-actions.ts` and `flow-inspector.ts`                                   |
 | `protocol/src/core.rs`       | Starts Desktop's main process as the core, for the app and the recorders                                                                           |
-| `chat/`                      | The Flock chat (its state, view, AG-UI reducer, markdown policy, highlighter, file dialog) and the Diff tab's review comments                  |
+| `chat/`                      | The Flock chat: its state, pane, AG-UI reducer, markdown policy, highlighter and file dialog                                                       |
 | `terminal/`                  | Go to pane's terminal: the VT state, a renderer drawn as Ghostty draws, input as `terminal-input` maps it, settled resizes                        |
 | `ghostty-sys/`               | Builds libghostty-vt from `vendor/ghostty` with Zig and binds its C API with bindgen                                                               |
 | `vendor/ghostty`             | Ghostty, a submodule at one pinned commit                                                                                                          |
@@ -205,7 +209,7 @@ view as one line scrolls in 11 ms, since only the new row is painted.
 The `terminal-ended` alert, the `terminal-where` label and the grid's cursor label stand in
 for the screen-reader text xterm.js gives.
 
-### Flock chat, agent markdown and the Diff tab
+### Flock chat and agent markdown
 
 The chat keeps today's transport: `say` streams AG-UI events, and Stop interrupts the stream.
 `chat/src/agui.rs` folds them as TanStack AI's client does: one assistant message a turn, its
@@ -225,10 +229,25 @@ the chat's questions are answered in place (`answer`), harness, model (a typed i
 save through `setSettings` and a refusal is said, earlier conversations reopen, the setup offer
 is answered inline, a message copies, and the board's card rides on the next message as a chip.
 
-The Diff tab reads `runDetail` until a record carries the diff, then each file's patch from
-`runFile` (`diff:<path>`, paged as Desktop's view does), and parses it with rune-kit's
-`diff::parse`. It shows unified or split. Selected lines plus a comment become a draft, and
-Compose shows the Delivery text `review-comments.ts` composes (ADR-0051).
+### An open Run's record
+
+Pressing a card, or `App::go_to_pane`, opens the Run's record and streams `runDetail` until Back;
+a later record that leaves a part out keeps the last one, as Desktop's does. Large items (a
+plan file, a report, a shot, each file's patch) are read from `runFile`, paged as Desktop's view
+does. `board/src/flow/` ports `flow-actions.ts` and `flow-inspector.ts`: the next move, lane and
+step actions, notes, questions and proposals are sent through `act` under a request id, and a
+refused one says why and offers Try again with the same request. A gesture on a Machine out of
+reach is still sent, marked `unsent`, so the host says so. Evidence draws images in place; a
+report is confined by Desktop's CSP and opened in the browser from a file through `openLink`,
+never drawn (D2 in ADR-draft-collie-desktop-is-drawn-by-rune); a video opens the same way.
+
+The Diff tab reads each file's patch (`diff:<path>`) and parses it with rune-kit's
+`diff::parse`. A tree beside it filters and goes to a file; a file ticked Viewed collapses and
+stays ticked while its patch is unchanged. It shows unified or split. Selected lines, in the
+diff or the plan, plus a comment become a draft; the drafts are sent as one Delivery, in the text
+`review-comments.ts` composes (ADR-0051), and cleared once the host takes it.
+`board/tests/record.rs` and `board/tests/record_view.rs` drive this against the fake core;
+nothing there acts on a live core.
 
 **Recordings.** `record-say` asks the spike core's `say` and writes each event as NDJSON. The
 fixtures are a plain reply with a table and code, a tool call, a run error (an attachment the

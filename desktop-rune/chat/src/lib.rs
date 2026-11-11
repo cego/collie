@@ -1,4 +1,4 @@
-//! The Flock chat, agent markdown and the Diff tab, as Rune draws them.
+//! The Flock chat and agent markdown, as Rune draws them.
 pub mod agui;
 pub mod ansi;
 pub mod attachments;
@@ -12,7 +12,6 @@ pub mod icons;
 pub mod images;
 pub mod pane;
 pub mod policy;
-pub mod review;
 pub mod view;
 pub mod words;
 

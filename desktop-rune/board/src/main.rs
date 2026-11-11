@@ -4,13 +4,11 @@
 use collie_desktop_board::calls::{Answer, Calls, Each, Live, Stop};
 use collie_desktop_board::notify::deliver;
 use collie_desktop_board::timing::Mark;
-use collie_desktop_board::{App, frame_drawn, run_diff, view};
+use collie_desktop_board::{App, frame_drawn, view};
 use collie_desktop_protocol::client::Client;
 use collie_desktop_protocol::core::Core;
 use collie_desktop_protocol::epoch_ms;
-use collie_desktop_protocol::generated::{
-    FlockItem, KeptRecord, RecordMarkPayload, RunDetailPayload,
-};
+use collie_desktop_protocol::generated::{FlockItem, RecordMarkPayload};
 use collie_desktop_terminal::pane::Pane;
 use collie_desktop_terminal::view::Tab;
 use rune::{AppHandle, AppSpec};
@@ -77,47 +75,6 @@ fn chat(handle: &AppHandle<App>) {
             }
         }));
         board.open_chat();
-    });
-}
-
-/// Reads the open Run's diff: its files from `runDetail`, each file's patch from `runFile`.
-fn diffs(handle: &AppHandle<App>, client: &Client) {
-    let (reader, shows) = (client.clone(), handle.clone());
-    handle.update(move |board, _| {
-        board.load_diff = Some(Box::new(move |installation, run, opened| {
-            let (client, shows) = (reader.clone(), shows.clone());
-            std::thread::spawn(move || {
-                let patch = run_diff(&client, &installation, &run).unwrap_or_default();
-                // FileDiff holds an Rc, so the patch is parsed on the view's thread.
-                shows.update(move |board, _| board.diff_read(opened, &patch));
-            });
-        }));
-    });
-}
-
-/// Reads the open pane's Run record off the view's thread, its Flow into the Flow map.
-fn records(handle: &AppHandle<App>, client: &Client) {
-    let (reader, shows) = (client.clone(), handle.clone());
-    handle.update(move |board, _| {
-        board.read_record = Some(Box::new(move |installation, run_id, opened| {
-            let records = reader.stream::<_, KeptRecord, Value>(
-                "runDetail",
-                RunDetailPayload {
-                    installation,
-                    run_id,
-                },
-            );
-            let release = records.release();
-            let shows = shows.clone();
-            std::thread::spawn(move || {
-                for kept in records.flatten() {
-                    if let Some(flow) = kept.detail.and_then(|d| d.flow).flatten() {
-                        shows.update(move |board, _| board.flow_read(opened, flow));
-                    }
-                }
-            });
-            Box::new(move || release.interrupt())
-        }));
     });
 }
 
@@ -280,8 +237,6 @@ fn main() {
     });
     go_to_panes(&handle, &client);
     chat(&handle);
-    diffs(&handle, &client);
-    records(&handle, &client);
     files_in(&handle);
     notifications(&handle, &client);
     // A headless render runs on a virtual clock, so it waits for a live board first.

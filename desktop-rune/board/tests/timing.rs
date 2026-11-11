@@ -89,7 +89,6 @@ fn runtime() -> Runtime<App> {
         board.apply(serde_json::from_str(line).unwrap());
     }
     board.go_to = Some(Box::new(|_, machine, _| Tab::new(None, machine, 100, 30)));
-    board.load_diff = Some(Box::new(|_, _, _| {}));
     let mut runtime = Runtime::new(
         board,
         view,

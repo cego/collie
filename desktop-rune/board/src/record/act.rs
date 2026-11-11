@@ -1,0 +1,442 @@
+//! A gesture on a record sent as one `act` request, said back in the record: what it did, or
+//! why not, with Try again sending the same request. A copy of `actionRunner` in
+//! `desktop/src/shared/actions.ts`.
+
+use crate::App;
+use collie_desktop_protocol::generated::{ActPayload, ActPayloadAction};
+use std::collections::hash_map::RandomState;
+use std::hash::{BuildHasher, Hasher};
+
+/// What the last gesture came to, shown under the record's header.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Notice {
+    pub said: String,
+    pub failed: bool,
+    /// What Try again sends again, under the same request.
+    pub again: Option<Sent>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sent {
+    pub installation: String,
+    pub action: ActPayloadAction,
+    pub request: String,
+    /// What follows once it is done, on every try.
+    pub after: After,
+}
+
+/// What a gesture does once its action is done.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum After {
+    #[default]
+    Nothing,
+    /// The review comment drafts it carried go, those edited since staying.
+    ClearDrafts {
+        run: (String, String),
+        sent: Vec<super::review::Draft>,
+    },
+    /// Another action, sent as a gesture of its own.
+    Then(Box<(ActPayloadAction, After)>),
+}
+
+/// A request id the host takes once, the same on every try of one gesture.
+pub fn new_request() -> String {
+    let random = |salt: u64| {
+        let mut hash = RandomState::new().build_hasher();
+        hash.write_u64(salt);
+        hash.write_u128(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos()),
+        );
+        hash.finish()
+    };
+    let (a, b) = (random(1), random(2));
+    let b = (b & 0x0fff_3fff_ffff_ffff) | 0x4000_8000_0000_0000;
+    format!(
+        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+        a >> 32,
+        (a >> 16) & 0xffff,
+        b >> 48,
+        (b >> 32) & 0xffff,
+        b & 0xffff_ffff_ffff
+    )
+}
+
+impl App {
+    /// Sends `action` once, under a new request, and `after` once it is done.
+    pub fn act_in_record(&mut self, installation: String, action: ActPayloadAction, after: After) {
+        let sent = Sent {
+            installation,
+            action,
+            request: new_request(),
+            after,
+        };
+        self.act_again(sent);
+    }
+
+    /// Sends a gesture again, under its own request; the host takes it once.
+    pub fn act_again(&mut self, sent: Sent) {
+        let Some(core) = self.core.clone() else {
+            return;
+        };
+        let unsent = self.unsent();
+        let payload = ActPayload {
+            installation: sent.installation.clone(),
+            action: sent.action.clone(),
+            request: Some(Some(sent.request.clone())),
+            unsent: unsent.map(Some),
+        };
+        self.record.sending = true;
+        core.request(
+            "act",
+            payload,
+            move |app: &mut App, answer: Result<String, _>| {
+                app.record.sending = false;
+                match answer {
+                    Ok(said) => {
+                        app.record.notice = Some(Notice {
+                            said,
+                            failed: false,
+                            again: None,
+                        });
+                        app.after(sent.installation, sent.after);
+                    }
+                    Err(why) => {
+                        app.record.notice = Some(Notice {
+                            said: why.to_string(),
+                            failed: true,
+                            again: Some(sent),
+                        })
+                    }
+                }
+            },
+        );
+    }
+
+    fn after(&mut self, installation: String, after: After) {
+        match after {
+            After::Nothing => {}
+            After::ClearDrafts { run, sent } => {
+                let drafts = self.record.drafts.entry(run).or_default();
+                *drafts = super::review::clear_sent(drafts, &sent);
+            }
+            After::Then(next) => {
+                let (action, after) = *next;
+                self.act_in_record(installation, action, after);
+            }
+        }
+    }
+}
+
+use super::{Form, Item};
+use crate::flow::actions::{self, Effect};
+use collie_desktop_protocol::generated::{OpenLinkPayload, WithdrawNote, WithdrawNoteTag};
+
+impl App {
+    /// What pressing a Flow or lane action does: sends it, opens its form, or shows its part.
+    pub fn run_effect(&mut self, effect: Effect) {
+        let Some(record) = &mut self.record.open else {
+            return;
+        };
+        let installation = record.installation.clone();
+        let revision = record.detail().and_then(|d| d.revision.clone());
+        match effect {
+            Effect::Write(write) => {
+                let write = actions::shown_at(write, revision.as_ref());
+                self.act_in_record(installation, write, After::Nothing);
+            }
+            Effect::Text {
+                write,
+                initial,
+                retry,
+                withdraw,
+            } => {
+                let title = match &write {
+                    ActPayloadAction::FollowUp(_) => "Follow-up run".to_string(),
+                    _ if retry.is_some() => "Retry with a note".into(),
+                    ActPayloadAction::Deliver(d) if d.agent.is_some() => "Tell the agent".into(),
+                    _ => "Note for the Step".into(),
+                };
+                record.form = Some(Form::Text {
+                    title,
+                    installation,
+                    write,
+                    retry,
+                    withdraw,
+                    edit: rune::edit::TextEdit::new(initial.unwrap_or_default()),
+                });
+            }
+            Effect::Answer(question) => {
+                record.form = Some(Form::Answer {
+                    installation,
+                    run: question.run,
+                    id: question.id,
+                    asked: question.text,
+                    options: question.options,
+                    picked: None,
+                    edit: rune::edit::TextEdit::default(),
+                })
+            }
+            Effect::Proposal(proposal) => {
+                record.form = Some(Form::Proposal {
+                    installation,
+                    proposal,
+                })
+            }
+            Effect::Terminal { agent, .. } => {
+                record.picked = Some(agent);
+                self.show_tab("terminal");
+            }
+            Effect::Part { part, .. } => self.show_tab(part),
+            Effect::Url(url) => self.open_link_in_record(url),
+            Effect::Run { run, machine } => {
+                let machine = machine.unwrap_or_else(|| record.machine.clone());
+                self.open_record(installation, run, machine, None);
+            }
+            Effect::Offer { .. } => {
+                // ponytail: an offer's inputs dialog is the board's; until then Start says so.
+                self.record.notice = Some(Notice {
+                    said: "Start this from the board's card.".into(),
+                    failed: true,
+                    again: None,
+                });
+            }
+        }
+    }
+
+    /// Edits a note already sent: it is withdrawn, and the new words delivered in its place.
+    pub fn edit_note(&mut self, run: String, step: String, note: String, text: String) {
+        let Some(record) = &mut self.record.open else {
+            return;
+        };
+        record.form = Some(Form::Text {
+            title: "Edit note".into(),
+            installation: record.installation.clone(),
+            write: actions::deliver(&run, Some(step), None, None, ""),
+            retry: None,
+            withdraw: Some(note),
+            edit: rune::edit::TextEdit::new(text),
+        });
+    }
+
+    pub fn withdraw_note(&mut self, run: String, note: String) {
+        let Some(record) = &self.record.open else {
+            return;
+        };
+        let installation = record.installation.clone();
+        let action = ActPayloadAction::WithdrawNote(WithdrawNote {
+            tag: WithdrawNoteTag::WithdrawNote,
+            run_id: run,
+            note,
+        });
+        self.act_in_record(installation, action, After::Nothing);
+    }
+
+    /// Sends the open form; `retry` sends the note and then resumes the Run.
+    pub fn send_form(&mut self, value: Option<String>) {
+        let Some(record) = &mut self.record.open else {
+            return;
+        };
+        let revision = record.detail().and_then(|d| d.revision.clone());
+        let Some(form) = record.form.take() else {
+            return;
+        };
+        match form {
+            Form::Text {
+                installation,
+                write,
+                retry,
+                withdraw,
+                edit,
+                ..
+            } => {
+                let said = edit.text.trim().to_string();
+                if said.is_empty() {
+                    record.form = Some(Form::Text {
+                        title: String::new(),
+                        installation,
+                        write,
+                        retry,
+                        withdraw,
+                        edit,
+                    });
+                    return;
+                }
+                let write = actions::shown_at(actions::with_text(&write, &said), revision.as_ref());
+                let after = match retry {
+                    Some(run) => After::Then(Box::new((actions::resume(&run), After::Nothing))),
+                    None => After::Nothing,
+                };
+                match withdraw {
+                    Some(note) => {
+                        let run = match &write {
+                            ActPayloadAction::Deliver(d) => d.run_id.clone(),
+                            _ => String::new(),
+                        };
+                        let first = ActPayloadAction::WithdrawNote(WithdrawNote {
+                            tag: WithdrawNoteTag::WithdrawNote,
+                            run_id: run,
+                            note,
+                        });
+                        self.act_in_record(
+                            installation,
+                            first,
+                            After::Then(Box::new((write, after))),
+                        );
+                    }
+                    None => self.act_in_record(installation, write, after),
+                }
+            }
+            Form::Answer {
+                installation,
+                run,
+                id,
+                picked,
+                edit,
+                ..
+            } => {
+                let typed = Some(edit.text.trim().to_string()).filter(|t| !t.is_empty());
+                let said = value.or(typed).or(picked).unwrap_or_default();
+                self.act_in_record(
+                    installation,
+                    actions::answer(&run, &id, &said),
+                    After::Nothing,
+                );
+            }
+            Form::Proposal {
+                installation,
+                proposal,
+            } => {
+                let action = if value.as_deref() == Some("decline") {
+                    actions::decline(&proposal)
+                } else {
+                    actions::confirm(&proposal)
+                };
+                self.act_in_record(installation, action, After::Nothing);
+            }
+        }
+    }
+
+    /// Sends the Run's review comment drafts as one message, to the agent or role chosen
+    /// (ADR-0051); they go once the host has taken it.
+    pub fn send_review(&mut self) {
+        let Some(record) = &self.record.open else {
+            return;
+        };
+        let drafts = self.record.drafts_of(record).to_vec();
+        if drafts.is_empty() {
+            return;
+        }
+        let choice = self.delivery_choice();
+        let revision = record.detail().and_then(|d| d.revision.clone());
+        let (agent, to) = choice.map_or((None, None), |c| (c.agent, c.to));
+        let text = super::review::compose(&drafts);
+        let write = actions::shown_at(
+            actions::deliver(&record.run, None, agent, to, &text),
+            revision.as_ref(),
+        );
+        let after = After::ClearDrafts {
+            run: record.key(),
+            sent: drafts,
+        };
+        self.act_in_record(record.installation.clone(), write, after);
+    }
+
+    /// The delivery choices for the open record's review comments, and the one picked.
+    pub fn delivery_choices(&self) -> Vec<super::agents::DeliveryChoice> {
+        let Some(record) = &self.record.open else {
+            return Vec::new();
+        };
+        let launches = record
+            .detail()
+            .and_then(|d| d.agents.clone().flatten())
+            .unwrap_or_default();
+        let live = self
+            .task_of_record()
+            .map(|t| t.agents.clone())
+            .unwrap_or_default();
+        let planner = record.chosen.as_deref() == Some("plan");
+        super::agents::delivery_choices(&launches, &live, None, planner.then_some("planner"))
+    }
+
+    pub fn delivery_choice(&self) -> Option<super::agents::DeliveryChoice> {
+        let choices = self.delivery_choices();
+        let picked = self.record.open.as_ref().and_then(|r| r.to.clone());
+        choices
+            .iter()
+            .find(|c| Some(&c.key) == picked.as_ref())
+            .or(choices.first())
+            .cloned()
+    }
+
+    /// Asks the core to open a link in the browser.
+    pub fn open_link_in_record(&mut self, url: String) {
+        let Some(core) = self.core.clone() else {
+            return;
+        };
+        core.request(
+            "openLink",
+            OpenLinkPayload { url },
+            |app: &mut App, done: Result<serde_json::Value, _>| {
+                if let Err(why) = done {
+                    app.record.notice = Some(Notice {
+                        said: why.to_string(),
+                        failed: true,
+                        again: None,
+                    });
+                }
+            },
+        );
+    }
+
+    /// Opens an evidence file in the browser: read, written aside (a report confined first),
+    /// and opened from there.
+    pub fn open_aside(&mut self, item: String) {
+        let Some(record) = &mut self.record.open else {
+            return;
+        };
+        if !record.opening.contains(&item) {
+            record.opening.push(item.clone());
+        }
+        match record.items.get(&item) {
+            Some(Item::Read(_)) => self.opened_aside(&item),
+            Some(Item::Reading) => {}
+            _ => self.reread_item(&item),
+        }
+    }
+
+    pub(super) fn opened_aside(&mut self, item: &str) {
+        let Some(record) = &mut self.record.open else {
+            return;
+        };
+        let Some(at) = record.opening.iter().position(|one| one == item) else {
+            return;
+        };
+        record.opening.remove(at);
+        let Some(Item::Read(bytes)) = record.items.get(item) else {
+            return;
+        };
+        let name = item.split_once(':').map_or(item, |(_, name)| name);
+        let path = super::evidence::aside(&record.installation, &record.run, name);
+        let bytes = if super::evidence::is_report(name) {
+            super::evidence::confined(&String::from_utf8_lossy(bytes)).into_bytes()
+        } else {
+            bytes.clone()
+        };
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|_| std::fs::write(&path, bytes));
+        match written {
+            Ok(()) => self.open_link_in_record(format!("file://{}", path.display())),
+            Err(why) => {
+                self.record.notice = Some(Notice {
+                    said: format!("{name} could not be written aside to open: {why}"),
+                    failed: true,
+                    again: None,
+                })
+            }
+        }
+    }
+}

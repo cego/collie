@@ -3,6 +3,9 @@
 //! A narrow copy of `flowRows`, `nodeName`, `flowAnnouncements` and `flowKey` in
 //! `desktop/src/shared/flow.ts`, which stays their owner.
 
+pub mod actions;
+pub mod inspector;
+
 use collie_desktop_protocol::generated::{DetailFlow, DetailFlowCurrent, GlyphState, Node};
 use rune::{El, Key, KeyEvent, LiveRegion, Mods, col, row, text};
 use rune_kit::{Button, ButtonVariant, Kit};
@@ -21,7 +24,7 @@ pub struct Row<'a> {
 }
 
 /// A string enum as its Schema writes it.
-fn written(value: &impl Serialize) -> String {
+pub(crate) fn written(value: &impl Serialize) -> String {
     serde_json::to_value(value)
         .ok()
         .and_then(|v| v.as_str().map(String::from))
@@ -172,6 +175,20 @@ impl FlowMap {
     }
 }
 
+/// A Step's state as one mark before its title; its name says the state in words.
+fn glyph(state: &GlyphState) -> &'static str {
+    match state {
+        GlyphState::Done => "✓",
+        GlyphState::Running => "●",
+        GlyphState::NeedsYou => "!",
+        GlyphState::Waiting => "◌",
+        GlyphState::Failed => "✗",
+        GlyphState::Stopped => "■",
+        GlyphState::NotRun => "–",
+        GlyphState::Expected => "○",
+    }
+}
+
 pub fn flow_map<S: 'static>(map: &FlowMap, lens: fn(&mut S) -> &mut FlowMap, k: &Kit) -> El {
     let current = spot_of(&map.flow.current);
     let lanes = rows(&map.flow).into_iter().map(|lane| {
@@ -190,7 +207,7 @@ pub fn flow_map<S: 'static>(map: &FlowMap, lens: fn(&mut S) -> &mut FlowMap, k: 
             let focused = map.focus.as_ref() == Some(&spot);
             let chosen = map.selected.as_ref() == Some(&spot);
             let key = format!("flow-{}-{}", spot.run, spot.node);
-            Button::new(node.title.clone())
+            Button::new(format!("{} {}", glyph(&node.state), node.title))
                 .variant(variant)
                 .on_press(move |s: &mut S| {
                     let map = lens(s);
