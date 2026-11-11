@@ -53,7 +53,8 @@ fn go_to_panes(handle: &AppHandle<App>, client: &Client) {
                 }
                 board.keep_chat_width();
                 board.ask_usage_when_due(epoch_ms());
-                collie_desktop_chat::chat::tick(board, epoch_ms())
+                let expired = board.expire_toasts(epoch_ms());
+                collie_desktop_chat::chat::tick(board, epoch_ms()) || expired
             });
         }
     });

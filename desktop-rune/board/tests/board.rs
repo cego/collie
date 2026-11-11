@@ -748,6 +748,19 @@ fn two_questions_are_answered_in_one_sitting_moving_on_to_the_next() {
         "Question 2 of 2"
     );
     assert_eq!(node(&runtime, "question-text").unwrap()["name"], "Second?");
+    press(&mut runtime, "option-0");
+    press(&mut runtime, "submit-answer");
+    assert!(
+        node(&runtime, "question-text").is_some(),
+        "open while the last answer is sending"
+    );
+    harness.fake.answer("act", Ok(json!("Answered")));
+    settle(&harness, &mut runtime);
+    assert!(
+        runtime.state.board.dialog.is_none(),
+        "every question answered closes the sitting"
+    );
+    assert!(node(&runtime, "question-text").is_none());
 }
 
 #[test]
@@ -1086,4 +1099,45 @@ fn the_finished_fold_says_whether_it_is_open_and_the_keyboard_opens_it() {
         "expanded"
     ));
     assert_eq!(cards_in(&runtime, "finished"), ["Read"]);
+}
+
+#[test]
+fn a_toast_goes_after_five_seconds_unless_the_pointer_is_on_it() {
+    let harness = Harness::new();
+    let mut runtime = runtime_of(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![task("t1", "Busy", "active", json!({}))],
+        )],
+    );
+    press(&mut runtime, "card-t1-menu");
+    choose(&mut runtime, "Stop run");
+    harness.fake.refuse("act", "the Run has already ended");
+    settle(&harness, &mut runtime);
+    let key = format!("notice-{}", runtime.state.board.notices[0].id);
+
+    assert!(!runtime.state.expire_toasts(1_000.0));
+    assert!(!runtime.state.expire_toasts(5_999.0));
+    let (x, y) = runtime.find(&key).expect("the toast");
+    runtime.pointer_move(x, y);
+    runtime.frame(0.1);
+    assert!(
+        !runtime.state.expire_toasts(60_000.0),
+        "held while pointed at"
+    );
+    runtime.pointer_move(5.0, 5.0);
+    runtime.frame(0.1);
+    assert!(
+        !runtime.state.expire_toasts(60_000.0),
+        "a full time again once left"
+    );
+    assert!(runtime.state.expire_toasts(65_000.0));
+    redraw(&mut runtime);
+    assert!(node(&runtime, &key).is_none());
+
+    runtime.state.pages.machines.told.say("Synced", true);
+    assert!(!runtime.state.expire_toasts(70_000.0));
+    assert!(runtime.state.expire_toasts(75_000.0));
+    assert!(runtime.state.pages.machines.told.said.is_empty());
 }

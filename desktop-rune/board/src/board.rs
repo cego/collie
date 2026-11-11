@@ -38,13 +38,14 @@ pub struct Trouble {
     pub at: f64,
 }
 
-/// What came of an action, said until the human closes it; a failure can be tried again.
+/// What came of an action, said for a while; a failure can be tried again.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Notice {
     pub id: u64,
     pub title: String,
     pub ok: bool,
     again: Option<Again>,
+    pub shown: crate::toasts::Shown,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -629,6 +630,7 @@ impl App {
             title,
             ok,
             again,
+            shown: Default::default(),
         });
         let excess = self.board.notices.len().saturating_sub(3);
         self.board.notices.drain(..excess);
@@ -1160,12 +1162,17 @@ impl App {
         let open = self.open_of(card);
         let installation = installation.clone();
         let answering = self.board.answering.clone();
-        if let Some(Dialog::Questions { sitting, .. }) = &mut self.board.dialog {
-            *sitting = sitting.answered(&answers::Now {
-                installation: &installation,
-                open: open.iter().collect(),
-                answering: &answering,
-            });
+        let now = answers::Now {
+            installation: &installation,
+            open: open.iter().collect(),
+            answering: &answering,
+        };
+        let Some(Dialog::Questions { sitting, .. }) = &mut self.board.dialog else {
+            return;
+        };
+        *sitting = sitting.answered(&now);
+        if sitting.view(&now).done {
+            self.board.dialog = None;
         }
     }
 

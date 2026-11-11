@@ -1011,7 +1011,11 @@ fn notices(app: &App, k: &Kit) -> El {
                 app.try_again(id)
             });
         }
-        region = region.toast(toast.build(k));
+        region = region.toast(
+            toast
+                .build(k)
+                .on_hover_change(move |app: &mut App, inside, _| app.hold_notice(id, inside)),
+        );
     }
     region.build(k)
 }

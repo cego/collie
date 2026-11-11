@@ -4,11 +4,12 @@
 use rune::{Color, El, col, el, row, text};
 use rune_kit::{Kit, Toast, ToastRegion};
 
-/// What came of an action, said until the human closes it.
+/// What came of an action, said for a while.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Said {
     pub text: String,
     pub ok: bool,
+    pub shown: crate::toasts::Shown,
 }
 
 /// What came of each action a page took, the newest last.
@@ -26,6 +27,7 @@ impl Told {
             Said {
                 text: text.into(),
                 ok,
+                shown: Default::default(),
             },
         ));
         // A long session keeps only the latest few.
@@ -36,6 +38,19 @@ impl Told {
 
     pub fn close(&mut self, id: u64) {
         self.said.retain(|(at, _)| *at != id);
+    }
+
+    /// Takes down what has been said long enough; whether any went.
+    pub fn expire(&mut self, now: f64) -> bool {
+        let said = self.said.len();
+        self.said.retain_mut(|(_, s)| !s.shown.over(now));
+        said != self.said.len()
+    }
+
+    pub fn hold(&mut self, id: u64, held: bool) {
+        if let Some((_, s)) = self.said.iter_mut().find(|(at, _)| *at == id) {
+            s.shown.hold(held);
+        }
     }
 
     /// The texts said, oldest first.
@@ -68,7 +83,8 @@ pub fn toasts<S: 'static>(
                 Toast::new(format!("said-{id}"), said.text.clone())
                     .lead(el().size(16.0, 20.0).center().child(dot))
                     .on_close(move |s: &mut S| lens(s).close(id))
-                    .build(k),
+                    .build(k)
+                    .on_hover_change(move |s: &mut S, inside, _| lens(s).hold(id, inside)),
             )
         });
     layer.push(region.build(k));
