@@ -8,6 +8,7 @@ pub mod notify;
 pub mod pages;
 pub mod record;
 pub mod shell;
+pub mod standing;
 pub mod timing;
 
 pub use shell::view;
@@ -33,6 +34,8 @@ pub struct App {
     pub chat: Chat,
     pub nav: shell::Nav,
     pub pages: pages::Pages,
+    /// Desktop's offer to help write the Standing direction, and its dialog.
+    pub standing: standing::Standing,
     /// The Desktop core, once the app has one; a test gives it a fake.
     pub core: Option<calls::Core<App>>,
     /// The open pane's Run, by installation and id.
