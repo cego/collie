@@ -816,3 +816,38 @@ fn a_cards_flow_strip_opens_its_record_on_flow_with_the_active_step_chosen_never
     let shown = keys(&runtime);
     assert!(shown.iter().any(|k| k == "inspector"), "{shown:?}");
 }
+
+fn width_of(runtime: &Runtime<App>, key: &str) -> f32 {
+    runtime
+        .elements()
+        .into_iter()
+        .find(|e| !e.exiting && e.key.as_deref() == Some(key))
+        .unwrap_or_else(|| panic!("no {key} in {:?}", keys(runtime)))
+        .rect[2]
+}
+
+#[test]
+fn the_forms_fields_span_their_form_not_a_fixed_280_points() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    runtime.update(|app, _| {
+        app.open_record("inst-build".into(), "r1".into(), "Build box".into(), None)
+    });
+    let flow = flow_with(
+        json!({"id": "ask", "title": "Ask", "state": "needs-you", "primary": "answer",
+            "questions": [{"id": "q-1", "name": "Which way?", "open": true, "text": "Which way?",
+                "options": [{"id": "left", "title": "Left"}]}]}),
+        json!([]),
+    );
+    harness
+        .fake
+        .push("runDetail", Ok(detail(json!({"flow": flow}))));
+    settle(&mut runtime, &harness, 100.0);
+    tap(&mut runtime, "next-action", 200.0);
+    let form = width_of(&runtime, "flow-form");
+    let field = width_of(&runtime, "form-answer-text");
+    assert!(
+        field > 300.0 && field > form - 80.0,
+        "the answer field is {field} wide in a form {form} wide"
+    );
+}

@@ -352,6 +352,7 @@ fn draft_editor(record: &Record, id: &str, k: &Kit) -> El {
         .w_full()
         .child(
             TextInput::new(&record.comment)
+                .width(None)
                 .label("Edit the comment")
                 .on_edit(|app: &mut App| {
                     &mut app.record.open.as_mut().expect("an open record").comment
@@ -1274,9 +1275,10 @@ fn form_view(app: &App, record: &Record, k: &Kit) -> Option<El> {
                 )
                 .child(
                     TextArea::new(edit)
+                        .width(None)
                         .placeholder("Say what you want")
                         .label(title.clone())
-                        .rows(4)
+                        .auto_grow(4, 10)
                         .on_edit(|app: &mut App| {
                             match app.record.open.as_mut().and_then(|r| r.form.as_mut()) {
                                 Some(Form::Text { edit, .. }) => edit,
@@ -1391,6 +1393,7 @@ fn offer_form(
                         )
                         .child(
                             TextInput::new(edit)
+                                .width(None)
                                 .label(name.clone())
                                 .on_edit(move |app: &mut App| {
                                     match app.record.open.as_mut().and_then(|r| r.form.as_mut()) {
@@ -1536,6 +1539,7 @@ fn answer_form(questions: &[super::Asked], at: usize, cancel: El, k: &Kit) -> El
         .children(options)
         .child(
             TextInput::new(&one.edit)
+                .width(None)
                 .placeholder(if one.options.is_empty() {
                     "Your answer"
                 } else {
@@ -2170,6 +2174,7 @@ fn plan_composer(record: &Record, anchor: &Anchor, k: &Kit) -> El {
         }))
         .child(
             TextInput::new(&record.comment)
+                .width(None)
                 .placeholder("Say what should change")
                 .label("Comment on the selection")
                 .on_edit(|app: &mut App| {

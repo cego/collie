@@ -1195,6 +1195,7 @@ fn composer(app: &App, k: &Kit) -> El {
         )
         .child(
             TextInput::new(&tab.comment)
+                .width(None)
                 .placeholder("Say what should change")
                 .label("Comment on the selected lines")
                 .on_edit(|app: &mut App| &mut diff_tab_of(app).comment)
