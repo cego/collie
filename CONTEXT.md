@@ -511,7 +511,8 @@ question — has nothing to settle. The board, History, the **Merge watch**, cha
 read this one derivation ([ADR-draft-a-task-lands-when-what-it-owes-is-settled](docs/adr/draft-a-task-lands-when-what-it-owes-is-settled.md)). A Task whose work has landed
 is **Finished**, the board's last section, as long as none of its Runs is still going,
 asking or stalled and none of its agents is working. Finished is what **Cleanup** waits
-for before it closes anything of a Task. Only a landed Task folds into History a day after
+for before it closes anything of a Task, and a checkout any Task still owes something on
+is kept whatever a Run's line says. Only a landed Task folds into History a day after
 it ends; one that still owes a merge request stays on the board however old it is.
 
 **Merge watch** — The host's round, every 5 minutes, that asks each merge request's own
@@ -587,8 +588,9 @@ human made is never removed.
 - The tree is clean.
 - It holds no commit that is not on the remote already.
 - Nothing is working in it, and no Run whose work has not landed could be resumed in it.
-- Its work has landed: the merge watch read its merge request as merged or closed, on
-  GitHub or GitLab; a **Disposition** was recorded; or its remote branch is gone.
+- Its work has landed: no Task whose Runs used it still owes anything on it, and the merge
+  watch read its merge request as merged or closed, on GitHub or GitLab; what settled it
+  was recorded (**Landed**); or its remote branch is gone.
 - Its Task's workspace has closed.
 
 A commit is on the remote when a remote-tracking ref contains it, or when it is the head
@@ -612,7 +614,7 @@ how much space that frees, and what Collie keeps and why. `collie cleanup --appl
 now. In order:
 
 1. A **Finished** Task's workspace closes after an hour.
-2. Its Worktrees go once **Settled**.
+2. Its Worktrees go once **Settled**, never while a Task still owes anything on them.
 3. Thirty days after its last Run ended, the Task and every one of its Runs are forgotten
    together: rows first, then files.
 

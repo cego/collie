@@ -1248,9 +1248,9 @@ const hostBoard = (dir: string) =>
       Effect.gen(function* () {
         const herds = yield* liveHerds(herdr, env);
         const sessions = Arr.map(herds, (session) => session.herdr);
-        const build = board.views(herds);
         const all = yield* board.runs;
         const tasks = yield* listTasks;
+        const views = yield* board.views(herds).pipe(Effect.option);
         return [
           // Before the worktrees: a checkout goes only once its Task's workspace has closed.
           taskWorkspacesSweeper({
@@ -1258,7 +1258,7 @@ const hostBoard = (dir: string) =>
             sessions: herds,
             tasks,
             // No board, no Task judged Finished, so nothing closed.
-            views: yield* build.pipe(Effect.orElseSucceed(() => [])),
+            views: Option.getOrElse(views, () => []),
             runs: all,
             seen,
           }),
@@ -1284,6 +1284,7 @@ const hostBoard = (dir: string) =>
             settling: settlingOf({
               stateDir: env.stateDir,
               runs: all,
+              views: Option.getOrNull(views),
               tasks,
               sessions,
               protect: [env.pluginRoot],
