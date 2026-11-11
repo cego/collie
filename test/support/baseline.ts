@@ -5579,6 +5579,125 @@ const withOrigin = () =>
     };
   });
 
+const PREREQUISITE_MR = `https://${PROJECT.gitlab}/-/merge_requests/41`;
+
+/**
+ * Another Run on this host whose recorded merge request is open, a ticket that needs its
+ * Change merged, and the fixture that waits on that ticket.
+ */
+const awaitingPrerequisite = (runId: string) =>
+  Effect.gen(function* () {
+    const origin = yield* withOrigin();
+    const bin = yield* FakeBin.make(`${rig.root}/bin`);
+    const open: ForgeModel = {
+      installed: true,
+      loggedIn: [FORGE_HOST.gitlab],
+      login: "tester",
+      mrs: [{ project: PROJECT.gitlab, iid: "41", state: "open", head: "feed41" }],
+    };
+    const forge = yield* forgeOnPath(bin, "gitlab", open);
+    const other = `${runId}-other`;
+    yield* session(
+      Effect.gen(function* () {
+        yield* admit({ runId: other, workflow: "implement", input: {} });
+        yield* (yield* Host).mergeRequest(other, PREREQUISITE_MR);
+      }),
+    );
+    const ticket = `${rig.root}/${runId}-ticket.md`;
+    yield* (yield* FileSystem.FileSystem)
+      .writeFileString(ticket, `# 02: needs the other\n\n**Needs merged:** ${other}\n`)
+      .pipe(Effect.orDie);
+    return {
+      ...origin,
+      bin,
+      forge,
+      open,
+      other,
+      run: {
+        entry: `${fixtures}/awaits-prerequisites.workflow.ts`,
+        runId,
+        input: { ticket, cwd: rig.projectDir },
+      },
+    };
+  });
+
+scenario(
+  "a ticket's wait on another Run's Change goes on through a merge elsewhere, and lands once master has it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-prerequisite-lands";
+        const { git, bin, forge, open, other, run } = yield* awaitingPrerequisite(runId);
+        const waiting = yield* Effect.forkChild(ran(run));
+        const line = `${other}'s Change to merge`;
+        expect(
+          yield* until(
+            () => awaitingOn(runId),
+            (on) => on !== "",
+          ),
+        ).toBe(line);
+
+        const upstream = `${rig.root}/upstream`;
+        yield* git(upstream, "switch", "-qc", "side");
+        yield* (yield* FileSystem.FileSystem)
+          .writeFileString(`${upstream}/side.txt`, "side\n")
+          .pipe(Effect.orDie);
+        yield* git(upstream, "add", "side.txt");
+        yield* git(upstream, "commit", "-qm", "the other Run's Change");
+        yield* git(upstream, "push", "-q", "origin", "side");
+        const merged = yield* git(upstream, "rev-parse", "HEAD");
+        yield* forge.set({
+          ...open,
+          mrs: [{ ...open.mrs[0]!, state: "merged", mergedSha: merged }],
+        });
+        const asked = forge.requests().length;
+        yield* until(
+          () => Effect.sync(() => forge.requests().length),
+          (now) => now >= asked + 2,
+        );
+        expect(yield* awaitingOn(runId)).toBe(line);
+
+        yield* git(upstream, "switch", "-q", "master");
+        yield* git(upstream, "merge", "-q", "--no-edit", "side");
+        yield* git(upstream, "push", "-q", "origin", "master");
+        const result = yield* Fiber.join(waiting);
+        yield* bin.restore();
+        expect(said(result)).toBe("Landed");
+        expect(yield* awaitingOn(runId)).toBe("");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a hold ends a ticket's wait on another Run's Change, and clears what it awaited",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-prerequisite-held";
+        const { bin, other, run } = yield* awaitingPrerequisite(runId);
+        const status = yield* running(run, (status) =>
+          Effect.gen(function* () {
+            yield* until(
+              () => awaitingOn(runId),
+              (on) => on === `${other}'s Change to merge`,
+            );
+            const fs = yield* FileSystem.FileSystem;
+            yield* fs.writeFileString(controlPath(dir, HOLD, runId), "").pipe(Effect.orDie);
+            return yield* until(
+              () => status,
+              (got) => got === "suspended",
+            );
+          }),
+        );
+        yield* bin.restore();
+        expect(status).toBe("suspended");
+        expect(yield* awaitingOn(runId)).toBe("");
+      }),
+    ),
+  120_000,
+);
+
 type Step = Effect.Effect<void, never, ChildProcessSpawner.ChildProcessSpawner>;
 
 /**

@@ -181,6 +181,9 @@ export interface Prerequisite {
 
 const needsLineOf = (text: string): string => NEEDS_LINE.exec(text)?.[1] ?? "";
 
+/** The Prerequisites a ticket's `**Needs merged:**` line names, or null where it cannot be read. */
+export const prerequisitesOf = (text: string) => prerequisitesIn(needsLineOf(text));
+
 /** The Prerequisites a `**Needs merged:**` line names, `[]` for none, and null where it cannot be read. */
 function prerequisitesIn(said: string): ReadonlyArray<Prerequisite> | null {
   if (said === "" || /^none\b/i.test(said)) return [];
@@ -682,7 +685,7 @@ export function orderedTickets(
     checks: checksIn(ticket.text),
     criteria: criteriaIn(ticket.text),
     benchmark: benchmarkIn(ticket.text),
-    prerequisites: prerequisitesIn(needsLineOf(ticket.text)) ?? [],
+    prerequisites: prerequisitesOf(ticket.text) ?? [],
   }));
 
   const here = new Set(Arr.map(slices, (slice) => slice.number));
