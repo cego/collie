@@ -404,10 +404,12 @@ export const healParks = <E, R, E2, R2>(opts: {
       }
       if (judged) yield* noteFailures(recoveriesIn(all));
       if (flying || claims.length === 0 || (yield* machineMemory(opts.env)).short) return;
+      // Read after the claims, so a claim's park, written before it, is in what is read.
+      const now = new Map(Arr.map(yield* opts.views, (view) => [view.runId, view] as const));
       for (const { view, claim } of claims.sort((a, b) =>
         Str.localeCompare(b.claim.at)(a.claim.at),
       )) {
-        const current = byId.get(view.runId) ?? view;
+        const current = now.get(view.runId) ?? view;
         if (!stillParked(current, claim)) {
           yield* close(current, claim, {
             outcome: "skipped",
