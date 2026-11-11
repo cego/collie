@@ -1101,9 +1101,25 @@ test(
 
 const UNIT = { name: "unit", executable: "true", argv: [], cwd: "worktree" } as const;
 
-for (const following of ["finish", "release"]) {
+for (const { following, retry, name } of [
+  {
+    following: "finish",
+    retry: false,
+    name: "implement then=finish refuses another Release while its first is pending",
+  },
+  {
+    following: "release",
+    retry: false,
+    name: "implement then=release refuses another Release while its first is pending",
+  },
+  {
+    following: "finish",
+    retry: true,
+    name: "a succeeded implement Run offers another Release after its Offer-started Release fails",
+  },
+]) {
   test(
-    `implement then=${following} refuses another Release while its first is pending`,
+    name,
     () =>
       runLive(
         Effect.gen(function* () {
@@ -1207,18 +1223,7 @@ for (const following of ["finish", "release"]) {
                 () => registry.view(child),
                 (view) => Arr.some(view?.waiting ?? [], (one) => one.name === "go"),
               );
-              const going = `a Release of ${mr} is still going: ${child}`;
-              expect(yield* registry.offers(runId)).toContainEqual(
-                expect.objectContaining({ id: "release", unavailable: going }),
-              );
-              const refused = yield* registry
-                .invoke({ runId, offer: "release", input: {}, request: "second-release" })
-                .pipe(Effect.flip);
-              expect(refused.reason).toContain(going);
-              expect(
-                Arr.filter(yield* store.runs, (row) => row.workflow === "release"),
-              ).toHaveLength(1);
-              if (following === "finish") {
+              if (retry) {
                 yield* registry.answer({
                   runId: child,
                   decision: "go",
@@ -1239,6 +1244,18 @@ for (const following of ["finish", "release"]) {
                 expect(
                   Arr.filter(yield* store.runs, (row) => row.workflow === "release"),
                 ).toHaveLength(2);
+              } else {
+                const going = `a Release of ${mr} is still going: ${child}`;
+                expect(yield* registry.offers(runId)).toContainEqual(
+                  expect.objectContaining({ id: "release", unavailable: going }),
+                );
+                const refused = yield* registry
+                  .invoke({ runId, offer: "release", input: {}, request: "second-release" })
+                  .pipe(Effect.flip);
+                expect(refused.reason).toContain(going);
+                expect(
+                  Arr.filter(yield* store.runs, (row) => row.workflow === "release"),
+                ).toHaveLength(1);
               }
             }),
           ).pipe(
