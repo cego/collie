@@ -22,10 +22,7 @@ fn played(name: &str) -> Transcript {
 }
 
 fn said(text: &str) -> Message {
-    Message {
-        role: Role::User,
-        parts: vec![Part::Text(text.into())],
-    }
+    Message::user("said-1", vec![Part::Text(text.into())], None)
 }
 
 fn text_of(message: &Message) -> &str {

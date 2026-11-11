@@ -147,12 +147,24 @@ struct Open {
 /// going to the whole URL; inline code that is only a web URL a link to it; and a link to a
 /// script URL its words alone.
 pub fn confined(src: &str) -> String {
+    confine(src, true)
+}
+
+/// [`confined`] for the chat, where a `file:line` has nowhere to jump and is drawn as code,
+/// as Desktop's chat draws a `file-ref` with no jump given.
+pub fn confined_chat(src: &str) -> String {
+    confine(src, false)
+}
+
+fn confine(src: &str, jumps: bool) -> String {
     let opts = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS;
     let mut edits: Vec<(Range<usize>, String)> = Vec::new();
     let mut open: Option<Open> = None;
     let (mut in_code_block, mut in_image) = (false, 0);
     for (event, range) in Parser::new_ext(src, opts).into_offset_iter() {
         match event {
+            Event::Start(Tag::HtmlBlock) => edits.push((range.clone(), html_text(&src[range]))),
+            Event::InlineHtml(tag) => edits.push((range, inline_html(&tag))),
             Event::Start(Tag::CodeBlock(_)) => in_code_block = true,
             Event::End(TagEnd::CodeBlock) => in_code_block = false,
             Event::Start(Tag::Image { .. }) => in_image += 1,
@@ -191,9 +203,10 @@ pub fn confined(src: &str) -> String {
                 open.as_mut().unwrap().text.push_str(&text)
             }
             Event::Code(code) if in_image == 0 => {
-                if file_lines(&code)
-                    .first()
-                    .is_some_and(|(r, _)| r.len() == code.len())
+                if jumps
+                    && file_lines(&code)
+                        .first()
+                        .is_some_and(|(r, _)| r.len() == code.len())
                 {
                     edits.push((range, link(&escaped(&code), &format!("{FILE_REF}{code}"))));
                 } else if WEB_URL.is_match(&code) {
@@ -206,7 +219,10 @@ pub fn confined(src: &str) -> String {
                     let at = range.start + at.start..range.start + at.end;
                     edits.push((
                         at,
-                        link(&escaped(&reference), &format!("{FILE_REF}{reference}")),
+                        match jumps {
+                            true => link(&escaped(&reference), &format!("{FILE_REF}{reference}")),
+                            false => format!("`{reference}`"),
+                        },
                     ));
                 }
             }
@@ -219,4 +235,110 @@ pub fn confined(src: &str) -> String {
         out.replace_range(range, &with);
     }
     out
+}
+
+static COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<!--.*?(-->|$)").unwrap());
+/// Elements whose content is code or a frame, never text a person reads.
+static UNREAD: LazyLock<Regex> = LazyLock::new(|| {
+    let each: Vec<String> = [
+        "script", "style", "iframe", "object", "embed", "template", "textarea", "noscript",
+    ]
+    .iter()
+    .map(|tag| format!(r"<{tag}\b[^>]*>.*?(</\s*{tag}\s*>|$)"))
+    .collect();
+    Regex::new(&format!("(?is){}", each.join("|"))).unwrap()
+});
+static SUMMARY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?is)<summary\b[^>]*>(.*?)(</\s*summary\s*>|$)").unwrap());
+static BREAK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)<br\s*/?>").unwrap());
+/// Where a block of HTML ends a line as a browser lays it out.
+static BLOCK_END: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)</?(p|div|li|ul|ol|tr|table|h[1-6]|blockquote|pre|details|section|article|header|footer|dl|dt|dd)\b[^>]*>").unwrap()
+});
+static TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)</?[A-Za-z][^>]*>").unwrap());
+static ENTITY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"&(#x?[0-9A-Fa-f]+|[a-zA-Z]+);").unwrap());
+
+fn entities(text: &str) -> String {
+    ENTITY
+        .replace_all(text, |found: &regex::Captures| {
+            let name = &found[1];
+            let code = match name {
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "amp" => Some('&'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                "nbsp" => Some('\u{a0}'),
+                _ => name
+                    .strip_prefix("#x")
+                    .or_else(|| name.strip_prefix("#X"))
+                    .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+                    .or_else(|| name.strip_prefix('#').and_then(|dec| dec.parse().ok()))
+                    .and_then(char::from_u32),
+            };
+            code.map_or_else(|| found[0].to_string(), String::from)
+        })
+        .into_owned()
+}
+
+/// A line of HTML's text as Markdown that draws it as written.
+fn as_text(line: &str) -> String {
+    let line = escaped(line.trim());
+    match line.chars().next() {
+        Some('#' | '-' | '+' | '|' | '=' | '~') => format!("\\{line}"),
+        _ => line,
+    }
+}
+
+/// A raw HTML block as the text a browser would show of it, so rune-kit, which draws no HTML,
+/// keeps its words: `<details>` keeps its summary, set apart in bold.
+pub fn html_text(html: &str) -> String {
+    const BOLD: char = '\u{1}';
+    const BR: char = '\u{2}';
+    let html = COMMENT.replace_all(html, "");
+    let html = UNREAD.replace_all(&html, "");
+    let html = SUMMARY.replace_all(&html, |found: &regex::Captures| {
+        let words = TAG.replace_all(&found[1], "");
+        format!("\n{BOLD}{}{BOLD}\n", words.trim())
+    });
+    let html = BREAK.replace_all(&html, BR.to_string().as_str());
+    let html = BLOCK_END.replace_all(&html, "\n");
+    let text = entities(&TAG.replace_all(&html, ""));
+    let mut paragraphs: Vec<String> = Vec::new();
+    let mut lines: Vec<String> = Vec::new();
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() {
+            if !lines.is_empty() {
+                paragraphs.push(lines.join("\n"));
+                lines.clear();
+            }
+            continue;
+        }
+        let shown = as_text(line).replace(BR, "\\\n").replace(BOLD, "**");
+        if shown.starts_with("**") && shown.ends_with("**") {
+            if !lines.is_empty() {
+                paragraphs.push(lines.join("\n"));
+                lines.clear();
+            }
+            paragraphs.push(shown);
+        } else {
+            lines.push(shown);
+        }
+    }
+    if !lines.is_empty() {
+        paragraphs.push(lines.join("\n"));
+    }
+    match paragraphs.is_empty() {
+        true => String::new(),
+        false => format!("{}\n\n", paragraphs.join("\n\n")),
+    }
+}
+
+/// An inline HTML tag: nothing, its text staying where it is; a `<br>` is a line break.
+fn inline_html(tag: &str) -> String {
+    match BREAK.is_match(tag) {
+        true => "\\\n".into(),
+        false => String::new(),
+    }
 }

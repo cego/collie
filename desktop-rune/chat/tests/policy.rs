@@ -34,7 +34,7 @@ fn linked(text: &str, links: &[(usize, usize, &str)]) -> Block {
 fn no_element_keeps_a_style_of_its_own() {
     assert_eq!(
         drawn("x <span style=\"a\">hi</span>\n\n<div style=\"position:fixed\">over all</div>\n"),
-        [para("x hi")]
+        [para("x hi"), para("over all")]
     );
 }
 
@@ -184,5 +184,18 @@ fn a_link_is_its_own_url_however_the_parser_encoded_its_address() {
     assert_eq!(
         drawn(&format!("[https://example.com/æble?a=b|c d]({href})")),
         [linked(shown, &[(0, shown.len(), href)])]
+    );
+}
+
+#[test]
+fn raw_html_keeps_its_words_and_a_details_block_its_summary() {
+    assert_eq!(
+        drawn("<details><summary>Which</summary>\n\nThe sweep and the bump.\n\n</details>\n"),
+        drawn("**Which**\n\nThe sweep and the bump.\n")
+    );
+    assert_eq!(drawn("one<br>two"), drawn("one\\\ntwo"));
+    assert_eq!(
+        drawn("<p>Kept &amp; <em>read</em></p>\n"),
+        drawn("Kept & read\n")
     );
 }

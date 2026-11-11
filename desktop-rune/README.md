@@ -19,7 +19,7 @@ review comments. The board's Chat button opens the Flock chat, which streams tur
 | `board/`                     | The app, and the board in `board/src/board/`: `applyItem`'s whole fold, today's sections and cards, alerts, actions, offers, questions, proposals |
 | `board/src/pages/settings/`  | Settings: the Flock's settings, each checked by the core, Record timing, Connections and their tokens, About                                       |
 | `protocol/src/core.rs`       | Starts Desktop's main process as the core, for the app and the recorders                                                                           |
-| `chat/`                      | The Flock chat (AG-UI reducer, markdown policy, syntect highlighter) and the Diff tab's review comments                                            |
+| `chat/`                      | The Flock chat (its state, view, AG-UI reducer, markdown policy, highlighter, file dialog) and the Diff tab's review comments                  |
 | `terminal/`                  | Go to pane's terminal: the VT state, its Rune view, input as `terminal-input` maps it, settled resizes                                             |
 | `ghostty-sys/`               | Builds libghostty-vt from `vendor/ghostty` with Zig and binds its C API with bindgen                                                               |
 | `vendor/ghostty`             | Ghostty, a submodule at one pinned commit                                                                                                          |
@@ -183,8 +183,18 @@ The chat keeps today's transport: `say` streams AG-UI events, and Stop interrupt
 parts (text, reasoning, tool calls with their arguments and output) in the order said, and a
 `RUN_ERROR` shown under the transcript. Text is drawn by rune-kit's Markdown, streaming while
 the turn runs, after `policy::confined` has applied Desktop's markdown policy to its source.
-The composer sends a turn and becomes Stop while it runs. A switch picks the code highlighter:
-rune-kit's built-in scanners or `chat/src/highlight.rs`, syntect with two-face's grammars.
+Code is coloured by rune-kit's built-in scanners where they know the language, else by
+`chat/src/highlight.rs`, syntect with two-face's grammars. Raw HTML keeps its words and a
+`<details>` its summary; in the chat a `file:line` is code, as in today's chat.
+
+The chat (`chat/src/chat.rs`, drawn by `chat/src/pane.rs`) reaches the core through the `Host`
+trait the app implements, so `board/tests/chat.rs` drives it on the fake core. It reads
+`transcript` as it opens and again on `conversationChanges` or the end of Desktop's own turn
+once no reply streams; Enter queues while a reply streams and Ctrl+Enter sends now; Stop brings
+the queued words back to the composer. Tool rows open to their input and ANSI-coloured output,
+the chat's questions are answered in place (`answer`), harness, model (a typed id too) and effort
+save through `setSettings` and a refusal is said, earlier conversations reopen, the setup offer
+is answered inline, a message copies, and the board's card rides on the next message as a chip.
 
 The Diff tab reads `runDetail` until a record carries the diff, then each file's patch from
 `runFile` (`diff:<path>`, paged as Desktop's view does), and parses it with rune-kit's
@@ -277,10 +287,12 @@ a Wayland compositor asks for before it lets a window take focus. `test/rune-she
 side once; `board/tests/notify.rs` checks it is posted and a click raises the window.
 
 **Files in.** The chat's Attach button, a paste into the composer and a drop on the chat each
-call `stagePaths` with the same paths, and what it copies in rides on the next turn. A paste
-takes the clipboard's file list, or text that is only `file://` URIs. Rune's dialog chooses
-one file, where Desktop's chooses several. winit 0.30 reports no file drops on Wayland, so
-there the chat says "Dropping files isn't available here. Attach or paste them instead."
+call `stagePaths` with the same paths, held to `attachments.ts`'s caps, and what it copies in
+rides on the next turn. A paste takes the clipboard's file list, or text that is only `file://`
+URIs; a pasted image goes to `stage` in parts, with a copy scaled to 2000 points; an empty paste
+asks `clipboardFiles`. Attach opens `chat/src/dialog.rs`, which picks several files (the XDG
+portal on Linux, rfd on macOS); the core's own dialog answers nothing under Rune. winit 0.30
+reports no file drops on Wayland, so there Attach's help says to attach or paste instead.
 
 **Scale.** Rune draws at `winit::Window::scale_factor()`, read when the window opens and at
 every resize or scale change. On a Wayland session the spike is a native Wayland client, and

@@ -9,8 +9,7 @@ use collie_desktop_protocol::client::Client;
 use collie_desktop_protocol::core::Core;
 use collie_desktop_protocol::epoch_ms;
 use collie_desktop_protocol::generated::{
-    AguiEvent, FlockItem, KeptRecord, RecordMarkPayload, RunDetailPayload, StagePathsPayload,
-    StagedOrRefusedItem,
+    FlockItem, KeptRecord, RecordMarkPayload, RunDetailPayload,
 };
 use collie_desktop_terminal::pane::Pane;
 use collie_desktop_terminal::view::Tab;
@@ -59,23 +58,24 @@ fn go_to_panes(handle: &AppHandle<App>, client: &Client) {
     });
 }
 
-/// Sends the chat's turns on `say`, its events read off the view's thread into the transcript.
-fn chat(handle: &AppHandle<App>, client: &Client) {
-    let (sayer, shows) = (client.clone(), handle.clone());
+/// Opens the chat on the core: its conversation, subscriptions and turns all go through it.
+fn chat(handle: &AppHandle<App>) {
+    let picks = handle.clone();
     handle.update(move |board, _| {
-        board.chat.say = Some(Box::new(move |payload, turn| {
-            let events = sayer.stream::<_, AguiEvent, Value>("say", payload);
-            let release = events.release();
-            let shows = shows.clone();
-            std::thread::spawn(move || {
-                for event in events {
-                    let event = event.map_err(|error| error.to_string());
-                    let at = epoch_ms();
-                    shows.update(move |board, _| board.chat_heard(turn, event, at));
-                }
-            });
-            Box::new(move || release.interrupt())
+        board.chat.pick = Some(Box::new(move || {
+            let picks = picks.clone();
+            let ask = move || {
+                let chosen = collie_desktop_chat::dialog::pick_files("Attach files");
+                picks.update(move |board, _| collie_desktop_chat::chat::picked(board, chosen));
+            };
+            // AppKit's panel runs on the main thread; the portal's blocks, so it runs off it.
+            if cfg!(target_os = "macos") {
+                ask();
+            } else {
+                std::thread::spawn(ask);
+            }
         }));
+        board.open_chat();
     });
 }
 
@@ -120,37 +120,12 @@ fn records(handle: &AppHandle<App>, client: &Client) {
     });
 }
 
-/// Hands the chat's files to `stagePaths`; what it copied in rides on the next turn.
-fn files_in(handle: &AppHandle<App>, client: &Client) {
-    let (stager, shows) = (client.clone(), handle.clone());
+/// Says where the platform reports no file drops; the chat stages its files through the core.
+fn files_in(handle: &AppHandle<App>) {
     handle.update(move |board, _| {
         // winit 0.30 reports no file drags on Wayland.
         board.chat.drops_unavailable =
             cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some();
-        board.chat.stage = Some(Box::new(move |paths| {
-            let (client, shows) = (stager.clone(), shows.clone());
-            let paths = paths
-                .iter()
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect();
-            std::thread::spawn(move || {
-                let staged = client.request::<_, Vec<StagedOrRefusedItem>, Value>(
-                    "stagePaths",
-                    StagePathsPayload { paths },
-                );
-                shows.update(move |board, _| match staged {
-                    Ok(staged) => staged.into_iter().for_each(|item| match item {
-                        StagedOrRefusedItem::StagedOrRefusedItem0(file) => {
-                            board.chat.attached.push(file.id)
-                        }
-                        StagedOrRefusedItem::StagedOrRefusedItem1(no) => {
-                            board.chat.transcript.error = Some(no.refused)
-                        }
-                    }),
-                    Err(error) => board.chat.transcript.error = Some(error.to_string()),
-                });
-            });
-        }));
     });
 }
 
@@ -303,10 +278,10 @@ fn main() {
         app.follow_flock();
     });
     go_to_panes(&handle, &client);
-    chat(&handle, &client);
+    chat(&handle);
     diffs(&handle, &client);
     records(&handle, &client);
-    files_in(&handle, &client);
+    files_in(&handle);
     notifications(&handle, &client);
     // A headless render runs on a virtual clock, so it waits for a live board first.
     if std::env::args().any(|arg| ["--snap", "--tree", "--script"].contains(&arg.as_str())) {
