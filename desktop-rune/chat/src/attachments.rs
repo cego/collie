@@ -4,6 +4,7 @@
 use collie_desktop_protocol::generated::{Document, StagedOrRefusedItem0};
 use rune::ClipboardContent;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A file a message carries, as the conversation shows it.
 #[derive(Debug, Clone, PartialEq)]
@@ -73,6 +74,15 @@ pub fn scaled_size(width: u32, height: u32) -> Option<(u32, u32)> {
         (width as f64 * by).round() as u32,
         (height as f64 * by).round() as u32,
     ))
+}
+
+/// A new key for one file staged in parts, of `size` bytes: one the core takes, made only of
+/// letters, digits, `_` and `-`, and unlike any other this process made.
+pub fn transfer_key(size: usize) -> String {
+    static MADE: AtomicU64 = AtomicU64::new(0);
+    let made = MADE.fetch_add(1, Ordering::Relaxed);
+    let at = collie_desktop_protocol::epoch_ms() as u64;
+    format!("{at}-{made}-{size}")
 }
 
 /// A pasted image's name, from when it was pasted: `pasted-2026-11-11-09-30-00.png`.

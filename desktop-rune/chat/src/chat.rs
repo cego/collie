@@ -1,7 +1,7 @@
 //! The Flock chat's state, and what each thing the human does asks of Desktop's core.
 
 use crate::agui::{Part, Transcript};
-use crate::attachments::{Attached, cap_refusal, pasted_name};
+use crate::attachments::{Attached, cap_refusal, pasted_name, transfer_key};
 use crate::choices::{
     ChatStatus, Draft, Queued, SetChoice, chat_announcement, choice_notices, refusal_said,
     remember_choice, stay_on, stop_draft,
@@ -1059,7 +1059,7 @@ pub fn stage_image<S: Host>(s: &mut S, png: Vec<u8>, at_iso: &str) {
         return;
     }
     s.chat_mut().refused = None;
-    let key = format!("{}-{}", at_iso, png.len());
+    let key = transfer_key(png.len());
     send_part(s, key, name, png, 0, None);
 }
 

@@ -11,6 +11,7 @@ use collie_desktop_board::shell::panes;
 use collie_desktop_board::{App, view};
 use collie_desktop_protocol::client::Client;
 use collie_desktop_terminal::view::Link;
+use rune::clipboard::MemoryClipboard;
 use rune::{ClipboardContent, Env, Key, KeyEvent, Mods, Runtime};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
@@ -344,6 +345,8 @@ fn a_pasted_screenshot_is_staged_in_parts_placed_and_typed_as_its_path() {
         ),
         (&json!("image/png"), &json!(0), &json!(PNG))
     );
+    let key = stage[0]["key"].as_str().unwrap();
+    assert!(support::core_takes_key(key), "the core refuses {key}");
     assert_eq!(
         harness.fake.asked_of("placeFiles"),
         [json!({"installation": "i-vm", "ids": ["cc/pasted.png"]})]
@@ -377,4 +380,96 @@ fn files_dropped_on_the_chat_beside_the_pane_go_to_the_chat_not_the_pane() {
     );
     assert!(harness.fake.asked_of("placeFiles").is_empty());
     assert_eq!(typed_after(&typed, 0), Vec::<String>::new());
+}
+
+/// A paste the platform reads, as Ctrl+V asks for one, into the chat's composer beside the pane.
+fn paste_into_composer(
+    runtime: &mut Runtime<App>,
+    clipboard: &MemoryClipboard,
+    held: ClipboardContent,
+    at: f64,
+) {
+    clipboard.set_content(held);
+    runtime.update(|_, tx| tx.request_paste());
+    runtime.frame(at);
+    runtime.frame(at + 0.1);
+}
+
+#[test]
+fn a_paste_into_the_chat_beside_the_pane_attaches_there_and_types_nothing_into_the_pane() {
+    let harness = Harness::new();
+    let (mut runtime, _, typed) = shown(&harness);
+    let clipboard = rune::clipboard::memory();
+    runtime.use_clipboard(&clipboard);
+    assert!(
+        runtime.state.nav.chat.is_open(),
+        "the chat is beside the pane"
+    );
+    let mut at = 3.0;
+    support::tap(&mut runtime, "composer", &mut at);
+    assert!(runtime.state.chat.composer.focused);
+
+    // A screenshot: staged for the chat under a key the core takes, and never placed.
+    use base64::Engine;
+    const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=";
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(PNG)
+        .unwrap();
+    let shot = rune::ClipboardImage::from_png(png).unwrap();
+    paste_into_composer(
+        &mut runtime,
+        &clipboard,
+        ClipboardContent::new("").with_image(shot),
+        at,
+    );
+    settle(&harness, &mut runtime);
+    let stage = harness.fake.asked_of("stage");
+    assert_eq!(stage.len(), 1, "{stage:?}");
+    let key = stage[0]["key"].as_str().unwrap();
+    assert!(support::core_takes_key(key), "the core refuses {key}");
+    assert!(
+        harness
+            .fake
+            .answer("stage", Ok(staged("cc/pasted.png", "pasted.png")))
+    );
+    settle(&harness, &mut runtime);
+    assert!(
+        runtime
+            .state
+            .chat
+            .attached
+            .iter()
+            .any(|f| f.id == "cc/pasted.png")
+    );
+
+    // Files a file manager copied.
+    paste_into_composer(
+        &mut runtime,
+        &clipboard,
+        ClipboardContent::new("").with_files(files()),
+        at + 1.0,
+    );
+    settle(&harness, &mut runtime);
+    assert_eq!(
+        harness.fake.asked_of("stagePaths"),
+        [json!({"paths": ["/home/mk/Pictures/shot.png", "/home/mk/my notes.txt"]})]
+    );
+
+    // Words are typed into the composer as they always were.
+    paste_into_composer(
+        &mut runtime,
+        &clipboard,
+        ClipboardContent::new("what failed?"),
+        at + 2.0,
+    );
+    settle(&harness, &mut runtime);
+    assert_eq!(runtime.state.chat.composer.text, "what failed?");
+
+    assert!(harness.fake.asked_of("placeFiles").is_empty());
+    assert!(harness.fake.asked_of("clipboardFiles").is_empty());
+    assert_eq!(
+        typed_after(&typed, 0),
+        Vec::<String>::new(),
+        "the pane got nothing"
+    );
 }

@@ -99,3 +99,12 @@ fn snapshot(installation: &str, profile: &str, name: &str) -> serde_json::Value 
             "protocol": 5, "herds": [], "tasks": [], "seq": 0 },
     })
 }
+
+/// Whether Desktop's core takes `key` for a staged transfer, by `stageAttachment`'s own rule
+/// in `desktop/src/bun/attachments.ts`: `/^[\w-]+$/`.
+pub fn core_takes_key(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
