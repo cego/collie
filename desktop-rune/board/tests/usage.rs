@@ -414,3 +414,31 @@ fn opening_the_page_asks_each_machine_and_draws_a_meter_per_window_of_the_live_o
     );
     assert!(said(&runtime, "mk-pc: can't say; upgrade this Machine"));
 }
+
+#[test]
+fn the_page_reads_usage_again_on_its_own_while_desktop_runs() {
+    let harness = Harness::<App>::new();
+    let mut app = flock_app(&harness);
+    app.pages.usage.every = std::time::Duration::from_millis(250);
+    let fresh = |percent: u32| {
+        json!([machine("vm", vec![reading(json!({ "windows": [window(json!({
+            "usedPercent": percent, "resetsAt": "2099-01-01T00:00:00Z" }))] }))])])
+    };
+    harness.fake.will_answer("usage", Ok(fresh(10)));
+    app.open_page(Page::Usage);
+    let mut runtime = runtime(app);
+    settle(&harness, &mut runtime);
+    runtime.frame(100.0);
+    assert!(said(&runtime, "Session: 10%"));
+    for _ in 0..8 {
+        harness.fake.will_answer("usage", Ok(fresh(64)));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    settle(&harness, &mut runtime);
+    runtime.frame(200.0);
+    assert!(
+        harness.fake.asked_of("usage").len() >= 2,
+        "it asked again without being told to"
+    );
+    assert!(said(&runtime, "Session: 64%"), "and shows the fresh reading");
+}
