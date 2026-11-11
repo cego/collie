@@ -550,19 +550,21 @@ const reviewNote = (
   head: string,
 ): string => {
   if (previous === undefined) return renderReview(review);
+  const published = Arr.filter(previous, (one) => Boolean(one.note));
+  if (previous.length > 0 && published.length === 0) return renderReview(review);
   const added = Arr.filter(
     review.findings,
-    (one) => !Arr.some(previous, (old) => old.id === one.id),
+    (one) => !Arr.some(published, (old) => old.id === one.id),
   );
   const changed = Arr.filter(review.findings, (one) =>
-    Arr.some(previous, (old) => old.id === one.id && old.status !== one.status),
+    Arr.some(published, (old) => old.id === one.id && old.status !== one.status),
   );
   if (added.length === 0 && changed.length === 0) return "";
   const stillOpen = Arr.filter(
     review.findings,
     (one) =>
       one.status === "open" &&
-      Arr.some(previous, (old) => old.id === one.id && old.status === "open"),
+      Arr.some(published, (old) => old.id === one.id && old.status === "open"),
   );
   return (
     Arr.join(

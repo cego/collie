@@ -2534,7 +2534,14 @@ for (const name of ["gitlab", "github"] as const) {
     120_000,
   );
 
-  for (const mode of ["partial", "force push", "unchanged", "resolved", "clean start"] as const)
+  for (const mode of [
+    "partial",
+    "force push",
+    "unchanged",
+    "resolved",
+    "clean start",
+    "unposted",
+  ] as const)
     scenario(
       `review ledger on ${name}: ${mode === "partial" ? "Review again carries earlier findings and posts the interdiff's status changes" : mode}`,
       () =>
@@ -2575,7 +2582,7 @@ for (const name of ["gitlab", "github"] as const) {
                     one.id === "F1"
                       ? mode === "force push"
                         ? "obsolete"
-                        : mode === "unchanged" || mode === "clean start"
+                        : mode === "unchanged" || mode === "clean start" || mode === "unposted"
                           ? "open"
                           : "fixed"
                       : mode === "resolved"
@@ -2591,7 +2598,12 @@ for (const name of ["gitlab", "github"] as const) {
               runId: first,
               input: { target },
               decision: "post-1",
-              value: mode === "clean start" ? "Post and approve 1234567" : "Post",
+              value:
+                mode === "unposted"
+                  ? "Don't post"
+                  : mode === "clean start"
+                    ? "Post and approve 1234567"
+                    : "Post",
             });
             const ledger = yield* findingsIn(runDir(dir, first));
             expect(ledger).toMatchObject(
@@ -2602,13 +2614,19 @@ for (const name of ["gitlab", "github"] as const) {
                       id: "F1",
                       status: "open",
                       head: REVIEW_HEAD,
-                      note: `Review by Collie for @tester · ${first} round 1 at ${REVIEW_HEAD}`,
+                      note:
+                        mode === "unposted"
+                          ? ""
+                          : `Review by Collie for @tester · ${first} round 1 at ${REVIEW_HEAD}`,
                     },
                     {
                       id: "F2",
                       status: "open",
                       head: REVIEW_HEAD,
-                      note: `Review by Collie for @tester · ${first} round 1 at ${REVIEW_HEAD}`,
+                      note:
+                        mode === "unposted"
+                          ? ""
+                          : `Review by Collie for @tester · ${first} round 1 at ${REVIEW_HEAD}`,
                     },
                   ],
             );
@@ -2687,8 +2705,12 @@ for (const name of ["gitlab", "github"] as const) {
               value: choice,
             });
             const notes = Rec.values((yield* forge.model()).notes ?? {}).flat();
-            expect(notes).toHaveLength(mode === "unchanged" ? 1 : 2);
-            if (mode === "clean start") {
+            expect(notes).toHaveLength(mode === "unchanged" || mode === "unposted" ? 1 : 2);
+            if (mode === "unposted") {
+              expect(notes[0]).toContain("An empty input crashes the request.");
+              expect(notes[0]).toContain("The unchanged handle leaks after every request.");
+              expect(notes[0]).toContain(`· ${next} round 1 at ${head}`);
+            } else if (mode === "clean start") {
               expect(notes[1]).toContain("F1: open");
               expect(notes[1]).toContain("An empty input crashes the request.");
             } else if (mode !== "unchanged") {

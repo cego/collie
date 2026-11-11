@@ -1763,7 +1763,8 @@ The reviewer returns every earlier id with its current status, plus new findings
 The **Review again** offer passes the earlier Run id as the host's `previous` option.
 The next reviewer receives its ledger and an interdiff, or the full diff after a force push.
 The posted note lists new findings and status changes; unchanged open findings appear by
-id only. An unchanged ledger posts nothing. `fixed` and `obsolete` findings stay in the
+id only. Only findings with a posted-note anchor count as previously published.
+An unchanged, previously posted ledger posts nothing. `fixed` and `obsolete` findings stay in the
 record without blocking a fix or approval; unresolved disputes still require a decision.
 
 `CriterionSchema` is how a builder answers one of its ticket's acceptance criteria:

@@ -2860,7 +2860,8 @@ your login on the target's own host.
 [Finding status](../CONTEXT.md), into the next review. The reviewer reads the interdiff
 since the last reviewed head, or the full diff after a force push. The next note lists
 new findings and status changes, with unchanged open findings listed by id only.
-An unchanged ledger posts nothing. Fixed and obsolete findings stay in the record;
+An unchanged, previously posted ledger posts nothing. Findings you chose not to post
+still appear in full when you first post them. Fixed and obsolete findings stay in the record;
 obsolete means the finding no longer applies, not that its bug was fixed.
 
 Fixing one is a different matter. A fix round is an `implement` run, and a mutating run
