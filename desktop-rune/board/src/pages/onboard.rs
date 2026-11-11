@@ -335,7 +335,7 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                 .child(body),
         )
         .on_close(|app: &mut App| app.close_onboarding())
-        .build(k, layer);
+        .build(collie_desktop_theme::dialog(k.dark), layer);
     let Some(asked) = current.and_then(|one| one.run.asked.as_ref()) else {
         return;
     };
@@ -387,5 +387,5 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                 ),
         )
         .on_close(move |app: &mut App| app.answer_herdr(&closed, default))
-        .build(k, layer);
+        .build(collie_desktop_theme::dialog(k.dark), layer);
 }

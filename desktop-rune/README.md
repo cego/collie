@@ -11,7 +11,8 @@ terminal from the `terminal` stream, through libghostty-vt, and sends what the h
 on `terminalSend`. The record's other tabs (Flow, Summary, Plan, Review, Diff, Evidence, Log,
 Facts, the merge request) read `runDetail` and `runFile`, and its Diff tab shows the Run's diff
 in rune-kit's Diff, where selected lines become review comments. The board's Chat button opens
-the Flock chat, which streams turns on `say`. Each Machine's saved board is drawn as soon as
+the Flock chat, which streams turns on `say`; toasts stand at the bottom right of the page's pane,
+clear of the chat. Each Machine's saved board is drawn as soon as
 `flock` sends it, under a line naming the Machines still being reached. A card's menu has Check
 output and Attach files. The toolbar shows each Subscription account's Usage, as today's header
 does. An `act` that the host refused has no Try again.
@@ -27,7 +28,7 @@ does. An `act` that the host refused has no Try again.
 | `board/src/record/`          | An open Run's record: its tabs, the Diff tab and review comments, evidence, acting through `act`                                                     |
 | `board/src/flow/`            | The Flow map's actions, next move and inspector, ported from Desktop's `flow-actions.ts` and `flow-inspector.ts`                                     |
 | `protocol/src/core.rs`       | Starts Desktop's main process as the core, for the app and the recorders                                                                             |
-| `theme/`                     | Collie's palette over OpenCode's kit for the board and chat: paper and ink surfaces, an iris accent, a hue per state, the mark, an AA and a hue test |
+| `theme/`                     | Collie's palette over OpenCode's kit for the board and chat: paper and ink surfaces, an iris accent that lightens under the pointer, a hue per state, the mark, dialogs on the raised surface, an AA and a hue test |
 | `chat/`                      | The Flock chat: its state, pane, AG-UI reducer, markdown policy, highlighter and file dialog                                                         |
 | `terminal/`                  | Go to pane's terminal: the VT state, a renderer drawn as Ghostty draws, input as `terminal-input` maps it, settled resizes                           |
 | `ghostty-sys/`               | Builds libghostty-vt from `vendor/ghostty` with Zig and binds its C API with bindgen                                                                 |

@@ -1058,5 +1058,5 @@ fn notices(app: &App, k: &Kit) -> El {
                 .on_hover_change(move |app: &mut App, inside, _| app.hold_notice(id, inside)),
         );
     }
-    region.build(k)
+    crate::toasts::beside_chat(app, region.build(k))
 }

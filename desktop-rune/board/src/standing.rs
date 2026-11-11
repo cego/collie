@@ -159,6 +159,7 @@ pub fn view(app: &App, k: &Kit, layer: &mut Vec<El>) {
     crate::pages::onboard::dialog(app, k, layer);
     let state = &app.standing;
     toasts(
+        app,
         &state.told,
         |app: &mut App| &mut app.standing.told,
         k,
@@ -278,5 +279,5 @@ pub fn view(app: &App, k: &Kit, layer: &mut Vec<El>) {
         .open(true)
         .child(body)
         .on_close(|app: &mut App| standing(app).open = false)
-        .build(k, layer);
+        .build(collie_desktop_theme::dialog(k.dark), layer);
 }
