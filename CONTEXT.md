@@ -321,7 +321,7 @@ corrections to it stop until an explicit `run clear-override`; nothing times it 
 
 **MR id** — A merge request's one identity, made of its host, project path and number in lower case: `gitlab.cego.dk/spilnu/app!42`, `github.com/cego/collie#300`. Every comparison of two merge requests goes through it: joining a Task, the merge watch and what it keeps, landing, cleanup and Dispositions. A legacy bare `mr:42`, or a hostless Disposition ref such as `app!42`, is resolved against the Run's checkout when it is read. One whose project cannot be told has none, and is never matched to another. A human is still shown the forge's own word and name ([ADR-draft-a-tasks-merge-requests-are-its-waves-changes](docs/adr/draft-a-tasks-merge-requests-are-its-waves-changes.md)).
 
-**Disposition** — What became of a Run's work, which is not how its execution ended. Recorded by a human beside the Run's status and never over it — `merged`, `abandoned` or `superseded`, with the merge request, commit or Run that backs it up. A Run that failed still failed; its disposition says whether the work landed anyway. Append-only, so a correction keeps what was believed before. Nothing to do with **Delivery**, which is one message to one agent.
+**Disposition** — What became of a Run's work, which is not how its execution ended. Recorded by a human beside the Run's status and never over it — `merged`, `abandoned` or `superseded`, with the merge request, commit or Run that backs it up. A Run that failed still failed; its disposition says whether the work landed anyway. A Disposition is the Run's, not its Task's: it settles what that Run carries as **Landed** says, and `superseded` only hands the Run's obligation on — to the successor it names, so a successor in the same Task leaves that Task owing the same merge request. Append-only, so a correction keeps what was believed before. Nothing to do with **Delivery**, which is one message to one agent.
 
 **Verification** — An independently collected command result bound to the tree it ran on,
 before and after. A tree is its content: committing exactly the bytes a Verification ran on
@@ -462,26 +462,38 @@ ranks first.
 
 **Working** — A Task something is actually doing: a Run the host holds that has not
 settled, or a **Reopened** Run whose agent herdr reports working. A Run whose question a
-human's message superseded is Working while its agent works on that message. The board's third
+human's message superseded is Working while its agent works on that message. The board's fourth
 section, under Waiting on you.
 
 **Waiting on you** — A Task whose work has ended without **landing**, and which nobody has
 asked you about: an implement Run that succeeded and whose merge request is open, a plan
 that is ready to implement, a Run that failed or was stopped with a branch or merge
-request behind it and has neither been resumed nor disposed of. The board's second
-section, under Needs you and over Working, because most of it is work a human can ship
-now; **Ready to release** leads it. Not a **Decision**: a Decision is Collie asking; this is work in your hands that
+request behind it and has neither been resumed nor disposed of. It stays here while it owes
+anything, whatever Dispositions its earlier Runs carry and however it was finished: Finish
+ends a Run, not a Task's delivery. Its sentence names the merge request still owed and what
+it lacks — approval, checks at its head, a conflict, or `closed without merging`. The board's third
+section, below Ready to ship and above Working. Work whose shipping gates hold belongs
+in **Ready to ship**. Not a **Decision**: a Decision is Collie asking; this is work in your hands that
 has not been mentioned. A Run that ended with nothing to file — no branch, no merge
 request, no plan, no question — has **Landed** and is not waiting on anyone.
 
-**Ready to release** — A Waiting on you Task whose merge request the forge would merge now:
+**Ready to ship** — The board's second section, below Needs you and above Waiting on you,
+Working and Finished. Only the human's shipping go remains. The card names **Merge**,
+**Stage** or **Deploy**. Merge invokes the existing Release offer or answers a declared Go.
+A declared Go enters only while its action's gates hold at its head or tag; a failed gate
+keeps it in Needs you. The host derives this once for Desktop, the CLI and chat.
+Entering the section raises no notification.
+
+**Ready to release** — The Merge gate: the forge would merge the merge request now:
 its leading Run succeeded; the merge request is open and not a draft; every check approved
 for the Run passed at its head; the forge's pipeline at that head passed, or there is none;
 no blocking review finding is unresolved; and the forge says it can merge. It is one fact,
 computed once in the board model, that the board, `collie run show`, `collie run wait
 --until ready` and chat all read, with each missing fact named and marked as one that may
 still come by itself (CI running, the forge still working it out) or one only a human can
-move. A card leaves Ready to release when CI or mergeability later says no. An open merge
+move. Every forge fact must be read at the current head within two merge-watch rounds.
+A stale, unknown or unreadable fact is missing and marked settling. A moved head or a
+failed gate revokes readiness. An open merge
 request that is not ready is still Waiting on you, and its card says what is missing. A
 Task with several merge requests judges each at its own head, and is Ready to release when
 any one of them is.
@@ -495,15 +507,36 @@ agents for as long as one is alive; a gone pane is the Follow-up Run's job (ADR-
 A finished Run's agent is closed once it has been idle for an hour since the Run finished
 (**Cleanup**), so a Run can be Reopened only until then.
 
-**Landed** — What a Task's work has done once it needs nothing more from anyone: a
-**Disposition** was recorded — merged, abandoned or superseded — the Run succeeded at a
-Workflow that produces nothing to land, such as a review, or it ended with nothing anyone
-could file: no branch, no merge request, no plan, no question. A Task with several merge
-requests has landed only once each is merged or carries an `abandoned` or `superseded`
-Disposition, and none of its Runs is still going. A Task whose work has landed
+**Landed** — What a Task's work has done once everything it owes is settled and none of its
+Runs is still going. A Task owes each merge request its Runs carry, and a branch with none.
+A merge request is settled when its forge reads it merged; when `abandoned` is recorded on a
+Run carrying it or on the Task's leading Run; when `merged` is recorded for it and its
+forge has not read it open since; or when
+`superseded` is recorded on it while its forge reads it closed, or on every Run of the Task
+carrying it with a ref naming a Run of another Task, which is then the one responsible. A
+`superseded` naming a successor in the same Task, or no Run, settles nothing while the merge
+request is open; reopened, a closed one is owed again. A plan is settled by any Disposition,
+and work that ended with nothing anyone could file — no branch, no merge request, no plan, no
+question — has nothing to settle. The board, History, the **Merge watch**, chat and Desktop
+read this one derivation ([ADR-draft-a-task-lands-when-what-it-owes-is-settled](docs/adr/draft-a-task-lands-when-what-it-owes-is-settled.md)). A Task whose work has landed
 is **Finished**, the board's last section, as long as none of its Runs is still going,
 asking or stalled and none of its agents is working. Finished is what **Cleanup** waits
-for before it closes anything of a Task.
+for before it closes anything of a Task, and a checkout any Task still owes something on
+is kept whatever a Run's line says. Only a landed Task folds into History a day after
+it ends; one that still owes a merge request stays on the board however old it is.
+
+**Merge watch** — The host's round, every 5 minutes, that asks each merge request's own
+forge what became of it and records `merged` as that forge's word when it merged. It asks
+about every merge request a Task owes, whatever its section, age or the Dispositions of
+its Runs, follows a merged one to production, and keeps asking about a closed one in case
+it is reopened. Only a merge request settled by `abandoned` is not asked about. Each answer
+it keeps carries the time it was read and the head it was read at, across a host restart,
+and an answer of open read after a recorded `merged` outranks it: the merge request is owed
+again, and no record is rewritten. An answer with no read time, as an earlier host wrote
+them, counts as never asked until the next round asks it. A forge that cannot be read
+leaves every stored answer and its read time as it was, so it settles nothing and
+unsettles nothing. A card says when the forge last answered once that is more than two
+rounds old, and says when its last ask failed.
 
 **Unseen** — A **Finished** Task's leading Run that ended by itself with something to
 report and that nobody has opened or acknowledged yet. The Run's host records **seen** once
@@ -570,8 +603,9 @@ human made is never removed.
 - The tree is clean.
 - It holds no commit that is not on the remote already.
 - Nothing is working in it, and no Run whose work has not landed could be resumed in it.
-- Its work has landed: the merge watch read its merge request as merged or closed, on
-  GitHub or GitLab; a **Disposition** was recorded; or its remote branch is gone.
+- Its work has landed: no Task whose Runs used it still owes anything on it, and the merge
+  watch read its merge request as merged or closed, on GitHub or GitLab; what settled it
+  was recorded (**Landed**); or its remote branch is gone.
 - Its Task's workspace has closed.
 
 A commit is on the remote when a remote-tracking ref contains it, or when it is the head
@@ -595,7 +629,7 @@ how much space that frees, and what Collie keeps and why. `collie cleanup --appl
 now. In order:
 
 1. A **Finished** Task's workspace closes after an hour.
-2. Its Worktrees go once **Settled**.
+2. Its Worktrees go once **Settled**, never while a Task still owes anything on them.
 3. Thirty days after its last Run ended, the Task and every one of its Runs are forgotten
    together: rows first, then files.
 
@@ -689,7 +723,10 @@ stage, merge, tag), and send one to production. It is asked on the Run once the 
 ready, never at its start. The first holds for one head: a head that moves takes it back.
 The second holds for what it sends. Before a merge, that is the head on stage, so the same
 rule applies. After one, it is one tag and the production jobs that tag names. Who answered
-is recorded, never a reason to refuse. Staging an open merge request without merging it is
+is recorded, never a reason to refuse. A Workflow can declare the Go's action and head
+or tag on `ask`; the host shows it in **Ready to ship** only while its gates hold.
+Merge and Stage from a Release Run use **Ready to release**; Deploy uses the host's
+recorded stage proof for that head or tag. Staging an open merge request without merging it is
 not one: a **Stage Run** asks for no Go, because its rollback takes it back.
 
 **Layer** — Where a definition is looked up, later wins by name. A Workflow is one `*.workflow.ts` entry, found project `.collie/workflows/` first, then the user's `~/.collie/user/workflows/`, then the installation's `workflows/`; a broken override is reported, never fallen through. A Persona is Markdown, found the same way: the project's `.collie/personas/`, then the user's `~/.collie/user/personas/`, then the installation's `personas/`. Forking takes a baseline definition into a later Layer. The user Layer's files are **shared definitions**: every Machine in a Flock holds the latest edit of each, its removal included, so the user Layer is the Flock's rather than one Machine's ([ADR-0061](docs/adr/0061-a-users-definitions-are-the-flocks.md)).

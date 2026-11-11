@@ -13,7 +13,7 @@ import { Rig, type RigError } from "../support/recorder";
 import { installBaseline } from "../support/engine";
 import { runEffect } from "../support/effect";
 import { FakeBin } from "../support/bin";
-import { forgeHttpOnPath, forgeHttpOver } from "../support/forge";
+import { forgeHttpOnPath, forgeHttpOver, storedAnswers } from "../support/forge";
 import { appState, type ControlSession } from "../../src/flows";
 import { shell } from "../../src/mr";
 import { mrDetails } from "../../src/forge/gitlab";
@@ -22,7 +22,7 @@ import { scopeFor } from "../../src/registry";
 import type { RunFacts } from "../../src/runs";
 import { madeRun } from "../support/records";
 import { recordDisposition } from "../../src/disposition";
-import { MERGE_POLL_MS, mrOf, watchedMr, writeMrStates, type MrPanels } from "../../src/merges";
+import { MERGE_POLL_MS, mrOf, watchedMr, type MrPanels } from "../../src/merges";
 import { focus } from "../support/focus";
 
 let rig: Rig;
@@ -162,7 +162,7 @@ const seedMany = Effect.fn("fetching.seedMany")(function* (count: number) {
   }
   // And in production, as far as a merge can go: the watch that follows a merged card to
   // its deploy jobs has nothing left to ask about these either.
-  yield* writeMrStates(
+  yield* storedAnswers(
     env.stateDir,
     new Map(Arr.map(ids, (_, at) => [`g/p!${at + 1}`, "in-prod"])),
   );

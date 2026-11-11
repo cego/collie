@@ -1013,6 +1013,16 @@ the first.
 - **One answer, whoever sends it.** Two answers racing make one piece of work; the second is
   refused with what the run already has, and retrying one under the same request id is the
   same answer rather than another.
+- **Declare a shipping Go with `shipping`.** Use `{ action: "merge", head }` or
+  `{ action: "stage", head }` for a merge request, and `{ action: "deploy", head }` or
+  `{ action: "deploy", tag }` for production. The head or tag must be nonempty; an unknown
+  action or missing revision is refused before the question is recorded. The declaration
+  survives a restart with the question. Names and option titles decide nothing.
+  The host places it in Ready to ship only while its action's gates hold: Merge and
+  Stage from an MR require Ready to release at that head on fresh forge answers; Deploy
+  requires the host's stage proof for that exact head or tag. A moved head, stale answer
+  or failed gate keeps it in Needs you, naming the failure. Answer it through the normal
+  answer path; the declaration grants no authority and never answers the question.
 - **The question survives a restart**, and so does its answer. What is waiting is in
   `run show`, and `run answer <run> <value> --decision <name>` settles it.
 

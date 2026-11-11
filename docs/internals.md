@@ -356,10 +356,12 @@ A worktree is **settled**, and only then removed, when all five hold
    repository's roaming checkouts, which the next roaming start would take over anyway, and
    the idle agents of the runs that finished or failed inside one hold it no more than
    their own run would;
-4. its work has landed: the merge watch read its merge request as merged or closed, on
-   GitHub or GitLab (`board/mr-states.json`), a Disposition of merged, abandoned or
-   superseded was recorded on a Run that recorded it, or, with neither, its branch is gone
-   from the remote; an open merge request keeps it;
+4. its work has landed: no Task whose Runs used it still owes anything on it, as the
+   board derives it (**Landed** in `CONTEXT.md`), and the merge watch read its merge
+   request as merged or closed, on GitHub or GitLab (`board/mr-states.json`), the board
+   says what settled it, or, with neither, its branch is gone from the remote; an open
+   merge request keeps it, and a board that could not be built leaves only the remote
+   branch to go by;
 5. its Task's workspace has closed — by cleanup or by a human — so a checkout never goes
    from under a workspace someone is looking at.
 

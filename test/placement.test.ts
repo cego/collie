@@ -31,7 +31,7 @@ import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { exec } from "./support/command";
 import { FakeBin } from "./support/bin";
-import { FORGE_HOST, forgeOnPath, serveForges } from "./support/forge";
+import { FORGE_HOST, forgeOnPath, serveForges, storedAnswers } from "./support/forge";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
 import { fixtures, until } from "./support/host";
@@ -55,7 +55,6 @@ import type * as MessageStorage from "effect/cluster/MessageStorage";
 import { SqlClient } from "effect/sql";
 import { VerifySpecSchema } from "../src/verify-spec";
 import { readTask, writeTask, type TaskRecord } from "../src/task";
-import { writeMrStates } from "../src/merges";
 import { type MrState } from "../src/board-model";
 import { HELLE_URL } from "../src/helle-url";
 import type { Call } from "./support/recorder";
@@ -2814,7 +2813,7 @@ const builtFromItsPlan = (mrState: MrState | null) =>
         yield* fs.makeDirectory(plan, { recursive: true });
         yield* fs.writeFileString(`${plan}/SPEC.md`, "# Add a picker\n");
         if (mrState !== null)
-          yield* writeMrStates(dir(), new Map([["gitlab.example.com/group/app!355", mrState]]));
+          yield* storedAnswers(dir(), new Map([["gitlab.example.com/group/app!355", mrState]]));
         const started = yield* start(builds!, {
           request: "r-by-hand",
           text: { work: plan },
