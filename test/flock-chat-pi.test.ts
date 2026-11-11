@@ -15,6 +15,7 @@ import { aboutNote } from "../desktop/src/shared/chat-view";
 import { FLOCK_TOOLS } from "../desktop/src/bun/flock-tools";
 import { FILE_TOOLS } from "../desktop/src/bun/file-tools";
 import { piPrompt } from "../desktop/src/bun/pi-transcript";
+import { piEvents } from "../desktop/src/bun/pi-agui";
 import { type AguiEvent, ends } from "../desktop/src/shared/agui";
 import { childEnv } from "../desktop/src/bun/login-env";
 import { offerOf, opensOn, readPiConfig } from "../desktop/src/bun/chat-choices";
@@ -26,8 +27,12 @@ import { readPiModels } from "../desktop/src/bun/pi-models";
 import { changeSettings } from "../desktop/src/bun/settings";
 import { chatSelects, choiceNotices } from "../desktop/src/shared/chat-choices";
 import { callFlockTool } from "../desktop/src/bun/flock-tools";
+import type { UserMcpServers } from "../desktop/src/bun/session";
+import { PiServer, piServers } from "../desktop/src/bun/pi-servers";
 
 let direction: { readonly text: string; readonly at: string } | undefined;
+let userServers: UserMcpServers = {};
+const FIXTURE = ["bun", `${import.meta.dir}/fixtures/pi-chat.ts`];
 
 const withPi = <A, E>(
   body: (
@@ -78,7 +83,7 @@ const withPi = <A, E>(
         placement: () => ({ rule: "Here", machines: [] }),
       };
       const endpoint = yield* loopbackTools(context);
-      const driver = piDriver(context, endpoint, ["bun", `${import.meta.dir}/fixtures/pi-chat.ts`]);
+      const driver = piDriver(context, endpoint, () => Promise.resolve(userServers), FIXTURE);
       return yield* body(driver, context);
     }).pipe(Effect.scoped, Effect.provide(platformLayer)),
   );
@@ -166,6 +171,8 @@ test("Pi's start isolates resources, keeps the token in its environment and send
         "",
         "--no-extensions",
         "-e",
+        "builtin:tool-search",
+        "-e",
         "builtin:mcp",
         "-e",
         `${context.dir}/pi-collie.ts`,
@@ -173,7 +180,7 @@ test("Pi's start isolates resources, keeps the token in its environment and send
         "--no-prompt-templates",
         "--no-context-files",
         "--tools",
-        expect.stringMatching(/^read,bash,edit,write,grep,find,ls,mcp__cf_[0-9a-f]{32}__\*$/),
+        "read,bash,edit,write,grep,find,ls,tool_search,mcp__*",
         "--model",
         "openai-codex/gpt-6.1-sol",
         "--thinking",
@@ -184,10 +191,10 @@ test("Pi's start isolates resources, keeps the token in its environment and send
       expect(details.systemPrompt).not.toContain("Personal");
       expect(details.extension).toContain("process.env.COLLIE_CHAT_MCP_TOKEN");
       expect(details.extension).toContain("timeout: 86400");
-      const prefix = pipe_(
-        Str.split(details.args[details.args.indexOf("--tools") + 1]!, ",").at(-1)!,
-        Str.slice(0, -1),
-      );
+      const prefix = `mcp__${pipe_(
+        /registerMcpServer\("(cf-[0-9a-f]{32})"/.exec(details.extension)![1]!,
+        Str.replaceAll("-", "_"),
+      )}__`;
       for (const name of Arr.map(
         [...FLOCK_TOOLS, ...FILE_TOOLS, { name: "AskUserQuestion" }],
         (tool) => tool.name,
@@ -526,7 +533,7 @@ test("Pi's configuration is read as a session opens, so a level changed since De
         drivers: (opened) =>
           loopbackTools(opened).pipe(
             Effect.map((endpoint) => ({
-              pi: piDriver(opened, endpoint, ["bun", `${import.meta.dir}/fixtures/pi-chat.ts`]),
+              pi: piDriver(opened, endpoint, () => Promise.resolve({}), FIXTURE),
             })),
           ),
       });
@@ -699,7 +706,7 @@ test("a question's buttons can be clicked before Pi's HTTP call reaches Desktop"
         drivers: (context) =>
           loopbackTools(context).pipe(
             Effect.map((endpoint) => ({
-              pi: piDriver(context, endpoint, ["bun", `${import.meta.dir}/fixtures/pi-chat.ts`]),
+              pi: piDriver(context, endpoint, () => Promise.resolve({}), FIXTURE),
             })),
           ),
       });
@@ -770,5 +777,184 @@ test("Pi's file tools and shell are refused where the human's sessions are kept"
           text: "Never read ~/.claude/projects without asking me.",
         }),
       ).toBeUndefined();
+    }),
+  ));
+
+const configured: UserMcpServers = {
+  "linear-server": { type: "http", url: "https://mcp.linear.app/mcp" },
+  docs: {
+    type: "http",
+    url: "https://docs.example/mcp",
+    headers: { Authorization: "Bearer s3cr3t-value" },
+  },
+  legacy: { type: "sse", url: "https://legacy.example/sse" },
+  refused: { command: "refused-mcp" },
+};
+
+const withServers = <A, E>(
+  servers: UserMcpServers,
+  body: Parameters<typeof withPi<A, E>>[0],
+): Promise<A> => {
+  userServers = servers;
+  return withPi(body).finally(() => {
+    userServers = {};
+  });
+};
+
+const opened = (driver: ReturnType<typeof piDriver>, id: string) =>
+  Effect.gen(function* () {
+    const session = yield* driver.open(id, "openai-codex/gpt-6.1-sol", "medium");
+    yield* Effect.addFinalizer(() => session.close);
+    return (message: string) =>
+      session
+        .offer(message)
+        .pipe(Effect.andThen(Stream.runCollect(session.events.pipe(Stream.takeUntil(ends)))));
+  });
+
+const replies = (events: ReadonlyArray<AguiEvent>) =>
+  Arr.flatMap(events, (event) => (event.type === "TEXT_MESSAGE_CONTENT" ? [event.delta] : []));
+
+const Inspected = Schema.Struct({
+  extension: Schema.String,
+  systemPrompt: Schema.String,
+  servers: Schema.String,
+  prompt: Schema.Struct({ message: Schema.String }),
+});
+const inspectedOf = (events: ReadonlyArray<AguiEvent>) =>
+  flow(
+    Schema.decodeResult(Schema.fromJsonString(Inspected)),
+    Result.getOrThrow,
+  )(replies(events)[0]!);
+
+test("Pi is handed the human's servers in its environment, never in the extension file, and is told of them", () =>
+  withServers(configured, (driver) =>
+    Effect.gen(function* () {
+      const turn = yield* opened(driver, "pi-servers");
+      const details = inspectedOf(yield* turn("inspect"));
+      expect(
+        flow(
+          Schema.decodeResult(Schema.fromJsonString(Schema.Record(Schema.String, PiServer))),
+          Result.getOrThrow,
+        )(details.servers),
+      ).toEqual(piServers(configured).given);
+      expect(details.extension).not.toContain("s3cr3t");
+      const prompt = pipe_(details.systemPrompt, Str.replace(/\s+/g, " "));
+      expect(prompt).toContain("this chat has linear-server, docs, refused");
+      expect(prompt).toContain("legacy (Pi does not speak SSE)");
+      expect(prompt).toContain("/mcp login <server>");
+    }),
+  ));
+
+type Notify = (message: string, kind: string) => void;
+type SessionStart = (
+  event: { readonly type: "session_start" },
+  ctx: { readonly ui: { readonly notify: Notify } },
+) => void;
+type Registered = readonly [string, Schema.Json];
+interface LoadedPi {
+  readonly registerMcpServer: (name: string, config: Schema.Json) => void;
+  readonly on: (event: string, handler: SessionStart) => void;
+}
+
+/** Pi as the extension meets it, refusing the server named `refused` as Pi refuses a name. */
+const refusingPi = (registered: Registered[], started: SessionStart[]): LoadedPi => ({
+  registerMcpServer: (name, config) => {
+    if (name === "refused") throw new Error("names registered by another extension throw");
+    registered.push([name, config]);
+  },
+  on: (event, handler) => {
+    if (event === "session_start") started.push(handler);
+  },
+});
+
+test("Collie's extension registers its server and the human's, survives one Pi refuses, and drops them from Pi's environment", () =>
+  withServers(configured, (driver, context) =>
+    Effect.gen(function* () {
+      const turn = yield* opened(driver, "pi-extension");
+      const { servers } = inspectedOf(yield* turn("inspect"));
+      Bun.env.COLLIE_CHAT_MCP_SERVERS = servers;
+      const registered: Registered[] = [];
+      const started: SessionStart[] = [];
+      const extension = yield* Effect.promise(
+        (): Promise<{ readonly default: (pi: LoadedPi) => void }> =>
+          import(`${context.dir}/pi-collie.ts`),
+      );
+      extension.default(refusingPi(registered, started));
+      expect(Bun.env.COLLIE_CHAT_MCP_SERVERS).toBeUndefined();
+      expect(registered[0]).toEqual([
+        expect.stringMatching(/^cf-[0-9a-f]{32}$/),
+        expect.objectContaining({ exposure: "direct" }),
+      ]);
+      expect(registered.slice(1)).toEqual([
+        ["linear-server", piServers(configured).given["linear-server"]!],
+        ["docs", piServers(configured).given["docs"]!],
+      ]);
+      const notices: string[] = [];
+      for (const handler of started)
+        handler({ type: "session_start" }, { ui: { notify: (message) => notices.push(message) } });
+      expect(notices).toEqual([
+        expect.stringContaining("refused: names registered by another extension throw"),
+      ]);
+    }),
+  ));
+
+test("a /mcp command goes to Pi as written, and what Pi says of it is the reply", () =>
+  withPi((driver) =>
+    Effect.gen(function* () {
+      const turn = yield* opened(driver, "pi-command");
+      const events = yield* turn("/mcp login linear-server");
+      expect(replies(events)).toEqual(["Pi ran: /mcp login linear-server"]);
+      expect(events.at(-1)).toMatchObject({ type: "RUN_FINISHED" });
+    }),
+  ));
+
+test("what Pi reports after its command's turn has ended comes with a later message's note, once", () =>
+  withPi((driver) =>
+    Effect.gen(function* () {
+      const turn = yield* opened(driver, "pi-after-command");
+      yield* turn("/mcp login linear-server");
+      // Pi may send it before or after the next message is written, so either next note may carry it.
+      const notes = [
+        inspectedOf(yield* turn("inspect")).prompt.message,
+        inspectedOf(yield* turn("inspect")).prompt.message,
+      ];
+      expect(
+        Arr.filter(notes, Str.includes("linear-server: connected after sign-in")),
+      ).toHaveLength(1);
+    }),
+  ));
+
+const notice = {
+  type: "extension_ui_request",
+  id: "late",
+  method: "notify",
+  message: "late",
+} as const;
+for (const [ending, record] of [
+  [
+    "a handled prompt",
+    { type: "response", command: "prompt", success: true, data: { disposition: "handled" } },
+  ],
+  ["a refused prompt", { type: "response", command: "prompt", success: false, error: "no" }],
+  ["a settled agent", { type: "agent_settled", aborted: false }],
+] as const)
+  test(`a command's turn ends with ${ending}, and a notice after it waits for the next message`, () => {
+    const state = piEvents("thread");
+    state.begin(true);
+    state.step(record);
+    expect(state.step(notice)).toEqual([]);
+    expect(state.reported()).toEqual(["late"]);
+  });
+
+test("what Pi reports during a model's turn comes with the next message's note, once", () =>
+  withPi((driver) =>
+    Effect.gen(function* () {
+      const turn = yield* opened(driver, "pi-reported");
+      expect(replies(yield* turn("Hi"))).toEqual(["Hello world !", "After agent_end"]);
+      const next = inspectedOf(yield* turn("inspect")).prompt.message;
+      expect(next).toContain("linear-server: needs sign-in, run /mcp login linear-server");
+      expect(next).toContain("Here");
+      const after = inspectedOf(yield* turn("inspect")).prompt.message;
+      expect(after).not.toContain("needs sign-in");
     }),
   ));
