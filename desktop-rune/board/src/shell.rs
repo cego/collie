@@ -1,9 +1,11 @@
 //! The window's frame: the sidebar that picks a page, the page under its toolbar, and the
 //! Flock chat as the trailing pane.
 
+mod files;
 pub mod panes;
 mod usage;
 
+pub use files::shell_quoted;
 pub use usage::{UsageEntry, usage_due, usage_entries};
 
 use crate::board::model::{Section, section_of};
@@ -339,10 +341,13 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
                 tab.focus(focused);
             }
         })
-        .on_paste(|app: &mut App, pasted: &str, _: &mut Tx| {
-            if let Some(tab) = app.shown_pane() {
-                tab.paste(pasted);
-            }
+        .on_paste_content(
+            |app: &mut App, pasted: &rune::ClipboardContent, _: &mut Tx| {
+                app.paste_into_pane(pasted)
+            },
+        )
+        .on_drop_files(|app: &mut App, files: &[std::path::PathBuf], _: &mut Tx| {
+            app.drop_on_pane(files.to_vec())
         })
 }
 
@@ -359,17 +364,17 @@ pub fn on_key(app: &mut App, key: &rune::KeyEvent, tx: &mut Tx) -> bool {
 }
 
 impl App {
-    /// The pane the record shows, while its Terminal tab is up.
-    fn shown_pane(&mut self) -> Option<&mut collie_desktop_terminal::view::Tab> {
-        let shown = self.record.open.is_some() && self.record_tab() == "terminal";
-        self.terminal.as_mut().filter(|_| shown)
-    }
-
-    /// A key typed into the shown pane, as its grid takes one.
+    /// A key typed into the shown pane, as its grid takes one. Ctrl+V reads the clipboard
+    /// first, so files on it are given to the pane rather than left to the pane's program.
     fn type_into_pane(&mut self, key: &rune::KeyEvent, tx: &mut Tx) -> bool {
         let Some(tab) = self.shown_pane() else {
             return false;
         };
+        if files::is_ctrl_v(key) {
+            let key = key.clone();
+            tx.read_clipboard(move |app: &mut App, held, _| app.ctrl_v_into_pane(&key, held));
+            return true;
+        }
         match tab.key(key) {
             Keyed::Passed => false,
             Keyed::Taken => true,

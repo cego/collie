@@ -159,6 +159,7 @@ const served = (main: Channel<ToView, ToMain>) =>
         stagePaths: () => Effect.die("not asked"),
         pickFiles: () => Effect.die("not asked"),
         clipboardFiles: () => Effect.die("not asked"),
+        placeFiles: () => Effect.die("not asked"),
         answer: () => Effect.die("not asked"),
         transcript: () => Effect.die("not asked"),
         conversations: () => Effect.die("not asked"),
