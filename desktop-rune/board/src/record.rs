@@ -99,6 +99,11 @@ pub struct Asked {
     pub picked: Option<String>,
     pub edit: TextEdit,
     pub sent: Option<String>,
+    /// The question as the board has it, when it does: then it is answered through the
+    /// board's questionnaire, with Hold and steering, as `FlowDecision.vue` substitutes it.
+    pub board: Option<collie_desktop_protocol::generated::Question>,
+    /// Words for the agent instead of an answer.
+    pub steer: TextEdit,
 }
 
 pub struct Record {
@@ -433,6 +438,13 @@ impl App {
         if let Some(record) = &mut self.record.open {
             record.chosen = Some(tab.into());
         }
+        // A pane is attached only while its tab shows it.
+        if self.record_tab() != "terminal"
+            && let Some(open) = self.terminal.take()
+        {
+            open.leave();
+            self.record.terminal_agent = None;
+        }
         self.tab_opened();
     }
 
@@ -459,8 +471,12 @@ impl App {
         }
     }
 
-    /// Opens the shown record's terminal on the agent asked for, unless it is open on it.
+    /// Opens the shown record's terminal on the agent asked for, unless it is open on it; only
+    /// while Terminal is the tab shown, so no pane is attached unseen.
     pub fn open_terminal(&mut self) {
+        if self.record_tab() != "terminal" {
+            return;
+        }
         let Some(record) = &self.record.open else {
             return;
         };

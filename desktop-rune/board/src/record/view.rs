@@ -1246,7 +1246,6 @@ fn inspector_view(app: &App, record: &Record, map: &flow::FlowMap, k: &Kit) -> O
 }
 
 fn form_view(app: &App, record: &Record, k: &Kit) -> Option<El> {
-    let _ = app;
     let form = record.form.as_ref()?;
     let cancel = Button::new("Cancel")
         .variant(ButtonVariant::Ghost)
@@ -1301,7 +1300,10 @@ fn form_view(app: &App, record: &Record, k: &Kit) -> Option<El> {
                         .child(cancel),
                 )
         }
-        Form::Answer { questions, at, .. } => answer_form(questions, *at, cancel, k),
+        // Every question answered, or gone from the board: the form is done.
+        Form::Answer { questions, .. } => {
+            answer_form(app, record, questions, app.question_shown()?, cancel, k)
+        }
         Form::Offer { offer, fields, .. } => offer_form(offer.as_ref(), fields, cancel, k),
         Form::Proposal { proposal, .. } => col().gap(8.0).child(markdown(&proposal.text, k)).child(
             row()
@@ -1428,12 +1430,27 @@ fn edit_of(app: &mut App) -> &mut rune::edit::TextEdit {
     }
 }
 
-fn answer_form(questions: &[super::Asked], at: usize, cancel: El, k: &Kit) -> El {
+fn steer_of(app: &mut App) -> &mut rune::edit::TextEdit {
+    let shown = app.question_shown().unwrap_or_default();
+    match app.record.open.as_mut().and_then(|r| r.form.as_mut()) {
+        Some(Form::Answer { questions, .. }) => &mut questions[shown].steer,
+        _ => unreachable!("an answer form is open"),
+    }
+}
+
+fn answer_form(
+    app: &App,
+    record: &Record,
+    questions: &[super::Asked],
+    at: usize,
+    cancel: El,
+    k: &Kit,
+) -> El {
     let Some(one) = questions.get(at) else {
         return col();
     };
     let n = questions.len();
-    let left = questions.iter().filter(|q| q.sent.is_none()).count();
+    let left = (0..n).filter(|i| !app.question_settled(*i)).count();
     let step = row()
         .key("question-step")
         .gap(4.0)
@@ -1482,6 +1499,10 @@ fn answer_form(questions: &[super::Asked], at: usize, cancel: El, k: &Kit) -> El
         .w_full()
         .child(step)
         .child(markdown(&one.asked, k));
+    if let Some(question) = &one.board {
+        let view = app.questionnaire_of(&record.installation, question).view();
+        return board_question(asked, &view, one, left, cancel, k);
+    }
     if let Some(sent) = &one.sent {
         return asked.child(
             row()
@@ -1561,12 +1582,168 @@ fn answer_form(questions: &[super::Asked], at: usize, cancel: El, k: &Kit) -> El
                     })
                     .variant(ButtonVariant::Submit)
                     .disabled(!ready)
-                    .on_press(|app: &mut App| app.send_form(None))
+                    .on_press(|app: &mut App| app.answer_in_record())
                     .build(k)
                     .key("form-send"),
                 )
                 .child(cancel),
         )
+}
+
+/// A question the board has, as its questionnaire has it: its options and Hold the Run, or a
+/// value typed; the words for the agent instead; and how the last send went.
+fn board_question(
+    asked: El,
+    view: &crate::board::questionnaire::QuestionnaireView,
+    one: &super::Asked,
+    left: usize,
+    cancel: El,
+    k: &Kit,
+) -> El {
+    use crate::board::questionnaire::HOLD;
+    let open = !view.sending && !view.settled;
+    let shortfall = view
+        .shortfall
+        .clone()
+        .map(|said| quiet(said, k).key("question-shortfall"));
+    let options = (!view.words).then(|| {
+        col()
+            .key("question-options")
+            .role("radiogroup")
+            .label(view.text.clone())
+            .focus_group()
+            .gap(10.0)
+            .w_full()
+            .children(view.rows.iter().map(|(row, checked)| {
+                let id = row.id.clone();
+                let mut said = row.title.clone();
+                if row.recommended {
+                    said.push_str(" · Recommended");
+                }
+                let mut item = rune_kit::RadioItem::new(said, *checked)
+                    .disabled(row.disabled || !open)
+                    .on_select(move |app: &mut App| app.pick_in_record(id.clone()));
+                if let Some(about) = row
+                    .why
+                    .clone()
+                    .filter(|_| row.disabled)
+                    .or(row.detail.clone())
+                {
+                    item = item.description(about);
+                }
+                let key = if row.id == HOLD {
+                    "option-hold".to_string()
+                } else {
+                    format!("option-{}", row.id)
+                };
+                item.build(k).key(key)
+            }))
+    });
+    let typed = view.words.then(|| {
+        TextInput::new(&one.edit)
+            .width(None)
+            .placeholder("Your answer")
+            .label("Your answer")
+            .disabled(!open)
+            .on_edit(edit_of)
+            .on_submit(|app: &mut App, _: &mut Tx| app.answer_in_record())
+            .build(k)
+            .key("form-answer-text")
+    });
+    let ready = open
+        && if view.words {
+            !one.edit.text.trim().is_empty()
+        } else {
+            view.submit
+        };
+    let held = view
+        .rows
+        .iter()
+        .any(|(row, checked)| *checked && row.id == HOLD);
+    let answer = row()
+        .gap(8.0)
+        .child(
+            Button::new(if held {
+                "Hold the Run"
+            } else if left > 1 {
+                "Answer and next"
+            } else {
+                "Answer"
+            })
+            .variant(ButtonVariant::Submit)
+            .disabled(!ready)
+            .on_press(|app: &mut App| app.answer_in_record())
+            .build(k)
+            .key("form-send"),
+        )
+        .child(cancel);
+    let steer_ready = !view.steer_disabled && !view.sending && !view.settled;
+    let words = !one.steer.text.trim().is_empty();
+    // A steer that failed keeps its words in the questionnaire; Send tries them again.
+    let again = !words && view.steer_send;
+    let steering = col()
+        .key("form-steer")
+        .gap(6.0)
+        .w_full()
+        .child(
+            text("Or tell the agent instead")
+                .font(k.ty.text_xsmall_medium)
+                .color(k.c.text_muted),
+        )
+        .child(
+            row()
+                .gap(8.0)
+                .center_y()
+                .w_full()
+                .child(
+                    TextInput::new(&one.steer)
+                        .width(None)
+                        .placeholder("What should it do?")
+                        .label("Words for the agent instead of an answer")
+                        .disabled(!steer_ready)
+                        .on_edit(steer_of)
+                        .on_submit(|app: &mut App, _: &mut Tx| app.steer_in_record())
+                        .build(k)
+                        .key("form-steer-text")
+                        .grow(1.0)
+                        .min_w(0.0),
+                )
+                .child(
+                    Button::new(if again {
+                        "Try again".to_string()
+                    } else {
+                        view.steer_label.clone()
+                    })
+                    .variant(ButtonVariant::Outline)
+                    .disabled(!steer_ready || !(words || again))
+                    .on_press(|app: &mut App| app.steer_in_record())
+                    .build(k)
+                    .key("form-steer-send"),
+                ),
+        )
+        .children(
+            view.steer_why
+                .clone()
+                .filter(|_| view.steer_disabled)
+                .map(|why| quiet(why, k).key("form-steer-why")),
+        );
+    let status = view.status.clone().map(|said| {
+        text(said)
+            .key("form-status")
+            .role("status")
+            .live_region(rune::LiveRegion::Polite)
+            .font(k.ty.text_small)
+            .color(k.c.text_base)
+            .wrap()
+            .w_full()
+    });
+    asked
+        .children(shortfall)
+        .children(options)
+        .children(typed)
+        .child(answer)
+        .children(status)
+        .child(steering)
 }
 
 fn summary_tab(app: &App, record: &Record, k: &Kit) -> El {
@@ -1919,7 +2096,16 @@ impl App {
         } else if writing {
             self.close_diff_comment();
         }
-        editing || writing
+        // Otherwise it closes the form open on Flow, as stable's dialogs close.
+        let form = !editing
+            && !writing
+            && self
+                .record
+                .open
+                .as_mut()
+                .and_then(|r| r.form.take())
+                .is_some();
+        editing || writing || form
     }
 
     /// Writes the composer's words into the draft being edited.

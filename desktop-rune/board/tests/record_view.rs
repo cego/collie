@@ -851,3 +851,33 @@ fn the_forms_fields_span_their_form_not_a_fixed_280_points() {
         "the answer field is {field} wide in a form {form} wide"
     );
 }
+
+#[test]
+fn a_record_attaches_its_terminal_only_while_its_terminal_tab_is_shown() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    runtime.update(|app, _| {
+        app.open_record(
+            "inst-build".into(),
+            "r1".into(),
+            "Build box".into(),
+            Some("log"),
+        )
+    });
+    harness.fake.push("runDetail", Ok(with_diff()));
+    settle(&mut runtime, &harness, 100.0);
+    assert!(runtime.state.terminal.is_none(), "not on Log");
+    // Picking an agent elsewhere, as the inspector's Watch it does first, attaches nothing.
+    runtime.update(|app, _| app.pick_agent("build-1".into()));
+    assert!(
+        runtime.state.terminal.is_none(),
+        "not until Terminal is shown"
+    );
+    runtime.update(|app, _| app.show_tab("terminal"));
+    assert!(runtime.state.terminal.is_some(), "on Terminal it attaches");
+    runtime.update(|app, _| app.show_tab("log"));
+    assert!(
+        runtime.state.terminal.is_none(),
+        "leaving Terminal leaves the pane"
+    );
+}
