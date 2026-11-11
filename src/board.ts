@@ -280,7 +280,7 @@ export interface Sentence {
   /** A live agent of the Run's, which the next move can be handed to. */
   agent: string | null;
   /** When the forge last answered about what is owed, once that is old or its last ask failed. */
-  answered?: { readonly forge: string; readonly ago: string; readonly failed: boolean } | null;
+  answered?: { readonly forge: string; readonly ago: string | null; readonly failed: boolean } | null;
   /**
    * Where a human is being waited for, when no Decision says: the pane of the agent
    * herdr will not prompt, or the step the Driver recorded itself waiting on. Null
@@ -567,6 +567,7 @@ export function sentenceFor(facts: Sentence): string {
 
 function answeredLine(answered: Sentence["answered"]): string {
   if (answered == null) return "";
+  if (answered.ago === null) return ` ${answered.forge} could not be read; it has not answered yet.`;
   return answered.failed
     ? ` ${answered.forge} could not be read; it last answered ${answered.ago}.`
     : ` ${answered.forge} last answered ${answered.ago}.`;
@@ -1782,20 +1783,21 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         const dated = Arr.flatMap(fates, (one) => {
           const facts = forge.get(one.id);
           const ref = readMrRef(one.mr);
-          if (one.settlement.by !== null || facts?.read === undefined || ref === null) return [];
-          const read = epochMs(facts.read);
+          if (one.settlement.by !== null || facts === undefined || ref === null ||
+            (facts.read === undefined && facts.asked === undefined)) return [];
+          const read = facts.read === undefined ? null : epochMs(facts.read);
           return [
             {
               forge: forgeOfRef(ref) === "github" ? "GitHub" : "GitLab",
               read,
-              failed: epochMs(facts.asked ?? facts.read) > read,
+              failed: read === null || (facts.asked !== undefined && epochMs(facts.asked) > read),
             },
           ];
-        }).sort((a, b) => Number(b.failed) - Number(a.failed) || a.read - b.read)[0];
+        }).sort((a, b) => Number(b.failed) - Number(a.failed) || (a.read ?? 0) - (b.read ?? 0))[0];
         const answeredAt = (now: number) =>
-          dated === undefined || (!dated.failed && now - dated.read <= 2 * MERGE_POLL_MS)
+          dated === undefined || (!dated.failed && dated.read !== null && now - dated.read <= 2 * MERGE_POLL_MS)
             ? null
-            : { forge: dated.forge, ago: agoMs(dated.read, now), failed: dated.failed };
+            : { forge: dated.forge, ago: dated.read === null ? null : agoMs(dated.read, now), failed: dated.failed };
         const sentenceAt = (now: number) =>
           go !== undefined
             ? (shippingFailure ??

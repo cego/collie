@@ -76,7 +76,7 @@ export const MR_STATES_FILE = "board/mr-states.json";
 
 const StateSchema = Schema.Literals(["open", "merged", "closed", "on-stage", "in-prod"]);
 const EntrySchema = Schema.Struct({
-  state: StateSchema,
+  state: Schema.optionalKey(StateSchema),
   checks: Schema.optionalKey(ForgeChecks),
   head: Schema.optionalKey(Schema.NullOr(Schema.String)),
   draft: Schema.optionalKey(Schema.Boolean),
@@ -220,7 +220,7 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
       if (answered === null) {
         const known = forge.get(id);
         // What it last said stands, dated as it was; only the failed ask is new.
-        if (known !== undefined) forge.set(id, { ...known, asked: now });
+        forge.set(id, { ...(known ?? { checks: { state: "unknown" }, head: null }), asked: now });
       } else {
         const { state, facts, by, mergedAt } = answered;
         opts.states.set(id, state);
@@ -514,6 +514,8 @@ export const writeMrStates = Effect.fn("Merges.write")(function* (
     const facts = forge.get(label) ?? factsOf(entries.get(label));
     entries.set(label, facts === null ? { state } : { state, ...facts });
   }
+  for (const [label, facts] of forge)
+    if (!states.has(label)) entries.set(label, { ...entries.get(label), ...facts });
   yield* fs.makeDirectory(path.dirname(file), { recursive: true });
   yield* fs.writeFileString(
     file,
@@ -549,13 +551,16 @@ const answers = Effect.fn("Merges.answers")(function* (stateDir: string) {
 
 /** Each merge request's state, as the last watch learned it. */
 export const readMrStates = Effect.fn("Merges.read")(function* (stateDir: string) {
-  return new Map(Arr.map(yield* answers(stateDir), ([label, entry]) => [label, entry.state]));
+  return new Map(Arr.flatMap(yield* answers(stateDir), ([label, entry]) =>
+    entry.state === undefined ? [] : [[label, entry.state] as const],
+  ));
 });
 
 /** What the forge said of each merge request's checks; an entry in the old shape has none. */
 export const readForge = Effect.fn("Merges.readForge")(function* (stateDir: string) {
   const found = new Map<string, ForgeFacts>();
-  for (const [label, entry] of yield* answers(stateDir)) {
+  for (const [label, entry] of yield* readEntries(stateDir)) {
+    if (entry.read === undefined && entry.asked === undefined) continue;
     const facts = factsOf(entry);
     if (facts !== null) found.set(label, facts);
   }

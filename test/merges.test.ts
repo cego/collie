@@ -641,6 +641,26 @@ test("stored answers keep their read time and head across a restart, and an old 
     }),
   ));
 
+test("a failed first forge read survives a restart without inventing a settlement answer", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const { stateDir, board } = yield* seeded();
+      const at = epochMs("2026-09-17T10:00:00Z");
+      yield* watch(stateDir, forge("gitlab", { loggedIn: [] }), yield* board({ now: at }), at);
+      const [card] = yield* board({ now: at + 60_000 });
+      expect(card!.sentence).toContain("GitLab could not be read; it has not answered yet.");
+      expect(card!.landed).toBe(false);
+      expect(yield* readMrStates(stateDir)).toEqual(new Map());
+      const facts = (yield* readForge(stateDir)).get(`${GITLAB}!65`);
+      expect(facts?.asked).toBe("2026-09-17T10:00:00.000Z");
+      expect(facts?.read).toBeUndefined();
+      yield* watch(stateDir, gitlab("open"), [card!], at + MERGE_POLL_MS);
+      const [recovered] = yield* board({ now: at + MERGE_POLL_MS });
+      expect(recovered!.sentence).not.toContain("could not be read");
+      expect(recovered!.mrState).toBe("open");
+    }),
+  ));
+
 test("a forge that fails to answer leaves the stored answer and its read time, and the card says so", () =>
   runWithForge(
     Effect.gen(function* () {
@@ -1652,13 +1672,13 @@ test("a merged GitHub pull request lands its card, by github's word", () =>
     }),
   ));
 
-test("no gh, or a gh nobody logged in to, leaves the card unchecked and says nothing of it", () =>
+test("no gh, or a gh nobody logged in to, leaves the card unchecked and discloses the failed read", () =>
   runWithForge(
     Effect.gen(function* () {
       for (const over of [{ installed: false }, { loggedIn: [] }]) {
         const { card } = yield* cardAfter(PR, github("open", [], over));
         expect(card.checks).toEqual({ state: "unchecked" });
-        expect(card.sentence).toBe("cego/collie#30 is open; nothing has checked it.");
+        expect(card.sentence).toBe("cego/collie#30 is open; nothing has checked it. GitHub could not be read; it has not answered yet.");
       }
     }),
   ));
