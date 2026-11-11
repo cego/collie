@@ -645,13 +645,15 @@ Examples:
 collie run start review --input target=https://gitlab.example.com/acme/app/-/merge_requests/2 --input plan= --input proves=
 collie run start review --input target=https://github.com/acme/app/pull/30 --input plan= --input proves=
 collie run start review --input target=worktree --input plan= --input proves=
-collie run start implement --input plan=ENG-123 --input then=
+collie run start implement --input plan=ENG-123 --input recovery= --input then=
 collie run start plan --input goal="one registry" --input then= --input workspace=projects-root
 ```
 
 `plan` takes `goal` and `then`. `then=implement` builds the plan as soon as its tickets are
 written, with nothing asked of anyone; empty, its end menu is asked
-([`plan`](workflows.md#plan)). `implement` takes `plan` and `then`: `then=release` releases
+([`plan`](workflows.md#plan)). `implement` takes `plan`, `recovery`, and `then`. Leave
+`recovery=` empty for new work; an explicit follow-up supplies the finished Run it recovers.
+`then=release` releases
 its merge request on a human's go, `finish` ends at the merge request, and empty asks
 ([`implement`](workflows.md#implement)).
 
@@ -1024,7 +1026,7 @@ inherits that one's as it stands. `run intent` reads and amends it; `run intent
 verification` names one of the run's checks through the host (below).
 
 ```sh
-collie --json run start implement --input plan=./plans/steering \
+collie --json run start implement --input plan=./plans/steering --input recovery= \
   --goal "land steering behind the existing envelope" \
   --constraint "rule:protected_paths:src/**,test/**" --severity block \
   --constraint "no new dependencies"
@@ -1422,7 +1424,7 @@ and as attention `drift_unresolved`, and a cross-run check that was owed and nev
 ## Outcomes
 
 ```sh
-collie run start implement --input plan=<source> --input outcome=bug
+collie run start implement --input plan=<source> --input recovery= --input outcome=bug
 ```
 
 What kind of result a run has to prove, and so what evidence closes it:
@@ -1816,7 +1818,7 @@ its own `.collie/verify.json` at its own base, or remembered checks. No start is
 checks.
 
 ```sh
-collie run start implement --input plan=… \
+collie run start implement --input plan=… --input recovery= \
   --verify '{"name":"tests","executable":"bun","argv":["test"],"cwd":"worktree"}'
 ```
 
@@ -2148,8 +2150,8 @@ the effect. Choose one per intended action — any unique string — and reuse i
 retry of that action:
 
 ```sh
-collie --json run start implement --input plan="$PWD/plan" --request-id start-plan-1 \
-  || collie --json run start implement --input plan="$PWD/plan" --request-id start-plan-1
+collie --json run start implement --input plan="$PWD/plan" --input recovery= --request-id start-plan-1 \
+  || collie --json run start implement --input plan="$PWD/plan" --input recovery= --request-id start-plan-1
 ```
 
 A receipt is reserved before the action starts. If execution is interrupted before its
