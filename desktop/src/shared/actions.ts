@@ -85,6 +85,11 @@ export const actionRunner = (
 export const offerKey = (offer: Pick<OfferView, "id" | "run">): string =>
   offer.run === undefined ? offer.id : `${offer.run}:${offer.id}`;
 
+export const offeringOf = (runId: string, offer: Pick<OfferView, "id" | "run"> | null) => ({
+  runId: offer?.run ?? runId,
+  offer: offer?.id ?? null,
+});
+
 export const chosenOffer = (offers: ReadonlyArray<OfferView>, chosen: string | null) =>
   Option.getOrUndefined(Arr.findFirst(offers, (offer) => offerKey(offer) === chosen));
 
