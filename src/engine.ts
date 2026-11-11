@@ -6637,6 +6637,8 @@ export interface RegistryApi {
   readonly resume: (
     runId: string,
     recoveryPark?: string,
+    /** Refuse rather than clear a Stop: a Heal's resume, which must not undo a person's. */
+    keepStop?: boolean,
   ) => Effect.Effect<typeof Controlled.Type, HostRefused, HostServices>;
   /**
    * What this Run offers to do next, decided by the module as it is now rather than as it
@@ -8716,7 +8718,12 @@ const makeRegistry: (
     set: boolean,
     recovered?: ReadonlySet<string>,
     alone = false,
+    keepStop = false,
   ) {
+    if (keepStop && control === STOP && !set && (yield* controlsOf(runId)).includes(STOP))
+      return yield* new HostRefused({
+        reason: `${runId}: a person stopped it, and only a person resumes it`,
+      });
     // A stop reaches the children a Run started: they are its work too.
     const runs =
       control === STOP && !alone ? [runId, ...descendantsOf(yield* store.runs, runId)] : [runId];
@@ -9358,7 +9365,11 @@ const makeRegistry: (
 
     recover: recover().pipe(Effect.map((result) => result.registrations)),
 
-    resume: Effect.fn("Engine.Registry.resume")(function* (runId: string, recoveryPark?: string) {
+    resume: Effect.fn("Engine.Registry.resume")(function* (
+      runId: string,
+      recoveryPark?: string,
+      keepStop = false,
+    ) {
       const recovered = yield* recover(
         new Set(
           recoveryPark === undefined
@@ -9369,7 +9380,7 @@ const makeRegistry: (
       entryCauses.set(runId, "resumed");
       const controlled = yield* (
         recoveryPark === undefined
-          ? applyControl(runId, STOP, false, recovered.takenUp)
+          ? applyControl(runId, STOP, false, recovered.takenUp, false, keepStop)
           : Effect.gen(function* () {
               const found = yield* routed(runId);
               const woken = yield* wake(runId, found, recoveryPark);
@@ -9380,7 +9391,7 @@ const makeRegistry: (
       if (controlled._tag === "Failure")
         return {
           ...recorded,
-          applied: recovered.takenUp.has(runId),
+          applied: !keepStop && recovered.takenUp.has(runId),
           detail: controlled.failure.reason,
         };
       if (recovered.takenUp.has(runId) || controlled.success.woken.includes(runId))
