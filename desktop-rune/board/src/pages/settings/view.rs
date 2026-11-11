@@ -1811,7 +1811,7 @@ fn own_view(app: &App, k: &Kit) -> El {
         &crate::pages::machines::rows(app),
         &readings,
         collie_desktop_protocol::epoch_ms(),
-        &crate::pages::clock::Zone::local(),
+        &crate::pages::clock::Zone::here(),
     );
     const COLUMNS: [(&str, f32); 6] = [
         ("Machine", 0.19),
