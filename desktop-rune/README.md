@@ -150,7 +150,7 @@ work under its own Run, as `askedFor` does: an agent of a Run under the card's i
 there. The pane stays on the agent it opened on while agents start and stop work; picking an
 agent or Reconnect opens it again. Until the core says `Opened`, what is typed waits and no
 size is sent, since `terminalSend` would reach the terminal shown before. The tab says how far
-the pane got: Connecting, Connected, No pane (with Open in herdr, the core's `goToPane`), Not
+the pane got: Connecting, Connected, No pane, Not
 connected or Disconnected with the core's reason and Reconnect; a stream that ends without a
 word says so. Only a live pane draws a cursor. The pane lands at once, with no fade or glide.
 While nothing has focus, the window's `on_key` (`shell::on_key`) types into the shown pane, as

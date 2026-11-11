@@ -201,8 +201,6 @@ pub struct Records {
     pub terminal_agent: Option<String>,
     /// The cols and rows the last terminal was laid out at, which the next one opens at.
     pub terminal_size: Option<(u16, u16)>,
-    /// What Open in herdr did, or why it could not.
-    pub terminal_said: Option<String>,
     /// The tab the record a card opens now opens on; its first tab when none.
     open_on: Option<&'static str>,
     images: Option<rune::ImageCache>,
@@ -545,7 +543,6 @@ impl App {
         let Some(go_to) = &self.go_to else { return };
         self.terminal = Some(go_to(payload, machine, self.opened));
         self.record.terminal_agent = asked.map(|tab| tab.name);
-        self.record.terminal_said = None;
     }
 
     /// Switches the terminal to another of the Task's agents.

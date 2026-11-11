@@ -1,14 +1,12 @@
 //! Go to pane in the app: a pane's `terminal` stream opened on the core, what it says applied
-//! to the terminal it was opened for, and Open in herdr where there is no pane to show.
+//! to the terminal it was opened for.
 
-use crate::calls::{CallError, Post};
+use crate::calls::Post;
 use crate::{App, GoTo};
 use collie_desktop_protocol::client::{Client, RpcError};
-use collie_desktop_protocol::generated::{GoToPaneSuccess, TerminalEvent};
-use collie_desktop_terminal::input::pane_where;
+use collie_desktop_protocol::generated::TerminalEvent;
 use collie_desktop_terminal::pane::Pane;
 use collie_desktop_terminal::view::Tab;
-use serde_json::json;
 
 /// What a pane's `terminal` stream said.
 #[derive(Debug)]
@@ -75,28 +73,5 @@ impl App {
             Heard::Failed(why) => tab.failed_with(why),
             Heard::Closed => tab.closed(),
         }
-    }
-
-    /// Opens herdr's own client on the open Run's workspace, in a terminal of this computer's.
-    pub fn open_in_herdr(&mut self) {
-        let (Some(record), Some(core)) = (&self.record.open, self.core.clone()) else {
-            return;
-        };
-        let machine = record.machine.clone();
-        let payload = json!({"installation": record.installation, "runId": record.run});
-        self.record.terminal_said = Some("Opening herdr…".into());
-        core.request(
-            "goToPane",
-            payload,
-            move |app: &mut App, went: Result<GoToPaneSuccess, CallError>| {
-                app.record.terminal_said = Some(match went {
-                    Ok(went) if went.opened => {
-                        format!("Opened {} in a terminal", pane_where(&machine, &went.at))
-                    }
-                    Ok(went) => format!("No terminal app found: run {}", went.command),
-                    Err(why) => format!("Could not open herdr: {why}"),
-                });
-            },
-        );
     }
 }

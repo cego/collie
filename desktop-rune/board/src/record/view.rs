@@ -3145,11 +3145,6 @@ fn terminal_tab(app: &App, record: &Record, k: &Kit) -> El {
                 .truncate()
                 .min_w(0.0)
         });
-    let herdr = Button::new("Open in herdr")
-        .variant(ButtonVariant::GhostMuted)
-        .on_press(|app: &mut App| app.open_in_herdr())
-        .build(k)
-        .key("open-in-herdr");
     let bar = row()
         .key("terminal-bar")
         .gap(12.0)
@@ -3161,16 +3156,12 @@ fn terminal_tab(app: &App, record: &Record, k: &Kit) -> El {
         .children(place)
         .child(rune::spacer())
         .children(away)
-        .child(status)
-        .child(herdr);
+        .child(status);
     let plain = |why: &str| crate::shell::panes::plainly(why, &record.machine);
     let why = match &link {
         Link::Failed(why) => Some(format!("Couldn't connect to the pane: {}", plain(why))),
         Link::Ended(why) => Some(format!("The pane disconnected: {}", plain(why))),
-        Link::NoPane => Some(
-            "This Run has no live agent's pane to show here; Open in herdr shows its workspace."
-                .to_string(),
-        ),
+        Link::NoPane => Some("This Run has no live agent's pane to show here.".to_string()),
         Link::Connecting | Link::Live => None,
     };
     let ended = why.map(|why| {
@@ -3202,14 +3193,6 @@ fn terminal_tab(app: &App, record: &Record, k: &Kit) -> El {
                     .build(k)
                     .key("terminal-reconnect"),
             )
-    });
-    let herdr_said = app.record.terminal_said.clone().map(|said| {
-        text(said)
-            .key("terminal-said")
-            .role("status")
-            .font(k.ty.small)
-            .color(k.c.text_muted)
-            .wrap()
     });
     let waiting = |key: &str, said: &str| {
         col()
@@ -3250,7 +3233,6 @@ fn terminal_tab(app: &App, record: &Record, k: &Kit) -> El {
         .transition(Transition::none())
         .child(bar)
         .children(ended)
-        .children(herdr_said)
         .child(
             col()
                 .key("terminal-body")

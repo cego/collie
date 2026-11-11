@@ -5,7 +5,6 @@
 
 mod support;
 
-use collie_desktop_board::calls::CallError;
 use collie_desktop_board::calls::testing::Harness;
 use collie_desktop_board::{App, view};
 use collie_desktop_protocol::client::RpcError;
@@ -16,7 +15,7 @@ use collie_desktop_terminal::view::Tab;
 use rune::{Env, Runtime};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
-use support::{said, settle, tap};
+use support::{said, tap};
 
 const RUN: &str = "run-1.implement";
 /// The working agent's own Run, one under the card's.
@@ -226,7 +225,7 @@ fn a_pane_that_ended_says_it_disconnected_dims_what_it_drew_and_connects_again()
 }
 
 #[test]
-fn a_run_with_no_pane_says_so_and_opens_herdr_on_its_workspace() {
+fn a_run_with_no_pane_says_so_and_offers_no_way_out_to_herdr() {
     let harness = Harness::new();
     let (app, _) = app(&harness, "working");
     let mut runtime = runtime(app, true);
@@ -241,39 +240,11 @@ fn a_run_with_no_pane_says_so_and_opens_herdr_on_its_workspace() {
     );
     assert!(said(
         &runtime,
-        "This Run has no live agent's pane to show here"
+        "This Run has no live agent's pane to show here."
     ));
     assert!(!keys(&runtime).iter().any(|k| k == "terminal-cursor"));
-    let mut at = 1.0;
-    tap(&mut runtime, "open-in-herdr", &mut at);
-    assert_eq!(
-        harness.fake.asked_of("goToPane"),
-        [json!({"installation": "i-vm", "runId": RUN})]
-    );
-    harness.fake.answer(
-        "goToPane",
-        Ok(
-            json!({"at": {"session": null, "workspace": "Front door", "tab": null},
-            "command": "herdr --remote mk@vm", "opened": false}),
-        ),
-    );
-    settle(&harness, &mut runtime);
-    runtime.frame(at);
-    assert!(said(
-        &runtime,
-        "No terminal app found: run herdr --remote mk@vm"
-    ));
-    harness.fake.will_answer(
-        "goToPane",
-        Err(CallError("that Machine is not connected".into())),
-    );
-    tap(&mut runtime, "open-in-herdr", &mut at);
-    settle(&harness, &mut runtime);
-    runtime.frame(at);
-    assert!(said(
-        &runtime,
-        "Could not open herdr: that Machine is not connected"
-    ));
+    assert!(!keys(&runtime).iter().any(|k| k == "open-in-herdr"));
+    assert!(!said(&runtime, "Open in herdr"), "herdr is not offered");
 }
 
 #[test]
