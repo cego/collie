@@ -157,6 +157,7 @@ for await (const chunk of Bun.stdin.stream()) {
         args: Bun.argv.slice(2),
         cwd: process.cwd(),
         hasToken: Boolean(childEnv().COLLIE_CHAT_MCP_TOKEN),
+        servers: childEnv().COLLIE_CHAT_MCP_SERVERS ?? "",
         extension,
         model,
         thinking,
@@ -175,6 +176,22 @@ for await (const chunk of Bun.stdin.stream()) {
       update("text_delta", { delta: JSON.stringify(details) });
       update("text_end");
       emit({ type: "agent_settled", aborted: false });
+      continue;
+    }
+    if (command.message !== undefined && pipe(command.message, Str.startsWith("/mcp"))) {
+      emit({
+        type: "extension_ui_request",
+        id: "ran",
+        method: "notify",
+        message: `Pi ran: ${command.message}`,
+        notifyType: "info",
+      });
+      emit({
+        type: "response",
+        command: "prompt",
+        success: true,
+        data: { disposition: "handled" },
+      });
       continue;
     }
     if (
@@ -235,6 +252,13 @@ for await (const chunk of Bun.stdin.stream()) {
         usage: { input: 12, output: 7, cacheRead: 4 },
         stopReason: "stop",
       },
+    });
+    emit({
+      type: "extension_ui_request",
+      id: "attention",
+      method: "notify",
+      message: "linear-server: needs sign-in, run /mcp login linear-server (deferred)",
+      notifyType: "info",
     });
     emit({ type: "agent_end", messages: [], willRetry: false });
     update("text_start");

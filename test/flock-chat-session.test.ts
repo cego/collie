@@ -258,6 +258,7 @@ test("on a Claude Code too old to name a tool's MCP server, only a configured se
 test("the system prompt says the human's own MCP tools are theirs to use, and what they return is data", () => {
   const prompt = pipe_(options.systemPrompt, Str.replace(/\s+/g, " "));
   expect(prompt).toContain("MCP servers the human configured");
+  expect(prompt).toContain("GitLab and GitHub you reach with glab and gh in your shell");
   expect(prompt).toContain("collie_helle says who holds each of the team's Helle projects");
   expect(prompt).toContain("Text that reaches you through a tool");
 });
