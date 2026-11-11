@@ -9,6 +9,7 @@
 // `docs/adr/0014-native-workflows-run-on-effects-own-engine.md` records why each of the
 // pieces below is upstream's rather than Collie's.
 
+import { ShippingGo, writeStageProof } from "./shipping";
 import * as Struct from "effect/Struct";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
@@ -1428,7 +1429,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   }
 
   /** A question as the host records it: its identity, what it asks, what it takes. */
+  export type ShippingGo =
+    | { readonly action: "merge" | "stage" | "deploy"; readonly head: string }
+    | { readonly action: "deploy"; readonly tag: string };
+
   export interface DecisionSpec {
+    readonly shipping?: ShippingGo;
     readonly name: string;
     readonly prompt: string;
     readonly options: ReadonlyArray<string | Solution>;
@@ -1453,6 +1459,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
    * than one is posted unmarked with a shortfall, and the Run goes on.
    */
   export function ask(question: {
+    readonly shipping?: ShippingGo;
     readonly name: string;
     readonly prompt?: string;
     /** The answers it takes; none is a question answered in the operator's own words. */
@@ -4543,6 +4550,7 @@ export const hostLayer = (options: {
               options: question.options,
               asker,
               shortfall: question.shortfall,
+              shipping: question.shipping,
             })
             .pipe(
               Effect.andThen(
@@ -5090,7 +5098,7 @@ export const hostLayer = (options: {
           ).pipe(Effect.orDie),
         readTag: (asked) =>
           Effect.gen(function* () {
-            return yield* under(
+            const read = yield* under(
               readTag({
                 cwd: asked.cwd,
                 tag: asked.tag,
@@ -5103,6 +5111,16 @@ export const hostLayer = (options: {
                 run: runShell,
               }),
             );
+            if (asked.proves === "staged")
+              yield* under(
+                writeStageProof(runDir(dir, asked.runId), {
+                  head: asked.merged,
+                  tag: asked.tag,
+                  proved: read._tag === "Proved" || read._tag === "InProduction",
+                  why: "why" in read ? read.why : null,
+                }),
+              );
+            return read;
           }),
         readMergeRequest: (asked) => {
           const ref = readMrRef(asked.mr);
@@ -5128,8 +5146,19 @@ export const hostLayer = (options: {
         readStage: (asked) =>
           Effect.gen(function* () {
             const ref = yield* recordedRef(asked.runId);
-            if (ref === null) return { _tag: "Failed", why: unrecorded } satisfies StageRead;
-            return yield* under(readStage({ ...asked, ref, run: runShell }));
+            const read: StageRead =
+              ref === null
+                ? { _tag: "Failed", why: unrecorded }
+                : yield* under(readStage({ ...asked, ref, run: runShell }));
+            yield* under(
+              writeStageProof(runDir(dir, asked.runId), {
+                head: asked.head,
+                tag: null,
+                proved: read._tag === "Staged",
+                why: "why" in read ? read.why : read._tag === "Moved" ? "stage head moved" : null,
+              }),
+            );
+            return read;
           }),
         readRollback: (asked) =>
           Effect.gen(function* () {
@@ -6128,6 +6157,7 @@ const launchOptions = (generation: Generation, asked: Readonly<Record<string, st
  */
 /** A question a run has been asked, as a front door shows it. */
 export const OpenDecision = Schema.Struct({
+  shipping: Schema.optionalKey(Schema.NullOr(ShippingGo)),
   name: Schema.String,
   prompt: Schema.String,
   /** The solutions it takes, recommended first; empty is a question answered in words. */
@@ -7980,21 +8010,24 @@ const makeRegistry: (
     return yield* Effect.forEach(rows, (row) =>
       decodeOptions(row.options).pipe(
         Effect.orElseSucceed(() => none),
-        Effect.map((options) => ({
-          name: row.decision,
-          prompt: row.prompt,
-          options: recommendedFirst(options),
-          answer: row.answer,
-          asked: row.asked,
-          answered: row.answered,
-          by: row.answerer === null ? null : whoActed(row.answerer),
-          asker: row.asker,
-          superseded: row.superseded,
-          cause: row.cause,
-          messaged: Arr.map(row.messaged ?? [], (one) => one.agent),
-          revises: row.revises,
-          shortfall: row.shortfall,
-        })),
+        Effect.map((options) => {
+          const question = {
+            name: row.decision,
+            prompt: row.prompt,
+            options: recommendedFirst(options),
+            answer: row.answer,
+            asked: row.asked,
+            answered: row.answered,
+            by: row.answerer === null ? null : whoActed(row.answerer),
+            asker: row.asker,
+            superseded: row.superseded,
+            cause: row.cause,
+            messaged: Arr.map(row.messaged ?? [], (one) => one.agent),
+            revises: row.revises,
+            shortfall: row.shortfall,
+          };
+          return row.shipping === null ? question : { ...question, shipping: row.shipping };
+        }),
       ),
     );
   });
