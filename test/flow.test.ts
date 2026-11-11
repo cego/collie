@@ -278,18 +278,19 @@ test(
       "collie-flow-repeats-",
       (world) =>
         Effect.gen(function* () {
-          yield* open(world, "a");
           const items = yield* stepped(world, "items");
-          const second = yield* until_(
-            world,
-            items,
+          const second = yield* until(
+            () =>
+              flowOf(world, items).pipe(
+                Effect.tap((flow) => (flow === null ? Effect.void : open(world, "a"))),
+              ),
             (flow) =>
-              Option.getOrUndefined(
-                Option.map(Option.fromNullishOr(nodeOf(flow, "slice")), (present) =>
-                  Arr.some(present.runs, (one) => one.id === "slice@b"),
-                ),
-              ) ?? false,
-          );
+              flow !== null &&
+              Arr.some(
+                nodeOf(flow, "slice")?.runs ?? [],
+                (one) => one.id === "slice@b" && one.state === "running",
+              ),
+          ).pipe(Effect.map((flow) => flow!));
           const slice = nodeOf(second, "slice")!;
           expect(laneOf(second).nodes).toHaveLength(1);
           expect(slice).toMatchObject({ state: "running", said: "Slice 2 of 3" });

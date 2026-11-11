@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
 import * as Str from "effect/String";
 import { Clock, Effect, FileSystem, Layer, Schema, type Scope } from "effect";
+import { TestClock } from "effect/testing";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
@@ -24,6 +25,7 @@ import { reached } from "../src/following";
 import { recordLaunch } from "../src/launches";
 import { recordClaudeEvent } from "../src/compactors";
 import { controlDir } from "../src/compaction";
+import { epochMs } from "../src/time";
 
 const ROOT = new URL("../", import.meta.url).pathname;
 
@@ -274,6 +276,9 @@ test(
               task: null,
             });
             yield* suspended(runId);
+            const [question] = yield* store.asked(runId);
+            const submitted = yield* TestClock.make();
+            yield* submitted.setTime(epochMs(question!.asked) + 1);
             for (const agent of ["planner", "reviewer"]) {
               yield* recordLaunch({
                 agent,
@@ -292,7 +297,8 @@ test(
                   hook_event_name: "UserPromptSubmit",
                   prompt: `Over to you, ${agent}`,
                 }).pipe(Effect.orDie),
-              );
+              ).pipe(Effect.provideService(Clock.Clock, submitted));
+              yield* submitted.adjust(1);
             }
             reads.length = 0;
             yield* registry.tendQuestions;
