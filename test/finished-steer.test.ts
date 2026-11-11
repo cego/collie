@@ -661,23 +661,67 @@ test(
   120_000,
 );
 
-test(
-  "a succeeded Run's agent is still told after its module was removed",
-  () =>
-    steerable("collie-finished-unregistered-", (world) =>
-      Effect.gen(function* () {
-        const { env, runId, agent } = yield* finishedWithAgent(world);
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.remove(`${world.user}/told.workflow.ts`).pipe(Effect.orDie);
-        // A host started again finds no module to register the Run's generation under.
-        yield* stopHost(world.state);
+for (const [status, terminal] of [
+  ["complete", "succeeded"],
+  ["failed", "failed"],
+] as const)
+  test(
+    `a ${terminal} Run's agent is still told after its module was removed`,
+    () =>
+      steerable(
+        `collie-finished-unregistered-${terminal}-`,
+        (world) =>
+          Effect.gen(function* () {
+            const { env, client, runId, agent } = yield* finishedWithAgent(
+              world,
+              "terminal-delivery",
+              status,
+            );
+            const before = yield* client.run({ runId }).pipe(Effect.orDie);
+            const fs = yield* FileSystem.FileSystem;
+            yield* fs.remove(`${world.user}/terminal-delivery.workflow.ts`).pipe(Effect.orDie);
+            // A host started again finds no module to register the Run's generation under.
+            yield* stopHost(world.state);
 
-        const [done] = yield* carryOutAsked(env, [deliver(runId, agent.name, "merge it")], chat());
-        expect(done).toMatchObject({ kind: "deliver", state: "applied" });
-      }),
-    ),
-  120_000,
-);
+            const [done] = yield* carryOutAsked(
+              env,
+              [deliver(runId, agent.name, "merge it")],
+              chat(),
+            );
+            expect(done).toMatchObject({ kind: "deliver", state: "applied" });
+            const check = (words: string) => {
+              expect(words).toContain(`${runId} has finished (${terminal})`);
+              expect(words).toContain("No Step reads this turn's Output");
+            };
+            check(done?.note ?? "");
+            check(yield* toolNamed("collie_receipts")!.call(env, { run: runId }));
+            const calls = yield* Effect.forEach(
+              Arr.filter(
+                Str.split(
+                  yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie),
+                  "\n",
+                ),
+                Boolean,
+              ),
+              (line) => Schema.decodeEffect(CallLine)(line).pipe(Effect.orDie),
+            );
+            const prompt =
+              Arr.filter(
+                calls,
+                (call) => call.cmd === "agent prompt" && call.argv[2] === agent.name,
+              ).at(-1)?.argv[3] ?? "";
+            const kept = /Their message is in (\S+)\./.exec(prompt)?.[1];
+            check(kept === undefined ? prompt : yield* fs.readFileString(kept).pipe(Effect.orDie));
+            const restarted = yield* connect(world.state).pipe(Effect.orDie);
+            const after = yield* restarted.run({ runId }).pipe(Effect.orDie);
+            expect(after?.status).toEqual(before?.status);
+            expect(after?.diagnostic).toContain("terminal-delivery.workflow.ts");
+          }),
+        [{ verdict: terminal === "failed" ? "failed" : "built" }],
+        ["terminal-delivery.workflow.ts"],
+      ),
+    120_000,
+  );
 
 test(
   "a steer that reached nobody on a running Run is failed, never applied",

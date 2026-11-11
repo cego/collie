@@ -2704,10 +2704,18 @@ const registrationOf = (definition: WorkflowDefinition, name: string): Registrat
  * toast. A suspension is not an ending, and a question or a stop says so for itself.
  */
 const ended = (runId: string, status: typeof RunStatus.Type) =>
-  Effect.serviceOption(Oversight).pipe(
-    Effect.flatMap((found) => (Option.isSome(found) ? found.value.finish(runId) : Effect.void)),
-    Effect.andThen(told(runId, status)),
-  );
+  Effect.gen(function* () {
+    if (status.status === "complete" || status.status === "failed") {
+      const fs = yield* FileSystem.FileSystem;
+      const place = yield* (yield* Host).place(runId);
+      yield* fs
+        .writeFileString(`${place.dir}/terminal.json`, asJsonText(status))
+        .pipe(Effect.orDie);
+    }
+    const oversight = yield* Effect.serviceOption(Oversight);
+    if (Option.isSome(oversight)) yield* oversight.value.finish(runId);
+    yield* told(runId, status);
+  });
 
 /** What an ending says to whoever started the Run, in the words the board reads it in. */
 const told = (runId: string, status: typeof RunStatus.Type) =>
@@ -7863,9 +7871,18 @@ const makeRegistry: (
     // Not registered here is not a verdict on the work: the rows are all still there,
     // and what is missing is the module, named so somebody can put it back.
     if (generation === undefined) {
+      const recorded = yield* fs.readFileString(`${runDir(dir, row.run)}/terminal.json`).pipe(
+        Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(RunStatus))),
+        Effect.orElseSucceed(() => null),
+      );
       return {
         ...about,
-        status: { status: "pending" as const },
+        status:
+          recorded?.status === "failed"
+            ? { ...recorded, entry: admitted.entry || recorded.entry }
+            : recorded?.status === "complete"
+              ? recorded
+              : { status: "pending" as const },
         diagnostic:
           unavailable.get(row.generation) ?? `${row.generation} is not registered in this host`,
       };
@@ -8156,7 +8173,14 @@ const makeRegistry: (
   const workflowEnded = Effect.fn("Engine.workflowEnded")(function* (runId: string) {
     const found = yield* routed(runId).pipe(Effect.option);
     // With its module gone the engine cannot be asked, and the finish's record answers.
-    if (Option.isNone(found)) return (yield* finishedOnRecord(runDir(dir, runId))) !== null;
+    if (Option.isNone(found)) {
+      const current = yield* view(runId);
+      return (
+        current?.status.status === "complete" ||
+        current?.status.status === "failed" ||
+        (yield* finishedOnRecord(runDir(dir, runId))) !== null
+      );
+    }
     const { generation, execution } = found.value;
     const workflow = generation.registration.workflow;
     const status = pollStatus(

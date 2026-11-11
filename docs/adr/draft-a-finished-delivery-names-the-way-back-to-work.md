@@ -21,6 +21,8 @@ starting a successor would turn a message to an agent into a new workflow execut
 the agent's delivered message name the terminal status and say that no Step consumes
 the turn's Output. A receipt records delivery, never workflow progress. The human
 explicitly chose this alternative to #338's original refuse-or-ingest requirement.
+The host persists the terminal status independently of the workflow module. Removing
+that module leaves the recorded status available to delivery and the Run's views.
 
 **D2. Show branch movement without rewriting execution history.** Compare the current
 pushed branch head with the head recorded when the Run finished. Show forward commits
