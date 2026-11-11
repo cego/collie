@@ -579,7 +579,8 @@ staging the tag or asking for production. Once every child of a repository has e
 the set starts one more Release Run for that repository, entering at Tag. It tags once
 over all the children that merged, proves the tag carries every merge and, for an
 application, stages the tag and asks for production once. A repository with nothing merged
-gets no tag. Failed or open children do not hold back a tag over the others' merges. One
+gets no tag. A pending Merge Go or Production Go in one repository does not delay another
+repository's tag Run. Failed or open children do not hold back a tag over the others' merges. One
 waiting on a release that failed, or on a merge request left open, is not started. The Run
 ends saying how many released, failed and were not started, and how many were left open,
 naming each, and fails where one failed. A failed child offers **Release again** with its

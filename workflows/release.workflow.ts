@@ -39,8 +39,9 @@ import {
   type OpenComment,
   type ReviewStanding,
 } from "collie";
-import { Deferred, Effect, Option, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
+import * as DurableDeferred from "effect/workflow/DurableDeferred";
 import { connection } from "./connections.ts";
 import * as Workflow from "effect/workflow/Workflow";
 import { WorkflowInstance } from "effect/workflow/WorkflowEngine";
@@ -387,6 +388,14 @@ type SetEnd =
   | { readonly _tag: "Released" | "LeftOpen" | "Failed"; readonly said: string }
   | { readonly _tag: "NotStarted"; readonly on: SetMember; readonly blocker: SetEnd };
 
+const SetEndSchema: Schema.Codec<SetEnd> = Schema.Union([
+  Schema.Struct({ _tag: Schema.Literals(["Released", "LeftOpen", "Failed"]), said: text }),
+  Schema.TaggedStruct("NotStarted", {
+    on: Schema.Struct({ id: text, target: text, url: text, checkout: Schema.optionalKey(text) }),
+    blocker: Schema.suspend(() => SetEndSchema),
+  }),
+]);
+
 const endLine = (member: SetMember, end: SetEnd) => {
   switch (end._tag) {
     case "Released":
@@ -445,7 +454,16 @@ const releaseEach = (members: ReadonlyArray<SetMember>) =>
     yield* forecast([releaseRuns]);
     const items = Arr.map(stacked.order, (one) => invocationFor("release", byId.get(one.id)!));
     const ends = new Map(
-      Arr.map(stacked.order, (one) => [one.id, Deferred.makeUnsafe<SetEnd>()] as const),
+      Arr.map(
+        stacked.order,
+        (one) =>
+          [
+            one.id,
+            DurableDeferred.make(`${invocationFor("release", byId.get(one.id)!)}.end`, {
+              success: SetEndSchema,
+            }),
+          ] as const,
+      ),
     );
     const releaseOne = (member: SetMember) =>
       Effect.gen(function* () {
@@ -458,50 +476,80 @@ const releaseEach = (members: ReadonlyArray<SetMember>) =>
           said: ran.said,
         } satisfies SetEnd;
       });
-    const ended = yield* Effect.forEach(
+    const repositories = Arr.groupBy(
       stacked.order,
-      (one) =>
-        Effect.gen(function* () {
-          const member = byId.get(one.id)!;
-          const before = yield* Effect.forEach(one.waitsOn, (id) =>
-            Effect.map(Deferred.await(ends.get(id)!), (end) => ({ on: byId.get(id)!, end })),
-          );
-          const blocked = Arr.findFirst(before, ({ end }) => end._tag !== "Released");
-          const end: SetEnd = Option.isSome(blocked)
-            ? { _tag: "NotStarted", on: blocked.value.on, blocker: blocked.value.end }
-            : yield* releaseRuns(releaseOne(member), {
-                item: invocationFor("release", member),
-                items,
-              });
-          yield* Deferred.succeed(ends.get(one.id)!, end);
-          yield* host.record(runId, endLine(member, end));
-          return { member, end };
-        }),
-      { concurrency: "unbounded" },
+      (one) => readMrRef(byId.get(one.id)!.target)!.project!,
     );
-    const repositories = Arr.groupBy(ended, ({ member }) => readMrRef(member.target)!.project!);
-    const tags = yield* Effect.forEach(Rec.values(repositories), (repository) =>
-      Effect.gen(function* () {
-        const merged = Arr.map(
-          Arr.filter(repository, ({ end }) => end._tag === "Released"),
-          ({ member }) => member,
-        );
-        const last = merged.at(-1);
-        if (last === undefined) return null;
-        const item = invocationFor("tag", last);
-        const tagged = yield* releaseRuns(
-          runOn(
-            "release",
-            last,
-            "tag",
-            Arr.map(merged, (one) => one.target),
-          ),
-          { item, items: [item] },
-        );
-        const said = `${readMrRef(last.target)!.project} ${tagged.ok ? "released" : "tag failed"}: ${tagged.said}`;
-        yield* host.record(runId, said);
-        return { ...tagged, said };
-      }),
+    const { ended, tags } = yield* Effect.all(
+      {
+        ended: Effect.forEach(
+          stacked.order,
+          (one) =>
+            Effect.gen(function* () {
+              const member = byId.get(one.id)!;
+              const end = yield* DurableDeferred.into(
+                Effect.gen(function* () {
+                  const before = yield* Effect.forEach(one.waitsOn, (id) =>
+                    Effect.map(DurableDeferred.await(ends.get(id)!), (end) => ({
+                      on: byId.get(id)!,
+                      end,
+                    })),
+                  );
+                  const blocked = Arr.findFirst(before, ({ end }) => end._tag !== "Released");
+                  const end: SetEnd = Option.isSome(blocked)
+                    ? { _tag: "NotStarted", on: blocked.value.on, blocker: blocked.value.end }
+                    : yield* releaseRuns(releaseOne(member), {
+                        item: invocationFor("release", member),
+                        items,
+                      });
+                  yield* host.record(runId, endLine(member, end));
+                  return end;
+                }),
+                ends.get(one.id)!,
+              );
+              return { member, end };
+            }),
+          { concurrency: "unbounded" },
+        ),
+        tags: Effect.forEach(
+          Rec.values(repositories),
+          (repository) =>
+            DurableDeferred.into(
+              Effect.gen(function* () {
+                const settled = yield* Effect.forEach(repository, (one) =>
+                  Effect.map(DurableDeferred.await(ends.get(one.id)!), (end) => ({
+                    member: byId.get(one.id)!,
+                    end,
+                  })),
+                );
+                const merged = Arr.map(
+                  Arr.filter(settled, ({ end }) => end._tag === "Released"),
+                  ({ member }) => member,
+                );
+                const last = merged.at(-1);
+                if (last === undefined) return null;
+                const item = invocationFor("tag", last);
+                const tagged = yield* releaseRuns(
+                  runOn(
+                    "release",
+                    last,
+                    "tag",
+                    Arr.map(merged, (one) => one.target),
+                  ),
+                  { item, items: [item] },
+                );
+                const said = `${readMrRef(last.target)!.project} ${tagged.ok ? "released" : "tag failed"}: ${tagged.said}`;
+                yield* host.record(runId, said);
+                return { ...tagged, said };
+              }),
+              DurableDeferred.make(`${repository[0]!.id}.tag-end`, {
+                success: Schema.NullOr(Schema.Struct({ ok: Schema.Boolean, said: text })),
+              }),
+            ),
+          { concurrency: "unbounded" },
+        ),
+      },
+      { concurrency: "unbounded" },
     );
     const count = (tag: SetEnd["_tag"]) => Arr.filter(ended, ({ end }) => end._tag === tag).length;
     const open = count("LeftOpen");

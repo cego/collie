@@ -178,6 +178,7 @@ let started: ChildAsk[] = [];
 /** The invocations whose child ends in failure. */
 let failing = new Set<string>();
 let childWaits = new Map<string, Deferred.Deferred<void>>();
+let admittedChildren = new Set<string>();
 /** A held invocation, and the invocation whose start it waits for. */
 let startsAfter = new Map<string, string>();
 let startSignals = new Map<string, Deferred.Deferred<void>>();
@@ -241,10 +242,14 @@ const children = Layer.succeed(Children)(
       Effect.gen(function* () {
         const after = startsAfter.get(ask.invocation);
         if (after !== undefined) yield* Deferred.await(startSignal(after));
-        started.push(ask);
-        yield* Deferred.succeed(startSignal(ask.invocation), undefined);
         const parent = Option.getOrUndefined(yield* Effect.serviceOption(Run))?.id;
         const runId = `${parent}-${ask.invocation}`;
+        const fresh = !admittedChildren.has(runId);
+        if (fresh) {
+          admittedChildren.add(runId);
+          started.push(ask);
+        }
+        yield* Deferred.succeed(startSignal(ask.invocation), undefined);
         if (
           runningChildren !== null &&
           parent !== undefined &&
@@ -256,7 +261,7 @@ const children = Layer.succeed(Children)(
           runId,
           workflow: ask.workflow,
           invocation: ask.invocation,
-          fresh: true,
+          fresh,
         };
       }),
     result: (child) =>
@@ -360,6 +365,7 @@ const runChild = (
   runId: string,
 ) =>
   Effect.gen(function* () {
+    if (childRuns.has(ask.invocation)) return;
     const made = yield* loaded(modules.get(parent)!, runId);
     yield* admit({
       runId,
@@ -11253,7 +11259,7 @@ scenario(
 );
 
 scenario(
-  "release of a set across two repositories tags each once and asks production Go only on its tag Run",
+  "release of a set across two repositories tags each once without waiting on the other's Merge or Production Go",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -11269,6 +11275,7 @@ scenario(
           },
           (run) =>
             Effect.gen(function* () {
+              const tags = [];
               for (const one of [first, second]) {
                 const child = yield* childDriven(one.invocation("release"));
                 const asking = yield* until(
@@ -11286,8 +11293,6 @@ scenario(
                 );
                 expect(end.status).toMatchObject({ status: "complete" });
                 expect(Arr.map(end.asked, (row) => row.decision)).not.toContain("production");
-              }
-              for (const one of [first, second]) {
                 const tagChild = yield* childDriven(one.invocation("tag"), run.status);
                 const ready = yield* until(
                   () => Effect.all({ status: tagChild.status, asked: tagChild.asked }),
@@ -11299,6 +11304,16 @@ scenario(
                   Arr.filter(yield* tagChild.asked, (row) => row.decision === "production"),
                 ).toHaveLength(1);
                 expect(Arr.map(yield* tagChild.asked, (row) => row.decision)).not.toContain("go-1");
+                tags.push(tagChild);
+                if (one === first) {
+                  const other = yield* childDriven(second.invocation("release"));
+                  expect((yield* goAsked(other.asked, "go-1")).answer).toBeNull();
+                  expect((yield* forge.model()).tags).toHaveLength(1);
+                }
+              }
+              expect((yield* goAsked(tags[0]!.asked, "production")).answer).toBeNull();
+              expect((yield* forge.model()).tags).toHaveLength(2);
+              for (const tagChild of tags) {
                 yield* tagChild.answer("production", "Send to production");
                 expect(yield* ended(tagChild.status)).toMatchObject({ status: "complete" });
               }
@@ -20105,6 +20120,7 @@ export const register = (pass: "shipped" | "unrelated", share: number) => {
         failing = new Set();
         modules = new Map();
         childWaits = new Map();
+        admittedChildren = new Set();
         runningChildren = null;
         childRuns = new Map();
         startsAfter = new Map();
