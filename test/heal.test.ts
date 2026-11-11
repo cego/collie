@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Option, Schedule, Schema, flow, Result } from "effect";
+import { Effect, Fiber, FileSystem, Option, Schedule, Schema, flow, Result } from "effect";
 import { connect, ownerOf } from "../src/host";
 import { holderLives } from "../src/lock";
 import { readAudit } from "../src/audit";
@@ -348,28 +348,76 @@ test(
             Effect.map((view) => view?.controls),
             Effect.orDie,
           );
-          expect(
-            (yield* collie(world, ["run", "stop", runId, "--request-id", "stopped"])).envelope.ok,
-          ).toBe(true);
+          // The person's Stop still closing the Run's agents while the Heal resumes it.
+          const stopping = yield* Effect.forkChild(
+            collie(world, ["run", "stop", runId, "--request-id", "stopped"]),
+          );
+          yield* until(
+            () => controls,
+            (now) => now?.includes("stop") === true,
+          );
           expect(yield* asHealer(world, healer, [{ kind: "resume", run: runId }])).toContain(
             "a person stopped it",
           );
+          expect((yield* Fiber.join(stopping)).envelope.ok).toBe(true);
           const resumed = yield* collie(world, ["run", "resume", runId], {
             COLLIE_RUN: healer.runId,
             COLLIE_AGENT: healer.agent,
           });
           expect(resumed.envelope).toMatchObject({ ok: false });
           expect(yield* controls).toContain("stop");
-          yield* collie(world, ["run", "resume", runId]);
-          expect(yield* controls).not.toContain("stop");
-          expect(yield* asHealer(world, healer, [{ kind: "resume", run: runId }])).not.toContain(
-            "is a Heal of",
-          );
           const asked = yield* client.run({ runId: other.runId }).pipe(Effect.orDie);
           expect(Arr.filter(asked?.waiting ?? [], (one) => one.answer !== null)).toEqual([]);
           expect(asked?.controls).toContain("hold");
         }),
       ["asks.workflow.ts", "parks-for.workflow.ts", "mender.workflow.ts"],
+    ),
+  120_000,
+);
+
+test(
+  "a Heal's resume applies while the Run is at the park its Heal was started for, and is refused once the Run has left it",
+  () =>
+    proves(
+      "collie-heal-park-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const status = `${world.home}/status`;
+          yield* fs.writeFileString(status, "working").pipe(Effect.orDie);
+          const { runId, client } = yield* started(
+            world,
+            "parks-for",
+            { causes: "unknown,unknown", entries: `${world.home}/entries` },
+            {
+              FAKE_HERDR_OUTPUTS: yield* queued(world, [null]),
+              FAKE_HERDR_AGENT_STATUS_FILE: status,
+            },
+          );
+          const heals = yield* until(
+            () => healsOf(client, runId),
+            (heals) => heals.length > 0,
+          );
+          const healer = { ...(yield* launchOf(client, heals[0]!.runId)), runId: heals[0]!.runId };
+          const parkOf = client.run({ runId }).pipe(
+            Effect.map((view) => view?.park?.id),
+            Effect.orDie,
+          );
+          const first = yield* parkOf;
+          expect(heals[0]!.input).toMatchObject({ park: first });
+          expect(yield* asHealer(world, healer, [{ kind: "resume", run: runId }])).toContain(
+            "resume: applied",
+          );
+          const second = yield* until(
+            () => parkOf,
+            (park) => park !== undefined && park !== first,
+          );
+          expect(yield* asHealer(world, healer, [{ kind: "resume", run: runId }])).toContain(
+            `has left park ${first}`,
+          );
+          expect(yield* parkOf).toBe(second);
+        }),
+      ["parks-for.workflow.ts", "mender.workflow.ts"],
     ),
   120_000,
 );

@@ -82,7 +82,7 @@ test(
             (view) => view?.status.status === "suspended",
           );
           yield* registry.control({ runId, control: STOP, set: true });
-          expect(yield* registry.resume(runId, undefined, true)).toMatchObject({
+          expect(yield* registry.resume(runId, undefined, "park-1")).toMatchObject({
             applied: false,
             detail: expect.stringContaining("a person stopped it"),
           });

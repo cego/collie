@@ -1940,15 +1940,18 @@ const frontDoorHandlers = (
         ...askerOf(client),
         ...stampOf(client),
       });
-      const asksFromHeal = (client: { readonly id: number }) => {
-        const who = stampOf(client);
-        return who.origin !== "agent" || who.from?.run === undefined
-          ? Effect.succeed(false)
-          : registry.view(who.from.run).pipe(
-              Effect.map((view) => view?.heals !== undefined),
-              Effect.orElseSucceed(() => false),
-            );
-      };
+      /** The park the asking agent's Heal was started for, where it is a Heal's. */
+      const parkHealedBy = (client: { readonly id: number }) =>
+        Effect.gen(function* () {
+          const who = stampOf(client);
+          if (who.origin !== "agent" || who.from?.run === undefined) return undefined;
+          const view = yield* registry.view(who.from.run).pipe(Effect.orElseSucceed(() => null));
+          if (view?.heals === undefined) return undefined;
+          return Option.getOrElse(
+            Schema.decodeUnknownOption(Schema.String)(view.input["park"]),
+            () => "",
+          );
+        });
       /** Where a door's file tools may not go: the human's sessions, but on Desktop's own. */
       const closedTo = (client: { readonly id: number }) =>
         whoOf(client).origin === "desktop"
@@ -2241,7 +2244,7 @@ const frontDoorHandlers = (
       const takeUp = Effect.fn("Host.takeUp")(function* (
         runId: string,
         recoveryPark?: string,
-        keepStop = false,
+        healing?: string,
       ) {
         const view = yield* registry.view(runId);
         const run = view === null ? null : factsOfView(env.stateDir, view);
@@ -2253,7 +2256,7 @@ const frontDoorHandlers = (
                 (yield* mrIdIn(mr, run!.cwd, shell)) ?? "",
               );
         if (state === undefined || !LANDED_STATES.has(state))
-          return yield* registry.resume(runId, recoveryPark, keepStop);
+          return yield* registry.resume(runId, recoveryPark, healing);
         return {
           runId,
           control: STOP,
@@ -2563,10 +2566,7 @@ const frontDoorHandlers = (
             "resume",
             request,
             whoOf(client),
-          )(
-            // A Heal's agent may resume the Run it heals, never undo a Stop set on it.
-            Effect.flatMap(asksFromHeal(client), (fromHeal) => takeUp(runId, undefined, fromHeal)),
-          ),
+          )(Effect.flatMap(parkHealedBy(client), (healing) => takeUp(runId, undefined, healing))),
         offers: ({ runId }) => serve(offersOn(runId)),
         workflows: ({ project }) =>
           discover(searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project })).pipe(
