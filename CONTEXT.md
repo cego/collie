@@ -711,6 +711,13 @@ implement Run's `Release` offer — on the card, from the CLI or from chat — o
 merge request it is (ADR-draft-a-merge-request-is-released-on-a-humans-go,
 ADR-draft-a-tasks-work-is-what-its-runs-worked-on).
 
+Given a set, it starts one child Release Run per merge request. Each keeps its review,
+Checks, Go and Helle claims, merges and ends **merged**, without tagging or production.
+Once a repository's children have ended, one more Release Run tags their merged work
+together and, for an application, stages the tag and asks for production once.
+A failed or open child does not prevent that tag; a repository with nothing merged gets
+none (ADR-draft-a-release-set-tags-once).
+
 **Stage Run** — One execution of the `stage` Workflow: one open merge request's head put
 on stage for testing, unmerged. It is not a release. It asks for no approval, answered or
 resolved comments, passed pipeline, mergeability or **Go**. It never merges, tags, pushes,

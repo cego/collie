@@ -182,6 +182,7 @@ let started: ChildAsk[] = [];
 /** The invocations whose child ends in failure. */
 let failing = new Set<string>();
 let childWaits = new Map<string, Deferred.Deferred<void>>();
+let admittedChildren = new Set<string>();
 /** A held invocation, and the invocation whose start it waits for. */
 let startsAfter = new Map<string, string>();
 let startSignals = new Map<string, Deferred.Deferred<void>>();
@@ -195,6 +196,7 @@ let runningChildren: {
   readonly context: Context.Context<SessionServices>;
   /** Where each child's workflow stays registered for as long as its parent is driven. */
   readonly scope: Scope.Closeable;
+  readonly tagsOnly: boolean;
 } | null = null;
 /** Each child run for real, by invocation. */
 let childRuns = new Map<string, ChildRunning>();
@@ -244,17 +246,26 @@ const children = Layer.succeed(Children)(
       Effect.gen(function* () {
         const after = startsAfter.get(ask.invocation);
         if (after !== undefined) yield* Deferred.await(startSignal(after));
-        started.push(ask);
-        yield* Deferred.succeed(startSignal(ask.invocation), undefined);
         const parent = Option.getOrUndefined(yield* Effect.serviceOption(Run))?.id;
         const runId = `${parent}-${ask.invocation}`;
-        if (runningChildren !== null && parent !== undefined)
+        const fresh = !admittedChildren.has(runId);
+        if (fresh) {
+          admittedChildren.add(runId);
+          started.push(ask);
+        }
+        yield* Deferred.succeed(startSignal(ask.invocation), undefined);
+        if (
+          runningChildren !== null &&
+          parent !== undefined &&
+          !failing.has(ask.invocation) &&
+          (!runningChildren.tagsOnly || Str.startsWith("tag-")(ask.invocation))
+        )
           yield* runChild(runningChildren, ask, parent, runId);
         return {
           runId,
           workflow: ask.workflow,
           invocation: ask.invocation,
-          fresh: true,
+          fresh,
         };
       }),
     result: (child) =>
@@ -358,8 +369,15 @@ const runChild = (
   runId: string,
 ) =>
   Effect.gen(function* () {
+    if (childRuns.has(ask.invocation)) return;
     const made = yield* loaded(modules.get(parent)!, runId);
-    yield* admit({ runId, workflow: made.workflow.name, input: ask.input, parent });
+    yield* admit({
+      runId,
+      workflow: made.workflow.name,
+      input: ask.input,
+      options: ask.options ?? {},
+      parent,
+    });
     const id = yield* made.workflow.executionId({ runId, input: ask.input });
     const registered = yield* Layer.buildWithScope(made.layer, running.scope);
     childRuns.set(ask.invocation, { made, registered, runId, input: ask.input, id });
@@ -381,15 +399,29 @@ const childEnd = (running: NonNullable<typeof runningChildren>, child: ChildRunn
   );
 
 /** A child run for real, once it has started: what it asks, and an answer given as a door gives one. */
-const childDriven = (invocation: string) =>
+const childDriven = (invocation: string, parent?: Effect.Effect<typeof RunStatus.Type>) =>
   Effect.gen(function* () {
     const { context } = runningChildren!;
     const child = yield* until(
-      () => Effect.sync(() => childRuns.get(invocation)),
+      () =>
+        Effect.gen(function* () {
+          const child = childRuns.get(invocation);
+          if (child === undefined && parent !== undefined) {
+            const status = yield* parent;
+            if (status.status === "failed") throw new Error(status.reason);
+          }
+          return child;
+        }),
       (one) => one !== undefined,
     ).pipe(Effect.map((one) => one!));
     return {
       runId: child.runId,
+      status: Effect.flatMap(WorkflowEngine.WorkflowEngine, (engine) =>
+        engine.poll(child.made.workflow, child.id),
+      ).pipe(
+        Effect.map((got) => pollStatus(got, "")),
+        Effect.provideContext(context),
+      ),
       asked: Effect.flatMap(Store, (store) => store.asked(child.runId)).pipe(
         Effect.provideContext(context),
       ),
@@ -10784,7 +10816,7 @@ const driven = <A, E>(
     readonly restarted?: boolean;
     readonly reached?: Deferred.Deferred<void>;
     /** Its children are run as Runs of its module, rather than recorded. */
-    readonly runsChildren?: boolean;
+    readonly runsChildren?: boolean | "tags";
   },
   drive: (run: {
     readonly status: Effect.Effect<typeof RunStatus.Type>;
@@ -10805,9 +10837,13 @@ const driven = <A, E>(
 ) =>
   session(
     Effect.gen(function* () {
-      const childScope = options.runsChildren === true ? yield* Scope.make() : null;
+      const childScope = options.runsChildren ? yield* Scope.make() : null;
       if (childScope !== null)
-        runningChildren = { context: yield* Effect.context<SessionServices>(), scope: childScope };
+        runningChildren = {
+          context: yield* Effect.context<SessionServices>(),
+          scope: childScope,
+          tagsOnly: options.runsChildren === "tags",
+        };
       const made = yield* loaded(options.entry, options.runId);
       const engine = yield* WorkflowEngine.WorkflowEngine;
       const store = yield* Store;
@@ -11102,7 +11138,7 @@ const member = (path: string, iid: string, source: string, target = "main") => {
     target,
     ref: `mr:${project}!${iid}`,
     url: `https://${project}/-/merge_requests/${iid}`,
-    invocation: (workflow: "release" | "stage") =>
+    invocation: (workflow: "release" | "stage" | "tag") =>
       invocationFor(workflow, {
         id: `${project}!${iid}`,
         target: `mr:${project}!${iid}`,
@@ -11145,11 +11181,268 @@ const setOnForge = (mrs: ReadonlyArray<Member>) =>
     return { bin, merged };
   });
 
-const startedChild = (one: Member, workflow: "release" | "stage") => ({
+const startedChild = (one: Member, workflow: "release" | "stage"): ChildAsk => ({
   invocation: one.invocation(workflow),
   workflow: "self",
-  input: { mr: one.ref },
+  input: workflow === "release" ? { mr: one.ref, merge_only: true } : { mr: one.ref },
 });
+
+const startedTag = (one: Member) => ({
+  invocation: one.invocation("tag"),
+  workflow: "self",
+  input: { mr: one.ref, together: [one.ref] },
+});
+
+const releasableSet = (
+  twoRepositories = false,
+  application = false,
+  productionCarriesFirst = false,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    dir = rig.root;
+    const first = member("a", "1", "feature");
+    const second = member(twoRepositories ? "b" : "a", "2", "feature-b");
+    const made = yield* releasable("gitlab", { project: first.project, iid: first.iid }, false);
+    yield* exec(["git", "remote", "set-url", "upstream", `https://${first.project}.git`], {
+      cwd: rig.projectDir,
+    });
+    const other = `${rig.root}/reviewed-b`;
+    yield* exec(["git", "worktree", "add", "-q", "-b", "feature-b", other], {
+      cwd: rig.projectDir,
+    });
+    yield* exec(["git", "commit", "-qm", "second change", "--allow-empty"], { cwd: other });
+    yield* exec(["git", "push", "-q", "origin", "feature-b"], { cwd: other });
+    const head = yield* revParse("HEAD", other);
+    const merged = Str.trim(
+      (yield* exec(
+        [
+          "git",
+          "commit-tree",
+          `${head}^{tree}`,
+          "-p",
+          made.merged,
+          "-p",
+          head,
+          "-m",
+          "Merge second change",
+        ],
+        { cwd: rig.projectDir },
+      )).stdout,
+    );
+    yield* exec(["git", "push", "-q", "origin", `${merged}:refs/heads/main`], {
+      cwd: rig.projectDir,
+    });
+    const secondCheckout = `${rig.root}/api`;
+    if (twoRepositories) {
+      yield* exec(["git", "clone", "-q", `${rig.root}/project-origin.git`, secondCheckout]);
+      yield* exec(["git", "checkout", "-q", "feature-b"], { cwd: secondCheckout });
+      yield* exec(["git", "remote", "add", "upstream", `https://${second.project}.git`], {
+        cwd: secondCheckout,
+      });
+    }
+    yield* fs.writeFileString(
+      `${rig.userDir}/config.json`,
+      asJson({ projects: { root: rig.root } }),
+    );
+    yield* made.forge.set({
+      ...(yield* made.forge.model()),
+      ancestry: { [merged]: [made.merged] },
+      mrs: [
+        readyMr("gitlab", made.head, made.merged, { project: first.project, iid: first.iid }),
+        readyMr("gitlab", head, merged, {
+          project: second.project,
+          iid: second.iid,
+          sourceBranch: second.source,
+        }),
+      ],
+    });
+    const script = {
+      writes: [],
+      sh: `bun '${ROOT}test/fixtures/release-set-agent.ts' '${made.forge.holding(yield* made.forge.model()).path}' '${rig.projectDir}' '${application ? "application" : "package"}' '${productionCarriesFirst ? made.merged : made.base}'`,
+      output: null,
+    };
+    yield* rig.queueOutputs(Arr.replicate(script, 10));
+    return { ...made, first, second, lastMerge: merged, secondCheckout };
+  });
+
+scenario(
+  "release of a set of two merge requests tags its repository once after both children end merged",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, forge, first, second, lastMerge } = yield* releasableSet();
+        const runId = "r-set-one-tag";
+        const status = yield* driven(
+          {
+            entry: shipped("release"),
+            runId,
+            input: { mr: `${first.ref} ${second.ref}` },
+            host: releaseHost(),
+            runsChildren: true,
+          },
+          (run) =>
+            Effect.gen(function* () {
+              const a = yield* childDriven(first.invocation("release"));
+              const b = yield* childDriven(second.invocation("release"));
+              const goA = yield* goAsked(a.asked, "go-1");
+              const goB = yield* goAsked(b.asked, "go-1");
+              yield* a.answer("go-1", optionsOf([goA], "go-1")[0]!);
+              const end = yield* ended(a.status);
+              expect(outcomeText(end)).toBe(
+                `${first.url} merged at ${(yield* forge.model()).mrs[0]!.mergedSha}`,
+              );
+              expect((yield* forge.model()).tags ?? []).toEqual([]);
+              yield* b.answer("go-1", optionsOf([goB], "go-1")[0]!);
+              return yield* ended(run.status);
+            }),
+        );
+        const model = yield* forge.model();
+        yield* bin.restore();
+        expect(status).toMatchObject({ status: "complete" });
+        expect(model.tags).toEqual([
+          {
+            project: first.project,
+            run: `${runId}-${second.invocation("tag")}`,
+            sha: lastMerge,
+            merged: [`${first.project}!1`, `${second.project}!2`],
+          },
+        ]);
+        for (const one of [first, second]) {
+          const child = `${runId}-${one.invocation("release")}`;
+          const enters = Arr.flatMap(yield* readStepLines(runDir(dir, child)), (line) =>
+            line.kind === "enter" ? [Str.split(line.key, "#")[0]!] : [],
+          );
+          expect(enters).toContain("merge");
+          for (const step of ["tag", "stage", "production-go", "production"])
+            expect(enters).not.toContain(step);
+        }
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "release of a set across two repositories tags each once without waiting on the other's Merge or Production Go",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, forge, first, second } = yield* releasableSet(true, true);
+        const runId = "s";
+        const status = yield* driven(
+          {
+            entry: shipped("release"),
+            runId,
+            input: { mr: `${first.ref} ${second.ref}` },
+            host: releaseHost(),
+            runsChildren: true,
+          },
+          (run) =>
+            Effect.gen(function* () {
+              const tags = [];
+              for (const one of [first, second]) {
+                const child = yield* childDriven(one.invocation("release"));
+                const asking = yield* until(
+                  () => Effect.all({ status: child.status, asked: child.asked }),
+                  ({ status, asked }) => status.status === "failed" || asked.length > 0,
+                );
+                if (asking.status.status === "failed") throw new Error(asking.status.reason);
+                const go = yield* goAsked(child.asked, "go-1");
+                yield* child.answer("go-1", optionsOf([go], "go-1")[0]!);
+                const end = yield* until(
+                  () => Effect.all({ status: child.status, asked: child.asked }),
+                  ({ status, asked }) =>
+                    status.status === "complete" ||
+                    Arr.some(asked, (one) => one.decision === "production"),
+                );
+                expect(end.status).toMatchObject({ status: "complete" });
+                expect(Arr.map(end.asked, (row) => row.decision)).not.toContain("production");
+                const tagChild = yield* childDriven(one.invocation("tag"), run.status);
+                const ready = yield* until(
+                  () => Effect.all({ status: tagChild.status, asked: tagChild.asked }),
+                  ({ status, asked }) => status.status === "failed" || asked.length > 0,
+                );
+                if (ready.status.status === "failed") throw new Error(ready.status.reason);
+                yield* goAsked(tagChild.asked, "production");
+                expect(
+                  Arr.filter(yield* tagChild.asked, (row) => row.decision === "production"),
+                ).toHaveLength(1);
+                expect(Arr.map(yield* tagChild.asked, (row) => row.decision)).not.toContain("go-1");
+                tags.push(tagChild);
+                if (one === first) {
+                  const other = yield* childDriven(second.invocation("release"));
+                  expect((yield* goAsked(other.asked, "go-1")).answer).toBeNull();
+                  expect((yield* forge.model()).tags).toHaveLength(1);
+                }
+              }
+              expect((yield* goAsked(tags[0]!.asked, "production")).answer).toBeNull();
+              expect((yield* forge.model()).tags).toHaveLength(2);
+              for (const tagChild of tags) {
+                yield* tagChild.answer("production", "Send to production");
+                expect(yield* ended(tagChild.status)).toMatchObject({ status: "complete" });
+              }
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+        expect(status).toMatchObject({ status: "complete" });
+        const tags = (yield* forge.model()).tags ?? [];
+        expect(Arr.map(tags, (tag) => ({ project: tag.project, run: tag.run }))).toEqual(
+          Arr.map([first, second], (one) => ({
+            project: one.project,
+            run: `${runId}-${one.invocation("tag")}`,
+          })),
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "release of a set whose reference order differs from merge order sends every merge to production",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, forge, first, second, lastMerge } = yield* releasableSet(false, true, true);
+        const runId = "r-set-reversed";
+        const status = yield* driven(
+          {
+            entry: shipped("release"),
+            runId,
+            input: { mr: `${second.ref} ${first.ref}` },
+            host: releaseHost(),
+            runsChildren: true,
+          },
+          (run) =>
+            Effect.gen(function* () {
+              for (const one of [first, second]) {
+                const child = yield* childDriven(one.invocation("release"));
+                yield* goAsked(child.asked, "go-1");
+                yield* child.answer("go-1", "Merge");
+                expect(yield* ended(child.status)).toMatchObject({ status: "complete" });
+              }
+              const child = yield* childDriven(first.invocation("tag"));
+              const ready = yield* until(
+                () => Effect.all({ status: child.status, asked: child.asked }),
+                ({ status, asked }) =>
+                  status.status === "complete" || status.status === "failed" || asked.length > 0,
+              );
+              expect(ready.asked).toMatchObject([{ decision: "production", answer: null }]);
+              yield* child.answer("production", "Send to production");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+        expect(status).toMatchObject({ status: "complete" });
+        const model = yield* forge.model();
+        expect(model.tags).toMatchObject([{ sha: lastMerge }]);
+        expect(Arr.findFirst(model.environments ?? [], (one) => one.tier === "production")).toEqual(
+          Option.some(expect.objectContaining({ deployed: lastMerge })),
+        );
+      }),
+    ),
+  120_000,
+);
 
 scenario(
   "release of app!12 and api!7, where api!7 targets app!12's branch, starts app!12's Release Run first and api!7's only once app!12's merged it",
@@ -11177,9 +11470,16 @@ scenario(
             }),
         );
         yield* bin.restore();
-        expect(started).toEqual([startedChild(app, "release"), startedChild(api, "release")]);
+        expect(new Set(started)).toEqual(
+          new Set([
+            startedChild(app, "release"),
+            startedChild(api, "release"),
+            startedTag(app),
+            startedTag(api),
+          ]),
+        );
         expect(status.status).toBe("complete");
-        expect(outcomeText(status)).toBe(
+        expect(outcomeText(status)).toContain(
           `2 released, 0 failed, 0 not started: ${app.url} released: done; ${api.url} released: done`,
         );
       }),
@@ -11248,7 +11548,9 @@ scenario(
             }),
         );
         yield* bin.restore();
-        expect(started).toEqual([startedChild(app, "release"), startedChild(api, "release")]);
+        expect(new Set(started)).toEqual(
+          new Set([startedChild(app, "release"), startedChild(api, "release"), startedTag(app)]),
+        );
         expect(status.status).toBe("complete");
       }),
     ),
@@ -11260,24 +11562,53 @@ scenario(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const app = member("app", "12", "app-schema");
-        const api = member("api", "7", "api-schema", "app-schema");
-        const web = member("web", "3", "web-page");
-        const { bin, merged } = yield* setOnForge([app, api, web]);
-        yield* merged(web);
+        const { bin, forge, first: app, lastMerge, secondCheckout } = yield* releasableSet(true);
+        const api = member("a", "2", "api-schema", "feature");
+        const web = member("web", "3", "feature-b");
+        yield* exec(["git", "remote", "set-url", "upstream", `https://${web.project}.git`], {
+          cwd: secondCheckout,
+        });
+        const model = yield* forge.model();
+        yield* forge.set({
+          ...model,
+          mrs: [
+            model.mrs[0]!,
+            {
+              ...model.mrs[1]!,
+              project: api.project,
+              sourceBranch: api.source,
+              targetBranch: api.target,
+            },
+            { ...model.mrs[1]!, project: web.project, iid: web.iid, state: "merged" },
+          ],
+        });
         failing = new Set([app.invocation("release")]);
         const set = `${app.ref} ${api.ref} ${web.ref}`;
         const status = yield* driven(
-          { entry: shipped("release"), runId: "r-set-fails", input: { mr: set } },
+          {
+            entry: shipped("release"),
+            runId: "r-set-fails",
+            input: { mr: set },
+            host: releaseHost(),
+            runsChildren: "tags",
+          },
           (run) => ended(run.status),
         );
         yield* bin.restore();
         expect(new Set(Arr.map(started, (one) => one.invocation))).toEqual(
-          new Set([app.invocation("release"), web.invocation("release")]),
+          new Set([app.invocation("release"), web.invocation("release"), web.invocation("tag")]),
         );
-        expect(outcomeText(status)).toBe(
+        expect(outcomeText(status)).toContain(
           `1 released, 1 failed, 1 not started: ${app.url} failed: ${app.invocation("release")} failed; ${web.url} released: done; ${api.url} was not started: it waits on ${app.url}, whose release failed`,
         );
+        expect((yield* forge.model()).tags).toEqual([
+          {
+            project: web.project,
+            run: `r-set-fails-${web.invocation("tag")}`,
+            sha: lastMerge,
+            merged: [],
+          },
+        ]);
 
         const declared = yield* loadEntry(shipped("release")).pipe(
           Effect.map((described) => declaredByModule(described.metadata)),
@@ -11416,7 +11747,7 @@ scenario(
         const moves = member("app", "30", "feature");
         const merges = member("app", "31", "feature-b");
         claimed.length = 0;
-        yield* rig.queueOutputs([PACKAGED, PACKAGED, TAGGED]);
+        yield* rig.queueOutputs([PACKAGED, PACKAGED, PACKAGED, TAGGED]);
         let moved = "";
         const status = yield* driven(
           {
@@ -11443,8 +11774,8 @@ scenario(
                 ...now,
                 mrs: Arr.map(now.mrs, (one) => (one.iid === "30" ? { ...one, head: moved } : one)),
               });
-              yield* movesRun.answer("go-1", "Release");
-              yield* mergesRun.answer("go-1", "Release");
+              yield* movesRun.answer("go-1", "Merge");
+              yield* mergesRun.answer("go-1", "Merge");
               const again = yield* goAsked(movesRun.asked, "go-2");
               expect(again.prompt).toContain(pipe(moved, Str.slice(0, 8)));
               yield* movesRun.answer("go-2", "Finish");
@@ -11460,7 +11791,7 @@ scenario(
           "no longer holds",
         );
         expect(outcomeText(status)).toBe(
-          `1 released, 0 failed, 0 not started, 1 left open: ${moves.url} left open: ${moves.url} was left open; ${merges.url} released: ${merges.url} merged at ${landed}, released as v1.2.0`,
+          `1 released, 0 failed, 0 not started, 1 left open: ${moves.url} left open: ${moves.url} was left open; ${merges.url} released: ${merges.url} merged at ${landed}; ${merges.project} released: ${merges.url} merged at ${landed}, released as v1.2.0`,
         );
       }),
     ),
@@ -19869,6 +20200,7 @@ export const register = (pass: "shipped" | "unrelated", share: number) => {
         failing = new Set();
         modules = new Map();
         childWaits = new Map();
+        admittedChildren = new Set();
         runningChildren = null;
         childRuns = new Map();
         startsAfter = new Map();

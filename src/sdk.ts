@@ -1190,6 +1190,8 @@ export interface HostApi {
   readonly readMergeRequest: (options: {
     readonly cwd: string;
     readonly mr: string;
+    /** Locate a foreign repository's checkout under the Projects root for a child Run. */
+    readonly checkout?: boolean;
   }) => Effect.Effect<MergeRequestRead>;
   /**
    * Whether the forge shows stage rolled back: the newest successful deployment of each of
