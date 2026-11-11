@@ -1896,12 +1896,16 @@ scenario(
 
         const build = "r-plan-speed-implement";
         yield* approve(build, ["unit"]);
+        const ready = yield* Deferred.make<Effect.Success<typeof Host>>();
         const running = yield* Effect.forkChild(
           ran({
             entry: shipped("implement"),
             runId: build,
             input,
             options: started[0]!.options,
+            host: Layer.effect(Host)(
+              Host.pipe(Effect.tap((host) => Deferred.succeed(ready, host))),
+            ),
           }),
         );
         const agents = `${dir}/agents/${build}`;
@@ -1923,20 +1927,15 @@ scenario(
           asJson({ ...plan, harness: { ...plan.harness, commits: [harness] } }),
         );
         const base = yield* originHead();
+        const host = yield* Deferred.await(ready);
         const measured = (pass: string) =>
-          session(
-            Host.pipe(
-              Effect.flatMap((host) =>
-                host.measure({
-                  runId: build,
-                  base,
-                  cwd: rig.projectDir,
-                  plan: { ...plan, harness: { ...plan.harness, commits: [harness] } },
-                  pass,
-                }),
-              ),
-            ),
-          );
+          host.measure({
+            runId: build,
+            base,
+            cwd: rig.projectDir,
+            plan: { ...plan, harness: { ...plan.harness, commits: [harness] } },
+            pass,
+          });
         yield* measured("calibration");
         yield* exec(["sh", "-c", "echo 3 > count && git add count && git commit -qm faster"], {
           cwd: rig.projectDir,
