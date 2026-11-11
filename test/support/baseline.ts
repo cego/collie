@@ -5464,6 +5464,49 @@ scenario(
   120_000,
 );
 
+for (const following of ["finish", "release"])
+  for (const source of ["unavailable Linear", "refused plan"])
+    scenario(
+      `Flow: implement then=${following} omits What next before rejecting an ${source} source`,
+      () =>
+        runEffect(
+          Effect.gen(function* () {
+            const runId = "r-impl-source-flow";
+            const plan =
+              source === "unavailable Linear"
+                ? "APP-123"
+                : yield* planOf([
+                    {
+                      file: "01-outside.md",
+                      title: "Outside the root",
+                      checks: "unit",
+                      body: "\n**Repo:** ../outside\n",
+                    },
+                  ]);
+            const result = yield* ran({
+              entry: shipped("implement"),
+              runId,
+              // oxlint-disable-next-line unicorn/no-thenable -- implement's Input is named `then`
+              input: { plan, then: following },
+            });
+            expect(reasonOf(result)).toContain(
+              source === "unavailable Linear"
+                ? "Cannot read the work source APP-123"
+                : "not under the plan's root",
+            );
+            expect(Arr.map((yield* laneNow(runId, "failed")).nodes, (node) => node.id)).toEqual([
+              "build",
+              "review",
+              "checks",
+              "merge-request",
+            ]);
+            expect(yield* questions(runId)).toEqual([]);
+            expect(started).toEqual([]);
+          }),
+        ),
+      120_000,
+    );
+
 scenario(
   "Flow: implement started with then=finish forecasts no What next, and its Steps up to the merge request are done",
   () =>
@@ -19773,7 +19816,7 @@ scenario(
         yield* ran({
           entry: shipped("implement"),
           runId: "r-flow-fan",
-          input: { plan: `${runDir(dir, "r-flow-fan")}/plan` },
+          input: { plan: `${runDir(dir, "r-flow-fan")}/plan`, ...FINISH },
         });
         const lane = yield* laneNow("r-flow-fan", "succeeded");
         expect(statesOf(lane)).toEqual([["repo-runs", "done"]]);

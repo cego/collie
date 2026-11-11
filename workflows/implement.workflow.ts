@@ -265,7 +265,6 @@ const next = step({
   description: "Whether the open merge request is released, staged or left as it is.",
   kind: "question",
 });
-/** The path of a Run that ends at its merge request without asking what next. */
 const delivery = [building, reviewRound, gate, mergeRequest];
 const repoRuns = step({
   id: "repo-runs",
@@ -355,6 +354,7 @@ export default defineWorkflow({
       const runId = (yield* Run).id;
       const place = yield* host.place(runId);
       const cwd = place.cwd;
+      if ((asked.then ?? "") !== "") yield* forecast(delivery);
       const source = yield* classifyWorkSource(asked.plan).pipe(
         Effect.orElseSucceed(() => ({ kind: "text", value: asked.plan })),
       );
@@ -414,7 +414,6 @@ export default defineWorkflow({
           });
         }
       }
-      if ((asked.then ?? "") !== "") yield* forecast(delivery);
       // A Run that stops short of its merge request fails, so no wave waits on work that is
       // not there and its card is not told as done.
       const unbuilt = (reason: string) =>
