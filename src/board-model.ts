@@ -760,10 +760,17 @@ export type RequestedBy = typeof RequestedBy.Type;
 export const requestedByLine = (who: RequestedBy) =>
   `Started by ${who.agent} of ${who.run} on ${who.machine.name}`;
 
-export const RunReport = Schema.Struct({
+const ReportTry = Schema.Struct({
   state: Schema.Literals(["delivered", "undelivered"]),
   at: Schema.String,
   note: Schema.String,
+});
+export const RunReport = Schema.Struct({
+  ...ReportTry.fields,
+  /** Undelivered because the requesting Machine could not be reached, so sent again once it is. */
+  unreached: Schema.optionalKey(Schema.Boolean),
+  /** The tries before this one, oldest first. */
+  tries: Schema.optionalKey(Schema.Array(ReportTry)),
   closed: Schema.Boolean,
   closure: Schema.optionalKey(Schema.String),
 });

@@ -781,7 +781,9 @@ times, text and read times (null until read). Chat and CLI can arm a hold with
 failed resumable Step also offers `retry-noted`, a note followed by resume.
 Their `link.asOf` is null for live local state, or the last admission or settlement
 notice from a paired Machine. `run.linkNotices` records those deliveries on the started
-Run; human output names undelivered notices. A missed notice is not retried or polled.
+Run, one entry per try; human output names undelivered notices. A missed notice is sent
+again, unchanged, each time the requesting Machine's link comes back, until it is
+delivered. Nothing polls.
 
 Each node's optional `primary` names its first action and `actions` lists the rest,
 without repeating it. A lane's `actions` are its own Run controls. `agent` names the

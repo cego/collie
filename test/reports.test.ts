@@ -480,6 +480,34 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
               report: { state: report!.state, closed: true },
             },
           });
+          if (mode === "gone") {
+            const links = () =>
+              fs
+                .readFileString(`${first.world.state}/host.log`)
+                .pipe(
+                  Effect.map(
+                    (log) =>
+                      Arr.filter(Str.split(log, "\n"), (line) =>
+                        pipe_(line, Str.includes("second is linked: ")),
+                      ).length,
+                  ),
+                );
+            const before = yield* links();
+            const recorded = yield* fs.readFileString(
+              `${runDir(first.world.state, runId)}/report.json`,
+            );
+            yield* stopHost(first.world.state);
+            yield* first.cli(["board"], { ...boot, FAKE_HERDR_OUTPUTS: localOutputs });
+            yield* until(links, (count) => count > before);
+            expect(
+              yield* fs.readFileString(`${runDir(first.world.state, runId)}/report.json`),
+            ).toBe(recorded);
+            expect(
+              Arr.filter(Str.split(yield* fs.readFileString(second.herdrLog), "\n"), (line) =>
+                pipe_(line, Str.includes(` of ${runId} on `)),
+              ),
+            ).toHaveLength(0);
+          }
         }),
       ["attended.workflow.ts", "completed-agent.workflow.ts"],
     ),
@@ -496,15 +524,11 @@ test(
   180_000,
 );
 test(
-  "a report to a gone agent is recorded undelivered and still closes",
+  "a report to a gone agent is recorded undelivered, still closes and is not sent again",
   () => story("gone"),
   180_000,
 );
-test(
-  "a report to an away Machine is bounded, recorded and never queued",
-  () => story("away"),
-  180_000,
-);
+test("a report to an away Machine is bounded and recorded", () => story("away"), 180_000);
 test(
   "a host restarting after delivery records one report and closes",
   () => story("restart"),

@@ -422,9 +422,12 @@ and at settlement, beside its outcome report. The `linkNotice` call validates th
 Machine and the requesting Run's agent, and records each request once on that Run. The
 Flow hangs the link under the Step whose launch made the start and keeps that placement
 when settlement arrives. Settlement takes precedence over an admission delivered late.
-The started Run records each notice's delivery result in `linkNotices`, shown by
-`collie run show`; an undelivered notice is recorded and not resent. Nothing polls another
-Machine for a linked Run. On one host, the Flow reads the requested Run's current facts
+The started Run records each try's result in `linkNotices`, shown by `collie run show`,
+and keeps each notice as first sent in `link-notices.jsonl`. Each time a paired Machine's
+link comes up, `onLink` tells the reports layer, which waits for that Machine's host to
+answer and then sends again every undelivered notice to it, unchanged and under its
+request id, and every report that did not reach it (`unreached`). The receiver's `once`
+makes a repeat change nothing. Nothing polls another Machine for a linked Run. On one host, the Flow reads the requested Run's current facts
 directly, and its link's `asOf` is null.
 
 Run records are served by their owning host through `run-record.ts`. Intent changes,
