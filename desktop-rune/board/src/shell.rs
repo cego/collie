@@ -200,6 +200,19 @@ fn nav_row(app: &App, page: Page, k: &Kit) -> El {
         .key(page.key())
 }
 
+/// Collie's mark and name over the pages.
+fn signature(k: &Kit) -> El {
+    row()
+        .key("signature")
+        .a11y_hidden()
+        .gap(8.0)
+        .center_y()
+        .px(8.0)
+        .pb(6.0)
+        .child(collie_desktop_theme::mark(k, 24.0))
+        .child(text("collie").font(k.ty.body_medium).color(k.c.text_strong))
+}
+
 fn page_pane(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
     match app.nav.page {
         Page::Board => board_pane(app, k, layer),
@@ -267,16 +280,22 @@ fn usage_button(app: &App, k: &Kit) -> El {
 }
 
 pub fn view(app: &App, cx: &mut Cx<App>) -> El {
-    let k = rune_theme_opencode::kit(cx.system_dark());
+    let k = collie_desktop_theme::kit(cx.system_dark());
+    let side = collie_desktop_theme::sidebar(cx.system_dark());
     let mut layer = Vec::new();
     let rows = Page::ALL[..Page::ALL.len() - 1]
         .iter()
-        .map(|page| nav_row(app, *page, k));
-    let mut sidebar = Sidebar::new().label("Pages").row_gap(1.0);
+        .map(|page| nav_row(app, *page, side));
+    let mut sidebar = Sidebar::new()
+        .label("Pages")
+        .row_gap(1.0)
+        .header(signature(k));
     for row in rows {
         sidebar = sidebar.child(row);
     }
-    let sidebar = sidebar.footer(nav_row(app, Page::Settings, k)).build(k);
+    let sidebar = sidebar
+        .footer(nav_row(app, Page::Settings, side))
+        .build(side);
     let chat_toggle = IconButton::new(&icons::CHAT)
         .label(if app.chat.popped {
             "Show the chat's window"

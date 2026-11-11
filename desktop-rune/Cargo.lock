@@ -655,6 +655,7 @@ dependencies = [
  "collie-desktop-chat",
  "collie-desktop-protocol",
  "collie-desktop-terminal",
+ "collie-desktop-theme",
  "collie-desktop-update",
  "futures-util",
  "rune",
@@ -673,6 +674,7 @@ version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
  "collie-desktop-protocol",
+ "collie-desktop-theme",
  "futures-util",
  "image",
  "pulldown-cmark",
@@ -709,6 +711,15 @@ dependencies = [
  "rune-theme-opencode",
  "serde_json",
  "swash",
+]
+
+[[package]]
+name = "collie-desktop-theme"
+version = "0.0.0"
+dependencies = [
+ "rune",
+ "rune-kit",
+ "rune-theme-opencode",
 ]
 
 [[package]]

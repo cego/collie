@@ -207,6 +207,7 @@ fn connecting_placeholder(k: &Kit) -> El {
         .pt(140.0)
         .gap(12.0)
         .items_center()
+        .child(collie_desktop_theme::mark(k, 48.0).mb(4.0))
         .child(Loader::new().size(20.0).build(k).a11y_hidden())
         .child(
             text("Connecting to your Flock…")
@@ -473,24 +474,26 @@ fn alerts(app: &App, k: &Kit) -> Vec<El> {
 /// A section's name and how many cards it holds, in its tone.
 fn section_title(k: &Kit, section: Section, count: usize, note: Option<String>) -> El {
     let tone = match section {
-        Section::NeedsYou => k.c.warning.fg,
-        _ => k.c.text_strong,
+        Section::NeedsYou => k.c.warning,
+        Section::Waiting => collie_desktop_theme::tones(k.dark).ready,
+        Section::Working => k.c.info,
+        Section::Finished => k.c.success,
     };
     row()
         .gap(8.0)
         .center_y()
         .a11y_hidden()
-        .child(text(section.label()).font(k.ty.ui_medium).color(tone))
+        .child(text(section.label()).font(k.ty.ui_medium).color(tone.fg))
         .child(
             el().px(6.0)
                 .h(18.0)
                 .radius(9.0)
-                .fill(k.c.layer_02)
+                .fill(tone.bg)
                 .center()
                 .child(
                     text(count.to_string())
                         .font(k.ty.text_xsmall_medium)
-                        .color(k.c.text_muted),
+                        .color(tone.fg),
                 ),
         )
         .children(note.map(|note| text(note).font(k.ty.small).color(k.c.info.fg)))

@@ -74,7 +74,7 @@ pub fn closed(s: &mut Alone, _: &mut Tx) {
 }
 
 pub fn view(s: &Alone, cx: &mut Cx<Alone>) -> El {
-    let k = rune_theme_opencode::kit(cx.system_dark());
+    let k = collie_desktop_theme::kit(cx.system_dark());
     let mut layer = Vec::new();
     let pane = crate::pane::chat::<Alone>(&s.chat, k, &mut layer);
     rune_kit::root(pane, layer)

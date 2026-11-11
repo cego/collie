@@ -336,12 +336,13 @@ fn step<S: 'static>(
         .gap(9.0)
         .center_y()
         .radius(k.radius.md)
-        .fill(if chosen {
-            k.c.layer_03
-        } else if linked {
-            k.c.layer_01
-        } else {
-            k.c.layer_02
+        .fill(match node.state {
+            _ if chosen => k.c.layer_03,
+            GlyphState::Failed => k.c.danger.bg,
+            GlyphState::NeedsYou => k.c.warning.bg,
+            _ if current => k.c.info.bg,
+            _ if linked => k.c.layer_01,
+            _ => k.c.layer_02,
         })
         .border(if strong { 1.5 } else { 1.0 }, edge)
         .hover(k.c.surface_hover)

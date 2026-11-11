@@ -300,7 +300,7 @@ fn the_pane_sits_on_the_records_own_surface_in_light_and_dark() {
         go_to_pane(&mut runtime);
         hear(&mut runtime, opened(), 0.2);
         hear(&mut runtime, frame(b"$ ls"), 0.3);
-        let kit = rune_theme_opencode::kit(dark);
+        let kit = collie_desktop_theme::kit(dark);
         let surface = kit.c.bg_base.hex()[..7].to_string();
         let ink = kit.c.text_base.hex()[..7].to_string();
         let drawn = runtime.state.terminal.as_ref().unwrap().frame();

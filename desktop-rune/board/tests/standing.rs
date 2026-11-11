@@ -14,7 +14,7 @@ use support::{said, tap};
 
 /// The dialog over an empty window, as `shell::view` draws it over every page.
 fn dialog_only(app: &App, cx: &mut Cx<App>) -> El {
-    let k = rune_theme_opencode::kit(cx.system_dark());
+    let k = collie_desktop_theme::kit(cx.system_dark());
     let mut layer = Vec::new();
     standing::view(app, k, &mut layer);
     rune_kit::root(col().key("window").w_full().h_full(), layer)

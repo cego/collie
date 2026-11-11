@@ -342,7 +342,7 @@ const PERCENT_W: f32 = 48.0;
 
 fn meter(k: &Kit, window: &WindowView) -> El {
     let fill = match window.level {
-        Level::Ok => k.c.text_muted,
+        Level::Ok => k.c.success.icon,
         Level::Warn => k.c.warning.icon,
         Level::Out => k.c.danger.icon,
     };

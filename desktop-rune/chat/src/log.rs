@@ -205,8 +205,8 @@ fn placeholder(k: &Kit, key: &str, mark: El, title: &str, said: &str) -> El {
         .child(
             el().size(40.0, 40.0)
                 .radius(12.0)
-                .fill(k.c.layer_02)
-                .border(1.0, k.c.border_weak)
+                .fill(collie_desktop_theme::tones(k.dark).brand.bg)
+                .border(1.0, collie_desktop_theme::tones(k.dark).brand.border)
                 .center()
                 .child(mark)
                 .mb(6.0),
@@ -230,7 +230,7 @@ fn empty(k: &Kit) -> El {
     placeholder(
         k,
         "chat-empty",
-        icon(&icons::FLOCK, 18.0).color(k.c.icon_muted),
+        icon(&collie_desktop_theme::MARK, 24.0).color(collie_desktop_theme::tones(k.dark).brand.fg),
         "Ask about the Flock",
         "The chat sees every Machine's board. Ask what needs you, or select a card to ask about it.",
     )
@@ -341,13 +341,13 @@ fn about_badge<S: Host>(k: &Kit, about: &About) -> El {
         .px(8.0)
         .h(22.0)
         .radius(6.0)
-        .fill(k.c.layer_02)
+        .fill(k.c.info.bg)
         .hover(k.c.hover)
-        .child(icon(&icons::CARD, 12.0).color(k.c.icon_faint))
+        .child(icon(&icons::CARD, 12.0).color(k.c.info.icon))
         .child(
             text(line)
                 .font(k.ty.text_xsmall_medium)
-                .color(k.c.text_muted)
+                .color(k.c.info.fg)
                 .truncate()
                 .shrink()
                 .a11y_hidden(),
@@ -471,7 +471,7 @@ fn message<S: Host>(chat: &Chat, k: &Kit, m: &Message, live: bool, last: bool) -
                                 .px(14.0)
                                 .py(9.0)
                                 .radius(14.0)
-                                .fill(k.c.layer_02)
+                                .fill(collie_desktop_theme::tones(k.dark).brand.bg)
                                 .children(parts),
                         ),
                 )

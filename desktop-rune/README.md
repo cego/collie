@@ -26,6 +26,7 @@ does. An `act` that the host refused has no Try again.
 | `board/src/record/`          | An open Run's record: its tabs, the Diff tab and review comments, evidence, acting through `act`                                                   |
 | `board/src/flow/`            | The Flow map's actions, next move and inspector, ported from Desktop's `flow-actions.ts` and `flow-inspector.ts`                                   |
 | `protocol/src/core.rs`       | Starts Desktop's main process as the core, for the app and the recorders                                                                           |
+| `theme/`                     | Collie's palette over OpenCode's kit for the board and chat: tinted surfaces, Collie green, a hue per state, the mark, an AA test                  |
 | `chat/`                      | The Flock chat: its state, pane, AG-UI reducer, markdown policy, highlighter and file dialog                                                       |
 | `terminal/`                  | Go to pane's terminal: the VT state, a renderer drawn as Ghostty draws, input as `terminal-input` maps it, settled resizes                        |
 | `ghostty-sys/`               | Builds libghostty-vt from `vendor/ghostty` with Zig and binds its C API with bindgen                                                               |
@@ -55,6 +56,7 @@ cargo run -p collie-desktop-board      # the window, with the live board of this
 cargo run -p collie-desktop-board -- --snap board.png --tree board.json   # headless
 cargo run -p collie-desktop-board -- --script s.json --frames N --out frames/   # headless input, after the first live board
 COLLIE_RUNE_SNAP_AT_START=1 cargo run -p collie-desktop-board -- --script s.json --frames N --out frames/   # the same, from the start
+cargo run -p collie-desktop-board --example scenes -- --scene record --snap record.png --theme light   # the test Flock and a record, on a fake core
 cargo run -p collie-desktop-chat --bin record-say -- --out x.ndjson --say 'hello'   # record a turn
 cargo run -p collie-desktop-chat --bin corpus -- <dir of .md> [--png <dir>]  # the corpus table
 cargo run --release -p collie-desktop-chat --example highlight-cost -- <dir of .md>
