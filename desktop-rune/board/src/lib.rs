@@ -6,6 +6,7 @@ pub mod flow;
 pub mod icons;
 pub mod notify;
 pub mod pages;
+pub mod quiet;
 pub mod record;
 pub mod shell;
 pub mod standing;
@@ -52,6 +53,8 @@ pub struct App {
     pub timing: std::cell::RefCell<timing::Timing>,
     /// The board's own state: the rest of the Flock, the selection, dialogs and answers.
     pub board: board::Board,
+    /// What keeps commits off a scroll: the core's changes held meanwhile, a closed chat unbuilt.
+    pub quiet: quiet::Quiet,
 }
 
 impl App {
@@ -175,6 +178,9 @@ pub fn board_pane(board: &App, k: &Kit, layer: &mut Vec<El>) -> El {
 
 /// The chat as the window's trailing pane, its menus on the window's `layer`.
 pub fn chat_pane_in(board: &App, k: &Kit, layer: &mut Vec<El>) -> El {
+    if !board.chat_built() {
+        return col().grow(1.0).min_h(0.0);
+    }
     col()
         .grow(1.0)
         .min_h(0.0)

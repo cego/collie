@@ -75,6 +75,7 @@ fn log<S: Host>(chat: &Chat, k: &Kit) -> El {
         })
         .children(entries::<S>(chat, k))
         .child(end);
+    let scroller = crate::glide::smooth::<S>(scroller, "chat-log");
     let jump = chat.away.then(|| {
         row()
             .w_full()

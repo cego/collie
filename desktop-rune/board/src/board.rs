@@ -969,7 +969,8 @@ impl App {
     }
 
     /// Where the proposal's text is shown, and where its end is: read to the end, it is seen.
-    pub fn proposal_drawn(&mut self, shown: Option<[f32; 2]>, end: Option<f32>) {
+    /// Whether this made the proposal read to its end.
+    pub fn proposal_drawn(&mut self, shown: Option<[f32; 2]>, end: Option<f32>) -> bool {
         if let Some(Dialog::Proposal {
             seen,
             shown: at,
@@ -983,10 +984,12 @@ impl App {
             if let Some(end) = end {
                 *last = end;
             }
-            if at[1] > 0.0 && *last <= at[0] + at[1] + 2.0 {
+            if !*seen && at[1] > 0.0 && *last <= at[0] + at[1] + 2.0 {
                 *seen = true;
+                return true;
             }
         }
+        false
     }
 
     /// Confirm (`yes`) or Decline what was read, not whatever the card holds by now.

@@ -1055,8 +1055,9 @@ pub fn view(app: &App, k: &Kit) -> El {
         .gap(6.0)
         .min_h(0.0)
         .child(filter)
-        .child(
+        .child(collie_desktop_chat::glide::smooth::<App>(
             col()
+                .key("diff-files")
                 .gap(1.0)
                 .grow(1.0)
                 .min_h(0.0)
@@ -1064,7 +1065,8 @@ pub fn view(app: &App, k: &Kit) -> El {
                     stick_bottom: false,
                 })
                 .children(rows),
-        );
+            "diff-files",
+        ));
     let kit = k.clone();
     let header = move |app: &App, file: usize| -> El {
         let Some(tab) = &app.diff else { return row() };

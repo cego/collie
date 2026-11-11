@@ -641,13 +641,7 @@ fn inline_control(
     let id = row.id();
     match row.key.as_str() {
         "harness" | "model" | "effort" => {
-            let selects = agents::agent_selects(
-                &page.catalogues,
-                &super::profiles(app),
-                &page.agent_settings(),
-                super::time::now_ms(),
-                super::time::local_offset(),
-            );
+            let selects = agent_selects(app, page);
             let disabled = page.choosing;
             let key = row.key.clone();
             let off: Vec<String> = [&selects.harness, &selects.effort]
@@ -938,15 +932,35 @@ fn setting_row(app: &App, page: &Settings, row: &Row, k: &Kit, layer: &mut Vec<E
         .child(meta)
 }
 
+thread_local! {
+    /// The view run under way, and the agent selects worked out in it.
+    static RUN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static SELECTS: std::cell::RefCell<Option<(u64, agents::AgentSelects)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The agent selects, merged from every catalogue once a view run rather than once a row.
+fn agent_selects(app: &App, page: &Settings) -> agents::AgentSelects {
+    let run = RUN.get();
+    if let Some((at, selects)) = SELECTS.with_borrow(Clone::clone)
+        && at == run
+    {
+        return selects;
+    }
+    let selects = agents::agent_selects(
+        &page.catalogues,
+        &super::profiles(app),
+        &page.agent_settings(),
+        super::time::now_ms(),
+        super::time::local_offset(),
+    );
+    SELECTS.set(Some((run, selects.clone())));
+    selects
+}
+
 fn section_view(app: &App, page: &Settings, shown: &Shown, k: &Kit, layer: &mut Vec<El>) -> El {
     let lead = if shown.group == "Agents" {
-        let selects = agents::agent_selects(
-            &page.catalogues,
-            &super::profiles(app),
-            &page.agent_settings(),
-            super::time::now_ms(),
-            super::time::local_offset(),
-        );
+        let selects = agent_selects(app, page);
         Some(format!(
             "What every step's agent runs on, unless it names its own. {}",
             page.catalogue_problem.clone().unwrap_or(selects.lead)
@@ -2067,6 +2081,7 @@ fn index_view(shown: &[Shown], connections: Option<usize>, own: bool, about: boo
 }
 
 pub fn view(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
+    RUN.set(RUN.get().wrapping_add(1));
     let page = &app.pages.settings;
     let filter = Filter::of(page);
     let shown = shown(page, &filter);
@@ -2262,7 +2277,7 @@ pub fn view(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
             .size(0.0, 0.0)
             .on_layout(|app: &mut App, _| super::onboarding_moved(app)),
         )
-        .child(
+        .child(collie_desktop_chat::glide::smooth::<App>(
             col()
                 .key("settings-scroll")
                 .grow(1.0)
@@ -2271,6 +2286,8 @@ pub fn view(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
                 .scroll(ScrollSpec {
                     stick_bottom: false,
                 })
+                .scroll_edge_fade(16.0)
                 .child(main),
-        )
+            "settings-scroll",
+        ))
 }

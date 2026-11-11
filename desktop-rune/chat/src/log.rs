@@ -61,7 +61,12 @@ pub(crate) fn entries<S: Host>(chat: &Chat, k: &Kit) -> Vec<El> {
     let last = messages.len().saturating_sub(1);
     for (at, m) in messages.iter().enumerate() {
         let live = chat.transcript.running && at == last;
-        entries.push(message::<S>(chat, k, m, live, at == last));
+        // Its markdown and highlighting are built again only when what it shows changed.
+        entries.push(rune::memo(
+            format!("message-{}", m.id),
+            shown_version(chat, m, live, at == last),
+            || message::<S>(chat, k, m, live, at == last),
+        ));
     }
     if working(chat) {
         entries.push(
@@ -129,6 +134,37 @@ pub(crate) fn entries<S: Host>(chat: &Chat, k: &Kit) -> Vec<El> {
         entries.push(queued_row::<S>(k, queued));
     }
     entries
+}
+
+/// Everything `message` reads: the message, where it stands, and the chat's state its parts
+/// show (opened rows, the copied one, a question's picks, attachments' thumbnails).
+fn shown_version(chat: &Chat, m: &Message, live: bool, last: bool) -> u64 {
+    use std::fmt::Write as _;
+    use std::hash::{Hash, Hasher};
+    struct Into<'a>(&'a mut std::collections::hash_map::DefaultHasher);
+    impl std::fmt::Write for Into<'_> {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            self.0.write(s.as_bytes());
+            Ok(())
+        }
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let _ = write!(Into(&mut h), "{m:?}");
+    (live, last, chat.transcript.running).hash(&mut h);
+    (chat.copied.as_deref() == Some(m.id.as_str())).hash(&mut h);
+    let mut open: Vec<&String> = chat.expanded.iter().collect();
+    open.sort();
+    open.hash(&mut h);
+    let mut answered: Vec<&String> = chat.answered.iter().collect();
+    answered.sort();
+    answered.hash(&mut h);
+    let mut picked: Vec<_> = chat.picked.iter().collect();
+    picked.sort();
+    picked.hash(&mut h);
+    let mut thumbs: Vec<&String> = chat.thumbs.keys().collect();
+    thumbs.sort();
+    thumbs.hash(&mut h);
+    h.finish()
 }
 
 fn epoch_ms() -> f64 {

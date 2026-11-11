@@ -18,15 +18,19 @@ use rune::{El, Key, KeyEvent, ScrollSpec, SurfaceFit, Transition, Tx, col, row, 
 use rune_kit::markdown::Markdown;
 use rune_kit::{Badge, Button, ButtonVariant, IconButton, Kit, TextArea, TextInput};
 
-fn scrolled(content: El) -> El {
-    col()
+fn scrolled(key: &str, content: El) -> El {
+    let scroller = col()
+        .key(key.to_string())
         .grow(1.0)
         .min_h(0.0)
         .w_full()
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
-        .child(content)
+        .scroll_anchor()
+        .scroll_edge_fade(16.0)
+        .child(content);
+    collie_desktop_chat::glide::smooth::<App>(scroller, key)
 }
 
 fn heading(said: &str, k: &Kit) -> El {
@@ -430,15 +434,15 @@ pub fn view(app: &App, k: &Kit) -> Option<El> {
     };
     let body = match shown.as_str() {
         "flow" => flow_tab(app, record, k),
-        "summary" => scrolled(summary_tab(app, record, k)),
+        "summary" => scrolled("summary-scroll", summary_tab(app, record, k)),
         "plan" => plan_tab(app, record, k),
-        "review" => scrolled(review_tab(app, record, k)),
+        "review" => scrolled("review-scroll", review_tab(app, record, k)),
         "diff" => with_drafts(app, record, super::diff::view(app, k), k),
-        "evidence" => scrolled(evidence_tab(record, k)),
+        "evidence" => scrolled("evidence-scroll", evidence_tab(record, k)),
         "log" => log_tab(record, k),
         "terminal" => terminal_tab(app, record, k),
-        "facts" => scrolled(facts_tab(record, k)),
-        mr => scrolled(mr_tab(record, mr, k)),
+        "facts" => scrolled("facts-scroll", facts_tab(record, k)),
+        mr => scrolled("mr-scroll", mr_tab(record, mr, k)),
     };
     let mut panel = col()
         .key(format!("tabpanel-{shown}"))
@@ -858,7 +862,7 @@ fn flow_tab(app: &App, record: &Record, k: &Kit) -> El {
     let inspector = inspector_view(app, record, map, k);
     let form = form_view(app, record, k);
     let inspected = inspector.is_some();
-    col()
+    let tab = col()
         .key("flow-tab")
         .gap(20.0)
         .grow(1.0)
@@ -867,10 +871,13 @@ fn flow_tab(app: &App, record: &Record, k: &Kit) -> El {
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
+        .scroll_anchor()
+        .scroll_edge_fade(16.0)
         .child(toolbar)
         .child(flow::flow_map(map, super::flow_of, k))
         .children(inspector)
-        .children(form.filter(|_| !inspected))
+        .children(form.filter(|_| !inspected));
+    collie_desktop_chat::glide::smooth::<App>(tab, "flow-tab")
 }
 
 /// The selected Step's details: its state, what it is for, its actions, facts and notes.
@@ -2323,7 +2330,7 @@ fn plan_tab(app: &App, record: &Record, k: &Kit) -> El {
         .min_w(0.0)
         .min_h(0.0)
         .children(composer)
-        .child(scrolled(shown));
+        .child(scrolled("plan-scroll", shown));
     with_drafts(
         app,
         record,
@@ -3030,7 +3037,7 @@ fn log_tab(record: &Record, k: &Kit) -> El {
         .min_h(0.0)
         .w_full()
         .children(more)
-        .child(
+        .child(collie_desktop_chat::glide::smooth::<App>(
             col()
                 .key("log-text")
                 .grow(1.0)
@@ -3042,7 +3049,8 @@ fn log_tab(record: &Record, k: &Kit) -> El {
                 .border(1.0, k.c.border_weak)
                 .scroll(ScrollSpec { stick_bottom: true })
                 .child(mono(&said, "log-lines", k)),
-        )
+            "log-text",
+        ))
 }
 
 fn terminal_tab(app: &App, record: &Record, k: &Kit) -> El {

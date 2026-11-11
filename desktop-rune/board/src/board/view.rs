@@ -9,6 +9,7 @@ use super::{answers, as_of_said, dialogs};
 use crate::record::flow_of;
 use crate::shell::Page;
 use crate::{App, flow, icons};
+use collie_desktop_chat::glide::smooth;
 use collie_desktop_protocol::generated::{Decision, GlyphState, LostState, State};
 use rune::{Color, El, Icon, Key, LiveRegion, col, el, icon, row, text};
 use rune_kit::{
@@ -163,6 +164,8 @@ pub fn view_in(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         .scroll(rune::ScrollSpec {
             stick_bottom: false,
         })
+        .scroll_anchor()
+        .scroll_edge_fade(16.0)
         .on_layout(|app: &mut App, rect: [f32; 4]| {
             if (app.board.width - rect[2]).abs() > 0.5 {
                 app.board.width = rect[2];
@@ -177,6 +180,7 @@ pub fn view_in(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         .label("Board")
         .children(app.flow.as_ref().map(|map| flow::flow_map(map, flow_of, k)))
         .child(body);
+    let scroll = smooth::<App>(scroll, "board-scroll");
     dialogs::dialog(app, k, layer);
     if !board.notices.is_empty() {
         layer.push(notices(app, k));

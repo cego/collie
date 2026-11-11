@@ -105,6 +105,7 @@ fn merge<'a>(live: &[&'a CataloguesSuccessItem], set_model: &str) -> Vec<Merged<
         .map(|&harness| {
             let mut sources = Vec::new();
             let mut models: Vec<Held> = Vec::new();
+            let mut at_of: std::collections::HashMap<&str, usize> = Default::default();
             for reading in live {
                 for catalogue in reading.catalogues.iter().filter(|c| c.harness == harness) {
                     sources.push(Source {
@@ -115,9 +116,10 @@ fn merge<'a>(live: &[&'a CataloguesSuccessItem], set_model: &str) -> Vec<Merged<
                         if entry.hidden && entry.model != set_model {
                             continue;
                         }
-                        let at = match models.iter().position(|m| m.id == entry.model) {
-                            Some(at) => at,
+                        let at = match at_of.get(entry.model.as_str()) {
+                            Some(&at) => at,
                             None => {
+                                at_of.insert(&entry.model, models.len());
                                 models.push(Held {
                                     id: entry.model.clone(),
                                     entry,

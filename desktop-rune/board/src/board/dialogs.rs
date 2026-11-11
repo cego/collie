@@ -285,8 +285,10 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                 .scroll(rune::ScrollSpec {
                     stick_bottom: false,
                 })
-                .on_drawn_layout(|app: &mut App, r: [f32; 4]| {
-                    app.proposal_drawn(Some([r[1], r[3]]), None)
+                .on_drawn_layout_tx(|app: &mut App, r: [f32; 4], tx: &mut rune::Tx| {
+                    if !app.proposal_drawn(Some([r[1], r[3]]), None) {
+                        tx.live_only();
+                    }
                 })
                 .child(
                     text(proposal.text.clone())
@@ -297,8 +299,12 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                         .w_full(),
                 )
                 .child(steps)
-                .child(el().key("proposal-end").h(1.0).w_full().on_drawn_layout(
-                    |app: &mut App, r: [f32; 4]| app.proposal_drawn(None, Some(r[1] + r[3])),
+                .child(el().key("proposal-end").h(1.0).w_full().on_drawn_layout_tx(
+                    |app: &mut App, r: [f32; 4], tx: &mut rune::Tx| {
+                        if !app.proposal_drawn(None, Some(r[1] + r[3])) {
+                            tx.live_only();
+                        }
+                    },
                 ));
             let footer = row()
                 .w_full()

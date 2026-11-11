@@ -200,7 +200,7 @@ pub fn code(k: &Kit, said: impl Into<String>) -> El {
 
 /// The page's scrolling column, as wide as reads well.
 pub fn page(key: &str, label: &str, children: Vec<El>) -> El {
-    col()
+    let scroller = col()
         .key(key.to_string())
         .label(label.to_string())
         .grow(1.0)
@@ -209,6 +209,7 @@ pub fn page(key: &str, label: &str, children: Vec<El>) -> El {
         .scroll(rune::ScrollSpec {
             stick_bottom: false,
         })
+        .scroll_edge_fade(16.0)
         .child(
             col()
                 .w_full()
@@ -216,7 +217,8 @@ pub fn page(key: &str, label: &str, children: Vec<El>) -> El {
                 .padding(20.0)
                 .gap(20.0)
                 .children(children),
-        )
+        );
+    collie_desktop_chat::glide::smooth::<crate::App>(scroller, key)
 }
 
 /// A raised panel that groups one thing's lines.
