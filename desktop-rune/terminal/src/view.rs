@@ -7,8 +7,9 @@ use crate::keys::typed;
 use crate::pane::Pane;
 use crate::vt::{Cell, Frame, Rgb, Vt, XTERM_JS};
 use base64::Engine;
+use collie_desktop_protocol::client::RpcError;
 use collie_desktop_protocol::generated::{
-    At, Command, TerminalEvent, TerminalInput, TerminalMouseAction, Type,
+    ActionFailed, At, Command, TerminalEvent, TerminalInput, TerminalMouseAction, Type,
 };
 use ghostty_sys::{
     GHOSTTY_MOUSE_ACTION_MOTION, GHOSTTY_MOUSE_ACTION_PRESS, GHOSTTY_MOUSE_ACTION_RELEASE,
@@ -75,6 +76,14 @@ impl Tab {
             r#type: Type::TerminalInput,
             text: String::from_utf8_lossy(bytes).into_owned(),
         }));
+    }
+
+    /// Why the `terminal` stream failed.
+    pub fn failed(&mut self, error: RpcError<ActionFailed>) {
+        self.ended = Some(match error {
+            RpcError::Failed(failed) => failed.reason,
+            other => other.to_string(),
+        });
     }
 
     /// One event of the `terminal` stream.

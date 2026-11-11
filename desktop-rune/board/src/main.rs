@@ -35,7 +35,7 @@ fn go_to_panes(handle: &AppHandle<Board>, client: &Client) {
                         };
                         match event {
                             Ok(event) => tab.shown(event),
-                            Err(error) => tab.ended = Some(error.to_string()),
+                            Err(error) => tab.failed(error),
                         }
                     });
                 }
@@ -272,7 +272,7 @@ fn main() {
         }
     });
     // A headless render runs on a virtual clock, so it waits for a live board first.
-    if std::env::args().any(|arg| arg == "--snap" || arg == "--tree") {
+    if std::env::args().any(|arg| ["--snap", "--tree", "--script"].contains(&arg.as_str())) {
         let _ = first_live.recv_timeout(Duration::from_secs(60));
     }
 

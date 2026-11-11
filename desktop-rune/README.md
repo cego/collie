@@ -45,6 +45,7 @@ cargo test --workspace                 # client against the transcripts, the boa
 cargo run --release -p collie-desktop-terminal --example throughput   # VT bytes per second
 cargo run -p collie-desktop-board      # the window, with the live board of this Machine
 cargo run -p collie-desktop-board -- --snap board.png --tree board.json   # headless
+cargo run -p collie-desktop-board -- --script s.json --frames N --out frames/   # headless input, after the first live board
 cargo run -p collie-desktop-chat --bin record-say -- --out x.ndjson --say 'hello'   # record a turn
 cargo run -p collie-desktop-chat --bin corpus -- <dir of .md> [--png <dir>]  # the corpus table
 cargo run --release -p collie-desktop-chat --example highlight-cost -- <dir of .md>

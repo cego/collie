@@ -202,6 +202,8 @@ pub fn chat<S: 'static>(chat: &Chat, lens: fn(&mut S) -> &mut Chat, k: &Kit) -> 
             .label(said)
             .font(k.ty.small)
             .color(k.c.text_muted)
+            .wrap()
+            .grow(1.0)
     });
     // rune-kit's TextInput hides its field, so `on_input_paste` needs Rune's own.
     let composer = text_input(&chat.composer, k.ty.ui_compact)
@@ -267,10 +269,17 @@ pub fn chat<S: 'static>(chat: &Chat, lens: fn(&mut S) -> &mut Chat, k: &Kit) -> 
                 .w_full()
                 .child(attach)
                 .child(composer)
-                .child(action)
+                .child(action),
+        )
+        .child(
+            row()
+                .gap(8.0)
+                .center_y()
+                .w_full()
+                .justify_end()
+                .children(drops_unavailable)
                 .child(colours),
         )
-        .children(drops_unavailable)
 }
 
 /// The files a paste carries: the clipboard's own list, or text that is only `file://` URIs.

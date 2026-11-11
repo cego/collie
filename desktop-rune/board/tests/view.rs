@@ -286,3 +286,48 @@ fn a_panes_run_record_gives_its_flow_map_and_one_since_left_does_not() {
     let shown = keys(&runtime);
     assert!(!shown.iter().any(|k| k == "flow"), "{shown:?}");
 }
+
+#[test]
+fn the_chats_controls_stay_inside_its_panel_and_leave_the_composer_the_most_room() {
+    for running in [false, true] {
+        let mut board = board();
+        board.chatting = true;
+        board.chat.transcript.running = running;
+        let mut runtime = Runtime::new(
+            board,
+            view,
+            (1280.0, 900.0),
+            Env {
+                system_dark: true,
+                scale: 1.0,
+            },
+        );
+        runtime.frame(0.0);
+        let elements = runtime.elements();
+        let rect = |key: &str| {
+            elements
+                .iter()
+                .find(|e| e.key.as_deref() == Some(key))
+                .unwrap_or_else(|| panic!("no {key}"))
+                .rect
+        };
+        let [px, py, pw, ph] = rect("chat");
+        let action = if running { "stop" } else { "send" };
+        for key in ["attach", "composer", action, "highlighter"] {
+            let [x, y, w, h] = rect(key);
+            assert!(
+                x >= px && y >= py && x + w <= px + pw && y + h <= py + ph,
+                "{key} at {:?} leaves the chat at {:?} (running: {running})",
+                [x, y, w, h],
+                [px, py, pw, ph]
+            );
+        }
+        let composer = rect("composer")[2];
+        for key in ["attach", action, "highlighter"] {
+            assert!(
+                composer > rect(key)[2],
+                "the composer, {composer} wide, is narrower than {key} (running: {running})"
+            );
+        }
+    }
+}

@@ -104,3 +104,33 @@ fn each_run_of_one_style_is_a_mono_span_and_the_cursor_cell_is_inverted() {
         .expect("a span at the cursor");
     assert_eq!((cursor.end, cursor.bg.map(|bg| bg.r)), (40, Some(1.0)));
 }
+
+#[test]
+fn a_pane_the_core_cannot_open_says_why_in_its_own_words() {
+    use collie_desktop_protocol::client::RpcError;
+    use collie_desktop_protocol::generated::{ActionFailed, ActionFailedTag};
+    let mut tab = Tab::new(None, "vm-mk".into(), 100, 30);
+    tab.failed(RpcError::Failed(ActionFailed {
+        tag: ActionFailedTag::ActionFailed,
+        reason: "that Machine is not connected".into(),
+        request: None,
+        step: None,
+        refused: None,
+    }));
+    let mut runtime = Runtime::new(
+        Shown { tab },
+        view,
+        (800.0, 600.0),
+        Env {
+            system_dark: true,
+            scale: 1.0,
+        },
+    );
+    runtime.frame(0.0);
+    let said = runtime
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("terminal-ended"))
+        .and_then(|e| e.text);
+    assert_eq!(said.as_deref(), Some("that Machine is not connected"));
+}
