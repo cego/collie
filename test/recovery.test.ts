@@ -707,6 +707,19 @@ for (const point of ["claimed", "recovery-park-cleared", "recovery-entered"] as 
               (line) => line.action === "resumed" && line.outcome === "claimed",
             );
             expect(claims).toHaveLength(1);
+            const reconciled = yield* until(
+              () => again.runMetrics({ runId }).pipe(Effect.orDie),
+              (lines) =>
+                Arr.some(lines, (line) => line.action === "resumed" && line.outcome !== "claimed"),
+            );
+            expect(
+              Arr.filter(
+                reconciled,
+                (line) => line.action === "resumed" && line.outcome !== "claimed",
+              ),
+            ).toEqual([
+              expect.objectContaining({ recoveryId: claims[0]?.recoveryId, outcome: "resumed" }),
+            ]);
             const audit = yield* until(
               () => readAudit(`${world.state}/runs/${runId}`).pipe(Effect.orDie),
               (lines) => Arr.filter(lines, (line) => line.operation === "resume").length === 1,
