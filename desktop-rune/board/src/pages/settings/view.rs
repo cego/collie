@@ -1830,13 +1830,8 @@ fn own_view(app: &App, k: &Kit) -> El {
             .gap(2.0)
             .child(body)
     };
-    let small = |s: String, color: Color| {
-        text(s)
-            .font(k.ty.text_small)
-            .color(color)
-            .wrap()
-            .w_full()
-    };
+    let small =
+        |s: String, color: Color| text(s).font(k.ty.text_small).color(color).wrap().w_full();
     let mono = |s: String, color: Color| {
         text(s)
             .font(k.ty.mono)
@@ -1848,10 +1843,7 @@ fn own_view(app: &App, k: &Kit) -> El {
     };
     let none = || small("—".into(), k.c.text_faint);
     let header = COLUMNS.iter().enumerate().fold(
-        across()
-            .w_full()
-            .role("row")
-            .fill(k.c.surface_raised_base),
+        across().w_full().role("row").fill(k.c.surface_raised_base),
         |row, (at, (title, _))| {
             row.child(
                 cell(
@@ -2236,13 +2228,21 @@ pub fn view(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         show_about,
         k,
     );
+    // Under this width the index would squeeze every setting's words; the search finds them.
+    let narrow = page.width > 0.0 && page.width < 820.0;
     across()
         .key("settings-page")
         .grow(1.0)
         .min_h(0.0)
         .w_full()
         .items_start()
-        .child(index)
+        .on_layout(|app: &mut App, [_, _, w, _]: [f32; 4]| {
+            let page = &mut app.pages.settings;
+            if (page.width - w).abs() > 1.0 {
+                page.width = w;
+            }
+        })
+        .children((!narrow).then_some(index))
         .child(
             col()
                 .key("settings-scroll")

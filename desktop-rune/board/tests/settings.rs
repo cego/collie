@@ -1142,8 +1142,18 @@ fn each_machines_own_settings_are_a_row_a_machine_with_what_it_read() {
     runtime.state.apply(read);
     settle(&harness, &mut runtime, 900.0);
     let vm = texts_in(&runtime, "own-vm");
-    for shown in ["vm", "/work", "pi", "codex, claude", "linear.team = TOOLS", "In sync"] {
-        assert!(vm.iter().any(|t| t == shown), "{shown} is in vm's row: {vm:?}");
+    for shown in [
+        "vm",
+        "/work",
+        "pi",
+        "codex, claude",
+        "linear.team = TOOLS",
+        "In sync",
+    ] {
+        assert!(
+            vm.iter().any(|t| t == shown),
+            "{shown} is in vm's row: {vm:?}"
+        );
     }
     let laptop = texts_in(&runtime, "own-laptop");
     assert!(
@@ -1186,7 +1196,10 @@ fn setting_up_linear_shows_the_job_it_started_as_an_onboarding() {
     );
     harness.fake.answer("linearSetup", Ok(json!("job-linear")));
     settle(&harness, &mut runtime, 900.0);
-    assert_eq!(runtime.state.pages.machines.job.as_deref(), Some("job-linear"));
+    assert_eq!(
+        runtime.state.pages.machines.job.as_deref(),
+        Some("job-linear")
+    );
     assert!(
         runtime
             .elements()

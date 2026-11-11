@@ -349,11 +349,7 @@ fn workflow(k: &Kit, one: &Workflow, metadata_open: bool) -> El {
         .gap(8.0)
         .center_y()
         .child(badge(k, layer_of(&one.layer)))
-        .child(
-            text(one.id.clone())
-                .font(k.ty.mono)
-                .color(k.c.text_muted),
-        )
+        .child(text(one.id.clone()).font(k.ty.mono).color(k.c.text_muted))
         .child(text("·").font(k.ty.text_small).color(k.c.text_faint))
         .child(path_text(k, &one.path));
     let mut article = col().key("workflow").w_full().gap(28.0).child(header(

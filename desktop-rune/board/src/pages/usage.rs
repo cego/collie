@@ -406,11 +406,12 @@ fn meter(k: &Kit, window: &WindowView) -> El {
         .gap(6.0)
         .pt(6.0)
         .child(track)
-        .children(window.reset.clone().map(|reset| {
-            text(reset)
-                .font(k.ty.text_xsmall)
-                .color(k.c.text_faint)
-        }));
+        .children(
+            window
+                .reset
+                .clone()
+                .map(|reset| text(reset).font(k.ty.text_xsmall).color(k.c.text_faint)),
+        );
     row()
         .key(format!("window-{}", window.key))
         .role("progressbar")
@@ -528,7 +529,7 @@ pub fn view(app: &App, k: &Kit, _layer: &mut Vec<El>) -> El {
     let read = match state.read_at {
         _ if state.reading && !state.listed => "Asking each live Machine…".to_string(),
         Some(at) => format!(
-            "Read {} from each live Machine; read again every minute",
+            "Read at {} from each live Machine, and again every minute",
             super::clock::when_of(at, now, &zone)
         ),
         None => "Read from each live Machine every minute".to_string(),
@@ -572,9 +573,7 @@ pub fn view(app: &App, k: &Kit, _layer: &mut Vec<El>) -> El {
                 ),
         );
     let mut children = vec![header];
-    if !state.listed {
-        children.push(muted(k, "Asking each Machine…"));
-    } else if shown.sections.is_empty() && shown.not_read.is_empty() {
+    if state.listed && shown.sections.is_empty() && shown.not_read.is_empty() {
         children.push(muted(k, "No live Machine has reported usage yet."));
     }
     children.extend(shown.sections.iter().map(|s| section(k, s)));

@@ -952,7 +952,9 @@ fn the_header_says_which_machines_it_reaches_and_never_calls_one_connecting_in_s
     let mut runtime = machines_page(&harness);
     for one in [
         snapshot("i-vm", "p-vm", "vm", "0.35.0"),
-        item(json!({ "_tag": "Reconnecting", "machine": { "profile": "p-vm", "name": "vm" }, "at": 5.0 })),
+        item(
+            json!({ "_tag": "Reconnecting", "machine": { "profile": "p-vm", "name": "vm" }, "at": 5.0 }),
+        ),
     ] {
         runtime.state.apply(one);
     }
@@ -969,12 +971,20 @@ fn the_header_says_which_machines_it_reaches_and_never_calls_one_connecting_in_s
         !said(&runtime, "Every Machine is in sync"),
         "a Machine connecting is not said to be in sync"
     );
-    assert!(said(&runtime, "Every Machine reached is in sync with Desktop 0.35.0"));
-    runtime.state.apply(snapshot("i-vm", "p-vm", "vm", "0.35.0"));
+    assert!(said(
+        &runtime,
+        "Every Machine reached is in sync with Desktop 0.35.0"
+    ));
+    runtime
+        .state
+        .apply(snapshot("i-vm", "p-vm", "vm", "0.35.0"));
     settle(&harness, &mut runtime);
     runtime.frame(800.0);
     assert!(said(&runtime, "2 of 2 Machines reached"));
-    assert!(said(&runtime, "Every Machine is in sync with Desktop 0.35.0"));
+    assert!(said(
+        &runtime,
+        "Every Machine is in sync with Desktop 0.35.0"
+    ));
 }
 
 #[test]
@@ -985,7 +995,10 @@ fn an_onboarding_started_anywhere_shows_over_whichever_page_is_open() {
     runtime.state.pages.machines.job = Some("job-9".into());
     settle(&harness, &mut runtime);
     runtime.frame(400.0);
-    assert!(said(&runtime, "Starting…"), "the onboarding shows on Settings");
+    assert!(
+        said(&runtime, "Starting…"),
+        "the onboarding shows on Settings"
+    );
     runtime.state.open_page(Page::Board);
     settle(&harness, &mut runtime);
     runtime.frame(800.0);

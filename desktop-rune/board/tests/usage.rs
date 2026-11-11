@@ -386,7 +386,7 @@ fn opening_the_page_asks_each_machine_and_draws_a_meter_per_window_of_the_live_o
     app.open_page(Page::Usage);
     let mut runtime = runtime(app);
     assert_eq!(harness.fake.asked_of("usage").len(), 1);
-    assert!(said(&runtime, "Asking each Machine…"));
+    assert!(said(&runtime, "Asking each live Machine…"));
     let answer = json!([
         machine("vm", vec![reading(json!({ "windows": [window(json!({ "usedPercent": 72,
             "resetsAt": "2099-01-01T00:00:00Z" }))] }))]),
@@ -421,8 +421,11 @@ fn the_page_reads_usage_again_on_its_own_while_desktop_runs() {
     let mut app = flock_app(&harness);
     app.pages.usage.every = std::time::Duration::from_millis(250);
     let fresh = |percent: u32| {
-        json!([machine("vm", vec![reading(json!({ "windows": [window(json!({
-            "usedPercent": percent, "resetsAt": "2099-01-01T00:00:00Z" }))] }))])])
+        json!([machine(
+            "vm",
+            vec![reading(json!({ "windows": [window(json!({
+            "usedPercent": percent, "resetsAt": "2099-01-01T00:00:00Z" }))] }))]
+        )])
     };
     harness.fake.will_answer("usage", Ok(fresh(10)));
     app.open_page(Page::Usage);
@@ -440,5 +443,8 @@ fn the_page_reads_usage_again_on_its_own_while_desktop_runs() {
         harness.fake.asked_of("usage").len() >= 2,
         "it asked again without being told to"
     );
-    assert!(said(&runtime, "Session: 64%"), "and shows the fresh reading");
+    assert!(
+        said(&runtime, "Session: 64%"),
+        "and shows the fresh reading"
+    );
 }

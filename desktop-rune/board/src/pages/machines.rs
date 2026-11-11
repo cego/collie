@@ -351,19 +351,15 @@ fn machine(k: &Kit, row: &MachineRow, holds: &DesktopHolds) -> El {
         }
         _ => {}
     }
-    let mut actions = rune::row()
-        .w_full()
-        .gap(8.0)
-        .center_y()
-        .child(
-            text(build_of(row))
-                .key("build")
-                .font(k.ty.text_small)
-                .color(k.c.text_faint)
-                .grow(1.0)
-                .shrink()
-                .truncate(),
-        );
+    let mut actions = rune::row().w_full().gap(8.0).center_y().child(
+        text(build_of(row))
+            .key("build")
+            .font(k.ty.text_small)
+            .color(k.c.text_faint)
+            .grow(1.0)
+            .shrink()
+            .truncate(),
+    );
     let profile = row.profile.clone();
     if syncable(&verdict) {
         let profile = profile.clone();
@@ -510,27 +506,16 @@ pub fn view(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
                     .a11y_hidden(),
             )
     };
-    let mut summary = col()
-        .grow(1.0)
-        .shrink()
-        .min_w(0.0)
-        .gap(6.0)
-        .child(line(
-            "reach",
-            reached,
-            reach_tone,
-            k.ty.body_medium,
-            k.c.text_strong,
-        ));
+    let mut summary = col().grow(1.0).shrink().min_w(0.0).gap(6.0).child(line(
+        "reach",
+        reached,
+        reach_tone,
+        k.ty.body_medium,
+        k.c.text_strong,
+    ));
     if let Some((said, lagging)) = synced {
         let tone = if lagging == 0 { Tone::Ok } else { Tone::Warn };
-        summary = summary.child(line(
-            "in-sync",
-            said,
-            tone,
-            k.ty.text_small,
-            k.c.text_muted,
-        ));
+        summary = summary.child(line("in-sync", said, tone, k.ty.text_small, k.c.text_muted));
     }
     let top = rune::row()
         .w_full()

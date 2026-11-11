@@ -243,7 +243,11 @@ fn pausing_the_chosen_schedule_asks_its_host_says_what_it_did_and_reads_again() 
     let harness = Harness::<App>::new();
     let mut runtime = schedules_page(&harness);
     let mut at = 100.0;
-    tap(&mut runtime, "schedules-i-vm/schedule-daily/schedule-pause", &mut at);
+    tap(
+        &mut runtime,
+        "schedules-i-vm/schedule-daily/schedule-pause",
+        &mut at,
+    );
     assert_eq!(
         harness.fake.asked_of("changeSchedule"),
         [json!({ "installation": "i-vm", "name": "daily", "change": "pause" })]
@@ -258,7 +262,11 @@ fn pausing_the_chosen_schedule_asks_its_host_says_what_it_did_and_reads_again() 
         2,
         "it reads again"
     );
-    tap(&mut runtime, "schedules-i-vm/schedule-daily/schedule-remove", &mut at);
+    tap(
+        &mut runtime,
+        "schedules-i-vm/schedule-daily/schedule-remove",
+        &mut at,
+    );
     harness
         .fake
         .answer("changeSchedule", Err(CallError("vm's host refused".into())));
@@ -272,7 +280,11 @@ fn moving_a_schedule_sends_it_to_the_machine_chosen_with_its_checkout_there() {
     let harness = Harness::<App>::new();
     let mut runtime = schedules_page(&harness);
     let mut at = 100.0;
-    tap(&mut runtime, "schedules-i-vm/schedule-daily/schedule-move", &mut at);
+    tap(
+        &mut runtime,
+        "schedules-i-vm/schedule-daily/schedule-move",
+        &mut at,
+    );
     assert!(
         said(&runtime, "mk-pc"),
         "the other reachable Machine is offered"
@@ -296,14 +308,26 @@ fn a_schedules_next_and_last_occurrence_are_said_on_the_clock() {
     use collie_desktop_board::pages::schedules::{last_said, next_said};
     let now = epoch_ms("2026-10-15T02:00:00.000Z").unwrap();
     let utc = Zone::utc();
-    let row = |over: Value| machine_schedules(&machine(json!({ "schedules": [entry(over)] }))).rows[0].clone();
+    let row = |over: Value| {
+        machine_schedules(&machine(json!({ "schedules": [entry(over)] }))).rows[0].clone()
+    };
     assert_eq!(next_said(&row(json!({})), now, &utc), "05:00 · in 3h 0m");
     assert_eq!(
-        next_said(&row(json!({ "next": "2026-10-17T05:00:00.000Z" })), now, &utc),
+        next_said(
+            &row(json!({ "next": "2026-10-17T05:00:00.000Z" })),
+            now,
+            &utc
+        ),
         "17 Oct, 05:00 · in 2d 3h"
     );
-    assert_eq!(next_said(&row(json!({ "next": null })), now, &utc), "When its Run ends");
-    assert_eq!(next_said(&row(json!({ "paused": true })), now, &utc), "Paused");
+    assert_eq!(
+        next_said(&row(json!({ "next": null })), now, &utc),
+        "When its Run ends"
+    );
+    assert_eq!(
+        next_said(&row(json!({ "paused": true })), now, &utc),
+        "Paused"
+    );
     assert_eq!(last_said(&row(json!({})), now, &utc), "Nothing yet");
     let ran = row(json!({ "last": { "occurrence": "2026-10-14T05:00:00.000Z",
         "outcome": { "kind": "run", "run": "run-1", "status": "complete" } } }));
@@ -316,18 +340,26 @@ fn a_machine_that_connects_while_the_page_is_open_has_its_schedules_read() {
     let harness = Harness::<App>::new();
     let mut app = flock_app(&harness);
     let item = |value: Value| -> FlockItem { serde_json::from_value(value).unwrap() };
-    app.apply(item(json!({ "_tag": "Lost", "machine": { "profile": "p-vm", "name": "vm" },
-        "state": "unreachable", "reason": "connection refused", "at": 1.0 })));
+    app.apply(item(
+        json!({ "_tag": "Lost", "machine": { "profile": "p-vm", "name": "vm" },
+        "state": "unreachable", "reason": "connection refused", "at": 1.0 }),
+    ));
     app.open_page(Page::Schedules);
     let mut runtime = runtime(app);
     harness.fake.answer(
         "schedules",
-        Ok(json!([on(json!({ "installation": "i-pc", "profile": "local", "name": "mk-pc" }))])),
+        Ok(json!([on(
+            json!({ "installation": "i-pc", "profile": "local", "name": "mk-pc" })
+        )])),
     );
     settle(&harness, &mut runtime);
     runtime.frame(100.0);
     runtime.frame(200.0);
-    assert_eq!(harness.fake.asked_of("schedules").len(), 1, "read once on opening");
+    assert_eq!(
+        harness.fake.asked_of("schedules").len(),
+        1,
+        "read once on opening"
+    );
     runtime.state.apply(item(json!({
         "machine": { "installation": "i-vm", "profile": "p-vm", "name": "vm" },
         "message": { "_tag": "Snapshot", "installation": "i-vm", "build": "0.35.0",
@@ -345,11 +377,16 @@ fn a_machine_that_connects_while_the_page_is_open_has_its_schedules_read() {
         "schedules",
         Ok(json!([
             on(json!({ "installation": "i-pc", "profile": "local", "name": "mk-pc" })),
-            on(json!({ "installation": "i-vm", "profile": "p-vm", "name": "vm",
-                "schedules": [entry(json!({}))] })),
+            on(
+                json!({ "installation": "i-vm", "profile": "p-vm", "name": "vm",
+                "schedules": [entry(json!({}))] })
+            ),
         ])),
     );
     settle(&harness, &mut runtime);
     runtime.frame(500.0);
-    assert!(said(&runtime, "self-improve in /src/collie"), "vm's Schedule is listed");
+    assert!(
+        said(&runtime, "self-improve in /src/collie"),
+        "vm's Schedule is listed"
+    );
 }

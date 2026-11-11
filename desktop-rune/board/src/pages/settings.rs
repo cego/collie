@@ -107,6 +107,8 @@ pub struct Settings {
     pub host_said: Option<Result<String, String>>,
 
     streams: Vec<Stop>,
+    /// The page's width as last laid out; a narrow page leaves its index out.
+    pub width: f32,
 }
 
 impl Settings {

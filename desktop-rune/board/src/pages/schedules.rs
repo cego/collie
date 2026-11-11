@@ -393,7 +393,10 @@ impl App {
     pub fn schedules_reach(&mut self, live: &str) {
         let state = &self.pages.schedules;
         if self.nav.page == crate::shell::Page::Schedules
-            && state.asked_live.as_deref().is_some_and(|asked| asked != live)
+            && state
+                .asked_live
+                .as_deref()
+                .is_some_and(|asked| asked != live)
         {
             self.read_schedules();
         }
@@ -555,7 +558,11 @@ fn action_button(k: &Kit, row: &RowView, action: Action) -> El {
         .on_press(move |app: &mut App| app.schedule_action(&installation, &name, action))
         .build(k)
         .key(action.key())
-        .label(format!("{} {}", action.label().trim_end_matches('…'), row.name))
+        .label(format!(
+            "{} {}",
+            action.label().trim_end_matches('…'),
+            row.name
+        ))
 }
 
 /// One fact of a Schedule: a faint caption over its value.
@@ -695,9 +702,11 @@ fn machine_section(k: &Kit, machine: &SchedulesSuccessItem, now: f64, zone: &Zon
     if view.rows.is_empty() {
         let said = view.said.unwrap_or_default();
         body = body.child(
-            col().w_full().px(16.0).py(14.0).child(
-                toned(k, said, tone).key(format!("schedules-said-{}", machine.profile)),
-            ),
+            col()
+                .w_full()
+                .px(16.0)
+                .py(14.0)
+                .child(toned(k, said, tone).key(format!("schedules-said-{}", machine.profile))),
         );
     }
     let n = view.rows.len();
@@ -789,5 +798,9 @@ pub fn view(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         .min_h(0.0)
         .w_full()
         .child(marker)
-        .child(super::common::page("schedules-scroll", "Schedules", children))
+        .child(super::common::page(
+            "schedules-scroll",
+            "Schedules",
+            children,
+        ))
 }
