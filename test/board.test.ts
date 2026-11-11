@@ -32,6 +32,7 @@ import {
 import { encodeStepLine, STEPS_FILE, type StepLine, type StepMeta } from "../src/steps";
 import { machineName } from "../src/peers";
 import { nothingToLandFile } from "../src/standing";
+import { writeStageProof } from "../src/shipping";
 import {
   Answered,
   Controlled,
@@ -1723,7 +1724,8 @@ test("a declared shipping Go holds only at its head and gates; an ordinary quest
         expect(ready!.shippingMr).toBe(M);
         const [moved] = yield* read(action, "new-head");
         expect(sectionOf(moved!)).toBe("needs-you");
-        expect(moved!.sentence).toContain("no longer holds");
+        expect(moved!.sentence).toContain("no longer holds for 77215b1");
+        expect(moved!.shipping).toBeNull();
         const [blocked] = yield* read(action, M_HEAD, false);
         expect(sectionOf(blocked!)).toBe("needs-you");
         expect(blocked!.sentence).toContain("not approved");
@@ -1731,6 +1733,49 @@ test("a declared shipping Go holds only at its head and gates; an ordinary quest
       for (const workflow of ["release", "stage"]) {
         const [ordinary] = yield* read(null, M_HEAD, true, workflow);
         expect(sectionOf(ordinary!)).toBe("needs-you");
+      }
+    }),
+  ));
+
+test("a head Deploy Go needs a current forge answer whose read time is not in the future", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, {
+        task: TASK.id,
+        mr: M,
+        state: "waiting",
+        asking: [
+          {
+            name: "production",
+            prompt: "Ship it?",
+            options: [],
+            shipping: { action: "deploy", head: M_HEAD },
+          },
+        ],
+      });
+      yield* writeStageProof(run.dir, { head: M_HEAD, tag: null, proved: true, why: null });
+      const read = (read: string, asked = read) =>
+        board(env, [run], {
+          mrStates: new Map([[M_ID, "open"]]),
+          forge: new Map([[M_ID, { head: M_HEAD, read, asked, checks: { state: "unknown" } }]]),
+        });
+
+      const [future] = yield* read("2026-09-14T10:06:00Z");
+      expect(sectionOf(future!)).toBe("needs-you");
+      expect(future!.shipping).toBeNull();
+      expect(future!.sentence).toContain("no longer holds for 77215b1");
+      const [fresh] = yield* read("2026-09-14T10:04:00Z");
+      expect(sectionOf(fresh!)).toBe("ready-to-ship");
+      expect(fresh!.shipping).toBe("deploy");
+      for (const [readAt, askedAt] of [
+        ["invalid", "invalid"],
+        ["2026-09-14T09:54:00Z", "2026-09-14T09:54:00Z"],
+        ["2026-09-14T10:04:00Z", "2026-09-14T10:05:00Z"],
+      ] as const) {
+        const [card] = yield* read(readAt, askedAt);
+        expect(sectionOf(card!)).toBe("needs-you");
+        expect(card!.shipping).toBeNull();
       }
     }),
   ));

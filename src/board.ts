@@ -1673,6 +1673,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           const current = gate.forged;
           const fresh =
             current?.read !== undefined &&
+            epochMs(current.read) <= now &&
             now - epochMs(current.read) <= 2 * MERGE_POLL_MS &&
             epochMs(current.asked ?? current.read) <= epochMs(current.read);
           if ("head" in go && (!fresh || current?.head !== go.head))
