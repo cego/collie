@@ -1657,6 +1657,8 @@ Rechecks record their result, build, and backoff. An automatic resume records a 
 outcome under one `recoveryId`; the report counts a completed resume once. A false recovery
 counts as a resume, but contributes no successful recovery time. `run show` and the card
 retain the latest recovery actions after the park clears; the drawer lists the latest 20.
+Plain `run show`, chat's Run details, and Desktop's card and Run record show the park cause,
+kind, and recovery actions too. Desktop cards show the latest two actions; the record shows the latest 20.
 A context sample is recorded as a
 `context` line wherever Collie samples a reused agent's context at a work boundary. A Run
 from before those were recorded counts none of either. The text caps each list at 20 lines and each list of Run ids

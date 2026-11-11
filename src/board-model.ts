@@ -967,6 +967,8 @@ export type RecordPart = typeof RecordPart.Type;
 
 export const RunDetail = Schema.Struct({
   id: Schema.String,
+  park: Schema.optionalKey(Schema.NullOr(Park)),
+  recovery: Schema.optionalKey(Schema.Array(Schema.String)),
   /** The record's revision; absent from a host without the Run model. */
   revision: Schema.optionalKey(RunRevision),
   /** Its parts still to come, each shown as loading until a later frame brings it. */

@@ -10,7 +10,9 @@ import { Effect, FileSystem, Schema } from "effect";
 import { TaskView } from "../src/board-model";
 import { connect } from "../src/host";
 import { until } from "./support/host";
-import { collie, proves, type World } from "./support/world";
+import { collie, collieCommand, proves, type World } from "./support/world";
+import { exec } from "./support/command";
+import { suiteEnv } from "./support/effect";
 
 test(
   "a park is recorded once per reason it moves into, and a clear records nothing",
@@ -81,10 +83,30 @@ test(
       "collie-park-cause-",
       (world) =>
         Effect.gen(function* () {
+          yield* collie(world, ["board"], { COLLIE_RECOVERY_EVERY: "100 millis" });
           const { client, runId } = yield* parkedFor(world, "ci-job-absent");
           const park = { cause: "ci-job-absent", kind: "rechecks" };
           const shown = yield* collie(world, ["run", "show", runId]);
           expect(shown.envelope.data).toMatchObject({ run: { runId, park } });
+          yield* until(
+            () => client.run({ runId }).pipe(Effect.orDie),
+            (view) => (view?.recovery?.length ?? 0) > 0,
+          );
+          const human = yield* exec([...(yield* collieCommand), "run", "show", runId], {
+            cwd: world.project,
+            env: {
+              PATH: "/usr/bin:/bin",
+              HOME: world.home,
+              HERDR_PLUGIN_ROOT: world.install,
+              HERDR_PLUGIN_STATE_DIR: world.state,
+              COLLIE_USER_DIR: world.config,
+              ...(yield* suiteEnv),
+            },
+          });
+          expect(human.exitCode).toBe(0);
+          expect(human.stdout).toContain("Parked: ci-job-absent · Collie rechecks");
+          expect(human.stdout).toContain("Recovery:");
+          expect(human.stdout).toContain("rechecked uncleared");
           const printed = yield* collie(world, ["board"]);
           const { tasks } = yield* Schema.decodeUnknownEffect(Board)(printed.envelope.data).pipe(
             Effect.orDie,

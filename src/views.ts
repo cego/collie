@@ -542,6 +542,8 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
     dir: run.dir,
     title: runTitle(run),
     status: run.state,
+    park: run.park,
+    recovery: run.recovery,
     inputs: Arr.map(Rec.toEntries(run.settled.inputs), ([name, value]) => ({
       name,
       value,
