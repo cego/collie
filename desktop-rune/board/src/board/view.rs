@@ -844,7 +844,7 @@ fn card(
                 .hover(c.hover)
                 .focusable(live)
                 .focus_ring(2.0, 0.0, c.border_focus)
-                .on_press(move |app: &mut App| app.open_card(&open))
+                .on_press(move |app: &mut App| app.open_card_at_flow(&open))
                 .role("button")
                 .label(strip.name.clone())
                 .child(glyphs)

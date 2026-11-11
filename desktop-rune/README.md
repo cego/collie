@@ -5,7 +5,8 @@ shell can draw Desktop's board with today's main process as its core. The app st
 `desktop/src/bun/index.ts` as a child process. `core/electrobun-stdio.ts` stands in for
 `electrobun/bun`, so Desktop's own code is unchanged. It then speaks `DesktopRpcs` to the core
 as Effect RPC over NDJSON on the core's stdio, subscribes to `flock`, and draws each Machine and
-its cards. Pressing a card opens its Run's record on the Terminal tab: Rune draws the pane's
+its cards. Pressing a card opens its Run's record on the Terminal tab, and its Flow strip on the
+Flow tab at the Run's active Step; on Terminal, and only there, Rune draws the pane's
 terminal from the `terminal` stream, through libghostty-vt, and sends what the human does back
 on `terminalSend`. The record's other tabs (Flow, Summary, Plan, Review, Diff, Evidence, Log,
 Facts, the merge request) read `runDetail` and `runFile`, and its Diff tab shows the Run's diff
@@ -286,22 +287,31 @@ step actions, notes, questions and proposals are sent through `act` under a requ
 refused one says why and offers Try again with the same request. A gesture on a Machine out of
 reach is still sent, marked `unsent`, so the host says so. Evidence draws images in place; a
 report is confined by Desktop's CSP and opened in the browser from a file through `openLink`,
-never drawn (D2 in ADR-draft-collie-desktop-is-drawn-by-rune); a video opens the same way.
+never drawn (D2 in ADR-draft-collie-desktop-is-drawn-by-rune); a video opens the same way. A
+check's output, a kept log or a handoff note opens under its row on a press, Enter or Space,
+read from `runFile` the first time, as `EvidenceText.vue` does. A record attaches its Run's pane
+only while Terminal is the tab shown, and leaves it as the tab is left.
 
 The Flow tab draws each lane as a map of Step cards that wraps to the record's width, with
 `FlowGlyph.vue`'s state marks drawn on a canvas (`board/src/flow/glyph.rs`) and the Step's
 inspector beside it once there is room. A Step's open questions are answered one at a time,
-"Question k of n", each its own `Answer`; its Start asks the Run what it `offers` now and sends
+"Question k of n", each its own `Answer`. A question the board also has is answered through the
+board's questionnaire, as `FlowDecision.vue` does: Hold the Run among its options, words for the
+agent instead, a status line, and the next question once the host takes the answer. Its Start asks the Run what it `offers` now and sends
 `Invoke` with the inputs typed, as the board's offers dialog does.
 
 The Diff tab reads each file's patch (`diff:<path>`) and parses it with rune-kit's
 `diff::parse`: only an open file's, four at a time, so a big file is read once it is opened; a
 file the Run has not changed again keeps its patch when the diff is read again, and coming back
 to the tab brings back the file read last. A tree beside it folds by folder, filters and goes to a
-file; a file ticked Viewed collapses and stays ticked while its patch is unchanged. It shows unified or split. Selected lines, in the
-diff or the plan, plus a comment become a draft; the drafts are sent as one Delivery, in the text
+file; a file ticked Viewed collapses and stays ticked while its patch is unchanged. It shows unified or split. A press on a line
+number selects it, a drag or Shift-press extends it, and a comment box opens under the lines,
+focused; a span selected in the plan opens one too. Enter or Comment saves a draft, shown under
+its lines, where it is edited or removed; Escape, Cancel, leaving the tab or file, or a press
+elsewhere with nothing typed closes the box. The drafts are sent as one Delivery, in the text
 `review-comments.ts` composes (ADR-0051), and cleared once the host takes it.
-`board/tests/record.rs` and `board/tests/record_view.rs` drive this against the fake core;
+`board/tests/record.rs`, `record_view.rs`, `comments.rs`, `evidence.rs` and `questions.rs` drive
+this against the fake core;
 nothing there acts on a live core.
 
 **Recordings.** `record-say` asks the spike core's `say` and writes each event as NDJSON. The

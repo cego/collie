@@ -201,3 +201,38 @@ pub fn plan_progress(tickets: &[Ticket]) -> Option<String> {
         format!("{done} of {} tickets done", tickets.len())
     })
 }
+
+/// `said` without its terminal escapes (colours, cursor moves, titles), as plain text shows it;
+/// `AnsiText.vue` draws the colours, which Rune's text here leaves out.
+pub fn without_escapes(said: &str) -> String {
+    let mut plain = String::with_capacity(said.len());
+    let mut chars = said.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            if c != '\r' {
+                plain.push(c);
+            }
+            continue;
+        }
+        match chars.next() {
+            // CSI: parameters, then one final byte from @ to ~.
+            Some('[') => {
+                for c in chars.by_ref() {
+                    if ('@'..='~').contains(&c) {
+                        break;
+                    }
+                }
+            }
+            // OSC: up to BEL or ST.
+            Some(']') => {
+                while let Some(c) = chars.next() {
+                    if c == '\u{7}' || (c == '\u{1b}' && chars.next_if_eq(&'\\').is_some()) {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    plain
+}

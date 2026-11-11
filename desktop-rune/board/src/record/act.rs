@@ -3,6 +3,8 @@
 //! `desktop/src/shared/actions.ts`.
 
 use crate::App;
+use crate::board::questionnaire::Event;
+use collie_desktop_protocol::generated::Question;
 use collie_desktop_protocol::generated::{ActPayload, ActPayloadAction};
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
@@ -153,6 +155,19 @@ pub fn offer_ready(fields: &[(String, bool, rune::edit::TextEdit)]) -> bool {
 impl App {
     /// What pressing a Flow or lane action does: sends it, opens its form, or shows its part.
     pub fn run_effect(&mut self, effect: Effect) {
+        // The board's own questions for the open Run, which carry Hold and steering.
+        let on_board: Vec<Question> = match &self.record.open {
+            Some(record) => self
+                .machines
+                .iter()
+                .filter(|m| m.machine.installation == record.installation)
+                .flat_map(|m| &m.cards)
+                .flat_map(crate::board::answers::open_questions)
+                .filter(|q| q.run == record.run)
+                .cloned()
+                .collect(),
+            None => Vec::new(),
+        };
         let Some(record) = &mut self.record.open else {
             return;
         };
@@ -189,12 +204,17 @@ impl App {
                 let questions = questions
                     .into_iter()
                     .map(|q| super::Asked {
+                        board: on_board
+                            .iter()
+                            .find(|b| b.run == q.run && b.id == q.id)
+                            .cloned(),
                         id: q.id,
                         asked: q.text,
                         options: q.options,
                         picked: None,
                         edit: rune::edit::TextEdit::default(),
                         sent: None,
+                        steer: rune::edit::TextEdit::default(),
                     })
                     .collect();
                 record.form = Some(Form::Answer {
@@ -333,6 +353,116 @@ impl App {
             after: After::Nothing,
         };
         self.act_again(sent);
+    }
+
+    /// The board's question at `at` of the answer form, with its installation and Machine.
+    fn board_question(&self, at: usize) -> Option<(String, String, Question)> {
+        let record = self.record.open.as_ref()?;
+        let Some(Form::Answer { questions, .. }) = &record.form else {
+            return None;
+        };
+        let question = questions.get(at)?.board.clone()?;
+        Some((
+            record.installation.clone(),
+            record.machine.clone(),
+            question,
+        ))
+    }
+
+    /// Whether the answer form's question `at` has nothing more to send: answered, or gone.
+    pub fn question_settled(&self, at: usize) -> bool {
+        match self.board_question(at) {
+            Some((installation, _, question)) => {
+                self.questionnaire_of(&installation, &question)
+                    .view()
+                    .settled
+            }
+            None => self
+                .record
+                .open
+                .as_ref()
+                .and_then(|r| match &r.form {
+                    Some(Form::Answer { questions, .. }) => questions.get(at),
+                    _ => None,
+                })
+                .is_none_or(|q| q.sent.is_some()),
+        }
+    }
+
+    /// The question the answer form shows: the one chosen, or once it is answered the next
+    /// still open; none once every one is, and the form is done.
+    pub fn question_shown(&self) -> Option<usize> {
+        let Some(Form::Answer { questions, at, .. }) =
+            self.record.open.as_ref().and_then(|r| r.form.as_ref())
+        else {
+            return None;
+        };
+        let n = questions.len();
+        (0..n)
+            .map(|step| (at + step) % n)
+            .find(|i| !self.question_settled(*i))
+    }
+
+    /// Feeds the board's questionnaire for the question shown one event.
+    fn step_shown(&mut self, event: Event) {
+        let Some(at) = self.question_shown() else {
+            return;
+        };
+        let Some((installation, machine, question)) = self.board_question(at) else {
+            return;
+        };
+        self.step_question(&installation, &machine, &question, event);
+    }
+
+    /// Picks a row of the question shown, Hold the Run among them.
+    pub fn pick_in_record(&mut self, id: String) {
+        self.step_shown(Event::Pick(id));
+    }
+
+    /// Answers the question shown with the row picked or the words typed.
+    pub fn answer_in_record(&mut self) {
+        let Some(at) = self.question_shown() else {
+            return;
+        };
+        if self.board_question(at).is_none() {
+            self.send_form(None);
+            return;
+        }
+        let typed = self.typed_at(at, |q| &q.edit);
+        self.step_shown(Event::Type(typed));
+        self.step_shown(Event::Submit(new_request()));
+    }
+
+    /// Sends the steering words to the agent instead of an answer.
+    pub fn steer_in_record(&mut self) {
+        let Some(at) = self.question_shown() else {
+            return;
+        };
+        // Words left in the field are sent; with none, the words kept from a send that failed.
+        let draft = self.typed_at(at, |q| &q.steer);
+        if !draft.trim().is_empty() {
+            self.step_shown(Event::Draft(draft));
+        }
+        self.step_shown(Event::Steer(new_request()));
+        let sending = self
+            .board_question(at)
+            .is_some_and(|(i, _, q)| self.questionnaire_of(&i, &q).view().sending);
+        if sending
+            && let Some(Form::Answer { questions, .. }) =
+                self.record.open.as_mut().and_then(|r| r.form.as_mut())
+        {
+            questions[at].steer = rune::edit::TextEdit::default();
+        }
+    }
+
+    fn typed_at(&self, at: usize, field: fn(&super::Asked) -> &rune::edit::TextEdit) -> String {
+        match self.record.open.as_ref().and_then(|r| r.form.as_ref()) {
+            Some(Form::Answer { questions, .. }) => questions
+                .get(at)
+                .map(|q| field(q).text.clone())
+                .unwrap_or_default(),
+            _ => String::new(),
+        }
     }
 
     /// Shows the answer form's question `at`.

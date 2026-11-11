@@ -99,6 +99,11 @@ pub struct Asked {
     pub picked: Option<String>,
     pub edit: TextEdit,
     pub sent: Option<String>,
+    /// The question as the board has it, when it does: then it is answered through the
+    /// board's questionnaire, with Hold and steering, as `FlowDecision.vue` substitutes it.
+    pub board: Option<collie_desktop_protocol::generated::Question>,
+    /// Words for the agent instead of an answer.
+    pub steer: TextEdit,
 }
 
 pub struct Record {
@@ -134,6 +139,12 @@ pub struct Record {
     pub opening: Vec<String>,
     /// The run or link of the selected Step the inspector shows, by id.
     pub entry: Option<String>,
+    /// The record's drawn width, which decides whether the drafts sit beside a tab or under it.
+    pub width: f32,
+    /// Whether the Run's active Step is chosen on Flow once its Flow is read.
+    pub at_active: bool,
+    /// The evidence items opened under their rows: a check's output, a kept log, a note.
+    pub expanded: Vec<String>,
 }
 
 impl Record {
@@ -159,6 +170,9 @@ impl Record {
             whole_log: false,
             opening: Vec::new(),
             entry: None,
+            width: 0.0,
+            at_active: false,
+            expanded: Vec::new(),
         }
     }
 
@@ -189,6 +203,8 @@ pub struct Records {
     pub terminal_size: Option<(u16, u16)>,
     /// What Open in herdr did, or why it could not.
     pub terminal_said: Option<String>,
+    /// Whether the record a card opens now opens on Flow rather than on its terminal.
+    to_flow: bool,
     images: Option<rune::ImageCache>,
 }
 
@@ -223,9 +239,43 @@ fn facts_of(record: &Record, live: bool, flow: bool, mr: Option<String>) -> TabF
 }
 
 impl App {
-    /// Goes to a Run's pane: its record, on Terminal while its Machine is reached.
+    /// Goes to a Run's pane: its record, on Terminal while its Machine is reached; on Flow for
+    /// a card's Flow strip, which never attaches to the agent.
     pub fn go_to_pane(&mut self, installation: String, run: String, machine: String) {
-        self.open_record(installation, run, machine, Some("terminal"));
+        let tab = if self.record.to_flow {
+            "flow"
+        } else {
+            "terminal"
+        };
+        self.open_record(installation, run, machine, Some(tab));
+    }
+
+    /// Opens a card's record on its Flow, the Run's active Step chosen, its details shown and
+    /// scrolled to; the card is chosen and seen as its name opens it.
+    pub fn open_card_at_flow(&mut self, key: &str) {
+        self.record.to_flow = true;
+        self.open_card(key);
+        self.record.to_flow = false;
+        self.show_active_step();
+    }
+
+    /// Shows Flow with the Run's active Step chosen, now or once the Flow is read.
+    fn show_active_step(&mut self) {
+        if self.record.open.is_none() {
+            return;
+        }
+        if self.record_tab() == "diff" {
+            self.diff_left();
+        }
+        self.show_tab("flow");
+        match &mut self.flow {
+            Some(map) => map.open_active(),
+            None => {
+                if let Some(record) = &mut self.record.open {
+                    record.at_active = true;
+                }
+            }
+        }
     }
 
     /// Opens a Run's record on `tab`, or on its first tab.
@@ -301,9 +351,16 @@ impl App {
         if !self.current(opened) {
             return;
         }
-        match &mut self.flow {
-            Some(map) => map.set(read),
-            None => self.flow = Some(flow::FlowMap::new(read)),
+        let map = match &mut self.flow {
+            Some(map) => {
+                map.set(read);
+                map
+            }
+            None => self.flow.insert(flow::FlowMap::new(read)),
+        };
+        if let Some(record) = self.record.open.as_mut().filter(|r| r.at_active) {
+            record.at_active = false;
+            map.open_active();
         }
     }
 
@@ -374,9 +431,19 @@ impl App {
         tabs::tab_shown(&self.record_tabs(), chosen)
     }
 
+    /// Shows `tab`; a comment box or a draft's edit open on the tab left closes, saving nothing.
     pub fn show_tab(&mut self, tab: &str) {
+        if self.record_tab() != tab {
+            self.close_comment();
+            self.close_diff_comment();
+        }
         if let Some(record) = &mut self.record.open {
             record.chosen = Some(tab.into());
+        }
+        // A pane is attached only while its tab shows it.
+        if self.record_tab() != "terminal" {
+            self.leave_terminal();
+            self.record.terminal_agent = None;
         }
         self.tab_opened();
     }
@@ -431,8 +498,12 @@ impl App {
     }
 
     /// Asks for the agent's own Run's pane, as `askedFor` does: an agent of a Run under the
-    /// card's is found only under its own.
+    /// card's is found only under its own. Only while Terminal is the tab shown, so no pane is
+    /// attached unseen.
     fn attach_terminal(&mut self) {
+        if self.record_tab() != "terminal" {
+            return;
+        }
         let Some(record) = &self.record.open else {
             return;
         };
@@ -485,6 +556,24 @@ impl App {
         record.items.insert(item.into(), Item::Reading);
         let (installation, run) = (record.installation.clone(), record.run.clone());
         self.read_part(installation, run, item.to_string(), Vec::new());
+    }
+
+    /// Opens `item` under its Evidence row, read the first time, or closes it.
+    pub fn toggle_evidence(&mut self, item: &str) {
+        let Some(record) = &mut self.record.open else {
+            return;
+        };
+        if let Some(at) = record.expanded.iter().position(|one| one == item) {
+            record.expanded.remove(at);
+            return;
+        }
+        record.expanded.push(item.into());
+        // One that could not be read is tried again as it is opened again.
+        if matches!(record.items.get(item), Some(Item::Failed(_))) {
+            self.reread_item(item);
+        } else {
+            self.read_item(item);
+        }
     }
 
     /// Reads `item` again, as when the host has changed it.

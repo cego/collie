@@ -290,23 +290,95 @@ pub fn anchor_said(anchor: &Anchor) -> String {
     }
 }
 
-/// A draft as the diff draws it under its line.
-pub fn draft_note(draft: &Draft, k: &Kit) -> El {
+/// A draft as the diff draws it under its line, with Edit and Remove; being edited, its words.
+pub fn draft_note(app: &App, draft: &Draft, k: &Kit) -> El {
+    let editing = app
+        .record
+        .open
+        .as_ref()
+        .filter(|r| r.editing.as_deref() == Some(draft.id.as_str()));
+    let body = match editing {
+        Some(record) => draft_editor(record, &draft.id, k),
+        None => text(draft.text.clone())
+            .font(k.ty.small)
+            .color(k.c.text_base)
+            .wrap()
+            .grow(1.0)
+            .min_w(0.0),
+    };
+    let (edit, gone) = (draft.id.clone(), draft.id.clone());
     row()
         .key(format!("note-{}", draft.id))
         .gap(8.0)
         .padding(8.0)
         .w_full()
+        .items_start()
         .radius(k.radius.sm)
         .fill(k.c.layer_03)
+        .on_press(|_: &mut App| {})
         .child(text("Draft").font(k.ty.small_medium).color(k.c.info.icon))
         .child(
-            text(draft.text.clone())
-                .font(k.ty.small)
-                .color(k.c.text_base)
-                .wrap()
+            col()
+                .gap(4.0)
                 .grow(1.0)
-                .min_w(0.0),
+                .min_w(0.0)
+                .child(body)
+                .children(editing.is_none().then(|| {
+                    row()
+                        .gap(2.0)
+                        .ml(-10.0)
+                        .child(
+                            Button::new("Edit")
+                                .variant(ButtonVariant::Ghost)
+                                .on_press(move |app: &mut App| app.edit_draft(&edit))
+                                .build(k)
+                                .key(format!("note-edit-{}", draft.id)),
+                        )
+                        .child(
+                            Button::new("Remove")
+                                .variant(ButtonVariant::Ghost)
+                                .on_press(move |app: &mut App| app.remove_draft(&gone))
+                                .build(k)
+                                .key(format!("note-remove-{}", draft.id)),
+                        )
+                })),
+        )
+}
+
+/// A draft's words open to edit: Save, or Escape and Cancel to leave them as they were.
+fn draft_editor(record: &Record, id: &str, k: &Kit) -> El {
+    col()
+        .gap(6.0)
+        .w_full()
+        .child(
+            TextInput::new(&record.comment)
+                .width(None)
+                .label("Edit the comment")
+                .on_edit(|app: &mut App| {
+                    &mut app.record.open.as_mut().expect("an open record").comment
+                })
+                .on_submit(|app: &mut App, _| app.save_draft_edit())
+                .on_key(|app: &mut App, ev: &KeyEvent, tx: &mut Tx| app.comment_key(ev, tx))
+                .build(k)
+                .key(format!("draft-text-{id}")),
+        )
+        .child(
+            row()
+                .gap(8.0)
+                .child(
+                    Button::new("Save")
+                        .variant(ButtonVariant::Submit)
+                        .on_press(App::save_draft_edit)
+                        .build(k)
+                        .key(format!("draft-save-{id}")),
+                )
+                .child(
+                    Button::new("Cancel")
+                        .variant(ButtonVariant::Ghost)
+                        .on_press(App::close_comment)
+                        .build(k)
+                        .key(format!("draft-cancel-{id}")),
+                ),
         )
 }
 
@@ -316,6 +388,9 @@ pub fn view(app: &App, k: &Kit) -> Option<El> {
     let tabs = app.record_tabs();
     let shown = tabs::tab_shown(&tabs, record.chosen.as_deref());
     let keys = |app: &mut App, ev: &KeyEvent, tx: &mut Tx| {
+        if app.comment_key(ev, tx) {
+            return true;
+        }
         let Key::Text(typed) = &ev.key else {
             return false;
         };
@@ -388,6 +463,13 @@ pub fn view(app: &App, k: &Kit) -> Option<El> {
             .grow(1.0)
             .min_h(0.0)
             .min_w(0.0)
+            .on_layout(|app: &mut App, rect: [f32; 4]| {
+                if let Some(record) = &mut app.record.open
+                    && (record.width - rect[2]).abs() > 0.5
+                {
+                    record.width = rect[2];
+                }
+            })
             .on_key(keys)
             .child(header(app, record, k))
             .children(standing(app, record, k))
@@ -493,6 +575,18 @@ fn header(app: &App, record: &Record, k: &Kit) -> El {
         .children(status)
 }
 
+/// What a record the host sent without its details says, as `RunRecord.vue` does.
+const NOT_THERE: &str = "This Run's details are not on its Machine.";
+
+/// `reading` while the record is still coming; once it came without its details, that.
+fn unread(record: &Record, reading: &str, k: &Kit) -> El {
+    if record.kept.is_some() && record.detail().is_none() {
+        quiet(NOT_THERE, k).key("record-not-there")
+    } else {
+        quiet(reading.to_string(), k)
+    }
+}
+
 /// Whether the record is current: still reading, no longer coming, or from a Machine out of
 /// reach.
 fn standing(app: &App, record: &Record, k: &Kit) -> Option<El> {
@@ -500,6 +594,8 @@ fn standing(app: &App, record: &Record, k: &Kit) -> Option<El> {
         format!("The record stopped coming: {why}")
     } else if record.kept.is_none() {
         "Reading the record…".into()
+    } else if record.detail().is_none() {
+        NOT_THERE.into()
     } else if !app.record_live() {
         let as_of = record.kept.as_ref().and_then(|kept| kept.as_of);
         match as_of {
@@ -1115,7 +1211,7 @@ fn inspector_view(app: &App, record: &Record, map: &flow::FlowMap, k: &Kit) -> O
         Part::Evidence if !proofs.is_empty() => col()
             .gap(2.0)
             .w_full()
-            .children(proofs.iter().map(|v| verification_row(v, k))),
+            .children(proofs.iter().map(|v| verification_row(v, record, k))),
         Part::Why => col()
             .gap(6.0)
             .w_full()
@@ -1168,7 +1264,6 @@ fn inspector_view(app: &App, record: &Record, map: &flow::FlowMap, k: &Kit) -> O
 }
 
 fn form_view(app: &App, record: &Record, k: &Kit) -> Option<El> {
-    let _ = app;
     let form = record.form.as_ref()?;
     let cancel = Button::new("Cancel")
         .variant(ButtonVariant::Ghost)
@@ -1197,9 +1292,10 @@ fn form_view(app: &App, record: &Record, k: &Kit) -> Option<El> {
                 )
                 .child(
                     TextArea::new(edit)
+                        .width(None)
                         .placeholder("Say what you want")
                         .label(title.clone())
-                        .rows(4)
+                        .auto_grow(4, 10)
                         .on_edit(|app: &mut App| {
                             match app.record.open.as_mut().and_then(|r| r.form.as_mut()) {
                                 Some(Form::Text { edit, .. }) => edit,
@@ -1222,7 +1318,10 @@ fn form_view(app: &App, record: &Record, k: &Kit) -> Option<El> {
                         .child(cancel),
                 )
         }
-        Form::Answer { questions, at, .. } => answer_form(questions, *at, cancel, k),
+        // Every question answered, or gone from the board: the form is done.
+        Form::Answer { questions, .. } => {
+            answer_form(app, record, questions, app.question_shown()?, cancel, k)
+        }
         Form::Offer { offer, fields, .. } => offer_form(offer.as_ref(), fields, cancel, k),
         Form::Proposal { proposal, .. } => col().gap(8.0).child(markdown(&proposal.text, k)).child(
             row()
@@ -1314,6 +1413,7 @@ fn offer_form(
                         )
                         .child(
                             TextInput::new(edit)
+                                .width(None)
                                 .label(name.clone())
                                 .on_edit(move |app: &mut App| {
                                     match app.record.open.as_mut().and_then(|r| r.form.as_mut()) {
@@ -1348,12 +1448,27 @@ fn edit_of(app: &mut App) -> &mut rune::edit::TextEdit {
     }
 }
 
-fn answer_form(questions: &[super::Asked], at: usize, cancel: El, k: &Kit) -> El {
+fn steer_of(app: &mut App) -> &mut rune::edit::TextEdit {
+    let shown = app.question_shown().unwrap_or_default();
+    match app.record.open.as_mut().and_then(|r| r.form.as_mut()) {
+        Some(Form::Answer { questions, .. }) => &mut questions[shown].steer,
+        _ => unreachable!("an answer form is open"),
+    }
+}
+
+fn answer_form(
+    app: &App,
+    record: &Record,
+    questions: &[super::Asked],
+    at: usize,
+    cancel: El,
+    k: &Kit,
+) -> El {
     let Some(one) = questions.get(at) else {
         return col();
     };
     let n = questions.len();
-    let left = questions.iter().filter(|q| q.sent.is_none()).count();
+    let left = (0..n).filter(|i| !app.question_settled(*i)).count();
     let step = row()
         .key("question-step")
         .gap(4.0)
@@ -1402,6 +1517,10 @@ fn answer_form(questions: &[super::Asked], at: usize, cancel: El, k: &Kit) -> El
         .w_full()
         .child(step)
         .child(markdown(&one.asked, k));
+    if let Some(question) = &one.board {
+        let view = app.questionnaire_of(&record.installation, question).view();
+        return board_question(asked, &view, one, left, cancel, k);
+    }
     if let Some(sent) = &one.sent {
         return asked.child(
             row()
@@ -1459,6 +1578,7 @@ fn answer_form(questions: &[super::Asked], at: usize, cancel: El, k: &Kit) -> El
         .children(options)
         .child(
             TextInput::new(&one.edit)
+                .width(None)
                 .placeholder(if one.options.is_empty() {
                     "Your answer"
                 } else {
@@ -1480,7 +1600,7 @@ fn answer_form(questions: &[super::Asked], at: usize, cancel: El, k: &Kit) -> El
                     })
                     .variant(ButtonVariant::Submit)
                     .disabled(!ready)
-                    .on_press(|app: &mut App| app.send_form(None))
+                    .on_press(|app: &mut App| app.answer_in_record())
                     .build(k)
                     .key("form-send"),
                 )
@@ -1488,9 +1608,165 @@ fn answer_form(questions: &[super::Asked], at: usize, cancel: El, k: &Kit) -> El
         )
 }
 
+/// A question the board has, as its questionnaire has it: its options and Hold the Run, or a
+/// value typed; the words for the agent instead; and how the last send went.
+fn board_question(
+    asked: El,
+    view: &crate::board::questionnaire::QuestionnaireView,
+    one: &super::Asked,
+    left: usize,
+    cancel: El,
+    k: &Kit,
+) -> El {
+    use crate::board::questionnaire::HOLD;
+    let open = !view.sending && !view.settled;
+    let shortfall = view
+        .shortfall
+        .clone()
+        .map(|said| quiet(said, k).key("question-shortfall"));
+    let options = (!view.words).then(|| {
+        col()
+            .key("question-options")
+            .role("radiogroup")
+            .label(view.text.clone())
+            .focus_group()
+            .gap(10.0)
+            .w_full()
+            .children(view.rows.iter().map(|(row, checked)| {
+                let id = row.id.clone();
+                let mut said = row.title.clone();
+                if row.recommended {
+                    said.push_str(" · Recommended");
+                }
+                let mut item = rune_kit::RadioItem::new(said, *checked)
+                    .disabled(row.disabled || !open)
+                    .on_select(move |app: &mut App| app.pick_in_record(id.clone()));
+                if let Some(about) = row
+                    .why
+                    .clone()
+                    .filter(|_| row.disabled)
+                    .or(row.detail.clone())
+                {
+                    item = item.description(about);
+                }
+                let key = if row.id == HOLD {
+                    "option-hold".to_string()
+                } else {
+                    format!("option-{}", row.id)
+                };
+                item.build(k).key(key)
+            }))
+    });
+    let typed = view.words.then(|| {
+        TextInput::new(&one.edit)
+            .width(None)
+            .placeholder("Your answer")
+            .label("Your answer")
+            .disabled(!open)
+            .on_edit(edit_of)
+            .on_submit(|app: &mut App, _: &mut Tx| app.answer_in_record())
+            .build(k)
+            .key("form-answer-text")
+    });
+    let ready = open
+        && if view.words {
+            !one.edit.text.trim().is_empty()
+        } else {
+            view.submit
+        };
+    let held = view
+        .rows
+        .iter()
+        .any(|(row, checked)| *checked && row.id == HOLD);
+    let answer = row()
+        .gap(8.0)
+        .child(
+            Button::new(if held {
+                "Hold the Run"
+            } else if left > 1 {
+                "Answer and next"
+            } else {
+                "Answer"
+            })
+            .variant(ButtonVariant::Submit)
+            .disabled(!ready)
+            .on_press(|app: &mut App| app.answer_in_record())
+            .build(k)
+            .key("form-send"),
+        )
+        .child(cancel);
+    let steer_ready = !view.steer_disabled && !view.sending && !view.settled;
+    let words = !one.steer.text.trim().is_empty();
+    // A steer that failed keeps its words in the questionnaire; Send tries them again.
+    let again = !words && view.steer_send;
+    let steering = col()
+        .key("form-steer")
+        .gap(6.0)
+        .w_full()
+        .child(
+            text("Or tell the agent instead")
+                .font(k.ty.text_xsmall_medium)
+                .color(k.c.text_muted),
+        )
+        .child(
+            row()
+                .gap(8.0)
+                .center_y()
+                .w_full()
+                .child(
+                    TextInput::new(&one.steer)
+                        .width(None)
+                        .placeholder("What should it do?")
+                        .label("Words for the agent instead of an answer")
+                        .disabled(!steer_ready)
+                        .on_edit(steer_of)
+                        .on_submit(|app: &mut App, _: &mut Tx| app.steer_in_record())
+                        .build(k)
+                        .key("form-steer-text")
+                        .grow(1.0)
+                        .min_w(0.0),
+                )
+                .child(
+                    Button::new(if again {
+                        "Try again".to_string()
+                    } else {
+                        view.steer_label.clone()
+                    })
+                    .variant(ButtonVariant::Outline)
+                    .disabled(!steer_ready || !(words || again))
+                    .on_press(|app: &mut App| app.steer_in_record())
+                    .build(k)
+                    .key("form-steer-send"),
+                ),
+        )
+        .children(
+            view.steer_why
+                .clone()
+                .filter(|_| view.steer_disabled)
+                .map(|why| quiet(why, k).key("form-steer-why")),
+        );
+    let status = view.status.clone().map(|said| {
+        text(said)
+            .key("form-status")
+            .role("status")
+            .live_region(rune::LiveRegion::Polite)
+            .font(k.ty.text_small)
+            .color(k.c.text_base)
+            .wrap()
+            .w_full()
+    });
+    asked
+        .children(shortfall)
+        .children(options)
+        .children(typed)
+        .child(answer)
+        .children(status)
+        .child(steering)
+}
+
 fn summary_tab(app: &App, record: &Record, k: &Kit) -> El {
     let Some(detail) = record.detail() else {
-        return quiet("Reading the record…", k);
+        return unread(record, "Reading the record…", k);
     };
     let sections = tabs::summary_of(detail).into_iter().map(|one| match one {
         SummarySection::Status(status) => section(
@@ -1649,17 +1925,32 @@ fn summary_tab(app: &App, record: &Record, k: &Kit) -> El {
     )
 }
 
-/// A file of the record with its size, and Open, which shows it in the browser.
-fn file_row(item: &str, name: &str, bytes: i64, record: &Record, k: &Kit) -> El {
-    let opening = item.to_string();
-    let reading = record.opening.iter().any(|one| one == item);
-    let size = if bytes >= 1 << 20 {
+/// A file's size as it is said.
+fn size_of(bytes: i64) -> String {
+    if bytes >= 1 << 20 {
         format!("{:.1} MB", bytes as f64 / (1 << 20) as f64)
     } else if bytes >= 1024 {
         format!("{} KB", bytes / 1024)
     } else {
         format!("{bytes} B")
-    };
+    }
+}
+
+/// Open, which shows a file of the record in the browser.
+fn open_button(item: &str, name: &str, record: &Record, k: &Kit) -> El {
+    let opening = item.to_string();
+    let reading = record.opening.iter().any(|one| one == item);
+    Button::new(if reading { "Opening…" } else { "Open" })
+        .variant(ButtonVariant::Ghost)
+        .icon(&icons::OPEN_ASIDE)
+        .on_press(move |app: &mut App| app.open_aside(opening.clone()))
+        .build(k)
+        .key(format!("open-{}", slug(item)))
+        .label(format!("Open {name} in the browser"))
+}
+
+/// A file of the record with its size, and Open, which shows it in the browser.
+fn file_row(item: &str, name: &str, bytes: i64, record: &Record, k: &Kit) -> El {
     row()
         .key(format!("file-{}", slug(item)))
         .gap(8.0)
@@ -1673,16 +1964,32 @@ fn file_row(item: &str, name: &str, bytes: i64, record: &Record, k: &Kit) -> El 
                 .grow(1.0)
                 .min_w(0.0),
         )
-        .child(text(size).font(k.ty.small).color(k.c.text_faint))
-        .child(
-            Button::new(if reading { "Opening…" } else { "Open" })
-                .variant(ButtonVariant::Ghost)
-                .icon(&icons::OPEN_ASIDE)
-                .on_press(move |app: &mut App| app.open_aside(opening.clone()))
-                .build(k)
-                .key(format!("open-{}", slug(item)))
-                .label(format!("Open {name} in the browser")),
-        )
+        .child(text(size_of(bytes)).font(k.ty.small).color(k.c.text_faint))
+        .child(open_button(item, name, record, k))
+}
+
+/// A kept log or note, read under its row as it is opened, and still opened in the browser.
+fn text_file_row(item: &str, name: &str, bytes: i64, record: &Record, k: &Kit) -> El {
+    let size = size_of(bytes);
+    evidence_text(
+        EvidenceRow {
+            key: format!("file-{}", slug(item)),
+            item: item.to_string(),
+            label: format!("{name}, {size}"),
+            parts: vec![
+                text(name.to_string())
+                    .font(k.ty.mono)
+                    .color(k.c.text_base)
+                    .truncate()
+                    .grow(1.0)
+                    .min_w(0.0),
+                text(size).font(k.ty.small).color(k.c.text_faint),
+            ],
+            aside: Some(open_button(item, name, record, k)),
+        },
+        record,
+        k,
+    )
 }
 
 fn plan_text(record: &Record, file: &str) -> Option<Result<String, String>> {
@@ -1745,8 +2052,78 @@ impl App {
         };
         let drafts = self.record.drafts.entry(record.key()).or_default();
         *drafts = add_draft(drafts, draft);
-        record.comment.clear();
+        record.comment = rune::edit::TextEdit::default();
         record.anchor = None;
+    }
+
+    /// A span selected in a plan file opens the comment box on it, focused, keeping what was
+    /// typed; a press that selects nothing closes an empty one.
+    pub fn choose_plan_span(&mut self, anchor: Option<Anchor>) {
+        let Some(record) = &mut self.record.open else {
+            return;
+        };
+        match anchor {
+            Some(anchor) => {
+                record.anchor = Some(anchor);
+                record.editing = None;
+                record.comment.focused = true;
+            }
+            None if record.comment.text.trim().is_empty() => record.anchor = None,
+            None => {}
+        }
+    }
+
+    /// Closes the plan's comment box and any draft being edited, saving nothing.
+    pub fn close_comment(&mut self) {
+        let Some(record) = &mut self.record.open else {
+            return;
+        };
+        if record.anchor.is_none() && record.editing.is_none() {
+            return;
+        }
+        record.anchor = None;
+        record.editing = None;
+        record.comment = rune::edit::TextEdit::default();
+    }
+
+    /// Escape closes a comment box or a draft's edit; Shift and Cmd-C go to the diff, which
+    /// extends a selection by a Shift-press and copies its lines.
+    pub fn comment_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
+        let on_diff = self.record_tab() == "diff";
+        if on_diff
+            && (matches!(ev.key, Key::Modifier { .. }) || ev.is_command('c'))
+            && let Some(tab) = &mut self.diff
+        {
+            return tab.state.key(ev, tx);
+        }
+        if ev.key != Key::Escape {
+            return false;
+        }
+        let editing = self
+            .record
+            .open
+            .as_ref()
+            .is_some_and(|r| r.anchor.is_some() || r.editing.is_some());
+        let writing = on_diff
+            && self
+                .diff
+                .as_ref()
+                .is_some_and(|t| t.writing.is_some() || t.state.selection().is_some());
+        if editing {
+            self.close_comment();
+        } else if writing {
+            self.close_diff_comment();
+        }
+        // Otherwise it closes the form open on Flow, as stable's dialogs close.
+        let form = !editing
+            && !writing
+            && self
+                .record
+                .open
+                .as_mut()
+                .and_then(|r| r.form.take())
+                .is_some();
+        editing || writing || form
     }
 
     /// Writes the composer's words into the draft being edited.
@@ -1759,15 +2136,44 @@ impl App {
         };
         let said = record.comment.text.trim().to_string();
         let drafts = self.record.drafts.entry(record.key()).or_default();
-        *drafts = edit_draft(drafts, &id, &said);
-        record.comment.clear();
+        // A draft emptied is removed, as it would say nothing.
+        *drafts = if said.is_empty() {
+            remove_draft(drafts, &id)
+        } else {
+            edit_draft(drafts, &id, &said)
+        };
+        record.comment = rune::edit::TextEdit::default();
         self.refresh_annotations();
     }
 
-    pub fn remove_draft(&mut self, id: &str) {
-        let Some(record) = &self.record.open else {
+    /// Opens a draft's words to edit, focused.
+    pub fn edit_draft(&mut self, id: &str) {
+        let Some(record) = &mut self.record.open else {
             return;
         };
+        let Some(said) = self
+            .record
+            .drafts
+            .get(&record.key())
+            .and_then(|d| d.iter().find(|d| d.id == id))
+            .map(|d| d.text.clone())
+        else {
+            return;
+        };
+        record.anchor = None;
+        record.editing = Some(id.into());
+        record.comment = rune::edit::TextEdit::new(said);
+        record.comment.focused = true;
+    }
+
+    pub fn remove_draft(&mut self, id: &str) {
+        let Some(record) = &mut self.record.open else {
+            return;
+        };
+        if record.editing.as_deref() == Some(id) {
+            record.editing = None;
+            record.comment = rune::edit::TextEdit::default();
+        }
         let drafts = self.record.drafts.entry(record.key()).or_default();
         *drafts = remove_draft(drafts, id);
         self.refresh_annotations();
@@ -1822,7 +2228,7 @@ impl App {
 
 fn plan_tab(app: &App, record: &Record, k: &Kit) -> El {
     let Some(plan) = record.detail().and_then(|d| d.plan.as_ref()) else {
-        return quiet("Reading the plan…", k);
+        return unread(record, "Reading the plan…", k);
     };
     let file = record.plan_file.clone().unwrap_or_else(|| "SPEC.md".into());
     let entry = |path: String, said: String, done: Option<bool>| {
@@ -1898,16 +2304,11 @@ fn plan_tab(app: &App, record: &Record, k: &Kit) -> El {
                     if change.dragging() {
                         return;
                     }
-                    let Some(record) = &mut app.record.open else {
-                        return;
-                    };
                     let selected = change
                         .selection()
                         .map(|s| s.text().to_string())
                         .unwrap_or_default();
-                    if let Some(anchor) = plan_anchor(&at, &selected) {
-                        record.anchor = Some(anchor);
-                    }
+                    app.choose_plan_span(plan_anchor(&at, &selected));
                 })
         }
     };
@@ -1915,36 +2316,7 @@ fn plan_tab(app: &App, record: &Record, k: &Kit) -> El {
         .anchor
         .as_ref()
         .filter(|_| record.editing.is_none())
-        .map(|anchor| {
-            row()
-                .key("plan-composer")
-                .gap(8.0)
-                .center_y()
-                .w_full()
-                .child(
-                    text(anchor_said(anchor))
-                        .font(k.ty.small)
-                        .color(k.c.text_muted),
-                )
-                .child(
-                    TextInput::new(&record.comment)
-                        .placeholder("Comment on the selection")
-                        .label("Comment on the selection")
-                        .on_edit(|app: &mut App| {
-                            &mut app.record.open.as_mut().expect("an open record").comment
-                        })
-                        .on_submit(|app: &mut App, _| app.add_plan_comment())
-                        .build(k)
-                        .key("plan-comment")
-                        .grow(1.0),
-                )
-                .child(
-                    Button::new("Add comment")
-                        .on_press(App::add_plan_comment)
-                        .build(k)
-                        .key("add-plan-comment"),
-                )
-        });
+        .map(|anchor| plan_composer(record, anchor, k));
     let content = col()
         .gap(8.0)
         .grow(1.0)
@@ -1966,45 +2338,119 @@ fn plan_tab(app: &App, record: &Record, k: &Kit) -> El {
     )
 }
 
+/// The comment box on a span of a plan file: where it is, its quote, the words, Comment and
+/// Cancel. Enter saves it and Escape closes it.
+fn plan_composer(record: &Record, anchor: &Anchor, k: &Kit) -> El {
+    let quote = match anchor {
+        Anchor::Plan { quote, .. } => quote.trim().to_string(),
+        Anchor::Diff { .. } => String::new(),
+    };
+    let ready = !record.comment.text.trim().is_empty();
+    col()
+        .key("plan-composer")
+        .role("group")
+        .label(anchor_said(anchor).replacen("On ", "Comment on ", 1))
+        .gap(8.0)
+        .padding(10.0)
+        .w_full()
+        .radius(k.radius.md)
+        .fill(k.c.layer_02)
+        .border(1.0, k.c.border_base)
+        .child(
+            text(anchor_said(anchor).replacen("On ", "Comment on ", 1))
+                .font(k.ty.small)
+                .color(k.c.text_muted),
+        )
+        .children((!quote.is_empty()).then(|| {
+            row()
+                .gap(8.0)
+                .w_full()
+                .child(rune::el().w(2.0).self_stretch().fill(k.c.border_strong))
+                .child(
+                    text(quote)
+                        .font(k.ty.small)
+                        .color(k.c.text_muted)
+                        .wrap()
+                        .max_lines(3)
+                        .grow(1.0)
+                        .min_w(0.0),
+                )
+        }))
+        .child(
+            TextInput::new(&record.comment)
+                .width(None)
+                .placeholder("Say what should change")
+                .label("Comment on the selection")
+                .on_edit(|app: &mut App| {
+                    &mut app.record.open.as_mut().expect("an open record").comment
+                })
+                .on_submit(|app: &mut App, _| app.add_plan_comment())
+                .on_key(|app: &mut App, ev: &KeyEvent, tx: &mut Tx| app.comment_key(ev, tx))
+                .build(k)
+                .key("plan-comment")
+                .w_full(),
+        )
+        .child(
+            row()
+                .gap(8.0)
+                .child(
+                    Button::new("Comment")
+                        .variant(ButtonVariant::Submit)
+                        .disabled(!ready)
+                        .on_press(App::add_plan_comment)
+                        .build(k)
+                        .key("add-plan-comment"),
+                )
+                .child(
+                    Button::new("Cancel")
+                        .variant(ButtonVariant::Ghost)
+                        .on_press(App::close_comment)
+                        .build(k)
+                        .key("cancel-plan-comment"),
+                ),
+        )
+}
+
+/// The record's width from which the drafts sit beside the tab they comment on.
+pub(super) const BESIDE_W: f32 = 1100.0;
+
 /// A tab with the Run's review comment drafts beside it, while it has any.
 fn with_drafts(app: &App, record: &Record, tab: El, k: &Kit) -> El {
     let drafts = app.record.drafts_of(record);
     if drafts.is_empty() {
         return tab;
     }
+    let tab = col().grow(1.0).min_w(0.0).min_h(0.0).child(tab);
+    let panel = review_panel(app, record, drafts, k);
+    // Too narrow to keep the tab readable beside them, the drafts sit under it.
+    if record.width > 0.0 && record.width < BESIDE_W {
+        return col()
+            .gap(12.0)
+            .grow(1.0)
+            .min_h(0.0)
+            .w_full()
+            .child(tab)
+            .child(panel.w_full().h(180.0));
+    }
     row()
         .gap(12.0)
         .grow(1.0)
         .min_h(0.0)
         .w_full()
-        .child(col().grow(1.0).min_w(0.0).min_h(0.0).child(tab))
-        .child(review_panel(app, record, drafts, k))
+        .child(tab)
+        .child(panel.w(300.0))
 }
 
 /// The drafts, who they go to, and Send: one message, as ADR-0051 has it.
 fn review_panel(app: &App, record: &Record, drafts: &[Draft], k: &Kit) -> El {
+    // A diff's draft is edited under its line while the Diff is shown.
+    let inline =
+        |draft: &Draft| matches!(draft.anchor, Anchor::Diff { .. }) && app.record_tab() == "diff";
     let rows = drafts.iter().map(|draft| {
-        let (edit, gone, said) = (draft.id.clone(), draft.id.clone(), draft.text.clone());
+        let (edit, gone) = (draft.id.clone(), draft.id.clone());
         let editing = record.editing.as_deref() == Some(draft.id.as_str());
-        let body = if editing {
-            col()
-                .gap(6.0)
-                .child(
-                    TextArea::new(&record.comment)
-                        .label("Edit the comment")
-                        .rows(3)
-                        .on_edit(|app: &mut App| {
-                            &mut app.record.open.as_mut().expect("an open record").comment
-                        })
-                        .build(k)
-                        .key(format!("draft-text-{}", draft.id)),
-                )
-                .child(
-                    Button::new("Save")
-                        .on_press(App::save_draft_edit)
-                        .build(k)
-                        .key(format!("draft-save-{}", draft.id)),
-                )
+        let body = if editing && !inline(draft) {
+            draft_editor(record, &draft.id, k)
         } else {
             text(draft.text.clone())
                 .font(k.ty.small)
@@ -2034,12 +2480,7 @@ fn review_panel(app: &App, record: &Record, drafts: &[Draft], k: &Kit) -> El {
                     .child(
                         Button::new("Edit")
                             .variant(ButtonVariant::Ghost)
-                            .on_press(move |app: &mut App| {
-                                if let Some(record) = &mut app.record.open {
-                                    record.editing = Some(edit.clone());
-                                    record.comment = rune::edit::TextEdit::new(said.clone());
-                                }
-                            })
+                            .on_press(move |app: &mut App| app.edit_draft(&edit))
                             .build(k)
                             .key(format!("draft-edit-{}", draft.id)),
                     )
@@ -2100,7 +2541,6 @@ fn review_panel(app: &App, record: &Record, drafts: &[Draft], k: &Kit) -> El {
         .label("Review comments")
         .gap(8.0)
         .padding(12.0)
-        .w(300.0)
         .min_h(0.0)
         .radius(k.radius.md)
         .fill(k.c.layer_02)
@@ -2122,7 +2562,7 @@ fn review_panel(app: &App, record: &Record, drafts: &[Draft], k: &Kit) -> El {
 
 fn review_tab(app: &App, record: &Record, k: &Kit) -> El {
     let Some(detail) = record.detail() else {
-        return quiet("Reading the review…", k);
+        return unread(record, "Reading the review…", k);
     };
     let review = match &detail.review {
         Review::Text(t) => Some(section("review-text", "Review", k, [markdown(&t.text, k)])),
@@ -2229,7 +2669,11 @@ fn source_file(record: &Record, file: &str, line: Option<u32>, k: &Kit) -> El {
     section("source-file", &said, k, [body])
 }
 
-fn verification_row(v: &collie_desktop_protocol::generated::Verification, k: &Kit) -> El {
+fn verification_row(
+    v: &collie_desktop_protocol::generated::Verification,
+    record: &Record,
+    k: &Kit,
+) -> El {
     use collie_desktop_protocol::generated::GlyphState;
     let passed = v.result == VerificationResult::Pass;
     let expected = crate::flow::written(&v.expect);
@@ -2240,49 +2684,149 @@ fn verification_row(v: &collie_desktop_protocol::generated::Verification, k: &Ki
     };
     let result = crate::flow::written(&v.result);
     let by = crate::flow::written(&v.by);
-    row()
-        .key(format!("check-{}", v.id))
-        .role("group")
-        .label(format!("{}: {result}, expected {expected}", v.name))
+    let title = text(v.name.clone())
+        .font(k.ty.mono)
+        .color(k.c.text_base)
+        .truncate()
+        .grow(1.0)
+        .min_w(0.0);
+    let verdict = text(format!(
+        "{result}{}",
+        if passed || expected != "pass" {
+            format!(", expected {expected}")
+        } else {
+            String::new()
+        }
+    ))
+    .font(k.ty.text_xsmall)
+    .color(k.c.text_muted);
+    let ran = text(format!(
+        "exit {} · {by} · {}",
+        v.exit,
+        when_of(&v.at, now())
+    ))
+    .font(k.ty.text_xsmall)
+    .color(k.c.text_faint)
+    .w(170.0)
+    .align(rune::Align::End);
+    evidence_text(
+        EvidenceRow {
+            key: format!("check-{}", v.id),
+            item: format!("verification:{}", v.id),
+            label: format!("{}: {result}, expected {expected}", v.name),
+            parts: vec![
+                crate::flow::glyph::glyph(&state, 14.0, k),
+                title,
+                verdict,
+                ran,
+            ],
+            aside: None,
+        },
+        record,
+        k,
+    )
+}
+
+/// A row of the Evidence tab whose item opens under it: a check's output, a kept log, a note.
+struct EvidenceRow {
+    key: String,
+    item: String,
+    label: String,
+    parts: Vec<El>,
+    /// Beside the row, outside its press: a file's Open.
+    aside: Option<El>,
+}
+
+/// An `EvidenceText.vue`: the row opens and closes on a press, Space or Enter, reading its item
+/// the first time; the text is monospace, selectable and scrolls within its box.
+fn evidence_text(row_of: EvidenceRow, record: &Record, k: &Kit) -> El {
+    let EvidenceRow {
+        key,
+        item,
+        label,
+        parts,
+        aside,
+    } = row_of;
+    let open = record.expanded.contains(&item);
+    let chevron = if open {
+        &icons::CHEVRON_DOWN
+    } else {
+        &icons::CHEVRON_RIGHT
+    };
+    let toggled = item.clone();
+    let keyed = item.clone();
+    let head = row()
+        .key(key.clone())
+        .role("button")
+        .label(label)
+        .expanded(open)
+        .focusable(true)
+        .focus_ring(2.0, 0.0, k.c.border_focus)
         .gap(10.0)
         .center_y()
         .h(32.0)
         .px(8.0)
-        .w_full()
+        .grow(1.0)
+        .min_w(0.0)
         .radius(k.radius.sm)
         .hover(k.c.surface_hover)
-        .child(crate::flow::glyph::glyph(&state, 14.0, k))
+        .on_press(move |app: &mut App| app.toggle_evidence(&toggled))
+        // Space presses it as any button; Enter too, as a disclosure takes it.
+        .on_key(move |app: &mut App, ev: &KeyEvent, _: &mut Tx| {
+            let enter = ev.key == Key::Enter && ev.mods == rune::Mods::default();
+            if enter {
+                app.toggle_evidence(&keyed);
+            }
+            enter
+        })
         .child(
-            text(v.name.clone())
-                .font(k.ty.mono)
-                .color(k.c.text_base)
-                .truncate()
-                .grow(1.0)
-                .min_w(0.0),
+            rune::icon(chevron, 14.0)
+                .color(k.c.icon_muted)
+                .a11y_hidden(),
         )
-        .child(
-            text(format!(
-                "{result}{}",
-                if passed || expected != "pass" {
-                    format!(", expected {expected}")
+        .children(parts);
+    let line = row()
+        .gap(4.0)
+        .center_y()
+        .w_full()
+        .child(head)
+        .children(aside);
+    let body = open.then(|| {
+        let said = match record.items.get(&item) {
+            Some(Item::Read(bytes)) => {
+                let plain = super::evidence::without_escapes(&String::from_utf8_lossy(bytes));
+                if plain.trim().is_empty() {
+                    quiet("It is empty.", k).key(format!("{key}-text"))
                 } else {
-                    String::new()
+                    mono(&plain, &format!("{key}-text"), k)
                 }
-            ))
-            .font(k.ty.text_xsmall)
-            .color(k.c.text_muted),
-        )
-        .child(
-            text(format!(
-                "exit {} · {by} · {}",
-                v.exit,
-                when_of(&v.at, now())
-            ))
-            .font(k.ty.text_xsmall)
-            .color(k.c.text_faint)
-            .w(170.0)
-            .align(rune::Align::End),
-        )
+            }
+            Some(Item::Failed(why)) => {
+                quiet(format!("Could not be read: {why}"), k).key(format!("{key}-failed"))
+            }
+            _ => quiet("Reading…", k)
+                .role("status")
+                .key(format!("{key}-reading")),
+        };
+        col()
+            .key(format!("{key}-body"))
+            .w_full()
+            .max_h(360.0)
+            .padding(10.0)
+            .radius(k.radius.sm)
+            .fill(k.c.layer_01)
+            .border(1.0, k.c.border_weak)
+            .scroll(ScrollSpec {
+                stick_bottom: false,
+            })
+            .child(said)
+    });
+    col()
+        .key(format!("{key}-box"))
+        .gap(4.0)
+        .w_full()
+        .child(line)
+        .children(body)
 }
 
 fn image_box(record: &Record, item: &EvidenceItem, k: &Kit) -> El {
@@ -2334,7 +2878,7 @@ impl App {
 
 fn evidence_tab(record: &Record, k: &Kit) -> El {
     let Some(detail) = record.detail() else {
-        return quiet("Reading the evidence…", k);
+        return unread(record, "Reading the evidence…", k);
     };
     let sorted = sort_evidence(&detail.evidence);
     let checks = (!detail.verifications.is_empty()).then(|| {
@@ -2343,10 +2887,12 @@ fn evidence_tab(record: &Record, k: &Kit) -> El {
             "checks",
             &format!("Checks · {n}"),
             k,
-            [col()
-                .gap(0.0)
-                .w_full()
-                .children(detail.verifications.iter().map(|v| verification_row(v, k)))],
+            [col().gap(0.0).w_full().children(
+                detail
+                    .verifications
+                    .iter()
+                    .map(|v| verification_row(v, record, k)),
+            )],
         )
     });
     let gallery = (!sorted.gallery.is_empty()).then(|| {
@@ -2371,7 +2917,8 @@ fn evidence_tab(record: &Record, k: &Kit) -> El {
                 .collect::<Vec<_>>(),
         )
     });
-    let listed = |key: &str, said: &str, files: &[EvidenceItem], prefix: &str| {
+    // Logs and notes open under their rows; reports and videos only in the browser.
+    let listed = |key: &str, said: &str, files: &[EvidenceItem], prefix: &str, read: bool| {
         (!files.is_empty()).then(|| {
             section(
                 key,
@@ -2379,7 +2926,14 @@ fn evidence_tab(record: &Record, k: &Kit) -> El {
                 k,
                 files
                     .iter()
-                    .map(|f| file_row(&format!("{prefix}:{}", f.name), &f.name, f.bytes, record, k))
+                    .map(|f| {
+                        let item = format!("{prefix}:{}", f.name);
+                        if read {
+                            text_file_row(&item, &f.name, f.bytes, record, k)
+                        } else {
+                            file_row(&item, &f.name, f.bytes, record, k)
+                        }
+                    })
                     .collect::<Vec<_>>(),
             )
         })
@@ -2389,11 +2943,18 @@ fn evidence_tab(record: &Record, k: &Kit) -> El {
         "Reports, opened sandboxed in the browser",
         &sorted.reports,
         "evidence",
+        false,
     );
-    let videos = listed("videos", "Videos", &sorted.videos, "evidence");
-    let files = listed("evidence-files", "Files", &sorted.files, "evidence");
+    let videos = listed("videos", "Videos", &sorted.videos, "evidence", false);
+    let files = listed(
+        "evidence-files",
+        "Logs and files",
+        &sorted.files,
+        "evidence",
+        true,
+    );
     let handoffs = detail.handoff_files.clone().flatten().unwrap_or_default();
-    let handoffs = listed("handoff-files", "Handoff files", &handoffs, "handoff");
+    let handoffs = listed("handoff-files", "Handoff notes", &handoffs, "handoff", true);
     let m = &detail.outcome.metrics;
     let mut metrics = vec![fact("Rework", format!("{}", m.rework), k)];
     let metrics_of = |rows: Vec<El>| [facts(rows)];
@@ -2436,7 +2997,7 @@ fn log_tab(record: &Record, k: &Kit) -> El {
         ),
         (_, Some(Review::Text(t))) => (t.text.clone(), t.truncated.then_some("")),
         (_, Some(Review::None(none))) => return quiet(none.reason.clone(), k),
-        (_, None) => return quiet("Reading the log…", k),
+        (_, None) => return unread(record, "Reading the log…", k),
     };
     let more = cut.map(|note| {
         let bar = row().key("log-bar").gap(12.0).center_y().w_full().child(
