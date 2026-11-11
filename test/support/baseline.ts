@@ -2828,7 +2828,7 @@ for (const name of ["gitlab", "github"] as const) {
   );
 
   scenario(
-    `review posting on ${name}: a host restarted after the note landed posts it once`,
+    `review posting on ${name}: replay after the note landed posts it once`,
     () =>
       runEffect(
         Effect.gen(function* () {
