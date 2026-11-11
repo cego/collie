@@ -1,6 +1,7 @@
 // ADR-draft-a-check-left-to-ci-is-proved-by-its-pipeline-job
 
 import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
 import { Clock, Duration, Effect, FileSystem } from "effect";
 import { mrRefOf } from "./board-model";
@@ -12,6 +13,7 @@ import { appendLog } from "./oversight";
 import { conflictsWithTarget } from "./review-wait";
 import { epochMs, nowIso } from "./time";
 import { rememberCiTarget } from "./park-recheck";
+import { branchChange, ownTests } from "./own-tests";
 import {
   appendVerification,
   encodeVerifying,
@@ -32,7 +34,7 @@ export const CI_BOUND = Duration.hours(2);
 export type CiJob =
   | {
       readonly proved: Verification;
-      /** It failed, and passed when retried: a Flake. */
+      /** It failed in no test of the branch's own, and passed when retried: a Flake. */
       readonly retried?: true;
     }
   | {
@@ -143,7 +145,26 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
         const status = yield* shell("git", ["status", "--porcelain", "--untracked-files=all"], cwd);
         if (status.code !== 0 || Str.trim(status.stdout) !== "")
           return unproved(`passed, but ${cwd} has changes it never saw`);
-        if (recorded !== undefined && retried === null) return { proved: recorded };
+        const attempt = read.retryOf ?? retried;
+        if (attempt !== null) {
+          const failed = yield* forge.failedAttempt(ref, attempt, cwd, asked.run);
+          const own =
+            failed.tests.length === 0 || read.target === null
+              ? []
+              : ownTests(failed.tests, yield* branchChange(cwd, read.target));
+          if (own.length > 0)
+            return unproved(
+              `failed in this branch's own ${own.length === 1 ? "test" : "tests"} ${Arr.join(
+                Arr.map(own, (one) => `"${one.name}"`),
+                ", ",
+              )}, and passed only when retried`,
+              "failed",
+              failed.url,
+              forge.jobLog(ref, attempt),
+            );
+        }
+        const flake = attempt === null ? {} : { retried: true as const };
+        if (recorded !== undefined && retried === null) return { proved: recorded, ...flake };
         const at = yield* nowIso;
         const ran = { name: job, url: read.url };
         const proof: Verification = {
@@ -171,7 +192,7 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
           asked.runDir,
           `ci: ${spec.name} proved by job ${job} on ${head}${read.merge === null ? "" : ` (merged-results pipeline at ${read.merge})`}: ${read.url ?? "no URL"}`,
         ).pipe(Effect.ignore);
-        return retried === null ? { proved: proof } : { proved: proof, retried: true as const };
+        return { proved: proof, ...flake };
       }
       // A forge with no pipeline for the head says pending, without a job.
       const absent =

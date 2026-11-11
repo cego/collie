@@ -1810,7 +1810,10 @@ waits for that job on the merge request's head commit, read through the forge, a
 its pass as a verification of the check, with the job's URL. A failed job is first read
 where the branch leaves its target branch: failed there too, it is reported as failing
 before the run's changes, and left unproved. Otherwise it is retried once, and a pass on
-the retry is reported as a Flake. A job that fails its retry goes to the builder in a CI
+the retry is reported as a Flake, unless the failed attempt's logs name a failed test of
+the branch's own: one whose file the branch adds or changes, or whose name holds a string
+a line the branch adds holds. That job is failed, as is one the forge says was retried
+before, by anyone. A job that fails its retry goes to the builder in a CI
 fix round, at most 4; see [`docs/workflows.md`](workflows.md). A job missing right after
 its retry, as GitHub holds back a job behind `needs` until its needs finish, is waited on
 like a pending one, up to 2 hours. A skipped, cancelled or missing job, a job not finished

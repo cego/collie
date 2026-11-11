@@ -539,6 +539,8 @@ function job(ref: MrRef, name: string, cwd: string): Effect.Effect<JobRead, neve
       url: found.value?.html_url ?? null,
       id: actionsJob(found.value?.html_url),
       merge: null,
+      retryOf: null,
+      target: pull.value.base.ref,
     };
   });
 }
@@ -1317,6 +1319,8 @@ export const github: Forge = {
   job,
   baseJob,
   retryJob,
+  // ponytail: GitHub reports no failed attempt until its check runs are read with `filter=all`.
+  failedAttempt: () => Effect.succeed({ url: null, tests: [] }),
   startPipeline: () =>
     Effect.succeed({ _tag: "Unneeded", why: "GitHub's Actions run on every push" } as const),
   jobLog,

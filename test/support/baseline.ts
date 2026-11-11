@@ -7411,8 +7411,13 @@ scenario(
 const CI_BASE = pipe("b", Str.repeat(40));
 const CI_LOG = (id: number) => `glab ci trace ${id} --repo ${PROJECT.gitlab}`;
 
-/** The merge request on `head`, its `nuxi-job` as given, and that job at the base as given. */
-const ciOn = (head: string, job: FakeJob, base?: FakeJob["state"]): ForgeModel => ({
+/** The merge request on `head` into `target`, its `nuxi-job` as given, and that job at the base as given. */
+const ciOn = (
+  head: string,
+  job: FakeJob,
+  base?: FakeJob["state"],
+  target = "main",
+): ForgeModel => ({
   installed: true,
   loggedIn: [FORGE_HOST.gitlab],
   login: "tester",
@@ -7422,13 +7427,41 @@ const ciOn = (head: string, job: FakeJob, base?: FakeJob["state"]): ForgeModel =
       iid: "31",
       state: "open",
       head,
-      targetBranch: "main",
+      targetBranch: target,
       jobs: [job],
       base: { at: CI_BASE, jobs: base === undefined ? [] : [{ name: "nuxi-job", state: base }] },
     },
   ],
 });
 const ciFailing: FakeJob = { name: "nuxi-job", state: "failed", retried: "failed" };
+
+/** A GitLab trace in which bun failed `name` in `file`, its section markers and colours left in. */
+const failedTrace = (file: string, name: string) =>
+  Arr.join(
+    [
+      "\u001b[0Ksection_start:1700000000:step_script\r\u001b[0Kbun test v1.4.4",
+      "",
+      `${file}:`,
+      `\u001b[0m\u001b[31m(fail)\u001b[0m ${name} \u001b[0m\u001b[2m[1.00ms]\u001b[0m`,
+      "\u001b[0Ksection_end:1700000001:step_script\r\u001b[0K",
+    ],
+    "\r\n",
+  );
+const OWN_TEST = "a new thing settles on its first try";
+const OWN_FILE = "test/new-thing.test.ts";
+
+/** A commit in `cwd` adding a test of the branch's own, and its sha. */
+const ownTestCommitted = (cwd: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.makeDirectory(`${cwd}/test`, { recursive: true }).pipe(Effect.orDie);
+    yield* fs
+      .writeFileString(`${cwd}/${OWN_FILE}`, `test("${OWN_TEST}", () => {});\n`)
+      .pipe(Effect.orDie);
+    yield* exec(["git", "add", OWN_FILE], { cwd });
+    yield* exec(["git", "commit", "-qm", "a new test"], { cwd });
+    return yield* revParse("HEAD", cwd);
+  });
 
 /** A commit on top of HEAD with the same tree, and the write that makes it HEAD, as a fix's push would. */
 const ciFixCommit = (parent = "HEAD") =>
@@ -7584,6 +7617,61 @@ scenario(
         expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(line);
         expect(yield* fs.exists(`${dir}/agents/${runId}/ci-fix-1.prompt.md`)).toBe(false);
         expect(yield* ciRecords(runId)).toHaveLength(1);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a failed job that passes on its retry after failing in a test the branch adds goes to a CI fix round naming that test",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin } = yield* deliveringOn("gitlab");
+        yield* ownTestCommitted(rig.projectDir);
+        // The merge request targets the branch origin has, where this one leaves it.
+        const target = Str.trim(
+          (yield* exec(["git", "symbolic-ref", "--short", "HEAD"], { cwd: rig.projectDir })).stdout,
+        );
+        const head = yield* headOf();
+        const flaky: FakeJob = {
+          name: "nuxi-job",
+          state: "failed",
+          retried: "passed",
+          trace: failedTrace(OWN_FILE, OWN_TEST),
+        };
+        const forge = yield* forgeOnPath(bin, "gitlab", ciOn(head, flaky, "passed", target));
+        const fix = yield* ciFixCommit();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-ci-own-flake";
+        yield* leftToCi(runId, ["nuxi"]);
+        yield* rig.queueOutputs([
+          BUILT,
+          CLEAN_SYNTHESIS,
+          OPENED_CI,
+          {
+            writes: [
+              fix.write,
+              forge.holding(ciOn(fix.sha, { name: "nuxi-job", state: "passed" }, "passed", target)),
+            ],
+            output: GATE_FIX,
+          },
+        ]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+          options: { outcome: "feature" },
+        });
+        yield* bin.restore();
+        expect(said(result)).toBe(CI_MR);
+        expect(yield* asked(runId, "ci-fix-1")).toContain(
+          `failed in this branch's own test "${OWN_TEST}", and passed only when retried`,
+        );
+        // The retried pass proved nothing: the only proof is the fix's.
+        const [proof, ...more] = yield* ciRecords(runId);
+        expect(more).toEqual([]);
+        expect(proof).toMatchObject({ name: "nuxi", end: { head_sha: fix.sha } });
       }),
     ),
   120_000,
@@ -11945,6 +12033,126 @@ scenario(
           end: { head_sha: head },
           job: { name: "test" },
         });
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a Release whose check is left to CI's test job is not asked its go on a retried pass of the branch's own test, and starts fix round 1",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, forge, base, reviewed, changed } = yield* releasable("gitlab", {
+          jobs: [
+            {
+              name: "test",
+              state: "passed",
+              id: 101,
+              attempts: [{ id: 1, state: "failed", trace: failedTrace(OWN_FILE, OWN_TEST) }],
+            },
+          ],
+        });
+        // The branch adds a test, and its target has not taken the branch yet.
+        const head = yield* ownTestCommitted(reviewed);
+        yield* exec(["git", "push", "-q", "origin", "feature"], { cwd: reviewed });
+        yield* exec(["git", "push", "-qf", "origin", `${base}:refs/heads/main`], {
+          cwd: rig.projectDir,
+        });
+        yield* changed({ head });
+        const now = yield* forge.model();
+        const pushed = yield* agentPush(
+          forge,
+          {
+            ...now,
+            mrs: Arr.map(now.mrs, (one) => ({ ...one, jobs: [{ name: "test", state: "passed" }] })),
+          },
+          head,
+        );
+        const runId = "r-release-own-flake";
+        yield* ownCheck(runId);
+        yield* rig.queueOutputs([
+          PACKAGED,
+          {
+            writes: pushed.writes,
+            sh: pushed.sh,
+            output: { verdict: "clean", fixed: [{ title: "check failed" }] },
+          },
+        ]);
+        yield* driven(
+          {
+            entry: shipped("release"),
+            runId,
+            input: { mr: RELEASING.gitlab.target },
+            host: releaseHost(),
+          },
+          (run) =>
+            Effect.gen(function* () {
+              const go = yield* goAsked(run.asked, "go-1");
+              expect(go.shipping).toEqual({ action: "merge", head: pushed.sha });
+              yield* run.answer("go-1", "Finish");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+        expect(yield* asked(runId, "fix-1")).toContain(
+          `failed in this branch's own test "${OWN_TEST}", and passed only when retried`,
+        );
+        const [proof, ...more] = yield* ciRecords(runId);
+        expect(more).toEqual([]);
+        expect(proof).toMatchObject({ name: "check", end: { head_sha: pushed.sha } });
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a Release whose check is left to CI's test job records a retried pass of a test the branch does not touch as unsettled, naming the job and the head",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, head } = yield* releasable("gitlab", {
+          jobs: [
+            {
+              name: "test",
+              state: "passed",
+              id: 101,
+              attempts: [
+                {
+                  id: 1,
+                  state: "failed",
+                  trace: failedTrace(
+                    "test/old-thing.test.ts",
+                    "an old thing settles on its first try",
+                  ),
+                },
+              ],
+            },
+          ],
+        });
+        const runId = "r-release-flake";
+        yield* ownCheck(runId);
+        yield* rig.queueOutputs([PACKAGED]);
+        yield* driven(
+          {
+            entry: shipped("release"),
+            runId,
+            input: { mr: RELEASING.gitlab.target },
+            host: releaseHost(),
+          },
+          (run) =>
+            Effect.gen(function* () {
+              const go = yield* goAsked(run.asked, "go-1");
+              expect(go.shipping).toEqual({ action: "merge", head });
+              yield* run.answer("go-1", "Finish");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(
+          `unsettled: check: job test failed on ${pipe(head, Str.slice(0, 12))}, then passed when retried — a Flake, so this Run has not settled it.`,
+        );
       }),
     ),
   120_000,

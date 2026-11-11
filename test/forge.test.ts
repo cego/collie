@@ -1770,7 +1770,10 @@ for (const name of ["gitlab", "github"] as const) {
     runEffect(
       Effect.gen(function* () {
         const read = (over: Partial<FakeMr>, rest: Partial<ForgeModel> = {}) => {
-          const fake = fakeForge(name, model(name, { mrs: [mr(name, over)], ...rest }));
+          const fake = fakeForge(
+            name,
+            model(name, { mrs: [mr(name, { targetBranch: "main", ...over })], ...rest }),
+          );
           return forge
             .job(ref(name), "nuxi-typecheck", "/w", fake.run)
             .pipe(Effect.provide(fake.layer));
@@ -1794,7 +1797,16 @@ for (const name of ["gitlab", "github"] as const) {
                 { name: "nuxi-typecheck", state },
               ],
             }),
-          ).toEqual({ ok: true, head: HEAD, state, url, id: jobId(name, 2), merge: null });
+          ).toEqual({
+            ok: true,
+            head: HEAD,
+            state,
+            url,
+            id: jobId(name, 2),
+            merge: null,
+            retryOf: null,
+            target: "main",
+          });
         expect(yield* read({ jobs: [{ name: "lint", state: "passed" }] })).toEqual({
           ok: true,
           head: HEAD,
@@ -1802,6 +1814,8 @@ for (const name of ["gitlab", "github"] as const) {
           url: null,
           id: null,
           merge: null,
+          retryOf: null,
+          target: "main",
         });
         for (const rest of [{ installed: false }, { loggedIn: [] }])
           expect((yield* read({ jobs: [] }, rest)).ok).toBe(false);
@@ -2072,6 +2086,8 @@ test("a GitLab merged-results pipeline counts for the head it was built from, an
         url: "https://gitlab.example.com/group/app/-/jobs/1",
         id: "1",
         merge: MERGE,
+        retryOf: null,
+        target: null,
       });
       // A pipeline of an older head: this head's has not started.
       expect(

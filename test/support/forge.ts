@@ -59,6 +59,18 @@ export const FakeJob = Schema.Struct({
   retried: Schema.optionalKey(JobStates),
   /** Its id once retried, as the forge gives a retry a job of its own. */
   id: Schema.optionalKey(Schema.Finite),
+  /** Its log, as GitLab's trace answers it. */
+  trace: Schema.optionalKey(Schema.String),
+  /** The attempts a retry left behind it, oldest first, as GitLab lists them with `include_retried`. */
+  attempts: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        id: Schema.Finite,
+        state: JobStates,
+        trace: Schema.optionalKey(Schema.String),
+      }),
+    ),
+  ),
 });
 export type FakeJob = typeof FakeJob.Type;
 
@@ -779,6 +791,18 @@ const pipelineIdOf = (mr: FakeMr) => Number(mr.iid) * 100;
 const jobsOf = (jobs: ReadonlyArray<FakeJob>, from: number) =>
   Arr.map(jobs, (job, at) => ({ ...job, id: job.id ?? from + at + 1 }));
 
+/** The job a retry leaves: a job of its own, the attempt it retried listed behind it. */
+const retriedJob = ({ trace, ...job }: FakeJob, n: number): FakeJob => {
+  const id = job.id ?? n + 1;
+  const attempt = trace === undefined ? { id, state: job.state } : { id, state: job.state, trace };
+  return {
+    ...job,
+    state: job.retried ?? job.state,
+    id: id + 100,
+    attempts: [...(job.attempts ?? []), attempt],
+  };
+};
+
 const actionsRun = (mr: FakeMr | undefined) => 4000 + Number(mr?.iid ?? 0);
 
 /** The merge request a project's job `id` is on its head pipeline of. */
@@ -1026,6 +1050,27 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
       );
       return mr === undefined ? no() : glabOnMr(model, mr, rest ?? "", args);
     }
+    const trace = /^projects\/([^/]+)\/jobs\/(\d+)(\/trace)?$/.exec(route);
+    if (trace && !args.includes("POST")) {
+      const found = Option.getOrUndefined(
+        Arr.findFirst(
+          Arr.flatMap(model.mrs, (mr) =>
+            Arr.flatMap(jobsOf(mr.jobs ?? [], 0), (job) =>
+              Arr.map([...(job.attempts ?? []), job], (one) => ({ mr, one })),
+            ),
+          ),
+          ({ one }) => one.id === Number(trace[2]),
+        ),
+      );
+      if (found === undefined) return no();
+      return trace[3] === undefined
+        ? json({
+            id: found.one.id,
+            web_url: `https://${found.mr.project}/-/jobs/${found.one.id}`,
+            pipeline: { id: pipelineIdOf(found.mr) },
+          })
+        : ok(found.one.trace ?? "");
+    }
     const retry = /^projects\/([^/]+)\/jobs\/(\d+)\/retry$/.exec(route);
     if (retry && args.includes("POST")) {
       const path = decodeURIComponent(retry[1]!);
@@ -1097,16 +1142,24 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
               jobsOf(mr.base?.jobs ?? [], 1000),
               jobsOf(mr.target?.jobs ?? [], 2000),
             ][id - pipelineIdOf(mr)];
-      const page = Number(/[?&]page=(\d+)/.exec(route)?.[1] ?? "1");
-      const size = Number(/[?&]per_page=(\d+)/.exec(route)?.[1] ?? "20");
+      const retriedToo = pipe(route, Str.includes("include_retried=true"));
+      const attempts = Arr.flatMap(listed ?? [], (job) => [
+        ...Arr.map(retriedToo ? (job.attempts ?? []) : [], (one) => ({
+          ...one,
+          name: job.name,
+          retried: true,
+        })),
+        { ...job, retried: false },
+      ]);
       return mr === undefined || listed === undefined
         ? no()
         : json(
-            Arr.map(listed.slice((page - 1) * size, page * size), (job) => ({
+            Arr.map(pageOf(route, attempts), (job) => ({
               id: job.id,
               name: job.name,
               status: GITLAB_JOB[job.state],
               web_url: `https://${mr.project}/-/jobs/${job.id}`,
+              retried: job.retried,
             })),
           );
     }
@@ -1960,9 +2013,7 @@ export function answer(
           : {
               ...one,
               jobs: Arr.map(one.jobs ?? [], (job, n) =>
-                [at].flat().includes(n)
-                  ? { ...job, state: job.retried ?? job.state, id: (job.id ?? n + 1) + 100 }
-                  : job,
+                [at].flat().includes(n) ? retriedJob(job, n) : job,
               ),
             },
       ),
