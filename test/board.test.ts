@@ -1386,6 +1386,71 @@ const M = "https://gitlab.cego.dk/mk/support/-/merge_requests/279";
 const M_ID = "gitlab.cego.dk/mk/support!279";
 const M_HEAD = "77215b10aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
+test("a Repo run's branch without an MR keeps its Task out of Finished and History", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const parent = yield* madeRun(dir, {
+        id: "r-parent",
+        task: TASK.id,
+        state: "succeeded",
+        created: "2026-09-14T08:00:00Z",
+      });
+      const child = yield* madeRun(dir, {
+        id: "r-api",
+        parent: parent.id,
+        repo: "api",
+        task: TASK.id,
+        state: "succeeded",
+        project: "/project/api",
+        branch: "mk/owed",
+        created: "2026-09-14T09:00:00Z",
+      });
+      const cards = yield* board(env, [parent, child], {
+        now: epochMs("2026-09-15T10:00:00Z"),
+        head: () => Effect.succeed(null),
+      });
+      expect(cards).toHaveLength(1);
+      expect(cards[0]!.landed).toBe(false);
+      expect(sectionOf(cards[0]!)).toBe("waiting");
+    }),
+  ));
+
+test("merging the leading Run's branch does not settle another Run's open MR", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const mr = yield* madeRun(dir, {
+        id: "r-mr",
+        task: TASK.id,
+        state: "succeeded",
+        branch: "mk/mr",
+        mr: M,
+        created: "2026-09-14T08:00:00Z",
+      });
+      const branch = yield* madeRun(dir, {
+        id: "r-branch",
+        task: TASK.id,
+        state: "succeeded",
+        branch: "mk/branch",
+        created: "2026-09-14T09:00:00Z",
+      });
+      yield* recordDisposition(branch.dir, {
+        at: "2026-09-14T09:30:00Z",
+        by: "mk",
+        kind: "merged",
+        ref: "mk/branch",
+        note: null,
+      });
+      const [card] = yield* board(env, [mr, branch], {
+        mrStates: new Map([[M_ID, "open"]]),
+        head: () => Effect.succeed(null),
+      });
+      expect(card!.landed).toBe(false);
+      expect(card!.mrs![0]!.settled).toBeNull();
+    }),
+  ));
+
 for (const withMr of [false, true])
   test(`an unsettled branch remains owed beside ${withMr ? "a merged MR" : "another settled branch"}`, () =>
     runEffect(
@@ -1569,18 +1634,27 @@ test("a declared shipping Go holds only at its head and gates; an ordinary quest
         mergeable: { state: "mergeable" as const, said: "approved" },
         read: "2026-09-14T10:04:00Z",
       };
-      const read = (action: "merge" | "stage" | null, head = M_HEAD, approved = true) =>
+      const read = (
+        action: "merge" | "stage" | null,
+        head = M_HEAD,
+        approved = true,
+        workflow = "release",
+      ) =>
         board(
           env,
           [
             {
               ...second,
+              workflow,
               state: "waiting",
               asking: [
                 {
-                  name: "any-name",
+                  name: action === null ? "go-1" : "any-name",
                   prompt: "Go?",
-                  options: [],
+                  options: [
+                    { id: "Release", title: "Release", recommended: true },
+                    { id: "Finish", title: "Finish" },
+                  ],
                   shipping: action === null ? undefined : { action, head: M_HEAD },
                 },
               ],
@@ -1615,8 +1689,10 @@ test("a declared shipping Go holds only at its head and gates; an ordinary quest
         expect(sectionOf(blocked!)).toBe("needs-you");
         expect(blocked!.sentence).toContain("not approved");
       }
-      const [ordinary] = yield* read(null);
-      expect(sectionOf(ordinary!)).toBe("needs-you");
+      for (const workflow of ["release", "stage"]) {
+        const [ordinary] = yield* read(null, M_HEAD, true, workflow);
+        expect(sectionOf(ordinary!)).toBe("needs-you");
+      }
     }),
   ));
 
