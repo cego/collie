@@ -1496,7 +1496,9 @@ The gate runs before the merge request, which is where the claim is made. Collie
 run's own checks itself at the tree as it stands, reading them again at every pass, then
 says what is missing. A check
 that failed and named its failing tests has each of them run once more alone (`rerun`); one
-that passes is a Flake, which is neither a gap nor a pass and is named in the merge request.
+that passes is a Flake, which is neither a gap nor a pass and is named in the merge request,
+unless the branch adds or changes that test: then it is never a Flake but a gap, which goes to
+the fixes.
 A failure outside any test, such as a file's `afterAll` (bun's `(unnamed)`), cannot be run
 alone, so a check that has one names no tests.
 A check that failed naming no tests runs once more whole (`recheck`). Gaps a check could

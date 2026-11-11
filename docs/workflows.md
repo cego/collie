@@ -250,7 +250,9 @@ the way: the human verifies the work in the merge request, before it lands. Wher
 output names the tests that failed (bun test's does), the gate reruns each of those tests
 once, alone, on the same tree. A test that then passes is a **Flake**: it is not handed to a
 fix and never counts as a pass, and the merge request names it under **Not settled by the
-run**. A failed check whose output names no tests is re-run whole once instead, since a check
+run**. A test the branch adds or changes is never a Flake: one that fails, then passes alone,
+is still the Run's own and goes to the fixes, its finding saying it passed alone, and it is
+not run at the base. A failed check whose output names no tests is re-run whole once instead, since a check
 that fails and then passes is a flake. The gate then hands
 what a check could still prove to the implementer for up to four fixes; a reviewer's
 judgement or an Output's claim is not handed over, since no fix moves it. Before any fix, each

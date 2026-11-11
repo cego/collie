@@ -8077,6 +8077,44 @@ scenario(
 );
 
 scenario(
+  "a test the branch adds that fails, then passes when run again alone, goes to gate fix 1, whose finding names it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-flake-own";
+        yield* levelRepository();
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.makeDirectory(`${rig.projectDir}/test`, { recursive: true });
+        yield* fs.writeFileString(`${rig.projectDir}/test/one.test.ts`, "// the branch's\n");
+        yield* exec(["git", "add", "-A"], { cwd: rig.projectDir });
+        yield* exec(["git", "commit", "-qm", "the change"], { cwd: rig.projectDir });
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const bin = yield* failingThen(runId, {
+          fails: "[ $n -eq 1 ]",
+          printed: FLAKY_OUTPUT,
+          rerun: ONE_PASSES,
+        });
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, moving(GATE_FIX), OPENED]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+          options: { outcome: "feature" },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* asked(runId, "gate-fix-1")).toContain(
+          "unit failed: the flaky one (test/one.test.ts), which then passed alone but is this branch's own test",
+        );
+        expect(yield* passesOf(runId)).toEqual(["gate", "rerun", "fix"]);
+        expect(yield* asked(runId, "mr")).not.toContain("a Flake");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "a failed check that names no tests is run again whole, as before",
   () =>
     runEffect(

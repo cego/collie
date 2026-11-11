@@ -524,6 +524,7 @@ export interface Collected {
    * the `baseline` it fails only where bun reported it failing, so a test the base lacks passes.
    */
   readonly test?: FailedTest;
+  readonly own?: boolean;
 }
 
 /** A check `startCheck` started, finished by `finishCheck` once `exit` is known. */
@@ -587,6 +588,7 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
           step,
           ...(what.log !== undefined && { log: what.log }),
           ...(what.test !== undefined && { test: what.test }),
+          ...(what.own !== undefined && { own: what.own }),
           ...(environment !== null && { environment }),
         },
       },
@@ -693,8 +695,9 @@ const settleCheck = Effect.fn("Verify.settleCheck")(function* (
   };
   const read: Verification = failed === null ? record : { ...record, failed };
   const tested: Verification = spec.test === undefined ? read : { ...read, test: spec.test };
+  const owned: Verification = spec.own === undefined ? tested : { ...tested, own: spec.own };
   const placed: Verification =
-    spec.environment === undefined ? tested : { ...tested, environment: spec.environment };
+    spec.environment === undefined ? owned : { ...owned, environment: spec.environment };
   const loggedRecord: Verification = spec.log === undefined ? placed : { ...placed, log: spec.log };
   const kept: Verification =
     spec.step === null
@@ -797,7 +800,7 @@ export const rerunTest = Effect.fn("Verify.rerunTest")(function* (
   run: CheckRun,
   spec: VerifySpec,
   test: FailedTest,
-  pass: { readonly pass: "rerun" | "baseline" },
+  pass: { readonly pass: "rerun"; readonly own: boolean } | { readonly pass: "baseline" },
   log?: string,
 ): Effect.fn.Return<Verification, VerifyRefused, Services> {
   const cwd = yield* checkCwd(run, spec);
@@ -810,9 +813,10 @@ export const rerunTest = Effect.fn("Verify.rerunTest")(function* (
     argv: rerunArgv(test),
     cwd,
     by: "collie",
-    pass,
+    pass: { pass: pass.pass },
     log,
     test,
+    ...(pass.pass === "rerun" && { own: pass.own }),
   });
 });
 
