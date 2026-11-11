@@ -1,6 +1,8 @@
 //! The Flock chat in the app's window, on a fake core: what it asks of Desktop's core, and
 //! what it shows of the answers, read through the accessibility tree.
 
+mod support;
+
 use collie_desktop_board::calls::CallError;
 use collie_desktop_board::calls::testing::Harness;
 use collie_desktop_board::{App, view};
@@ -664,6 +666,8 @@ fn a_pasted_image_is_staged_with_a_copy_scaled_for_the_model() {
     assert_eq!(first[0]["mediaType"], "image/png");
     assert!(first[0]["name"].as_str().unwrap().starts_with("pasted-"));
     assert!(first[0].get("scaledOf").is_none());
+    let key = first[0]["key"].as_str().unwrap();
+    assert!(support::core_takes_key(key), "the core refuses {key}");
     window.answer(
         "stage",
         json!({ "id": "img1", "name": "pasted.png", "size": 1.0, "mediaType": "image/png", "path": "/nowhere" }),
@@ -671,6 +675,8 @@ fn a_pasted_image_is_staged_with_a_copy_scaled_for_the_model() {
     let staged = window.asked("stage");
     assert_eq!(staged.len(), 2, "the scaled copy follows");
     assert_eq!(staged[1]["scaledOf"], "img1");
+    let key = staged[1]["key"].as_str().unwrap();
+    assert!(support::core_takes_key(key), "the core refuses {key}");
     assert!(window.has("file-img1"));
 }
 

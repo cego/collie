@@ -164,7 +164,8 @@ so the recording has arrived).
 while the pane is shown, are staged as the chat stages its attachments, placed on the pane's
 Machine by the core's `placeFiles` through its host's `upload`, and typed as one paste of
 their shell-quoted paths there, without Enter. A file that fails is said in the tab's status
-and the log, and nothing is typed. Drops on the chat beside it still go to the chat. See
+and the log, and nothing is typed. Drops on the chat beside it, and pastes into its focused
+composer, still go to the chat. See
 [ADR-draft-a-file-given-to-a-pane-is-placed-on-its-machine](../docs/adr/draft-a-file-given-to-a-pane-is-placed-on-its-machine.md).
 
 **Drawn as Ghostty draws.** The view paints each row into pixels on the CPU and shows it with
@@ -410,8 +411,10 @@ side once; `board/tests/notify.rs` checks it is posted and a click raises the wi
 **Files in.** The chat's Attach button, a paste into the composer and a drop on the chat each
 call `stagePaths` with the same paths, held to `attachments.ts`'s caps, and what it copies in
 rides on the next turn. A paste takes the clipboard's file list, or text that is only `file://`
-URIs; a pasted image goes to `stage` in parts, with a copy scaled to 2000 points; an empty paste
-asks `clipboardFiles`. Attach opens `chat/src/dialog.rs`, which picks several files (the XDG
+URIs; a pasted image goes to `stage` in parts, with a copy scaled to 2000 points, under a key
+from `attachments::transfer_key`, since the core refuses any key but `[\w-]+`. An empty paste
+asks `clipboardFiles`, though Rune skips a paste the platform read nothing from, and the
+stand-in's `Utils` reads no clipboard, so under Rune it finds none. Attach opens `chat/src/dialog.rs`, which picks several files (the XDG
 portal on Linux, rfd on macOS); the core's own dialog answers nothing under Rune. winit 0.30
 reports no file drops on Wayland, so there Attach's help says to attach or paste instead.
 

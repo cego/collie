@@ -5,7 +5,7 @@
 use crate::App;
 use crate::calls::CallError;
 use base64::Engine;
-use collie_desktop_chat::attachments::{iso_of, pasted_name, pasted_paths};
+use collie_desktop_chat::attachments::{iso_of, pasted_name, pasted_paths, transfer_key};
 use collie_desktop_protocol::generated::{StagedOrRefusedItem, StagedOrRefusedItem0};
 use collie_desktop_protocol::{epoch_ms, log};
 use rune::{ClipboardContent, Key, KeyEvent};
@@ -144,7 +144,7 @@ impl App {
             ),
             Given::Image(png) => {
                 let name = pasted_name(&iso_of(epoch_ms()), "image/png");
-                let key = format!("pane-{}-{}", epoch_ms(), png.len());
+                let key = transfer_key(png.len());
                 self.stage_part(to, key, name, png, 0);
             }
         }
