@@ -1055,14 +1055,27 @@ pub fn terminal<S: 'static>(tab: &Tab, lens: fn(&mut S) -> Option<&mut Tab>) -> 
             }
         });
     let place = tab.at.as_ref().map(|at| pane_where(&tab.machine, at));
+    // The lines over the grid take the pane's colours, whatever the app's theme.
+    let (fg, bg) = (color(tab.look.theme.fg), color(tab.look.theme.bg));
     col()
         .w_full()
         .h_full()
-        .children(place.map(|place| text(place).key("terminal-where")))
-        .children(
-            tab.ended
-                .clone()
-                .map(|why| text(why).key("terminal-ended").role("alert")),
-        )
+        .fill(bg)
+        .children(place.map(|place| {
+            text(place)
+                .color(fg)
+                .opacity(0.7)
+                .px(tab.look.padding)
+                .py(4.0)
+                .key("terminal-where")
+        }))
+        .children(tab.ended.clone().map(|why| {
+            text(why)
+                .color(fg)
+                .px(tab.look.padding)
+                .py(4.0)
+                .key("terminal-ended")
+                .role("alert")
+        }))
         .child(grid)
 }
