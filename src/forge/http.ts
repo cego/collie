@@ -10,6 +10,7 @@ import { ChildProcessSpawner } from "effect/process";
 import type { FetchLike, ForgeProvider, GitHubProvider } from "forges";
 import type { MrForge } from "../board-model";
 import { shell, type Runner } from "../mr";
+import type { Readiness } from "./forge";
 
 /**
  * How a host's CLI login is read. Each step is a **credential read**, the only commands
@@ -193,10 +194,31 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
         return {
           ok: false,
           reason: `${login.display} refused ${login.cli}'s login for ${login.host}: run ${login.relogin}`,
+          status: 401,
         } as const;
       });
 
     return { ask };
+  });
+
+/** Whether the forge takes the CLI's login, by asking who it is: only a refusal needs a human. */
+export const loginReadiness = <R>(
+  login: ForgeLogin,
+  cwd: string,
+  run: Runner<R>,
+): Effect.Effect<Readiness, never, R | ForgeHttp> =>
+  Effect.gen(function* () {
+    const http = yield* ForgeHttp;
+    const me = yield* http.ask(login, cwd, (provider, signal) => provider.users.me({ signal }));
+    if (me.ok) return { ok: true, reason: "" };
+    const refused = me.status === 401 || (me.status === 403 && /bad credentials/i.test(me.reason));
+    return refused || (yield* login.token(run, cwd)) === null
+      ? { ok: false, reason: login.notReady, cause: "login-missing" }
+      : {
+          ok: false,
+          reason: `${login.cli} could not verify its login to ${login.host}: ${me.reason}`,
+          cause: "forge-unavailable",
+        };
   });
 
 /** One request to the login's host, as `<cli> api` sent it: its parsed body, or why not. */

@@ -315,6 +315,7 @@ test(
             setSharedDefinitions: ({ definitions }) => Effect.succeed(definitions),
           };
           const link: Link = {
+            reconnected: Effect.void,
             ...own,
             dir: "test",
             userDir: "test",

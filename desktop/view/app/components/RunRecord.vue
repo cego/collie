@@ -12,6 +12,7 @@ import {
   landingOf,
   mrTabsOf,
   recordTabs,
+  recoveryOf,
   rememberScroll,
   type ScrollMemory,
   scrollToRestore,
@@ -59,6 +60,7 @@ watch(
 onBeforeUnmount(() => keptRecords.closed(recordKey.value));
 const { value: read, trouble } = useHeld(() => runDetailAtom(recordKey.value));
 const detail = computed(() => read.value?.detail ?? null);
+const recovery = computed(() => recoveryOf(detail.value ?? {}));
 // A record its host has not confirmed since its door went takes no action, as a saved card.
 const freshPlaced = computed(() => ({
   ...props.placed,
@@ -317,6 +319,19 @@ const locationOf = (file: string, line: number | null) =>
       :class="{ '[scrollbar-gutter:stable]': tab !== 'terminal' }"
     >
       <div class="flex flex-col gap-4" :class="readingClass">
+        <p v-if="recovery.park" class="text-sm text-muted" data-testid="record-park">
+          {{ recovery.park }}
+        </p>
+        <section
+          v-if="recovery.history.length > 0"
+          aria-label="Recovery history"
+          class="text-sm text-muted"
+        >
+          <h3 class="font-semibold">Recovery</h3>
+          <ul>
+            <li v-for="(line, at) in recovery.history" :key="at">{{ line }}</li>
+          </ul>
+        </section>
         <RetryNotice
           v-if="trouble !== null"
           title="This Run's details could not be read; showing what they last said"

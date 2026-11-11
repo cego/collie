@@ -21,7 +21,9 @@ import { endAgent } from "../src/agent-end";
 import type { Backend } from "../src/herdr";
 import { readLaunches } from "../src/launches";
 import {
+  PARK_CAUSE,
   Registry,
+  controlPath,
   foundationLayer,
   registryLayer,
   type Generation,
@@ -95,6 +97,17 @@ const until = <A, E, R>(read: () => Effect.Effect<A, E, R>, wanted: (value: A) =
       yield* TestClock.withLive(Effect.sleep("20 millis"));
     }
   });
+
+/** Until an agent that ended its turn without its Output has been reminded and left it unwritten. */
+const remindersSpent = (runId: string) =>
+  until(
+    () =>
+      FileSystem.FileSystem.pipe(
+        Effect.flatMap((fs) => fs.readFileString(controlPath(dir(), PARK_CAUSE, runId))),
+        Effect.orElseSucceed(() => ""),
+      ),
+    (cause) => cause === "output-absent",
+  );
 
 const THREAD = "019a0000-0000-7000-8000-00000000c0de";
 const standIn = () => `${rig.root}/codex-server.json`;
@@ -260,6 +273,8 @@ test(
           { verdict: "planned" },
           { verdict: "noted" },
           null,
+          null,
+          null,
           { verdict: "fixed" },
         ]);
         const result = yield* hosted(
@@ -273,6 +288,7 @@ test(
             );
             yield* fs.writeFileString(`${dir()}/agents/${runId}/opencode.session`, "ses_notes");
             yield* idleAfterItsStep(named("opencode"), "at launch");
+            yield* remindersSpent(runId);
             const sessions = {
               claude: yield* recordedSession(runId, "claude"),
               codex: yield* recordedSession(runId, "codex"),
@@ -344,6 +360,8 @@ test(
         yield* rig.queueOutputs([
           { verdict: "reviewed" },
           null,
+          null,
+          null,
           { verdict: "done" },
           { verdict: "fixed" },
         ]);
@@ -353,6 +371,7 @@ test(
             const named = (runId: string, operation: string) =>
               agentName(runId, operation, null, 1);
             yield* idleAfterItsStep(named(running, "pi"));
+            yield* remindersSpent(running);
             const done = yield* started("claude", "r2");
             yield* finished(done);
             return { running, done, named };
@@ -440,7 +459,7 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const core = yield* rig.startCore();
-        yield* rig.queueOutputs([null, { verdict: "fixed" }]);
+        yield* rig.queueOutputs([null, null, null, { verdict: "fixed" }]);
         const { runId, agent, before } = yield* hosted(
           Effect.gen(function* () {
             const runId = yield* started("opencode", "r1");
@@ -451,6 +470,7 @@ test(
             );
             yield* fs.writeFileString(`${dir()}/agents/${runId}/opencode.session`, "ses_notes");
             yield* idleAfterItsStep(agent, "at launch");
+            yield* remindersSpent(runId);
             yield* until(
               () => readLaunches(runId),
               (launches) => Arr.some(launches, (one) => one.agentSession !== undefined),

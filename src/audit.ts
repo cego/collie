@@ -16,6 +16,8 @@ export type ScheduledBy = typeof ScheduledBy.Type;
 
 export const AuditLine = Schema.Struct({
   at: Schema.String,
+  /** When the request was asked, where its act ran before `at` was taken. */
+  requested: Schema.optionalKey(Schema.String),
   operation: Schema.String,
   request: Schema.String,
   actor: Schema.Struct({
@@ -118,6 +120,7 @@ export const recordAudit = Effect.fn("Audit.record")(function* <A, I extends Sch
     readonly asked?: Schema.Json | undefined;
     readonly result: Schema.Codec<A, I>;
     readonly value: A;
+    readonly requested?: string | undefined;
   },
 ) {
   const written: AuditLine = {
@@ -130,6 +133,7 @@ export const recordAudit = Effect.fn("Audit.record")(function* <A, I extends Sch
   let full = written;
   if (line.reason !== undefined) full = { ...full, reason: line.reason };
   if (line.asked !== undefined) full = { ...full, asked: line.asked };
+  if (line.requested !== undefined) full = { ...full, requested: line.requested };
   yield* appendJournal(fileOf(runDir), AuditJson, full);
 });
 
@@ -170,7 +174,8 @@ export const once = Effect.fn("Audit.once")(function* <A, I extends Schema.Json,
     }
     return yield* Schema.decodeUnknownEffect(line.result)(prior.result).pipe(Effect.orDie);
   }
+  const requested = yield* nowIso;
   const value = yield* act;
-  yield* recordAudit(runDir, { ...line, value }).pipe(Effect.orDie);
+  yield* recordAudit(runDir, { ...line, value, requested }).pipe(Effect.orDie);
   return value;
 });

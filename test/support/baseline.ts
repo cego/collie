@@ -107,6 +107,7 @@ import {
   AWAITING,
   HOLD,
   PARKED,
+  PARK_CAUSE,
   RunStatus,
   Registry,
   answerDecision,
@@ -137,6 +138,8 @@ import * as Reactivity from "effect/reactivity/Reactivity";
 import { registerAgent, scopeFor } from "../../src/registry";
 import { deliveriesOf, SENT_STATES } from "../../src/steering";
 import { fixtures, until } from "./host";
+import { BUILD } from "../../src/host";
+import { readMetrics } from "../../src/metrics";
 
 const ROOT = new URL("../../", import.meta.url).pathname;
 
@@ -1564,6 +1567,7 @@ const resumeImplementPark = (
       );
       expect(status.status).toBe("suspended");
       expect(why).toContain(reason);
+      expect(yield* parkedCause(options.runId)).toBe("step-failed");
       expect(why).not.toContain("follow-up Run");
       const branch = yield* exec(["git", "branch", "--show-current"], { cwd: rig.projectDir });
       const worktrees = yield* exec(["git", "worktree", "list", "--porcelain"], {
@@ -7315,6 +7319,10 @@ scenario(
         expect(why).toContain(
           `nuxi is left to CI and unproved: job nuxi-job on ${pipe(head, Str.slice(0, 12))} is not in its pipeline`,
         );
+        expect(yield* parkedCause(runId)).toBe("ci-job-absent");
+        expect(yield* halts(runId)).toEqual([
+          expect.objectContaining({ cause: "ci-job-absent", build: BUILD }),
+        ]);
         expect(yield* ciRecords(runId)).toEqual([]);
       }),
     ),
@@ -7612,6 +7620,7 @@ scenario(
         });
         yield* bin.restore();
         expect(why).toContain("Outcome unproved after 4 CI fixes");
+        expect(yield* parkedCause(runId)).toBe("gate-fix-unproved");
         expect(why).toContain(
           `nuxi is left to CI and unproved: job nuxi-job on ${pipe(last, Str.slice(0, 12))} is failed`,
         );
@@ -8506,6 +8515,7 @@ const heldUnproved = (runId: string) =>
     );
     expect(result).toBe("suspended");
     expect(yield* parkedWhy(runId)).toContain("Outcome unproved after 4 gate fixes: lint failed");
+    expect(yield* parkedCause(runId)).toBe("gate-fix-unproved");
     return { bin, options };
   });
 
@@ -9238,6 +9248,30 @@ const deliveringOn = (name: MrForge, mrs: ForgeModel["mrs"] = []) =>
 for (const name of ["gitlab", "github"] as const) {
   const noun = name === "gitlab" ? "merge request" : "pull request";
 
+  scenario(`a missing ${name} login parks delivery naming login-missing`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, forge } = yield* deliveringOn(name);
+        const denied = forge.holding({ installed: true, loggedIn: [], login: null, mrs: [] });
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = `r-${name}-login-missing`;
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([{ writes: [denied], output: BUILT }, CLEAN_SYNTHESIS]);
+        const why = yield* parkedOn({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+        });
+        yield* bin.restore();
+        expect(why).toContain("login");
+        expect(yield* parkedCause(runId)).toBe("login-missing");
+        expect(yield* halts(runId)).toEqual([
+          expect.objectContaining({ cause: "login-missing", build: BUILD }),
+        ]);
+      }),
+    ),
+  );
+
   scenario(
     `implement opens a ${noun} on a ${name} checkout with that forge's own command`,
     () =>
@@ -9533,6 +9567,7 @@ scenario(
         ])
           expect(why).toContain(undone);
         expect(why).toEndWith(`resume ${runId}.`);
+        expect(yield* parkedCause(runId)).toBe("step-failed");
         expect(yield* prompts()).toHaveLength(3);
       }),
     ),
@@ -9635,7 +9670,8 @@ scenario(
             Effect.gen(function* () {
               const first = yield* until(
                 () => Effect.zip(run.status, parkedWhy(runId)),
-                ([got, why]) => why !== "" || got.status === "failed",
+                ([got, why]) =>
+                  (got.status === "suspended" && why !== "") || got.status === "failed",
               );
               expect(first[1]).toContain("push denied");
               yield* run.resume;
@@ -10133,6 +10169,17 @@ const parkedWhy = (runId: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(controlPath(dir, PARKED, runId))),
     Effect.orElseSucceed(() => ""),
+  );
+
+const parkedCause = (runId: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.readFileString(controlPath(dir, PARK_CAUSE, runId))),
+    Effect.orElseSucceed(() => ""),
+  );
+
+const halts = (runId: string) =>
+  Effect.map(readMetrics(evidenceDir(dir, runId)), (lines) =>
+    Arr.filter(lines, (line) => line.kind === "halt"),
   );
 
 /** What a Run awaits that ends by itself, or "" while it awaits nothing. */
@@ -19057,6 +19104,7 @@ scenario(
         expect(why).toContain("harness.json again: Missing key");
         expect(why).toContain(`at ["harness"]["commits"][0]`);
         expect(why).toContain(`Correct it, then resume ${runId}.`);
+        expect(yield* parkedCause(runId)).toBe("step-failed");
         expect(yield* runLog(runId)).not.toContain("benchmark plan 1");
         expect(yield* calibrations(runId)).toEqual([]);
       }),

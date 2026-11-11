@@ -1908,6 +1908,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
               ? null
               : `${open[0]!.constraint}${open.length > 1 ? ` (and ${open.length - 1} more)` : ""}`),
           held: held === undefined ? null : heldLine(null),
+          park: leader.park ?? null,
+          recovery: leader.recovery ?? [],
           heldBy: held === undefined ? null : yield* holderOf(held),
           decision,
           questions,

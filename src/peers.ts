@@ -313,6 +313,7 @@ export interface PeerClient {
 
 /** What a peer link reaches its own host with, which only it may declare `from.machine` with. */
 export interface Link {
+  readonly reconnected: Effect.Effect<void>;
   readonly dir: string;
   readonly userDir: string;
   readonly build: string;
@@ -647,7 +648,8 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
   const onLink = (peer: Peer) =>
     void runFork(
       Effect.forkIn(
-        reconcileMachines.pipe(
+        link.reconnected.pipe(
+          Effect.andThen(reconcileMachines),
           Effect.andThen(() =>
             Arr.some(peers, (one) => one.installation === peer.installation)
               ? link

@@ -24,6 +24,7 @@ import { cardFlow } from "../../../src/shared/flow-strip";
 import { flockMrsAtom, runDetailKey } from "../flock";
 import { useAtomValue } from "@effect/atom-vue";
 import { kept } from "../kept";
+import { recoveryOf } from "../../../src/shared/record";
 
 const props = defineProps<{
   task: TaskView;
@@ -33,6 +34,7 @@ const props = defineProps<{
   cardKey: string;
   machine: string;
 }>();
+const recovery = computed(() => recoveryOf(props.task, 2));
 const { run, openLink } = useActions();
 const pointing = (at: boolean) =>
   kept.pointed(
@@ -325,6 +327,16 @@ const menu = computed(() =>
       </button>
       <p v-if="task.held" class="text-sm text-muted">{{ task.held }}</p>
       <p v-if="task.drift" class="text-sm text-warning">{{ task.drift }}</p>
+      <p v-if="recovery.park" class="text-sm text-muted" data-testid="park-status">
+        {{ recovery.park }}
+      </p>
+      <ul
+        v-if="recovery.history.length > 0"
+        aria-label="Recovery history"
+        class="mt-2 text-xs text-muted"
+      >
+        <li v-for="(line, at) in recovery.history" :key="at">{{ line }}</li>
+      </ul>
 
       <div v-if="asked !== null" class="mt-3 flex flex-col gap-2" data-testid="question">
         <p class="line-clamp-2 text-sm font-medium">{{ asked.text }}</p>

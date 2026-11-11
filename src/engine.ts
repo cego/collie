@@ -139,7 +139,7 @@ import { helleUrlOf } from "./helle-url";
 import { currentPid, signalProcess } from "./lock";
 import { skillDirs, skillFile, type CheckoutKind, type InputStrategy } from "./definitions";
 import { EXCLUSIVE_STRATEGIES } from "./strategies";
-import { appendMetric, noteVerification, metricsOf, readMetrics } from "./metrics";
+import { appendMetric, noteVerification, metricsOf, readMetrics, recoveriesIn } from "./metrics";
 import { ForgeHttp, forgeHttpLayer } from "./forge/http";
 import { EngineTouches, engineTouchesLayer, touching } from "./engine-touches";
 import { ciJob } from "./ci-job";
@@ -179,6 +179,7 @@ import {
 import { redact } from "./redact";
 import { reportOf, type Recorded } from "./report";
 import { outcomeRecordsOf, type OutcomeRecords } from "./outcomes";
+import { Park, ParkCause, parkOf, parkWithRecovery, recoveryLine } from "./park-cause";
 import type { Metrics, Solution } from "./board-model";
 import {
   forgeOfRef,
@@ -427,6 +428,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly state: "ok"; readonly account: string; readonly detail: string }
     | { readonly state: "absent" | "broken"; readonly detail: string; readonly fix: string; readonly reusable?: { readonly from: string } };
   export const ConnectionReading: Schema.Codec<ConnectionReading, unknown, never, never>;
+  export type ParkCause = ${Arr.join(
+    Arr.map(ParkCause.literals, (id) => JSON.stringify(id)),
+    " | ",
+  )};
+  export const ParkCause: Schema.Codec<ParkCause, unknown, never, never>;
   export interface ReviewScope { readonly source: string; readonly requirements: string; readonly target: string; readonly head: string; readonly fingerprint: string; readonly outcome: string; readonly risks: string }
   export const ReviewScope: Schema.Codec<ReviewScope, unknown, never, never>;
   export interface Recovery { readonly implementation: boolean; readonly reason: string; readonly previous: string; readonly commits: string; readonly review: SynthesisReport | null }
@@ -846,6 +852,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** What opening a merge request from here needs, and what it would be filled in with. */
   export interface MrReady {
     readonly ok: boolean;
+    readonly cause?: ParkCause;
     readonly provider?: "gitlab" | "github";
     readonly repository?: string;
     /** Why it cannot be done here. Empty where it can. */
@@ -912,8 +919,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly usageWait: (runId: string, wait: { readonly account: string; readonly resetsAt: string | null } | null) => Effect.Effect<void>;
     /** Records where the Run's work is among its Steps; \`step\` and \`forecast\` call it. */
     readonly step: (runId: string, note: { readonly kind: string } & Record<string, unknown>) => Effect.Effect<void>;
-    /** Why this Run parked its own work, shown beside its status; null clears it. */
-    readonly parked: (runId: string, why: string | null) => Effect.Effect<void>;
+    /** Why this Run parked its own work, shown beside its status; null clears it. No cause is \`unknown\`. */
+    readonly parked: (runId: string, why: string | null, cause?: ParkCause) => Effect.Effect<void>;
     readonly asking: (runId: string, question: DecisionSpec, asker?: string) => Effect.Effect<void>;
     /** Every question this run has been asked, oldest first, with its answer once it has one. */
     readonly asked: (
@@ -3183,12 +3190,28 @@ const HAND_OVER_TIMEOUT = "30 seconds";
 export { HOLD, STOP, controlPath };
 /** Why work parked; the host clears it when taking that work up. */
 export const PARKED = "parked";
+/** The Park cause of the park in `PARKED`; left when that clears, and read only beside it. */
+export const PARK_CAUSE = "park-cause";
+const PARK_INFO = "park-info";
+const ParkJson = Schema.fromJsonString(Park);
+const readParkInfo = (fs: FileSystem.FileSystem, path: string) =>
+  fs.readFileString(path).pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(ParkJson)),
+    Effect.orElseSucceed(() => null),
+  );
 /** A wait that ends by itself; the host clears it when the wait ends. */
 export const AWAITING = "awaiting";
 /** Work waiting for a Subscription to reset; cleared once it goes on. */
 export const USAGE = "usage";
 /** A directory per parent, holding a file per child whose result it is blocked on. */
 const AWAITED = "awaited";
+
+const decodeParkCause = Schema.decodeUnknownOption(ParkCause);
+const readParkCause = (fs: FileSystem.FileSystem, path: string) =>
+  fs.readFileString(path).pipe(
+    Effect.map((text) => Option.getOrElse(decodeParkCause(text), (): ParkCause => "unknown")),
+    Effect.orElseSucceed((): ParkCause => "unknown"),
+  );
 
 export const UsageWaitSchema = Schema.Struct({
   account: Schema.String,
@@ -4515,18 +4538,32 @@ export const hostLayer = (options: {
             Effect.provideService(FileSystem.FileSystem, fs),
             Effect.orDie,
           ),
-        parked: (runId, why) => {
+        parked: (runId, why, cause = "unknown") => {
           const path = controlPath(dir, PARKED, runId);
+          const causePath = controlPath(dir, PARK_CAUSE, runId);
+          // Renamed into place, so a reader never sees it empty.
+          const put = (to: string, text: string) =>
+            fs
+              .writeFileString(`${to}.new`, text)
+              .pipe(Effect.andThen(fs.rename(`${to}.new`, to)), Effect.orDie);
           return (
             why === null
               ? fs.remove(path, { force: true }).pipe(Effect.orDie)
               : Effect.gen(function* () {
                   const before = yield* fs.readFileString(path).pipe(Effect.option);
-                  // Renamed into place, so a reader never sees it empty.
-                  yield* fs
-                    .writeFileString(`${path}.new`, why)
-                    .pipe(Effect.andThen(fs.rename(`${path}.new`, path)), Effect.orDie);
-                  if (Option.getOrNull(before) === why) return;
+                  const causeBefore = yield* readParkCause(fs, causePath);
+                  let info = yield* readParkInfo(fs, controlPath(dir, PARK_INFO, runId));
+                  if (Option.isNone(before) || causeBefore !== cause || info === null) {
+                    const since = yield* nowIso;
+                    info = { ...parkOf(cause), id: `${since}-${yield* Random.nextInt}`, since };
+                    yield* put(
+                      controlPath(dir, PARK_INFO, runId),
+                      yield* Schema.encodeEffect(ParkJson)(info).pipe(Effect.orDie),
+                    );
+                  }
+                  yield* put(causePath, cause);
+                  yield* put(path, why);
+                  if (Option.getOrNull(before) === why && causeBefore === cause) return;
                   yield* under(
                     Effect.gen(function* () {
                       yield* appendMetric(evidenceDir(dir, runId), {
@@ -4535,10 +4572,25 @@ export const hostLayer = (options: {
                         subject: "",
                         value: 0,
                         note: why,
+                        cause,
+                        build: manifest.version,
+                        park: info!.id,
                       });
                     }),
                   );
-                  yield* notify(runId, "needs-you", why, { key: `parked:${why}` });
+                  const park = parkWithRecovery(
+                    info,
+                    recoveriesIn(
+                      yield* readMetrics(evidenceDir(dir, runId)).pipe(Effect.provideContext(bun)),
+                    ),
+                  );
+                  if (park.kind !== "rechecks")
+                    yield* notify(
+                      runId,
+                      "needs-you",
+                      Arr.join([why, ...(park.history ?? [])], "\n"),
+                      { key: `parked:${cause}` },
+                    );
                 })
           ).pipe(Effect.andThen(store.announce));
         },
@@ -4676,6 +4728,10 @@ export const hostLayer = (options: {
                   return {
                     ok: false,
                     provider,
+                    cause:
+                      reading.state === "absent"
+                        ? ("login-missing" as const)
+                        : ("forge-unavailable" as const),
                     reason: `${reading.detail}. Fix: ${reading.fix}`,
                     assignee: "",
                     template: "",
@@ -6249,6 +6305,9 @@ export const RunView = Schema.Struct({
   diagnostic: Schema.NullOr(Schema.String),
   /** Why the Run parked its own work and what picks it up again, or null. */
   parked: Schema.NullOr(Schema.String),
+  /** That park's cause and what it lets the host do; absent from an older host. */
+  park: Schema.optionalKey(Schema.NullOr(Park)),
+  recovery: Schema.optionalKey(Schema.Array(Schema.String)),
   /** What it waits for that needs nobody to repair anything, or null. */
   awaiting: Schema.NullOr(AwaitingSchema),
   /** The merge request the Run opened, as its workflow recorded it, or null. */
@@ -6493,6 +6552,7 @@ export interface RegistryApi {
   readonly recover: Effect.Effect<typeof Registrations.Type, never, HostServices>;
   readonly resume: (
     runId: string,
+    recoveryPark?: string,
   ) => Effect.Effect<typeof Controlled.Type, HostRefused, HostServices>;
   /**
    * What this Run offers to do next, decided by the module as it is now rather than as it
@@ -6567,7 +6627,13 @@ export interface Admitted {
  * run recorded and the engine not yet told, and with the engine told and the receipt not
  * yet written. Only a test sets one, through the host's `COLLIE_HOST_CRASH_AT`.
  */
-export type CrashPoint = "admitted" | "executed" | "answered" | "reported";
+export type CrashPoint =
+  | "admitted"
+  | "executed"
+  | "answered"
+  | "reported"
+  | "recovery-park-cleared"
+  | "recovery-entered";
 
 /**
  * How a host turns a public workflow id into the module this project should run. It is
@@ -6766,6 +6832,7 @@ const makeRegistry: (
   // the module as it is now, never restored.
   yield* clearGenerations(dir);
   const waking = yield* Semaphore.make(1);
+  const controlling = yield* Semaphore.make(1);
   const clearParked = (runId: string) =>
     fs
       .remove(controlPath(dir, PARKED, runId), { force: true })
@@ -7877,6 +7944,23 @@ const makeRegistry: (
     const { cwd, branch, workspace, worktree } = placedOf(row, admitted.options);
     const outcome = admitted.options.outcome ?? UNSPECIFIED;
     const generation = live.get(row.generation);
+    const parked = yield* fs
+      .readFileString(controlPath(dir, PARKED, row.run))
+      .pipe(Effect.orElseSucceed(() => null));
+    const metrics = yield* readMetrics(evidenceDir(dir, row.run)).pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.provideContext(bun),
+    );
+    const recovery = recoveriesIn(metrics);
+    const lastPark = Option.getOrUndefined(Arr.findLast(metrics, (line) => line.kind === "halt"));
+    const info =
+      parked === null
+        ? null
+        : ((yield* readParkInfo(fs, controlPath(dir, PARK_INFO, row.run))) ?? {
+            ...parkOf(yield* readParkCause(fs, controlPath(dir, PARK_CAUSE, row.run))),
+            id: lastPark?.park ?? lastPark?.at ?? row.admitted,
+            since: lastPark?.at ?? row.admitted,
+          });
     const about = {
       ...admitted,
       strategies: generation?.hints ?? {},
@@ -7888,9 +7972,9 @@ const makeRegistry: (
       created: row.admitted,
       waiting: yield* steered(row.run),
       controls: yield* controlsOf(row.run),
-      parked: yield* fs
-        .readFileString(controlPath(dir, PARKED, row.run))
-        .pipe(Effect.orElseSucceed(() => null)),
+      parked,
+      park: parked === null ? null : parkWithRecovery(info!, recovery),
+      recovery: Arr.map(recovery.slice(-20), recoveryLine),
       awaiting: yield* fs.readFileString(controlPath(dir, AWAITING, row.run)).pipe(
         Effect.flatMap(Schema.decodeUnknownEffect(AwaitingJson)),
         Effect.orElseSucceed(() => null),
@@ -7983,7 +8067,55 @@ const makeRegistry: (
       readonly generation: Generation;
       readonly execution: string;
     },
+    recoveryPark?: string,
   ) {
+    const claim =
+      recoveryPark === undefined
+        ? undefined
+        : Option.getOrUndefined(
+            Arr.findLast(
+              yield* readMetrics(evidenceDir(dir, runId)),
+              (line) =>
+                line.park === recoveryPark &&
+                line.action === "resumed" &&
+                line.outcome === "claimed",
+            ),
+          );
+    const recoveryEntered = () =>
+      readStepLines(runDir(dir, runId)).pipe(
+        Effect.map(
+          (lines) =>
+            claim !== undefined &&
+            (claim.entries === undefined
+              ? Arr.some(
+                  lines,
+                  (line) => line.kind === "entry" && epochMs(line.at) >= epochMs(claim.at),
+                )
+              : Arr.filter(lines, (line) => line.kind === "entry").length > claim.entries),
+        ),
+      );
+    if (recoveryPark !== undefined) {
+      if (yield* recoveryEntered()) return true;
+      const row = yield* store.run(runId);
+      const view = row === null ? null : yield* viewOf(row);
+      const savedPark = yield* readParkInfo(fs, controlPath(dir, PARK_INFO, runId));
+      if (
+        claim === undefined ||
+        view === null ||
+        (view.park === null ? savedPark?.id !== recoveryPark : view.park?.id !== recoveryPark) ||
+        view.controls.length > 0 ||
+        Arr.some(
+          view.waiting,
+          (one) =>
+            isUnanswered(one) ||
+            isSetAside(view.waiting, one) ||
+            (one.asker != null && one.answer === null),
+        )
+      )
+        return yield* new HostRefused({
+          reason: "The park is no longer eligible for automatic resume",
+        });
+    }
     const workflow = found.generation.registration.workflow;
     const status = pollStatus(
       yield* engine.poll(workflow, found.execution),
@@ -7994,6 +8126,7 @@ const makeRegistry: (
       const before = entries?.get(runId) ?? 0;
       const old = yield* fs.readFileString(controlPath(dir, PARKED, runId)).pipe(Effect.option);
       yield* clearParked(runId);
+      if (recoveryPark !== undefined) yield* crash("recovery-park-cleared");
       yield* engine
         .resume(workflow, found.execution)
         .pipe(Effect.onError(() => restoreParked(runId, old)));
@@ -8004,7 +8137,12 @@ const makeRegistry: (
       }
     }
     yield* settle(found);
-    return status === "suspended";
+    if (recoveryPark !== undefined) yield* crash("recovery-entered");
+    if (recoveryPark !== undefined && !(yield* recoveryEntered()))
+      return yield* new HostRefused({
+        reason: `${runId} has not recorded entry after its recovery claim`,
+      });
+    return recoveryPark !== undefined || status === "suspended";
   }, waking.withPermits(1));
 
   const settle = (found: { readonly generation: Generation; readonly execution: string }) =>
@@ -8515,7 +8653,7 @@ const makeRegistry: (
       }
     }
     return { runs, woken };
-  });
+  }, controlling.withPermits(1));
 
   /** A stop, and the agents of every Run it reached closed: the Runs, and what did not close. */
   const stopTree = Effect.fn("Engine.stopTree")(function* (
@@ -9132,15 +9270,24 @@ const makeRegistry: (
 
     recover: recover().pipe(Effect.map((result) => result.registrations)),
 
-    resume: Effect.fn("Engine.Registry.resume")(function* (runId: string) {
+    resume: Effect.fn("Engine.Registry.resume")(function* (runId: string, recoveryPark?: string) {
       const recovered = yield* recover(
-        new Set([runId, ...descendantsOf(yield* store.runs, runId)]),
+        new Set(
+          recoveryPark === undefined
+            ? [runId, ...descendantsOf(yield* store.runs, runId)]
+            : [runId],
+        ),
       );
       entryCauses.set(runId, "resumed");
-      const controlled = yield* applyControl(runId, STOP, false, recovered.takenUp).pipe(
-        Effect.result,
-        Effect.ensuring(Effect.sync(() => entryCauses.delete(runId))),
-      );
+      const controlled = yield* (
+        recoveryPark === undefined
+          ? applyControl(runId, STOP, false, recovered.takenUp)
+          : Effect.gen(function* () {
+              const found = yield* routed(runId);
+              const woken = yield* wake(runId, found, recoveryPark);
+              return { runs: [runId], woken: woken ? [runId] : [] };
+            }).pipe(controlling.withPermits(1))
+      ).pipe(Effect.result, Effect.ensuring(Effect.sync(() => entryCauses.delete(runId))));
       const recorded = { runId, control: STOP, set: false, left: [] };
       if (controlled._tag === "Failure")
         return {
