@@ -280,7 +280,7 @@ export const reportsLayer = (opts: {
       yield* Effect.forkScoped(
         Effect.gen(function* () {
           const linked = yield* due.size === 0
-            ? Effect.map(Queue.take(opts.linked), Option.some)
+            ? Effect.asSome(Queue.take(opts.linked))
             : Queue.take(opts.linked).pipe(Effect.timeoutOption("5 seconds"));
           if (Option.isSome(linked)) due.set(linked.value.installation, linked.value);
           for (const [installation, peer] of due)

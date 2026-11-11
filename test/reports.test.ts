@@ -105,13 +105,8 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
             mode === "failed" ? "The laptop cannot reproduce this goal" : result.summary;
           const socket = `${first.world.home}/herdr.sock`;
           let closeAsked = false;
-          let releaseClose = () => {};
-          const closeHeld =
-            mode === "away-close"
-              ? new Promise<void>((resolve) => {
-                  releaseClose = resolve;
-                })
-              : Promise.resolve();
+          const held = Promise.withResolvers<void>();
+          const closeHeld = mode === "away-close" ? held.promise : Promise.resolve();
           const server = createServer((connection) => {
             let pending = "";
             connection.on("data", (chunk) => {
@@ -436,7 +431,7 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
             const linkedBefore = yield* linkedLines();
             yield* second.cli(["board"], { FAKE_HERDR_OUTPUTS: farOutputs });
             yield* until(linkedLines, (count) => count > linkedBefore);
-            releaseClose();
+            held.resolve();
           }
           const readReport = () =>
             fs.readFileString(`${runDir(first.world.state, runId)}/report.json`).pipe(
