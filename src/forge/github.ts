@@ -1,6 +1,7 @@
 // The GitHub adapter: everything Collie asks GitHub, through `gh` or over HTTP with gh's
 // token. Only github.com.
 
+import { stripVTControlCharacters } from "node:util";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -16,6 +17,7 @@ import {
   type MrRef,
 } from "../board-model";
 import { keepCredentialHelper, whatItSaid, type Runner } from "../mr";
+import { failedTestsIn } from "../own-tests";
 import { epochMs } from "../time";
 import type {
   DeployTier,
@@ -27,6 +29,7 @@ import type {
   FromBranch,
   FromBranchList,
   BaseJobRead,
+  FailedAttempt,
   JobRead,
   JobState,
   PipelineRead,
@@ -40,6 +43,7 @@ import {
   pagesAs,
   request,
   requestAs,
+  requestText,
   type Answered,
   type ForgeLogin,
 } from "./http";
@@ -517,10 +521,17 @@ function job(ref: MrRef, name: string, cwd: string): Effect.Effect<JobRead, neve
     const head = pull.value.head.sha;
     const unread = (why: string) =>
       ({ ok: false, reason: `could not list the check runs on ${head}: ${why}` }) as const;
-    const found = yield* checkRun(repo, head, name, cwd);
-    if (!found.ok) return unread(found.reason);
+    // `filter=all` lists the attempts a rerun left behind, newest first.
+    const named = yield* checkRuns(
+      repo,
+      head,
+      `check_name=${encodeURIComponent(name)}&filter=all&per_page=100`,
+      cwd,
+    );
+    if (!named.ok) return unread(named.reason);
+    const [found, before] = named.value;
     let absent: JobState = "missing";
-    if (found.value === undefined) {
+    if (found === undefined) {
       // GitHub creates a job behind `needs` only once its needs finish.
       let listed = 0;
       for (let page = 1; absent === "missing"; page++) {
@@ -535,11 +546,14 @@ function job(ref: MrRef, name: string, cwd: string): Effect.Effect<JobRead, neve
     return {
       ok: true,
       head,
-      state: found.value === undefined ? absent : stateOf(found.value),
-      url: found.value?.html_url ?? null,
-      id: actionsJob(found.value?.html_url),
+      state: found === undefined ? absent : stateOf(found),
+      url: found?.html_url ?? null,
+      id: actionsJob(found?.html_url),
       merge: null,
-      retryOf: null,
+      retryOf:
+        found !== undefined && before !== undefined && stateOf(before) === "failed"
+          ? actionsJob(before.html_url)
+          : null,
       target: pull.value.base.ref,
     };
   });
@@ -982,6 +996,58 @@ function retryJob(ref: MrRef, id: string, cwd: string): Effect.Effect<Readiness,
 
 const runOf = (id: string) => Str.split(id, "/")[0]!;
 
+const AttemptJob = Schema.Struct({
+  run_id: Schema.Finite,
+  run_attempt: Schema.Finite,
+  html_url: optionalText,
+});
+const AttemptJobs = Schema.Struct({
+  jobs: Schema.Array(
+    Schema.Struct({ id: Schema.Finite, status: Schema.String, conclusion: optionalText }),
+  ),
+});
+
+/** A job log as bun printed it: GitHub's columns, timestamps, `##[…]` markers, colours and CRs gone. */
+const plainLog = (log: string) =>
+  pipe(
+    stripVTControlCharacters(log),
+    Str.replace(/^(?:[^\t\n]*\t[^\t\n]*\t)?\d{4}-\d\d-\d\dT[\d:.]+Z ?/gm, ""),
+    Str.replace(/##\[\w+\]/g, ""),
+    Str.replaceAll("\r", ""),
+  );
+
+/** Check run `id`'s failed attempt, with the failed tests its run attempt's failed jobs' logs name. */
+function failedAttempt(
+  ref: MrRef,
+  id: string,
+  cwd: string,
+): Effect.Effect<FailedAttempt, never, ForgeHttp> {
+  return Effect.gen(function* () {
+    const repo = mrPath({ project: ref.project, iid: "" });
+    const attempt = yield* rest(
+      AttemptJob,
+      cwd,
+      `repos/${repo}/actions/jobs/${Str.split(id, "/")[1]}`,
+    );
+    if (!attempt.ok) return { url: null, tests: [] };
+    const url = attempt.value.html_url ?? null;
+    const route = `repos/${repo}/actions/runs/${attempt.value.run_id}/attempts/${attempt.value.run_attempt}/jobs`;
+    const jobs: Array<(typeof AttemptJobs.Type)["jobs"][number]> = [];
+    for (let page = 1; ; page++) {
+      const listed = yield* rest(AttemptJobs, cwd, `${route}?per_page=100&page=${page}`);
+      if (!listed.ok) return { url, tests: [] };
+      jobs.push(...listed.value.jobs);
+      if (listed.value.jobs.length < 100) break;
+    }
+    const logs = yield* Effect.forEach(
+      Arr.filter(jobs, (one) => stateOf(one) === "failed"),
+      (one) => requestText(LOGIN, cwd, `repos/${repo}/actions/jobs/${one.id}/logs`),
+    );
+    const tests = Arr.flatMap(logs, (log) => (log.ok ? failedTestsIn(plainLog(log.value)) : []));
+    return { url, tests: Arr.dedupeWith(tests, (a, b) => a.name === b.name) };
+  });
+}
+
 const jobLog = (ref: MrRef, id: string) =>
   Result.getOrThrow(
     CommandLine.join([
@@ -1319,8 +1385,7 @@ export const github: Forge = {
   job,
   baseJob,
   retryJob,
-  // ponytail: GitHub reports no failed attempt until its check runs are read with `filter=all`.
-  failedAttempt: () => Effect.succeed({ url: null, tests: [] }),
+  failedAttempt,
   startPipeline: () =>
     Effect.succeed({ _tag: "Unneeded", why: "GitHub's Actions run on every push" } as const),
   jobLog,
