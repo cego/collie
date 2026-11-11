@@ -9,7 +9,7 @@ import * as Option from "effect/Option";
 import { pipe } from "effect/Function";
 import { Effect, FileSystem, Schema } from "effect";
 import { evidenceDir, runDir } from "./engine";
-import { readAudit } from "./audit";
+import { readAudit, type AuditLine } from "./audit";
 import { readDispositions, latest } from "./disposition";
 import { launchDir, readLaunches, stemOf } from "./launches";
 import { deliveriesOf } from "./steering";
@@ -49,6 +49,14 @@ export const OutcomeRecords = Schema.Struct({
 });
 export type OutcomeRecords = typeof OutcomeRecords.Type;
 
+/** Each resume a Run's trail records, timed from when it was asked, and the front door that asked. */
+export const resumesIn = (trail: ReadonlyArray<AuditLine>) =>
+  Arr.flatMap(trail, (line) =>
+    line.operation === "resume"
+      ? [{ at: line.requested ?? line.at, origin: line.actor.origin }]
+      : [],
+  );
+
 const ITERATION = /Iteration (\d+) of at most (\d+)\./;
 
 export const outcomeRecordsOf = Effect.fn("Outcomes.records")(function* (
@@ -67,12 +75,10 @@ export const outcomeRecordsOf = Effect.fn("Outcomes.records")(function* (
   }
   const dir = runDir(stateDir, runId);
   const steering: Array<{ kind: SteeringKind; origin: string }> = [];
-  const resumes: Array<{ at: string; origin: string }> = [];
-  for (const line of yield* readAudit(dir).pipe(Effect.orElseSucceed(() => []))) {
+  const trail = yield* readAudit(dir).pipe(Effect.orElseSucceed(() => []));
+  for (const line of trail)
     for (const kind of STEERING)
       if (line.operation === kind) steering.push({ kind, origin: line.actor.origin });
-    if (line.operation === "resume") resumes.push({ at: line.at, origin: line.actor.origin });
-  }
   const corrections = new Set<string>();
   for (const delivery of yield* deliveriesOf(runId))
     if (delivery.cause.kind === "correction") corrections.add(delivery.causal_key);
@@ -97,7 +103,7 @@ export const outcomeRecordsOf = Effect.fn("Outcomes.records")(function* (
     moved: Arr.flatMap(yield* readStepLines(dir), (line) =>
       line.kind === "enter" || line.kind === "leave" ? [line.at] : [],
     ),
-    resumes,
+    resumes: resumesIn(trail),
   } satisfies OutcomeRecords;
 });
 

@@ -2,11 +2,15 @@
 
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
+import { BunServices } from "@effect/platform-bun";
+import { Effect, FileSystem, Schema } from "effect";
 import type * as Types from "effect/Types";
 import { HOLD, STOP, type RunView } from "../src/engine";
 import type { Metrics } from "../src/board-model";
 import { reportLines, reportOf } from "../src/report";
-import type { OutcomeRecords } from "../src/outcomes";
+import { resumesIn, type OutcomeRecords } from "../src/outcomes";
+import { once, readAudit } from "../src/audit";
+import { nowIso } from "../src/time";
 import type { Metric } from "../src/metrics";
 
 const view = (over: Partial<RunView> & { runId: string }): RunView => ({
@@ -454,6 +458,41 @@ test("a human resume after the Run moved on from its park is not counted against
   expect(report.measures.parks.byCause).toMatchObject([
     { cause: "ci-job-absent", humanResumes: 0 },
   ]);
+});
+
+test("the Step progress a human resume makes while it runs still counts that resume against the park", async () => {
+  const counted = await Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-resume-" });
+    const parked = yield* nowIso;
+    yield* Effect.sleep("5 millis");
+    let progress = "";
+    yield* once(
+      dir,
+      { operation: "resume", request: "resume-1", origin: "desktop", result: Schema.Boolean },
+      Effect.gen(function* () {
+        yield* Effect.sleep("5 millis");
+        progress = yield* nowIso;
+        yield* Effect.sleep("5 millis");
+        return true;
+      }),
+    );
+    return reportOf(
+      [view({ runId: "a" })],
+      new Map(),
+      null,
+      new Map([
+        [
+          "a",
+          {
+            records: records({ moved: [progress], resumes: resumesIn(yield* readAudit(dir)) }),
+            metrics: [halt(parked, "ci-job-absent")],
+          },
+        ],
+      ]),
+    ).measures.parks.byCause;
+  }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.runPromise);
+  expect(counted).toMatchObject([{ cause: "ci-job-absent", humanResumes: 1 }]);
 });
 
 const reminded = (outcome: NonNullable<Metric["outcome"]>, waitedMs: number): Metric => ({
