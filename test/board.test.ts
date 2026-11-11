@@ -3090,7 +3090,7 @@ test("a succeeded Run's open merge request is ready only on checks at its branch
             Arr.map(present___.missing, (one) => one.fact),
           ),
         ),
-      ).toEqual(["mr-open", "ci", "mergeable", "freshness"]);
+      ).toEqual(["mr-open", "ci", "mergeable"]);
       const green = yield* forgeSays({ state: "mergeable", said: "mergeable" });
       expect(green[0]!.ready).toBe(true);
       expect(green[0]!.readiness).toEqual({ ready: true, missing: [] });

@@ -753,9 +753,34 @@ test("freshness revokes ready to release when a forge answer ages or belongs to 
     const ready = readyToRelease({ ...mergeableNow, ...freshness });
     expect(ready.ready).toBe(false);
     expect(ready.missing).toContainEqual(
-      expect.objectContaining({ fact: "freshness", settling: true }),
+      expect.objectContaining({ fact: "mergeable", settling: true }),
     );
   }
+});
+
+test("stale readiness still decodes through protocol 5's missing-fact vocabulary", () => {
+  const previous = Schema.Struct({
+    ready: Schema.Boolean,
+    missing: Schema.Array(
+      Schema.Struct({
+        fact: Schema.Literals([
+          "succeeded",
+          "leads",
+          "mr-open",
+          "not-draft",
+          "checks",
+          "ci",
+          "review",
+          "mergeable",
+        ]),
+        said: Schema.String,
+        settling: Schema.Boolean,
+      }),
+    ),
+  });
+  const stale = readyToRelease({ ...mergeableNow, read: 0 });
+  expect(stale.ready).toBe(false);
+  expect(Schema.is(previous)(stale)).toBe(true);
 });
 
 test("each fact ready to release needs is named when it is missing, and whether it may yet come", () => {

@@ -301,7 +301,6 @@ export const MissingFact = Schema.Struct({
     "ci",
     "review",
     "mergeable",
-    "freshness",
   ]),
   said: Schema.String,
   settling: Schema.Boolean,
@@ -378,7 +377,8 @@ export function readyToRelease(facts: ReleaseFacts): ReadyToRelease {
       facts.head === null ||
       facts.head !== facts.readHead
     )
-      lack("freshness", "the forge answer is stale, unreadable or not at the current head", true);
+      if (!Arr.some(missing, (one) => one.fact === "mergeable"))
+        lack("mergeable", "the forge answer is stale, unreadable or not at the current head", true);
   }
   if (facts.blocking > 0)
     lack("review", `${facts.blocking} blocking review finding(s) are unresolved`);
