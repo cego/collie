@@ -737,3 +737,16 @@ fn a_failed_list_explains_the_table_fallback_while_a_harness_list_names_its_sour
         Some("Listed by Claude Code on this computer")
     );
 }
+
+#[test]
+fn the_submit_button_stops_the_humans_reply_and_sends_while_desktop_speaks() {
+    use collie_desktop_chat::choices::reply_button;
+    let said = |replying, speaking| {
+        let b = reply_button(replying, speaking);
+        (b.stops, b.name)
+    };
+    assert_eq!(said(false, false), (false, "Send"));
+    assert_eq!(said(true, false), (true, "Stop the reply"));
+    assert_eq!(said(true, true), (false, "Send"));
+    assert_eq!(said(false, true), (false, "Send"));
+}

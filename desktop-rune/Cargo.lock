@@ -680,6 +680,7 @@ dependencies = [
  "rfd",
  "rune",
  "rune-kit",
+ "rune-theme-opencode",
  "serde",
  "serde_json",
  "syntect",

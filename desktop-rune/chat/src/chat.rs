@@ -97,8 +97,20 @@ pub struct Chat {
     pub expanded: HashSet<String>,
     /// Why the chat's subscriptions stopped, until they are taken again.
     pub trouble: Option<String>,
+    /// When the stopped subscriptions are taken again on their own (epoch ms).
+    pub retry_at: Option<f64>,
+    /// Failures in a row since the core last answered, for the wait before the next try.
+    failures: u32,
+    /// The whole seconds the reconnect notice last said were left.
+    said_left: Option<i64>,
+    /// The log is scrolled up from its latest message.
+    pub away: bool,
+    /// Where the log's viewport ends, in window points.
+    log_bottom: f32,
     /// The chat is in its own window, and this pane stands aside.
     pub popped: bool,
+    /// This is the chat in its own window, not the pane beside the board.
+    pub alone: bool,
     /// Asks the app to show the chat in its own window, or back beside the board.
     pub pop: Option<Box<dyn Fn(bool)>>,
     /// The message whose words were copied last.
@@ -115,6 +127,26 @@ impl Chat {
     /// Makes the chip the board's selection, or clears it.
     pub fn choose(&mut self, about: Option<About>) {
         self.about = about;
+    }
+
+    /// The log's viewport was laid out ending at `bottom`.
+    pub fn log_laid_out(&mut self, bottom: f32) {
+        self.log_bottom = bottom;
+    }
+
+    /// The log's end was laid out at `end`; says whether that moves it into or out of view.
+    pub fn end_laid_out(&mut self, end: f32) -> bool {
+        // A little slack, so a fraction of a line under the edge still counts as the latest.
+        let away = end > self.log_bottom + 24.0;
+        let changed = away != self.away;
+        self.away = away;
+        changed
+    }
+
+    /// The whole seconds until the subscriptions are taken again, as the notice says them.
+    pub fn retry_in(&self, now: f64) -> Option<i64> {
+        self.retry_at
+            .map(|at| ((at - now) / 1000.0).ceil().max(0.0) as i64)
     }
 
     pub fn settings(&self) -> SettingsSuccess {
@@ -446,7 +478,10 @@ pub fn open<S: Host>(s: &mut S) {
     if !s.chat().subscriptions.is_empty() {
         return;
     }
-    s.chat_mut().trouble = None;
+    let chat = s.chat_mut();
+    chat.trouble = None;
+    chat.retry_at = None;
+    chat.said_left = None;
     let mut subscriptions = Vec::new();
     subscriptions.extend(listen(s, "settings", (), |s: &mut S, v| {
         held(s, v, |chat, settings: SettingsSuccess| {
@@ -515,14 +550,46 @@ pub fn open<S: Host>(s: &mut S) {
 fn held<S: Host, A>(s: &mut S, value: Result<A, String>, apply: impl FnOnce(&mut Chat, A)) -> bool {
     match value {
         Ok(value) => {
+            s.chat_mut().failures = 0;
             apply(s.chat_mut(), value);
             true
         }
         Err(why) => {
-            s.chat_mut().trouble = Some(why);
+            let chat = s.chat_mut();
+            chat.retry_at = Some(epoch_ms() + backoff(chat.failures));
+            chat.failures += 1;
+            chat.trouble = Some(why);
             false
         }
     }
+}
+
+/// `min(1 s × 2^failures, 60 s)`, as `backoff` in `src/peers-model.ts`.
+pub fn backoff(failures: u32) -> f64 {
+    (1000.0 * 2f64.powi(failures.min(16) as i32)).min(60_000.0)
+}
+
+fn epoch_ms() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64() * 1000.0)
+}
+
+/// The app's clock at `now` (epoch ms): stopped subscriptions are taken again once their wait
+/// is over. Says whether anything the chat shows changed.
+pub fn tick<S: Host>(s: &mut S, now: f64) -> bool {
+    let chat = s.chat_mut();
+    if chat.trouble.is_none() {
+        return false;
+    }
+    if chat.retry_at.is_some_and(|at| at <= now) {
+        reconnect(s);
+        return true;
+    }
+    let left = chat.retry_in(now);
+    let changed = left != chat.said_left;
+    chat.said_left = left;
+    changed
 }
 
 /// Subscribes again after the subscriptions stopped.
@@ -891,6 +958,35 @@ fn take_setup<S: Host>(s: &mut S) {
             s.chat_mut().turn = stop.map(|stop| stop as Box<dyn FnOnce()>);
         },
     );
+}
+
+/// Shows the chat in its own window (`out`), or back beside the board; not while a reply
+/// streams, which would be cut off.
+pub fn pop<S: Host>(s: &mut S, out: bool) {
+    let chat = s.chat_mut();
+    if out && chat.transcript.running {
+        return;
+    }
+    chat.menu = None;
+    chat.model_menu.close();
+    chat.popped = out;
+    if let Some(pop) = &chat.pop {
+        pop(out);
+    }
+    s.popped(out);
+    if !out {
+        reload(s);
+    }
+}
+
+/// The chat's own window closed, so the chat is shown beside the board again.
+pub fn came_back<S: Host>(s: &mut S) {
+    if !s.chat().popped {
+        return;
+    }
+    s.chat_mut().popped = false;
+    s.popped(false);
+    reload(s);
 }
 
 /// Copies a message's words.

@@ -4,15 +4,18 @@ pub mod ansi;
 pub mod attachments;
 pub mod chat;
 pub mod choices;
+pub mod composer;
 pub mod corpus;
 pub mod dialog;
 pub mod highlight;
 pub mod host;
 pub mod icons;
 pub mod images;
+pub mod log;
 pub mod pane;
 pub mod policy;
 pub mod view;
+pub mod window;
 pub mod words;
 
 pub use chat::Chat;

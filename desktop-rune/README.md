@@ -228,6 +228,15 @@ the queued words back to the composer. Tool rows open to their input and ANSI-co
 the chat's questions are answered in place (`answer`), harness, model (a typed id too) and effort
 save through `setSettings` and a refusal is said, earlier conversations reopen, the setup offer
 is answered inline, a message copies, and the board's card rides on the next message as a chip.
+`chat/src/log.rs` draws the transcript (a run of finished tool calls folds into one "Used N
+tools" line, a reply under way says "Working…" until its words or a waiting call show, and a
+log scrolled up offers Jump to latest) and `chat/src/composer.rs` the message box, its choices
+as menus in one row with Attach and Send. A lost subscription retries on its own with Desktop's
+backoff and counts down to it. The header's Pop out moves the chat to its own window
+(`chat/src/window.rs`, opened through `App::window`, not while a reply streams), and closing that
+window puts it back beside the board. `cargo run -p collie-desktop-chat --example states --
+--scene <name> --snap x.png` draws its empty, loading, tools, working, question, error,
+reconnecting, popped, queued and long states on no core.
 
 ### An open Run's record
 

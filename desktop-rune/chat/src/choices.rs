@@ -462,6 +462,28 @@ pub fn choice_notices(settings: &SettingsSuccess, choices: Option<&ChatChoicesSu
     }
 }
 
+/// The message box's last button: Stop while the human's reply streams, else Send.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ReplyButton {
+    pub stops: bool,
+    pub name: &'static str,
+}
+
+/// Desktop's own turn about News is no reply of the human's to stop (`replyButton`).
+pub fn reply_button(replying: bool, desktop_speaking: bool) -> ReplyButton {
+    if replying && !desktop_speaking {
+        ReplyButton {
+            stops: true,
+            name: "Stop the reply",
+        }
+    } else {
+        ReplyButton {
+            stops: false,
+            name: "Send",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ChatStatus {
     pub replying: bool,

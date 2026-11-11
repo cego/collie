@@ -25,6 +25,8 @@ pub trait Host: Sized + 'static {
     fn heard_chunk(&mut self, _turn: u64) {}
     /// The human pressed the card a message was sent about.
     fn open_about(&mut self, _about: &About) {}
+    /// The chat went to its own window (`out`) or came back beside the board.
+    fn popped(&mut self, _out: bool) {}
 }
 
 /// Asks `tag` with a typed payload and answer.
