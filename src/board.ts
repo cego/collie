@@ -1698,7 +1698,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           leader;
         const offered =
           planReady || (shippingMr !== null && go === undefined)
-            ? primaryOf(yield* offersOfRun(shippingOwner.id))
+            ? offerOf(yield* offersOfRun(shippingOwner.id), planReady ? undefined : "release")
             : null;
         const offer =
           offered === null || shippingOwner.id === leader.id
@@ -1979,10 +1979,12 @@ export function readyRuns(
   );
 }
 
-/** The offer a card presents first: the one its module marks primary and can make now. */
-const primaryOf = (offers: ReadonlyArray<OfferView>): BoardOffer | null => {
+const offerOf = (offers: ReadonlyArray<OfferView>, id?: string): BoardOffer | null => {
   const first = Option.getOrUndefined(
-    Arr.findFirst(offers, (one) => one.primary && one.unavailable === null),
+    Arr.findFirst(offers, (one) =>
+      one.unavailable === null &&
+      (id === undefined ? one.primary : one.id === id && one.kind === "follow-up"),
+    ),
   );
   if (first === undefined) return null;
   const offer = { id: first.id, title: first.title };

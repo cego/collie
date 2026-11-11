@@ -28,6 +28,7 @@ import {
   type ForgeChecks,
   type Mergeability,
   type MrState,
+  type OfferView,
 } from "../src/board-model";
 import { encodeStepLine, STEPS_FILE, type StepLine, type StepMeta } from "../src/steps";
 import { machineName } from "../src/peers";
@@ -1573,6 +1574,32 @@ for (const state of ["failed", "stopped"] as const)
         expect(card!.sentence).not.toContain("Merged as");
       }),
     ));
+
+test("Merge uses the Release offer even when an unrelated follow-up is primary", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const { second } = yield* supersededChain(dir);
+      const release: OfferView = {
+        id: "release", title: "Release", workflow: "renamed-delivery", arguments: null,
+        kind: "follow-up" as const, primary: false, unavailable: null,
+      };
+      const unrelated = { ...release, id: "follow-up", title: "Keep going on this", primary: true };
+      const read = (offers: ReadonlyArray<typeof release>) => board(env, [second], {
+        ...unapproved(),
+        forge: new Map([[M_ID, { ...unapproved().forge.get(M_ID)!,
+          mergeable: { state: "mergeable", said: "approved" } }]]),
+        head: () => Effect.succeed(M_HEAD), offers: () => Effect.succeed(offers),
+      });
+      const [ready] = yield* read([unrelated, release]);
+      expect(primaryAction(ready!)).toEqual({ kind: "offer", offer: { id: "release", title: "Release" } });
+      for (const offers of [[unrelated], [unrelated, { ...release, unavailable: "not connected" }], []]) {
+        const [card] = yield* read(offers);
+        expect(card!.offer).toBeNull();
+        expect(primaryAction(card!)?.kind).toBe("open-mr");
+      }
+    }),
+  ));
 
 test("fresh green work has a Merge shipping action, revoked by a moved head, failed CI, stale answer or unknown mergeability", () =>
   runEffect(
