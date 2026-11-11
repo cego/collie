@@ -515,3 +515,245 @@ fn a_gesture_on_a_machine_out_of_reach_says_so_to_the_host() {
         "its Machine is out of reach"
     );
 }
+
+#[test]
+fn a_steps_questions_are_answered_one_after_another_each_on_its_own() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    runtime.update(|app, _| {
+        app.open_record("inst-build".into(), "r1".into(), "Build box".into(), None)
+    });
+    let flow = flow_with(
+        json!({"id": "ask", "title": "Ask", "state": "needs-you", "primary": "answer",
+            "questions": [
+                {"id": "q-1", "name": "Which way?", "open": true, "text": "Which way?",
+                    "options": [{"id": "left", "title": "Left"}, {"id": "right", "title": "Right"}]},
+                {"id": "q-2", "name": "How fast?", "open": true, "text": "How fast?",
+                    "options": [{"id": "slow", "title": "Slow"}, {"id": "quick", "title": "Quick"}]}]}),
+        json!([]),
+    );
+    harness
+        .fake
+        .push("runDetail", Ok(detail(json!({"flow": flow}))));
+    settle(&mut runtime, &harness, 100.0);
+    tap(&mut runtime, "next-action", 200.0);
+    assert_eq!(named(&runtime, "question-count")["name"], "Question 1 of 2");
+    tap(&mut runtime, "option-right", 300.0);
+    tap(&mut runtime, "form-send", 400.0);
+    assert_eq!(named(&runtime, "question-count")["name"], "Question 2 of 2");
+    tap(&mut runtime, "option-quick", 500.0);
+    tap(&mut runtime, "form-send", 600.0);
+    let sent: Vec<Value> = harness
+        .fake
+        .asked_of("act")
+        .into_iter()
+        .map(|a| a["action"].clone())
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            json!({"_tag": "Answer", "runId": "r1", "decision": "q-1", "value": "right"}),
+            json!({"_tag": "Answer", "runId": "r1", "decision": "q-2", "value": "quick"}),
+        ]
+    );
+    assert!(
+        !keys(&runtime).iter().any(|k| k == "flow-form"),
+        "the form closes once every question is answered"
+    );
+}
+
+#[test]
+fn a_steps_start_asks_the_run_what_it_offers_and_starts_it_with_what_was_typed() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    runtime.update(|app, _| {
+        app.open_record("inst-build".into(), "r1".into(), "Build box".into(), None)
+    });
+    let flow = flow_with(
+        json!({"id": "offer:build", "title": "Build it", "state": "expected", "primary": "start"}),
+        json!([]),
+    );
+    harness
+        .fake
+        .push("runDetail", Ok(detail(json!({"flow": flow}))));
+    settle(&mut runtime, &harness, 100.0);
+    tap(&mut runtime, "next-action", 200.0);
+    assert_eq!(
+        harness.fake.asked_of("offers"),
+        [json!({"installation": "inst-build", "runId": "r1"})]
+    );
+    harness.fake.answer(
+        "offers",
+        Ok(json!([
+            {"id": "other", "title": "Other", "workflow": "general", "arguments": null,
+                "kind": "action", "primary": false, "unavailable": null},
+            {"id": "build", "title": "Build it", "workflow": "implement", "kind": "follow-up",
+                "primary": true, "unavailable": null,
+                "arguments": {"type": "object", "required": ["goal"],
+                    "properties": {"goal": {"type": "string"}, "tries": {"type": "number"}}}}
+        ])),
+    );
+    settle(&mut runtime, &harness, 300.0);
+    assert_eq!(named(&runtime, "offer-title")["name"], "Build it");
+    assert!(
+        harness.fake.asked_of("act").is_empty(),
+        "an offer that takes inputs waits for them"
+    );
+    tap(&mut runtime, "offer-field-goal", 350.0);
+    runtime.key(rune::KeyEvent {
+        key: rune::Key::Text("Ship it".into()),
+        mods: Default::default(),
+    });
+    runtime.frame(380.0);
+    tap(&mut runtime, "offer-start", 400.0);
+    assert_eq!(
+        harness.fake.asked_of("act")[0]["action"],
+        json!({"_tag": "Invoke", "runId": "r1", "offer": "build", "input": {"goal": "Ship it"}})
+    );
+}
+
+fn several_files(files: Value) -> Value {
+    detail(json!({"diff": {"base": "abc", "live": true, "files": files}}))
+}
+
+fn read_asked(harness: &Harness<App>) -> Vec<String> {
+    harness
+        .fake
+        .asked_of("runFile")
+        .iter()
+        .map(|a| a["ref"].as_str().unwrap().to_string())
+        .collect()
+}
+
+fn small(path: &str) -> Value {
+    json!({"path": path, "status": "modified", "added": 1, "removed": 1})
+}
+
+fn patch_of(path: &str) -> Value {
+    let patch = PATCH.replace("src/a.rs", path);
+    json!({"ref": format!("diff:{path}"), "encoding": "utf8", "content": patch, "size": patch.len()})
+}
+
+#[test]
+fn a_big_files_patch_is_read_only_once_it_is_opened_and_no_more_than_four_at_once() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    runtime.update(|app, _| {
+        app.open_record(
+            "inst-build".into(),
+            "r1".into(),
+            "Build box".into(),
+            Some("diff"),
+        )
+    });
+    let mut files: Vec<Value> = (1..=5).map(|i| small(&format!("src/f{i}.rs"))).collect();
+    files.push(json!({"path": "src/big.rs", "status": "modified", "added": 4000, "removed": 10}));
+    harness
+        .fake
+        .push("runDetail", Ok(several_files(json!(files))));
+    settle(&mut runtime, &harness, 100.0);
+    assert_eq!(
+        read_asked(&harness),
+        [
+            "diff:src/f1.rs",
+            "diff:src/f2.rs",
+            "diff:src/f3.rs",
+            "diff:src/f4.rs"
+        ],
+        "four at once, the big file not at all"
+    );
+    harness.fake.answer("runFile", Ok(patch_of("src/f1.rs")));
+    settle(&mut runtime, &harness, 200.0);
+    assert_eq!(
+        read_asked(&harness).len(),
+        5,
+        "the fifth goes once one is in"
+    );
+    assert!(
+        keys(&runtime).iter().any(|k| k == "show-src/big.rs"),
+        "the big file says it is not read yet: {:?}",
+        keys(&runtime)
+    );
+    tap(&mut runtime, "tree-file-src/big.rs", 300.0);
+    assert_eq!(read_asked(&harness).len(), 5, "opened, it waits its turn");
+    harness.fake.answer("runFile", Ok(patch_of("src/f2.rs")));
+    settle(&mut runtime, &harness, 400.0);
+    assert_eq!(read_asked(&harness).last().unwrap(), "diff:src/big.rs");
+}
+
+#[test]
+fn a_folder_of_the_diffs_tree_folds_its_files_away_until_a_filter_looks_inside() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    runtime.update(|app, _| {
+        app.open_record(
+            "inst-build".into(),
+            "r1".into(),
+            "Build box".into(),
+            Some("diff"),
+        )
+    });
+    harness.fake.push(
+        "runDetail",
+        Ok(several_files(json!([
+            small("src/a.rs"),
+            small("docs/b.md")
+        ]))),
+    );
+    settle(&mut runtime, &harness, 100.0);
+    assert!(keys(&runtime).iter().any(|k| k == "tree-file-src/a.rs"));
+    tap(&mut runtime, "tree-src/", 200.0);
+    let shown = keys(&runtime);
+    assert!(
+        !shown.iter().any(|k| k == "tree-file-src/a.rs"),
+        "{shown:?}"
+    );
+    assert!(
+        shown.iter().any(|k| k == "tree-file-docs/b.md"),
+        "{shown:?}"
+    );
+    let folder = named(&runtime, "tree-src/");
+    assert!(
+        folder["states"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("collapsed")),
+        "{folder}"
+    );
+    runtime.update(|app, _| app.diff.as_mut().unwrap().filter = TextEdit::new("a.rs"));
+    runtime.frame(300.0);
+    assert!(keys(&runtime).iter().any(|k| k == "tree-file-src/a.rs"));
+}
+
+#[test]
+fn a_file_the_run_has_not_changed_again_keeps_its_patch_when_the_diff_is_read_again() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    runtime.update(|app, _| {
+        app.open_record(
+            "inst-build".into(),
+            "r1".into(),
+            "Build box".into(),
+            Some("diff"),
+        )
+    });
+    harness.fake.push(
+        "runDetail",
+        Ok(several_files(json!([small("src/a.rs"), small("src/b.rs")]))),
+    );
+    settle(&mut runtime, &harness, 100.0);
+    harness.fake.answer("runFile", Ok(patch_of("src/a.rs")));
+    harness.fake.answer("runFile", Ok(patch_of("src/b.rs")));
+    settle(&mut runtime, &harness, 200.0);
+    let changed = json!({"path": "src/b.rs", "status": "modified", "added": 3, "removed": 1});
+    harness.fake.push(
+        "runDetail",
+        Ok(several_files(json!([small("src/a.rs"), changed]))),
+    );
+    settle(&mut runtime, &harness, 300.0);
+    assert_eq!(
+        read_asked(&harness),
+        ["diff:src/a.rs", "diff:src/b.rs", "diff:src/b.rs"],
+        "only the file changed again is read again"
+    );
+}

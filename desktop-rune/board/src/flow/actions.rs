@@ -33,7 +33,8 @@ pub enum Effect {
         /// The note this one replaces.
         withdraw: Option<String>,
     },
-    Answer(Question),
+    /// The Step's open questions, the first answered first.
+    Answer(Vec<Question>),
     Proposal(Proposal),
     Terminal {
         run: String,
@@ -300,25 +301,32 @@ pub fn flow_action(kind: &Primary, node: &NodeRun, lane: &Lane, live: bool) -> O
             },
         ),
         Primary::Answer => {
-            let asked = node
+            let asked: Vec<Question> = node
                 .questions
                 .iter()
-                .find(|q| q.id.is_some() && q.open.unwrap_or(q.answered.is_none()))?;
+                .filter(|q| q.open.unwrap_or(q.answered.is_none()))
+                .filter_map(|asked| {
+                    Some(Question {
+                        run: run.into(),
+                        id: asked.id.clone()?,
+                        step: node.title.clone(),
+                        text: asked
+                            .text
+                            .clone()
+                            .flatten()
+                            .unwrap_or_else(|| asked.name.clone()),
+                        options: asked.options.clone().flatten().unwrap_or_default(),
+                    })
+                })
+                .collect();
+            if asked.is_empty() {
+                return None;
+            }
             Some(ActionView {
                 label: "Answer".into(),
                 tone: Tone::Warning,
-                caption: None,
-                effect: Effect::Answer(Question {
-                    run: run.into(),
-                    id: asked.id.clone()?,
-                    step: node.title.clone(),
-                    text: asked
-                        .text
-                        .clone()
-                        .flatten()
-                        .unwrap_or_else(|| asked.name.clone()),
-                    options: asked.options.clone().flatten().unwrap_or_default(),
-                }),
+                caption: (asked.len() > 1).then(|| format!("{} questions", asked.len())),
+                effect: Effect::Answer(asked),
             })
         }
         Primary::Proposal => Some(ActionView {

@@ -147,3 +147,18 @@ icon!(
     "collie-sparkles",
     r#"<path d="M6.5 2.5L7.6 5.4L10.5 6.5L7.6 7.6L6.5 10.5L5.4 7.6L2.5 6.5L5.4 5.4Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/><path d="M11.5 9.5L12.1 10.9L13.5 11.5L12.1 12.1L11.5 13.5L10.9 12.1L9.5 11.5L10.9 10.9Z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round" fill="none"/>"#
 );
+icon!(
+    MACHINE,
+    "collie-machine",
+    r#"<rect x="2" y="3" width="12" height="8" rx="1.25" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M5.5 13.5H10.5M8 11V13.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>"#
+);
+icon!(
+    TERMINAL,
+    "collie-terminal",
+    r#"<rect x="2" y="2.5" width="12" height="11" rx="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M4.75 6L6.75 8L4.75 10M8.5 10.25H11.25" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#
+);
+icon!(
+    FORWARD,
+    "collie-forward",
+    r#"<path d="M6.5 3.5L11 8L6.5 12.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#
+);

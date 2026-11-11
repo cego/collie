@@ -11,12 +11,12 @@ use crate::flow::actions::{ActionView, Tone, lane_actions, next_move, step_actio
 use crate::flow::inspector::{self, Part};
 use crate::{App, flow, icons};
 use collie_desktop_protocol::generated::{
-    Category, DetailMr, EvidenceItem, GlyphState, Lane, Node, NodeRun, Review, VerificationResult,
+    Category, DetailMr, EvidenceItem, Lane, Node, NodeRun, Review, VerificationResult,
 };
 use collie_desktop_terminal::view::terminal;
-use rune::{El, Key, KeyEvent, ScrollSpec, SurfaceFit, Tx, col, row, spacer, text};
+use rune::{El, Key, KeyEvent, ScrollSpec, SurfaceFit, Tx, col, row, text};
 use rune_kit::markdown::Markdown;
-use rune_kit::{Badge, BadgeVariant, Button, ButtonVariant, IconButton, Kit, TextArea, TextInput};
+use rune_kit::{Badge, Button, ButtonVariant, IconButton, Kit, TextArea, TextInput};
 
 fn scrolled(content: El) -> El {
     col()
@@ -31,8 +31,8 @@ fn scrolled(content: El) -> El {
 
 fn heading(said: &str, k: &Kit) -> El {
     text(said.to_string())
-        .font(k.ty.small_medium)
-        .color(k.c.text_muted)
+        .font(k.ty.text_small_medium)
+        .color(k.c.text_strong)
 }
 
 fn section(key: &str, said: &str, k: &Kit, body: impl IntoIterator<Item = El>) -> El {
@@ -40,7 +40,7 @@ fn section(key: &str, said: &str, k: &Kit, body: impl IntoIterator<Item = El>) -
         .key(key.to_string())
         .role("group")
         .label(said.to_string())
-        .gap(6.0)
+        .gap(8.0)
         .w_full()
         .child(heading(said, k))
         .children(body)
@@ -48,46 +48,198 @@ fn section(key: &str, said: &str, k: &Kit, body: impl IntoIterator<Item = El>) -
 
 fn panel(k: &Kit) -> El {
     col()
-        .gap(8.0)
-        .padding(12.0)
+        .gap(12.0)
+        .padding(16.0)
         .w_full()
-        .radius(k.radius.md)
+        .radius(k.radius.lg)
         .fill(k.c.layer_02)
-        .border(1.0, k.c.border_base)
+        .border(1.0, k.c.border_weak)
 }
 
 fn quiet(said: impl Into<String>, k: &Kit) -> El {
     text(said.into())
-        .font(k.ty.small)
+        .font(k.ty.text_xsmall)
         .color(k.c.text_muted)
         .wrap()
         .w_full()
 }
 
+/// Prose is read at most this wide.
+const READING_W: f32 = 920.0;
+
+/// Sections one under another, a hairline between each.
+fn ruled(into: El, sections: impl IntoIterator<Item = El>, k: &Kit) -> El {
+    let mut into = into.gap(20.0);
+    for (at, one) in sections.into_iter().enumerate() {
+        if at > 0 {
+            into = into.child(
+                rune::el()
+                    .h(1.0)
+                    .w_full()
+                    .fill(k.c.border_weak)
+                    .a11y_hidden(),
+            );
+        }
+        into = into.child(one);
+    }
+    into
+}
+
+/// The width of a fact's label, so a list of facts lines up.
+const LABEL_W: f32 = 112.0;
+
 fn fact(label: &str, value: impl Into<String>, k: &Kit) -> El {
     row()
-        .gap(12.0)
+        .gap(16.0)
         .w_full()
         .child(
             text(label.to_string())
-                .font(k.ty.small)
+                .font(k.ty.text_xsmall)
                 .color(k.c.text_muted)
-                .w(140.0),
+                .w(LABEL_W)
+                .truncate(),
         )
         .child(
             text(value.into())
-                .font(k.ty.small)
+                .font(k.ty.text_xsmall)
                 .color(k.c.text_base)
-                .wrap()
+                .wrap_anywhere()
                 .grow(1.0)
                 .min_w(0.0)
                 .selectable(true),
         )
 }
 
+/// Facts one under another, their labels in one column.
+fn facts(rows: impl IntoIterator<Item = El>) -> El {
+    col().gap(6.0).w_full().children(rows)
+}
+
+/// A track of segments, as rune-kit's SegmentedControl draws one, its segments as wide as
+/// their words.
+fn segments(k: &Kit) -> El {
+    row()
+        .h(32.0)
+        .padding(2.0)
+        .gap(2.0)
+        .center_y()
+        .radius(8.0)
+        .fill(k.c.layer_01)
+        .box_shadow(rune::Shadow {
+            spread: 0.5,
+            color: k.c.border_base,
+            ..Default::default()
+        })
+}
+
+fn segment(said: String, chosen: bool, k: &Kit) -> El {
+    let seg = row()
+        .h(28.0)
+        .px(12.0)
+        .center()
+        .radius(6.0)
+        .focusable(true)
+        .checked(chosen)
+        .focus_selected(chosen)
+        .child(
+            text(said)
+                .font(k.ty.ui)
+                .color(if chosen {
+                    k.c.text_strong
+                } else {
+                    k.c.text_muted
+                })
+                .a11y_hidden(),
+        );
+    if chosen {
+        seg.fill(k.c.bg_base).box_shadow(rune::Shadow {
+            spread: 0.5,
+            color: k.c.border_strong,
+            ..Default::default()
+        })
+    } else {
+        seg.hover(k.c.hover)
+    }
+}
+
+/// How a Run's status reads: settled, failed, asking or under way.
+fn status_tone(status: &str, k: &Kit) -> rune_kit::StateColors {
+    let said = status.to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| said.contains(w));
+    if has(&["fail", "died", "error"]) {
+        k.c.danger
+    } else if has(&["done", "complete", "succeed", "merged", "landed"]) {
+        k.c.success
+    } else if has(&[
+        "wait", "need", "held", "hold", "pause", "suspend", "park", "ask",
+    ]) {
+        k.c.warning
+    } else if has(&["run", "work", "pending", "start"]) {
+        k.c.info
+    } else {
+        rune_kit::StateColors {
+            bg: k.c.layer_03,
+            fg: k.c.text_muted,
+            border: k.c.border_base,
+            icon: k.c.icon_muted,
+        }
+    }
+}
+
+/// A Run's status as a pill: a dot and its word, in its tone.
+fn status_pill(status: &str, k: &Kit) -> El {
+    let tone = status_tone(status, k);
+    let mut word = status.to_string();
+    if let Some(first) = word.get_mut(0..1) {
+        first.make_ascii_uppercase();
+    }
+    row()
+        .key("record-status")
+        .role("status")
+        .label(format!("Status: {status}"))
+        .h(24.0)
+        .px(10.0)
+        .gap(6.0)
+        .center_y()
+        .radius(12.0)
+        .fill(tone.bg)
+        .border(1.0, tone.border)
+        .child(
+            rune::el()
+                .size(7.0, 7.0)
+                .radius(3.5)
+                .fill(tone.icon)
+                .a11y_hidden(),
+        )
+        .child(
+            text(word)
+                .font(k.ty.text_xsmall_medium)
+                .color(tone.fg)
+                .a11y_hidden(),
+        )
+}
+
+/// A record's prose, a step smaller than a chat's so it sits under its section's heading.
 fn markdown(source: &str, k: &Kit) -> El {
+    let body = rune::TextStyle {
+        line_height: 20.0,
+        ..k.ty.text_small
+    };
+    let heading = |size: f32| rune::TextStyle {
+        size,
+        weight: 600.0,
+        line_height: size + 8.0,
+        ..body
+    };
+    let style = rune_kit::MarkdownStyle::from_kit(k)
+        .body_font(body)
+        .heading_font(1, heading(16.0))
+        .heading_font(2, heading(14.0))
+        .heading_font(3, heading(13.0))
+        .list(16.0, 4.0);
     Markdown::new(source.to_string())
         .selectable(true)
+        .style(style)
         .build(k)
         .w_full()
 }
@@ -110,16 +262,6 @@ fn slug(said: &str) -> String {
             _ => None,
         })
         .collect()
-}
-
-fn glyph_color(state: &GlyphState, k: &Kit) -> rune::Color {
-    match state {
-        GlyphState::Done => k.c.success.icon,
-        GlyphState::Running => k.c.info.icon,
-        GlyphState::NeedsYou => k.c.warning.icon,
-        GlyphState::Failed | GlyphState::Stopped => k.c.danger.icon,
-        _ => k.c.text_faint,
-    }
 }
 
 /// Where a draft is, as the composer and the drafts list say it.
@@ -228,8 +370,9 @@ pub fn view(app: &App, k: &Kit) -> Option<El> {
             .key("record")
             .role("group")
             .label(format!("Run {}", record.run))
-            .padding(16.0)
-            .gap(10.0)
+            .padding(20.0)
+            .pt(16.0)
+            .gap(14.0)
             .grow(1.0)
             .min_h(0.0)
             .min_w(0.0)
@@ -257,12 +400,9 @@ fn header(app: &App, record: &Record, k: &Kit) -> El {
         .map(|t| t.name.clone())
         .or_else(|| detail.map(|d| d.title.clone()))
         .unwrap_or_else(|| record.run.clone());
-    let mut under = vec![record.run.clone(), record.machine.clone()];
-    if let Some(detail) = detail
-        && detail.title != title
-    {
-        under.insert(0, detail.title.clone());
-    }
+    let workflow = detail
+        .map(|d| d.title.clone())
+        .filter(|workflow| *workflow != title);
     let started_by = detail
         .and_then(|d| d.requested_by.clone().flatten())
         .map(|by| {
@@ -276,39 +416,73 @@ fn header(app: &App, record: &Record, k: &Kit) -> El {
         .on_press(App::back)
         .build(k)
         .key("back");
-    let status = detail.map(|d| {
-        Badge::new(d.status.clone())
-            .variant(BadgeVariant::Subtle)
-            .build(k)
-    });
+    let status = detail.map(|d| status_pill(&d.status, k));
+    let has_workflow = workflow.is_some();
+    let dot = || {
+        text("·")
+            .font(k.ty.text_xsmall)
+            .color(k.c.text_faint)
+            .a11y_hidden()
+    };
+    let meta = row()
+        .key("record-meta")
+        .gap(6.0)
+        .center_y()
+        .min_w(0.0)
+        .children(workflow.map(|w| {
+            text(w)
+                .font(k.ty.text_xsmall_medium)
+                .color(k.c.text_muted)
+                .truncate()
+        }))
+        .children(has_workflow.then(dot))
+        .child(
+            text(record.run.clone())
+                .key("record-run")
+                .font(k.ty.mono)
+                .color(k.c.text_muted)
+                .selectable(true),
+        )
+        .child(dot())
+        .child(
+            row()
+                .gap(4.0)
+                .center_y()
+                .child(rune::icon(&icons::MACHINE, 12.0).color(k.c.icon_muted))
+                .child(
+                    text(record.machine.clone())
+                        .font(k.ty.text_xsmall)
+                        .color(k.c.text_muted),
+                ),
+        );
     row()
         .key("record-header")
-        .gap(10.0)
+        .gap(12.0)
         .center_y()
         .w_full()
         .child(back)
         .child(
             col()
-                .gap(2.0)
+                .gap(3.0)
                 .grow(1.0)
                 .min_w(0.0)
                 .child(
                     text(title)
                         .key("record-title")
-                        .font(k.ty.body_medium)
+                        .role("heading")
+                        .font(rune::TextStyle {
+                            size: 17.0,
+                            line_height: 24.0,
+                            ..k.ty.body_medium
+                        })
                         .color(k.c.text_strong)
                         .truncate(),
                 )
-                .child(
-                    text(under.join(" · "))
-                        .font(k.ty.small)
-                        .color(k.c.text_muted)
-                        .truncate(),
-                )
+                .child(meta)
                 .children(started_by.map(|said| {
                     text(said)
                         .key("requested-by")
-                        .font(k.ty.small)
+                        .font(k.ty.text_xsmall)
                         .color(k.c.text_muted)
                 })),
         )
@@ -440,14 +614,8 @@ fn tab_bar(tabs: &[Tab], shown: &str, k: &Kit) -> El {
         } else {
             tab.label.clone()
         };
-        Button::new(label)
-            .variant(if chosen {
-                ButtonVariant::Neutral
-            } else {
-                ButtonVariant::GhostMuted
-            })
-            .on_press(move |app: &mut App| app.show_tab(&value))
-            .build(k)
+        segment(label, chosen, k)
+            .on_press_tx(move |app: &mut App, tx| app.show_tab_tx(&value, tx))
             .key(format!("tab-{}", tab.value))
             .role("tab")
             .label(if tab.loading {
@@ -455,17 +623,15 @@ fn tab_bar(tabs: &[Tab], shown: &str, k: &Kit) -> El {
             } else {
                 tab.label.clone()
             })
-            .checked(chosen)
-            .focus_selected(chosen)
     });
-    row()
-        .key("record-tabs")
-        .role("tablist")
-        .label("Record")
-        .focus_group()
-        .gap(2.0)
-        .w_full()
-        .children(tabs)
+    row().w_full().child(
+        segments(k)
+            .key("record-tabs")
+            .role("tablist")
+            .label("Record")
+            .focus_group()
+            .children(tabs),
+    )
 }
 
 fn action_button(action: &ActionView, key: String, k: &Kit) -> El {
@@ -481,13 +647,19 @@ fn action_button(action: &ActionView, key: String, k: &Kit) -> El {
         .build(k)
         .key(key);
     match &action.caption {
-        Some(caption) => col()
-            .gap(2.0)
-            .child(button)
-            .child(text(caption.clone()).font(k.ty.small).color(k.c.text_muted)),
+        Some(caption) => col().gap(4.0).child(button).child(
+            text(caption.clone())
+                .font(k.ty.text_xsmall)
+                .color(k.c.text_muted),
+        ),
         None => button,
     }
 }
+
+/// The map is this wide or wider: the Step's details sit beside its work.
+const SIDE_BY_SIDE: f32 = 760.0;
+/// The Step's details column, beside its work.
+const CONTEXT_W: f32 = 320.0;
 
 fn flow_tab(app: &App, record: &Record, k: &Kit) -> El {
     let Some(map) = &app.flow else {
@@ -501,7 +673,7 @@ fn flow_tab(app: &App, record: &Record, k: &Kit) -> El {
         .find(|l| l.run == record.run)
         .or(map.flow.lanes.first());
     let lane_row = lane.map(|lane| {
-        row().key("lane-actions").gap(6.0).children(
+        row().key("lane-actions").gap(6.0).center_y().children(
             lane_actions(lane, live)
                 .iter()
                 .map(|a| action_button(a, format!("lane-{}", slug(&a.label)), k)),
@@ -510,15 +682,23 @@ fn flow_tab(app: &App, record: &Record, k: &Kit) -> El {
     let next = next_move(&map.flow).and_then(|next| {
         let node = crate::flow::actions::as_run(next.node);
         let action = crate::flow::actions::flow_action(&next.action, &node, next.lane, live)?;
+        let tone = match action.tone {
+            Tone::Error => k.c.danger,
+            Tone::Warning => k.c.warning,
+            Tone::Neutral => k.c.info,
+        };
         Some(
             row()
                 .key("next-move")
-                .gap(10.0)
+                .gap(12.0)
                 .center_y()
-                .padding(10.0)
-                .w_full()
+                .padding(12.0)
+                .grow(1.0)
+                .min_w(0.0)
                 .radius(k.radius.md)
-                .fill(k.c.layer_02)
+                .fill(tone.bg)
+                .border(1.0, tone.border)
+                .child(crate::flow::glyph::glyph(&next.node.state, 18.0, k))
                 .child(
                     col()
                         .gap(2.0)
@@ -526,7 +706,7 @@ fn flow_tab(app: &App, record: &Record, k: &Kit) -> El {
                         .min_w(0.0)
                         .child(
                             text(format!("Next: {}", next.node.title))
-                                .font(k.ty.ui_medium)
+                                .font(k.ty.text_small_medium)
                                 .color(k.c.text_strong),
                         )
                         .children(next.notice.map(|n| quiet(n, k))),
@@ -539,32 +719,283 @@ fn flow_tab(app: &App, record: &Record, k: &Kit) -> El {
         .notice
         .clone()
         .flatten()
-        .filter(|_| next_move(&map.flow).is_none());
+        .filter(|_| next.is_none())
+        .map(|n| {
+            row()
+                .key("flow-notice")
+                .grow(1.0)
+                .min_w(0.0)
+                .padding(10.0)
+                .radius(k.radius.md)
+                .fill(k.c.warning.bg)
+                .child(
+                    text(n)
+                        .font(k.ty.text_xsmall)
+                        .color(k.c.warning.fg)
+                        .wrap()
+                        .grow(1.0)
+                        .min_w(0.0),
+                )
+        });
+    let lead = next.or(notice).unwrap_or_else(|| {
+        text(if map.selected.is_some() {
+            ""
+        } else {
+            "Choose a Step to see its work. Arrow keys move between Steps and Runs."
+        })
+        .font(k.ty.text_xsmall)
+        .color(k.c.text_faint)
+        .grow(1.0)
+        .min_w(0.0)
+    });
+    let toolbar = row()
+        .key("flow-toolbar")
+        .gap(12.0)
+        .center_y()
+        .w_full()
+        .child(lead)
+        .children(lane_row);
+    let inspector = inspector_view(app, record, map, k);
+    let form = form_view(app, record, k);
+    let inspected = inspector.is_some();
     col()
         .key("flow-tab")
-        .gap(12.0)
+        .gap(20.0)
         .grow(1.0)
         .min_h(0.0)
         .w_full()
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
-        .children(notice.map(|n| quiet(n, k)))
-        .children(next)
+        .child(toolbar)
+        .child(flow::flow_map(map, super::flow_of, k))
+        .children(inspector)
+        .children(form.filter(|_| !inspected))
+}
+
+/// The selected Step's details: its state, what it is for, its actions, facts and notes.
+fn step_context(
+    app: &App,
+    record: &Record,
+    spot: &flow::Spot,
+    parent: &Node,
+    node: &NodeRun,
+    lane: Option<&Lane>,
+    k: &Kit,
+) -> El {
+    let live = app.record_live();
+    let now = now();
+    let entries = inspector::entries_of(parent);
+    let timing = inspector::step_timing(node, &parent.runs, now);
+    let status = inspector::status_of(node, timing.as_deref());
+    let found = inspector::facts_of(node, |iso| when_of(iso, now));
+    let steering = inspector::step_steering(node);
+    let actions = lane
+        .map(|lane| step_actions(node, lane, live))
+        .unwrap_or_default();
+    let state = crate::flow::written(&node.state).replace('-', " ");
+    let close = IconButton::new(&icons::CLOSE)
+        .label("Close the Step's details")
+        .on_press(|app: &mut App| {
+            if let Some(map) = &mut app.flow {
+                map.selected = None;
+            }
+            if let Some(record) = &mut app.record.open {
+                record.entry = None;
+                record.part = None;
+            }
+        })
+        .build(k)
+        .key("inspector-close");
+    let title = row()
+        .gap(10.0)
+        .center_y()
+        .w_full()
+        .child(crate::flow::glyph::glyph(&node.state, 18.0, k))
         .child(
-            row()
-                .gap(12.0)
-                .w_full()
+            col()
+                .gap(1.0)
+                .grow(1.0)
+                .min_w(0.0)
                 .child(
-                    col()
-                        .grow(1.0)
-                        .min_w(0.0)
-                        .child(flow::flow_map(map, super::flow_of, k)),
+                    text(node.title.clone())
+                        .key("inspector-title")
+                        .font(k.ty.body_medium)
+                        .color(k.c.text_strong)
+                        .truncate(),
                 )
-                .children(lane_row),
+                .child(
+                    text(match &status {
+                        Some(said) => format!("{state} · {said}"),
+                        None => state.clone(),
+                    })
+                    .key("inspector-status")
+                    .font(k.ty.text_xsmall)
+                    .color(crate::flow::glyph::tone(&node.state, k))
+                    .wrap()
+                    .w_full(),
+                ),
         )
-        .children(inspector_view(app, record, map, k))
-        .children(form_view(record, k))
+        .children(steering.badge.clone().map(|b| Badge::new(b).build(k)))
+        .children(map_selected(app).then_some(close));
+    let purpose = (!node.description.trim().is_empty()).then(|| {
+        text(node.description.trim().to_string())
+            .key("inspector-purpose")
+            .font(k.ty.text_small)
+            .color(k.c.text_base)
+            .wrap()
+            .w_full()
+    });
+    let pause = steering.pause.clone().map(|p| quiet(p, k));
+    let run = spot.run.clone();
+    let notes = steering.notes.iter().map(|note| {
+        let (edit_run, edit_step, id, said) = (
+            run.clone(),
+            parent.id.clone(),
+            note.id.clone(),
+            note.text.clone(),
+        );
+        let (gone_run, gone_id) = (run.clone(), note.id.clone());
+        let read = note.read.as_ref().map_or("unread".to_string(), |at| {
+            format!("read {}", when_of(at, now))
+        });
+        col()
+            .key(format!("note-{}", note.id))
+            .gap(6.0)
+            .padding(10.0)
+            .w_full()
+            .radius(k.radius.sm)
+            .fill(k.c.layer_01)
+            .child(
+                text(note.text.clone())
+                    .font(k.ty.text_xsmall)
+                    .color(k.c.text_base)
+                    .wrap()
+                    .w_full(),
+            )
+            .child(
+                row()
+                    .gap(4.0)
+                    .center_y()
+                    .w_full()
+                    .child(
+                        text(format!("{} · {} · {read}", note.by, when_of(&note.at, now)))
+                            .font(k.ty.text_xsmall)
+                            .color(k.c.text_faint)
+                            .grow(1.0)
+                            .min_w(0.0)
+                            .truncate(),
+                    )
+                    .children(note.read.is_none().then(|| {
+                        Button::new("Edit")
+                            .variant(ButtonVariant::Ghost)
+                            .on_press(move |app: &mut App| {
+                                app.edit_note(
+                                    edit_run.clone(),
+                                    edit_step.clone(),
+                                    id.clone(),
+                                    said.clone(),
+                                )
+                            })
+                            .build(k)
+                            .key(format!("note-edit-{}", note.id))
+                    }))
+                    .children(note.read.is_none().then(|| {
+                        Button::new("Withdraw")
+                            .variant(ButtonVariant::Ghost)
+                            .on_press(move |app: &mut App| {
+                                app.withdraw_note(gone_run.clone(), gone_id.clone())
+                            })
+                            .build(k)
+                            .key(format!("note-withdraw-{}", note.id))
+                    })),
+            )
+    });
+    let notes: Vec<El> = notes.collect();
+    let entry_rows = (!entries.is_empty()).then(|| {
+        section(
+            "inspector-entries",
+            "Runs",
+            k,
+            [row()
+                .gap(4.0)
+                .flex_wrap()
+                .w_full()
+                .children(entries.iter().map(|one| {
+                    let id = one.id.clone();
+                    let chosen = record.entry.as_deref() == Some(one.id.as_str());
+                    row()
+                        .key(format!("entry-{}", one.id))
+                        .role("button")
+                        .label(one.title.clone())
+                        .focusable(true)
+                        .checked(chosen)
+                        .h(26.0)
+                        .px(8.0)
+                        .gap(6.0)
+                        .center_y()
+                        .radius(k.radius.sm)
+                        .fill(if chosen { k.c.layer_03 } else { k.c.layer_01 })
+                        .border(
+                            1.0,
+                            if chosen {
+                                k.c.border_strong
+                            } else {
+                                k.c.border_weak
+                            },
+                        )
+                        .hover(k.c.surface_hover)
+                        .on_press(move |app: &mut App| {
+                            if let Some(record) = &mut app.record.open {
+                                record.entry = if record.entry.as_deref() == Some(id.as_str()) {
+                                    None
+                                } else {
+                                    Some(id.clone())
+                                };
+                            }
+                        })
+                        .child(crate::flow::glyph::glyph(&one.state, 12.0, k))
+                        .child(
+                            text(one.title.clone())
+                                .font(k.ty.text_xsmall)
+                                .color(k.c.text_base)
+                                .a11y_hidden(),
+                        )
+                }))],
+        )
+    });
+    let action_row = (!actions.is_empty()).then(|| {
+        row().key("step-actions").gap(6.0).flex_wrap().children(
+            actions
+                .iter()
+                .map(|a| action_button(a, format!("action-{}", slug(&a.label)), k)),
+        )
+    });
+    let fact_rows = (!found.is_empty()).then(|| {
+        facts(found.iter().map(|f| fact(&f.label, f.value.clone(), k))).key("inspector-facts")
+    });
+    let rule = || {
+        rune::el()
+            .h(1.0)
+            .w_full()
+            .fill(k.c.border_weak)
+            .a11y_hidden()
+    };
+    col()
+        .key("inspector-context")
+        .gap(14.0)
+        .w_full()
+        .child(title)
+        .children(purpose)
+        .children(action_row)
+        .children(fact_rows.map(|f| col().gap(14.0).w_full().child(rule()).child(f)))
+        .children(entry_rows)
+        .children(pause)
+        .children((!notes.is_empty()).then(|| section("inspector-notes", "Notes", k, notes)))
+}
+
+fn map_selected(app: &App) -> bool {
+    app.flow.as_ref().is_some_and(|m| m.selected.is_some())
 }
 
 fn inspector_view(app: &App, record: &Record, map: &flow::FlowMap, k: &Kit) -> Option<El> {
@@ -584,14 +1015,7 @@ fn inspector_view(app: &App, record: &Record, map: &flow::FlowMap, k: &Kit) -> O
     let lane: Option<&Lane> = map.flow.lanes.iter().find(|l| l.run == spot.run);
     let live = app.record_live();
     let detail = record.detail();
-    let now = now();
-    let timing = inspector::step_timing(&node, &parent.runs, now);
-    let status = inspector::status_of(&node, timing.as_deref());
-    let facts = inspector::facts_of(&node, |iso| when_of(iso, now));
     let steering = inspector::step_steering(&node);
-    let actions = lane
-        .map(|lane| step_actions(&node, lane, live))
-        .unwrap_or_default();
     let starts: Vec<i64> = map
         .flow
         .lanes
@@ -612,152 +1036,47 @@ fn inspector_view(app: &App, record: &Record, map: &flow::FlowMap, k: &Kit) -> O
         .part
         .unwrap_or_else(|| inspector::inspector_part(&node, live));
     let part = inspector::shown_part(chosen, &parts);
-    let title = row()
-        .gap(8.0)
-        .center_y()
-        .child(
-            text("●")
-                .font(k.ty.small)
-                .color(glyph_color(&node.state, k)),
-        )
-        .child(
-            text(node.title.clone())
-                .font(k.ty.ui_medium)
-                .color(k.c.text_strong),
-        )
-        .children(steering.badge.clone().map(|b| Badge::new(b).build(k)))
-        .child(spacer())
-        .children(status.map(|s| text(s).font(k.ty.small).color(k.c.text_muted)));
-    let purpose = (!node.description.trim().is_empty()).then(|| quiet(node.description.trim(), k));
-    let facts = col()
-        .gap(2.0)
-        .children(facts.iter().map(|f| fact(&f.label, f.value.clone(), k)));
-    let pause = steering.pause.clone().map(|p| quiet(p, k));
-    let run = spot.run.clone();
-    let notes = steering.notes.iter().map(|note| {
-        let (edit_run, edit_step, id, said) = (
-            run.clone(),
-            parent.id.clone(),
-            note.id.clone(),
-            note.text.clone(),
-        );
-        let (gone_run, gone_id) = (run.clone(), note.id.clone());
-        let read = note.read.as_ref().map_or("unread".to_string(), |at| {
-            format!("read {}", when_of(at, now))
-        });
-        row()
-            .key(format!("note-{}", note.id))
-            .gap(8.0)
-            .center_y()
-            .w_full()
-            .child(
-                col()
-                    .gap(2.0)
-                    .grow(1.0)
-                    .min_w(0.0)
-                    .child(
-                        text(note.text.clone())
-                            .font(k.ty.small)
-                            .color(k.c.text_base)
-                            .wrap(),
-                    )
-                    .child(
-                        text(format!("{} · {} · {read}", note.by, when_of(&note.at, now)))
-                            .font(k.ty.small)
-                            .color(k.c.text_faint),
-                    ),
-            )
-            .children(note.read.is_none().then(|| {
-                Button::new("Edit")
-                    .variant(ButtonVariant::Ghost)
-                    .on_press(move |app: &mut App| {
-                        app.edit_note(
-                            edit_run.clone(),
-                            edit_step.clone(),
-                            id.clone(),
-                            said.clone(),
-                        )
-                    })
-                    .build(k)
-                    .key(format!("note-edit-{}", note.id))
-            }))
-            .children(note.read.is_none().then(|| {
-                Button::new("Withdraw")
-                    .variant(ButtonVariant::Ghost)
-                    .on_press(move |app: &mut App| {
-                        app.withdraw_note(gone_run.clone(), gone_id.clone())
-                    })
-                    .build(k)
-                    .key(format!("note-withdraw-{}", note.id))
-            }))
-    });
-    let entry_rows = (!entries.is_empty()).then(|| {
-        row()
-            .key("inspector-entries")
-            .gap(4.0)
-            .flex_wrap()
-            .children(entries.iter().map(|one| {
-                let id = one.id.clone();
-                let chosen = record.entry.as_deref() == Some(one.id.as_str());
-                Button::new(one.title.clone())
-                    .variant(if chosen {
-                        ButtonVariant::Neutral
-                    } else {
-                        ButtonVariant::Ghost
-                    })
-                    .on_press(move |app: &mut App| {
-                        if let Some(record) = &mut app.record.open {
-                            record.entry = if record.entry.as_deref() == Some(id.as_str()) {
-                                None
-                            } else {
-                                Some(id.clone())
-                            };
-                        }
-                    })
-                    .build(k)
-                    .key(format!("entry-{}", one.id))
-                    .checked(chosen)
-            }))
-    });
-    let action_row = (!actions.is_empty()).then(|| {
-        row().key("step-actions").gap(6.0).flex_wrap().children(
-            actions
-                .iter()
-                .map(|a| action_button(a, format!("action-{}", slug(&a.label)), k)),
-        )
-    });
     let part_tabs = (parts.len() > 1).then(|| {
-        row()
+        segments(k)
             .key("inspector-parts")
             .role("tablist")
             .label("Step's work")
-            .gap(2.0)
+            .focus_group()
             .children(parts.iter().map(|p| {
                 let value = p.value;
-                Button::new(p.label.clone())
-                    .variant(if value == part {
-                        ButtonVariant::Neutral
-                    } else {
-                        ButtonVariant::GhostMuted
-                    })
+                segment(p.label.clone(), value == part, k)
                     .on_press(move |app: &mut App| {
                         if let Some(record) = &mut app.record.open {
                             record.part = Some(value);
                         }
                     })
-                    .build(k)
                     .key(format!("part-{}", slug(&format!("{value:?}"))))
                     .role("tab")
-                    .checked(value == part)
+                    .label(p.label.clone())
             }))
     });
     let work = match part {
         Part::Terminal => {
             let agent = node.agent.clone().flatten();
             row()
-                .gap(8.0)
+                .gap(12.0)
                 .center_y()
-                .child(quiet("Its terminal is on the Terminal tab.", k))
+                .padding(14.0)
+                .w_full()
+                .radius(k.radius.md)
+                .fill(k.c.layer_01)
+                .border(1.0, k.c.border_weak)
+                .child(rune::icon(&icons::TERMINAL, 16.0).color(k.c.icon_muted))
+                .child(
+                    text(match &agent {
+                        Some(agent) => format!("{agent} is working in its terminal."),
+                        None => "Its work is in the Run's terminal.".into(),
+                    })
+                    .font(k.ty.text_xsmall)
+                    .color(k.c.text_muted)
+                    .grow(1.0)
+                    .min_w(0.0),
+                )
                 .child(
                     Button::new("Watch it")
                         .variant(ButtonVariant::Outline)
@@ -773,36 +1092,79 @@ fn inspector_view(app: &App, record: &Record, map: &flow::FlowMap, k: &Kit) -> O
         }
         Part::Log => match &log.text {
             Some(lines) => col()
-                .gap(4.0)
+                .gap(6.0)
+                .w_full()
                 .children(log.older.map(|o| quiet(o, k)))
-                .child(mono(lines, "inspector-log", k)),
+                .child(
+                    col()
+                        .w_full()
+                        .max_h(420.0)
+                        .padding(12.0)
+                        .radius(k.radius.md)
+                        .fill(k.c.layer_01)
+                        .border(1.0, k.c.border_weak)
+                        .scroll(ScrollSpec { stick_bottom: true })
+                        .child(mono(lines, "inspector-log", k)),
+                ),
             None => quiet(inspector::quiet_work(&node), k),
         },
         Part::Evidence if !proofs.is_empty() => col()
-            .gap(4.0)
+            .gap(2.0)
+            .w_full()
             .children(proofs.iter().map(|v| verification_row(v, k))),
-        Part::Why => quiet(steering.retry_text.clone(), k),
-        Part::Decision => quiet("It waits for an answer: press Answer or Review above.", k),
+        Part::Why => col()
+            .gap(6.0)
+            .w_full()
+            .child(heading("Why it failed", k))
+            .child(
+                col()
+                    .w_full()
+                    .padding(12.0)
+                    .radius(k.radius.md)
+                    .fill(k.c.danger.bg)
+                    .border(1.0, k.c.danger.border)
+                    .child(mono(&steering.retry_text, "inspector-why", k)),
+            ),
+        Part::Decision if record.form.is_none() => {
+            quiet("It waits for an answer: press Answer or Review.", k)
+        }
+        Part::Decision => rune::el(),
         _ => quiet(inspector::quiet_work(&node), k),
+    };
+    let form = form_view(app, record, k);
+    let work = col()
+        .key("inspector-work")
+        .role("region")
+        .label("Step work")
+        .gap(12.0)
+        .grow(1.0)
+        .min_w(0.0)
+        .children(form)
+        .children(part_tabs.map(|tabs| row().child(tabs)))
+        .child(work);
+    let context = step_context(app, record, &spot, parent, &node, lane, k);
+    let beside = map.width >= SIDE_BY_SIDE;
+    let body = if beside {
+        row()
+            .gap(24.0)
+            .w_full()
+            .child(context.w(CONTEXT_W))
+            .child(rune::el().w(1.0).fill(k.c.border_weak).a11y_hidden())
+            .child(work)
+    } else {
+        col().gap(16.0).w_full().child(context).child(work)
     };
     Some(
         panel(k)
             .key("inspector")
             .role("group")
             .label(format!("Step {}", node.title))
-            .child(title)
-            .children(purpose)
-            .children(entry_rows)
-            .children(action_row)
-            .children(pause)
-            .children(notes)
-            .child(facts)
-            .children(part_tabs)
-            .child(work),
+            .child(body),
     )
 }
 
-fn form_view(record: &Record, k: &Kit) -> Option<El> {
+fn form_view(app: &App, record: &Record, k: &Kit) -> Option<El> {
+    let _ = app;
     let form = record.form.as_ref()?;
     let cancel = Button::new("Cancel")
         .variant(ButtonVariant::Ghost)
@@ -856,70 +1218,8 @@ fn form_view(record: &Record, k: &Kit) -> Option<El> {
                         .child(cancel),
                 )
         }
-        Form::Answer {
-            asked,
-            options,
-            picked,
-            edit,
-            ..
-        } => col()
-            .gap(8.0)
-            .child(markdown(asked, k))
-            .children(options.iter().map(|option| {
-                let id = option.id.clone();
-                let chosen = picked.as_deref() == Some(option.id.as_str());
-                let mut said = option.title.clone();
-                if option.recommended == Some(true) {
-                    said.push_str(" (recommended)");
-                }
-                col()
-                    .gap(2.0)
-                    .child(
-                        Button::new(said)
-                            .variant(if chosen {
-                                ButtonVariant::Contrast
-                            } else {
-                                ButtonVariant::Outline
-                            })
-                            .on_press(move |app: &mut App| {
-                                if let Some(Form::Answer { picked, .. }) =
-                                    app.record.open.as_mut().and_then(|r| r.form.as_mut())
-                                {
-                                    *picked = Some(id.clone());
-                                }
-                            })
-                            .build(k)
-                            .key(format!("option-{}", option.id))
-                            .checked(chosen),
-                    )
-                    .children(option.subtitle.clone().map(|s| quiet(s, k)))
-            }))
-            .child(
-                TextInput::new(edit)
-                    .placeholder("Or answer in your own words")
-                    .label("Answer in your own words")
-                    .on_edit(|app: &mut App| {
-                        match app.record.open.as_mut().and_then(|r| r.form.as_mut()) {
-                            Some(Form::Answer { edit, .. }) => edit,
-                            _ => unreachable!("an answer form is open"),
-                        }
-                    })
-                    .build(k)
-                    .key("form-answer-text"),
-            )
-            .child(
-                row()
-                    .gap(8.0)
-                    .child(
-                        Button::new("Answer")
-                            .variant(ButtonVariant::Submit)
-                            .disabled(picked.is_none() && edit.text.trim().is_empty())
-                            .on_press(|app: &mut App| app.send_form(None))
-                            .build(k)
-                            .key("form-send"),
-                    )
-                    .child(cancel),
-            ),
+        Form::Answer { questions, at, .. } => answer_form(questions, *at, cancel, k),
+        Form::Offer { offer, fields, .. } => offer_form(offer.as_ref(), fields, cancel, k),
         Form::Proposal { proposal, .. } => col().gap(8.0).child(markdown(&proposal.text, k)).child(
             row()
                 .gap(8.0)
@@ -949,14 +1249,256 @@ fn form_view(record: &Record, k: &Kit) -> Option<El> {
     )
 }
 
+/// The questions of a Step one at a time, "Question k of n" with Back and Next when there are
+/// several, each answered by an option or in words and sent on its own.
+/// A Step's Start: what it starts, why it cannot now, and the inputs it takes, as the board's
+/// offers dialog asks them.
+fn offer_form(
+    offer: Option<&collie_desktop_protocol::generated::OffersSuccessItem>,
+    fields: &[(String, bool, rune::edit::TextEdit)],
+    cancel: El,
+    k: &Kit,
+) -> El {
+    let Some(offer) = offer else {
+        return col()
+            .gap(12.0)
+            .child(quiet("Asking the Run what it offers…", k).key("offer-reading"))
+            .child(row().child(cancel));
+    };
+    let ready = offer.unavailable.is_none() && super::act::offer_ready(fields);
+    col()
+        .key("offer")
+        .gap(12.0)
+        .w_full()
+        .child(
+            col()
+                .gap(2.0)
+                .child(
+                    text(offer.title.clone())
+                        .key("offer-title")
+                        .role("heading")
+                        .font(k.ty.ui_medium)
+                        .color(k.c.text_strong),
+                )
+                .child(quiet(format!("Starts {}", offer.workflow), k)),
+        )
+        .children(offer.unavailable.clone().map(|why| {
+            text(why)
+                .key("offer-unavailable")
+                .role("status")
+                .font(k.ty.text_xsmall)
+                .color(k.c.warning.fg)
+                .wrap()
+                .w_full()
+        }))
+        .children(
+            fields
+                .iter()
+                .enumerate()
+                .map(|(i, (name, required, edit))| {
+                    col()
+                        .gap(4.0)
+                        .w_full()
+                        .child(
+                            text(if *required {
+                                name.clone()
+                            } else {
+                                format!("{name} (optional)")
+                            })
+                            .font(k.ty.text_xsmall_medium)
+                            .color(k.c.text_muted),
+                        )
+                        .child(
+                            TextInput::new(edit)
+                                .label(name.clone())
+                                .on_edit(move |app: &mut App| {
+                                    match app.record.open.as_mut().and_then(|r| r.form.as_mut()) {
+                                        Some(Form::Offer { fields, .. }) => &mut fields[i].2,
+                                        _ => unreachable!("an offer form is open"),
+                                    }
+                                })
+                                .build(k)
+                                .key(format!("offer-field-{name}")),
+                        )
+                }),
+        )
+        .child(
+            row()
+                .gap(8.0)
+                .child(
+                    Button::new("Start")
+                        .variant(ButtonVariant::Submit)
+                        .disabled(!ready)
+                        .on_press(|app: &mut App| app.make_offer_in_record())
+                        .build(k)
+                        .key("offer-start"),
+                )
+                .child(cancel),
+        )
+}
+
+fn edit_of(app: &mut App) -> &mut rune::edit::TextEdit {
+    match app.record.open.as_mut().and_then(|r| r.form.as_mut()) {
+        Some(Form::Answer { questions, at, .. }) => &mut questions[*at].edit,
+        _ => unreachable!("an answer form is open"),
+    }
+}
+
+fn answer_form(questions: &[super::Asked], at: usize, cancel: El, k: &Kit) -> El {
+    let Some(one) = questions.get(at) else {
+        return col();
+    };
+    let n = questions.len();
+    let left = questions.iter().filter(|q| q.sent.is_none()).count();
+    let step = row()
+        .key("question-step")
+        .gap(4.0)
+        .center_y()
+        .w_full()
+        .child(
+            text(if n > 1 {
+                format!("Question {} of {n}", at + 1)
+            } else {
+                "Question".into()
+            })
+            .key("question-count")
+            .role("status")
+            .font(k.ty.text_xsmall_medium)
+            .color(k.c.warning.fg),
+        )
+        .children((n > 1).then(|| {
+            text(format!(" · {left} still open"))
+                .font(k.ty.text_xsmall)
+                .color(k.c.text_muted)
+                .grow(1.0)
+        }))
+        .children((n > 1).then(|| {
+            row()
+                .gap(2.0)
+                .child(
+                    IconButton::new(&icons::BACK)
+                        .label("Previous question")
+                        .disabled(at == 0)
+                        .on_press(move |app: &mut App| app.show_question(at.saturating_sub(1)))
+                        .build(k)
+                        .key("question-back"),
+                )
+                .child(
+                    IconButton::new(&icons::FORWARD)
+                        .label("Next question")
+                        .disabled(at + 1 >= n)
+                        .on_press(move |app: &mut App| app.show_question(at + 1))
+                        .build(k)
+                        .key("question-next"),
+                )
+        }));
+    let asked = col()
+        .key(format!("question-{}", one.id))
+        .gap(12.0)
+        .w_full()
+        .child(step)
+        .child(markdown(&one.asked, k));
+    if let Some(sent) = &one.sent {
+        return asked.child(
+            row()
+                .key("question-sent")
+                .role("status")
+                .gap(8.0)
+                .center_y()
+                .child(crate::flow::glyph::glyph(
+                    &collie_desktop_protocol::generated::GlyphState::Done,
+                    14.0,
+                    k,
+                ))
+                .child(
+                    text(format!("Answered: {sent}"))
+                        .font(k.ty.text_small)
+                        .color(k.c.text_base)
+                        .wrap()
+                        .grow(1.0)
+                        .min_w(0.0),
+                ),
+        );
+    }
+    let options = (!one.options.is_empty()).then(|| {
+        col()
+            .key("question-options")
+            .role("radiogroup")
+            .label(one.asked.clone())
+            .focus_group()
+            .gap(10.0)
+            .w_full()
+            .children(one.options.iter().map(|option| {
+                let id = option.id.clone();
+                let chosen = one.picked.as_deref() == Some(option.id.as_str());
+                let mut said = option.title.clone();
+                if option.recommended == Some(true) {
+                    said.push_str(" · Recommended");
+                }
+                let mut item =
+                    rune_kit::RadioItem::new(said, chosen).on_select(move |app: &mut App| {
+                        if let Some(Form::Answer { questions, at, .. }) =
+                            app.record.open.as_mut().and_then(|r| r.form.as_mut())
+                        {
+                            questions[*at].picked = Some(id.clone());
+                            questions[*at].edit = rune::edit::TextEdit::default();
+                        }
+                    });
+                if let Some(about) = option.subtitle.clone().or(option.detail.clone()) {
+                    item = item.description(about);
+                }
+                item.build(k).key(format!("option-{}", option.id))
+            }))
+    });
+    let ready = one.picked.is_some() || !one.edit.text.trim().is_empty();
+    asked
+        .children(options)
+        .child(
+            TextInput::new(&one.edit)
+                .placeholder(if one.options.is_empty() {
+                    "Your answer"
+                } else {
+                    "Or answer in your own words"
+                })
+                .label("Answer in your own words")
+                .on_edit(edit_of)
+                .build(k)
+                .key("form-answer-text"),
+        )
+        .child(
+            row()
+                .gap(8.0)
+                .child(
+                    Button::new(if left > 1 {
+                        "Answer and next"
+                    } else {
+                        "Answer"
+                    })
+                    .variant(ButtonVariant::Submit)
+                    .disabled(!ready)
+                    .on_press(|app: &mut App| app.send_form(None))
+                    .build(k)
+                    .key("form-send"),
+                )
+                .child(cancel),
+        )
+}
+
 fn summary_tab(app: &App, record: &Record, k: &Kit) -> El {
     let Some(detail) = record.detail() else {
         return quiet("Reading the record…", k);
     };
     let sections = tabs::summary_of(detail).into_iter().map(|one| match one {
-        SummarySection::Status(status) => {
-            section("summary-status", "Status", k, [quiet(status, k)])
-        }
+        SummarySection::Status(status) => section(
+            "summary-status",
+            "Status",
+            k,
+            [text(status)
+                .font(k.ty.text_small)
+                .color(k.c.text_base)
+                .wrap()
+                .w_full()],
+        ),
         SummarySection::Attention {
             category,
             explanation,
@@ -972,17 +1514,49 @@ fn summary_tab(app: &App, record: &Record, k: &Kit) -> El {
         }
         SummarySection::Outcome(outcome) => {
             let outcome = *outcome;
+            let part = |label: &str, body: El| {
+                col()
+                    .gap(4.0)
+                    .w_full()
+                    .child(
+                        text(label.to_string())
+                            .font(k.ty.text_xsmall)
+                            .color(k.c.text_muted),
+                    )
+                    .child(body)
+            };
             let mut said = Vec::new();
-            said.extend(outcome.kind.map(|v| fact("Kind", v, k)));
-            said.extend(outcome.delivered.map(|v| fact("Delivered", v, k)));
-            said.extend(outcome.gaps.iter().map(|g| fact("Gap", g.clone(), k)));
-            said.extend(outcome.obstacle.map(|v| fact("Obstacle", v, k)));
-            said.extend(outcome.next.map(|v| fact("Next", v, k)));
+            said.extend(outcome.kind.map(|v| {
+                row().child(
+                    Badge::new(v)
+                        .variant(rune_kit::BadgeVariant::Subtle)
+                        .build(k),
+                )
+            }));
             said.extend(
                 outcome
                     .measurement
                     .flatten()
-                    .map(|v| fact("Measured", v, k)),
+                    .map(|v| part("Measured", markdown(&v, k))),
+            );
+            if !outcome.gaps.is_empty() {
+                let gaps = outcome
+                    .gaps
+                    .iter()
+                    .map(|g| format!("- {g}"))
+                    .collect::<Vec<_>>();
+                said.push(part("Still to prove", markdown(&gaps.join("\n"), k)));
+            }
+            said.extend(
+                outcome
+                    .obstacle
+                    .map(|v| part("In its way", markdown(&v, k))),
+            );
+            said.extend(outcome.next.map(|v| part("Next", markdown(&v, k))));
+            said.extend(
+                outcome
+                    .delivered
+                    .map(|v| part("Delivered", markdown(&v, k))),
             );
             section("summary-outcome", "Outcome", k, said)
         }
@@ -990,10 +1564,9 @@ fn summary_tab(app: &App, record: &Record, k: &Kit) -> El {
             "summary-inputs",
             "Inputs",
             k,
-            inputs
-                .iter()
-                .map(|i| fact(&i.name, i.value.clone(), k))
-                .collect::<Vec<_>>(),
+            [facts(
+                inputs.iter().map(|i| fact(&i.name, i.value.clone(), k)),
+            )],
         ),
         SummarySection::Replies(replies) => section(
             "summary-replies",
@@ -1019,30 +1592,26 @@ fn summary_tab(app: &App, record: &Record, k: &Kit) -> El {
             "summary-steps",
             "Steps",
             k,
-            detail
-                .steps
-                .iter()
-                .map(|s| {
-                    let took = s
-                        .took
-                        .clone()
-                        .map(|t| format!(" · {t}"))
-                        .unwrap_or_default();
-                    fact(
-                        &s.id,
-                        format!(
-                            "{}{took}{}",
-                            s.status,
-                            if s.note.is_empty() {
-                                String::new()
-                            } else {
-                                format!(" · {}", s.note)
-                            }
-                        ),
-                        k,
-                    )
-                })
-                .collect::<Vec<_>>(),
+            [facts(detail.steps.iter().map(|s| {
+                let took = s
+                    .took
+                    .clone()
+                    .map(|t| format!(" · {t}"))
+                    .unwrap_or_default();
+                fact(
+                    &s.id,
+                    format!(
+                        "{}{took}{}",
+                        s.status,
+                        if s.note.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" · {}", s.note)
+                        }
+                    ),
+                    k,
+                )
+            }))],
         )
     });
     let attachments = detail
@@ -1069,13 +1638,11 @@ fn summary_tab(app: &App, record: &Record, k: &Kit) -> El {
             )
         });
     let _ = app;
-    col()
-        .key("summary")
-        .gap(16.0)
-        .w_full()
-        .children(sections)
-        .children(steps)
-        .children(attachments)
+    ruled(
+        col().key("summary").max_w(READING_W).w_full(),
+        sections.chain(steps).chain(attachments),
+        k,
+    )
 }
 
 /// A file of the record with its size, and Open, which shows it in the browser.
@@ -1659,14 +2226,13 @@ fn source_file(record: &Record, file: &str, line: Option<u32>, k: &Kit) -> El {
 }
 
 fn verification_row(v: &collie_desktop_protocol::generated::Verification, k: &Kit) -> El {
+    use collie_desktop_protocol::generated::GlyphState;
     let passed = v.result == VerificationResult::Pass;
     let expected = crate::flow::written(&v.expect);
-    let (mark, color) = match (&v.result, expected.as_str()) {
-        (VerificationResult::Pass, "pass") | (VerificationResult::Fail, "fail") => {
-            ("✓", k.c.success.icon)
-        }
-        (VerificationResult::Unstable, _) => ("~", k.c.warning.icon),
-        _ => ("✗", k.c.danger.icon),
+    let state = match (&v.result, expected.as_str()) {
+        (VerificationResult::Pass, "pass") | (VerificationResult::Fail, "fail") => GlyphState::Done,
+        (VerificationResult::Unstable, _) => GlyphState::NeedsYou,
+        _ => GlyphState::Failed,
     };
     let result = crate::flow::written(&v.result);
     let by = crate::flow::written(&v.by);
@@ -1674,10 +2240,14 @@ fn verification_row(v: &collie_desktop_protocol::generated::Verification, k: &Ki
         .key(format!("check-{}", v.id))
         .role("group")
         .label(format!("{}: {result}, expected {expected}", v.name))
-        .gap(8.0)
+        .gap(10.0)
         .center_y()
+        .h(32.0)
+        .px(8.0)
         .w_full()
-        .child(text(mark).font(k.ty.ui_medium).color(color).w(14.0))
+        .radius(k.radius.sm)
+        .hover(k.c.surface_hover)
+        .child(crate::flow::glyph::glyph(&state, 14.0, k))
         .child(
             text(v.name.clone())
                 .font(k.ty.mono)
@@ -1688,17 +2258,26 @@ fn verification_row(v: &collie_desktop_protocol::generated::Verification, k: &Ki
         )
         .child(
             text(format!(
-                "{result}{} · exit {} · by {by} · {}",
+                "{result}{}",
                 if passed || expected != "pass" {
                     format!(", expected {expected}")
                 } else {
                     String::new()
-                },
+                }
+            ))
+            .font(k.ty.text_xsmall)
+            .color(k.c.text_muted),
+        )
+        .child(
+            text(format!(
+                "exit {} · {by} · {}",
                 v.exit,
                 when_of(&v.at, now())
             ))
-            .font(k.ty.small)
-            .color(k.c.text_muted),
+            .font(k.ty.text_xsmall)
+            .color(k.c.text_faint)
+            .w(170.0)
+            .align(rune::Align::End),
         )
 }
 
@@ -1708,7 +2287,10 @@ fn image_box(record: &Record, item: &EvidenceItem, k: &Kit) -> El {
         Some(Item::Image(image)) => rune::el()
             .pixels_fit(image.pixels(), SurfaceFit::Fit)
             .w_full()
-            .h(240.0),
+            .h(260.0)
+            .radius(k.radius.md)
+            .fill(k.c.layer_01)
+            .border(1.0, k.c.border_weak),
         Some(Item::Failed(why)) => quiet(why.clone(), k),
         _ => quiet("Reading…", k),
     };
@@ -1716,13 +2298,13 @@ fn image_box(record: &Record, item: &EvidenceItem, k: &Kit) -> El {
         .key(format!("shot-{}", slug(&item.name)))
         .role("img")
         .label(item.name.clone())
-        .gap(4.0)
+        .gap(6.0)
         .grow(1.0)
         .min_w(0.0)
         .child(shot)
         .child(
             text(item.name.clone())
-                .font(k.ty.small)
+                .font(k.ty.text_xsmall)
                 .color(k.c.text_muted)
                 .truncate(),
         )
@@ -1752,15 +2334,15 @@ fn evidence_tab(record: &Record, k: &Kit) -> El {
     };
     let sorted = sort_evidence(&detail.evidence);
     let checks = (!detail.verifications.is_empty()).then(|| {
+        let n = detail.verifications.len();
         section(
             "checks",
-            "Checks",
+            &format!("Checks · {n}"),
             k,
-            detail
-                .verifications
-                .iter()
-                .map(|v| verification_row(v, k))
-                .collect::<Vec<_>>(),
+            [col()
+                .gap(0.0)
+                .w_full()
+                .children(detail.verifications.iter().map(|v| verification_row(v, k)))],
         )
     });
     let gallery = (!sorted.gallery.is_empty()).then(|| {
@@ -1810,6 +2392,7 @@ fn evidence_tab(record: &Record, k: &Kit) -> El {
     let handoffs = listed("handoff-files", "Handoff files", &handoffs, "handoff");
     let m = &detail.outcome.metrics;
     let mut metrics = vec![fact("Rework", format!("{}", m.rework), k)];
+    let metrics_of = |rows: Vec<El>| [facts(rows)];
     metrics.extend(
         m.time_to_first_evidence
             .map(|t| fact("First evidence", super::when::minutes(t), k)),
@@ -1822,18 +2405,17 @@ fn evidence_tab(record: &Record, k: &Kit) -> El {
         && videos.is_none()
         && files.is_none()
         && handoffs.is_none();
-    col()
-        .key("evidence")
-        .gap(16.0)
-        .w_full()
-        .children(empty.then(|| quiet("This Run has recorded no evidence yet.", k)))
-        .children(checks)
-        .children(gallery)
-        .children(reports)
-        .children(videos)
-        .children(files)
-        .children(handoffs)
-        .child(section("metrics", "Metrics", k, metrics))
+    let none = empty.then(|| quiet("This Run has recorded no evidence yet.", k));
+    let parts = none
+        .into_iter()
+        .chain(checks)
+        .chain(gallery)
+        .chain(reports)
+        .chain(videos)
+        .chain(files)
+        .chain(handoffs)
+        .chain([section("metrics", "Metrics", k, metrics_of(metrics))]);
+    ruled(col().key("evidence").w_full(), parts, k)
 }
 
 fn log_tab(record: &Record, k: &Kit) -> El {
@@ -1853,14 +2435,27 @@ fn log_tab(record: &Record, k: &Kit) -> El {
         (_, None) => return quiet("Reading the log…", k),
     };
     let more = cut.map(|note| {
+        let bar = row().key("log-bar").gap(12.0).center_y().w_full().child(
+            text("Showing the end of the log")
+                .font(k.ty.text_xsmall)
+                .color(k.c.text_muted)
+                .grow(1.0),
+        );
         if note.is_empty() {
-            Button::new("Read the whole log")
-                .variant(ButtonVariant::Outline)
-                .on_press(|app: &mut App| app.read_item("log"))
-                .build(k)
-                .key("log-whole")
+            bar.child(
+                Button::new("Read the whole log")
+                    .variant(ButtonVariant::Ghost)
+                    .on_press(|app: &mut App| app.read_item("log"))
+                    .build(k)
+                    .key("log-whole"),
+            )
         } else {
-            quiet(note, k).role("status")
+            bar.child(
+                text(note)
+                    .role("status")
+                    .font(k.ty.text_xsmall)
+                    .color(k.c.text_muted),
+            )
         }
     });
     col()
@@ -1876,9 +2471,10 @@ fn log_tab(record: &Record, k: &Kit) -> El {
                 .grow(1.0)
                 .min_h(0.0)
                 .w_full()
-                .padding(8.0)
-                .radius(k.radius.sm)
-                .fill(k.c.layer_02)
+                .padding(12.0)
+                .radius(k.radius.lg)
+                .fill(k.c.layer_01)
+                .border(1.0, k.c.border_weak)
                 .scroll(ScrollSpec { stick_bottom: true })
                 .child(mono(&said, "log-lines", k)),
         )
@@ -1892,53 +2488,120 @@ fn terminal_tab(app: &App, record: &Record, k: &Kit) -> El {
     let shown = app.record.terminal_agent.clone();
     let shown_agent = agents.iter().find(|a| Some(&a.name) == shown.as_ref());
     let tabs = agent_tabs(&agents, shown_agent);
+    let dot = |state: &str| {
+        rune::el()
+            .size(6.0, 6.0)
+            .radius(3.0)
+            .fill(status_tone(state, k).icon)
+            .a11y_hidden()
+    };
     let switcher = (tabs.len() > 1).then(|| {
-        row()
+        segments(k)
             .key("agent-tabs")
             .role("tablist")
             .label("Agents")
-            .gap(2.0)
+            .focus_group()
             .children(tabs.iter().map(|tab| {
                 let name = tab.name.clone();
                 let chosen = Some(&tab.name) == shown.as_ref();
-                Button::new(format!("{} · {}", tab.label, tab.state))
-                    .variant(if chosen {
-                        ButtonVariant::Neutral
-                    } else {
-                        ButtonVariant::GhostMuted
-                    })
+                segment(tab.label.clone(), chosen, k)
+                    .gap(6.0)
+                    .child(dot(&tab.state))
                     .on_press(move |app: &mut App| app.pick_agent(name.clone()))
-                    .build(k)
                     .key(format!("agent-{}", tab.name))
                     .role("tab")
                     .label(match &tab.now {
                         Some(now) => format!("{}, {}: {now}", tab.label, tab.state),
                         None => format!("{}, {}", tab.label, tab.state),
                     })
-                    .checked(chosen)
             }))
     });
+    let one = (tabs.len() == 1).then(|| {
+        let tab = &tabs[0];
+        row()
+            .key("agent-one")
+            .gap(8.0)
+            .center_y()
+            .child(dot(&tab.state))
+            .child(
+                text(tab.label.clone())
+                    .font(k.ty.text_xsmall_medium)
+                    .color(k.c.text_base),
+            )
+            .child(
+                text(match &tab.now {
+                    Some(now) => format!("{} · {now}", tab.state),
+                    None => tab.state.clone(),
+                })
+                .font(k.ty.text_xsmall)
+                .color(k.c.text_faint)
+                .truncate()
+                .min_w(0.0),
+            )
+    });
     let away = (!app.record_live()).then(|| {
-        quiet(
-            "Its Machine is out of reach; this is what the pane last drew.",
-            k,
-        )
-        .role("status")
+        row()
+            .key("terminal-away")
+            .role("status")
+            .label("Its Machine is out of reach; this is what the pane last drew.")
+            .gap(6.0)
+            .center_y()
+            .h(24.0)
+            .px(10.0)
+            .radius(12.0)
+            .fill(k.c.warning.bg)
+            .child(
+                text("Out of reach · last drawn")
+                    .font(k.ty.text_xsmall_medium)
+                    .color(k.c.warning.fg)
+                    .a11y_hidden(),
+            )
     });
     let pane = match &app.terminal {
         Some(tab) => terminal(tab, |app: &mut App| app.terminal.as_mut()),
-        None => quiet("Opening the terminal…", k),
+        None => col()
+            .key("terminal-opening")
+            .grow(1.0)
+            .w_full()
+            .center()
+            .gap(8.0)
+            .child(rune::icon(&icons::TERMINAL, 20.0).color(k.c.icon_faint))
+            .child(
+                text("Opening the terminal…")
+                    .font(k.ty.text_xsmall)
+                    .color(k.c.text_muted),
+            ),
     };
     let _ = record;
+    let bar = row()
+        .key("terminal-bar")
+        .gap(12.0)
+        .center_y()
+        .w_full()
+        .h(44.0)
+        .px(8.0)
+        .children(switcher)
+        .children(one)
+        .child(rune::spacer())
+        .children(away);
     col()
         .key("terminal-tab")
-        .gap(8.0)
         .grow(1.0)
         .min_h(0.0)
         .w_full()
-        .children(switcher)
-        .children(away)
-        .child(pane)
+        .radius(k.radius.lg)
+        .border(1.0, k.c.border_weak)
+        .fill(k.c.layer_01)
+        .clip_rounded(k.radius.lg)
+        .child(bar)
+        .child(
+            rune::el()
+                .h(1.0)
+                .w_full()
+                .fill(k.c.border_weak)
+                .a11y_hidden(),
+        )
+        .child(col().grow(1.0).min_h(0.0).w_full().child(pane))
 }
 
 fn facts_tab(record: &Record, k: &Kit) -> El {
@@ -2020,13 +2683,11 @@ fn facts_tab(record: &Record, k: &Kit) -> El {
                 .collect::<Vec<_>>(),
         )
     });
-    col()
-        .key("facts")
-        .gap(16.0)
-        .w_full()
-        .child(col().gap(4.0).children(rows))
-        .children(agents)
-        .children(steering)
+    ruled(
+        col().key("facts").max_w(READING_W).w_full(),
+        [facts(rows)].into_iter().chain(agents).chain(steering),
+        k,
+    )
 }
 
 fn mr_tab(record: &Record, tab: &str, k: &Kit) -> El {

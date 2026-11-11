@@ -6,10 +6,11 @@ use super::review::{Anchor, Draft, add_draft, diff_anchor};
 use crate::App;
 use collie_desktop_protocol::generated::{File, FileStatus};
 use rune::edit::TextEdit;
-use rune::{El, Tx, col, row, text};
+use rune::{El, Tx, col, icon, row, text};
+use rune_kit::diff::FileStatus as Drawn;
 use rune_kit::diff::{Annotation, DiffMode, DiffState, DiffView, FileDiff, LineRef, parse};
 use rune_kit::{Button, ButtonVariant, Checkbox, Kit, SegmentedControl, TextInput};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TreeNode {
@@ -144,6 +145,29 @@ pub fn filter_tree(tree: &[TreeNode], text: &str) -> Vec<TreeNode> {
     merged(kept(tree, &wanted))
 }
 
+/// Every folder of the tree, by key.
+pub fn folders_of(tree: &[TreeNode]) -> Vec<String> {
+    tree.iter()
+        .flat_map(|node| match node {
+            TreeNode::File { .. } => Vec::new(),
+            TreeNode::Folder { key, children, .. } => {
+                let mut all = vec![key.clone()];
+                all.extend(folders_of(children));
+                all
+            }
+        })
+        .collect()
+}
+
+/// Whether a folder's files are listed: every folder while a filter is in effect, else all but
+/// those the human closed, as `openFolders` decides.
+pub fn folder_open(key: &str, closed: &HashSet<String>, filtering: bool) -> bool {
+    filtering || !closed.contains(key)
+}
+
+/// At most this many files' patches are read at once: each has the host run git.
+pub const READS_AT_ONCE: usize = 4;
+
 /// What a viewed tick saw, so a file the Run changes again loses it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tick {
@@ -261,6 +285,14 @@ pub struct DiffTab {
     pub choices: HashMap<String, bool>,
     pub filter: TextEdit,
     pub comment: TextEdit,
+    /// The tree's folders the human closed.
+    pub closed: HashSet<String>,
+    /// Files wanted open whose patch is not read yet, in the order they are read.
+    pub queued: Vec<String>,
+    /// Files whose patch is being read now.
+    pub reading: HashSet<String>,
+    /// The file read last before the tab was left, which it opens on again.
+    pub left_at: Option<String>,
 }
 
 impl DiffTab {
@@ -273,16 +305,39 @@ impl DiffTab {
             choices: HashMap::new(),
             filter: TextEdit::default(),
             comment: TextEdit::default(),
+            closed: HashSet::new(),
+            queued: Vec::new(),
+            reading: HashSet::new(),
+            left_at: None,
         }
     }
 
-    fn reading(base: String, files: Vec<File>) -> DiffTab {
-        DiffTab {
+    /// A tab for `files`, keeping what the human chose on the one it replaces.
+    fn reading(base: String, files: Vec<File>, was: Option<DiffTab>) -> DiffTab {
+        let mut tab = DiffTab {
             base,
             files: files_of(&diff_tree(&files)),
             built: false,
             ..DiffTab::new(Vec::new())
+        };
+        if let Some(was) = was {
+            tab.choices = was.choices;
+            tab.closed = was.closed;
+            tab.filter = was.filter;
+            tab.comment = was.comment;
+            tab.left_at = was.left_at;
+            tab.state.set_mode(was.state.mode());
+            tab.state.set_wrap(was.state.wrap());
         }
+        tab
+    }
+
+    /// Whether `path` is drawn open: chosen open, or small enough to open itself.
+    pub fn is_open(&self, path: &str) -> bool {
+        self.files
+            .iter()
+            .find(|f| f.path == path)
+            .is_some_and(|f| file_open(f, &self.choices))
     }
 
     /// The file shown at the top of the diff.
@@ -314,15 +369,32 @@ impl DiffTab {
         self.state.set_annotations(notes);
     }
 
-    fn apply_choices(&mut self) {
-        for (at, file) in self.files.iter().enumerate() {
+    /// Closes each file not chosen open, and each whose patch is not read yet.
+    fn apply_choices(&mut self, read: &HashSet<String>) {
+        for file in &self.files {
             if let Some(index) = self.state.file_index(&file.path) {
-                let _ = at;
-                self.state
-                    .set_collapsed(index, !file_open(file, &self.choices));
+                let open = file_open(file, &self.choices) && read.contains(&file.path);
+                self.state.set_collapsed(index, !open);
             }
         }
     }
+}
+
+/// A file not read yet: its name and how it changed, with no lines.
+fn unread(file: &File) -> FileDiff {
+    let path = Some(file.path.clone());
+    let (old, new) = match file.status {
+        FileStatus::Added => (None, path),
+        FileStatus::Deleted => (path, None),
+        FileStatus::Modified => (path.clone(), path),
+    };
+    let mut drawn = FileDiff::between(old, new, "", "");
+    drawn.status = match file.status {
+        FileStatus::Added => Drawn::Added,
+        FileStatus::Deleted => Drawn::Deleted,
+        FileStatus::Modified => Drawn::Modified,
+    };
+    drawn
 }
 
 fn diff_of(app: &App) -> &DiffState {
@@ -330,6 +402,9 @@ fn diff_of(app: &App) -> &DiffState {
 }
 
 fn diff_of_mut(app: &mut App) -> &mut DiffState {
+    // The Diff's own header opens a file in place; its rows then change and it asks for the
+    // state again here, which is where a file opened before its patch is read gets read.
+    app.read_opened_files();
     &mut app.diff.as_mut().expect("an open diff").state
 }
 
@@ -345,7 +420,8 @@ impl App {
         }
     }
 
-    /// Starts reading the record's diff, file by file, unless it is read for these files.
+    /// Starts reading the record's diff, unless it is read for these files: each open file's
+    /// patch, a few at a time, drawn as it comes; a closed one only once it is opened.
     pub fn read_diff(&mut self) {
         let Some(record) = &self.record.open else {
             return;
@@ -353,15 +429,15 @@ impl App {
         let Some(diff) = record.detail().and_then(|d| d.diff.clone()) else {
             return;
         };
-        let same = self.diff.as_ref().is_some_and(|tab| {
-            tab.base == diff.base && {
-                let mut had = tab.files.clone();
-                let mut now = diff.files.clone();
-                had.sort_by(|a, b| a.path.cmp(&b.path));
-                now.sort_by(|a, b| a.path.cmp(&b.path));
-                had == now
-            }
-        });
+        let sorted = |files: &[File]| {
+            let mut files = files.to_vec();
+            files.sort_by(|a, b| a.path.cmp(&b.path));
+            files
+        };
+        let same = self
+            .diff
+            .as_ref()
+            .is_some_and(|tab| tab.base == diff.base && sorted(&tab.files) == sorted(&diff.files));
         if same {
             return;
         }
@@ -369,18 +445,87 @@ impl App {
         if let Some(ticks) = self.record.viewed.get_mut(&key) {
             *ticks = ticks_still_true(ticks, &diff.files, &diff.base);
         }
-        let tab = DiffTab::reading(diff.base.clone(), diff.files.clone());
-        let items: Vec<String> = tab
+        let was = self.diff.take();
+        // A file the Run has not changed since keeps its patch, so the diff does not jump.
+        let kept: Vec<String> = was
+            .as_ref()
+            .filter(|was| was.base == diff.base)
+            .map(|was| {
+                was.files
+                    .iter()
+                    .filter(|f| diff.files.contains(f))
+                    .map(|f| f.path.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let tab = DiffTab::reading(diff.base.clone(), diff.files.clone(), was);
+        if let Some(record) = &mut self.record.open {
+            record.items.retain(|item, _| {
+                item.strip_prefix("diff:")
+                    .is_none_or(|path| kept.iter().any(|k| k == path))
+            });
+        }
+        let open: Vec<String> = tab
             .files
             .iter()
-            .map(|f| format!("diff:{}", f.path))
+            .filter(|f| file_open(f, &tab.choices))
+            .map(|f| f.path.clone())
             .collect();
         self.diff = Some(tab);
-        for item in &items {
-            self.reread_item(item);
+        for path in open {
+            self.want_file(&path);
         }
-        if items.is_empty() {
-            self.diff_part_read();
+        self.redraw_diff();
+    }
+
+    /// Reads `path`'s patch, in turn, unless it is read or being read.
+    pub fn want_file(&mut self, path: &str) {
+        let item = format!("diff:{path}");
+        let had = self
+            .record
+            .open
+            .as_ref()
+            .is_some_and(|r| r.items.contains_key(&item));
+        let Some(tab) = &mut self.diff else { return };
+        if had || tab.reading.contains(path) || tab.queued.iter().any(|q| q == path) {
+            return;
+        }
+        tab.queued.push(path.to_string());
+        self.read_more_files();
+    }
+
+    /// Starts the next reads, keeping at most `READS_AT_ONCE` going.
+    fn read_more_files(&mut self) {
+        loop {
+            let Some(tab) = &mut self.diff else { return };
+            if tab.reading.len() >= READS_AT_ONCE || tab.queued.is_empty() {
+                return;
+            }
+            let path = tab.queued.remove(0);
+            tab.reading.insert(path.clone());
+            self.read_item(&format!("diff:{path}"));
+        }
+    }
+
+    /// Files the human opened in the Diff itself whose patches are not read yet.
+    pub fn read_opened_files(&mut self) {
+        let Some(tab) = &mut self.diff else { return };
+        let mut opened = Vec::new();
+        for file in &tab.files {
+            let Some(at) = tab.state.file_index(&file.path) else {
+                continue;
+            };
+            let read = !tab.state.files()[at].hunks.is_empty();
+            let open = !tab.state.collapsed(at);
+            if open || read {
+                tab.choices.insert(file.path.clone(), open);
+            }
+            if open && !read {
+                opened.push(file.path.clone());
+            }
+        }
+        for path in opened {
+            self.want_file(&path);
         }
     }
 
@@ -391,27 +536,39 @@ impl App {
         }
     }
 
-    /// Draws the diff once every file's patch has come.
-    pub(super) fn diff_part_read(&mut self) {
+    /// A file's patch came: draw it, and read on.
+    pub(super) fn diff_part_read(&mut self, item: &str) {
+        if let (Some(tab), Some(path)) = (&mut self.diff, item.strip_prefix("diff:")) {
+            tab.reading.remove(path);
+        }
+        self.redraw_diff();
+        self.read_more_files();
+    }
+
+    /// Draws every file in the tree's order: those read with their lines, the rest by name.
+    fn redraw_diff(&mut self) {
         let (Some(record), Some(tab)) = (&self.record.open, &mut self.diff) else {
             return;
         };
-        if tab.built {
-            return;
-        }
         let mut drawn = Vec::new();
+        let mut read = HashSet::new();
         for file in &tab.files {
             match record.items.get(&format!("diff:{}", file.path)) {
                 Some(super::Item::Read(bytes)) => {
-                    drawn.extend(parse(&String::from_utf8_lossy(bytes)))
+                    let parsed = parse(&String::from_utf8_lossy(bytes));
+                    if !parsed.is_empty() {
+                        read.insert(file.path.clone());
+                        drawn.extend(parsed);
+                        continue;
+                    }
+                    drawn.push(unread(file));
                 }
-                Some(super::Item::Failed(_)) => {}
-                _ => return,
+                _ => drawn.push(unread(file)),
             }
         }
         tab.state.set_files(drawn);
         tab.built = true;
-        tab.apply_choices();
+        tab.apply_choices(&read);
         let drafts = self
             .record
             .drafts
@@ -419,6 +576,32 @@ impl App {
             .cloned()
             .unwrap_or_default();
         tab.annotate(&drafts);
+    }
+
+    /// Back on the Diff tab: the file read last is brought back into view.
+    pub fn diff_returned(&mut self, tx: &mut Tx) {
+        let Some(tab) = &mut self.diff else { return };
+        let Some(path) = tab.left_at.clone() else {
+            return;
+        };
+        if let Some(index) = tab.state.file_index(&path) {
+            tab.state.scroll_to_file(index, tx);
+        }
+    }
+
+    /// Leaving the Diff tab: which file was being read.
+    pub fn diff_left(&mut self) {
+        if let Some(tab) = &mut self.diff {
+            tab.left_at = tab.active();
+        }
+    }
+
+    /// Opens or closes a folder of the tree.
+    pub fn toggle_folder(&mut self, key: &str) {
+        let Some(tab) = &mut self.diff else { return };
+        if !tab.closed.remove(key) {
+            tab.closed.insert(key.to_string());
+        }
     }
 
     fn diff_drafts_changed(&mut self) {
@@ -475,13 +658,42 @@ impl App {
         // A file ticked viewed closes, as a reviewed file does on a forge.
         let open = !is_viewed(ticks, file, &tab.base);
         tab.choices.insert(path.into(), open);
-        tab.apply_choices();
+        self.choices_changed();
     }
 
     pub fn open_every_file(&mut self, open: bool) {
         if let Some(tab) = &mut self.diff {
             tab.choices = choice_for_every(&tab.files, open);
-            tab.apply_choices();
+        }
+        self.choices_changed();
+    }
+
+    /// The files whose patch is read.
+    fn read_files(&self) -> HashSet<String> {
+        let Some(record) = &self.record.open else {
+            return HashSet::new();
+        };
+        record
+            .items
+            .iter()
+            .filter(|(_, item)| matches!(item, super::Item::Read(_)))
+            .filter_map(|(item, _)| item.strip_prefix("diff:").map(String::from))
+            .collect()
+    }
+
+    /// Draws each file open or closed as chosen, reading those opened before they are read.
+    fn choices_changed(&mut self) {
+        let read = self.read_files();
+        let Some(tab) = &mut self.diff else { return };
+        tab.apply_choices(&read);
+        let wanted: Vec<String> = tab
+            .files
+            .iter()
+            .filter(|f| file_open(f, &tab.choices) && !read.contains(&f.path))
+            .map(|f| f.path.clone())
+            .collect();
+        for path in wanted {
+            self.want_file(&path);
         }
     }
 
@@ -501,6 +713,13 @@ impl App {
             return;
         };
         tab.choices.insert(path.into(), true);
+        let read = self.read_files().contains(path);
+        let Some(tab) = &mut self.diff else { return };
+        if !read {
+            tab.state.scroll_to_file(index, tx);
+            self.want_file(path);
+            return;
+        }
         tab.state.set_collapsed(index, false);
         match line {
             Some(line) => {
@@ -536,16 +755,45 @@ fn tree_rows(app: &App, nodes: &[TreeNode], depth: usize, k: &Kit, out: &mut Vec
                 label,
                 children,
             } => {
+                let open = folder_open(key, &tab.closed, !tab.filter.text.trim().is_empty());
+                let folder = key.clone();
                 out.push(
-                    text(format!("{label}/"))
+                    row()
                         .key(format!("tree-{key}"))
-                        .font(k.ty.small)
-                        .color(k.c.text_faint)
-                        .truncate()
-                        .pl(indent)
-                        .py(2.0),
+                        .role("button")
+                        .label(format!("{label}/"))
+                        .expanded(open)
+                        .focusable(true)
+                        .gap(4.0)
+                        .center_y()
+                        .h(26.0)
+                        .pl(indent - 4.0)
+                        .pr(8.0)
+                        .radius(k.radius.sm)
+                        .hover(k.c.surface_hover)
+                        .on_press(move |app: &mut App| app.toggle_folder(&folder))
+                        .child(
+                            icon(
+                                if open {
+                                    k.glyph.triangle_down
+                                } else {
+                                    k.glyph.triangle_right
+                                },
+                                14.0,
+                            )
+                            .color(k.c.icon_faint),
+                        )
+                        .child(
+                            text(format!("{label}/"))
+                                .font(k.ty.text_xsmall)
+                                .color(k.c.text_muted)
+                                .truncate()
+                                .a11y_hidden(),
+                        ),
                 );
-                tree_rows(app, children, depth + 1, k, out);
+                if open {
+                    tree_rows(app, children, depth + 1, k, out);
+                }
             }
             TreeNode::File { key, label, file } => {
                 let facts = row_facts(file, &drafted);
@@ -569,6 +817,7 @@ fn tree_rows(app: &App, nodes: &[TreeNode], depth: usize, k: &Kit, out: &mut Vec
                 said.push(counts.clone());
                 let path = key.clone();
                 let shown = active.as_deref() == Some(key.as_str());
+                let reading = tab.reading.contains(key) || tab.queued.contains(key);
                 out.push(
                     row()
                         .key(format!("tree-file-{key}"))
@@ -576,23 +825,25 @@ fn tree_rows(app: &App, nodes: &[TreeNode], depth: usize, k: &Kit, out: &mut Vec
                         .label(said.join(", "))
                         .focusable(true)
                         .checked(shown)
-                        .gap(6.0)
+                        .gap(8.0)
                         .center_y()
-                        .pl(indent)
+                        .h(26.0)
+                        .pl(indent + 14.0)
                         .pr(8.0)
-                        .py(3.0)
                         .radius(k.radius.sm)
                         .fill(if shown { k.c.layer_03 } else { k.c.layer_01 })
+                        .hover(k.c.surface_hover)
                         .on_press_tx(move |app: &mut App, tx| app.go_to_file(&path, None, tx))
                         .child(
                             text(facts.status)
-                                .font(k.ty.small_medium)
+                                .font(k.ty.text_xsmall_medium)
                                 .color(mark)
-                                .w(10.0),
+                                .w(10.0)
+                                .a11y_hidden(),
                         )
                         .child(
                             text(label.clone())
-                                .font(k.ty.small)
+                                .font(k.ty.text_xsmall)
                                 .color(if viewed {
                                     k.c.text_faint
                                 } else {
@@ -600,17 +851,26 @@ fn tree_rows(app: &App, nodes: &[TreeNode], depth: usize, k: &Kit, out: &mut Vec
                                 })
                                 .truncate()
                                 .grow(1.0)
-                                .min_w(0.0),
+                                .min_w(0.0)
+                                .a11y_hidden(),
                         )
                         .children((facts.drafts > 0).then(|| {
                             text(format!("✎{}", facts.drafts))
-                                .font(k.ty.small)
+                                .font(k.ty.text_xsmall)
                                 .color(k.c.info.icon)
+                                .a11y_hidden()
                         }))
-                        .children(
-                            viewed.then(|| text("✓").font(k.ty.small).color(k.c.success.icon)),
-                        )
-                        .child(text(counts).font(k.ty.small).color(k.c.text_faint)),
+                        .children(viewed.then(|| {
+                            icon(k.glyph.check_small, 14.0)
+                                .color(k.c.success.icon)
+                                .a11y_hidden()
+                        }))
+                        .child(
+                            text(if reading { "reading…".into() } else { counts })
+                                .font(k.ty.text_xsmall)
+                                .color(k.c.text_faint)
+                                .a11y_hidden(),
+                        ),
                 );
             }
         }
@@ -631,25 +891,17 @@ pub fn view(app: &App, k: &Kit) -> El {
     let Some(record) = &app.record.open else {
         return col();
     };
-    if !tab.built {
-        let read = tab
-            .files
-            .iter()
-            .filter(|f| {
-                record
-                    .items
-                    .get(&format!("diff:{}", f.path))
-                    .is_some_and(|i| !matches!(i, super::Item::Reading))
-            })
-            .count();
-        return text(format!(
-            "Reading the diff: {read} of {} files",
-            tab.files.len()
+    let in_flight = tab.reading.len() + tab.queued.len();
+    let reading = (in_flight > 0).then(|| {
+        text(format!(
+            "Reading {in_flight} {}…",
+            if in_flight == 1 { "file" } else { "files" }
         ))
         .key("diff-reading")
         .role("status")
-        .color(k.c.text_muted);
-    }
+        .font(k.ty.text_xsmall)
+        .color(k.c.text_faint)
+    });
     let ticks = app
         .record
         .viewed
@@ -691,9 +943,10 @@ pub fn view(app: &App, k: &Kit) -> El {
         .child(
             text(viewed_count(&ticks, &tab.files, &tab.base))
                 .key("diff-viewed")
-                .font(k.ty.small)
+                .font(k.ty.text_xsmall)
                 .color(k.c.text_muted),
         )
+        .children(reading)
         .child(rune::spacer())
         .child(every("Expand all", "diff-expand", true))
         .child(every("Collapse all", "diff-collapse", false))
@@ -748,6 +1001,38 @@ pub fn view(app: &App, k: &Kit) -> El {
             .find(|f| f.path == path)
             .is_some_and(|f| ticks.is_some_and(|t| is_viewed(t, f, &tab.base)));
         let key = format!("viewed-{path}");
+        let unread = tab
+            .state
+            .file_index(&path)
+            .is_some_and(|at| tab.state.files()[at].hunks.is_empty())
+            && tab
+                .files
+                .iter()
+                .find(|f| f.path == path)
+                .is_some_and(|f| f.added.is_some_and(|a| a + f.removed.unwrap_or(0) > 0));
+        if unread {
+            let reading = tab.reading.contains(&path) || tab.queued.contains(&path);
+            let show = path.clone();
+            return row()
+                .gap(8.0)
+                .center_y()
+                .child(
+                    text(if reading {
+                        "Reading…"
+                    } else {
+                        "Not read yet"
+                    })
+                    .font(kit.ty.text_xsmall)
+                    .color(kit.c.text_faint),
+                )
+                .children((!reading).then(|| {
+                    Button::new("Show")
+                        .variant(ButtonVariant::Ghost)
+                        .on_press_tx(move |app: &mut App, tx| app.go_to_file(&show, None, tx))
+                        .build(&kit)
+                        .key(format!("show-{path}"))
+                }));
+        }
         Checkbox::new(viewed)
             .label("Viewed")
             .on_toggle(move |app: &mut App| app.toggle_viewed(&path))

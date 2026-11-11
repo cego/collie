@@ -254,9 +254,17 @@ reach is still sent, marked `unsent`, so the host says so. Evidence draws images
 report is confined by Desktop's CSP and opened in the browser from a file through `openLink`,
 never drawn (D2 in ADR-draft-collie-desktop-is-drawn-by-rune); a video opens the same way.
 
+The Flow tab draws each lane as a map of Step cards that wraps to the record's width, with
+`FlowGlyph.vue`'s state marks drawn on a canvas (`board/src/flow/glyph.rs`) and the Step's
+inspector beside it once there is room. A Step's open questions are answered one at a time,
+"Question k of n", each its own `Answer`; its Start asks the Run what it `offers` now and sends
+`Invoke` with the inputs typed, as the board's offers dialog does.
+
 The Diff tab reads each file's patch (`diff:<path>`) and parses it with rune-kit's
-`diff::parse`. A tree beside it filters and goes to a file; a file ticked Viewed collapses and
-stays ticked while its patch is unchanged. It shows unified or split. Selected lines, in the
+`diff::parse`: only an open file's, four at a time, so a big file is read once it is opened; a
+file the Run has not changed again keeps its patch when the diff is read again, and coming back
+to the tab brings back the file read last. A tree beside it folds by folder, filters and goes to a
+file; a file ticked Viewed collapses and stays ticked while its patch is unchanged. It shows unified or split. Selected lines, in the
 diff or the plan, plus a comment become a draft; the drafts are sent as one Delivery, in the text
 `review-comments.ts` composes (ADR-0051), and cleared once the host takes it.
 `board/tests/record.rs` and `board/tests/record_view.rs` drive this against the fake core;

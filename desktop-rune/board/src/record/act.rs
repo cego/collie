@@ -21,6 +21,8 @@ pub struct Sent {
     pub installation: String,
     pub action: ActPayloadAction,
     pub request: String,
+    /// An offer's input, which the generated `Invoke` cannot carry.
+    pub input: Option<serde_json::Value>,
     /// What follows once it is done, on every try.
     pub after: After,
 }
@@ -70,6 +72,7 @@ impl App {
             installation,
             action,
             request: new_request(),
+            input: None,
             after,
         };
         self.act_again(sent);
@@ -87,6 +90,10 @@ impl App {
             request: Some(Some(sent.request.clone())),
             unsent: unsent.map(Some),
         };
+        let mut payload = serde_json::to_value(payload).unwrap_or_default();
+        if let Some(input) = &sent.input {
+            payload["action"]["input"] = input.clone();
+        }
         self.record.sending = true;
         core.request(
             "act",
@@ -131,7 +138,17 @@ impl App {
 
 use super::{Form, Item};
 use crate::flow::actions::{self, Effect};
-use collie_desktop_protocol::generated::{OpenLinkPayload, WithdrawNote, WithdrawNoteTag};
+use collie_desktop_protocol::generated::{
+    Invoke, InvokeInput, InvokeTag, OffersSuccessItem, OpenLinkPayload, WithdrawNote,
+    WithdrawNoteTag,
+};
+
+/// Whether every field an offer needs has words.
+pub fn offer_ready(fields: &[(String, bool, rune::edit::TextEdit)]) -> bool {
+    fields
+        .iter()
+        .all(|(_, required, edit)| !required || !edit.text.trim().is_empty())
+}
 
 impl App {
     /// What pressing a Flow or lane action does: sends it, opens its form, or shows its part.
@@ -167,15 +184,24 @@ impl App {
                     edit: rune::edit::TextEdit::new(initial.unwrap_or_default()),
                 });
             }
-            Effect::Answer(question) => {
+            Effect::Answer(questions) => {
+                let run = questions.first().map(|q| q.run.clone()).unwrap_or_default();
+                let questions = questions
+                    .into_iter()
+                    .map(|q| super::Asked {
+                        id: q.id,
+                        asked: q.text,
+                        options: q.options,
+                        picked: None,
+                        edit: rune::edit::TextEdit::default(),
+                        sent: None,
+                    })
+                    .collect();
                 record.form = Some(Form::Answer {
                     installation,
-                    run: question.run,
-                    id: question.id,
-                    asked: question.text,
-                    options: question.options,
-                    picked: None,
-                    edit: rune::edit::TextEdit::default(),
+                    run,
+                    questions,
+                    at: 0,
                 })
             }
             Effect::Proposal(proposal) => {
@@ -194,14 +220,128 @@ impl App {
                 let machine = machine.unwrap_or_else(|| record.machine.clone());
                 self.open_record(installation, run, machine, None);
             }
-            Effect::Offer { .. } => {
-                // ponytail: an offer's inputs dialog is the board's; until then Start says so.
-                self.record.notice = Some(Notice {
-                    said: "Start this from the board's card.".into(),
+            Effect::Offer { run, offer } => self.open_offer(installation, run, offer),
+        }
+    }
+
+    /// Asks the Run what it offers now, as the board's Start does: its module's decision at
+    /// this moment, not the Step's; one that takes nothing is made at once.
+    fn open_offer(&mut self, installation: String, run: String, chosen: String) {
+        let Some(core) = self.core.clone() else {
+            return;
+        };
+        let Some(record) = &mut self.record.open else {
+            return;
+        };
+        let payload = serde_json::json!({"installation": installation, "runId": run});
+        record.form = Some(Form::Offer {
+            installation,
+            run,
+            chosen,
+            offer: None,
+            fields: Vec::new(),
+        });
+        core.request(
+            "offers",
+            payload,
+            |app: &mut App, read: Result<Vec<OffersSuccessItem>, crate::calls::CallError>| {
+                let Some(record) = &mut app.record.open else {
+                    return;
+                };
+                let Some(Form::Offer {
+                    chosen,
+                    offer,
+                    fields,
+                    ..
+                }) = &mut record.form
+                else {
+                    return;
+                };
+                let failed = |said: String| Notice {
+                    said,
                     failed: true,
                     again: None,
-                });
-            }
+                };
+                let named = match read {
+                    Ok(read) => read
+                        .into_iter()
+                        .find(|o| crate::board::offer_key(o) == *chosen || o.id == *chosen),
+                    Err(why) => {
+                        record.form = None;
+                        app.record.notice = Some(failed(why.0));
+                        return;
+                    }
+                };
+                let Some(named) = named else {
+                    record.form = None;
+                    app.record.notice = Some(failed("The Run no longer offers this.".into()));
+                    return;
+                };
+                *fields = crate::board::offer_fields(named.arguments.as_ref())
+                    .into_iter()
+                    .map(|(name, required)| (name, required, rune::edit::TextEdit::default()))
+                    .collect();
+                let at_once = fields.is_empty() && named.unavailable.is_none();
+                *offer = Some(named);
+                if at_once {
+                    app.make_offer_in_record();
+                }
+            },
+        );
+    }
+
+    /// Makes the picked offer with what was typed, once every field it needs has words.
+    pub fn make_offer_in_record(&mut self) {
+        let Some(record) = &mut self.record.open else {
+            return;
+        };
+        let Some(Form::Offer {
+            offer: Some(offer),
+            fields,
+            ..
+        }) = &record.form
+        else {
+            return;
+        };
+        if offer.unavailable.is_some() || !offer_ready(fields) {
+            return;
+        }
+        let Some(Form::Offer {
+            installation,
+            run,
+            offer: Some(offer),
+            fields,
+            ..
+        }) = record.form.take()
+        else {
+            return;
+        };
+        let typed: Vec<(String, String)> = fields
+            .into_iter()
+            .map(|(name, _, edit)| (name, edit.text.clone()))
+            .collect();
+        let sent = Sent {
+            installation,
+            action: ActPayloadAction::Invoke(Invoke {
+                tag: InvokeTag::Invoke,
+                run_id: offer.run.clone().unwrap_or(run),
+                offer: offer.id.clone(),
+                input: InvokeInput {},
+            }),
+            request: new_request(),
+            input: Some(crate::board::offer_input(offer.arguments.as_ref(), &typed)),
+            after: After::Nothing,
+        };
+        self.act_again(sent);
+    }
+
+    /// Shows the answer form's question `at`.
+    pub fn show_question(&mut self, to: usize) {
+        if let Some(Form::Answer { questions, at, .. }) =
+            self.record.open.as_mut().and_then(|r| r.form.as_mut())
+            && to < questions.len()
+        {
+            *at = to;
         }
     }
 
@@ -291,18 +431,42 @@ impl App {
             Form::Answer {
                 installation,
                 run,
-                id,
-                picked,
-                edit,
-                ..
+                mut questions,
+                at,
             } => {
-                let typed = Some(edit.text.trim().to_string()).filter(|t| !t.is_empty());
-                let said = value.or(typed).or(picked).unwrap_or_default();
-                self.act_in_record(
-                    installation,
-                    actions::answer(&run, &id, &said),
-                    After::Nothing,
-                );
+                let Some(one) = questions.get_mut(at) else {
+                    return;
+                };
+                let typed = Some(one.edit.text.trim().to_string()).filter(|t| !t.is_empty());
+                let Some(said) = value.or(typed).or(one.picked.clone()) else {
+                    record.form = Some(Form::Answer {
+                        installation,
+                        run,
+                        questions,
+                        at,
+                    });
+                    return;
+                };
+                let action = actions::answer(&run, &one.id, &said);
+                one.sent = Some(said);
+                // Each question is its own answer: the form stays on the next one still open.
+                let n = questions.len();
+                let next = (1..n)
+                    .map(|step| (at + step) % n)
+                    .find(|i| questions[*i].sent.is_none());
+                if let Some(next) = next {
+                    record.form = Some(Form::Answer {
+                        installation: installation.clone(),
+                        run,
+                        questions,
+                        at: next,
+                    });
+                }
+                self.act_in_record(installation, action, After::Nothing);
+            }
+            form @ Form::Offer { .. } => {
+                record.form = Some(form);
+                self.make_offer_in_record();
             }
             Form::Proposal {
                 installation,
