@@ -117,6 +117,7 @@ Name=Collie
 Exec=collie-desktop
 Icon=collie
 Categories=Development;
+StartupWMClass=${IDENTIFIER}
 `;
 
 const entitlementsPlist = `<?xml version="1.0" encoding="UTF-8"?>

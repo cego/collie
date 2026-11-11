@@ -237,6 +237,8 @@ fn main() {
     let core = Core::start_with(&env);
     let client = core.client.clone();
 
+    // The desktop entry's name, so the window is shown as its launcher's, never stable Desktop's.
+    rune::set_app_id("dk.cego.collie.desktop.rune");
     let app = App::new(AppSpec::new(
         "Collie (Rune spike)",
         (1280.0, 900.0),

@@ -133,10 +133,11 @@ jobs:
         working-directory: desktop-rune
       - run: cargo clippy --workspace --all-targets -- -D warnings
         working-directory: desktop-rune
-      - run: cargo test --workspace
-        working-directory: desktop-rune
+      # protocol/tests/core.rs starts Desktop's main process under Bun.
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4"
       - run: bun install --frozen-lockfile
+      - run: cargo test --workspace
+        working-directory: desktop-rune
       - run: bun test test/rune-contract.test.ts test/rune-types.test.ts test/rune-shell.test.ts

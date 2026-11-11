@@ -2120,6 +2120,8 @@ machine's shared SSH connection, so the host is started with the environment `co
 so nothing its model does is ever recorded as yours. For a herdr machine on a session other than `default`, the host is handed that
 session's socket. Desktop never starts, signals or connects to a host by any other route.
 `COLLIE_DESKTOP_COLLIE` replaces how `collie` is run here, as a JSON array.
+`COLLIE_DESKTOP_STATE_HOME` moves where Desktop keeps its own state from `$XDG_STATE_HOME`;
+what Desktop starts, `collie` and herdr among it, still gets your `XDG_STATE_HOME`.
 
 ### The Flock chat
 

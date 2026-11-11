@@ -256,8 +256,12 @@ const openSlack = Effect.gen(function* () {
 /** How long herdr's question waits on the human before it takes herdr's own default. */
 const QUESTION_LIMIT = "10 minutes";
 
-/** Where Desktop keeps what is its own on this computer, the Flock chat's session among it. */
-const StateDir = Config.String("XDG_STATE_HOME").pipe(
+/**
+ * Where Desktop keeps what is its own on this computer, the Flock chat's session among it.
+ * COLLIE_DESKTOP_STATE_HOME moves only Desktop's own; what it starts keeps XDG_STATE_HOME.
+ */
+const StateDir = Config.String("COLLIE_DESKTOP_STATE_HOME").pipe(
+  Config.orElse(() => Config.String("XDG_STATE_HOME")),
   Config.orElse(() => Config.String("HOME").pipe(Config.map((home) => `${home}/.local/state`))),
 );
 

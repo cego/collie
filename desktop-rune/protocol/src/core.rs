@@ -52,7 +52,8 @@ impl Core {
         };
         let mut child = command
             .envs(env.iter().copied())
-            .env("XDG_STATE_HOME", state.join("state"))
+            // Not XDG_STATE_HOME: what the core starts, herdr's machine list among it, reads that.
+            .env("COLLIE_DESKTOP_STATE_HOME", state.join("state"))
             .env("COLLIE_RUNE_USER_DATA", state.join("data"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

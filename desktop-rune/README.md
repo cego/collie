@@ -53,7 +53,9 @@ cargo run -p collie-desktop-board --example read-diff -- <installation> <run>
 
 Run `bun install` at the root first, since the core is Desktop's source run by `bun`
 (`COLLIE_RUNE_BUN` names another). The core keeps its state under
-`$XDG_STATE_HOME/collie-desktop-rune-spike/`, apart from a Desktop running beside it. With no GPU,
+`$XDG_STATE_HOME/collie-desktop-rune-spike/`, apart from a Desktop running beside it, through
+`COLLIE_DESKTOP_STATE_HOME`: what the core starts keeps your `XDG_STATE_HOME`, since herdr reads
+its paired Machines from there. With no GPU,
 point Vulkan at lavapipe: `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`. On
 Linux, building needs `libxkbcommon-dev` and `libwayland-dev`, and lavapipe is in
 `mesa-vulkan-drivers`. libghostty-vt needs Zig 0.16.0 (`zig` on `PATH`, or `ZIG` naming it)
@@ -336,6 +338,9 @@ Linux and macOS and keeps the artefacts. No release publishes them.
 | -------- | ------------------------------------------------------------------------------------------------ |
 | Linux    | `collie-desktop/{collie-desktop, collie-core, collie.png, collie-desktop.desktop, version.json}` |
 | macOS    | `Collie.app/Contents/{Info.plist, MacOS/collie-desktop, MacOS/collie-core, Resources/…}`         |
+
+On Linux the window's Wayland `app_id` (X11 `WM_CLASS`) is `dk.cego.collie.desktop.rune`, which the
+entry's `StartupWMClass` names, so a desktop shows the window as its own launcher's.
 
 The update archive is `rune-stable-<os>-<arch>-collie-desktop[.app].tar.zst`, beside
 `rune-stable-<os>-<arch>-update.json`. The `rune-` prefix and the identifier
