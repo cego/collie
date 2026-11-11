@@ -813,7 +813,8 @@ fn a_stopped_subscription_is_said_and_taken_again_on_retry() {
     );
     window.tap("chat-retry-now");
     assert_eq!(window.asked("settings").len(), 2);
-    assert!(!window.has("chat-trouble"));
+    window.push("settings", json!({}));
+    assert!(!window.has("chat-trouble"), "said until it answers");
 }
 
 fn states(node: &Value) -> Vec<String> {
@@ -1037,7 +1038,8 @@ fn the_reconnect_notice_counts_down_and_takes_the_subscriptions_again_on_its_own
     });
     window.settle();
     assert_eq!(window.asked("settings").len(), 2, "taken again");
-    assert!(!window.has("chat-trouble"));
+    window.push("settings", json!({}));
+    assert!(!window.has("chat-trouble"), "said until it answers");
 }
 
 #[test]
@@ -1234,11 +1236,12 @@ fn the_chats_pickers_open_at_their_trigger_in_its_own_window() {
         )
     }));
     let streams = core.core.clone();
-    alone.stream = Some(Box::new(move |tag, payload, mut each| {
-        streams.stream(
+    alone.stream = Some(Box::new(move |tag, payload, mut each, ended| {
+        streams.stream_until(
             tag,
             payload,
             move |a: &mut Alone, value: Result<Value, CallError>| each(a, value.map_err(|e| e.0)),
+            ended,
         )
     }));
     alone.chat.pop = Some(Box::new(|_| {}));
@@ -1313,4 +1316,118 @@ fn p2_a_conversation_changed_under_a_stopped_reply_is_read_again() {
         2,
         "read once it is stopped"
     );
+}
+
+#[test]
+fn p2_a_reply_whose_stream_ends_unsaid_is_no_longer_under_way() {
+    let mut window = Window::reading(json!([]));
+    window.type_in("What needs me?");
+    window.tap("send");
+    assert!(window.has("stop"));
+    window.core.fake.end("say");
+    window.settle();
+    assert!(
+        !window.has("stop"),
+        "the reply is over: {:?}",
+        window.keys()
+    );
+    assert!(window.has("send"));
+}
+
+#[test]
+fn p2_a_failed_subscription_is_retaken_alone_and_said_once_until_it_answers() {
+    let mut window = Window::reading(json!([]));
+    window.core.fake.push(
+        "flockSettings",
+        Err(CallError(
+            "The Flock's settings could not be read: no Machine is connected".into(),
+        )),
+    );
+    window.settle();
+    let said = window.said("chat-trouble");
+    assert!(said.contains("no Machine is connected"), "{said}");
+    window.rt.update(|board, _| {
+        collie_desktop_chat::chat::tick(board, f64::MAX);
+    });
+    window.settle();
+    assert_eq!(window.asked("flockSettings").len(), 2, "it is taken again");
+    assert_eq!(
+        window.asked("settings").len(),
+        1,
+        "the others are left as they are"
+    );
+    assert!(
+        window.has("chat-trouble"),
+        "still said while it is taken again, not cleared and said again"
+    );
+    window.core.fake.push(
+        "flockSettings",
+        Ok(json!({ "settings": {}, "readable": true })),
+    );
+    window.settle();
+    assert!(!window.has("chat-trouble"), "it answered");
+}
+
+#[test]
+fn p2_a_subscription_the_core_ends_is_retaken_quietly() {
+    let mut window = Window::reading(json!([]));
+    window.core.fake.end("desktopTurns");
+    window.settle();
+    assert_eq!(window.asked("desktopTurns").len(), 2, "taken again at once");
+    assert!(!window.has("chat-trouble"), "a renewal is no trouble");
+    window.core.fake.end("desktopTurns");
+    window.settle();
+    assert_eq!(window.asked("desktopTurns").len(), 2, "the next waits");
+    assert!(!window.has("chat-trouble"));
+    window.rt.update(|board, _| {
+        collie_desktop_chat::chat::tick(board, f64::MAX);
+    });
+    window.settle();
+    assert_eq!(window.asked("desktopTurns").len(), 3);
+}
+
+#[test]
+fn p2_the_chat_logs_a_failed_turn_a_refused_choice_and_its_subscriptions_never_their_words() {
+    let dir = std::env::temp_dir().join(format!("collie-chat-log-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    collie_desktop_board::log::here(&dir, collie_desktop_board::log::LOG_BYTES);
+    let mut window = Window::reading(json!([]));
+    window.push("settings", json!({}));
+    window.push("chatChoices", choices());
+    window.type_in("my private question");
+    window.tap("send");
+    window.played("say-error");
+    window.tap("chat-harness");
+    window.tap("chat-harness-menu-item1");
+    window.refuse("setSettings", "Codex is not signed in.");
+    window.core.fake.push(
+        "desktopTurns",
+        Err(CallError("the Desktop core is gone".into())),
+    );
+    window.settle();
+    window.rt.update(|board, _| {
+        collie_desktop_chat::chat::tick(board, f64::MAX);
+    });
+    window.push("desktopTurns", json!("ended"));
+    let logged = std::fs::read_to_string(dir.join("desktop.log")).unwrap_or_default();
+    let chat: Vec<(String, String)> = logged
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .filter(|l| l["area"] == "chat")
+        .map(|l| {
+            (
+                l["what"].as_str().unwrap().into(),
+                l["rpc"].as_str().unwrap_or("").into(),
+            )
+        })
+        .collect();
+    let has = |what: &str, rpc: &str| chat.iter().any(|(w, r)| w == what && r == rpc);
+    assert!(has("turn failed", ""), "{logged}");
+    assert!(has("choice refused", "setSettings"), "{logged}");
+    assert!(has("subscription failed", "desktopTurns"), "{logged}");
+    assert!(has("resubscribe scheduled", "desktopTurns"), "{logged}");
+    assert!(has("resubscribe", "desktopTurns"), "{logged}");
+    assert!(has("subscription back", "desktopTurns"), "{logged}");
+    assert!(!logged.contains("private"), "{logged}");
 }

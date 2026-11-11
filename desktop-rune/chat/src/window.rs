@@ -2,13 +2,13 @@
 //! reaches the core through what the app hands it, and tells the board's window when it closes.
 
 use crate::chat::{self, Chat};
-use crate::host::{Done, Each, Host, Stop};
+use crate::host::{Done, Each, Ended, Host, Stop};
 use collie_desktop_protocol::generated::About;
 use rune::{Cx, El, Tx};
 use serde_json::Value;
 
 pub type Request = Box<dyn Fn(&str, Value, Done<Alone>)>;
-pub type Streams = Box<dyn Fn(&str, Value, Each<Alone>) -> Stop>;
+pub type Streams = Box<dyn Fn(&str, Value, Each<Alone>, Ended<Alone>) -> Stop>;
 
 #[derive(Default)]
 pub struct Alone {
@@ -36,10 +36,16 @@ impl Host for Alone {
         }
     }
 
-    fn stream(&self, tag: &str, payload: Value, each: Each<Self>) -> Option<Stop> {
+    fn stream(
+        &self,
+        tag: &str,
+        payload: Value,
+        each: Each<Self>,
+        ended: Ended<Self>,
+    ) -> Option<Stop> {
         self.stream
             .as_ref()
-            .map(|stream| stream(tag, payload, each))
+            .map(|stream| stream(tag, payload, each, ended))
     }
 
     fn open_about(&mut self, about: &About) -> Option<String> {

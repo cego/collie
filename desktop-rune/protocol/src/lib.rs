@@ -3,6 +3,7 @@
 
 pub mod client;
 pub mod core;
+pub mod log;
 /// Included, not a module file, so `cargo fmt` leaves the generator's output as it wrote it.
 #[allow(clippy::large_enum_variant)]
 pub mod generated {

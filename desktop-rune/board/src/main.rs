@@ -1,7 +1,7 @@
 //! The spike app: starts Desktop's main process as its core, speaks `DesktopRpcs` to it over
 //! stdio, draws the board `flock` streams, and a pressed card's pane on the `terminal` stream.
 
-use collie_desktop_board::calls::{Answer, CallError, Calls, Each, Live, Stop};
+use collie_desktop_board::calls::{Answer, CallError, Calls, Each, Ended, Live, Stop};
 use collie_desktop_board::notify::deliver;
 use collie_desktop_board::timing::Mark;
 use collie_desktop_board::{App, frame_drawn, view};
@@ -104,11 +104,12 @@ fn chat_window(app: &mut rune::App<App>, handle: &AppHandle<App>, client: &Clien
             move |a: &mut Alone, answer: Result<Value, CallError>| done(a, answer.map_err(|e| e.0)),
         )
     }));
-    alone.stream = Some(Box::new(move |tag, payload, mut each| {
-        core.stream(
+    alone.stream = Some(Box::new(move |tag, payload, mut each, ended| {
+        core.stream_until(
             tag,
             payload,
             move |a: &mut Alone, value: Result<Value, CallError>| each(a, value.map_err(|e| e.0)),
+            ended,
         )
     }));
     let main = handle.clone();
@@ -295,9 +296,9 @@ impl Calls for FirstLive {
         self.calls.request(tag, payload, answer)
     }
 
-    fn stream(&self, tag: &str, payload: Value, mut each: Each) -> Stop {
+    fn stream(&self, tag: &str, payload: Value, mut each: Each, ended: Ended) -> Stop {
         if tag != "flock" {
-            return self.calls.stream(tag, payload, each);
+            return self.calls.stream(tag, payload, each, ended);
         }
         let live = self.live.lock().unwrap().take();
         self.calls.stream(
@@ -314,11 +315,13 @@ impl Calls for FirstLive {
                 }
                 each(item)
             }),
+            ended,
         )
     }
 }
 
 fn main() {
+    collie_desktop_protocol::log::start();
     let staging = update_at_launch();
     let env: Vec<(&str, &std::ffi::OsStr)> = staging
         .iter()

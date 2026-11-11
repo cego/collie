@@ -2,6 +2,7 @@
 //! view's thread and applied to the app on it.
 
 use collie_desktop_protocol::client::{Client, RpcError};
+use collie_desktop_protocol::log;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
@@ -45,11 +46,14 @@ pub type Answer = Box<dyn FnOnce(Result<Value, Failure>) + Send>;
 pub type Each = Box<dyn FnMut(Result<Value, Failure>) + Send>;
 /// Ends a stream; its subscriber hears nothing after.
 pub type Stop = Box<dyn FnOnce() + Send>;
+/// Runs once where a stream ends without an error, or the core interrupts it; never after
+/// its Stop.
+pub type Ended = Box<dyn FnOnce() + Send>;
 
 /// The core as the view reaches it: the live one over stdio, or a test's fake.
 pub trait Calls: Send + Sync {
     fn request(&self, tag: &str, payload: Value, answer: Answer);
-    fn stream(&self, tag: &str, payload: Value, each: Each) -> Stop;
+    fn stream(&self, tag: &str, payload: Value, each: Each, ended: Ended) -> Stop;
 }
 
 /// Hands a change to the app to the view's thread.
@@ -104,11 +108,20 @@ impl<S: 'static> Core<S> {
     ) {
         let post = self.post.clone();
         let payload = serde_json::to_value(payload).unwrap_or(Value::Null);
+        let rpc = tag.to_string();
         self.calls.request(
             tag,
             payload,
             Box::new(move |answer| {
                 let answer = typed(answer);
+                if let Err(failed) = &answer {
+                    let what = if failed.refused {
+                        "request refused"
+                    } else {
+                        "request failed"
+                    };
+                    log::event("calls", what, Some(&failed.said), &[("rpc", &rpc)]);
+                }
                 post(Box::new(move |s| done(s, answer)));
             }),
         );
@@ -122,16 +135,41 @@ impl<S: 'static> Core<S> {
         payload: P,
         each: impl FnMut(&mut S, Result<A, CallError>) + Send + 'static,
     ) -> Stop {
+        self.stream_until(tag, payload, each, |_| {})
+    }
+
+    /// `stream`, with `ended` run on the view's thread where the stream ends without an error
+    /// or the core interrupts it: not after its Stop.
+    pub fn stream_until<P: Serialize, A: DeserializeOwned + Send + 'static>(
+        &self,
+        tag: &str,
+        payload: P,
+        each: impl FnMut(&mut S, Result<A, CallError>) + Send + 'static,
+        ended: impl FnOnce(&mut S) + Send + 'static,
+    ) -> Stop {
         let post = self.post.clone();
         let each = Arc::new(Mutex::new(each));
         let payload = serde_json::to_value(payload).unwrap_or(Value::Null);
+        let (rpc, ends, posts) = (tag.to_string(), tag.to_string(), self.post.clone());
         self.calls.stream(
             tag,
             payload,
             Box::new(move |value| {
+                if let Err(failed) = &value {
+                    log::event(
+                        "calls",
+                        "stream failed",
+                        Some(&failed.said),
+                        &[("rpc", &rpc)],
+                    );
+                }
                 let value = typed(value).map_err(CallError::from);
                 let each = each.clone();
                 post(Box::new(move |s| (each.lock().unwrap())(s, value)));
+            }),
+            Box::new(move || {
+                log::event("calls", "stream ended", None, &[("rpc", &ends)]);
+                posts(Box::new(move |s| ended(s)));
             }),
         )
     }
@@ -169,15 +207,31 @@ impl Calls for Live {
         });
     }
 
-    fn stream(&self, tag: &str, payload: Value, mut each: Each) -> Stop {
+    fn stream(&self, tag: &str, payload: Value, mut each: Each, ended: Ended) -> Stop {
         let values = self.0.stream::<_, Value, Value>(tag, payload);
         let release = values.release();
+        let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stops = stopped.clone();
+        let is_stopped = move || stopped.load(std::sync::atomic::Ordering::SeqCst);
         std::thread::spawn(move || {
             for value in values {
-                each(value.map_err(said));
+                if is_stopped() {
+                    return;
+                }
+                match value {
+                    // The core cut it off: it ended, as one that ends without an error.
+                    Err(RpcError::Interrupted) => break,
+                    value => each(value.map_err(said)),
+                }
+            }
+            if !is_stopped() {
+                ended();
             }
         });
-        Box::new(move || release.interrupt())
+        Box::new(move || {
+            stops.store(true, std::sync::atomic::Ordering::SeqCst);
+            release.interrupt()
+        })
     }
 }
 
@@ -185,7 +239,7 @@ impl Calls for Live {
 pub mod testing {
     use super::*;
 
-    type Subscriber = (String, Arc<Mutex<Option<Each>>>);
+    type Subscriber = (String, Arc<Mutex<Option<(Each, Ended)>>>);
 
     #[derive(Default)]
     pub struct Fake {
@@ -242,8 +296,23 @@ pub mod testing {
                 .iter()
                 .filter(|(t, _)| t == tag)
             {
-                if let Some(each) = each.lock().unwrap().as_mut() {
+                if let Some((each, _)) = each.lock().unwrap().as_mut() {
                     each(value.clone().map_err(Failure::from));
+                }
+            }
+        }
+
+        /// Ends every open stream of `tag` without an error, as the core ends one.
+        pub fn end(&self, tag: &str) {
+            for (_, each) in self
+                .streams
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(t, _)| t == tag)
+            {
+                if let Some((_, ended)) = each.lock().unwrap().take() {
+                    ended();
                 }
             }
         }
@@ -273,9 +342,9 @@ pub mod testing {
             }
         }
 
-        fn stream(&self, tag: &str, payload: Value, each: Each) -> Stop {
+        fn stream(&self, tag: &str, payload: Value, each: Each, ended: Ended) -> Stop {
             self.asked.lock().unwrap().push((tag.into(), payload));
-            let each = Arc::new(Mutex::new(Some(each)));
+            let each = Arc::new(Mutex::new(Some((each, ended))));
             self.streams
                 .lock()
                 .unwrap()
