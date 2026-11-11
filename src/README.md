@@ -68,6 +68,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `outcomes.ts`          | The report's measures: rounds, dispositions, steering, verifications, parks, context — each with its Runs                   |
 | `issue-privacy.ts`     | The bounded checkout walk and directory aliases inspected before publishing issue text                                      |
 | `cards.ts`             | One slice of work as a human wants it handed over, with its readiness and significance                                      |
+| `recovery.ts`          | Pushed branch movement and completed reviews bound to requirements, Intent, target, and revision                            |
 | `disposition.ts`       | What became of a Run's work, recorded beside its status and never over it                                                   |
 | `conversation.ts`      | What the human and Collie have said about this Herd, redacted and reference-checked                                         |
 | `redact.ts`            | Credential-shaped values replaced by their kind, the one list chat, cards and every front door use                          |

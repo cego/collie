@@ -62,6 +62,7 @@ import { flowInputsFor, taskFlowFor } from "./flow-read";
 import { machineName } from "./peers";
 import { deliveriesOf, SENT_STATES, toldIn } from "./steering";
 import { readCards } from "./cards";
+import { branchMovement } from "./recovery";
 import { owedLocally } from "./check-proof";
 import {
   Answered,
@@ -1519,6 +1520,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
               )
             : null;
         const open = openReports(yield* readDrift(leader.dir).pipe(Effect.orElseSucceed(() => [])));
+        const movement = yield* branchMovement(leader);
         const task = leader.task === null ? null : (tasks.get(leader.task) ?? null);
         const { name, project } = namesOf(task?.label ?? "", leader);
         const started = Arr.filter(
@@ -1901,9 +1903,10 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           // The leading Run's own open drift: what an earlier Run of this Task drifted from
           // was judged against a tree that has moved since.
           drift:
-            open.length === 0
+            movement ??
+            (open.length === 0
               ? null
-              : `${open[0]!.constraint}${open.length > 1 ? ` (and ${open.length - 1} more)` : ""}`,
+              : `${open[0]!.constraint}${open.length > 1 ? ` (and ${open.length - 1} more)` : ""}`),
           held: held === undefined ? null : heldLine(null),
           heldBy: held === undefined ? null : yield* holderOf(held),
           decision,
@@ -1968,6 +1971,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           });
           return keep(shown, Math.min(now + GOING_EVERY_MS, ...expires));
         }
+        if (leader.branch !== null) return keep(shown, now + 60_000);
         const leaves = last + FINISHED_FOR_MS + 1;
         const retimed = (now: number): Retimed | null =>
           now >= leaves

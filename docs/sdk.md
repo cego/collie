@@ -168,6 +168,16 @@ the file that asked.
 What the host lends is `Run`, `Host`, `Agents`, `Children`, the workflow engine, the file
 system, paths and the process spawner. Everything else is yours.
 
+`Host.reviewScope(run, source, outcome, risks)` captures the requirements, Intent, target head,
+and checkout revision before a review. `Host.recordReview(run, scope, base, review)` records
+the completed review only while that scope still holds. Journal the scope before launching
+the reviewers, and journal the association after collection, in separate Activities per pass.
+Replaying a review then retains its original scope and cannot supersede a newer judgement.
+`Host.recovery(run, parent, source)`
+takes the pushed branch by a guarded fast-forward and reads durable implementation and
+review facts. The module chooses its entry from those facts; the host doesn't select a
+workflow by name. Missing associations never authorise skipping review.
+
 ### Two projects, two implementations
 
 A shared contract with more than one implementation is an ordinary service with more than
@@ -1729,6 +1739,10 @@ export default defineWorkflow({
   checkout. A
   follow-up declares no `arguments`: it takes whatever inputs its workflow has that
   `inputs` does not fill, and a front door asks for those.
+  An optional `entry(facts)` names its entry in the offer's title. `facts.recovery` holds
+  implementation and review facts where the module declares that entry and hints a work
+  source. A filled work source remains the destination of a text follow-up's new words;
+  changing those words doesn't inherit the original source's review.
 
 Both are what a finished Run offers to do next, and both front doors make the same offer:
 `collie run actions <run>` lists them and `collie run action <run> <id> --input k=v` does
@@ -1887,5 +1901,8 @@ the host sends the requester the status, summary or failure reason and
 `collie run show <id>` for the full Output. The Delivery uses the agent's sender line and
 a request id derived from the started Run. A restart reuses that Delivery. Delivery uses
 `boundary`, supported by all harnesses. A gone agent, an unpaired Machine or a Machine
-that does not answer within fifteen seconds leaves an undelivered report with its reason;
-there is no retry queue. `run show` and the drawer show the requester and report.
+that does not answer within fifteen seconds leaves an undelivered report with its reason.
+A report that did not reach its Machine is sent again, with the same request id and text,
+each time that Machine's link comes back, so the agent is told once; a gone agent or an
+unpaired Machine is final. The report's `tries` keep the earlier tries. `run show` and the
+drawer show the requester and report.

@@ -17,6 +17,7 @@
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as Num from "effect/Number";
 import * as Arr from "effect/Array";
+import { branchMovement } from "./recovery";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
 import { pipe } from "effect/Function";
@@ -417,6 +418,7 @@ export class HostVersionMismatch extends Data.TaggedError("HostVersionMismatch")
 }> {}
 
 const RunShown = Schema.Struct({
+  branchProgress: Schema.optionalKey(Schema.NullOr(Schema.String)),
   view: RunView,
   agents: Schema.Array(RunAgent),
   disposition: Schema.NullOr(Disposition),
@@ -901,6 +903,12 @@ const handlers = (
             const hosted = yield* Effect.context<HostServices>();
             return {
               view,
+              branchProgress: yield* branchMovement({
+                cwd: view.cwd,
+                dir: runDir(dir, runId),
+                branch: view.branch,
+                state: view.status.status === "complete" ? "succeeded" : view.status.status,
+              }),
               agents: yield* runAgents(runId),
               disposition: latest(
                 yield* readDispositions(runDir(dir, runId)).pipe(Effect.orElseSucceed(() => [])),
@@ -3612,7 +3620,10 @@ const frontDoorHandlers = (
                   return yield* new HostRefused({
                     reason: `${runId} declares no follow-up, so there is nothing to carry on with`,
                   });
-                const into = followUpField(offered.arguments);
+                const into =
+                  offered.textField === undefined
+                    ? followUpField(offered.arguments)
+                    : { field: offered.textField };
                 if ("refused" in into)
                   return yield* new HostRefused({
                     reason: `${runId}'s follow-up "${offered.id}" ${into.refused}`,
@@ -4161,6 +4172,8 @@ const own = (
     const declared: Declared = new Map();
     const stamp = yield* (yield* SecureRandom.SecureRandom).uuidV4();
     const toasted = yield* PubSub.unbounded<Toasted>();
+    // Kept until the reports layer takes them, so a link up before it starts is not missed.
+    const linked = yield* Queue.unbounded<Peer>();
     const peers = yield* startPeers({
       dir,
       userDir: env.userDir,
@@ -4187,6 +4200,7 @@ const own = (
         Effect.map((backend) => backend === "herdr"),
         Effect.provideContext(bun),
       ),
+      linked: (peer) => Queue.offer(linked, peer).pipe(Effect.asVoid),
       tell: (peer) =>
         Effect.scoped(
           connectPeer(dir, peer.name, { as: "host", client: machineName(), stamp }).pipe(
@@ -4212,7 +4226,9 @@ const own = (
             Layer.effectDiscard(
               Effect.gen(function* () {
                 const { reportsLayer } = yield* Effect.promise(() => import("./reports"));
-                yield* Layer.build(reportsLayer({ env, installation, stamp, crashAt }));
+                yield* Layer.build(
+                  reportsLayer({ env, installation, stamp, crashAt, linked, live: peers.live }),
+                );
               }),
             ),
           ).pipe(

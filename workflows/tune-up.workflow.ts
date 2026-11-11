@@ -32,6 +32,7 @@ import {
   renderApproved,
   renderEvidence,
   step,
+  stepFailed,
   type Integration,
   type Measurement,
   type SynthesisReport,
@@ -51,6 +52,8 @@ import {
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as Activity from "effect/workflow/Activity";
+import * as Workflow from "effect/workflow/Workflow";
+import { WorkflowInstance } from "effect/workflow/WorkflowEngine";
 import markdown from "./tune-up.md" with { type: "text" };
 import { IMPLEMENTER, REVIEWER, ROUNDS, rally, reviewPass, reviewRound } from "./reviewing.ts";
 import { Tree, deliver, gate, mergeRequest } from "./delivering.ts";
@@ -1159,6 +1162,19 @@ export default defineWorkflow({
         `budget: cycles ${budget.cycles}, threshold ${budget.threshold}%, tolerance ${budget.tolerance}%, samples ${budget.samples}, wall time ${budget.wall_time || "none"}, external ${budget.external}`,
       );
       const told = { inputs: { focus: input.focus ?? "" }, run: { dir: place.dir, id: runId } };
+      const measureOrPark = (asked: Parameters<typeof host.measure>[0]) =>
+        host.measure(asked).pipe(
+          Effect.catch((failed) =>
+            Effect.gen(function* () {
+              const reason = `${failed.reason}. Correct it, then resume ${runId}.`;
+              yield* host.record(runId, reason);
+              yield* stepFailed(reason);
+              yield* host.parked(runId, reason);
+              return yield* Workflow.suspend(yield* WorkflowInstance);
+            }),
+          ),
+          Effect.tap(() => host.parked(runId, null)),
+        );
 
       const from = input.from ?? "";
       const agents = yield* Agents;
@@ -1322,29 +1338,31 @@ export default defineWorkflow({
       let counted = written;
       let ending: string | null = null;
       let calibrated = false;
-      for (let repairs = 0; ;) {
-        const measured = yield* calibrate(
+      for (let repairs = 0, attempt = 1; ; attempt++) {
+        const result = yield* calibrate(
           Activity.make({
-            name: `calibration.${calibrations.length + 1}`,
-            success: MeasurementSchema,
+            name: `calibration.${attempt}`,
+            success: Schema.Union([MeasurementSchema, Schema.Struct({ refused: text })]),
             error: WorkflowError,
             execute: Effect.map(
               host.measure({ runId, base, cwd, plan, reason: reasons.at(-1), pass: "calibration" }),
               (answered) => answered.measurement,
-            ),
+            ).pipe(Effect.catch((failed) => Effect.succeed({ refused: failed.reason }))),
           }),
         );
-        calibrations.push(measured);
+        const measured = "refused" in result ? null : result;
+        if (measured !== null) calibrations.push(measured);
         const itself =
-          measured.candidate.harness_applied === undefined
+          measured === null ||
+          (measured.candidate.harness_applied === undefined
             ? measured.base.content === measured.candidate.content
-            : measured.candidate.head_sha === measured.base.commit;
-        if (measured.result._tag === "Judged" && !itself)
+            : measured.candidate.head_sha === measured.base.commit);
+        if (measured !== null && measured.result._tag === "Judged" && !itself)
           return yield* new WorkflowError({
             reason: `calibration ${measured.id} did not measure the base against itself: ${cwd} at ${measured.candidate.head_sha} holds more than the harness commits ${Arr.join(plan.harness.commits, ", ")}`,
           });
-        const read = calibrationOf(measured);
-        if (read._tag === "Calibrated") {
+        const read = measured === null ? null : calibrationOf(measured);
+        if (measured !== null && read?._tag === "Calibrated") {
           const primary =
             Option.getOrUndefined(Arr.findFirst(plan.metrics, (one) => one.role === "primary"))
               ?.name ?? "";
@@ -1352,18 +1370,21 @@ export default defineWorkflow({
           calibrated = true;
           break;
         }
-        const kind = read._tag === "HarnessBroken" ? "harness broken" : "proof unavailable";
+        const kind =
+          read === null || read._tag === "HarnessBroken" ? "harness broken" : "proof unavailable";
         const why =
-          read._tag === "ProofUnavailable"
-            ? Arr.join(
-                Arr.map(read.lost, (one) => one.why),
-                "; ",
-              )
-            : measured.result._tag === "Judged"
-              ? Arr.join(read.why, "; ")
-              : unjudged(measured, measured.result);
+          "refused" in result
+            ? result.refused
+            : read?._tag === "ProofUnavailable"
+              ? Arr.join(
+                  Arr.map(read.lost, (one) => one.why),
+                  "; ",
+                )
+              : result.result._tag === "Judged"
+                ? Arr.join(read?._tag === "HarnessBroken" ? read.why : [], "; ")
+                : unjudged(result, result.result);
         const counters =
-          read._tag === "ProofUnavailable"
+          read?._tag === "ProofUnavailable"
             ? Arr.map(read.lost, (one) => ({
                 ...one,
                 counter: Option.getOrUndefined(
@@ -1399,13 +1420,32 @@ export default defineWorkflow({
           );
           continue;
         }
-        const failed = `${kind}: ${why} (calibration ${measured.id})`;
+        const measurement = measured?.id ?? `refused attempt ${attempt}`;
+        const failed = `${kind}: ${why} (calibration ${measurement})`;
         if (repairs >= REPAIRS) {
           ending = `${failed}; ${REPAIRS} repairs spent`;
-          break;
+          if (kind === "proof unavailable") break;
+          yield* calibrate(
+            Activity.make({
+              name: `calibration.${attempt}.park`,
+              execute: Effect.gen(function* () {
+                const fs = yield* FileSystem.FileSystem;
+                const marker = `${place.dir}/calibration.${attempt}.parked`;
+                if (yield* fs.exists(marker).pipe(Effect.orDie))
+                  return yield* host.parked(runId, null);
+                const reason = `${ending}. Correct it, then resume ${runId}.`;
+                yield* fs.writeFileString(marker, "").pipe(Effect.orDie);
+                yield* host.record(runId, reason);
+                yield* stepFailed(reason);
+                yield* host.parked(runId, reason);
+                return yield* Workflow.suspend(yield* WorkflowInstance);
+              }),
+            }),
+          );
         }
         repairs += 1;
-        yield* host.record(runId, `${failed}; repair ${repairs} of ${REPAIRS}`);
+        const of = Math.max(REPAIRS, repairs);
+        yield* host.record(runId, `${failed}; repair ${repairs} of ${of}`);
         const repaired = yield* repair(
           agentWork({
             operation: `repair-${repairs}`,
@@ -1416,12 +1456,12 @@ export default defineWorkflow({
               ...told,
               repair: {
                 n: String(repairs),
-                of: String(REPAIRS),
+                of: String(of),
                 class: kind,
                 why,
-                measurement: measured.id,
+                measurement,
               },
-              noise: intervalsLine(measured),
+              noise: measured === null ? why : intervalsLine(measured),
               plan: yield* encodePlan(plan),
               samples: String(budget.samples),
             },
@@ -1430,7 +1470,7 @@ export default defineWorkflow({
         );
         const next = planOf(repaired);
         const encoded = yield* experimentOf(next);
-        if (tried.has(encoded)) {
+        if (kind === "proof unavailable" && tried.has(encoded)) {
           ending = `${failed}; repair ${repairs} left the plan as it was, and a plan is never calibrated twice`;
           break;
         }
@@ -1660,7 +1700,7 @@ export default defineWorkflow({
               success: MeasurementSchema,
               error: WorkflowError,
               execute: Effect.map(
-                host.measure({
+                measureOrPark({
                   runId,
                   base,
                   cwd,
@@ -1941,7 +1981,7 @@ export default defineWorkflow({
               return yield* new WorkflowError({
                 reason: `${cwd} has no merge base with its default branch to measure against`,
               });
-            const { measurement, ran } = yield* host.measure({
+            const { measurement, ran } = yield* measureOrPark({
               runId,
               base: mergeBase,
               cwd,
@@ -2101,7 +2141,14 @@ export default defineWorkflow({
                   success: MeasurementSchema,
                   error: WorkflowError,
                   execute: Effect.map(
-                    host.measure({ runId, base, cwd, plan, reason: reasons.at(-1), pass: "final" }),
+                    measureOrPark({
+                      runId,
+                      base,
+                      cwd,
+                      plan,
+                      reason: reasons.at(-1),
+                      pass: "final",
+                    }),
                     (answered) => answered.measurement,
                   ),
                 });

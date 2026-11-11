@@ -786,10 +786,17 @@ export type RequestedBy = typeof RequestedBy.Type;
 export const requestedByLine = (who: RequestedBy) =>
   `Started by ${who.agent} of ${who.run} on ${who.machine.name}`;
 
-export const RunReport = Schema.Struct({
+const ReportTry = Schema.Struct({
   state: Schema.Literals(["delivered", "undelivered"]),
   at: Schema.String,
   note: Schema.String,
+});
+export const RunReport = Schema.Struct({
+  ...ReportTry.fields,
+  /** Undelivered because the requesting Machine could not be reached, so sent again once it is. */
+  unreached: Schema.optionalKey(Schema.Boolean),
+  /** The tries before this one, oldest first. */
+  tries: Schema.optionalKey(Schema.Array(ReportTry)),
   closed: Schema.Boolean,
   closure: Schema.optionalKey(Schema.String),
 });
@@ -988,6 +995,7 @@ export const RecordPart = Schema.Literals(["diff", "tail", "mr", "texts"]);
 export type RecordPart = typeof RecordPart.Type;
 
 export const RunDetail = Schema.Struct({
+  branchProgress: Schema.optionalKey(Schema.NullOr(Schema.String)),
   id: Schema.String,
   /** The record's revision; absent from a host without the Run model. */
   revision: Schema.optionalKey(RunRevision),
@@ -1093,6 +1101,7 @@ export const recordIn = (value: RunDetail | RecordUnchanged | null): RunDetail |
 
 /** One offer as a front door shows it, over the wire. */
 export const OfferView = Schema.Struct({
+  textField: Schema.optionalKey(Schema.String),
   id: Schema.String,
   title: Schema.String,
   /** The workflow it starts, by public id. */
