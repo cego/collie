@@ -344,13 +344,10 @@ test(
             expect(yield* asHealer(world, healer, [action])).toContain(
               `${healer.runId} is a Heal of ${runId}`,
             );
-          expect(yield* asHealer(world, healer, [{ kind: "resume", run: runId }])).not.toContain(
-            "is a Heal of",
+          const controls = client.run({ runId }).pipe(
+            Effect.map((view) => view?.controls),
+            Effect.orDie,
           );
-          const asked = yield* client.run({ runId: other.runId }).pipe(Effect.orDie);
-          expect(Arr.filter(asked?.waiting ?? [], (one) => one.answer !== null)).toEqual([]);
-          expect(asked?.controls).toContain("hold");
-          expect((yield* client.run({ runId }).pipe(Effect.orDie))?.controls).not.toContain("stop");
           expect(
             (yield* collie(world, ["run", "stop", runId, "--request-id", "stopped"])).envelope.ok,
           ).toBe(true);
@@ -362,7 +359,15 @@ test(
             COLLIE_AGENT: healer.agent,
           });
           expect(resumed.envelope).toMatchObject({ ok: false });
-          expect((yield* client.run({ runId }).pipe(Effect.orDie))?.controls).toContain("stop");
+          expect(yield* controls).toContain("stop");
+          yield* collie(world, ["run", "resume", runId]);
+          expect(yield* controls).not.toContain("stop");
+          expect(yield* asHealer(world, healer, [{ kind: "resume", run: runId }])).not.toContain(
+            "is a Heal of",
+          );
+          const asked = yield* client.run({ runId: other.runId }).pipe(Effect.orDie);
+          expect(Arr.filter(asked?.waiting ?? [], (one) => one.answer !== null)).toEqual([]);
+          expect(asked?.controls).toContain("hold");
         }),
       ["asks.workflow.ts", "parks-for.workflow.ts", "mender.workflow.ts"],
     ),
