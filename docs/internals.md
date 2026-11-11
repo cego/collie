@@ -1756,7 +1756,8 @@ builds so a queued suite cannot replace the executables an active suite runs. Te
 each file stay sequential: fixtures
 change environment variables and prototypes, so `--concurrent` is not safe here. A test's
 default timeout is 30 seconds rather than Bun's five: a test that starts processes is
-slower on a busy machine, and that is not a hang. For debugging, `bun test
+slower on a busy machine, and that is not a hang. The `test/support/hosts.ts` preload sets it,
+so every `bun test` gets it, the gate's and an agent's alike. For debugging, `bun test
 ./test/engine.test.ts` runs one file against the sources, without workers.
 
 One whole suite runs at a time on a Machine, per user. `bun run test` takes a lock,

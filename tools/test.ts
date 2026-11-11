@@ -137,14 +137,7 @@ const suite = (targeted: boolean, kind: Kind, since: bigint, budget: Budget, see
         const child = yield* startOnHold(
           store,
           hold.id,
-          [
-            "bun",
-            "test",
-            `--parallel=${hold.workers}`,
-            "--timeout=30000",
-            ...flags,
-            ...request.args,
-          ],
+          ["bun", "test", `--parallel=${hold.workers}`, ...flags, ...request.args],
           {
             kind,
             env: {
