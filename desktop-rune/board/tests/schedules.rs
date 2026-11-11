@@ -299,7 +299,82 @@ fn moving_a_schedule_sends_it_to_the_machine_chosen_with_its_checkout_there() {
             json!({ "from": "i-vm", "to": "i-pc", "name": "daily", "checkout": "/home/mk/src/collie" })
         ]
     );
+    harness.fake.answer("moveSchedule", Ok(json!("Moved daily to mk-pc")));
+    settle(&harness, &mut runtime);
     assert!(runtime.state.pages.schedules.moving.is_none());
+}
+
+#[test]
+fn a_move_keeps_its_dialog_until_it_is_done_and_says_why_one_was_refused() {
+    let harness = Harness::<App>::new();
+    let mut runtime = schedules_page(&harness);
+    let mut at = 100.0;
+    tap(
+        &mut runtime,
+        "schedules-i-vm/schedule-daily/schedule-move",
+        &mut at,
+    );
+    tap(&mut runtime, "move-submit", &mut at);
+    assert!(said(&runtime, "Moving…"), "it says the move is asked");
+    harness.fake.answer(
+        "moveSchedule",
+        Err(CallError("mk-pc has no checkout at /src/collie".into())),
+    );
+    settle(&harness, &mut runtime);
+    runtime.frame(at);
+    assert!(
+        runtime.state.pages.schedules.moving.is_some(),
+        "a refused move keeps its dialog"
+    );
+    let refused = runtime
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("move-refused"))
+        .expect("the refusal is said in the dialog");
+    assert_eq!(refused.role, "alert");
+    assert!(said(&runtime, "mk-pc has no checkout at /src/collie"));
+    tap(&mut runtime, "move-submit", &mut at);
+    assert_eq!(harness.fake.asked_of("moveSchedule").len(), 2);
+    harness
+        .fake
+        .answer("moveSchedule", Ok(json!("Moved daily to mk-pc")));
+    settle(&harness, &mut runtime);
+    runtime.frame(at);
+    assert!(runtime.state.pages.schedules.moving.is_none(), "done, it closes");
+    assert_eq!(
+        runtime.state.pages.schedules.told.texts(),
+        ["Moved daily to mk-pc"]
+    );
+}
+
+#[test]
+fn the_move_dialogs_machine_select_opens_its_list_at_its_field() {
+    let harness = Harness::<App>::new();
+    let mut runtime = schedules_page(&harness);
+    let mut at = 100.0;
+    tap(
+        &mut runtime,
+        "schedules-i-vm/schedule-daily/schedule-move",
+        &mut at,
+    );
+    tap(&mut runtime, "move-to/move-to-trigger", &mut at);
+    runtime.frame(at);
+    let rect = |key: &str| {
+        runtime
+            .elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some(key))
+            .unwrap_or_else(|| panic!("no {key}"))
+            .rect
+    };
+    let [fx, fy, fw, fh] = rect("move-to-trigger");
+    let [lx, ly, lw, _] = rect("move-to-content");
+    assert!(fy > 40.0, "the field is in the dialog, at {fy}");
+    assert!(
+        lx < fx + fw && fx < lx + lw && (ly - (fy + fh)).abs() < 12.0,
+        "the list at ({lx}, {ly}) opens under its field at ({fx}, {})",
+        fy + fh
+    );
 }
 
 #[test]

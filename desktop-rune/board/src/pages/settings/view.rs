@@ -230,7 +230,9 @@ fn choice_select(
         .iter()
         .map(|(v, l, _)| (l.clone(), v.clone()))
         .collect();
-    Select::new(key.clone(), &labels)
+    // Its field is keyed `{key}-trigger`, which its list is anchored to: re-keying the field
+    // would leave the list at the window's corner, so the key goes on a wrapper.
+    let select = Select::new(key.clone(), &labels)
         .details(&details)
         .current(current.as_deref())
         .placeholder(placeholder)
@@ -247,15 +249,16 @@ fn choice_select(
                 choose(app, value.clone());
             }
         })
-        .build(k, layer)
-        .key(key)
+        .build(k, layer);
+    el().key(key).child(select)
 }
 
+/// Every option, a disabled one too: its detail says why it can't be chosen, and an empty
+/// list says nothing.
 fn select_options(select: &ChoiceSelect) -> Vec<(String, String, Option<String>)> {
     select
         .options
         .iter()
-        .filter(|o| !o.disabled)
         .map(|o| (o.value.clone(), o.label.clone(), o.description.clone()))
         .collect()
 }
@@ -647,8 +650,16 @@ fn inline_control(
             );
             let disabled = page.choosing;
             let key = row.key.clone();
-            let chosen =
-                move |app: &mut App, value: String| super::choose_agent(app, &key, &value, false);
+            let off: Vec<String> = [&selects.harness, &selects.effort]
+                .iter()
+                .flat_map(|s| s.options.iter().filter(|o| o.disabled))
+                .map(|o| o.value.clone())
+                .collect();
+            let chosen = move |app: &mut App, value: String| {
+                if !off.contains(&value) {
+                    super::choose_agent(app, &key, &value, false)
+                }
+            };
             let control = match row.key.as_str() {
                 "harness" => choice_select(
                     page,
@@ -2243,6 +2254,14 @@ pub fn view(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
             }
         })
         .children((!narrow).then_some(index))
+        .child(
+            el().key(format!(
+                "settings-onboardings-{}",
+                app.pages.machines.onboardings
+            ))
+            .size(0.0, 0.0)
+            .on_layout(|app: &mut App, _| super::onboarding_moved(app)),
+        )
         .child(
             col()
                 .key("settings-scroll")

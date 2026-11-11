@@ -845,6 +845,45 @@ fn add_machine_sends_what_was_typed_trimmed_then_shows_its_onboarding_and_herdrs
 }
 
 #[test]
+fn add_machine_keeps_its_dialog_until_the_core_takes_it_and_says_why_it_refused() {
+    let harness = Harness::<App>::new();
+    let mut runtime = machines_page(&harness);
+    let mut at = 400.0;
+    tap(&mut runtime, "add-machine", &mut at);
+    let adding = runtime.state.pages.machines.adding.as_mut().unwrap();
+    adding.target.replace_text("mk@vm-new");
+    adding.label.replace_text("vm-new");
+    tap(&mut runtime, "add-submit", &mut at);
+    assert!(said(&runtime, "Adding…"), "it says it is adding");
+    harness.fake.answer(
+        "addMachine",
+        Err(CallError("herdr refused: vm-new is already saved".into())),
+    );
+    settle(&harness, &mut runtime);
+    runtime.frame(at);
+    let adding = runtime
+        .state
+        .pages
+        .machines
+        .adding
+        .as_ref()
+        .expect("a refused Machine keeps its dialog");
+    assert_eq!(adding.target.text, "mk@vm-new", "and what was typed");
+    let refused = runtime
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("add-refused"))
+        .expect("the refusal is said in the dialog");
+    assert_eq!(refused.role, "alert");
+    assert!(said(&runtime, "herdr refused: vm-new is already saved"));
+    tap(&mut runtime, "add-submit", &mut at);
+    harness.fake.answer("addMachine", Ok(json!("job-3")));
+    settle(&harness, &mut runtime);
+    assert!(runtime.state.pages.machines.adding.is_none(), "taken, it closes");
+    assert_eq!(runtime.state.pages.machines.job.as_deref(), Some("job-3"));
+}
+
+#[test]
 fn an_ended_onboarding_offers_retry_and_skip_on_its_unsettled_steps() {
     let harness = Harness::<App>::new();
     let mut runtime = machines_page(&harness);
@@ -909,7 +948,10 @@ fn clean_up_reads_each_live_machine_and_sweeps_the_chosen_ones_under_a_request()
         .answer("sweep", Ok(json!({ "remove": [], "keep": [], "bytes": 0 })));
     settle(&harness, &mut runtime);
     runtime.frame(at);
-    assert!(said(&runtime, "Nothing removed"));
+    assert!(
+        !runtime.state.pages.machines.cleanup.open,
+        "every sweep cleaned, the dialog closes"
+    );
     assert_eq!(
         runtime.state.pages.machines.told.texts(),
         ["Cleaned up mk-pc: freed 0 B"]

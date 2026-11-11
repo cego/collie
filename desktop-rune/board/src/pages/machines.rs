@@ -23,6 +23,10 @@ pub struct Adding {
     pub target: TextEdit,
     pub label: TextEdit,
     pub session: TextEdit,
+    /// The core is saving it; the dialog stays until it answers.
+    pub busy: bool,
+    /// Why the core refused it, said in the dialog.
+    pub refused: Option<String>,
 }
 
 impl Adding {
@@ -54,11 +58,19 @@ pub struct Machines {
     /// A login code being pasted.
     pub code: TextEdit,
     pub told: Told,
+    /// Counts each onboarding run that has moved on, which Settings reads its Connections again on.
+    pub onboardings: u64,
 }
 
 impl Machines {
     /// Hears a `flock` item; the board hands each one here as it folds it.
     pub fn heard(&mut self, item: &FlockItem) {
+        if let FlockItem::Onboarding(one) = item {
+            let before = self.flock.job(&one.job).map(|o| (o.run.at, o.run.ready));
+            if before != Some((one.run.at, one.run.ready)) {
+                self.onboardings += 1;
+            }
+        }
         self.flock.apply(item);
     }
 
@@ -161,16 +173,31 @@ impl App {
         self.pages.machines.adding = Some(adding);
     }
 
-    /// Saves the Machine typed in herdr, then onboards it, showing its onboarding.
+    /// Saves the Machine typed in herdr, then onboards it: the dialog closes on the core's
+    /// yes and shows its onboarding, or keeps what was typed and says why not.
     pub fn add_machine(&mut self) {
-        let Some(payload) = self.pages.machines.adding.as_ref().and_then(Adding::to_add) else {
+        let Some(adding) = self.pages.machines.adding.as_mut() else {
             return;
         };
-        self.pages.machines.adding = None;
+        let Some(payload) = adding.to_add().filter(|_| !adding.busy) else {
+            return;
+        };
         let Some(core) = &self.core else { return };
-        core.request("addMachine", payload, |app: &mut App, job| match job {
-            Ok(job) => app.pages.machines.job = Some(job),
-            Err(why) => told(app).say(why.0, false),
+        adding.busy = true;
+        adding.refused = None;
+        core.request("addMachine", payload, |app: &mut App, job| {
+            let machines = &mut app.pages.machines;
+            match (job, machines.adding.as_mut()) {
+                (Ok(job), _) => {
+                    machines.adding = None;
+                    machines.job = Some(job);
+                }
+                (Err(why), Some(adding)) => {
+                    adding.busy = false;
+                    adding.refused = Some(why.0);
+                }
+                (Err(why), None) => told(app).say(why.0, false),
+            }
         });
     }
 
@@ -312,7 +339,8 @@ fn machine(k: &Kit, row: &MachineRow, holds: &DesktopHolds) -> El {
         body = body.child(toned(k, reason.clone(), Tone::Warn).key("reason"));
     }
     if let Some(reason) = &row.transport_reason {
-        body = body.child(muted(k, reason.clone()).key("transport-reason"));
+        // Why its paired link runs over SSH; the core keeps it while the link does.
+        body = body.child(muted(k, format!("Not direct: {reason}")).key("transport-reason"));
     }
     for lag in &verdict.behind {
         body = body.child(toned(k, lag.said.clone(), Tone::Warn));
@@ -455,11 +483,21 @@ fn add_dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                     .grow(1.0),
                 ),
         )
+        .children(adding.refused.as_ref().map(|why| {
+            toned(k, why.clone(), Tone::Bad)
+                .key("add-refused")
+                .role("alert")
+                .label(why.clone())
+        }))
         .child(
             rune::row().w_full().child(el().grow(1.0)).child(
-                Button::new("Add Machine")
+                Button::new(if adding.busy {
+                    "Adding…"
+                } else {
+                    "Add Machine"
+                })
                     .variant(ButtonVariant::Contrast)
-                    .disabled(adding.to_add().is_none())
+                    .disabled(adding.busy || adding.to_add().is_none())
                     .on_press(|app: &mut App| app.add_machine())
                     .build(k)
                     .key("add-submit"),
