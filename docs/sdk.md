@@ -724,9 +724,11 @@ On success, its `signature` identifies the posted note for the findings ledger.
 reviewed head when the new head descends from it. Otherwise it reads the full diff.
 Journal it in an Activity with `error: WorkflowError`; an unreadable forge fails the read.
 
-`host.approveReview({ target, cwd, head })` approves that reviewed head, independently of posting.
+`host.approveReview({ target, cwd, head })` requests approval of that reviewed head, independently of posting.
 Journal it in a separate Activity after the post succeeds. The shipped review offers approval
 explicitly and ends with the forge's reason on its card when the forge refuses it.
+GitLab enforces the reviewed `sha` atomically. GitHub approval returns `ok: false` without sending
+an approval request because GitHub cannot atomically guard the reviewed head.
 
 `mrForgeFacts(target)` is pure: for an `mr:` target it gives the forge's name and noun and
 the `diff`, `view` and `checkout` command lines a prompt hands a reviewer, written by that

@@ -248,48 +248,20 @@ export const approveReview = (
   Effect.gen(function* () {
     const where = mrWords(ref).label;
     if (head === "") return { ok: false, message: `did not approve ${where}: no reviewed head` };
+    if (login.forge === "github")
+      return {
+        ok: false,
+        message: `did not approve ${where} at ${head}: GitHub cannot atomically guard the reviewed head; no approval sent`,
+      };
     const repo = threadRepo(login, project);
     const path = `${repo.owner}/${repo.name}`;
-    const pull = `repos/${path}/pulls/${ref.iid}`;
-    const current = () =>
-      requestAs(Schema.Struct({ head: Schema.Struct({ sha: Schema.String }) }), login, cwd, pull);
-    if (login.forge === "github") {
-      const before = yield* current();
-      if (!before.ok || before.value.head.sha !== head)
-        return {
-          ok: false,
-          message: `did not approve ${where} at ${head}: ${before.ok ? "SHA does not match HEAD" : before.reason}`,
-        };
-    }
-    const approved = yield* login.forge === "gitlab"
-      ? request(
-          login,
-          cwd,
-          "POST",
-          `projects/${encodeURIComponent(path)}/merge_requests/${ref.iid}/approve`,
-          { sha: head },
-        )
-      : request(login, cwd, "POST", `${pull}/reviews`, {
-          event: "APPROVE",
-          commit_id: head,
-        });
-    if (approved.ok && login.forge === "github") {
-      const after = yield* current();
-      if (!after.ok || after.value.head.sha !== head) {
-        const review = Schema.decodeUnknownOption(Schema.Struct({ id: Schema.Finite }))(
-          approved.value,
-        );
-        const withdrawn = Option.isSome(review)
-          ? yield* request(login, cwd, "PUT", `${pull}/reviews/${review.value.id}/dismissals`, {
-              message: `Reviewed ${head}; the PR head changed or could not be verified.`,
-            })
-          : { ok: false, reason: "GitHub did not return the approval id" };
-        return {
-          ok: false,
-          message: `did not approve ${where} at ${head}: ${after.ok ? "SHA does not match HEAD" : after.reason}; ${withdrawn.ok ? "approval withdrawn" : `could not withdraw approval: ${withdrawn.reason}; dismiss it on GitHub`}`,
-        };
-      }
-    }
+    const approved = yield* request(
+      login,
+      cwd,
+      "POST",
+      `projects/${encodeURIComponent(path)}/merge_requests/${ref.iid}/approve`,
+      { sha: head },
+    );
     return approved.ok
       ? { ok: true, message: `approved ${where} at ${head}` }
       : { ok: false, message: `did not approve ${where} at ${head}: ${approved.reason}` };
