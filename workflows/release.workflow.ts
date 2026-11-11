@@ -1112,6 +1112,7 @@ export default defineWorkflow({
           const answer = yield* mergeGo(
             ask({
               name: `go-${gos}`,
+              shipping: { action: goes[0] === GO.test ? "stage" : "merge", head },
               prompt: `Release ${mr} at ${short(head)}, approved by ${approvers}? ${offered} Finish leaves it open.`,
               options: Arr.map([...goes, GO.finish], (id, at) => ({ id, recommended: at === 0 })),
             }),
@@ -1236,6 +1237,7 @@ export default defineWorkflow({
               Effect.gen(function* () {
                 const go = yield* ask({
                   name: nth("production", n),
+                  shipping: { action: "deploy", head },
                   prompt: `Stage carries ${mr} at \`${short(head)}\` for testing, unmerged: ${plays(tested.jobs)}. Test it there, then: ${PRODUCTION.send} merges it at that head, tags it and plays production with no further question; ${PRODUCTION.leave} merges and tags it, and waits until production carries it, whoever plays it; ${GO.finish} merges nothing and rolls stage back.`,
                   options: [
                     { id: PRODUCTION.send, recommended: true },
@@ -1427,6 +1429,7 @@ export default defineWorkflow({
             (yield* productionGo(
               ask({
                 name: "production",
+                shipping: { action: "deploy", tag: staged.tag },
                 prompt: `${staged.tag} of ${mr} is on stage: stage carries \`${short(landed.sha)}\`. Verify stage, then: ${PRODUCTION.send} plays ${plays(jobs)}; ${PRODUCTION.leave} waits until production carries it, whoever plays it.`,
                 options: [{ id: PRODUCTION.send, recommended: true }, PRODUCTION.leave],
               }),

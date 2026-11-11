@@ -1513,6 +1513,8 @@ export interface Landed {
  * the Task a checkout belongs to still has its workspace open.
  */
 export interface Settling {
+  readonly owedAt: ReadonlySet<string>;
+  readonly owedOn: ReadonlySet<string>;
   readonly landedAt: ReadonlyMap<string, Landed>;
   /** By `onBranch`: a branch name means nothing outside its repository. */
   readonly landedOn: ReadonlyMap<string, Landed>;
@@ -1528,6 +1530,8 @@ export interface Settling {
 export const onBranch = (project: string, branch: string) => `${project}\n${branch}`;
 
 export const NOTHING_SETTLING: Settling = {
+  owedAt: new Set(),
+  owedOn: new Set(),
   landedAt: new Map(),
   landedOn: new Map(),
   openOn: new Map(),
@@ -1718,6 +1722,11 @@ const settled = Effect.fn("worktree.settled")(function* (
   },
 ) {
   const { run, settling } = opts;
+  if (
+    settling.owedAt.has(worktree.path) ||
+    settling.owedOn.has(onBranch(opts.project, worktree.branch))
+  )
+    return keepIt("its Task still owes work");
   const dirty = yield* run("git", ["status", "--porcelain"], worktree.path);
   if (dirty.code !== 0) return keepIt("could not read the working tree");
   if (Str.trim(dirty.stdout) !== "") return keepIt("uncommitted changes");
@@ -1758,6 +1767,8 @@ const landedBy = Effect.fn("worktree.landedBy")(function* (
     project: string;
   },
 ) {
+  if (opts.settling.owedOn.has(onBranch(opts.project, worktree.branch)))
+    return keepIt("its Task still owes work");
   if (landed !== undefined) return settledBecause(landed.why);
   const open = opts.settling.openOn.get(onBranch(opts.project, worktree.branch));
   if (open !== undefined) return keepIt(`${open} is still open`);

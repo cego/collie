@@ -47,6 +47,7 @@ import { StoreWrites } from "./store-writes";
 import { RequestConflict, type Solution } from "./board-model";
 import { nowIso } from "./time";
 import { Observed, WatchCursor, Woke } from "./mr-watch-model";
+import { ShippingGo } from "./shipping";
 
 /** A run as it was admitted: the claim, the arguments and the execution it became. */
 const Run = Schema.Struct({
@@ -142,6 +143,7 @@ const Decision = Schema.Struct({
   reached: Schema.NullOr(Schema.String),
   /** What keeps it short of standard; null for one that is not, or an older host's. */
   shortfall: Schema.NullOr(Schema.String),
+  shipping: Schema.NullOr(Schema.fromJsonString(ShippingGo)),
 });
 export type DecisionRow = typeof Decision.Type;
 
@@ -254,6 +256,7 @@ export interface StoreApi {
     readonly asker?: string;
     readonly revises?: string;
     readonly shortfall?: string;
+    readonly shipping?: ShippingGo;
   }) => Effect.Effect<void>;
   /** Every question this run has been asked, answered or not, in the order they were. */
   readonly asked: (run: string) => Effect.Effect<ReadonlyArray<DecisionRow>>;
@@ -583,7 +586,11 @@ const migrations = (imports: {
     yield* sql`CREATE INDEX collie_launches_agent ON collie_launches (agent)`;
     yield* imports.launches;
   }),
-  "18_watches": Effect.gen(function* () {
+  "18_shipping_go": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`ALTER TABLE collie_decisions ADD COLUMN shipping TEXT`;
+  }),
+  "19_watches": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`
       CREATE TABLE collie_watches (
@@ -702,7 +709,7 @@ function makeStore(
         sql`SELECT ${columns} FROM collie_runs WHERE accepted IS NULL ORDER BY admitted, run`,
     });
 
-    const decisionColumns = sql`run, decision, prompt, options, answer, request, asker, answerer, asked, answered, superseded, cause, superseder, messaged, revises, reached, shortfall`;
+    const decisionColumns = sql`run, decision, prompt, options, answer, request, asker, answerer, asked, answered, superseded, cause, superseder, messaged, revises, reached, shortfall, shipping`;
 
     const decisionsOf = SqlSchema.findAll({
       Request: Schema.String,
@@ -840,12 +847,12 @@ function makeStore(
         Effect.gen(function* () {
           const at = yield* nowIso;
           yield* sql`
-              INSERT INTO collie_decisions (run, decision, prompt, options, asked, asker, revises, reached, shortfall)
+              INSERT INTO collie_decisions (run, decision, prompt, options, asked, asker, revises, reached, shortfall, shipping)
               VALUES (
                 ${question.run}, ${question.decision}, ${question.prompt},
                 ${asJsonText([...question.options])}, ${at}, ${question.asker ?? null},
                 ${question.revises ?? null}, ${question.asker === undefined ? at : null},
-                ${question.shortfall ?? null}
+                ${question.shortfall ?? null}, ${question.shipping === undefined ? null : asJsonText(question.shipping)}
               )
               ON CONFLICT(run, decision) DO UPDATE SET reached = excluded.reached
                 WHERE excluded.reached IS NOT NULL
@@ -949,8 +956,8 @@ function makeStore(
         const opened = yield* mutation(
           [revising.run],
           sql`
-            INSERT INTO collie_decisions (run, decision, prompt, options, asked, revises, shortfall)
-            SELECT run, ${revising.name}, prompt, options, ${at}, decision, shortfall
+            INSERT INTO collie_decisions (run, decision, prompt, options, asked, revises, shortfall, shipping)
+            SELECT run, ${revising.name}, prompt, options, ${at}, decision, shortfall, shipping
             FROM collie_decisions
             WHERE run = ${revising.run} AND decision = ${revising.decision}
               AND asker IS NULL AND answer IS NULL AND superseded IS NOT NULL

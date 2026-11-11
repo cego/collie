@@ -131,6 +131,7 @@ import { findingsIn } from "../../src/output";
 import { FINGERPRINT_MAX_BYTES, collect, fingerprint, readVerifications } from "../../src/verify";
 import { inputsFor, offersFrom } from "../../src/offers";
 import { Store, storeLayer } from "../../src/store";
+import { readStageProof, type ShippingGo } from "../../src/shipping";
 import { recordsAt, type Records } from "../../src/records";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import * as Reactivity from "effect/reactivity/Reactivity";
@@ -4748,7 +4749,13 @@ const stallAsked = (
   run: {
     readonly status: Effect.Effect<typeof RunStatus.Type>;
     readonly asked: Effect.Effect<
-      ReadonlyArray<{ decision: string; prompt: string; options: string; answer: string | null }>
+      ReadonlyArray<{
+        decision: string;
+        prompt: string;
+        options: string;
+        answer: string | null;
+        shipping?: ShippingGo | null;
+      }>
     >;
   },
   name: string,
@@ -5138,7 +5145,12 @@ scenario(
 const withOrigin = () =>
   Effect.gen(function* () {
     const git = (cwd: string, ...args: string[]) =>
-      exec(["git", ...args], { cwd }).pipe(Effect.map((done) => Str.trim(done.stdout)));
+      exec(["git", ...args], { cwd }).pipe(
+        Effect.map((done) => {
+          expect(done.exitCode, done.stderr).toBe(0);
+          return Str.trim(done.stdout);
+        }),
+      );
     const remote = `${rig.root}/origin.git`;
     const upstream = `${rig.root}/upstream`;
     yield* git(rig.root, "init", "-q", "--bare", "-b", "master", remote);
@@ -5174,17 +5186,6 @@ const withOrigin = () =>
     };
   });
 
-/** Until the file exists: a step whose prompt is written has been reached. */
-const reached = (file: string) =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) =>
-      until(
-        () => fs.exists(file).pipe(Effect.orElseSucceed(() => false)),
-        (there) => there,
-      ),
-    ),
-  );
-
 type Step = Effect.Effect<void, never, ChildProcessSpawner.ChildProcessSpawner>;
 
 /**
@@ -5215,7 +5216,13 @@ const builtUntilParked = (
     );
     const agents = `${dir}/agents/${runId}`;
     for (const { operation, step } of hands) {
-      yield* reached(`${agents}/${operation}.prompt.md`);
+      yield* until(
+        () => fs.readFileString(`${agents}/agents.log`).pipe(Effect.orElseSucceed(() => "")),
+        (said) =>
+          pipe(said, Str.includes(`: launched for ${operation}\n`)) ||
+          pipe(said, Str.includes(`: reattached to ${operation}\n`)),
+      );
+      expect(yield* prompts()).toContainEqual(expect.stringContaining(`${operation}.prompt.md`));
       yield* step;
       yield* fs.writeFileString(`${agents}/${operation}.json`, asJson(BUILT));
     }
@@ -9279,7 +9286,7 @@ scenario(
             Effect.gen(function* () {
               const [, why] = yield* until(
                 () => Effect.zip(run.status, parkedWhy(runId)),
-                ([got, why]) => why !== "" || got.status !== "pending",
+                ([got, why]) => got.status === "suspended" && why !== "",
               );
               expect(why).toContain("500");
               expect(why).toEndWith(`resume ${runId}.`);
@@ -9460,7 +9467,7 @@ scenario(
             Effect.gen(function* () {
               const [, why] = yield* until(
                 () => Effect.zip(run.status, parkedWhy(runId)),
-                ([got, why]) => why !== "" || got.status !== "pending",
+                ([got, why]) => got.status === "suspended" && why !== "",
               );
               expect(why).toContain("500");
               expect(why).toEndWith(`resume ${runId}.`);
@@ -9500,7 +9507,7 @@ scenario(
             Effect.gen(function* () {
               const [, why] = yield* until(
                 () => Effect.zip(run.status, parkedWhy(runId)),
-                ([got, why]) => why !== "" || got.status !== "pending",
+                ([got, why]) => got.status === "suspended" && why !== "",
               );
               expect(why).toContain("unable to access origin");
               expect(why).toEndWith(`resume ${runId}.`);
@@ -11202,7 +11209,13 @@ const driven = <A, E>(
   drive: (run: {
     readonly status: Effect.Effect<typeof RunStatus.Type>;
     readonly asked: Effect.Effect<
-      ReadonlyArray<{ decision: string; prompt: string; options: string; answer: string | null }>
+      ReadonlyArray<{
+        decision: string;
+        prompt: string;
+        options: string;
+        answer: string | null;
+        shipping?: ShippingGo | null;
+      }>
     >;
     readonly answer: (decision: string, value: string) => Effect.Effect<void>;
     /** Whether the engine has done with the answer to `decision`, waking the Run included. */
@@ -11297,7 +11310,13 @@ const answeredEarly = (question: string, over: HostOverride) => {
 /** The go asked under `name`, once it is open. */
 const goAsked = (
   asked: Effect.Effect<
-    ReadonlyArray<{ decision: string; prompt: string; options: string; answer: string | null }>
+    ReadonlyArray<{
+      decision: string;
+      prompt: string;
+      options: string;
+      answer: string | null;
+      shipping?: ShippingGo | null;
+    }>
   >,
   name: string,
 ) =>
@@ -11472,7 +11491,8 @@ scenario(
           },
           (run) =>
             Effect.gen(function* () {
-              yield* goAsked(run.asked, "go-1");
+              const go = yield* goAsked(run.asked, "go-1");
+              expect(go.shipping).toEqual({ action: "merge", head });
               yield* run.answer("go-1", "Finish");
               return yield* ended(run.status);
             }),
@@ -14637,6 +14657,7 @@ for (const name of ["gitlab", "github"] as const) {
           const status = yield* driven(options(runId), (run) =>
             Effect.gen(function* () {
               const go = yield* goAsked(run.asked, "go-1");
+              expect(go.shipping).toEqual({ action: "merge", head });
               expect(optionsOf([go], "go-1")).toEqual(["Merge, tag and stage", "Finish"]);
               expect(recommendedOf([go], "go-1")).toEqual({
                 recommended: "Merge, tag and stage",
@@ -14647,6 +14668,13 @@ for (const name of ["gitlab", "github"] as const) {
               expect(claimed).toEqual([]);
               yield* run.answer("go-1", "Merge, tag and stage");
               const production = yield* goAsked(run.asked, "production");
+              expect(production.shipping).toEqual({ action: "deploy", tag: "v1.2.0" });
+              expect(yield* readStageProof(runDir(dir, runId))).toEqual({
+                head: merged,
+                tag: "v1.2.0",
+                proved: true,
+                why: null,
+              });
               expect(optionsOf([production], "production")).toEqual([
                 "Send to production",
                 "Leave production to me",
@@ -15132,6 +15160,7 @@ for (const name of ["gitlab", "github"] as const) {
           const status = yield* driven(options(runId), (run) =>
             Effect.gen(function* () {
               const go = yield* goAsked(run.asked, "go-1");
+              expect(go.shipping).toEqual({ action: "stage", head });
               expect(optionsOf([go], "go-1")).toEqual(["Stage the merge request", "Finish"]);
               expect(recommendedOf([go], "go-1")).toEqual({
                 recommended: "Stage the merge request",
@@ -15140,6 +15169,13 @@ for (const name of ["gitlab", "github"] as const) {
               expect(go.prompt).toContain("deploys that head to stage for you to test, unmerged");
               yield* run.answer("go-1", "Stage the merge request");
               const production = yield* goAsked(run.asked, "production");
+              expect(production.shipping).toEqual({ action: "deploy", head });
+              expect(yield* readStageProof(runDir(dir, runId))).toEqual({
+                head,
+                tag: null,
+                proved: true,
+                why: null,
+              });
               expect(optionsOf([production], "production")).toEqual([
                 "Send to production",
                 "Leave production to me",

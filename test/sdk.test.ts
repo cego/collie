@@ -28,8 +28,61 @@ import { REQUESTABLE, isOutcome, type Outcome } from "../src/outcome";
 import { loadEntry } from "../src/engine";
 import { runEffect } from "./support/effect";
 import { fixtures } from "./support/host";
+import { stopHost, until } from "./support/host";
+import { proves } from "./support/world";
+import { connect } from "../src/host";
 
 const requestable: ReadonlyArray<Outcome> = Arr.filter(REQUESTABLE, isOutcome);
+
+test(
+  "ask persists a shipping declaration and refuses malformed actions or missing heads",
+  () =>
+    proves(
+      "collie-shipping-contract-",
+      (world) =>
+        Effect.gen(function* () {
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          for (const declaration of [
+            { action: "merge", head: "abc123" },
+            { action: "unknown", head: "abc123" },
+            { action: "merge" },
+          ]) {
+            const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
+              declaration,
+            );
+            const started = yield* client
+              .start({
+                project: world.project,
+                id: "shipping-go",
+                request: encoded,
+                input: { declaration: encoded },
+              })
+              .pipe(Effect.orDie);
+            const shown = yield* until(
+              () => client.run({ runId: started.runId }),
+              (run) => (run?.waiting.length ?? 0) > 0 || run?.status.status === "failed",
+            ).pipe(Effect.orDie);
+            if (declaration.action === "merge" && declaration.head !== undefined) {
+              expect(shown?.waiting[0]?.shipping).toEqual({ action: "merge", head: "abc123" });
+              yield* client
+                .answer({
+                  runId: started.runId,
+                  decision: "ship",
+                  value: "stop",
+                  request: "answered",
+                })
+                .pipe(Effect.orDie);
+            } else {
+              expect(shown?.status.status).toBe("failed");
+              expect(shown?.waiting).toEqual([]);
+            }
+          }
+          yield* stopHost(world.state);
+        }),
+      ["shipping-go.workflow.ts"],
+    ),
+  240_000,
+);
 
 /** Checking what a module declares never builds one, which is the point of doing it first. */
 const registration = (): Registration => {
