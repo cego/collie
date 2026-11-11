@@ -65,7 +65,10 @@ here are in [`src/README.md`](src/README.md).
   [`docs/using.md`](docs/using.md#what-collies-agents-get), `src/profile.ts`, `src/agents.ts`,
   `test/profile.test.ts`, `test/agents.test.ts`.
 - **Attachments** → [ADR-0046](docs/adr/0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md),
-  `src/attachments.ts`, `src/uploads.ts`, `src/host-files.ts`, `test/attachments.test.ts`, `test/host-files.test.ts`.
+  `src/attachments.ts`, `src/uploads.ts`, `src/host-files.ts`, `test/attachments.test.ts`, `test/host-files.test.ts`;
+  a file pasted or dropped on a pane: [ADR-draft-a-file-given-to-a-pane-is-placed-on-its-machine](docs/adr/draft-a-file-given-to-a-pane-is-placed-on-its-machine.md),
+  `placeStaged` in `desktop/src/bun/carried.ts`, `desktop-rune/board/src/shell/files.rs`,
+  `test/desktop-place-files.test.ts`, `desktop-rune/board/tests/pane_files.rs`.
 - **Usage, fallbacks** → [ADR-0049](docs/adr/0049-work-goes-to-an-agent-with-usage-left.md),
   [`docs/using.md`](docs/using.md#usage), `src/usage-model.ts`, `src/usage.ts`, `src/commands/usage.ts`,
   `resolveWithRoom` in `src/harness.ts`, `choose` in `src/agents.ts`, `test/usage-model.test.ts`,

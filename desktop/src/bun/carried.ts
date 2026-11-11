@@ -157,8 +157,7 @@ export const placeStaged = Effect.fn("Carried.place")(function* (
   for (const id of ids) {
     const copy = yield* describeAttachment(dir, id);
     const name = copy?.name ?? Str.split(id, "/").at(-1) ?? id;
-    const bytes =
-      copy === null ? undefined : yield* fs.readFile(copy.path).pipe(Effect.option);
+    const bytes = copy === null ? undefined : yield* fs.readFile(copy.path).pipe(Effect.option);
     if (bytes === undefined || Option.isNone(bytes))
       return yield* new HostRefused({
         reason: `${name} is no longer held by Desktop; paste it again`,

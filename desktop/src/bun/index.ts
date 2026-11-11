@@ -840,8 +840,7 @@ const main = Effect.gen(function* () {
       );
 
   /** What this session placed on each Machine for a pane: path there, and when, by sha256. */
-  const placed: Map<string, Map<string, { readonly path: string; readonly at: number }>> =
-    new Map();
+  const placed = new Map<string, Map<string, { readonly path: string; readonly at: number }>>();
   /** Files named by path, each copied in or refused in words. */
   const stagedFrom = (paths: ReadonlyArray<string>) =>
     Effect.forEach(paths, (path) =>

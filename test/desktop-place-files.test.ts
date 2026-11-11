@@ -3,11 +3,14 @@
 // path there is answered; a file that cannot be placed names itself and places nothing more.
 
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, FileSystem } from "effect";
 import { HostRefused } from "../src/board-model";
 import { stagePath } from "../desktop/src/bun/attachments";
+import type { StagedOrRefused } from "../desktop/src/shared/attachments";
 import { placeStaged } from "../desktop/src/bun/carried";
 
 interface Uploaded {
@@ -47,7 +50,7 @@ const machine = (files = true, refuse?: string) => {
   };
 };
 
-const idOf = (staged: object) => ("id" in staged ? String(staged.id) : "");
+const idOf = (staged: StagedOrRefused) => ("id" in staged ? staged.id : "");
 
 test("a staged file is uploaded to the pane's Machine once and answered with its path there", () =>
   inDir((dir) =>
@@ -61,7 +64,7 @@ test("a staged file is uploaded to the pane's Machine once and answered with its
       const vm = machine();
 
       const paths = yield* placeStaged(held, vm.machine, `${dir}/own`, [shot, notes]);
-      const sha = (id: string) => id.slice(0, 64);
+      const sha = (id: string) => pipe(id, Str.slice(0, 64));
       expect(paths).toEqual([
         `/home/mk/.local/state/collie/uploads/${sha(shot)}/shot one.png`,
         `/home/mk/.local/state/collie/uploads/${sha(notes)}/notes.txt`,
@@ -83,7 +86,7 @@ test("a file Desktop holds no copy of, or a host that refuses, places nothing an
       const fs = yield* FileSystem.FileSystem;
       yield* fs.writeFileString(`${dir}/shot.png`, "PNG!");
       const shot = idOf(yield* stagePath(`${dir}/own`, `${dir}/shot.png`));
-      const gone = `${"0".repeat(64)}/gone.png`;
+      const gone = `${pipe("0", Str.repeat(64))}/gone.png`;
 
       const vm = machine();
       const missing = yield* placeStaged(new Map(), vm.machine, `${dir}/own`, [gone, shot]).pipe(

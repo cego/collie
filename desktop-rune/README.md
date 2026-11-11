@@ -159,6 +159,14 @@ app, and nothing is typed into a pane under a dialog. `examples/terminal-tab.rs`
 from a recording in each state (`STATE=connecting|ended|failed|nopane`, snapped with `--at 0.6`
 so the recording has arrived).
 
+**Files given to the pane** (`board/src/shell/files.rs`): a paste carrying files or an image
+(Ctrl+Shift+V, or Ctrl+V while the clipboard holds them), or files dropped on the window
+while the pane is shown, are staged as the chat stages its attachments, placed on the pane's
+Machine by the core's `placeFiles` through its host's `upload`, and typed as one paste of
+their shell-quoted paths there, without Enter. A file that fails is said in the tab's status
+and the log, and nothing is typed. Drops on the chat beside it still go to the chat. See
+[ADR-draft-a-file-given-to-a-pane-is-placed-on-its-machine](../docs/adr/draft-a-file-given-to-a-pane-is-placed-on-its-machine.md).
+
 **Drawn as Ghostty draws.** The view paints each row into pixels on the CPU and shows it with
 `El::pixels`; the cursor is its own image laid over the row. It follows the human's Ghostty
 config (`config.rs`: `font-family`, `font-size`, colours, `palette`, `cursor-style`,
