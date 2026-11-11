@@ -13,14 +13,24 @@ import { LAYERS } from "./definitions-model";
 export const HEALS_PER_RUN = 3;
 
 /** What a Heal hands back: a claim the host reads for words, never for its judgement. */
-export const HealOutput = Schema.Struct({
+const HealSaid = {
   diagnosis: Schema.String,
   actions: Schema.Array(Schema.String),
-  result: Schema.Literals(["resumed", "escalate"]),
-  /** Why only a person can move the Run, where it escalates. */
-  needs_person: Schema.optionalKey(Schema.String),
   finding: HealFinding,
-});
+};
+export const HealOutput = Schema.Union([
+  Schema.Struct({
+    ...HealSaid,
+    result: Schema.Literal("resumed"),
+    needs_person: Schema.optionalKey(Schema.String),
+  }),
+  Schema.Struct({
+    ...HealSaid,
+    result: Schema.Literal("escalate"),
+    /** Why only a person can move the Run. */
+    needs_person: Schema.String,
+  }),
+]);
 export type HealOutput = typeof HealOutput.Type;
 
 /** Every Heal a Run has had, by its claim. */

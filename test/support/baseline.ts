@@ -3322,6 +3322,28 @@ scenario(
   120_000,
 );
 
+scenario(
+  "heal sends an escalation that does not say why a person is needed back for repair",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const escalated = { ...HEALED, result: "escalate" };
+        const reasoned = { ...escalated, needs_person: "Only you can pick the release date." };
+        yield* rig.queueOutputs([escalated, reasoned]);
+        const result = yield* ran({
+          entry: shipped("heal"),
+          runId: "r-heal-escalates",
+          input: { run: "run-parked", park: "park-1" },
+        });
+        expect(result).toMatchObject({ _tag: "Success", success: reasoned });
+        const messages = yield* prompts();
+        expect(messages).toHaveLength(2);
+        expect(messages[1]).toContain("needs_person");
+      }),
+    ),
+  120_000,
+);
+
 const asApproved = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Array(VerifySpecSchema))),
   Result.getOrThrow,

@@ -1359,9 +1359,10 @@ panes and transcripts, its checks and pipeline), tells the agent that missed som
 it missed, and resumes the Run. It never does the Run's work. The host refuses everything
 else from it: answering a Decision, lifting a Hold, undoing a Stop, taking an offer, and
 anything on another Run. It returns `{ diagnosis, actions, result, needs_person, finding }`,
-where `result` is `resumed` or `escalate` and `finding` is required: `collie_defect`, `key`,
+where `result` is `resumed` or `escalate`, `needs_person` says why only a person can move
+the Run and is required with `escalate`, and `finding` is required: `collie_defect`, `key`,
 `root_cause`, `fix` and `regression`, stated for everyone who runs Collie. An Output without
-a finding is sent back for repair. The host judges the parked Run's facts, never `result`.
+a finding, or an escalation without `needs_person`, is sent back for repair. The host judges the parked Run's facts, never `result`.
 
 The host finds it by its declaration, `heals: true`, never by its id; a project's fork that
 declares it replaces the shipped one.

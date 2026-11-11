@@ -2,11 +2,9 @@ import { agentWork, contentOf, defineWorkflow, step } from "collie";
 import { Schema } from "effect";
 import markdown from "./heal.md" with { type: "text" };
 
-const Healed = Schema.Struct({
+const said = {
   diagnosis: Schema.String,
   actions: Schema.Array(Schema.String),
-  result: Schema.Literals(["resumed", "escalate"]),
-  needs_person: Schema.optionalKey(Schema.String),
   finding: Schema.Struct({
     collie_defect: Schema.Boolean,
     key: Schema.String,
@@ -14,7 +12,15 @@ const Healed = Schema.Struct({
     fix: Schema.String,
     regression: Schema.String,
   }),
-});
+};
+const Healed = Schema.Union([
+  Schema.Struct({
+    ...said,
+    result: Schema.Literal("resumed"),
+    needs_person: Schema.optionalKey(Schema.String),
+  }),
+  Schema.Struct({ ...said, result: Schema.Literal("escalate"), needs_person: Schema.String }),
+]);
 const content = contentOf(markdown);
 const heal = step({
   id: "heal",
