@@ -336,6 +336,16 @@ export const ForgeModel = Schema.Struct({
       }),
     ),
   ),
+  tags: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        project: Schema.String,
+        run: Schema.String,
+        sha: Schema.String,
+        merged: Schema.Array(Schema.String),
+      }),
+    ),
+  ),
   /** What the forge stamps a reply or a merge with. */
   now: Schema.optionalKey(Schema.String),
 });
