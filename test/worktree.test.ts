@@ -1722,6 +1722,49 @@ test("a URL that only starts or ends like a pull request's names none", () =>
     }),
   ));
 
+test("a longer URL that holds a merge request's path names none", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs();
+      expect(yield* plan({ plan: `${MR_42}.json`, plan_kind: "text" })).toMatchObject(
+        fresh("from the work"),
+      );
+    }),
+  ));
+
+test("a longer URL that holds a pull request's path names none", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* githubPull();
+      for (const work of [
+        "https://github.com/acme/app/pull/30.json",
+        "https://docs.example.com/github.com/acme/app/pull/30",
+        "Read https://example.org/github.com/acme/app/pull/30 first",
+        "https://docs.example.com/(github.com/acme/app/pull/30)",
+        "Fix https://docs.example.com/r?to=https://github.com/acme/app/pull/30",
+      ]) {
+        expect(yield* plan({ plan: work, plan_kind: "text" })).toMatchObject(
+          fresh("from the work"),
+        );
+      }
+    }),
+  ));
+
+test("a merge request URL set off by brackets or punctuation is still read", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs();
+      for (const work of [`Fix <${MR_42}>.`, `Fix [the parser](${MR_42}/diffs)!`, `"${MR_42}"`]) {
+        expect(yield* plan({ plan: work, plan_kind: "text" })).toMatchObject({
+          branch: "fix-the-parser",
+          source: "from the merge request",
+        });
+      }
+    }),
+  ));
+
 test("work giving one merge request's URL twice holds two URLs, so it gets a fresh branch", () =>
   runOnPath(
     Effect.gen(function* () {
