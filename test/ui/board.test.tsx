@@ -1898,7 +1898,7 @@ test("the Home board draws its sections in the board's one order", () =>
             task({ id: "t4", name: "Shippable", state: "done", landed: false, run: "r4" }),
             task({
               id: "t5",
-              name: "Mergeable",
+              name: "Green and approved",
               state: "done",
               landed: false,
               shipping: "merge",
