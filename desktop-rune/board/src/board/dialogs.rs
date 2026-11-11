@@ -138,6 +138,7 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                             );
                             body = body.child(
                                 TextInput::new(edit)
+                                    .width(None)
                                     .label(name.clone())
                                     .on_edit(move |app: &mut App| match &mut app.board.dialog {
                                         Some(Dialog::Offers { fields, .. }) => &mut fields[at].2,
@@ -424,38 +425,53 @@ fn form(app: &App, k: &Kit, installation: &str, machine: &str, question: &Questi
             .cloned()
             .unwrap_or_else(|| TextEdit::new(""))
     };
+    let status = text(view.status.clone().unwrap_or_default())
+        .key("answer-state")
+        .font(k.ty.small)
+        .color(k.c.text_muted)
+        .role("status")
+        .label(view.status.clone().unwrap_or_default())
+        .live_region(LiveRegion::Polite)
+        .wrap()
+        .grow(1.0)
+        .shrink();
+    let footer = |button: El| {
+        row()
+            .w_full()
+            .gap(12.0)
+            .center_y()
+            .child(status)
+            .child(button)
+    };
     if view.words {
         let edit = edit_or(&typed_key);
-        form = form.child(
-            row()
-                .w_full()
-                .gap(8.0)
-                .child(
-                    TextInput::new(&edit)
-                        .label("Your answer")
-                        .on_change(fed(typed_key.clone(), Event::Type))
-                        .on_edit(edit_at(typed_key.clone()))
-                        .on_submit({
-                            let s = step(Event::Key {
-                                key: "Enter".into(),
-                                r#mod: false,
-                                at: Where::Answer,
-                            });
-                            move |app: &mut App, _: &mut rune::Tx| s(app)
-                        })
-                        .build(k)
-                        .key("answer")
-                        .grow(1.0),
-                )
-                .child(
-                    Button::new("Send")
-                        .variant(ButtonVariant::Contrast)
-                        .disabled(!view.submit)
-                        .on_press(step(Event::Submit(super::new_request())))
-                        .build(k)
-                        .key("send-answer"),
-                ),
-        );
+        form = form
+            .child(
+                TextInput::new(&edit)
+                    .label("Your answer")
+                    .placeholder("Your answer")
+                    .width(None)
+                    .on_change(fed(typed_key.clone(), Event::Type))
+                    .on_edit(edit_at(typed_key.clone()))
+                    .on_submit({
+                        let s = step(Event::Key {
+                            key: "Enter".into(),
+                            r#mod: false,
+                            at: Where::Answer,
+                        });
+                        move |app: &mut App, _: &mut rune::Tx| s(app)
+                    })
+                    .build(k)
+                    .key("answer"),
+            )
+            .child(footer(
+                Button::new("Send answer")
+                    .variant(ButtonVariant::Contrast)
+                    .disabled(!view.submit)
+                    .on_press(step(Event::Submit(super::new_request())))
+                    .build(k)
+                    .key("send-answer"),
+            ));
     } else {
         let mut options = col()
             .key("options")
@@ -532,34 +548,25 @@ fn form(app: &App, k: &Kit, installation: &str, machine: &str, question: &Questi
                     .focusable(!one.disabled),
             );
         }
-        form = form.child(options).child(
-            row().w_full().justify_end().child(
-                Button::new("Submit answer")
-                    .variant(ButtonVariant::Contrast)
-                    .disabled(!view.submit)
-                    .on_press(step(Event::Submit(super::new_request())))
-                    .build(k)
-                    .key("submit-answer"),
-            ),
-        );
+        form = form.child(options).child(footer(
+            Button::new("Submit answer")
+                .variant(ButtonVariant::Contrast)
+                .disabled(!view.submit)
+                .on_press(step(Event::Submit(super::new_request())))
+                .build(k)
+                .key("submit-answer"),
+        ));
     }
-    form = form.child(
-        text(view.status.clone().unwrap_or_default())
-            .key("answer-state")
-            .font(k.ty.small)
-            .color(k.c.text_muted)
-            .role("status")
-            .label(view.status.clone().unwrap_or_default())
-            .live_region(LiveRegion::Polite)
-            .wrap()
-            .w_full(),
-    );
     let draft = edit_or(&draft_key);
+    let explained = view
+        .steer_why
+        .clone()
+        .unwrap_or_else(|| "The question is set aside: the agent re-thinks and asks again.".into());
     form.child(el().h(1.0).w_full().fill(k.c.border_weak).a11y_hidden())
         .child(
             col()
                 .key("steering")
-                .gap(6.0)
+                .gap(8.0)
                 .w_full()
                 .child(
                     text("Or tell the agent something else instead")
@@ -568,34 +575,43 @@ fn form(app: &App, k: &Kit, installation: &str, machine: &str, question: &Questi
                         .a11y_hidden(),
                 )
                 .child(
-                    TextInput::new(&draft)
+                    TextArea::new(&draft)
                         .label("Or tell the agent something else instead")
-                        .placeholder(
-                            "It sets the question aside: the agent re-thinks and asks again.",
-                        )
+                        .placeholder("What should it do instead?")
+                        .width(None)
+                        .auto_grow(2, 6)
                         .disabled(view.steer_disabled)
                         .on_edit(edit_at(draft_key.clone()))
                         .on_change(fed(draft_key.clone(), Event::Draft))
+                        .on_submit({
+                            let s = step(Event::Steer(super::new_request()));
+                            move |app: &mut App, _: &mut rune::Tx| s(app)
+                        })
                         .build(k)
                         .key("steer-text"),
                 )
-                .children(view.steer_why.clone().map(|why| {
-                    text(why)
-                        .font(k.ty.small)
-                        .color(k.c.text_faint)
-                        .wrap()
-                        .w_full()
-                }))
                 .child(
-                    row().w_full().justify_end().child(
-                        Button::new(view.steer_label.clone())
-                            .variant(ButtonVariant::Outline)
-                            .control_size(ControlSize::Small)
-                            .disabled(!view.steer_send)
-                            .on_press(step(Event::Steer(super::new_request())))
-                            .build(k)
-                            .key("steer-send"),
-                    ),
+                    row()
+                        .w_full()
+                        .gap(12.0)
+                        .center_y()
+                        .child(
+                            text(explained)
+                                .key("steer-why")
+                                .font(k.ty.small)
+                                .color(k.c.text_faint)
+                                .wrap()
+                                .grow(1.0)
+                                .shrink(),
+                        )
+                        .child(
+                            Button::new(view.steer_label.clone())
+                                .variant(ButtonVariant::Outline)
+                                .disabled(!view.steer_send)
+                                .on_press(step(Event::Steer(super::new_request())))
+                                .build(k)
+                                .key("steer-send"),
+                        ),
                 ),
         )
 }

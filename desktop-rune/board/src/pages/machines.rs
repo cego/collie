@@ -433,6 +433,7 @@ fn add_dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
             .label(label)
             .control(
                 TextInput::new(edit)
+                    .width(None)
                     .label(label)
                     .on_edit(lens)
                     .on_submit(|app: &mut App, _| app.add_machine())

@@ -168,6 +168,7 @@ pub fn steps(
                     .center_y()
                     .child(
                         TextInput::new(edit)
+                            .width(None)
                             .placeholder("Code")
                             .label("The code the login page gave")
                             .on_edit(|app: &mut App| &mut app.pages.machines.code)

@@ -533,6 +533,7 @@ fn move_dialog(state: &Schedules, k: &Kit, layer: &mut Vec<El>) {
                     .label("Checkout there")
                     .control(
                         TextInput::new(&moving.checkout)
+                            .width(None)
                             .label("Checkout there")
                             .placeholder("The same path")
                             .on_edit(|app: &mut App| {
