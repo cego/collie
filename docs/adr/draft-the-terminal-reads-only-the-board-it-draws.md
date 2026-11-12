@@ -32,6 +32,14 @@ This removes reads and representations; it adds no data cache, delay, or polling
 interval change. The existing focus reuse and recovery poll retain their behavior.
 The host's shared protocol and desktop-specific code are unchanged.
 
+Host publication also invalidates the terminal. Filesystem writes precede the host's
+asynchronous Task build, so a fast read can finish before the new snapshot arrives.
+The existing Task and selected-detail subscriptions notify a single-slot queue after
+updating their latest values. The bridge merges those notifications into its bounded
+background-read lane. A new frame cannot leave the board waiting for the recovery
+poll, and a burst still requests only one read after the current read finishes.
+Focus changes retain their immediate cancellation behavior.
+
 ## Validation
 
 Behavioral regressions count the reader's external calls and verify fresh Task and

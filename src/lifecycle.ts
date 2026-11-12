@@ -809,13 +809,18 @@ const FIRST_BOARD_WAIT = "10 seconds";
  * The board the host serves, followed for as long as the caller's scope: each read is the
  * latest the stream has said. A dropped stream reconnects and starts from a fresh snapshot.
  */
-export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (env: PluginEnv) {
+export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (
+  env: PluginEnv,
+  /** The latest read changed, including connection state. Does not perform a read. */
+  changed?: () => void,
+) {
   const tasks = new Map<string, TaskView>();
   const first = yield* Deferred.make<void>();
   let waited = false;
   /** False between a dropped stream and the fresh snapshot after it. */
   let live = false;
   let lost: string | null = null;
+  const notice = Effect.sync(() => changed?.());
   const apply = (message: BoardMessage) =>
     Effect.suspend(() => {
       switch (message._tag) {
@@ -824,13 +829,13 @@ export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (env: Pl
           for (const task of message.tasks) tasks.set(task.id, task);
           live = true;
           lost = null;
-          return Deferred.succeed(first, undefined);
+          return Deferred.succeed(first, undefined).pipe(Effect.andThen(notice));
         case "Upsert":
           tasks.set(message.task.id, message.task);
-          return Effect.void;
+          return notice;
         case "Remove":
           tasks.delete(message.id);
-          return Effect.void;
+          return notice;
         default:
           return Effect.void;
       }
@@ -840,14 +845,21 @@ export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (env: Pl
   ).pipe(
     Effect.catchCause((cause) =>
       Effect.sync(() => {
-        lost = Cause.hasInterruptsOnly(cause)
+        const next = Cause.hasInterruptsOnly(cause)
           ? null
           : Str.split(reason(Cause.squash(cause)), "\n")[0]!;
+        if (lost !== next) {
+          lost = next;
+          changed?.();
+        }
       }),
     ),
     Effect.ensuring(
       Effect.sync(() => {
-        live = false;
+        if (live) {
+          live = false;
+          changed?.();
+        }
       }),
     ),
   );
@@ -910,7 +922,11 @@ const FIRST_DETAIL_WAIT = "5 seconds";
  * The open drawer's details, followed for as long as the caller's scope. A read for
  * another Run, or the same one shown differently, follows that instead.
  */
-export const followRunDetail = Effect.fn("Lifecycle.followRunDetail")(function* (env: PluginEnv) {
+export const followRunDetail = Effect.fn("Lifecycle.followRunDetail")(function* (
+  env: PluginEnv,
+  /** A frame for the selected Run arrived; the reader now has that frame. */
+  changed?: () => void,
+) {
   const scope = yield* Effect.scope;
   const services = yield* Effect.context<Client>();
   let open: {
@@ -938,7 +954,10 @@ export const followRunDetail = Effect.fn("Lifecycle.followRunDetail")(function* 
               Stream.runForEach(stream, (detail) =>
                 Effect.sync(() => {
                   refreshMr = false;
-                  if (open?.key === showingKey) open.latest = detail;
+                  if (open?.key === showingKey) {
+                    open.latest = detail;
+                    changed?.();
+                  }
                 }).pipe(Effect.andThen(Deferred.succeed(first, undefined))),
               ),
           ),

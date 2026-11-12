@@ -21,6 +21,7 @@ import {
   Queue,
   Schedule,
   Schema,
+  Stream,
 } from "effect";
 import { EXCLUSIVE_STRATEGIES, strategyMeaning } from "./strategies";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
@@ -757,6 +758,13 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
   const platform = yield* Effect.context<
     FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
   >();
+  // A file write can arrive before the host publishes its new board. That publication
+  // must wake the terminal too, rather than relying on the duration of a prior read.
+  const changes = yield* Queue.sliding<void>(1);
+  yield* Effect.addFinalizer(() => Queue.shutdown(changes));
+  const changed = () => {
+    Queue.offerUnsafe(changes, undefined);
+  };
   const session: ControlSession = {
     herdr,
     ...scopeFor(env, env.cwd),
@@ -770,8 +778,8 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     // asks, and reports that the compaction is in the air; the human presses the key
     // again when the pane says it has finished. No work is sent either way.
     compaction: { waitMs: 0 },
-    tasksOf: yield* followBoard(env),
-    detailOf: yield* followRunDetail(env),
+    tasksOf: yield* followBoard(env, changed),
+    detailOf: yield* followRunDetail(env, changed),
     usageOf: () =>
       usageReadings(env, "board").pipe(
         Effect.map((read) => (read.ok ? read.value : [])),
@@ -797,6 +805,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
       const navigate = (run: string) =>
         dispatch?.({ _tag: "SetFilter", filter: { kind: "run", id: run } });
       yield* runApp({
+        changes: Stream.fromQueue(changes),
         onReady: (own) => {
           dispatch = own;
         },

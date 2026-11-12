@@ -152,6 +152,67 @@ test("writes during a refresh let it finish and request one fresh read afterward
     }),
   ));
 
+test("host board changes publish without a file write and coalesce behind the current read", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const changes = yield* Queue.unbounded<void>();
+      const held = yield* Deferred.make<void>();
+      let latest = "initial";
+      let reads = 0;
+      let seen = 0;
+      let interrupted = false;
+      const driven = yield* driveBridge({
+        filter: { kind: "all" },
+        origin: null,
+        stateDir: rig.stateDir,
+        changes: Stream.fromQueue(changes).pipe(
+          Stream.tap(() =>
+            Effect.sync(() => {
+              seen++;
+            }),
+          ),
+        ),
+        load: () =>
+          Effect.gen(function* () {
+            const reading = ++reads;
+            const value = latest;
+            if (reading === 3)
+              yield* Deferred.await(held).pipe(
+                Effect.onInterrupt(() =>
+                  Effect.sync(() => {
+                    interrupted = true;
+                  }),
+                ),
+              );
+            return stateFor(value);
+          }),
+        act: () => Effect.succeed(null),
+      }).pipe(Effect.provideService(FileSystem.FileSystem, { ...fs, watch: () => Stream.never }));
+      yield* until(
+        "the initial board to land",
+        () => reads === 2 && driven.state().newer === "initial",
+      );
+
+      latest = "host update";
+      yield* Queue.offer(changes, undefined);
+      yield* until("the host update to start a read", () => reads === 3);
+      latest = "newest host update";
+      for (let i = 0; i < 20; i++) {
+        yield* Queue.offer(changes, undefined);
+        yield* until("the host event to be consumed", () => seen === i + 2);
+      }
+      expect(reads).toBe(3);
+      expect(interrupted).toBe(false);
+      yield* Deferred.succeed(held, undefined);
+      yield* until(
+        "the latest host state to land",
+        () => driven.state().newer === "newest host update",
+      );
+      expect(reads).toBe(4);
+    }),
+  ));
+
 test("host logs do not refresh the board, but Run writes still do", () =>
   runEffect(
     Effect.gen(function* () {
