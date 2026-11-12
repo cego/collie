@@ -7,6 +7,8 @@ import * as Rec from "effect/Record";
 import { Effect, Schema } from "effect";
 import * as Option from "effect/Option";
 import { connect, frontDoor, socketOf, type HostClient } from "../src/host";
+import { currentEnv } from "../src/env";
+import { makeOffer, type FlowPrompts } from "../src/flows";
 import { stopHost, until } from "./support/host";
 import { proves, save, type World } from "./support/world";
 
@@ -134,4 +136,47 @@ test(
       [],
     ),
   120_000,
+);
+
+test(
+  "the TUI board asks again for what a field cannot take, and takes Merge only once its consequences are confirmed",
+  () =>
+    proves(
+      "collie-offer-tui-",
+      (world) =>
+        Effect.gen(function* () {
+          const project = yield* projectOf(world);
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const runId = yield* finished(client, project).pipe(Effect.orDie);
+          const asked: string[] = [];
+          const headers: string[] = [];
+          const answers = ["maybe", "false", "true"];
+          const picks = ["cancel", "take"];
+          const prompts: FlowPrompts = {
+            menu: (items, options) => {
+              headers.push(options?.header ?? "");
+              const id = picks.shift();
+              return Effect.succeed(Option.getOrNull(Arr.findFirst(items, (one) => one.id === id)));
+            },
+            ask: (question) => {
+              asked.push(question);
+              return Effect.succeed(answers.shift() ?? null);
+            },
+          };
+
+          expect(yield* makeOffer(yield* currentEnv, prompts, runId, "merge")).toBeNull();
+          expect(asked).toEqual(["notify? (optional)", "Notify must be yes or no. notify?"]);
+          expect(headers).toEqual(["Merges it and stops: nothing is tagged or deployed."]);
+          expect((yield* client.runs({ task: null }).pipe(Effect.orDie)).length).toBe(1);
+
+          const note = yield* makeOffer(yield* currentEnv, prompts, runId, "merge");
+          expect(note).toStartWith("Started run ");
+          const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
+          const child = Option.getOrUndefined(Arr.findFirst(runs, (one) => one.parent === runId));
+          expect(child?.input).toEqual({ mr: MR, notify: true, ship: "merge" });
+          yield* stopHost(world.state);
+        }),
+      [],
+    ),
+  300_000,
 );

@@ -153,7 +153,7 @@ const doing = (action: CardAction, primary: boolean) => {
     }
     case "offer": {
       return {
-        label: primary && view.shipping === "merge" ? "Merge" : action.offer.title,
+        label: action.offer.title,
         press: () => (offering.value = offeringOf(runId, action.offer)),
       };
     }
