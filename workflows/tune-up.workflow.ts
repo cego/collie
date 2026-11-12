@@ -905,7 +905,6 @@ const bodyOf = (got: {
   );
 };
 
-/** The harness `commits` that `cwd` lacks (`harnessLacking`), cherry-picked onto it. */
 const carryHarness = ({
   cwd,
   from,
