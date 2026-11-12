@@ -41,7 +41,7 @@ test.each(["listing", "member", "ps"])(
         );
         const fs = FileSystem.makeNoop({
           exists: () => Effect.succeed(at !== "ps"),
-          readDirectory: () => (at === "listing" ? refused : Effect.succeed(["123"])),
+          readDirectory: () => (at === "listing" ? refused : Effect.succeed([String(process.pid)])),
           readFileString: () => refused,
         });
         const found = yield* sessionOf(7).pipe(
@@ -53,6 +53,74 @@ test.each(["listing", "member", "ps"])(
           Effect.result,
         );
         expect(found._tag).toBe("Failure");
+      }),
+    ),
+);
+
+test.skipIf(process.platform !== "linux").each([true, false])(
+  "an Unknown session cmdline error is ignored only for a proven absent process (exited: %p)",
+  (exited) =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const child = yield* spawner.spawn(
+          ChildProcess.make(
+            process.execPath,
+            ["-e", 'console.log("ready"); setInterval(() => {}, 1000);'],
+            { detached: false, stdout: "pipe", stderr: "ignore" },
+          ),
+        );
+        yield* Stream.runDrain(Stream.take(Stream.decodeText(child.stdout), 1));
+        const live = (yield* processOf(child.pid))!;
+        expect(live.session).not.toBeNull();
+        expect(live.session).not.toBe(child.pid);
+        expect(yield* processAbsent(child.pid)).toBe(false);
+        const cmdline = `/proc/${child.pid}/cmdline`;
+        const unknown = PlatformError.systemError({
+          _tag: "Unknown",
+          module: "FileSystem",
+          method: "readFile",
+          pathOrDescriptor: cmdline,
+          description: "cmdline read failed",
+        });
+        const absentAtRead: boolean[] = [];
+        const raced: FileSystem.FileSystem = {
+          ...fs,
+          readDirectory: (path, options) =>
+            fs
+              .readDirectory(path, options)
+              .pipe(
+                Effect.map((names) =>
+                  path === "/proc"
+                    ? Arr.filter(names, (name) => name === String(child.pid))
+                    : names,
+                ),
+              ),
+          readFileString: (path, encoding) =>
+            path === cmdline
+              ? Effect.gen(function* () {
+                  if (exited) {
+                    yield* child.kill();
+                    yield* child.exitCode.pipe(Effect.result);
+                  } else yield* fs.readFileString(path, encoding);
+                  absentAtRead.push(yield* processAbsent(child.pid));
+                  return yield* unknown;
+                })
+              : fs.readFileString(path, encoding),
+        };
+        const found = yield* sessionOf(live.session!).pipe(
+          Effect.provideService(FileSystem.FileSystem, raced),
+          Effect.result,
+        );
+        expect(absentAtRead).toEqual([exited]);
+        if (exited) {
+          expect(found._tag).toBe("Success");
+          expect(found._tag === "Success" && found.success).toEqual([]);
+        } else {
+          expect(found._tag).toBe("Failure");
+          expect(found._tag === "Failure" && found.failure).toBe(unknown);
+        }
       }),
     ),
 );
