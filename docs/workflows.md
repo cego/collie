@@ -669,11 +669,25 @@ Changes requested keep it from being ready. While what it waits for comes by its
 still running, a teammate's approval, review threads to be resolved — the Run is working,
 not needing you: the card stays under Working and says "Waiting for CI and a teammate's
 approval on `<mr>`.", with no notification and nothing in News, until the wait outlasts 2
-hours (2 days for a person), when it parks. A red pipeline, changes requested or a merge the
-forge refuses for another reason (a rebase, a draft) parks it as Needs you, naming what holds it
-back; it keeps reading the review, and goes on by itself once that is repaired. A head that moves is fast-forwarded to and proved before anything
+hours (2 days for a person), when it parks. Terminal failed CI at the proved head goes to
+the same agent's fixer, even when local Checks pass or none are configured. The finding
+names the failed head, check or pipeline, and its forge URL when available. Proof fixes
+and CI repairs share four rounds across proof and review reentry until readiness. A green
+local Check or a success claim cannot clear remote failure or restart that allowance.
+No remote progress parks early; continued failure after four repairs parks with the head
+and pipeline. Resume reads current forge state without repeating completed repair work.
+Collie proves the pushed head, including Checks left to CI, before a fresh release go.
+Changes requested or a merge the forge refuses for another reason (a rebase, a draft)
+still parks it as Needs you while it keeps reading. Approval alone, running or unknown CI,
+and no pipeline retain their normal behavior. Confirmed target conflicts take priority
+over proof and CI repair; fresh comments keep their existing handling.
+A head that moves is fast-forwarded to and proved before anything
 can be asked about it. A merge request someone else merges, or closes, ends the Run with
 nothing tagged.
+
+A CI failure discovered after a go invalidates that go. The existing claim cleanup and,
+where needed, pre-merge stage rollback run before repair. Hold and Stop prevent further
+fix or release work. Recovery after merge is unchanged.
 
 **Review comments** are answered as they come. An **external** comment is a person's,
 by anyone but the forge login Collie works as: a bot's comment, a system note and your

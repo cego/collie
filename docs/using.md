@@ -2964,6 +2964,18 @@ the repair. Collie then proves the pushed head before asking a fresh release go.
 unsuccessful conflict repairs, or a repair that leaves the remote head unchanged, park
 the Run with the reason; repair it and resume to have Collie read the forge again.
 
+Failed CI during Review wait also goes to that agent, with the failed head, pipeline or
+check name, and available forge URL. Local Checks passing, or having none, does not clear
+a remote failure. Proof fixes and CI repairs share four rounds until the merge request
+is ready, including returns through Review wait. No remote progress or four unsuccessful
+repairs parks the Run with the failing head and pipeline. Repair the branch or recover CI,
+then resume: Collie reads and proves the current head without repeating completed repairs.
+Approval alone, running or unknown CI, and other forge blocks keep their normal waits.
+Target conflicts are repaired first; moved heads are adopted and proved before CI repair.
+A repaired head needs a fresh go after proof, green CI, approval, and answered comments.
+A failure after a go returns its claim and rolls pre-merge stage back where required.
+Hold and Stop still prevent further work; recovery after merge is unchanged.
+
 To have it ask before it shares the merge request with your team, turn on
 `release.share_for_approval` and name your Slack channel in `release.approval_channel`
 under Settings ([Your defaults](#your-defaults)). While the merge request waits on a

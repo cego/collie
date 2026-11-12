@@ -913,8 +913,21 @@ With `returnConflicts: true`, a confirmed target conflict instead returns `Confl
 with its current `head`, before `Moved` or `Unanswered`, including when combined with
 `whileConflicting`. Unknown mergeability and other forge blocks retain their ordinary
 waiting behavior. Release uses this option to repair a conflict before proving the pushed
-head and asking a fresh go. Take either inside an Activity, and suspend on `Held` there,
-so a resume waits again.
+head and asking a fresh go.
+With `returnFailedCi: true`, terminal CI failure at `proved` returns `FailedCi`, carrying
+`head`, the failed check or pipeline `name`, and optional forge `url`. Merged and closed
+states remain terminal. With both repair options, conflicts precede moved heads, which
+precede fresh comments and failed CI. Missing approval does not suppress a failed-CI return.
+Approval alone, running or unknown CI, no pipeline, and other forge blocks keep their
+normal behavior. Omitting the option preserves ordinary polling.
+
+Release seeds its proof/fix path from this structured failure, even when local Checks pass
+or none are configured. Proof fixes and CI repairs share four rounds across review reentry
+until readiness; a green local Check cannot restart that allowance. No remote progress or
+exhaustion parks with the failing head and pipeline. Resume rereads the forge without
+repeating completed repairs, then proves the current head, including Checks left to CI.
+A repaired head requires a fresh go after normal readiness. Take waits inside an Activity,
+and suspend on `Held` there, so a resume waits again.
 
 `host.prerequisites({ runId, cwd, ticket })` reads the ticket file at `ticket` again, and
 asks once whether every Change its `**Needs merged:**` line names has landed. It answers a

@@ -729,6 +729,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly _tag: "Unanswered"; readonly head: string; readonly comments: ReadonlyArray<OpenComment>; readonly approvers?: ReadonlyArray<string> }
     | { readonly _tag: "Moved"; readonly head: string }
     | { readonly _tag: "Conflicting"; readonly head: string }
+    | { readonly _tag: "FailedCi"; readonly head: string; readonly name: string; readonly url?: string }
     | { readonly _tag: "Merged"; readonly sha: string; readonly by: string; readonly at: string }
     | { readonly _tag: "Closed" }
     | { readonly _tag: "Held" }
@@ -1159,6 +1160,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly whileConflicting?: boolean;
       /** Return a confirmed target conflict at its current head for repair. */
       readonly returnConflicts?: boolean;
+      /** Return terminal CI failure at the proved head, after fresh comments. */
+      readonly returnFailedCi?: boolean;
     }) => Effect.Effect<ReviewStanding, WorkflowError>;
     /**
      * One read of whether the Changes the ticket at \`ticket\` names on its **Needs merged:** line
@@ -4389,6 +4392,7 @@ export const hostLayer = (options: {
         readonly proved: string;
         readonly seen: ReadonlyArray<string>;
         readonly returnConflicts?: boolean;
+        readonly returnFailedCi?: boolean;
       }) =>
         Effect.gen(function* () {
           const mr = yield* mergeRequestOf(fs, dir, asked.runId);
@@ -5290,7 +5294,8 @@ export const hostLayer = (options: {
               for (;;) {
                 const { mr, read, standing } = yield* reviewRead(asked);
                 const wait = reviewWaitOf(mr, read);
-                if (standing._tag === "Conflicting") return standing;
+                if (standing._tag === "Conflicting" || standing._tag === "FailedCi")
+                  return standing;
                 if (asked.whileConflicting === true) {
                   const conflicting =
                     read.ok && read.state === "open" && conflictsWithTarget(read.mergeable);

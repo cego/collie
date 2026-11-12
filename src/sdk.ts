@@ -1119,6 +1119,8 @@ export interface HostApi {
     readonly whileConflicting?: boolean;
     /** Return a confirmed target conflict as `Conflicting` at its current head for repair. */
     readonly returnConflicts?: boolean;
+    /** Return terminal CI failure at the proved head as `FailedCi`, after fresh comments. */
+    readonly returnFailedCi?: boolean;
   }) => Effect.Effect<ReviewStanding, WorkflowError>;
   /**
    * One read of whether the Changes the ticket at `ticket` names on its `**Needs merged:**`
