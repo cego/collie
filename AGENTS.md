@@ -87,6 +87,10 @@ here are in [`src/README.md`](src/README.md).
   [`docs/using.md`](docs/using.md#self-improve), `workflows/self-improve.workflow.ts`,
   `workflows/retrospective.ts`, `personas/retrospective.md`, `test/support/baseline.ts`.
   Its triage uses the installed `retro` skill.
+- **Parks, recovery, the Heal** → [ADR-draft-a-run-recovers-where-it-parks](docs/adr/draft-a-run-recovers-where-it-parks.md),
+  [`docs/cli.md`](docs/cli.md#stop-and-resume), `src/park-cause.ts`, `src/park-recovery.ts`,
+  `src/heal.ts`, `healerBound` in `src/host.ts`, `workflows/heal.workflow.ts`,
+  `test/recovery.test.ts`, `test/heal.test.ts`.
 - **Settings** → [ADR-0043](docs/adr/0043-a-shared-setting-is-its-latest-edit.md), `src/settings.ts`,
   `setSetting` and `takeShared` in `src/config.ts`. The user Layer's files are shared by the same rule:
   [ADR-0061](docs/adr/0061-a-users-definitions-are-the-flocks.md),
@@ -169,6 +173,7 @@ here are in [`src/README.md`](src/README.md).
   [ADR-0055](docs/adr/0055-a-run-never-asks-to-run-its-checks.md),
   [`docs/sdk.md`](docs/sdk.md#reviewing-and-fixing-until-it-converges), `settleRound`, `test/rally.test.ts`.
 - **Lists of work, slices, fan-out** → [ADR-0024](docs/adr/0024-a-list-of-work-is-known-by-its-names.md),
+  waiting on another Run's Change: [ADR-draft-a-change-waits-on-another-runs-change-to-merge](docs/adr/draft-a-change-waits-on-another-runs-change-to-merge.md),
   [`docs/sdk.md`](docs/sdk.md#a-list-of-work-one-item-at-a-time), `src/slices.ts`, `src/plan.ts`, `test/listing.test.ts`.
 - **Cards, offers** → [ADR-0025](docs/adr/0025-a-card-is-facts-and-an-offer-is-a-declaration.md),
   [`docs/sdk.md`](docs/sdk.md#what-a-definition-declares), `src/standing.ts`, `src/offers.ts`, `src/cards.ts`,

@@ -329,7 +329,8 @@ const answerFrom = Effect.fn("fake.answer")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const ref = /is in (\S+\.md) /.exec(line);
+  // The step's prompt file, or another agent's message ("Their message is in <file>.md. Read it").
+  const ref = /is in (\S+\.md)(?: |\. )/.exec(line);
   const text =
     ref && (yield* fs.exists(ref[1]!)) ? yield* fs.readFileString(ref[1]!, "utf8") : line;
   const match = /^OUTPUT_PATH: (.+)$/m.exec(text);

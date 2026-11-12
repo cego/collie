@@ -24,6 +24,7 @@ import {
   FindingSchema,
   FixOutputSchema,
   IntegrationSchema,
+  PrerequisiteStandingSchema,
   Agents,
   Children,
   Host,
@@ -212,9 +213,12 @@ const SliceRecord = Schema.Struct({
   title: Schema.String,
   blockedBy: Schema.Array(Schema.String),
   checks: Schema.Array(Schema.String),
-  // A reading journaled before tickets carried their criteria, or their benchmark, has none.
+  // A reading journaled before tickets carried their criteria, benchmark or prerequisites has none.
   criteria: Schema.optionalKey(Schema.Array(Schema.String)),
   benchmark: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  prerequisites: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ run: Schema.String, change: Schema.NullOr(Schema.String) })),
+  ),
 });
 
 /** A ticket's criteria and after-merge outcomes as one reading of its file found them. */
@@ -578,6 +582,7 @@ export default defineWorkflow({
           ...one,
           criteria: one.criteria ?? [],
           benchmark: one.benchmark ?? null,
+          prerequisites: one.prerequisites ?? [],
         }));
       });
       let tickets: ReadonlyArray<Slice> = yield* ticketsNow;
@@ -674,15 +679,73 @@ export default defineWorkflow({
             reviewed: recovery.review,
           };
       }
+      const needing = (one: Slice) => ({
+        runId,
+        cwd,
+        ticket: `${source.value}/issues/${one.file}`,
+      });
+      let prerequisiteReads = 0;
+      const landed = (one: Slice) =>
+        Effect.suspend(() => {
+          prerequisiteReads += 1;
+          return Activity.make({
+            name: `prerequisites.${prerequisiteReads}`,
+            success: PrerequisiteStandingSchema,
+            error: WorkflowError,
+            execute: host.prerequisites(needing(one)),
+          });
+        }).pipe(Effect.map((standing) => standing._tag === "Landed"));
+      let prerequisiteWaits = 0;
+      const awaited = (one: Slice) =>
+        Effect.gen(function* () {
+          prerequisiteWaits += 1;
+          const standing = yield* Activity.make({
+            name: `prerequisites-wait.${prerequisiteWaits}`,
+            success: PrerequisiteStandingSchema,
+            error: WorkflowError,
+            // Suspended inside the Activity, so a resume waits again.
+            execute: Effect.gen(function* () {
+              const standing = yield* host.awaitPrerequisites(needing(one));
+              if (standing._tag === "Held") return yield* Workflow.suspend(yield* WorkflowInstance);
+              return standing;
+            }),
+          });
+          if (standing._tag === "Never")
+            yield* unbuilt(
+              `${one.file}.prerequisites-${prerequisiteWaits}`,
+              `${one.file}: ${standing.why}`,
+            );
+        });
+      const pickable = Effect.gen(function* () {
+        for (;;) {
+          const left = Arr.filter(tickets, (one) => !built.has(one.file));
+          if (left.length === 0) return undefined;
+          const unblocked = Arr.filter(left, (one) =>
+            Arr.every(one.blockedBy, (id) => !Arr.some(left, (other) => other.number === id)),
+          );
+          for (const one of unblocked)
+            if (one.prerequisites.length === 0 || (yield* landed(one))) return one;
+          const waiting = unblocked[0];
+          if (waiting === undefined)
+            return yield* new WorkflowError({
+              reason: `these tickets block each other, so none of them can be built first: ${Arr.join(
+                Arr.map(left, (one) => one.file),
+                ", ",
+              )}`,
+            });
+          yield* building(awaited(waiting), {
+            item: waiting.file,
+            items: Arr.map(tickets, (one) => one.file),
+          });
+        }
+      });
       for (; recovery.entry === "Build";) {
         // Identities before work: two tickets nobody can tell apart would share one
         // result, and finding that out after an agent has been paid for is too late.
         const clash = identityProblem(Arr.map(tickets, (ticket) => ticket.file));
         if (clash !== null) return yield* new WorkflowError({ reason: clash });
-        const ticket =
-          whole && built.size === 0
-            ? null
-            : Option.getOrUndefined(Arr.findFirst(tickets, (one) => !built.has(one.file)));
+        const next = yield* pickable;
+        const ticket = whole && built.size === 0 ? null : next;
         if (ticket === undefined) break;
         rallied = null;
         let attempt = 0;
@@ -694,8 +757,9 @@ export default defineWorkflow({
             const before = (yield* host.evidence(runId, cwd)).verifications.length;
             if (ticket !== null) yield* checkpoint(place.dir, ticket, "started", []);
             const merged =
-              ticket !== null && built.size > 0
-                ? yield* integrated(`${ticket.file}.merge`, true)
+              (ticket !== null && built.size > 0) ||
+              Arr.some(ticket === null ? tickets : [ticket], (one) => one.prerequisites.length > 0)
+                ? yield* integrated(`${item}.merge`, true)
                 : null;
             const session = yield* sessionNow;
             // A plan built in one pass answers every ticket's criteria, and words their own.

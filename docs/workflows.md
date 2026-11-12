@@ -1,6 +1,6 @@
 # Workflows
 
-Collie ships eleven workflows. This page is the "which one do I want" level: what each is
+Collie ships twelve workflows. This page is the "which one do I want" level: what each is
 for, what it needs from you, and how they chain. The files under
 [`workflows/`](../workflows) are canonical for step-by-step behavior: each is a TypeScript
 module with its Markdown beside it as content ([the SDK](sdk.md)). Any of them is a fork
@@ -353,6 +353,23 @@ name git would refuse in a branch name stops the hand-off, quoting the ticket, a
 `schema` in `api` beside a repository called `api--schema`, since both would be run as
 `api--schema`.
 
+A ticket may need a Change another plan's Run is building merged before it is built. It
+names that **Prerequisite** on a `**Needs merged:**` line: Run ids separated by commas, each
+followed by that Run's Change name, or by nothing for its default Change, like
+`**Needs merged:** run-ac644eef card, run-e15f4a62`. The Change is always in the ticket's own
+repository. A ticket of the same plan goes on `**Blocked by:**` instead, and another
+repository's release is cego/collie#338's. The Run building the ticket builds every other
+ticket it can first. Then it waits, and its card reads `Waiting for <run>'s <change> to
+merge.` It checks every 5 minutes, spends no model tokens, and ends on a Hold or a Stop. A
+Prerequisite has landed once its merge request has merged and its merge commit is on the
+default branch. The Run then merges the default branch in and builds the ticket on it. Each
+check reads the ticket again, so taking the entry off the line is how to go on without it.
+The wait needs you only when it can never end by itself: the named Run is not on this host,
+or is this Run or one it came out of, or ended with no merge request for that Change, or that
+merge request closed without merging. The Run then parks as a failed Step that names the Run,
+and resuming it reads the ticket again. A wait past 2 days parks as overdue, as any wait on a
+person does. See [ADR-draft-a-change-waits-on-another-runs-change-to-merge](adr/draft-a-change-waits-on-another-runs-change-to-merge.md).
+
 A plan is single-repository only when its tickets all say `.`, or carry no line at all, and
 are all in one Change. A plan whose tickets all name one repository _by path_ is not one of
 those: that repository is somewhere under the root, and its run has to be rooted there. A
@@ -391,8 +408,8 @@ its result names what each repository ended as.
   is recorded and shown on the Run, and the menu comes back; started directly, the start is
   refused with it before any Run is admitted. The same reading checks
   the tickets when the planner writes them, and a plan it refuses goes back to the planner
-  once, so most of these never reach the menu. The reasons are a cycle between Changes, a
-  `Change:` name git would refuse in a branch name or that names another repository, a
+  once, so most of these never reach the menu. The reasons are a cycle between Changes or
+  between one Change's tickets, a `Change:` name git would refuse in a branch name or that names another repository, a
   ticket with no `Repo:` line where its siblings have one, a repository with no checkout
   under the root — Collie does not clone — a `Repo:` that is not a path under the root, two
   tickets wearing one number, or a "Blocked by" line naming something that is not a ticket
@@ -1357,3 +1374,31 @@ Review, Checks, Merge request and External report.
 Module: [`workflows/tune-up.workflow.ts`](../workflows/tune-up.workflow.ts), with its
 prompts in [`workflows/tune-up.md`](../workflows/tune-up.md) and its agent's Persona in
 [`personas/tuner.md`](../personas/tuner.md).
+
+## `heal`
+
+**For:** a parked Run Collie's own recovery could not move. You never start it: the host
+does, once per park, before the park would tell you it needs you. See
+[Stop and resume](cli.md#stop-and-resume) for when.
+
+**Input:** `run` and `park`, the parked Run and the park it is for.
+
+**What happens:** one healer reads everything about the parked Run (its record, its agents'
+panes and transcripts, its checks and pipeline), tells the agent that missed something what
+it missed, and resumes the Run. It never does the Run's work. The host refuses everything
+else from it: answering a Decision, lifting a Hold, undoing a Stop, taking an offer, and
+anything on another Run. Its resume applies only while the Run is still at the park the
+Heal was started for and neither it nor a Run under it has a Stop, checked as one change with any Stop. It returns `{ diagnosis, actions, result, needs_person, finding }`,
+where `result` is `resumed` or `escalate`, `needs_person` says why only a person can move
+the Run and is required with `escalate`, and `finding` is required: `collie_defect`, `key`,
+`root_cause`, `fix` and `regression`, stated for everyone who runs Collie. An Output without
+a finding, or an escalation without `needs_person`, is sent back for repair. The host judges the parked Run's facts, never `result`.
+
+The host finds it by its declaration, `heals: true`, never by its id; a project's fork that
+declares it replaces the shipped one.
+
+Its Flow forecasts one Step, Heal, which produces evidence.
+
+Module: [`workflows/heal.workflow.ts`](../workflows/heal.workflow.ts), with its prompt in
+[`workflows/heal.md`](../workflows/heal.md) and its agent's Persona in
+[`personas/healer.md`](../personas/healer.md).

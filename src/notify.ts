@@ -23,6 +23,8 @@ export const NOTIFICATION_KINDS = [
   "needs-you",
   "run-done",
   "run-failed",
+  /** The one time a person hears of a park a Heal cleared. */
+  "run-healed",
   "mr-opened",
   /**
    * Drift that Collie could not settle: the correction bound was spent, or nobody was
@@ -55,6 +57,7 @@ export const SOUND = {
   "needs-you": "request",
   "run-done": "done",
   "run-failed": "request",
+  "run-healed": "done",
   "mr-opened": "done",
   "drift-unresolved": "request",
   "correction-sent": "request",
@@ -72,6 +75,7 @@ const HEADLINE = {
   "needs-you": () => "needs you",
   "run-done": () => "finished",
   "run-failed": () => "failed",
+  "run-healed": () => "was healed",
   "mr-opened": (mr?: string) => (mr ? `opened ${mr}` : "opened a merge request"),
   "drift-unresolved": (what?: string) =>
     what ? `drifted from ${what} and could not be corrected` : "has drift nobody has settled",
