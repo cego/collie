@@ -203,7 +203,10 @@ export function shell(
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const command = ChildProcess.make(cmd, args, {
       cwd,
-      env,
+      // A status that refreshes the index holds `index.lock` while it writes, and a commit an
+      // agent makes in that moment is refused. Git's optional locks are for the one working
+      // in a checkout, never for a reader beside it.
+      env: cmd === "git" ? { GIT_OPTIONAL_LOCKS: "0", ...env } : env,
       stdout: "pipe",
       stderr: "pipe",
       // extendEnv, so git and glab inherit this process's environment and find their

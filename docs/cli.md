@@ -1721,6 +1721,12 @@ That pair is the point: a pass on a tree that changed while the command ran says
 about either tree, so such a result is `unstable` and never `pass`. So is a tree too large
 to fingerprint at all, because two unmeasured trees are not one tree.
 
+Reading the tree writes nothing in the checkout. Collie's status of a checkout runs with
+`GIT_OPTIONAL_LOCKS=0`, so it never holds `index.lock` and a commit made beside it is never
+refused for one. The tree is staged in a copy of the index that keeps the index's own
+time, so an edit that leaves a file's size as it was, in the second the file was staged,
+still moves the tree.
+
 What the command prints is shown as it runs — its stdout on stdout and its stderr on
 stderr, or both on stderr under `--json`, where stdout is the one envelope — and the exit
 status is the command's own, so a failure says why the first time.
