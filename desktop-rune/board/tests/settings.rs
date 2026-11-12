@@ -850,7 +850,7 @@ fn opening_settings_asks_the_core_for_everything_it_shows_and_draws_it() {
     );
     assert_eq!(
         said(&runtime, "settings-count").as_deref(),
-        Some("41 settings")
+        Some("42 settings")
     );
     assert!(element(&runtime, "connection-gitlab").is_some());
 }
@@ -1103,7 +1103,7 @@ fn the_search_keeps_the_rows_it_names_and_says_how_many() {
     type_text(&mut runtime, "quiet", 1100.0);
     assert_eq!(
         said(&runtime, "settings-count").as_deref(),
-        Some("2 of 41 settings shown")
+        Some("2 of 42 settings shown")
     );
     assert!(element(&runtime, "setting-flock-quiet_ms").is_some());
     assert!(element(&runtime, "setting-flock-trust").is_none());
@@ -1111,7 +1111,7 @@ fn the_search_keeps_the_rows_it_names_and_says_how_many() {
     tap(&mut runtime, "settings-only-set", 1300.0);
     assert_eq!(
         said(&runtime, "settings-count").as_deref(),
-        Some("1 of 41 settings shown")
+        Some("1 of 42 settings shown")
     );
 }
 

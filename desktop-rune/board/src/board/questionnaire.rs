@@ -47,7 +47,7 @@ pub enum Where {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
-    Seen(Option<Question>),
+    Seen(Option<Box<Question>>),
     Pick(String),
     Key {
         key: String,
@@ -284,7 +284,7 @@ impl Questionnaire {
     pub fn step(&mut self, event: Event) -> Option<Does> {
         match event {
             Event::Seen(question) => {
-                self.seen(question);
+                self.seen(question.map(|q| *q));
                 None
             }
             Event::Pick(id) => {

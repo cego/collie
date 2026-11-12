@@ -303,7 +303,7 @@ fn waiting_work_older_than_a_week_is_folded_but_ready_work_never_is() {
             ],
         )],
     );
-    assert_eq!(cards_in(&runtime, "waiting"), ["Ready", "Fresh"]);
+    assert_eq!(cards_in(&runtime, "waiting"), ["Fresh", "Ready"]);
     let older = node(&runtime, "waiting-older").expect("the older fold");
     assert!(
         within(&older)
@@ -312,7 +312,7 @@ fn waiting_work_older_than_a_week_is_folded_but_ready_work_never_is() {
         "{older}"
     );
     press(&mut runtime, "waiting-older");
-    assert_eq!(cards_in(&runtime, "waiting"), ["Ready", "Fresh", "Stale"]);
+    assert_eq!(cards_in(&runtime, "waiting"), ["Fresh", "Ready", "Stale"]);
 }
 
 #[test]
@@ -882,7 +882,10 @@ fn a_flock_the_core_cuts_off_is_followed_again_at_once_and_quietly() {
     runtime.state.follow_flock();
     harness.fake.push(
         "flock",
-        Ok(snapshot(&pc(), vec![task("t1", "Busy", "active", json!({}))])),
+        Ok(snapshot(
+            &pc(),
+            vec![task("t1", "Busy", "active", json!({}))],
+        )),
     );
     settle(&harness, &mut runtime);
     // A host restarted under the core: the core ends `flock` without an error.
@@ -893,7 +896,10 @@ fn a_flock_the_core_cuts_off_is_followed_again_at_once_and_quietly() {
     assert_eq!(cards_in(&runtime, "working"), ["Busy"]);
     harness.fake.push(
         "flock",
-        Ok(snapshot(&pc(), vec![task("t2", "Again", "active", json!({}))])),
+        Ok(snapshot(
+            &pc(),
+            vec![task("t2", "Again", "active", json!({}))],
+        )),
     );
     settle(&harness, &mut runtime);
     assert_eq!(cards_in(&runtime, "working"), ["Again"]);
@@ -1433,4 +1439,83 @@ fn cards_take_the_columns_the_boards_width_fits_at_once_never_springing_into_the
         (card[2] - (board[2] - 2.0 * 12.0) / 3.0).abs() < 1.0,
         "three columns once the chat closes, without springing: {card:?} in {board:?}"
     );
+}
+
+#[test]
+fn work_ready_to_merge_is_its_own_section_and_its_merge_is_offered_by_the_run_that_owns_it() {
+    let harness = Harness::new();
+    let offer = json!({"id": "merge", "title": "Merge the MR", "run": "r-owner"});
+    let mut runtime = runtime(app(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![
+                task("t-ask", "Ask me", "blocked", json!({})),
+                task(
+                    "t-ship",
+                    "Green and approved",
+                    "done",
+                    json!({"shipping": "merge", "offer": offer}),
+                ),
+                task("t-wait", "Look at me", "stopped", json!({})),
+                task("t-work", "Busy", "active", json!({})),
+            ],
+        )],
+    ));
+    let header = node(&runtime, "header").expect("a header");
+    assert_eq!(
+        header["name"],
+        "One task is waiting on you. 1 ready to ship, 1 waiting on you. 1 working."
+    );
+    let order: Vec<String> = within(&runtime.accessibility_json())
+        .into_iter()
+        .filter(|n| n["role"] == "group")
+        .filter_map(|n| n["name"].as_str().map(String::from))
+        .filter(|name| name.ends_with(", 1"))
+        .collect();
+    assert_eq!(
+        order,
+        [
+            "Needs you, 1",
+            "Ready to ship, 1",
+            "Waiting on you, 1",
+            "Working, 1"
+        ]
+    );
+    assert_eq!(cards_in(&runtime, "ready-to-ship"), ["Green and approved"]);
+    let primary = node(&runtime, "card-t-ship-primary").expect("its merge");
+    assert_eq!(primary["name"], "Merge");
+    press(&mut runtime, "card-t-ship-primary");
+    assert_eq!(
+        harness.fake.asked_of("offers"),
+        [json!({"installation": "inst-pc", "runId": "r-owner"})]
+    );
+}
+
+#[test]
+fn a_parked_card_names_its_cause_and_its_latest_two_recovery_actions() {
+    let harness = Harness::new();
+    let runtime = runtime(app(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![task(
+                "t1",
+                "Waiting for CI",
+                "blocked",
+                json!({"park": {"cause": "ci-job-absent", "kind": "rechecks"},
+                    "recovery": ["first", "second", "third"]}),
+            )],
+        )],
+    ));
+    let park = node(&runtime, "card-t1-park").expect("its park");
+    assert_eq!(park["name"], "Parked: ci-job-absent · Collie rechecks");
+    let history = node(&runtime, "card-t1-recovery").expect("its recovery");
+    assert_eq!(history["name"], "Recovery history");
+    let lines: Vec<&str> = within(&history)
+        .into_iter()
+        .filter(|n| n["role"] == "list-item")
+        .filter_map(|n| n["name"].as_str())
+        .collect();
+    assert_eq!(lines, ["second", "third"]);
 }

@@ -368,18 +368,20 @@ pub fn placed(machines: &[Shown]) -> Vec<Placed<'_>> {
     all
 }
 
-/// The board's four sections, in the order it draws them.
+/// The board's five sections, in the order it draws them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
     NeedsYou,
+    ReadyToShip,
     Waiting,
     Working,
     Finished,
 }
 
 impl Section {
-    pub const ALL: [Section; 4] = [
+    pub const ALL: [Section; 5] = [
         Section::NeedsYou,
+        Section::ReadyToShip,
         Section::Waiting,
         Section::Working,
         Section::Finished,
@@ -387,6 +389,7 @@ impl Section {
     pub fn label(self) -> &'static str {
         match self {
             Section::NeedsYou => "Needs you",
+            Section::ReadyToShip => "Ready to ship",
             Section::Waiting => "Waiting on you",
             Section::Working => "Working",
             Section::Finished => "Finished",
@@ -395,6 +398,7 @@ impl Section {
     pub fn key(self) -> &'static str {
         match self {
             Section::NeedsYou => "needs-you",
+            Section::ReadyToShip => "ready-to-ship",
             Section::Waiting => "waiting",
             Section::Working => "working",
             Section::Finished => "finished",
@@ -406,12 +410,15 @@ impl Section {
 }
 
 /// A decision beats liveness, liveness beats history, and history is split by whether the
-/// work landed.
+/// work landed. Work its host found ready to ship is a section of its own.
 pub fn section_of(task: &Task) -> Section {
+    let shipping = matches!(task.shipping, Some(Some(_)));
     match task.state {
+        State::Blocked if shipping => Section::ReadyToShip,
         State::Blocked => Section::NeedsYou,
         State::Active | State::Quiet => Section::Working,
         _ if task.landed => Section::Finished,
+        _ if shipping => Section::ReadyToShip,
         _ => Section::Waiting,
     }
 }
@@ -441,8 +448,8 @@ pub fn can_resume(state: &State) -> bool {
     matches!(state, State::Failed | State::Stopped | State::Abandoned)
 }
 
-/// The sections, the state order inside Needs you, what is ready to release, then whatever
-/// changed last.
+/// The sections, the state order inside Needs you, the latest first inside Ready to ship,
+/// then whatever changed last.
 pub fn sort_board(placed: &mut [Placed<'_>]) {
     placed.sort_by(|a, b| {
         let (a, b) = (a.task, b.task);
@@ -456,7 +463,13 @@ pub fn sort_board(placed: &mut [Placed<'_>]) {
                     std::cmp::Ordering::Equal
                 }
             })
-            .then_with(|| b.ready.unwrap_or(false).cmp(&a.ready.unwrap_or(false)))
+            .then_with(|| {
+                if sa == Section::ReadyToShip {
+                    b.at.partial_cmp(&a.at).unwrap_or(std::cmp::Ordering::Equal)
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            })
             .then_with(|| {
                 let (ta, tb) = (a.ended.unwrap_or(a.at), b.ended.unwrap_or(b.at));
                 tb.partial_cmp(&ta).unwrap_or(std::cmp::Ordering::Equal)
@@ -513,13 +526,16 @@ pub fn header_sentence(tasks: &[&Task], now: Option<f64>) -> (String, bool) {
         .filter(|t| section_of(t) == Section::Waiting)
         .filter(|t| now.is_none_or(|now| !older(t, now)))
         .collect();
-    let ready = waiting.iter().filter(|t| t.ready == Some(true)).count();
+    let ready = tasks
+        .iter()
+        .filter(|t| section_of(t) == Section::ReadyToShip)
+        .count();
     let mut held = Vec::new();
     if ready > 0 {
-        held.push(format!("{ready} ready to release"));
+        held.push(format!("{ready} ready to ship"));
     }
-    if waiting.len() != ready {
-        held.push(format!("{} waiting on you", waiting.len() - ready));
+    if !waiting.is_empty() {
+        held.push(format!("{} waiting on you", waiting.len()));
     }
     let in_hand = if held.is_empty() {
         String::new()

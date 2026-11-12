@@ -3,7 +3,7 @@
 
 use super::agents::{capital, mr_words, read_mr_ref};
 use collie_desktop_protocol::generated::{
-    Category, Detail, DetailMr2, Input, Outcome, PendingItem, Replie,
+    Category, Detail, DetailMr2, Input, Kind, Outcome, Park, PendingItem, Replie,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -279,4 +279,32 @@ pub fn offers_terminal(live: bool, chosen: Option<&str>) -> bool {
 /// Followed to its end unless the human scrolled up to read.
 pub fn log_following(scroll_top: f32, client_height: f32, scroll_height: f32) -> bool {
     scroll_top + client_height >= scroll_height - 2.0
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recovery {
+    pub park: Option<String>,
+    pub history: Vec<String>,
+}
+
+pub fn recovery_of(park: Option<&Park>, recovery: Option<&[String]>, limit: usize) -> Recovery {
+    let history = recovery.unwrap_or_default();
+    Recovery {
+        park: park.map(park_line),
+        history: history[history.len().saturating_sub(limit)..].to_vec(),
+    }
+}
+
+/// `parkLine` in `src/park-cause.ts`.
+pub fn park_line(park: &Park) -> String {
+    let cause = serde_json::to_value(&park.cause)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default();
+    let kind = match park.kind {
+        Kind::AsksAgent => "Collie asks its agent",
+        Kind::Rechecks => "Collie rechecks",
+        Kind::NeedsYou => "needs you",
+    };
+    format!("Parked: {cause} · {kind}")
 }

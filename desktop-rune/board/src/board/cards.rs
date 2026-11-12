@@ -4,7 +4,7 @@
 
 use super::model::{Placed, can_resume, is_settled};
 use collie_desktop_protocol::generated::{
-    Flow, Glyph, GlyphState, Mr, MrState, Offer, State, Task,
+    Action, Flow, Glyph, GlyphState, Mr, MrState, Offer, State, Task,
 };
 
 /// A merge request reference: `host/group/project` (none for an old bare iid) and its number.
@@ -309,6 +309,10 @@ pub fn card_actions(task: &Task) -> Vec<CardAction> {
     actions
 }
 
+pub fn ships_by_merge(task: &Task) -> bool {
+    task.shipping == Some(Some(Action::Merge))
+}
+
 /// The one action that ends a card's wait, drawn first on it.
 pub fn primary_action(task: &Task) -> Option<CardAction> {
     if task.decision.is_some() {
@@ -322,6 +326,9 @@ pub fn primary_action(task: &Task) -> Option<CardAction> {
     }
     if task.landed {
         return None;
+    }
+    if ships_by_merge(task) && task.offer.is_some() {
+        return task.offer.clone().map(CardAction::Offer);
     }
     if task.plan_ready {
         return task.offer.clone().map(CardAction::Offer);
@@ -431,6 +438,7 @@ fn scalar_of(task: &Task) -> Vec<Mr> {
         ready: task.ready.unwrap_or(false),
         disposition: task.disposition.clone(),
         waits_on: Vec::new(),
+        settled: None,
     }]
 }
 

@@ -917,3 +917,44 @@ fn a_record_whose_details_are_not_on_its_machine_says_so_rather_than_reading() {
         "nothing is still reading: {said:?}"
     );
 }
+
+#[test]
+fn a_parked_runs_record_names_its_park_and_keeps_its_recovery_after_it_clears() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    runtime.update(|app, _| app.open_card("inst-build:b2"));
+    runtime.frame(100.0);
+    let recovery: Vec<String> = (1..=22).map(|n| format!("rechecked {n}")).collect();
+    harness.fake.push(
+        "runDetail",
+        Ok(detail(json!({
+            "park": {"cause": "login-missing", "kind": "needs-you"},
+            "recovery": recovery,
+        }))),
+    );
+    settle(&mut runtime, &harness, 200.0);
+    assert_eq!(
+        named(&runtime, "record-park")["name"],
+        "Parked: login-missing · needs you"
+    );
+    let lines = |runtime: &Runtime<App>| -> Vec<String> {
+        within(&named(runtime, "record-recovery"))
+            .into_iter()
+            .filter(|n| n["role"] == "list-item")
+            .filter_map(|n| n["name"].as_str().map(String::from))
+            .collect()
+    };
+    let kept = lines(&runtime);
+    assert_eq!(kept.len(), 20);
+    assert_eq!(kept[0], "rechecked 3");
+
+    harness.fake.push(
+        "runDetail",
+        Ok(detail(
+            json!({"park": null, "recovery": ["rechecked cleared", "resumed resumed"]}),
+        )),
+    );
+    settle(&mut runtime, &harness, 300.0);
+    assert!(!keys(&runtime).iter().any(|k| k == "record-park"));
+    assert_eq!(lines(&runtime), ["rechecked cleared", "resumed resumed"]);
+}

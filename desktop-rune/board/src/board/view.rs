@@ -7,10 +7,11 @@ use super::model::{
 };
 use super::{answers, as_of_said, dialogs};
 use crate::record::flow_of;
+use crate::record::tabs::recovery_of;
 use crate::shell::Page;
 use crate::{App, flow, icons};
 use collie_desktop_chat::glide::smooth;
-use collie_desktop_protocol::generated::{Decision, GlyphState, LostState, State};
+use collie_desktop_protocol::generated::{Decision, GlyphState, LostState, State, Task};
 use rune::{Color, El, Icon, Key, LiveRegion, col, el, icon, row, text};
 use rune_kit::{
     Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, Loader, Menu, MenuItem,
@@ -486,7 +487,7 @@ fn alerts(app: &App, k: &Kit) -> Vec<El> {
 fn section_title(k: &Kit, section: Section, count: usize, note: Option<String>) -> El {
     let tone = match section {
         Section::NeedsYou => k.c.warning,
-        Section::Waiting => collie_desktop_theme::tones(k.dark).ready,
+        Section::ReadyToShip | Section::Waiting => collie_desktop_theme::tones(k.dark).ready,
         Section::Working => k.c.info,
         Section::Finished => k.c.success,
     };
@@ -604,7 +605,7 @@ fn pill(k: &Kit, key: &str, said: &str, tone: Option<&StateColors>) -> El {
 }
 
 /// A card action as this board does it, or none where Desktop has no way to yet.
-fn label_of(action: &CardAction, primary: bool) -> Option<String> {
+fn label_of(task: &Task, action: &CardAction, primary: bool) -> Option<String> {
     Some(match action {
         CardAction::GoToTab => "Go to pane".into(),
         CardAction::CheckOutput => "Check output…".into(),
@@ -614,6 +615,7 @@ fn label_of(action: &CardAction, primary: bool) -> Option<String> {
             mr.url()?;
             cards::open_mr_label(mr, primary, named.as_deref())
         }
+        CardAction::Offer(_) if primary && cards::ships_by_merge(task) => "Merge".into(),
         CardAction::Offer(offer) => offer.title.clone(),
         CardAction::Offers => "What it offers…".into(),
         CardAction::Resume => (if primary { "Resume" } else { "Resume run" }).into(),
@@ -625,6 +627,24 @@ fn label_of(action: &CardAction, primary: bool) -> Option<String> {
         } => cards::dispose_label(*disposition, named.as_deref()),
         CardAction::Acknowledge => "Acknowledge".into(),
     })
+}
+
+pub(crate) fn recovery_list(k: &Kit, key: String, lines: Vec<String>) -> El {
+    col()
+        .key(key)
+        .role("list")
+        .label("Recovery history")
+        .gap(2.0)
+        .w_full()
+        .children(lines.into_iter().map(|line| {
+            text(line.clone())
+                .role("listitem")
+                .label(line)
+                .font(k.ty.small)
+                .color(k.c.text_muted)
+                .wrap()
+                .w_full()
+        }))
 }
 
 fn small_button(label: String, variant: ButtonVariant) -> Button {
@@ -655,7 +675,7 @@ fn card(
     let menu_actions: Vec<(CardAction, String)> = cards::card_actions(task)
         .into_iter()
         .chain(cards::disposition_actions(task))
-        .filter_map(|a| label_of(&a, false).map(|l| (a, l)))
+        .filter_map(|a| label_of(task, &a, false).map(|l| (a, l)))
         .collect();
     let open = app.board.menu.as_deref() == Some(key.as_str());
     let trigger = IconButton::new(&icons::MORE)
@@ -911,6 +931,26 @@ fn card(
         );
     }
 
+    let recovery = recovery_of(
+        task.park.as_ref().and_then(Option::as_ref),
+        task.recovery.as_deref(),
+        2,
+    );
+    if let Some(park) = recovery.park {
+        card = card.child(
+            text(park.clone())
+                .key(format!("{id}-park"))
+                .label(park)
+                .font(k.ty.small)
+                .color(c.text_muted)
+                .wrap()
+                .w_full(),
+        );
+    }
+    if !recovery.history.is_empty() {
+        card = card.child(recovery_list(k, format!("{id}-recovery"), recovery.history));
+    }
+
     // What it asks: questions, or a proposal to review.
     let asks = |key: &str, said: String| {
         col().key(key.to_string()).gap(8.0).w_full().child(
@@ -997,7 +1037,7 @@ fn card(
                 .shrink(),
         );
     if let Some((action, label)) =
-        cards::primary_action(task).and_then(|a| label_of(&a, true).map(|l| (a, l)))
+        cards::primary_action(task).and_then(|a| label_of(task, &a, true).map(|l| (a, l)))
     {
         let key = key.clone();
         let mut button = small_button(label, ButtonVariant::Neutral).disabled(!live);

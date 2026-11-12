@@ -9,7 +9,7 @@ pub mod clicks;
 mod dialogs;
 pub mod model;
 pub mod questionnaire;
-mod view;
+pub(crate) mod view;
 
 use collie_desktop_protocol::generated::{About, LostState};
 pub use model::{Flock, Placed, Shown};
@@ -738,7 +738,9 @@ impl App {
                     self.open_link(url);
                 }
             }
+            // An offer of another Run of the Task is that Run's to make.
             CardAction::Offer(offer) => {
+                let run = offer.run.clone().unwrap_or(run);
                 self.open_offers(key, installation, run, as_of, Some(offer.id.clone()))
             }
             CardAction::Offers => self.open_offers(key, installation, run, as_of, None),
@@ -1288,7 +1290,7 @@ impl App {
             if question.as_ref() == Some(&asked.question) && asked.on_board {
                 continue;
             }
-            asked.step(Event::Seen(question));
+            asked.step(Event::Seen(question.map(Box::new)));
         }
         self.sitting_sees();
     }

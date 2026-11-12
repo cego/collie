@@ -99,6 +99,10 @@ pub struct Task {
     pub age: String,
     pub drift: Option<String>,
     pub held: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub park: Option<Option<Park>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<Vec<String>>,
     #[serde(rename = "heldBy")]
     pub held_by: Option<HeldBy>,
     pub decision: Option<Decision>,
@@ -121,6 +125,10 @@ pub struct Task {
     pub checks: Option<Option<Checks>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ready: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub shipping: Option<Option<Action>>,
+    #[serde(rename = "shippingMr", default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub shipping_mr: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub readiness: Option<Readiness>,
     #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
@@ -178,6 +186,58 @@ pub enum StepState {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Park {
+    pub cause: Cause,
+    pub kind: Kind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Cause {
+    #[serde(rename = "output-absent")]
+    OutputAbsent,
+    #[serde(rename = "idle-budget")]
+    IdleBudget,
+    #[serde(rename = "ci-job-absent")]
+    CiJobAbsent,
+    #[serde(rename = "forge-unavailable")]
+    ForgeUnavailable,
+    #[serde(rename = "herdr-unavailable")]
+    HerdrUnavailable,
+    #[serde(rename = "checkout-dirty-collie")]
+    CheckoutDirtyCollie,
+    #[serde(rename = "checkout-dirty-human")]
+    CheckoutDirtyHuman,
+    #[serde(rename = "login-missing")]
+    LoginMissing,
+    #[serde(rename = "branch-force-pushed")]
+    BranchForcePushed,
+    #[serde(rename = "release-failed")]
+    ReleaseFailed,
+    #[serde(rename = "gate-fix-unproved")]
+    GateFixUnproved,
+    #[serde(rename = "step-failed")]
+    StepFailed,
+    #[serde(rename = "unknown")]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Kind {
+    #[serde(rename = "asks-agent")]
+    AsksAgent,
+    #[serde(rename = "rechecks")]
+    Rechecks,
+    #[serde(rename = "needs-you")]
+    NeedsYou,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HeldBy {
     pub by: String,
     pub reason: String,
@@ -192,7 +252,9 @@ pub enum Decision {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Question {
-    pub kind: Kind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shipping: Option<Shipping>,
+    pub kind: QuestionKind,
     pub run: String,
     pub id: String,
     pub step: String,
@@ -208,7 +270,42 @@ pub struct Question {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum Kind {
+#[serde(untagged)]
+pub enum Shipping {
+    Shipping0(Shipping0),
+    Deploy(Deploy),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Shipping0 {
+    pub action: Action,
+    pub head: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Action {
+    #[serde(rename = "merge")]
+    Merge,
+    #[serde(rename = "stage")]
+    Stage,
+    #[serde(rename = "deploy")]
+    Deploy,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Deploy {
+    pub action: DeployAction,
+    pub tag: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum DeployAction {
+    #[serde(rename = "deploy")]
+    Deploy,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum QuestionKind {
     #[serde(rename = "question")]
     Question,
 }
@@ -242,7 +339,7 @@ pub struct Proposal {
     pub id: String,
     pub hash: String,
     pub text: String,
-    pub actions: Vec<Action>,
+    pub actions: Vec<ProposalAction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -252,7 +349,7 @@ pub enum ProposalKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Action {
+pub struct ProposalAction {
     pub text: String,
     pub allowed: bool,
 }
@@ -288,6 +385,8 @@ pub struct Mr {
     pub head: Option<String>,
     pub ready: bool,
     pub disposition: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub settled: Option<Option<Settled>>,
     #[serde(rename = "waitsOn")]
     pub waits_on: Vec<String>,
 }
@@ -360,6 +459,16 @@ pub struct Unchecked {
 pub enum UncheckedState {
     #[serde(rename = "unchecked")]
     Unchecked,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Settled {
+    #[serde(rename = "merged")]
+    Merged,
+    #[serde(rename = "abandoned")]
+    Abandoned,
+    #[serde(rename = "superseded")]
+    Superseded,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -447,6 +556,8 @@ pub struct Reopened {
 pub struct Offer {
     pub id: String,
     pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1401,7 +1512,13 @@ pub struct KeptRecord {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Detail {
+    #[serde(rename = "branchProgress", default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub branch_progress: Option<Option<String>>,
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub park: Option<Option<Park>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<Revision>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1479,6 +1596,10 @@ pub struct Report {
     pub state: ReportState,
     pub at: String,
     pub note: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreached: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tries: Option<Vec<Trie>>,
     pub closed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closure: Option<String>,
@@ -1490,6 +1611,13 @@ pub enum ReportState {
     Delivered,
     #[serde(rename = "undelivered")]
     Undelivered,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Trie {
+    pub state: ReportState,
+    pub at: String,
+    pub note: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2093,11 +2221,11 @@ pub enum Produces {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Attempt {
     pub at: String,
-    pub cause: Option<Cause>,
+    pub cause: Option<AttemptCause>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum Cause {
+pub enum AttemptCause {
     #[serde(rename = "restarted")]
     Restarted,
     #[serde(rename = "resumed")]
@@ -2448,7 +2576,7 @@ pub struct Dispose {
     pub tag: DisposeTag,
     #[serde(rename = "runId")]
     pub run_id: String,
-    pub kind: DisposeKind,
+    pub kind: Settled,
     pub r#ref: String,
 }
 
@@ -2456,16 +2584,6 @@ pub struct Dispose {
 pub enum DisposeTag {
     #[serde(rename = "Dispose")]
     Dispose,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum DisposeKind {
-    #[serde(rename = "merged")]
-    Merged,
-    #[serde(rename = "abandoned")]
-    Abandoned,
-    #[serde(rename = "superseded")]
-    Superseded,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2572,6 +2690,8 @@ pub struct InvokeInput {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OffersSuccessItem {
+    #[serde(rename = "textField", default, skip_serializing_if = "Option::is_none")]
+    pub text_field: Option<String>,
     pub id: String,
     pub title: String,
     pub workflow: String,

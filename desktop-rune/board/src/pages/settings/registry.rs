@@ -353,6 +353,16 @@ pub fn settings() -> Vec<Setting> {
             .unit("percent"),
         ),
         of(
+            "recovery.resume",
+            Boolean,
+            "true",
+            words(
+                "Runs",
+                "Resume cleared parks",
+                "Whether the host resumes a parked Run once its read-only recheck clears. Off still records rechecks.",
+            ),
+        ),
+        of(
             "release.share_for_approval",
             Boolean,
             "false",

@@ -478,6 +478,7 @@ pub fn view(app: &App, k: &Kit) -> Option<El> {
             .child(header(app, record, k))
             .children(standing(app, record, k))
             .children(notice(app, k))
+            .children(parked(record, k))
             .child(tab_bar(&tabs, &shown, k))
             .child(panel.child(body)),
     )
@@ -589,6 +590,44 @@ fn unread(record: &Record, reading: &str, k: &Kit) -> El {
     } else {
         quiet(reading.to_string(), k)
     }
+}
+
+fn parked(record: &Record, k: &Kit) -> Option<El> {
+    let detail = record.detail()?;
+    let recovery = super::tabs::recovery_of(
+        detail.park.as_ref().and_then(Option::as_ref),
+        detail.recovery.as_deref(),
+        20,
+    );
+    if recovery.park.is_none() && recovery.history.is_empty() {
+        return None;
+    }
+    let park = recovery.park.map(|park| {
+        text(park.clone())
+            .key("record-park")
+            .label(park)
+            .font(k.ty.small)
+            .color(k.c.text_muted)
+            .wrap()
+            .w_full()
+    });
+    let history = (!recovery.history.is_empty()).then(|| {
+        col()
+            .gap(4.0)
+            .w_full()
+            .child(
+                text("Recovery")
+                    .role("heading")
+                    .font(k.ty.small_medium)
+                    .color(k.c.text_base),
+            )
+            .child(crate::board::view::recovery_list(
+                k,
+                "record-recovery".into(),
+                recovery.history,
+            ))
+    });
+    Some(col().gap(8.0).w_full().children(park).children(history))
 }
 
 /// Whether the record is current: still reading, no longer coming, or from a Machine out of
