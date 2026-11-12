@@ -126,6 +126,10 @@ Pause transitions and note receipts still persist; the live Steps keep writing t
 Model-backed Run listings use the supplied file reader for intent and displayed controls as well.
 Direct Run reads and live control decisions keep their fresh filesystem reads.
 
+Kept cards and check markers use their source-input revisions. Stamping a changed age or
+record still advances the public revision, but does not invalidate the card that produced it.
+File, row and observed Run-fact changes still invalidate the affected cards.
+
 `bench/front-door-wait.ts` measures `verify` first values and `read` answers
 against the record-open fixture's host while its live Runs keep the board building.
 The harness disables OTLP and records every board-build duration through `COLLIE_RECORD_MARKS`,

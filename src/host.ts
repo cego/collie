@@ -1219,7 +1219,7 @@ const hostBoard = (dir: string) =>
     const cards: KeptCards | undefined =
       model === undefined
         ? undefined
-        : { revision: model.highest, kept: new Map(), markers: new Map() };
+        : { revision: model.inputsAt, kept: new Map(), markers: new Map() };
     /** The offers a build read, which the door is told of with its listing. */
     const offered = new Map<string, ReadonlyArray<OfferView>>();
     const boardOf = (facts: ReadonlyArray<RunFacts>, alive: ReadonlyArray<AgentInfo>) =>
