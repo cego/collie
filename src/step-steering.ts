@@ -25,6 +25,7 @@ const State = Schema.Struct({
 });
 type State = typeof State.Type;
 const json = Schema.fromJsonString(State);
+const sameState = Schema.toEquivalence(State);
 const lock = Semaphore.makeUnsafe(1);
 const empty: State = { pauses: [], reached: null, notes: [] };
 export const readStepSteering = Effect.fn("StepSteering.read")(function* (dir: string) {
@@ -41,7 +42,9 @@ const change = <A>(
   lock.withPermits(1)(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const next = yield* edit(yield* readStepSteering(dir));
+      const before = yield* readStepSteering(dir);
+      const next = yield* edit(before);
+      if (sameState(before, next.state)) return next.value;
       yield* fs
         .writeFileString(
           `${dir}/step-steering.json.tmp`,
