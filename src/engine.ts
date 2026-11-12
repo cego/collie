@@ -678,6 +678,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly _tag: "HarnessBroken"; readonly why: ReadonlyArray<string> }
     | { readonly _tag: "ProofUnavailable"; readonly lost: ReadonlyArray<{ readonly metric: string; readonly why: string }> };
   export function calibrationOf(measured: Pick<Measurement, "plan" | "result">): Calibration;
+  /**
+   * The harness \`commits\` that \`at\` lacks, in order: those after the longest prefix whose touched
+   * files \`at\` holds exactly as that prefix left them, whatever their SHAs.
+   */
+  export function harnessLacking(cwd: string, at: string, commits: ReadonlyArray<string>): Effect.Effect<ReadonlyArray<string>, never, ChildProcessSpawner.ChildProcessSpawner>;
 
   /** What a merge at a head came to: \`MergedOutside\` is a merge this Run did not make. */
   export type MergeOutcome =

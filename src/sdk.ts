@@ -129,6 +129,8 @@ export {
   type Calibration,
   type Measurement,
 } from "./measurement-model";
+/** The harness commits a tree lacks, decided by content (`carryHarness`, the base tree). */
+export { harnessLacking } from "./harness-held";
 export { MergeOutcomeSchema, TakeoverSchema, type MergeOutcome, type Takeover } from "./landing";
 /** Whether the Changes a ticket needs merged have landed (`HostApi.awaitPrerequisites`). */
 export { PrerequisiteStandingSchema, type PrerequisiteStanding } from "./prerequisites";
