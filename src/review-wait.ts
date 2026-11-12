@@ -34,6 +34,7 @@ export const ReviewStandingSchema = Schema.Union([
     approvers: Schema.optionalKey(Schema.Array(Schema.String)),
   }),
   Schema.TaggedStruct("Moved", { head: Schema.String }),
+  Schema.TaggedStruct("Conflicting", { head: Schema.String }),
   Schema.TaggedStruct("Merged", { sha: Schema.String, by: Schema.String, at: Schema.String }),
   Schema.TaggedStruct("Closed", {}),
   Schema.TaggedStruct("Held", {}),
@@ -61,7 +62,11 @@ export const waitsOnApproval = (standing: ReviewStanding) =>
  */
 export function standingOf(
   read: ReviewRead,
-  against: { readonly proved: string; readonly seen: ReadonlyArray<string> },
+  against: {
+    readonly proved: string;
+    readonly seen: ReadonlyArray<string>;
+    readonly returnConflicts?: boolean;
+  },
 ): ReviewStanding {
   if (!read.ok) return { _tag: "Unreadable", reason: read.reason };
   if (read.state === "merged")
@@ -72,6 +77,8 @@ export function standingOf(
       at: read.merged?.at ?? "",
     };
   if (read.state === "closed") return { _tag: "Closed" };
+  if (against.returnConflicts === true && conflictsWithTarget(read.mergeable))
+    return { _tag: "Conflicting", head: read.head };
   if (read.head !== against.proved) return { _tag: "Moved", head: read.head };
   const open = Arr.filter(read.comments, (one) => one.external && !one.answered);
   const fresh = Arr.filter(open, (one) => !against.seen.includes(one.id));

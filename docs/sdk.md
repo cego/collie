@@ -914,9 +914,13 @@ repair, as the release's re-reading of a go does. With `whileConflicting: true` 
 only while the forge says the merge request conflicts with its target branch, parked as Needs
 you with the line that says its branch must take the target, and returns the standing at
 `proved` as soon as the forge no longer says so, the merge request is merged or closed, or a
-Hold or Stop ends it (`Held`). A head pushed while it still conflicts keeps it waiting. The
-release takes it before it proves a head and when a check left to CI finds the conflict. Take either inside an Activity, and suspend on `Held`
-there, so a resume waits again.
+Hold or Stop ends it (`Held`). A head pushed while it still conflicts keeps it waiting.
+With `returnConflicts: true`, a confirmed target conflict instead returns `Conflicting`
+with its current `head`, before `Moved` or `Unanswered`, including when combined with
+`whileConflicting`. Unknown mergeability and other forge blocks retain their ordinary
+waiting behavior. Release uses this option to repair a conflict before proving the pushed
+head and asking a fresh go. Take either inside an Activity, and suspend on `Held` there,
+so a resume waits again.
 
 `host.prerequisites({ runId, cwd, ticket })` reads the ticket file at `ticket` again, and
 asks once whether every Change its `**Needs merged:**` line names has landed. It answers a
@@ -964,7 +968,8 @@ the next round: a `fixed` answer counts only where the head carries its commit.
 `head`, writing the move to the Run's log. It answers `At` with the `head` and where it
 moved `from`, or `Refused` with `why`: a checkout with uncommitted changes, a head origin
 lacks, or one that does not fast-forward, as after a force push. Nothing is reset or
-discarded.
+discarded. With optional `branch`, it refuses a detached checkout or a different source
+branch before moving anything, even when already at `head`.
 
 `host.readTag({ runId, cwd, tag, merged, pipeline, proves, stage, production })` reads a
 tag back from origin and the forge rather than from an Output, against what it must prove.
