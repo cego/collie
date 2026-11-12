@@ -1115,6 +1115,10 @@ export const OfferView = Schema.Struct({
   /** What it takes, as JSON Schema; null where it takes nothing. */
   arguments: Schema.NullOr(Schema.Json),
   kind: Schema.Literals(["action", "follow-up"]),
+  /** What taking it ships: `merge` only merges, `release` also tags and deploys. */
+  ships: Schema.optionalKey(Schema.Literals(["merge", "release"])),
+  /** What taking it does, which a front door shows and asks about before taking it. */
+  confirm: Schema.optionalKey(Schema.String),
   primary: Schema.Boolean,
   /** Why it cannot be made now, or null when it can. */
   unavailable: Schema.NullOr(Schema.String),
@@ -2586,6 +2590,13 @@ export function cardActions(view: TaskView): CardAction[] {
  * Acknowledge; any other finished or decision card has none — its buttons are the
  * decision's own, or the menu's.
  */
+/** The word a ready card's shipping is said with: its offer's own title where it has one. */
+export function shippingLabel(view: Pick<TaskView, "shipping" | "offer">): string | null {
+  if (view.shipping == null) return null;
+  if (view.shipping === "merge") return view.offer?.title ?? "Merge";
+  return view.shipping === "stage" ? "Stage" : "Deploy";
+}
+
 export function primaryAction(view: TaskView): CardAction | null {
   if (view.decision !== null) return null;
   if (view.state === "active" || view.state === "quiet") return { kind: "go-to-tab" };

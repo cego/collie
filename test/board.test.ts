@@ -1858,6 +1858,52 @@ test("Merge uses the Release offer even when an unrelated follow-up is primary",
     }),
   ));
 
+test("Ready to ship takes the offer that declares it releases before one that only merges, and says that offer's title", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const { second } = yield* supersededChain(dir);
+      const offer = (id: string, title: string, ships: "merge" | "release"): OfferView => ({
+        id,
+        title,
+        workflow: "delivery",
+        arguments: null,
+        kind: "follow-up",
+        ships,
+        primary: false,
+        unavailable: null,
+      });
+      const read = (offers: ReadonlyArray<OfferView>) =>
+        board(env, [second], {
+          ...unapproved(),
+          forge: new Map([
+            [
+              M_ID,
+              {
+                ...unapproved().forge.get(M_ID)!,
+                mergeable: { state: "mergeable", said: "approved" },
+              },
+            ],
+          ]),
+          head: () => Effect.succeed(M_HEAD),
+          offers: () => Effect.succeed(offers),
+        });
+      const merge = offer("merge", "Merge", "merge");
+      const [both] = yield* read([merge, offer("deliver", "Release", "release")]);
+      expect(primaryAction(both!)).toEqual({
+        kind: "offer",
+        offer: { id: "deliver", title: "Release" },
+      });
+      expect(Arr.join(boardLines([both!]), "\n")).toContain(`Release: ${both!.sentence}`);
+      expect(herdLines([both!], 0)).toContain(`Release: ${both!.sentence}`);
+      const [alone] = yield* read([merge]);
+      expect(primaryAction(alone!)).toEqual({
+        kind: "offer",
+        offer: { id: "merge", title: "Merge" },
+      });
+    }),
+  ));
+
 test("fresh green work has a Merge shipping action, revoked by a moved head, failed CI, stale answer or unknown mergeability", () =>
   runEffect(
     Effect.gen(function* () {
@@ -1914,10 +1960,10 @@ test("fresh green work has a Merge shipping action, revoked by a moved head, fai
       });
       const text = Arr.join(boardLines([received]), "\n");
       expect(text).toContain("Ready to ship · 1");
-      expect(text).toContain("Merge: Ready to release: mk/support!279");
+      expect(text).toContain("Release: Ready to release: mk/support!279");
       const chat = herdLines([received], epochMs("2026-09-14T10:05:00Z"));
       expect(chat).toContain("## Ready to ship · 1");
-      expect(chat).toContain("Merge: Ready to release: mk/support!279");
+      expect(chat).toContain("Release: Ready to release: mk/support!279");
       const cards = { revision: () => 1, kept: new Map(), markers: new Map() };
       const cached = (now: string) =>
         board(env, [second], {

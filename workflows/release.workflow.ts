@@ -617,6 +617,10 @@ export default defineWorkflow({
       description:
         "The merge request or pull request to release, or several, separated by spaces or commas",
     }),
+    ship: Schema.optionalKey(Schema.Literals(["release", "merge"])).annotate({
+      description:
+        "release (the default) merges, tags and deploys it; merge merges it and stops, with nothing tagged or deployed",
+    }),
     merge_only: Schema.optionalKey(Schema.Boolean).annotate({
       description: "A set child ends after its merge, leaving tagging to the set",
     }),
@@ -626,7 +630,7 @@ export default defineWorkflow({
   }),
   output: Schema.String,
   agents: { roles: { implementer: IMPLEMENTER } },
-  hints: { mr: "diff-target" },
+  hints: { mr: "diff-target", merge_only: "internal", together: "internal" },
   path: [
     checkingOut,
     assess,
@@ -647,7 +651,7 @@ export default defineWorkflow({
       title: "Release again",
       workflow: "self",
       when: "failed",
-      inputs: { mr: "started-with", together: "started-with" },
+      inputs: { mr: "started-with", ship: "started-with", together: "started-with" },
       eligible: startedWithOne,
     },
   ],
@@ -669,6 +673,18 @@ export default defineWorkflow({
       if (tagOnly && (asked.merge_only === true || asked.together!.length === 0))
         return yield* fail("A tag Run needs merged merge requests and cannot also be merge-only");
       const set = mrSet(asked.mr);
+      const mergeAlone = asked.ship === "merge";
+      if (
+        mergeAlone &&
+        (tagOnly ||
+          asked.merge_only !== undefined ||
+          (set !== null && "mrs" in set && set.mrs.length > 1))
+      )
+        return yield* fail(
+          "Merge takes one merge request, and a release set's own inputs are the set's to give",
+        );
+      const setChild = asked.merge_only === true;
+      const mergeOnly = setChild || mergeAlone;
       if (set !== null && "unresolved" in set)
         return yield* fail(
           `${set.unresolved} is not a merge request this Run can find, so nothing was released`,
@@ -737,6 +753,8 @@ export default defineWorkflow({
       if (start._tag === "Unreadable")
         return yield* fail(`${mr} could not be read: ${start.reason}`);
       if (start._tag === "Closed") return yield* fail(`${mr} is closed, so nothing was released`);
+      if (mergeAlone && start._tag === "Merged")
+        return yield* fail(`${mr} is already merged, so there is nothing to merge`);
       if (tagOnly && start._tag !== "Merged")
         return yield* fail(`${mr} is not merged, so nothing was tagged`);
       const tagMerges: string[] = [];
@@ -792,37 +810,36 @@ export default defineWorkflow({
       );
       const testJobs = assessed.is_package ? [] : (assessed.stage_jobs?.merge_request ?? []);
       const stageJobs = assessed.is_package ? [] : (assessed.stage_jobs?.tag ?? []);
-      if (!assessed.is_package && testJobs.length === 0 && stageJobs.length === 0)
+      if (!mergeAlone && !assessed.is_package && testJobs.length === 0 && stageJobs.length === 0)
         return yield* fail(
           `${mr} is an application with no stage deploy that Collie can prove, on its merge request's pipeline or its tags', so nothing was released${assessed.kind_evidence ? `: ${assessed.kind_evidence}` : ""}`,
         );
-      if ((tagOnly || asked.merge_only === true) && !assessed.is_package && stageJobs.length === 0)
+      if ((tagOnly || setChild) && !assessed.is_package && stageJobs.length === 0)
         return yield* fail(
           `${mr} has no stage deploy on its tags, so the set cannot release it to stage`,
         );
-      const finishing =
-        asked.merge_only === true
-          ? []
-          : assessed.is_package
-            ? [tag]
-            : [stage, productionGo, playProduction];
+      const finishing = mergeOnly
+        ? []
+        : assessed.is_package
+          ? [tag]
+          : [stage, productionGo, playProduction];
       yield* forecast(
         recovering === null && !tagOnly
           ? [assess, proveHead, reviewWait, mergeGo, claim, merge, ...finishing]
           : [assess, claim, ...finishing],
       );
-      const goes =
-        asked.merge_only === true
-          ? [GO.merge]
-          : assessed.is_package
-            ? [GO.release]
-            : [
-                ...(testJobs.length > 0 ? [GO.test] : []),
-                ...(stageJobs.length > 0 ? [GO.stage] : []),
-              ];
-      const offered =
-        asked.merge_only === true
-          ? `${GO.merge} merges it at that head; the set tags this repository once its children have ended.`
+      const goes = mergeOnly
+        ? [GO.merge]
+        : assessed.is_package
+          ? [GO.release]
+          : [
+              ...(testJobs.length > 0 ? [GO.test] : []),
+              ...(stageJobs.length > 0 ? [GO.stage] : []),
+            ];
+      const offered = setChild
+        ? `${GO.merge} merges it at that head; the set tags this repository once its children have ended.`
+        : mergeAlone
+          ? `${GO.merge} merges it at that head and stops: nothing is tagged or deployed.`
           : assessed.is_package
             ? `${GO.release} merges it at that head and tags it;`
             : Arr.join(
@@ -1263,7 +1280,7 @@ export default defineWorkflow({
             ask({
               name: `go-${gos}`,
               shipping: { action: goes[0] === GO.test ? "stage" : "merge", head },
-              prompt: `Release ${mr} at ${short(head)}, approved by ${approvers}? ${offered} Finish leaves it open.`,
+              prompt: `${mergeAlone ? GO.merge : GO.release} ${mr} at ${short(head)}, approved by ${approvers}? ${offered} Finish leaves it open.`,
               options: Arr.map([...goes, GO.finish], (id, at) => ({ id, recommended: at === 0 })),
             }),
             { round: gos },
@@ -1476,7 +1493,7 @@ export default defineWorkflow({
 
       const released = `${mr} merged at ${landed.sha}`;
       const giveBack = landed.slugs.length === 0 ? Effect.void : host.release(runId);
-      if (asked.merge_only === true) {
+      if (mergeOnly) {
         yield* giveBack;
         return released;
       }

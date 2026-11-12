@@ -337,6 +337,23 @@ export default defineWorkflow({
       workflow: "release",
       when: "succeeded",
       inputs: { mr: "merge-request" },
+      given: { ship: "release" },
+      ships: "release",
+      confirm:
+        "Release waits until the merge request is approved, green and proved at its head, then asks for your go. On it, it merges, tags the release and deploys the tag to stage where it has one; production waits for a second go.",
+      eligible: (facts) => facts.mrUrl !== null,
+    },
+    {
+      id: "merge",
+      connections: ["gitlab"],
+      title: "Merge",
+      workflow: "release",
+      when: "succeeded",
+      inputs: { mr: "merge-request" },
+      given: { ship: "merge" },
+      ships: "merge",
+      confirm:
+        "Merge waits until the merge request is approved, green and proved at its head, then asks for your go. On it, it merges and stops: nothing is tagged or deployed.",
       eligible: (facts) => facts.mrUrl !== null,
     },
     {

@@ -1721,7 +1721,9 @@ export default defineWorkflow({
   and in a recorded Run), and a module with inputs hints exactly one
   field with one of them ([one launch Input](authoring.md#writing-one)). They are exclusive: one field each, so renaming `plan` to `spec` changes
   nothing about how it is inferred, what it names a branch after, which label its Run is
-  listed under, or which previous review it is given.
+  listed under, or which previous review it is given. `internal` marks an input only the
+  workflow that starts this one sets, as a release set sets `merge_only` on its children:
+  no offer or start form asks for it, and an offer refuses a caller's value for it.
 - **`outcome`** is `fixed` or `selectable`, never both. `selectable` offers only the kinds
   a human may ask an implement Run for — `review` and `plan` are what a workflow proves.
 - **`checkout`** is what the workflow needs of the repository. `branch` builds on a
@@ -1747,6 +1749,13 @@ export default defineWorkflow({
   checkout. A
   follow-up declares no `arguments`: it takes whatever inputs its workflow has that
   `inputs` does not fill, and a front door asks for those.
+  `given` binds inputs to fixed values, so two offers can start the same workflow
+  differently: implement's **Merge** and **Release** both start `release`, one with
+  `ship: "merge"` and one with `ship: "release"`. A given input is never asked for, and an
+  offer refuses a caller's value for it. `ships` says what taking the offer ships —
+  `merge` only merges, `release` also tags and deploys — and a ready card's primary takes
+  the offer that releases before one that only merges. `confirm` says what taking it does,
+  in your words: a front door shows it and asks before it invokes the offer.
   An optional `entry(facts)` names its entry in the offer's title. `facts.recovery` holds
   implementation and review facts where the module declares that entry and hints a work
   source. A filled work source remains the destination of a text follow-up's new words;

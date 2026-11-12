@@ -1246,7 +1246,7 @@ function itemFor(view: TaskView, action: CardAction, primary: boolean): MenuItem
     case "offer":
       return {
         key: "i",
-        label: primary && view.shipping === "merge" ? "Merge" : action.offer.title,
+        label: action.offer.title,
         command: { _tag: "InvokeOffer", runId: action.offer.run ?? runId, offer: action.offer.id },
       };
     case "check-output":

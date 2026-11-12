@@ -18,6 +18,7 @@ import {
   mrReadiness,
   sectionOf,
   SECTIONS,
+  shippingLabel,
   type TaskView,
   mrNounOf,
 } from "./board-model";
@@ -441,7 +442,7 @@ function cardLine(view: TaskView): string {
           Arr.map(view.agents, (agent) => agent.name),
           ", ",
         )}`;
-  return `- run ${view.run}: ${view.name}${project}, ${view.state}${where}${agents}. ${view.shipping == null ? "" : `${view.shipping === "merge" ? "Merge" : view.shipping === "stage" ? "Stage" : "Deploy"}: `}${view.sentence}${view.drift === null ? "" : ` ${view.drift}`}`;
+  return `- run ${view.run}: ${view.name}${project}, ${view.state}${where}${agents}. ${view.shipping == null ? "" : `${shippingLabel(view)}: `}${view.sentence}${view.drift === null ? "" : ` ${view.drift}`}`;
 }
 
 /** The board as chat reads it: the header, then each section's cards in the board's order. */

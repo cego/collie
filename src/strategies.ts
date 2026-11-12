@@ -196,6 +196,7 @@ const STRATEGY_MEANINGS = new Map<InputStrategy, string>([
   ],
   ["flag", "true or false"],
   ["optional", "Anything, or empty"],
+  ["internal", "Set by the workflow that starts this one, never asked"],
 ]);
 
 export const strategyMeaning = (strategy: InputStrategy): string =>

@@ -2450,6 +2450,9 @@ export function declaredByModule(metadata: WorkflowMetadata | undefined): Declar
     arguments: jsonSchemaFor(Schema.Struct(action.arguments)).document,
     kind: "action" as const,
     inputs: action.inputs ?? {},
+    given: action.given,
+    ships: action.ships,
+    confirm: action.confirm,
     connections: action.connections,
     eligible: action.eligible,
   }));
@@ -2461,6 +2464,9 @@ export function declaredByModule(metadata: WorkflowMetadata | undefined): Declar
     kind: "follow-up" as const,
     entry: offer.entry,
     inputs: offer.inputs ?? {},
+    given: offer.given,
+    ships: offer.ships,
+    confirm: offer.confirm,
     connections: offer.connections,
     eligible: (facts: ActionFacts) =>
       (offer.when === "always" || (offer.when === "succeeded") === facts.succeeded) &&
@@ -8726,7 +8732,10 @@ const makeRegistry: (
       Effect.map((target) => {
         const field = fieldWith(target.hints, "work-source");
         if (field !== undefined) offer = { ...offer, textField: field };
-        const rest = Arr.filter(Rec.toEntries(target.fields), ([name]) => !(name in filled));
+        const rest = Arr.filter(
+          Rec.toEntries(target.fields),
+          ([name]) => !(name in filled) && target.hints[name] !== "internal",
+        );
         if (rest.length === 0) return offer;
         return {
           ...offer,
@@ -9361,6 +9370,14 @@ const makeRegistry: (
         });
       }
       const starting = yield* resolve({ project: row.project, id: offer.workflow });
+      const bound = Arr.findFirst(
+        Rec.keys(options.input),
+        (name) => name in (offer.given ?? {}) || starting.hints[name] === "internal",
+      );
+      if (Option.isSome(bound))
+        return yield* new HostRefused({
+          reason: `"${bound.value}" is Collie's to set when "${options.offer}" starts ${offer.workflow}, so it cannot be given`,
+        });
       // What the offer said Collie fills in, filled from the Run it is about. The
       // caller's own values win: an offer names where a value comes from, and a caller
       // that has a better one for the same field is not overruled by a default.

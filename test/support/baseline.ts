@@ -3046,6 +3046,49 @@ scenario("implement offers Stage as a follow-up on a succeeded Run with its merg
   ),
 );
 
+scenario(
+  "implement offers Release and Merge apart: each says what it ships and starts release bound to it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const declared = yield* loadEntry(shipped("implement")).pipe(
+          Effect.map((described) => declaredByModule(described.metadata)),
+        );
+        const facts: ActionFacts = {
+          outcome: "feature",
+          succeeded: true,
+          branch: "feature",
+          mrUrl: OPENED.mr_url,
+          planIssues: 0,
+          disposed: false,
+          openFindings: 0,
+          diffTarget: null,
+          claim: null,
+        };
+        const offered = offersFrom(declared, facts, { self: idOf("implement") });
+        const of = (id: string) =>
+          Option.getOrUndefined(Arr.findFirst(offered, (offer) => offer.id === id))!;
+        expect(of("release").ships).toBe("release");
+        expect(of("merge").ships).toBe("merge");
+        expect(of("release").confirm).toContain("tags");
+        expect(of("merge").confirm).toContain("nothing is tagged or deployed");
+        expect(inputsFor(of("release"), { runDir: "/r", facts, input: {} })).toEqual({
+          mr: OPENED.mr_url,
+          ship: "release",
+        });
+        expect(inputsFor(of("merge"), { runDir: "/r", facts, input: {} })).toEqual({
+          mr: OPENED.mr_url,
+          ship: "merge",
+        });
+        const release = yield* loadEntry(shipped("release"));
+        expect(release.metadata?.hints).toMatchObject({
+          merge_only: "internal",
+          together: "internal",
+        });
+      }).pipe(Effect.orDie),
+    ),
+);
+
 scenario("what a finished Run of each shipped module offers is the module's own declaration", () =>
   runEffect(
     Effect.gen(function* () {
@@ -3105,11 +3148,13 @@ scenario("what a finished Run of each shipped module offers is the module's own 
       const offered = offersFrom(implement, delivered, { self: idOf("implement") });
       expect(Arr.map(offered, (o) => [o.id, o.title, o.workflow])).toEqual([
         ["release", "Release", "release"],
+        ["merge", "Merge", "release"],
         ["stage", "Stage", "stage"],
         ["follow-up", "Keep going on this — Build", idOf("implement")],
       ]);
       expect(inputsFor(offered[0]!, { runDir: "/r", facts: delivered, input: {} })).toEqual({
         mr: mrUrl,
+        ship: "release",
       });
       expect(offersFrom(implement, { ...delivered, disposed: true })).toEqual([]);
       expect(
@@ -12846,6 +12891,78 @@ for (const name of ["gitlab", "github"] as const) {
             expect(yield* asked(runId, step)).not.toMatch(other);
           expect(yield* asked(runId, "tag")).toContain(`merged commit is \`${merged}\``);
           yield* checkedOutThenAssessed(runId);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: ship merge asks a Merge go, merges at the proved head under the claim, and tags and deploys nothing`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, merged } = yield* releasable(name);
+          claimed.length = 0;
+          const runId = `r-merge-${name}`;
+          // An application with no stage deploy on its tags, which a set's child could not merge.
+          yield* rig.queueOutputs([
+            { ...APP_ASSESSED, stage_jobs: { merge_request: ["deploy-stage"], tag: [] } },
+          ]);
+          const status = yield* driven(
+            {
+              entry: shipped("release"),
+              runId,
+              input: { mr: target, ship: "merge" },
+              host: releaseHost(),
+            },
+            (run) =>
+              Effect.gen(function* () {
+                const go = yield* goAsked(run.asked, "go-1");
+                expect(go.prompt).toStartWith(`Merge ${mr} at ${pipe(head, Str.slice(0, 8))}`);
+                expect(go.prompt).toContain("nothing is tagged or deployed");
+                expect(optionsOf([go], "go-1")).toEqual(["Merge", "Finish"]);
+                expect(claimed).toEqual([]);
+                yield* run.answer("go-1", "Merge");
+                return yield* ended(run.status);
+              }),
+          );
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} merged at ${merged}`);
+          expect(Arr.map(model.merges ?? [], (one) => one.sha)).toEqual([head]);
+          expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+          expect(yield* wasAsked(runId, "tag")).toBe(false);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: ship merge is refused with a set's own inputs or several merge requests, before anything is read`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin } = yield* releasable(name);
+          claimed.length = 0;
+          const refusable: ReadonlyArray<Record<string, Schema.Json>> = [
+            { mr: target, ship: "merge", merge_only: true },
+            { mr: target, ship: "merge", together: [target] },
+            { mr: `${target} ${pipe(target, Str.replace(/30$/, "31"))}`, ship: "merge" },
+          ];
+          for (const [at, input] of refusable.entries()) {
+            const result = yield* ran({
+              entry: shipped("release"),
+              runId: `r-merge-refused-${name}-${at}`,
+              input,
+              host: releaseHost(),
+            });
+            expect(reasonOf(result)).toBe(
+              "Merge takes one merge request, and a release set's own inputs are the set's to give",
+            );
+          }
+          yield* bin.restore();
+          expect(yield* prompts()).toHaveLength(0);
+          expect(claimed).toEqual([]);
         }),
       ),
     120_000,

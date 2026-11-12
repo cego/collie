@@ -189,6 +189,7 @@ export function inferInput(
       // Declared so the placeholder resolves, empty until a workflow embedding this
       // one passes a value of its own. Never asked for.
       case "optional":
+      case "internal":
         return { ...base, value: "", source: "default" };
       case "repository":
         return {
