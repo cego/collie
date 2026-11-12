@@ -1958,7 +1958,11 @@ its time.
   host writes before and after the write; the state directory's watch, before the
   board's debounce; another process's SQLite commit, seen within 250 ms through
   `PRAGMA data_version`; and a branch moving in a checkout whose head a card reads, through
-  a watch on that checkout's git directories. A read overtaken by invalidation retries. A missing file is kept as its error's data, not as
+  a watch on that checkout's git directories. When all checkout watches are registered,
+  the model invalidates its earlier head reads and publishes a change, covering commits
+  made before registration. It retains one change for a board that subscribes after the
+  first build, so that refresh cannot be lost. A read overtaken by invalidation retries.
+  A missing file is kept as its error's data, not as
   the error, since every live `Error` slows each collection of the heap. If the recursive watch
   fails, the model reads from disk, and every read takes a new revision, so nothing derived
   before is reused. Engine status and clock-derived
