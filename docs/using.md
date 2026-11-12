@@ -299,7 +299,8 @@ Run ended, `bodil remote down <name>` takes the instance down once you are done 
    `then` — offers one such row per choice instead, even with nothing inferred: `plan`
    **Ask when the plan is written** or **Build it**, `implement` **Ask at the merge
    request**, **End at the merge request** or **Release it**. The row you start from is
-   remembered for that workflow in that project, across the Flock, and offered first next
+   remembered for that workflow in that project, or for the Projects root where the start is
+   rooted there, across the Flock, and offered first next
    time; with nothing remembered the first row asks, as before. Telling chat to start one
    does the same: it passes how far you said, else the remembered choice.
 5. The run's card appears on the [Control Plane](#the-control-plane).

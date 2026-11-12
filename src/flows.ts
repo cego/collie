@@ -418,7 +418,11 @@ const startModule = Effect.fn("Flows.startModule")(function* (
   );
   const reach = reachOf(module.inputs);
   if (reach !== null && text[reach.name] === undefined) {
-    const saved = yield* savedReach(env.userDir, module.id, yield* launchProject(at.cwd));
+    const saved = yield* savedReach(
+      env.userDir,
+      module.id,
+      yield* launchProject(at.cwd, rooted ? PROJECTS_ROOT_OPTION : undefined),
+    );
     const chosen = yield* prompts.menu(
       Arr.map(savedFirst(reach, saved), (choice) => ({
         id: `${REACH_ROW}${choice.value}`,

@@ -869,7 +869,8 @@ the work they decide about in front of the human. It is asked inline on the boar
 **Reach** — How far a Run goes before it asks what next: the Input a Workflow hints with
 `reach`, each value titled for the human (`plan`'s and `implement`'s `then`). The board's
 start row offers each, and a start from the board or a chat remembers the one chosen as the
-default for that Workflow in that project — its remote, else its directory — as the shared
+default for that Workflow in that project — `projects-root` for a start rooted at the
+Projects root, else its remote, else its directory — as the shared
 setting `launch_reach.<workflow>.<project>`, which Settings does not show. The next launch
 offers it first; with none saved the first is empty, which asks as before. A typed
 `collie run start` gives it with `--input` and neither reads nor saves it.

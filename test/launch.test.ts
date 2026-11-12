@@ -6,7 +6,7 @@ import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { ConfigProvider, Effect, FileSystem, Schema, Scope } from "effect";
 import type { PlatformServices } from "../src/platform";
-import { writeConfigValue } from "../src/config";
+import { savedReaches, writeConfigValue } from "../src/config";
 import { currentEnv, type PluginEnv } from "../src/env";
 import { pickFlow, type FlowPrompts } from "../src/flows";
 import { Herdr } from "../src/herdr";
@@ -212,6 +212,30 @@ test(
         expect(Arr.map(rows.slice(-2), (row) => row.id)).toEqual(["reach:", "reach:ship"]);
         // oxlint-disable-next-line unicorn/no-thenable -- the Input is named `then`
         expect(runs[0]?.input).toEqual({ goal: "one registry", then: "" });
+      }),
+    ),
+  240_000,
+);
+
+test(
+  "a launch from the Home rooted at the Projects root remembers how far it goes for projects-root",
+  () =>
+    launching("collie-launch-reach-root-", (world) =>
+      Effect.gen(function* () {
+        const root = `${world.home}/projects`;
+        yield* (yield* FileSystem.FileSystem).makeDirectory(root, { recursive: true });
+        yield* writeConfigValue(world.config, "projects.root", root);
+        const home = yield* onTheBoard(world);
+
+        const first = answering(["reached", "one registry", "reach:ship"]);
+        expect(yield* pickFlow(new Herdr(home), home, first.prompts)).toBe(0);
+        expect(yield* savedReaches(home.userDir)).toEqual([
+          { workflow: "reached", project: "projects-root", value: "ship" },
+        ]);
+
+        const second = answering(["reached", "another registry", "reach:ship"]);
+        expect(yield* pickFlow(new Herdr(home), home, second.prompts)).toBe(0);
+        expect(Arr.map(second.rows.slice(-2), (row) => row.id)).toEqual(["reach:ship", "reach:"]);
       }),
     ),
   240_000,
