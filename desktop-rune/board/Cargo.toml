@@ -1,0 +1,25 @@
+[package]
+name = "collie-desktop-board"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+collie-desktop-protocol = { path = "../protocol" }
+collie-desktop-terminal = { path = "../terminal" }
+collie-desktop-chat = { path = "../chat" }
+collie-desktop-update = { path = "../update" }
+collie-desktop-theme = { path = "../theme" }
+base64 = "0.22"
+rune = { workspace = true, features = ["native-file-dialog"] }
+rune-mac.workspace = true
+rune-kit.workspace = true
+rune-theme-opencode.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "6", default-features = false, features = ["tokio", "proxy"] }
+tokio = { version = "1", features = ["rt", "macros", "sync"] }
+futures-util = { version = "0.3", default-features = false }

@@ -1,0 +1,5 @@
+{"from":"shell","frame":{"_tag":"Hello"}}
+{"from":"shell","frame":{"_tag":"Request","id":0,"tag":"syncNow","payload":{"profile":"build"},"headers":[]}}
+{"from":"core","frame":{"_tag":"Exit","requestId":0,"exit":{"_tag":"Success","value":{"said":"Synced Build box","failed":false}}}}
+{"from":"shell","frame":{"_tag":"Request","id":1,"tag":"syncNow","payload":{"profile":"gone"},"headers":[]}}
+{"from":"core","frame":{"_tag":"Exit","requestId":1,"exit":{"_tag":"Failure","cause":[{"_tag":"Fail","error":{"_tag":"ActionFailed","reason":"no Machine is called gone"}}]}}}
