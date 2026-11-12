@@ -776,6 +776,24 @@ for (const name of ["gitlab", "github"] as const) {
         }),
       ));
 
+    if (name === "gitlab")
+      for (const part of ["approvals", "discussions"])
+        test(`a transient failure reading ${part} makes the merge request unavailable`, () => {
+          const fake = fakeForge(name, model(name));
+          const layer = forgeHttpTest(fake.run, (url, init) =>
+            Str.endsWith(`/${part}`)(new URL(url).pathname)
+              ? Promise.resolve(new Response('{"message":"service unavailable"}', { status: 503 }))
+              : fake.fetch(url, init),
+          );
+          return runEffect(
+            Effect.gen(function* () {
+              const panel = yield* forge.details(ref(name), "/w", fake.run);
+              expect(panel).toMatchObject({ _tag: "Unavailable", transient: true });
+              expect(panel._tag === "Unavailable" && panel.reason).toContain("503");
+            }).pipe(Effect.provide(layer)),
+          );
+        });
+
     test("posts one review note over HTTP without approving", () => {
       const fake = fakeForge(name, model(name));
       return runEffect(

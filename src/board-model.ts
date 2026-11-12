@@ -673,7 +673,10 @@ export const MrDetails = Schema.TaggedStruct("Details", {
 export type MrDetails = typeof MrDetails.Type;
 
 /** Why the panel has nothing to show — one line, and nothing else in the panel breaks. */
-export const MrUnavailable = Schema.TaggedStruct("Unavailable", { reason: Schema.String });
+export const MrUnavailable = Schema.TaggedStruct("Unavailable", {
+  reason: Schema.String,
+  transient: Schema.optionalKey(Schema.Boolean),
+});
 export type MrUnavailable = typeof MrUnavailable.Type;
 
 export const MrPanel = Schema.Union([MrDetails, MrUnavailable]);

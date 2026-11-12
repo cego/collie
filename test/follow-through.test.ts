@@ -19,6 +19,7 @@ import { ROOT, until, watching } from "./support/watching";
 import { HOLD, Registry } from "../src/engine";
 import { Store } from "../src/store";
 import { sectionOf } from "../src/board-model";
+import { readMetrics } from "../src/metrics";
 
 const PROJECT = "gitlab.cego.dk/mk/collie";
 const TARGET = `https://${PROJECT}/-/merge_requests/7`;
@@ -428,6 +429,169 @@ const approvals = (forge: Forge) =>
     Arr.filter(forge.requests(), (one) => Str.endsWith("/merge_requests/7/approve")(one.url)),
     (one) => one.body,
   );
+
+test(
+  "concurrent forge failures park the initial head read once and recover before launching a reviewer",
+  () =>
+    host.runEffect(
+      Effect.gen(function* () {
+        const { first, forge, entry } = yield* begun("review", [review([])]);
+        let unavailable = true;
+        let failing: Promise<void> | null = null;
+        let replies = 0;
+        const together = Promise.withResolvers<void>();
+        forge.before((url) =>
+          unavailable && Str.includes("/merge_requests/7")(url)
+            ? (failing ??= runLive(forge.set(model(first, { httpFault: { status: 503 } }))))
+            : Promise.resolve(),
+        );
+        forge.after((url, _init, response) => {
+          if (!unavailable || !Str.includes("/merge_requests/7")(url))
+            return Promise.resolve(response);
+          if (++replies === 3) together.resolve();
+          return together.promise.then(() => response);
+        });
+        yield* host.session(
+          forge,
+          Effect.gen(function* () {
+            yield* host.recovering;
+            const { runId } = yield* host.started(entry, "cli-1", { target: TARGET });
+            const parked = yield* until(
+              () => host.status(runId),
+              (view) =>
+                view?.status.status === "failed" ||
+                (view?.status.status === "suspended" && view.park != null),
+            );
+            expect(parked?.status.status).toBe("suspended");
+            expect(parked?.park).toMatchObject({ cause: "forge-unavailable", kind: "rechecks" });
+            expect(yield* host.agentStarts).toHaveLength(0);
+            unavailable = false;
+            yield* forge.set(model(first));
+            yield* until(
+              () => asked(runId),
+              (rows) => Arr.some(rows, (row) => row.decision === "approve-1"),
+            );
+            expect((yield* host.status(runId))?.park).toBeNull();
+            expect(yield* host.agentStarts).toHaveLength(1);
+            expect(yield* notesOf(forge)).toHaveLength(1);
+          }),
+        );
+      }),
+    ),
+  600_000,
+);
+
+for (const id of ["review", "second-look"])
+  for (const status of [503, 429])
+    test(
+      `${id}: forge ${status} during the wait parks for rechecks and recovers automatically`,
+      () =>
+        host.runEffect(
+          Effect.gen(function* () {
+            const { first, forge, entry } = yield* begun(id, [
+              review([F1]),
+              review([{ ...F1, status: "fixed" }]),
+            ]);
+            yield* host.session(
+              forge,
+              Effect.gen(function* () {
+                const runId = yield* startedWaiting(entry);
+                yield* host.recovering;
+                const before = yield* forge.model();
+                yield* forge.set({ ...before, httpFault: { status } });
+                const parked = yield* until(
+                  () => host.status(runId),
+                  (view) =>
+                    view?.status.status === "failed" ||
+                    (view?.status.status === "suspended" && view.park != null),
+                ).pipe(Effect.timeout("10 minutes"));
+                expect(parked?.status.status).toBe("suspended");
+                expect(parked?.park).toMatchObject({
+                  cause: "forge-unavailable",
+                  kind: "rechecks",
+                });
+                expect(yield* host.agentStarts).toHaveLength(1);
+                yield* forge.set(before);
+                yield* until(
+                  () => readMetrics(`${host.dir()}/evidence/${runId}`),
+                  (lines) =>
+                    Arr.some(
+                      lines,
+                      (line) => line.action === "resumed" && line.outcome === "resumed",
+                    ),
+                );
+                expect((yield* host.status(runId))?.park).toBeNull();
+                expect(yield* host.agentStarts).toHaveLength(1);
+                yield* pushedOn(forge, first);
+                yield* until(
+                  () => asked(runId),
+                  (rows) => Arr.some(rows, (row) => row.decision === "approve-2"),
+                );
+                expect(yield* notesOf(forge)).toHaveLength(2);
+                expect(yield* host.agentStarts).toHaveLength(2);
+              }),
+            );
+          }),
+        ),
+      600_000,
+    );
+
+for (const id of ["review", "second-look"])
+  for (const status of [503, 429])
+    test(
+      `${id}: forge ${status} after accepting a review parks its Activity and recovers without a duplicate note`,
+      () =>
+        host.runEffect(
+          Effect.gen(function* () {
+            const { forge, entry } = yield* begun(id, [review([])]);
+            let accepted = false;
+            let unavailable = true;
+            forge.after((url, init, response) => {
+              if (init?.method === "POST" && Str.endsWith("/notes")(url)) accepted = true;
+              return Promise.resolve(
+                accepted && unavailable
+                  ? new Response('{"message":"temporarily unavailable"}', { status })
+                  : response,
+              );
+            });
+            yield* host.session(
+              forge,
+              Effect.gen(function* () {
+                yield* host.recovering;
+                const { runId } = yield* host.started(entry, "cli-1", { target: TARGET });
+                const parked = yield* until(
+                  () => host.status(runId),
+                  (view) =>
+                    view?.status.status === "failed" ||
+                    (view?.status.status === "suspended" && view.park != null),
+                );
+                expect(parked?.status.status).toBe("suspended");
+                expect(parked?.park).toMatchObject({
+                  cause: "forge-unavailable",
+                  kind: "rechecks",
+                });
+                expect(yield* notesOf(forge)).toHaveLength(1);
+                expect(yield* host.agentStarts).toHaveLength(1);
+                unavailable = false;
+                yield* until(
+                  () => asked(runId),
+                  (rows) => Arr.some(rows, (row) => row.decision === "approve-1"),
+                );
+                expect((yield* host.status(runId))?.park).toBeNull();
+                expect(yield* notesOf(forge)).toHaveLength(1);
+                expect(
+                  Arr.filter(
+                    forge.requests(),
+                    (one) => one.method === "POST" && Str.endsWith("/notes")(one.url),
+                  ),
+                ).toHaveLength(1);
+                expect(yield* host.agentStarts).toHaveLength(1);
+              }),
+            );
+          }),
+        ),
+      600_000,
+    );
 
 for (const id of ["review", "second-look"]) {
   test(

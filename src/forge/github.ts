@@ -293,6 +293,7 @@ function details(ref: MrRef, cwd: string): Effect.Effect<MrPanel, never, ForgeHt
       return {
         _tag: "Unavailable",
         reason: `could not read ${mrWords(ref).label}: ${read.reason}`,
+        transient: read.transient,
       };
     const { pull, rollup } = read.value;
     const checks = rollupChecks(rollup);

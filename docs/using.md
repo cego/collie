@@ -2930,8 +2930,11 @@ When nothing open blocks and nothing is disputed, it asks **Approve `<mr>` at `<
 next round reviews the new head and asks again, and the old head is never approved.
 A head you already approved is not asked about again. Merged or closed finishes the Run.
 Turned off while it waits, its next round goes back to the menu above. A Hold while it waits
-starts no round and posts nothing until you let it go. A forge that cannot be read fails the
-Run.
+starts no round and posts nothing until you let it go. A network failure, rate limit, or
+server error parks the Run with `forge-unavailable`; Collie rechecks the merge request and
+resumes automatically when the forge answers again. A note accepted before the failure is
+found by its signature on recovery, so it is not posted twice. A forge refusal remains a
+fact for you to act on.
 
 Its card says, in turn: **Reviewing, round N.** at the head being reviewed; **Waiting for
 @author to change `<mr>`.**, with **approved at `<short sha>`** once approved, which is never

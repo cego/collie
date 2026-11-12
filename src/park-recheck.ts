@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
+import * as Rec from "effect/Record";
 import { Effect, Schema } from "effect";
 import { mrRefOf } from "./board-model";
 import { forgeOf } from "./forge/forge";
@@ -23,7 +24,8 @@ export const rememberCiTarget = (dir: string, target: typeof CiTarget.Type) =>
 const reply = (cleared: boolean, note: string, error = false) => ({ cleared, note, error });
 
 export const recheckPark = (
-  view: Pick<RunView, "park" | "cwd" | "runId" | "mr" | "branch">,
+  view: Pick<RunView, "park" | "cwd" | "runId" | "mr" | "branch"> &
+    Partial<Pick<RunView, "input" | "strategies">>,
   stateDir: string,
   herdr: Pick<Herdr, "sessionList">,
 ) =>
@@ -70,7 +72,21 @@ export const recheckPark = (
         return reply(true, `jobs ${Arr.join([...latest.keys()], ", ")} present at parked head`);
       }
       case "forge-unavailable": {
-        const project = mrRefOf(view.mr)?.project ?? (yield* projectHere(view.cwd, shell));
+        let ref = mrRefOf(view.mr);
+        for (const [name, value] of Rec.toEntries(view.input ?? {}))
+          if (
+            ref === null &&
+            view.strategies?.[name] === "diff-target" &&
+            Schema.is(Schema.String)(value)
+          )
+            ref = mrRefOf(value);
+        if (ref !== null) {
+          const read = yield* forgeOf(ref).details(ref, view.cwd, shell);
+          return read._tag === "Details"
+            ? reply(true, "forge answered")
+            : reply(false, read.reason, true);
+        }
+        const project = yield* projectHere(view.cwd, shell);
         if (project === null) return reply(false, "no forge project recorded");
         const branch = view.branch ?? "HEAD";
         const read = yield* forgeOf({ project, iid: "" }).forBranch(

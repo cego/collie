@@ -196,7 +196,15 @@ export function mrDetails<R>(
       return {
         _tag: "Unavailable",
         reason: `could not read ${where}: ${read.reason}`,
+        transient: read.transient,
       } satisfies MrUnavailable;
+    for (const part of [approvals, discussions])
+      if (!part.ok && part.transient)
+        return {
+          _tag: "Unavailable",
+          reason: part.reason,
+          transient: true,
+        } satisfies MrUnavailable;
     const mr = read.value;
     const draft = mr.draft === true || mr.work_in_progress === true;
     const pipeline = mr.head_pipeline?.status ?? mr.pipeline?.status ?? "";

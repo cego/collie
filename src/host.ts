@@ -153,6 +153,7 @@ import { SharedDefinition } from "./definitions-model";
 import { DefinitionRefused, sharedDefinitions, takeDefinitions } from "./shared-definitions";
 import { sideJobs } from "./side-jobs";
 import { recoverParks } from "./park-recovery";
+import { Host } from "./sdk";
 import { machineMemory } from "./memory";
 import { Usage, usageLayer } from "./usage";
 import { HarnessCatalogues, catalogueLayer } from "./catalogue";
@@ -1385,6 +1386,10 @@ const hostBoard = (dir: string) =>
       watches: {
         list: store.watches,
         observe: store.observe,
+        unavailable: (run: string, why: string) =>
+          Effect.flatMap(Host, (host) => host.parked(run, why, "forge-unavailable")).pipe(
+            Effect.provideContext(hosted),
+          ),
         wake: (run: string, name: string, woke: Woke) =>
           registry.wake(run, name, woke).pipe(Effect.provideContext(hosted)),
       },

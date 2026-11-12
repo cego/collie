@@ -3860,6 +3860,36 @@ export const hostLayer = (options: {
       const bun = yield* Effect.context<PlatformServices | Records>();
       const under = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
         Effect.provideContext(effect, services);
+      const reviewForge = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
+        Effect.gen(function* () {
+          const run = yield* Effect.serviceOption(Run);
+          const instance = yield* Effect.serviceOption(WorkflowEngine.WorkflowInstance);
+          if (Option.isNone(run) || Option.isNone(instance)) return yield* under(effect);
+          const parking = yield* Semaphore.make(1);
+          return yield* under(
+            effect.pipe(
+              Effect.updateService(ForgeHttp, (http) =>
+                ForgeHttp.of({
+                  ask: (login, cwd, call) =>
+                    http
+                      .ask(login, cwd, call)
+                      .pipe(
+                        Effect.tap((answer) =>
+                          !answer.ok && answer.transient
+                            ? host
+                                .parked(run.value.id, answer.reason, "forge-unavailable")
+                                .pipe(
+                                  Effect.andThen(Workflow.suspend(instance.value)),
+                                  parking.withPermits(1),
+                                )
+                            : Effect.void,
+                        ),
+                      ),
+                }),
+              ),
+            ),
+          );
+        });
       const anySet = (runId: string, ...controls: ReadonlyArray<string>) =>
         controlSet(dir, runId, ...controls).pipe(Effect.provideService(FileSystem.FileSystem, fs));
       const set = (control: string, runId: string) => anySet(runId, control);
@@ -5239,7 +5269,7 @@ export const hostLayer = (options: {
             const ref = mrRefOf(asked.target);
             if (ref === null)
               return yield* new WorkflowError({ reason: `${asked.target} is not a merge request` });
-            const panel = yield* under(forgeOf(ref).details(ref, asked.cwd, runShell));
+            const panel = yield* reviewForge(forgeOf(ref).details(ref, asked.cwd, runShell));
             if (panel._tag !== "Details")
               return yield* new WorkflowError({
                 reason: `could not read ${mrLabel(asked.target)}: ${panel.reason}`,
@@ -5259,12 +5289,14 @@ export const hostLayer = (options: {
             if (ref === null)
               return yield* new WorkflowError({ reason: `${asked.target} is not a merge request` });
             const forge = forgeOf(ref);
-            const me = yield* under(forge.login(asked.cwd, runShell, ref.project));
+            const me = yield* reviewForge(forge.login(asked.cwd, runShell, ref.project));
             if (me === null)
               return yield* new WorkflowError({
                 reason: `the forge did not say who is logged in to read ${mrLabel(asked.target)}'s approval`,
               });
-            const read = yield* under(forge.approvedAt(ref, me, asked.head, asked.cwd, runShell));
+            const read = yield* reviewForge(
+              forge.approvedAt(ref, me, asked.head, asked.cwd, runShell),
+            );
             if (!read.ok)
               return yield* new WorkflowError({
                 reason: `could not read ${mrLabel(asked.target)}'s approval: ${read.reason}`,
@@ -5309,7 +5341,7 @@ export const hostLayer = (options: {
             const ref = mrRefOf(asked.target);
             if (ref === null)
               return yield* new WorkflowError({ reason: `${asked.target} is not a merge request` });
-            const read = yield* under(
+            const read = yield* reviewForge(
               forgeOf(ref).descends(ref, asked.previous, asked.head, asked.cwd, runShell),
             );
             if (!read.ok)
@@ -5536,7 +5568,7 @@ export const hostLayer = (options: {
             ),
           ),
         post: (asked) =>
-          under(
+          reviewForge(
             fs.readFileString(asked.file).pipe(
               Effect.flatMap((body) =>
                 Effect.flatMap(loadDefaults(options.userDir ?? dir), (defaults) =>
@@ -5559,7 +5591,7 @@ export const hostLayer = (options: {
             ),
           ),
         reviewedHead: (asked) =>
-          under(
+          reviewForge(
             Effect.gen(function* () {
               const ref = parseMrTarget(asked.target);
               if (ref === null) return "";
@@ -5568,7 +5600,7 @@ export const hostLayer = (options: {
             }),
           ),
         reviewChanges: (asked) =>
-          under(
+          reviewForge(
             Effect.gen(function* () {
               const ref = parseMrTarget(asked.target);
               if (ref === null) return "";
@@ -5584,7 +5616,7 @@ export const hostLayer = (options: {
             }),
           ),
         approveReview: (asked) =>
-          under(
+          reviewForge(
             Effect.gen(function* () {
               const ref = parseMrTarget(asked.target);
               if (ref === null)

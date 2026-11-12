@@ -13,6 +13,7 @@ export interface Watches {
   readonly list: (mrs: ReadonlyArray<string>) => Effect.Effect<ReadonlyArray<WatchRow>>;
   readonly observe: (run: string, name: string, observed: Observed) => Effect.Effect<void>;
   readonly wake: (run: string, name: string, woke: Woke) => Effect.Effect<void>;
+  readonly unavailable: (run: string, reason: string) => Effect.Effect<void>;
 }
 
 /** What the merge watch read of a merge request, as a watch judges it. */
@@ -45,6 +46,8 @@ export const settleWatches = Effect.fn("MrWatch.settle")(function* (opts: {
       continue;
     }
     const read = opts.panels.get(row.mr)?.panel;
+    if (read?._tag === "Unavailable" && read.transient)
+      yield* opts.watches.unavailable(row.run, read.reason);
     if (read?._tag !== "Details") continue;
     const { verdict, observed } = judge({
       cursor: row.cursor,

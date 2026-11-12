@@ -28,10 +28,12 @@ import {
   type HostServices,
 } from "../../src/engine";
 import { Store } from "../../src/store";
+import { Host } from "../../src/sdk";
 import { buildBoard } from "../../src/board";
 import { mrId } from "../../src/board-model";
 import { factsOfView } from "../../src/runs";
 import { mergeWatch } from "../../src/side-jobs";
+import { recoverParks } from "../../src/park-recovery";
 import { Woke } from "../../src/mr-watch-model";
 import type { MrPanels } from "../../src/merges";
 
@@ -143,6 +145,10 @@ export const watching = (rig: Rig) => {
         watches: {
           list: store.watches,
           observe: store.observe,
+          unavailable: (run, why) =>
+            Effect.flatMap(Host, (host) => host.parked(run, why, "forge-unavailable")).pipe(
+              Effect.provideContext(hosted),
+            ),
           wake: (run, name, woke) =>
             registry.wake(run, name, woke).pipe(Effect.provideContext(hosted)),
         },
@@ -166,6 +172,21 @@ export const watching = (rig: Rig) => {
       text: {},
       task: null,
     });
+  });
+
+  const recovering = Effect.gen(function* () {
+    const registry = yield* Registry;
+    const services = yield* Effect.context<HostServices | PlatformServices>();
+    yield* Effect.forkScoped(
+      recoverParks({
+        env: env(),
+        herdr: new FakeHerdr(env()),
+        views: registry.views(null),
+        reconnects: Effect.succeed(0),
+        panels: new Map(),
+        resume: (view, _request, park) => registry.resume(view.runId, park),
+      }).pipe(Effect.provideContext(services)),
+    );
   });
 
   const status = (runId: string) =>
@@ -203,6 +224,7 @@ export const watching = (rig: Rig) => {
     gitlab,
     session,
     mergeWatched,
+    recovering,
     started,
     status,
     watchOf,

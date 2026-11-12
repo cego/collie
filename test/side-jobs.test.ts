@@ -63,6 +63,7 @@ const NO_WATCHES = {
   list: () => Effect.succeed([]),
   observe: () => Effect.void,
   wake: () => Effect.void,
+  unavailable: () => Effect.void,
 };
 
 const until = <A, R>(read: Effect.Effect<A, never, R>, done: (a: A) => boolean) =>
