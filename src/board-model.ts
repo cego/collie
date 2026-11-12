@@ -2385,10 +2385,10 @@ export const offerChoices = (field: OfferField): ReadonlyArray<OfferChoice> => {
   if (control.kind !== "enum") return [];
   return [
     ...unset,
-    ...Arr.map(control.options, (option, at) => ({
+    ...Arr.map(optionEntries(control.options), (entry, at) => ({
       key: `option-${at}`,
-      label: optionLabel(option),
-      entry: optionEntry(option),
+      label: optionLabel(entry),
+      entry,
     })),
   ];
 };
@@ -2445,9 +2445,11 @@ const controlOf = (field: DrawnField): OfferControl => {
 };
 const JSON_ANY: OfferControl = { kind: "json", holds: null };
 
-/** A string option's entry is itself; any other is its JSON. */
-const optionEntry = (option: Schema.Json) => (isText(option) ? option : encodeJson(option));
-const optionLabel = (option: Schema.Json) => (option === "" ? EMPTY_OPTION : optionEntry(option));
+const optionEntries = (options: ReadonlyArray<Schema.Json>): ReadonlyArray<string> => {
+  const plain = Arr.map(options, (option) => (isText(option) ? option : encodeJson(option)));
+  return new Set(plain).size === plain.length ? plain : Arr.map(options, encodeJson);
+};
+const optionLabel = (entry: string) => (entry === "" ? EMPTY_OPTION : entry);
 
 const labelOf = (name: string) =>
   pipe(name, Str.replaceAll("_", " "), Str.replaceAll("-", " "), Str.capitalize);
@@ -2455,7 +2457,11 @@ const labelOf = (name: string) =>
 const entryOf = (control: OfferControl, value: Schema.Json): string => {
   if (control.kind === "list" && Arr.isArray(value) && Arr.every(value, isText))
     return Arr.join(value, "\n");
-  if (isText(value) && (control.kind === "text" || control.kind === "enum")) return value;
+  if (control.kind === "enum") {
+    const at = Arr.findFirstIndex(control.options, (one) => encodeJson(one) === encodeJson(value));
+    if (Option.isSome(at)) return optionEntries(control.options)[at.value]!;
+  }
+  if (isText(value) && control.kind === "text") return value;
   return encodeJson(value);
 };
 
@@ -2467,17 +2473,19 @@ type Entry =
 const readEntry = (field: OfferField, entry: string | undefined): Entry => {
   if (entry === undefined) return { _tag: "Unset" };
   const { control } = field;
-  if (control.kind === "enum")
+  if (control.kind === "enum") {
+    const entries = optionEntries(control.options);
     return Option.match(
-      Arr.findFirst(control.options, (one) => optionEntry(one) === entry),
+      Arr.findFirstIndex(entries, (one) => one === entry),
       {
-        onSome: (value): Entry => ({ _tag: "Read", value }),
+        onSome: (at): Entry => ({ _tag: "Read", value: control.options[at]! }),
         onNone: (): Entry => ({
           _tag: "Refused",
-          why: `must be one of: ${Arr.join(Arr.map(control.options, optionLabel), ", ")}`,
+          why: `must be one of: ${Arr.join(Arr.map(entries, optionLabel), ", ")}`,
         }),
       },
     );
+  }
   const text = Str.trim(entry);
   if (text === "") return { _tag: "Unset" };
   switch (control.kind) {

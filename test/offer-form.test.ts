@@ -168,3 +168,19 @@ test("an enum of numbers, booleans or null is a choice of exactly those values, 
     errors: { level: "Level must be one of: low, 1, true" },
   });
 });
+
+test("an enum holding a string and a value that writes the same is still a choice between the two", () => {
+  const shadowed = jsonSchemaFor(
+    Schema.Struct({ pick: Schema.Literals(["1", 1, "true", true, "null", null]) }),
+  ).document;
+  const [pick] = offerFields(shadowed);
+  const choices = Arr.filter(offerChoices(pick!), (one) => one.entry !== undefined);
+  expect(new Set(Arr.map(choices, (one) => one.entry)).size).toBe(6);
+  expect(new Set(Arr.map(choices, (one) => one.label)).size).toBe(6);
+  expect(
+    Arr.map(choices, (one) => {
+      const read = offerInput(shadowed, { pick: one.entry });
+      return read._tag === "Valid" ? read.input.pick : read;
+    }),
+  ).toEqual(["1", 1, "true", true, "null", null]);
+});
