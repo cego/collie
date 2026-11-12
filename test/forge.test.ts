@@ -2564,6 +2564,63 @@ const approval = (review: ReviewRead) => {
   return { approved: review.approved, approvers: review.approvers };
 };
 
+for (const snapshot of [
+  { change: "new approval", earlier: [], current: ["dave"], approved: true, names: ["dave"] },
+  {
+    change: "replacement approval",
+    earlier: ["alice"],
+    current: ["dave"],
+    approved: true,
+    names: ["dave"],
+  },
+  {
+    change: "non-contributing optional approval",
+    earlier: ["alice", "dave"],
+    current: ["dave"],
+    approved: true,
+    names: ["dave"],
+  },
+  { change: "removed approval", earlier: ["alice"], current: [], approved: false, names: [] },
+  { change: "self-only approval", earlier: ["alice"], current: ["me"], approved: false, names: [] },
+])
+  test(`GitLab approval snapshot: a ${snapshot.change} supplies both rule readiness and current human names`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        // The global /approvals list and /approval_state disagree on current rule contributors.
+        const review = yield* reviewOn("gitlab", {
+          required: 1,
+          approvers: snapshot.earlier,
+          rules: [{ name: "Maintainers", required: 1, approvers: snapshot.current }],
+        });
+        expect(approval(review)).toEqual({
+          approved: snapshot.approved,
+          approvers: snapshot.names,
+        });
+      }),
+    ));
+
+test("GitLab approval snapshot: optional human approvals remain visible when there are no rules", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const review = yield* reviewOn("gitlab", { approvers: ["alice", "me"], rules: [] });
+      expect(approval(review)).toEqual({ approved: true, approvers: ["alice"] });
+    }),
+  ));
+
+test("GitLab approval snapshot: one human satisfying several rules is reported once", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const review = yield* reviewOn("gitlab", {
+        approvers: ["dave", "me"],
+        rules: [
+          { name: "Maintainers", required: 1, approvers: ["dave", "me"] },
+          { name: "Security", required: 1, approvers: ["dave"] },
+        ],
+      });
+      expect(approval(review)).toEqual({ approved: true, approvers: ["dave"] });
+    }),
+  ));
+
 test("GitLab counts each approval rule again without Collie's approval, on every tier", () =>
   runEffect(
     Effect.gen(function* () {
