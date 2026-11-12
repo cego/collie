@@ -2032,7 +2032,7 @@ export function readyRuns(
 
 /** What ships a ready merge request: an offer that releases, else one that merges, else `release`. */
 const shippingOffer = (offers: ReadonlyArray<OfferView>): BoardOffer | null => {
-  const ready = Arr.filter(offers, (one) => one.unavailable === null && one.kind === "follow-up");
+  const ready = Arr.filter(offers, (one) => one.unavailable === null);
   const declared = Arr.findFirst(ready, (one) => one.ships === "release").pipe(
     Option.orElse(() => Arr.findFirst(ready, (one) => one.ships === "merge")),
   );

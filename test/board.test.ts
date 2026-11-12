@@ -1858,17 +1858,22 @@ test("Merge uses the Release offer even when an unrelated follow-up is primary",
     }),
   ));
 
-test("Ready to ship takes the offer that declares it releases before one that only merges, and says that offer's title", () =>
+test("Ready to ship takes the offer that declares it releases before one that only merges, action or follow-up, and says that offer's title", () =>
   runEffect(
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
       const { second } = yield* supersededChain(dir);
-      const offer = (id: string, title: string, ships: "merge" | "release"): OfferView => ({
+      const offer = (
+        id: string,
+        title: string,
+        ships: "merge" | "release",
+        kind: OfferView["kind"] = "follow-up",
+      ): OfferView => ({
         id,
         title,
         workflow: "delivery",
         arguments: null,
-        kind: "follow-up",
+        kind,
         ships,
         primary: false,
         unavailable: null,
@@ -1900,6 +1905,17 @@ test("Ready to ship takes the offer that declares it releases before one that on
       expect(primaryAction(alone!)).toEqual({
         kind: "offer",
         offer: { id: "merge", title: "Merge" },
+      });
+      const ship = offer("ship", "Ship it", "release", "action");
+      const [byAction] = yield* read([merge, ship]);
+      expect(primaryAction(byAction!)).toEqual({
+        kind: "offer",
+        offer: { id: "ship", title: "Ship it" },
+      });
+      const [actionAlone] = yield* read([ship]);
+      expect(primaryAction(actionAlone!)).toEqual({
+        kind: "offer",
+        offer: { id: "ship", title: "Ship it" },
       });
     }),
   ));
