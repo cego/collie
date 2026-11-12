@@ -18579,7 +18579,11 @@ const improving: HostOverride = Layer.effect(Host)(
 );
 
 /** A `self-improve` Run, executed to its end. */
-const improved = (runId: string, input: Readonly<Record<string, Schema.Json>>) =>
+const improved = (
+  runId: string,
+  input: Readonly<Record<string, Schema.Json>>,
+  host: HostOverride = improving,
+) =>
   session(
     Effect.gen(function* () {
       const made = yield* loaded(shipped("self-improve"), runId);
@@ -18590,7 +18594,7 @@ const improved = (runId: string, input: Readonly<Record<string, Schema.Json>>) =
         .execute({ runId, input })
         .pipe(Effect.result, Effect.provide(made.layer));
     }),
-    improving,
+    host,
   );
 
 const freshDay = () => {
@@ -18879,6 +18883,100 @@ scenario(
         expect(summary).toContain(
           "implement Runs that reached a merge request without failing: 2 of 10 (20%).",
         );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "self-improve replays a window recorded before question measures without repeating its work",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        freshDay();
+        const runId = "r-retrospective-upgraded";
+        const input = { runs: "machine", improvements: 3 };
+        const improvements = Arr.map(["first", "second", "third"], (name) => ({
+          name,
+          keys: [name],
+          why: `Fix ${name}`,
+        }));
+        yield* rig.queueOutputs([
+          triaged(
+            Arr.map(improvements, ({ name }) => finding({ key: name })),
+            improvements,
+          ),
+        ]);
+        for (const { name } of improvements)
+          childWaits.set(`improvement-${name}`, Deferred.makeUnsafe<void>());
+        yield* running({ entry: shipped("self-improve"), runId, input, host: improving }, () =>
+          until(
+            () => Effect.sync(() => started.length),
+            (count) => count === 3,
+          ),
+        );
+        const before = { filed: [...filed], children: [...started] };
+        const promptsBefore = yield* agentPrompts();
+        expect(before.filed).toHaveLength(3);
+        expect(promptsBefore).toHaveLength(1);
+
+        // The window saved before 4c574c7d had no question measures or repeated findings,
+        // and its report's Runs had no questions or merge-request fields. Only this
+        // isolated test host's completed Activity reply is changed; its effects stay.
+        const saved = yield* session(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            yield* sql`UPDATE cluster_replies SET payload = json_set(
+              json_remove(payload, '$.value.exit.value.questions', '$.value.exit.value.repeated'),
+              '$.value.exit.value.report.runs',
+              json((SELECT json_group_array(json_remove(value, '$.questions', '$.mr', '$.merged'))
+                FROM json_each(json_extract(cluster_replies.payload, '$.value.exit.value.report.runs')))))
+              WHERE request_id IN (SELECT id FROM cluster_messages
+                WHERE tag = 'activity' AND json_extract(payload, '$.name') = 'window')`;
+            return yield* sql<{
+              since: string;
+              questions: string | null;
+              repeated: string | null;
+              runs: string;
+            }>`SELECT json_extract(payload, '$.value.exit.value.since') AS since,
+              json_type(payload, '$.value.exit.value.questions') AS questions,
+              json_type(payload, '$.value.exit.value.repeated') AS repeated,
+              json_extract(payload, '$.value.exit.value.report.runs') AS runs
+              FROM cluster_replies WHERE request_id IN (SELECT id FROM cluster_messages
+                WHERE tag = 'activity' AND json_extract(payload, '$.name') = 'window')`;
+          }).pipe(Effect.orDie),
+        );
+        expect(saved).toHaveLength(1);
+        expect(saved[0]!.questions).toBe(null);
+        expect(saved[0]!.repeated).toBe(null);
+        expect(saved[0]!.runs).not.toContain('"questions"');
+        expect(saved[0]!.runs).not.toContain('"mr"');
+        expect(saved[0]!.runs).not.toContain('"merged"');
+        childWaits.clear();
+        const frozen: HostOverride = Layer.effect(Host)(
+          Effect.gen(function* () {
+            const host = yield* Host;
+            return Host.of({
+              ...host,
+              report: () =>
+                Effect.fail(new WorkflowError({ reason: "the saved window must not be reread" })),
+            });
+          }),
+        ).pipe(Layer.provide(improving));
+        const result = yield* improved(runId, input, frozen);
+        expect(saidBy(result)).toContain(
+          "Filed 3, commented 0, refused 0; 3 Improvements, 0 failed",
+        );
+        expect(filed).toEqual(before.filed);
+        expect(commented).toEqual([]);
+        expect(started).toEqual(before.children);
+        expect(yield* agentPrompts()).toEqual(promptsBefore);
+        const summary = yield* readText(`${runDir(dir, runId)}/summary.md`);
+        expect(summary).toContain(saved[0]!.since);
+        expect(summary).toContain(
+          "Question measures were not recorded for this retrospective window.",
+        );
+        expect(summary).not.toContain("0 questions asked");
       }),
     ),
   120_000,

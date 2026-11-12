@@ -251,14 +251,19 @@ export const questionMeasures = (runs: ReadonlyArray<AskingRun>): QuestionMeasur
   };
 };
 
-export const questionLines = ({ asked, landed, perLanded, implement }: QuestionMeasures) => [
-  perLanded === null
-    ? `- ${asked} questions asked; no merge request landed.`
-    : `- ${asked} questions asked over ${landed} merge requests landed: ${perLanded.toFixed(1)} per landed merge request.`,
-  `- implement Runs that reached a merge request without failing: ${implement.reached} of ${implement.of}${
-    implement.of === 0 ? "" : ` (${Math.round((implement.reached / implement.of) * 100)}%)`
-  }.`,
-];
+export const questionLines = (measures: QuestionMeasures | undefined) => {
+  if (measures === undefined)
+    return ["Question measures were not recorded for this retrospective window."];
+  const { asked, landed, perLanded, implement } = measures;
+  return [
+    perLanded === null
+      ? `- ${asked} questions asked; no merge request landed.`
+      : `- ${asked} questions asked over ${landed} merge requests landed: ${perLanded.toFixed(1)} per landed merge request.`,
+    `- implement Runs that reached a merge request without failing: ${implement.reached} of ${implement.of}${
+      implement.of === 0 ? "" : ` (${Math.round((implement.reached / implement.of) * 100)}%)`
+    }.`,
+  ];
+};
 
 const REPEATED_ASKINGS = 10;
 const REPEATED_SHARE = 0.9;
@@ -325,7 +330,7 @@ export const repeatedAnswers = (runs: ReadonlyArray<AskingRun>): ReadonlyArray<F
 export const summaryOf = (options: {
   readonly runId: string;
   readonly since: string;
-  readonly questions: QuestionMeasures;
+  readonly questions: QuestionMeasures | undefined;
   readonly acted: ReadonlyArray<{ readonly finding: Finding; readonly outcome: Outcome }>;
   readonly improvements: ReadonlyArray<Ended>;
   readonly leftOut: ReadonlyArray<LeftOut>;
