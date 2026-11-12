@@ -1176,6 +1176,62 @@ test.skipIf(process.platform !== "linux")(
   120_000,
 );
 
+/** Whether a process's status, as `/proc` gives it, has a SIGTERM waiting to be delivered. */
+const termWaits = (status: string) =>
+  Arr.some(Str.split(status, "\n"), (line) => {
+    const [key, mask = ""] = Str.split(line, ":\t");
+    return (key === "ShdPnd" || key === "SigPnd") && (BigInt(`0x${mask}`) & 0x4000n) !== 0n;
+  });
+
+const takesOverFromASlowHost = (
+  replace: (
+    state: string,
+  ) => Effect.Effect<
+    unknown,
+    never,
+    FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
+  >,
+) =>
+  proves(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { state, notes, runId, old, check } = yield* runsOnAnOlderHost;
+      // The host answers nobody while it is stopped, and goes on the moment it is told to end.
+      yield* signalProcess(old.pid, "SIGSTOP");
+      yield* Effect.forkScoped(
+        until(
+          () => fs.readFileString(`/proc/${old.pid}/status`).pipe(Effect.orElseSucceed(() => "")),
+          termWaits,
+        ).pipe(Effect.andThen(signalProcess(old.pid, "SIGCONT"))),
+      );
+      yield* fastForward(replace(state), 5);
+
+      expect(yield* signalProcess(old.pid)).toBe(false);
+      expect(yield* stillRunning(check)).toBe(true);
+      const { recorded, runs, log } = yield* handedRecorded(state, runId, notes);
+      expect(runs).toHaveLength(1);
+      expect(recorded).toHaveLength(1);
+      expect(log).not.toContain(`ended check handed of ${runId}`);
+    }),
+  );
+
+test.skipIf(process.platform !== "linux")(
+  "a newer client an older host is too slow to answer takes its check over all the same",
+  () =>
+    takesOverFromASlowHost((state) =>
+      Effect.scoped(connect(state).pipe(Effect.flatMap((client) => client.identity()))).pipe(
+        Effect.orDie,
+      ),
+    ),
+  120_000,
+);
+
+test.skipIf(process.platform !== "linux")(
+  "a restart onto a newer build hands over the check of a host too slow to answer",
+  () => takesOverFromASlowHost((state) => restartHost(state).pipe(Effect.orDie)),
+  120_000,
+);
+
 test.skipIf(process.platform !== "linux")(
   "an agent's verify waiting on a host a newer client replaces returns its check's result, run once",
   () =>
