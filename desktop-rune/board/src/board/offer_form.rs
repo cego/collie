@@ -119,18 +119,28 @@ fn label_of(name: &str) -> String {
     }
 }
 
-/// A string option's entry is itself; any other is its JSON.
-fn option_entry(option: &Value) -> String {
-    option
-        .as_str()
-        .map_or_else(|| option.to_string(), String::from)
+fn option_entries(options: &[Value]) -> Vec<String> {
+    let plain: Vec<String> = options
+        .iter()
+        .map(|option| {
+            option
+                .as_str()
+                .map_or_else(|| option.to_string(), String::from)
+        })
+        .collect();
+    let distinct: std::collections::HashSet<&String> = plain.iter().collect();
+    if distinct.len() == plain.len() {
+        plain
+    } else {
+        options.iter().map(Value::to_string).collect()
+    }
 }
 
-fn option_label(option: &Value) -> String {
-    if option == "" {
+fn option_label(entry: &str) -> String {
+    if entry.is_empty() {
         EMPTY_OPTION.into()
     } else {
-        option_entry(option)
+        entry.into()
     }
 }
 
@@ -141,7 +151,11 @@ fn entry_of(control: &Control, value: &Value) -> String {
             .filter_map(Value::as_str)
             .collect::<Vec<_>>()
             .join("\n"),
-        (Control::Text | Control::Enum(_), Value::String(text)) => text.clone(),
+        (Control::Enum(options), _) => match options.iter().position(|one| one == value) {
+            Some(at) => option_entries(options).swap_remove(at),
+            None => value.to_string(),
+        },
+        (Control::Text, Value::String(text)) => text.clone(),
         _ => value.to_string(),
     }
 }
@@ -159,8 +173,8 @@ pub fn offer_choices(field: &OfferField) -> Vec<(String, Option<String>)> {
             choices.push(("No".into(), Some("false".into())));
         }
         Control::Enum(options) => {
-            for option in options {
-                choices.push((option_label(option), Some(option_entry(option))));
+            for entry in option_entries(options) {
+                choices.push((option_label(&entry), Some(entry)));
             }
         }
         _ => return Vec::new(),
@@ -179,10 +193,11 @@ fn read_entry(field: &OfferField, entry: Option<&str>) -> Read {
         return Read::Unset;
     };
     if let Control::Enum(options) = &field.control {
-        return match options.iter().find(|o| option_entry(o) == entry) {
-            Some(option) => Read::Value(option.clone()),
+        let entries = option_entries(options);
+        return match entries.iter().position(|one| one == entry) {
+            Some(at) => Read::Value(options[at].clone()),
             None => {
-                let named: Vec<String> = options.iter().map(option_label).collect();
+                let named: Vec<String> = entries.iter().map(|one| option_label(one)).collect();
                 Read::Refused(format!("must be one of: {}", named.join(", ")))
             }
         };

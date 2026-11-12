@@ -190,3 +190,37 @@ fn an_enum_of_numbers_booleans_or_null_is_a_choice_of_exactly_those_values_sent_
         ])
     );
 }
+
+#[test]
+fn an_enum_holding_a_string_and_a_value_that_writes_the_same_is_still_a_choice_between_the_two() {
+    let drawn = json!({"type": "object", "required": ["pick"], "properties": {
+        "pick": {"anyOf": [
+            {"type": "string", "enum": ["1"]}, {"type": "number", "enum": [1]},
+            {"type": "string", "enum": ["true"]}, {"type": "boolean", "enum": [true]},
+            {"type": "string", "enum": ["null"]}, {"type": "object", "enum": [null]},
+        ]},
+    }});
+    let fields = offer_fields(Some(&drawn));
+    let choices = offer_choices(&fields[0]);
+    let labels: std::collections::HashSet<_> = choices.iter().map(|(label, _)| label).collect();
+    let made: std::collections::HashSet<_> = choices.iter().map(|(_, entry)| entry).collect();
+    assert_eq!((labels.len(), made.len()), (6, 6));
+    let sent: Vec<Value> = choices
+        .iter()
+        .map(|(_, entry)| {
+            let entry = entry.clone().unwrap();
+            offer_input(Some(&drawn), &entries(&[("pick", &entry)])).unwrap()["pick"].clone()
+        })
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            json!("1"),
+            json!(1),
+            json!("true"),
+            json!(true),
+            json!("null"),
+            Value::Null
+        ]
+    );
+}
