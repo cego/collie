@@ -601,12 +601,15 @@ export default defineWorkflow({
       const answeredFor: Answered[] = [];
       let build: typeof Built.Type | null = null;
       let rallied: Rallied | null = null;
+      // An agent's start gives every Input, one it leaves out as "" (docs/cli.md): an empty
+      // `recovery` is new work, as one never given is.
+      const recovers = asked.recovery === "" ? undefined : asked.recovery;
       const recovered = yield* Activity.make({
         name: "recovery-entry",
         success: Recovery,
         error: WorkflowError,
         execute:
-          asked.recovery === undefined
+          recovers === undefined
             ? Effect.succeed({
                 implementation: false,
                 reason: "An ordinary start builds the work.",
@@ -614,14 +617,14 @@ export default defineWorkflow({
                 commits: "",
                 review: null,
               })
-            : host.recovery(runId, asked.recovery, asked.plan),
+            : host.recovery(runId, recovers, asked.plan),
       });
       const recovery = { ...recovered, entry: recoveryEntry(recovered) };
-      if (asked.recovery !== undefined)
+      if (recovers !== undefined)
         yield* host.record(runId, `Follow-up enters at ${recovery.entry}: ${recovery.reason}`);
       let parentDir = "";
       if (recovery.entry !== "Build") {
-        const parent = Str.split(asked.recovery ?? "", "/").at(-1) ?? "";
+        const parent = Str.split(recovers ?? "", "/").at(-1) ?? "";
         parentDir = (yield* host.place(parent)).dir;
         build = yield* Activity.make({
           name: "recovery-build-claims",
