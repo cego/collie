@@ -748,6 +748,9 @@ abandoned, or superseded while closed or by a Run of another Task; a plan with a
 disposition; or nothing to file at all — as one line, `3 finished today,
 1 failed`, until you click it open; anything older than a day is behind `older…`, which
 reads it from this checkout's history rather than carding every Run Collie has ever kept.
+The day counts from when the Task's Runs last worked: opening a record, or recording what
+became of the work, is not work, so a month-old Task marked abandoned today goes straight
+behind `older…`.
 Only landed work goes behind `older…`: a Task that still owes a merge request stays on the
 board however old it is.
 An **Unseen** card — a Run that ended by itself with a report and nothing to land, which
