@@ -144,7 +144,7 @@ import { configuredAgents } from "./agents";
 import { Collecting } from "./collecting";
 import { memoryWaitOf, waitForMemory, waitLine } from "./memory-wait";
 import { runLog } from "./agent-end";
-import { hostLogger, rotateInPlace } from "./host-log";
+import { hostLogger, isHostLog, rotateInPlace } from "./host-log";
 import { handoffsDir, handoffsIn } from "./handoffs";
 import { QUESTIONS } from "./compactors";
 import { Catalogue, discover, searchPath } from "./discovery";
@@ -1522,7 +1522,7 @@ const isBookkeeping = ({ _tag, path }: FileSystem.WatchEvent) => {
   );
   if (pipe(name, Str.endsWith(".lock")) || pipe(name, Str.endsWith(".tmp")) || top === "ssh")
     return true;
-  if (/^host\.(log|out)(\.\d+)?$|^host\.db-(wal|journal)$/.test(path)) return true;
+  if (isHostLog(path) || /^host\.db-(wal|journal)$/.test(path)) return true;
   if (top === "compaction") return name !== QUESTIONS;
   // The board reads only these directories' mtime, which a file growing leaves alone.
   return (
