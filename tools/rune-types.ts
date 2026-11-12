@@ -265,11 +265,10 @@ const schemaOf = (rpc: Rpc.AnyWithProps, part: (typeof SPOKEN)[number][1]) => {
 const ALL: ReadonlyArray<readonly [string, (typeof SPOKEN)[number][1], string]> = [
   ...SPOKEN,
   ...Arr.flatMap([...DesktopRpcs.requests.keys()], (tag) =>
-    Arr.map(["payload", "success", "error"] as const, (which) => [
-      tag,
-      which,
-      `${pascal(tag)}${pascal(which)}`,
-    ] as const),
+    Arr.map(
+      ["payload", "success", "error"] as const,
+      (which) => [tag, which, `${pascal(tag)}${pascal(which)}`] as const,
+    ),
   ),
 ];
 

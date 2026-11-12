@@ -17,26 +17,26 @@ clear of the chat. Each Machine's saved board is drawn as soon as
 output and Attach files. The toolbar shows each Subscription account's Usage, as today's header
 does. An `act` that the host refused has no Try again.
 
-| Crate or file                | What it owns                                                                                                                                         |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `protocol/src/generated.rs`  | The Rust types of the RPCs spoken (`flock`, `syncNow`, `terminal`, `terminalSend`, `say`, `runDetail`, `runFile`), generated; never edited by hand   |
-| `protocol/src/rpc.rs`        | Effect RPC's envelope (Request, Chunk, Exit, Ack, Interrupt) and Desktop's `Hello`, written by hand                                                  |
-| `protocol/src/client.rs`     | The NDJSON client: requests, streams acked chunk by chunk, interrupts, the core gone                                                                 |
-| `protocol/src/bin/roundtrip` | Decodes and re-encodes frames through the Rust types, for `test/rune-contract.test.ts`                                                               |
-| `board/`                     | The app, and the board in `board/src/board/`: `applyItem`'s whole fold, today's sections and cards, alerts, actions, offers, questions, proposals    |
-| `board/src/pages/settings/`  | Settings: the Flock's settings, each checked by the core, Record timing, Connections and their tokens, About                                         |
-| `board/src/record/`          | An open Run's record: its tabs, the Diff tab and review comments, evidence, acting through `act`                                                     |
-| `board/src/flow/`            | The Flow map's actions, next move and inspector, ported from Desktop's `flow-actions.ts` and `flow-inspector.ts`                                     |
-| `protocol/src/core.rs`       | Starts Desktop's main process as the core, for the app and the recorders                                                                             |
+| Crate or file                | What it owns                                                                                                                                                                                                        |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `protocol/src/generated.rs`  | The Rust types of the RPCs spoken (`flock`, `syncNow`, `terminal`, `terminalSend`, `say`, `runDetail`, `runFile`), generated; never edited by hand                                                                  |
+| `protocol/src/rpc.rs`        | Effect RPC's envelope (Request, Chunk, Exit, Ack, Interrupt) and Desktop's `Hello`, written by hand                                                                                                                 |
+| `protocol/src/client.rs`     | The NDJSON client: requests, streams acked chunk by chunk, interrupts, the core gone                                                                                                                                |
+| `protocol/src/bin/roundtrip` | Decodes and re-encodes frames through the Rust types, for `test/rune-contract.test.ts`                                                                                                                              |
+| `board/`                     | The app, and the board in `board/src/board/`: `applyItem`'s whole fold, today's sections and cards, alerts, actions, offers, questions, proposals                                                                   |
+| `board/src/pages/settings/`  | Settings: the Flock's settings, each checked by the core, Record timing, Connections and their tokens, About                                                                                                        |
+| `board/src/record/`          | An open Run's record: its tabs, the Diff tab and review comments, evidence, acting through `act`                                                                                                                    |
+| `board/src/flow/`            | The Flow map's actions, next move and inspector, ported from Desktop's `flow-actions.ts` and `flow-inspector.ts`                                                                                                    |
+| `protocol/src/core.rs`       | Starts Desktop's main process as the core, for the app and the recorders                                                                                                                                            |
 | `theme/`                     | Collie's palette over OpenCode's kit for the board and chat: paper and ink surfaces, an iris accent that lightens under the pointer, a hue per state, the mark, dialogs on the raised surface, an AA and a hue test |
-| `chat/`                      | The Flock chat: its state, pane, AG-UI reducer, markdown policy, highlighter and file dialog                                                         |
-| `terminal/`                  | Go to pane's terminal: the VT state, a renderer drawn as Ghostty draws, input as `terminal-input` maps it, settled resizes                           |
-| `ghostty-sys/`               | Builds libghostty-vt from `vendor/ghostty` with Zig and binds its C API with bindgen                                                                 |
-| `vendor/ghostty`             | Ghostty, a submodule at one pinned commit                                                                                                            |
-| `core/`                      | The stdio stand-in for `electrobun/bun`, and the tsconfig that points Desktop's imports at it                                                        |
-| `fixtures/`                  | The test Flock and NDJSON transcripts of Effect's own client and server, written by `tools/rune-fixtures.ts`                                         |
-| `fixtures/terminal/`         | `terminal` streams recorded by `core/record-terminal.ts`                                                                                             |
-| `fixtures/chat/`             | `say` streams recorded by `chat/src/bin/record-say.rs`                                                                                               |
+| `chat/`                      | The Flock chat: its state, pane, AG-UI reducer, markdown policy, highlighter and file dialog                                                                                                                        |
+| `terminal/`                  | Go to pane's terminal: the VT state, a renderer drawn as Ghostty draws, input as `terminal-input` maps it, settled resizes                                                                                          |
+| `ghostty-sys/`               | Builds libghostty-vt from `vendor/ghostty` with Zig and binds its C API with bindgen                                                                                                                                |
+| `vendor/ghostty`             | Ghostty, a submodule at one pinned commit                                                                                                                                                                           |
+| `core/`                      | The stdio stand-in for `electrobun/bun`, and the tsconfig that points Desktop's imports at it                                                                                                                       |
+| `fixtures/`                  | The test Flock and NDJSON transcripts of Effect's own client and server, written by `tools/rune-fixtures.ts`                                                                                                        |
+| `fixtures/terminal/`         | `terminal` streams recorded by `core/record-terminal.ts`                                                                                                                                                            |
+| `fixtures/chat/`             | `say` streams recorded by `chat/src/bin/record-say.rs`                                                                                                                                                              |
 
 ## Commands
 
