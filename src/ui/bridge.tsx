@@ -4,11 +4,22 @@
 // other direction — components never hold an Effect, and the handlers never render.
 
 import * as Str from "effect/String";
-import { Deferred, Effect, Fiber, FileSystem, Queue, Scope, Stream, SubscriptionRef } from "effect";
+import {
+  Deferred,
+  Duration,
+  Effect,
+  Fiber,
+  FileSystem,
+  Queue,
+  Scope,
+  Stream,
+  SubscriptionRef,
+} from "effect";
 import { createCliRenderer } from "@opentui/core";
 import { render, useKeyboard, useRenderer } from "@opentui/solid";
 import { createSignal, ErrorBoundary, onMount, Show, type Accessor } from "solid-js";
 import { reason } from "../naming";
+import { isHostLog } from "../host-log";
 import type { InputPrompts } from "../inputs";
 import { App } from "./App";
 import { Flow } from "./Flow";
@@ -238,21 +249,29 @@ export function driveBridge<E, R>(
      * them because `fs.watch` drops events on some filesystems and says nothing when it
      * does. A tick carries the focus as it stands, so it never overrides one.
      */
-    const ticks = Stream.merge(
-      fs.watch(bridge.stateDir, { recursive: true }).pipe(Stream.catchCause(() => Stream.empty)),
+    const ticks = yield* Stream.merge(
+      fs.watch(bridge.stateDir, { recursive: true }).pipe(
+        Stream.filter((event) => !isHostLog(event.path)),
+        Stream.catchCause(() => Stream.empty),
+      ),
       Stream.tick(`${POLL_MS} millis`),
-    ).pipe(Stream.mapEffect(() => SubscriptionRef.get(focus)));
+    ).pipe(Stream.share({ capacity: 1, strategy: "sliding", idleTimeToLive: Duration.infinity }));
 
     /**
      * One writer of `state`, and the load in flight is interrupted the moment a newer
-     * focus arrives. Holding a cursor key used to queue one full read per keypress and
-     * run every one of them, and a read that started earlier could land after a newer
-     * one and put a stale board back on screen. `switchMap` is what makes the newest
-     * focus the only one that finishes.
+     * focus arrives. Background writes instead request one read after the current one:
+     * cancelling on each write made a busy host repeatedly start reads that never
+     * finished. The pending read covers every write seen while the current one ran.
+     * Only a change of focus supersedes work; the watch is shared across those changes.
      */
     yield* Effect.forkScoped(
-      Stream.merge(SubscriptionRef.changes(focus), ticks).pipe(
-        Stream.switchMap((at) => Stream.fromEffect(stated(bridge.load(at)))),
+      SubscriptionRef.changes(focus).pipe(
+        Stream.switchMap((at) =>
+          Stream.concat(Stream.make(undefined), ticks).pipe(
+            Stream.buffer({ capacity: 1, strategy: "sliding" }),
+            Stream.mapEffect(() => stated(bridge.load(at))),
+          ),
+        ),
         Stream.runForEach((next) =>
           Effect.sync(() => {
             // The marks are the bridge's own, and so is a command's note: a load that has

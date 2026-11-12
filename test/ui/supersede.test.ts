@@ -5,7 +5,7 @@ import * as Cause from "effect/Cause";
 // `glab` call sat in the same queue in front of the next Select.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Deferred, Effect } from "effect";
+import { Deferred, Effect, FileSystem, Queue, Stream } from "effect";
 import { Rig } from "../support/recorder";
 import { runEffect } from "../support/effect";
 import { driveBridge, type Focus } from "../../src/ui/bridge";
@@ -109,6 +109,147 @@ test("a newer focus interrupts the read in flight, and the newer one lands", () 
         expect(driven.state().board.repo).toBe("run:b");
       }),
     ),
+  ));
+
+test("writes during a refresh let it finish and request one fresh read afterwards", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const events = yield* Queue.unbounded<FileSystem.WatchEvent>();
+      const held = yield* Deferred.make<void>();
+      let reads = 0;
+      let seen = 0;
+      let interrupted = false;
+      const driven = yield* driveBridge({
+        filter: { kind: "all" },
+        origin: null,
+        stateDir: rig.stateDir,
+        load: () =>
+          Effect.gen(function* () {
+            const reading = ++reads;
+            if (reading === 2)
+              yield* Deferred.await(held).pipe(
+                Effect.onInterrupt(() =>
+                  Effect.sync(() => {
+                    interrupted = true;
+                  }),
+                ),
+              );
+            return stateFor(String(reading));
+          }),
+        act: () => Effect.succeed(null),
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          watch: () =>
+            Stream.fromQueue(events).pipe(
+              Stream.tap(() =>
+                Effect.sync(() => {
+                  seen++;
+                }),
+              ),
+            ),
+        }),
+      );
+      yield* until("the refresh to start", () => reads === 2);
+      for (let i = 0; i < 20; i++) {
+        yield* Queue.offer(events, { _tag: "Update", path: "runs/one/output.json" });
+        yield* until("the write to be consumed", () => seen === i + 1);
+      }
+      expect(interrupted).toBe(false);
+      expect(reads).toBe(2);
+      yield* Deferred.succeed(held, undefined);
+      yield* until("the pending refresh to finish", () => driven.state().board.repo === "3");
+      expect(reads).toBe(3);
+    }),
+  ));
+
+test("host logs do not refresh the board, but Run writes still do", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const events = yield* Queue.unbounded<FileSystem.WatchEvent>();
+      let reads = 0;
+      let seen = 0;
+      const driven = yield* driveBridge({
+        filter: { kind: "all" },
+        origin: null,
+        stateDir: rig.stateDir,
+        load: () => Effect.sync(() => stateFor(String(++reads))),
+        act: () => Effect.succeed(null),
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          watch: () =>
+            Stream.fromQueue(events).pipe(
+              Stream.tap(() =>
+                Effect.sync(() => {
+                  seen++;
+                }),
+              ),
+            ),
+        }),
+      );
+      yield* until("the first refresh to finish", () => reads >= 2);
+      yield* Effect.sleep("20 millis");
+      const before = reads;
+      for (const path of ["host.log", "host.out", "host.log.1"]) {
+        yield* Queue.offer(events, { _tag: "Update", path });
+      }
+      yield* until("the events to be read", () => seen === 3);
+      yield* Effect.sleep("20 millis");
+      expect(reads).toBe(before);
+      yield* Queue.offer(events, { _tag: "Update", path: "runs/one/output.json" });
+      yield* until(
+        "the Run write to be shown",
+        () => driven.state().board.repo === String(before + 1),
+      );
+    }),
+  ));
+
+test("one watcher follows focus changes and closes with the bridge", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      let opened = 0;
+      let closed = 0;
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const driven = yield* driveBridge({
+            filter: { kind: "all" },
+            origin: null,
+            stateDir: rig.stateDir,
+            load: (focus) => Effect.succeed(stateFor(focus.selected)),
+            act: () => Effect.succeed(null),
+          }).pipe(
+            Effect.provideService(FileSystem.FileSystem, {
+              ...fs,
+              watch: () =>
+                Stream.unwrap(
+                  Effect.acquireRelease(
+                    Effect.sync(() => {
+                      opened++;
+                      return Stream.never;
+                    }),
+                    () =>
+                      Effect.sync(() => {
+                        closed++;
+                      }),
+                  ),
+                ),
+            }),
+          );
+          yield* until("the watcher to open", () => opened > 0);
+          for (let i = 0; i < 10; i++) {
+            driven.dispatch({ _tag: "Select", id: `run:${i}`, on: null });
+            yield* until("the new focus", () => driven.state().board.repo === `run:${i}`);
+          }
+          expect(opened).toBe(1);
+          expect(closed).toBe(0);
+        }),
+      );
+      expect(closed).toBe(1);
+    }),
   ));
 
 test("a command that takes its time does not stall the next keypress", () =>
