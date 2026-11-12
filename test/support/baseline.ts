@@ -20133,6 +20133,52 @@ scenario(
 );
 
 scenario(
+  "a tune-up carried from one whose harness is several commits editing one file reaches its Cycle's verdict",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const first = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        yield* FileSystem.FileSystem.pipe(
+          Effect.flatMap((fs) =>
+            fs.writeFileString(`${rig.projectDir}/bench/bench.sh`, CYCLE_BENCH),
+          ),
+          Effect.orDie,
+        );
+        yield* exec(["git", "commit", "-qam", "harness, again"], { cwd: rig.projectDir });
+        const second = yield* headOf();
+        const plan = {
+          ...tunePlan(first, [STEADY_PRIMARY, SIZE_GUARDRAIL]),
+          harness: { commits: [first, second], paths: ["bench"] },
+        };
+        // One list for both Runs: the later one's Cycle and reset take the last two.
+        yield* rig.queueOutputs([TUNE_DISCOVERED, plan, EXHAUSTED, NO_CHANGE(), RESET()]);
+        expect((yield* tunedUp("r-tune-multi-first"))._tag).toBe("Success");
+        yield* exec(["git", "reset", "-q", "--hard", `${first}~1`], { cwd: rig.projectDir });
+        // So the carried copies cannot come out with their originals' SHAs.
+        yield* exec(["git", "commit", "-q", "--allow-empty", "-m", "the default branch moves on"], {
+          cwd: rig.projectDir,
+        });
+        const runId = "r-tune-multi-carried";
+        yield* checkedBy(runId, "unit", "sh", ["-c", "test ! -e broken"]);
+        const result = yield* tunedUp(runId, { from: "r-tune-multi-first", samples: 4, cycles: 1 });
+        expect(result._tag).toBe("Success");
+        expect(yield* runLog(runId)).toContain(`harness commits ${first}, ${second} carried onto`);
+        const [measured] = yield* cyclesMeasured(runId);
+        expect(measured?.pass).toBe("cycle 1");
+        expect(measured?.result._tag).toBe("Judged");
+        const copied = yield* exec(
+          ["git", "merge-base", "--is-ancestor", first, measured!.base.commit],
+          { cwd: rig.projectDir },
+        );
+        expect(copied.exitCode).not.toBe(0);
+        expect(measured!.base.head_sha).toBe(measured!.base.commit);
+        expect(yield* runLog(runId)).toContain("cycle 1 reverted to");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "a tune-up Cycle whose checks fail is reverted though it measures a gain, and the Run completes with its findings",
   () =>
     runEffect(
