@@ -179,7 +179,7 @@ Machine by the core's `placeFiles` through its host's `upload`, and typed as one
 their shell-quoted paths there, without Enter. A file that fails is said in the tab's status
 and the log, and nothing is typed. Drops on the chat beside it, and pastes into its focused
 composer, still go to the chat. See
-[ADR-draft-a-file-given-to-a-pane-is-placed-on-its-machine](../docs/adr/draft-a-file-given-to-a-pane-is-placed-on-its-machine.md).
+[ADR-0065](../docs/adr/0065-a-file-given-to-a-pane-is-placed-on-its-machine.md).
 
 **Drawn as Ghostty draws.** The view paints each row into pixels on the CPU and shows it with
 `El::pixels`; the cursor is its own image laid over the row. It follows the human's Ghostty
@@ -309,7 +309,7 @@ step actions, notes, questions and proposals are sent through `act` under a requ
 refused one says why and offers Try again with the same request. A gesture on a Machine out of
 reach is still sent, marked `unsent`, so the host says so. Evidence draws images in place; a
 report is confined by Desktop's CSP and opened in the browser from a file through `openLink`,
-never drawn (D2 in ADR-draft-collie-desktop-is-drawn-by-rune); a video opens the same way. A
+never drawn (D2 in ADR-0066); a video opens the same way. A
 check's output, a kept log or a handoff note opens under its row on a press, Enter or Space,
 read from `runFile` the first time, as `EvidenceText.vue` does. A record attaches its Run's pane
 only while Terminal is the tab shown, and leaves it as the tab is left.
@@ -535,7 +535,7 @@ Mac signing uses the existing Apple release secrets, notarizing and stapling whe
 credentials are available; `tools/verify-mac-app.sh` verifies built and archived apps.
 
 The cutover decision and verification scope are in
-[the ADR](../docs/adr/draft-collie-replaces-the-webview-desktop-in-place.md).
+[the ADR](../docs/adr/0067-collie-replaces-the-webview-desktop-in-place.md).
 
 Historical spike Sizes on vm-mk (Linux x64):
 

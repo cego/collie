@@ -1,6 +1,6 @@
 # Collie replaces the webview desktop in place
 
-**Status: draft.** Requested by the human on 2026-11-12: carry the resource
+**Status: accepted for Collie 1.0.0.** Requested by the human on 2026-11-12: carry the resource
 optimizations into the Rune branch, remove the Nuxt app, and cut existing desktop
 installations directly over to the native app named Collie.
 
@@ -39,7 +39,7 @@ another launch replaces it.
 CI requires the native bundle, core typecheck, Rust behavior tests and schema
 contract checks. The release builds the same native artifacts for Linux x64 and
 Apple silicon, including the existing signed Setup/DMG installer names. This
-branch change prepares the cutover; it does not itself publish a release.
+cutover ships as Collie 1.0.0, published from the version tag after the required checks pass.
 
 ## Evidence and limits
 

@@ -1,8 +1,8 @@
 # Collie Desktop is drawn by Rune
 
-**Status: draft; the side-by-side gate is superseded by the [direct cutover decision](draft-collie-replaces-the-webview-desktop-in-place.md).** Decided by the human on run-d9db315d.implement
-(ticket 07), 2026-11-10. Go or no-go waits for the after-merge evidence below. The product
-decisions recorded here stand whichever way the gate goes.
+**Status: accepted; the historical side-by-side gate is superseded by the [direct cutover decision](0067-collie-replaces-the-webview-desktop-in-place.md).** Decided by the human on run-d9db315d.implement
+(ticket 07), 2026-11-10. The gate below records the original spike; the human approved
+the direct cutover for Collie 1.0.0 on 2026-11-12.
 
 ## What was true before
 

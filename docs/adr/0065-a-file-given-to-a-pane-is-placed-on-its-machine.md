@@ -1,12 +1,12 @@
 # A file given to a pane is placed on its Machine
 
-**Status: draft.** Decided on run-f0d81d1d, where the human asked to paste and drop files
+**Status: accepted for Collie 1.0.0.** Decided on run-f0d81d1d, where the human asked to paste and drop files
 into a Run's terminal "for all harnesses, local or remote".
 
 It extends [ADR-0046](0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md) from
 the Flock chat to a Run's pane, and builds on
 [ADR-0044](0044-go-to-pane-opens-the-pane-in-desktop.md) (Go to pane) and
-[ADR-draft-collie-desktop-is-drawn-by-rune](draft-collie-desktop-is-drawn-by-rune.md).
+[ADR-0066](0066-collie-desktop-is-drawn-by-rune.md).
 
 ## What was true before
 
@@ -53,7 +53,7 @@ before its files are placed is typed into nothing.
 ## Consequences
 
 - On Wayland, winit reports no file drops, so files reach a pane by paste only, as they
-  reach the chat (ADR-draft-collie-desktop-is-drawn-by-rune D2).
+  reach the chat (ADR-0066 D2).
 - Ctrl+V reads the clipboard before it is typed, so a pane's own Ctrl+V arrives after that
   read. With an image on the clipboard, a harness that reads its own clipboard now gets a
   path instead.

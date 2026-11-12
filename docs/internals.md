@@ -1611,7 +1611,7 @@ existing installer and update artifact names. The installed product is named **C
 `desktop-rune/scripts/bundle.ts` supplies the official brand icons, USTAR update archives,
 and metadata the old app's updater accepts, so its next update replaces the webview app in
 place. Credentials, saved Machines, conversations and settings keep their existing paths.
-See [the cutover decision](adr/draft-collie-replaces-the-webview-desktop-in-place.md).
+See [the cutover decision](adr/0067-collie-replaces-the-webview-desktop-in-place.md).
 
 On macOS the bundle is signed with `ELECTROBUN_DEVELOPER_ID` (ad hoc without one) and
 notarised when the Apple credentials are complete. `desktop/scripts/mac-signing.ts` owns

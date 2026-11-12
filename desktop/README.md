@@ -22,7 +22,7 @@ The existing `dk.cego.collie.desktop` stable identity, launcher paths and data r
 are retained. Signed `stable-<os>-<arch>` archives replace the old app in place;
 settings, connection credentials and chat state remain where the core reads them.
 The user-facing name is Collie on both platforms. See
-[the cutover decision](../docs/adr/draft-collie-replaces-the-webview-desktop-in-place.md)
+[the cutover decision](../docs/adr/0067-collie-replaces-the-webview-desktop-in-place.md)
 for the legacy updater contract and remaining platform verification.
 
 ## Measuring Desktop's start

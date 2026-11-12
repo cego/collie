@@ -1,4 +1,4 @@
-// A file given to a pane is placed on the pane's Machine (ADR-draft-a-file-given-to-a-pane-is-placed-on-its-machine):
+// A file given to a pane is placed on the pane's Machine (ADR-0065):
 // Desktop's copy is uploaded through the host's `upload` in parts, once per content, and its
 // path there is answered; a file that cannot be placed names itself and places nothing more.
 

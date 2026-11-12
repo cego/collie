@@ -1,4 +1,4 @@
-//! A dialog that picks several files (ADR-draft-collie-desktop-is-drawn-by-rune D2), which
+//! A dialog that picks several files (ADR-0066 D2), which
 //! Rune's own `open_file` does not: the XDG desktop portal's FileChooser with `multiple` on
 //! Linux, rfd's panel on macOS. It blocks, so Linux calls it off the view's thread.
 

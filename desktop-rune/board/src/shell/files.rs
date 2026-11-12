@@ -1,6 +1,6 @@
 //! Files pasted or dropped on a Run's pane: staged on this computer, placed on the pane's
 //! Machine through its host (`placeFiles`), then typed into the pane as their paths there in
-//! one paste, without Enter (ADR-draft-a-file-given-to-a-pane-is-placed-on-its-machine).
+//! one paste, without Enter (ADR-0065).
 
 use crate::App;
 use crate::calls::CallError;
