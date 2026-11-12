@@ -726,6 +726,50 @@ for (const name of ["gitlab", "github"] as const)
       }),
     ));
 
+test("a GitHub infrastructure failure between an own-test failure and a pass cannot prove the check", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, forge } = yield* waiting(
+        "passed",
+        PULL,
+        undefined,
+        {
+          jobs: [
+            {
+              name: "test",
+              state: "passed",
+              id: 201,
+              attempts: [
+                { id: 1, state: "failed" },
+                { id: 101, state: "failed", trace: "runner could not start" },
+              ],
+            },
+            {
+              name: "suite (1)",
+              state: "passed",
+              id: 202,
+              attempts: [
+                { id: 2, state: "failed", trace: `${OWN_FILE}:\n(fail) works\n` },
+                { id: 102, state: "failed", trace: "runner could not start" },
+              ],
+            },
+          ],
+        },
+        "github",
+        BRANCH,
+      );
+      const result = yield* read({ ...asked, spec: GATE, settle: true }, forge);
+      expect(result).toMatchObject({
+        state: "failed",
+        url: `https://${PROJECT.github}/actions/runs/4031/job/1`,
+        log: GH_LOG,
+      });
+      expect("unproved" in result ? result.unproved : "").toContain('own test "works"');
+      expect(yield* journalOf(asked)).toEqual([]);
+      expect(reruns(forge.requests)).toEqual([]);
+    }),
+  ));
+
 for (const name of ["gitlab", "github"] as const)
   test(`a ${name} failed own test keeps its file when another job names an untouched test the same`, () =>
     runEffect(

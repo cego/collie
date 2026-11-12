@@ -1804,7 +1804,7 @@ for (const name of ["gitlab", "github"] as const) {
             url,
             id: jobId(name, 2),
             merge: null,
-            retryOf: null,
+            retryOf: [],
             target: "main",
           });
         expect(yield* read({ jobs: [{ name: "lint", state: "passed" }] })).toEqual({
@@ -1814,7 +1814,7 @@ for (const name of ["gitlab", "github"] as const) {
           url: null,
           id: null,
           merge: null,
-          retryOf: null,
+          retryOf: [],
           target: "main",
         });
         for (const rest of [{ installed: false }, { loggedIn: [] }])
@@ -2086,7 +2086,7 @@ test("a GitLab merged-results pipeline counts for the head it was built from, an
         url: "https://gitlab.example.com/group/app/-/jobs/1",
         id: "1",
         merge: MERGE,
-        retryOf: null,
+        retryOf: [],
         target: null,
       });
       // A pipeline of an older head: this head's has not started.
@@ -3383,7 +3383,7 @@ test("GitLab identifies a retry from job IDs without a retried response field", 
         ok: true,
         state: "passed",
         id: "101",
-        retryOf: "1",
+        retryOf: ["1"],
       });
     }).pipe(Effect.provide(fake.layer)),
   );
@@ -3416,7 +3416,7 @@ test("GitHub finds a failed attempt beyond a page of passing reruns", () => {
         ok: true,
         state: "passed",
         id: "4030/201",
-        retryOf: "4030/1",
+        retryOf: ["4030/1"],
       });
     }).pipe(Effect.provide(fake.layer)),
   );

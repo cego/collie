@@ -145,8 +145,8 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
         const status = yield* shell("git", ["status", "--porcelain", "--untracked-files=all"], cwd);
         if (status.code !== 0 || Str.trim(status.stdout) !== "")
           return unproved(`passed, but ${cwd} has changes it never saw`);
-        const attempt = read.retryOf ?? retried;
-        if (attempt !== null) {
+        const attempts = Arr.dedupe([...read.retryOf, ...(retried === null ? [] : [retried])]);
+        for (const attempt of attempts) {
           const failed = yield* forge.failedAttempt(ref, attempt, cwd, asked.run);
           const own =
             failed.tests.length === 0 || read.target === null
@@ -163,7 +163,7 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
               forge.jobLog(ref, attempt),
             );
         }
-        const flake = attempt === null ? {} : { retried: true as const };
+        const flake = attempts.length === 0 ? {} : { retried: true as const };
         if (recorded !== undefined && retried === null) return { proved: recorded, ...flake };
         const at = yield* nowIso;
         const ran = { name: job, url: read.url };

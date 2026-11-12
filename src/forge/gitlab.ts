@@ -659,7 +659,7 @@ function job(ref: MrRef, name: string, cwd: string): Effect.Effect<JobRead, neve
       url: null,
       id: null,
       merge: null,
-      retryOf: null,
+      retryOf: [],
       target,
     } as const;
     if (pipeline === null) return waiting;
@@ -792,14 +792,14 @@ const jobIn = (reached: Reached, cwd: string, id: number, name: string) =>
   Effect.map(pipelineJobs(reached, cwd, id), (listed) => {
     if (!listed.ok) return listed;
     const [found, ...before] = Arr.filter(listed.value, (one) => one.name === name);
-    const failed = Option.getOrUndefined(Arr.findFirst(before, (one) => one.status === "failed"));
+    const failed = Arr.filter(before, (one) => one.status === "failed");
     return {
       ok: true,
       value: {
         state: found === undefined ? "missing" : (JOB_STATES.get(found.status) ?? "pending"),
         url: found?.web_url ?? null,
         id: found === undefined ? null : String(found.id),
-        retryOf: failed === undefined ? null : String(failed.id),
+        retryOf: Arr.map(failed, (one) => String(one.id)),
       },
     } as const;
   });

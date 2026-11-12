@@ -74,8 +74,8 @@ export type JobRead =
       readonly id: string | null;
       /** The merge commit a merged-results pipeline of `head` ran on, else null. */
       readonly merge: string | null;
-      /** The failed attempt this job retried, as `failedAttempt` takes it, else null. */
-      readonly retryOf: string | null;
+      /** Earlier failed attempts, newest first, as `failedAttempt` takes each one. */
+      readonly retryOf: ReadonlyArray<string>;
       /** The branch the merge request targets, where the forge said. */
       readonly target: string | null;
     }

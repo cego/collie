@@ -535,7 +535,7 @@ function job(ref: MrRef, name: string, cwd: string): Effect.Effect<JobRead, neve
       if (some.value.length < 100) break;
     }
     const [found, ...before] = named;
-    const failed = Option.getOrUndefined(Arr.findFirst(before, (one) => stateOf(one) === "failed"));
+    const failed = Arr.filter(before, (one) => stateOf(one) === "failed");
     let absent: JobState = "missing";
     if (found === undefined) {
       // GitHub creates a job behind `needs` only once its needs finish.
@@ -556,7 +556,10 @@ function job(ref: MrRef, name: string, cwd: string): Effect.Effect<JobRead, neve
       url: found?.html_url ?? null,
       id: actionsJob(found?.html_url),
       merge: null,
-      retryOf: actionsJob(failed?.html_url),
+      retryOf: Arr.filter(
+        Arr.map(failed, (one) => actionsJob(one.html_url)),
+        (id) => id !== null,
+      ),
       target: pull.value.base.ref,
     };
   });
