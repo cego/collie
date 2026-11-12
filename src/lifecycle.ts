@@ -190,6 +190,15 @@ type Client = FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner;
 
 /** A refusal as the front doors say one, with the host's own sentence inside it. */
 export const refusal = (cause: HostFailure): Failure => {
+  const failure = refused(cause);
+  return cause._tag === "HostUnavailable" ||
+    cause._tag === "MachineUnreachable" ||
+    cause._tag === "RpcClientError"
+    ? { ...failure, unreached: true }
+    : failure;
+};
+
+const refused = (cause: HostFailure): Failure => {
   switch (cause._tag) {
     case "HostRefused":
       // The host says so first where the input is why, and that is exit 2, not exit 1.
@@ -1288,6 +1297,7 @@ export const steerRun = (
                       ? deliveredLine(sent)
                       : `Note ${sent.note} kept for Step ${options.step}.`,
                   sent.kept,
+                  sent.workflowNotice,
                 ],
                 (line) => line !== undefined,
               ),
@@ -1297,7 +1307,13 @@ export const steerRun = (
           ),
         };
       // A receipt that read as delivered when nothing was sent is the failure ADR-0041 ends.
-      const why = `Nothing was delivered: ${sent.detail || "no agent to tell"}.`;
+      const why = Arr.join(
+        Arr.filter(
+          [`Nothing was delivered: ${sent.detail || "no agent to tell"}.`, sent.workflowNotice],
+          (line) => line !== undefined,
+        ),
+        " ",
+      );
       return err(
         "operation_failed",
         withNotice(route === null ? why : `${why} ${route}`, sent.redacted, " "),

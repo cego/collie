@@ -1,6 +1,6 @@
 # Workflows
 
-Collie ships eleven workflows. This page is the "which one do I want" level: what each is
+Collie ships twelve workflows. This page is the "which one do I want" level: what each is
 for, what it needs from you, and how they chain. The files under
 [`workflows/`](../workflows) are canonical for step-by-step behavior: each is a TypeScript
 module with its Markdown beside it as content ([the SDK](sdk.md)). Any of them is a fork
@@ -123,6 +123,26 @@ a new `<your GitLab login>/<task>` from `--input task=`, else, given another Run
 plan directory, the branch that Run's Task is on until its merge request lands, else a new
 one from the plan directory's own name, or the work itself. Nobody is asked for one ([the full order](cli.md#start-a-run)).
 
+**Follow-ups:** **Keep going on this** names its entry: **Checks**, **Review**, or **Build**.
+It carries the original work source and recovers the finished Run's branch. A completed
+clean review must settle the same requirements, outcome, pushed head, fingerprint, and
+diff target before Checks can be the entry. That review can belong to another Run of the
+same Task. A green pipeline alone doesn't qualify. Older Runs without those associations
+need review again. A review of only completed tickets cannot settle the whole plan.
+External issue bodies also need a fresh review while the host cannot
+snapshot their current requirements.
+
+Where the branch already carries implementation, the follow-up starts at Review and uses
+the same bounded fix-and-review rally. Reviewers see commits since the previous review,
+the original requirements, and any additional work you requested. A missing requirement
+goes to the builder as a finding. With no established implementation, it starts at Build.
+The host reads the facts again when you take the offer. A clean checkout behind the
+pushed branch fast-forwards; divergent history or unpublished work refuses that checkout
+change. Changed requirements, head, outcome, or target require review again. Checks still
+prove the current revision, and delivery updates the branch's existing merge request.
+The parent keeps its terminal status and finishing revision
+([ADR-draft-a-finished-delivery-names-the-way-back-to-work](adr/draft-a-finished-delivery-names-the-way-back-to-work.md)).
+
 **What happens:** one implementer agent builds, a commit per ticket. It reviews what it
 built with the same pass `review` runs — one complete review — and loops on the findings for
 at most four review and fix rounds. Every commit is pushed, so the reviewers read the change
@@ -134,8 +154,9 @@ rather than fails: the question names the ticket and the criteria still unmet, s
 ticket can be amended. It asks sooner when a hand-back leaves the tree as it found it and
 reports a blocking finding, since another could not move that blocker, and that question
 names the blockers too. **Hand back** reads the ticket again, goes on with no builder turn if
-nothing is unmet any more, and otherwise hands it back with two tries fresh. **Stop** fails
-the Run with that reason, before any review. An unattended Run waits on either question. A ticket's `## After merge` outcomes are not criteria:
+nothing is unmet any more, and otherwise hands it back with two tries fresh. **Stop** parks
+the Run with that reason, before any review. A resume asks the builder again under a new
+operation and reads its new Output. An unattended Run waits on either question. A ticket's `## After merge` outcomes are not criteria:
 the merge request names them under **Not settled by the run**. A criterion only CI, a merge
 or a deploy can show may be answered `after merge: <reason>`: it does not end the Run, the
 reviewer blocks one the Run could have shown, and the merge request names the ticket, the
@@ -211,11 +232,15 @@ runs at, and nothing uncommitted, as when a ticket is proved met by work already
 merge request step does not run and **What next?** is not asked. The Run ends with, and its
 log records, `nothing to land: no commits over <base>, where this branch leaves <default
 branch>, and nothing uncommitted`, and its card offers no follow-up. A branch with commits
-that cannot be pushed still fails, as below.
+that cannot be pushed parks for repair, as below.
 
-It fails with the reason there is no merge request — a ticket stopped
-on a blocking finding, acceptance criteria unreadable or still unmet when Stop was answered, a review that halted — and says to
-continue with a follow-up Run, which **Keep going on this** starts. A delivery the
+It parks its Step with the reason and what to correct when its spec cannot be read,
+the builder stops, a ticket's blocking findings remain unresolved, or the final rally halts,
+including a disputed blocker. `run resume` or `retry-noted` continues on the same worktree,
+branch and agents. A missing spec is read again; a stopped build gets a new operation.
+A stopped rally gets one more fix-and-review round. Unresolved disputes stay on its card
+at their original blocking severity while it is parked. If it still cannot converge, it parks
+again with the new reason. No retry is automatic. A delivery the
 Merge request step's agent left undone — the branch not pushed, no merge request URL, or a
 blocking finding — does not fail it: the Run parks at Merge request with the reason, and a
 resume asks that agent again, told of the merge request already open. Its `minor` findings
@@ -244,7 +269,7 @@ with a check still failing and no stall, the Run is parked "Outcome unproved aft
 fixes …", naming the gaps; repair the checks and resume it, and a resume from that park runs
 each check still failing whole once more, since a repair can be outside the tree. A gate fix lands after the last
 review, so the merge request says it was not re-reviewed. What the Run could not settle —
-checks still unproved, blocking disputes the reviewers left unanswered, and the assumptions
+checks still unproved, disputes from gate fixes, and the assumptions
 an implementer made where the spec was silent — goes into the description under **Not
 settled by the run**, and the merge request opens anyway.
 
@@ -326,6 +351,23 @@ name git would refuse in a branch name stops the hand-off, quoting the ticket, a
 `schema` in `api` beside a repository called `api--schema`, since both would be run as
 `api--schema`.
 
+A ticket may need a Change another plan's Run is building merged before it is built. It
+names that **Prerequisite** on a `**Needs merged:**` line: Run ids separated by commas, each
+followed by that Run's Change name, or by nothing for its default Change, like
+`**Needs merged:** run-ac644eef card, run-e15f4a62`. The Change is always in the ticket's own
+repository. A ticket of the same plan goes on `**Blocked by:**` instead, and another
+repository's release is cego/collie#338's. The Run building the ticket builds every other
+ticket it can first. Then it waits, and its card reads `Waiting for <run>'s <change> to
+merge.` It checks every 5 minutes, spends no model tokens, and ends on a Hold or a Stop. A
+Prerequisite has landed once its merge request has merged and its merge commit is on the
+default branch. The Run then merges the default branch in and builds the ticket on it. Each
+check reads the ticket again, so taking the entry off the line is how to go on without it.
+The wait needs you only when it can never end by itself: the named Run is not on this host,
+or is this Run or one it came out of, or ended with no merge request for that Change, or that
+merge request closed without merging. The Run then parks as a failed Step that names the Run,
+and resuming it reads the ticket again. A wait past 2 days parks as overdue, as any wait on a
+person does. See [ADR-draft-a-change-waits-on-another-runs-change-to-merge](adr/draft-a-change-waits-on-another-runs-change-to-merge.md).
+
 A plan is single-repository only when its tickets all say `.`, or carry no line at all, and
 are all in one Change. A plan whose tickets all name one repository _by path_ is not one of
 those: that repository is somewhere under the root, and its run has to be rooted there. A
@@ -364,8 +406,8 @@ its result names what each repository ended as.
   is recorded and shown on the Run, and the menu comes back; started directly, the start is
   refused with it before any Run is admitted. The same reading checks
   the tickets when the planner writes them, and a plan it refuses goes back to the planner
-  once, so most of these never reach the menu. The reasons are a cycle between Changes, a
-  `Change:` name git would refuse in a branch name or that names another repository, a
+  once, so most of these never reach the menu. The reasons are a cycle between Changes or
+  between one Change's tickets, a `Change:` name git would refuse in a branch name or that names another repository, a
   ticket with no `Repo:` line where its siblings have one, a repository with no checkout
   under the root — Collie does not clone — a `Repo:` that is not a path under the root, two
   tickets wearing one number, or a "Blocked by" line naming something that is not a ticket
@@ -573,13 +615,26 @@ branch is another's source branch waits on it, and so does one a fan-out's Chang
 on each of the set's merge requests whose Change is in an earlier wave of the same plan. A
 waiting one is started only once those Release Runs have merged theirs, costing nothing
 meanwhile. Merge requests that wait on each other are refused.
-Each child is a release as below, of its one merge request: its own Go at its own head,
-withdrawn only when its own head moves; its own production go; its own Helle claims. One
+For merge requests in another repository, the set uses that repository's checkout under
+the Projects root for its merge children and tag Run.
+Each child keeps its own review, Checks, Go at its own head and Helle claims. Its Go is
+withdrawn only when its own head moves. It merges and ends **merged**, without tagging,
+staging the tag or asking for production. Once every child of a repository has ended,
+the set starts one more Release Run for that repository, entering at Tag. It tags once
+over all the children that merged, proves the tag carries every merge and, for an
+application, stages the tag and asks for production once. A repository with nothing merged
+gets no tag. A pending Merge Go or Production Go in one repository does not delay another
+repository's tag Run. Failed or open children do not hold back a tag over the others' merges. One
 waiting on a release that failed, or on a merge request left open, is not started. The Run
 ends saying how many released, failed and were not started, and how many were left open,
 naming each, and fails where one failed. A failed child offers **Release again** with its
 one merge request; the set's Run never offers the whole set again. Picking several Gos in
 one question is not yet offered: each child asks its own.
+
+The set fills `merge_only=true` on its children. Each repository's tag Run starts with
+`together` naming the merged merge requests its tag must carry. These inputs are available through
+every front door; a normal start needs neither. A set's application needs stage deploy
+jobs on its tags. Without them, its merge child refuses to merge.
 
 **Checkout:** its own, of the merge request's source branch (the pull request's head
 branch on GitHub): the one git already has for it, which is the implement Run's worktree
@@ -941,6 +996,11 @@ Where it changed code and nothing names the run's checks, it names them with
 `collie run intent verification` — with `--cwd` naming the repository, at the Projects
 root — and Collie runs the named checks there when the run ends.
 
+For a speed comparison, the agent takes a Measurement. It writes the benchmark plan in
+the Run's `handoffs/<slug>.benchmark.json`, calibrates the base against itself with
+`collie measure --pass calibration`, then measures the candidate with `--pass final`.
+It reports the host's verdicts and Measurement id; see [`collie measure`](cli.md#measure).
+
 **Ends:** when the agent writes its Output. Its `summary` is the run's result and what the
 card says, as `Completed. It reported: “…”` — its status, then its claim, shown as one. A `blocked` reason fails the run with that reason. There
 is no menu, and the agent takes steering after the run has ended.
@@ -1045,9 +1105,14 @@ optionally, the branch with `branch`. A remote start can name the repository by 
 
 **What happens:** one investigator works in the Run's own checkout and returns
 `{ summary, findings: [{ what, evidence }] }`. It changes only what the goal asks,
-proves nothing beyond its decoded Output and offers no next steps. The host reports
+has no proof gate and offers no next steps. The host reports
 the result to the agent that started it, then closes the investigator and its Task
 workspace unless another Run or a human pane needs it (`closes: "reported"`).
+
+For a speed comparison, the investigator takes a Measurement. It writes the benchmark
+plan in the Run's `handoffs/<slug>.benchmark.json`, calibrates the base against itself
+with `collie measure --pass calibration`, then measures the candidate with `--pass final`.
+It reports the host's verdicts and Measurement id; see [`collie measure`](cli.md#measure).
 
 Its Flow forecasts one Step, Investigate, which produces evidence.
 
@@ -1149,7 +1214,7 @@ with no Discover or Harness Output fails the Run, naming the files it looked for
    it, against the Run's own checkout, which holds nothing else yet. The calibration is one
    of three:
    - **calibrated**: the primary shows no change against itself and every guardrail holds;
-   - **harness broken**: a prepare or sample failed or timed out, a metric went unread, or
+   - **harness broken**: the host refused the Measurement, a prepare or sample failed or timed out, a metric went unread, or
      an `exact` metric is not the same number on every sample of identical trees;
    - **proof unavailable**: the primary is `inconclusive` or differs from itself, or a
      guardrail is not held. Each metric is named with its interval and how far it reaches
@@ -1162,12 +1227,13 @@ with no Discover or Harness Output fails the Run, naming the files it looked for
    interval against itself and the plan, and repairs the harness, in new commits on the
    harness paths, or the plan: more samples, a steadier window, a counter, or limits of a
    metric's own with their `why`. Its answer is recorded as a new plan with its reason and
-   calibrated again. A repair that leaves the plan as it was is not calibrated again: one
+   calibrated again. After a verdict, a repair that leaves the plan as it was is not calibrated again: one
    that only rewords a `why`, or declares limits a metric already had from the plan, leaves
-   it as it was. Once
-   the repairs are spent, or one changed nothing, the Run **fails**, its reason the findings
-   file, then `harness broken:` or `proof unavailable:` and each metric. Every calibration,
-   plan and harness commit stays on the record.
+   it as it was. Once the repairs are spent, a broken harness **parks at Calibrate**, naming
+   the tree and reason. Resume grants one more repair and calibration, even of an unchanged
+   plan when no verdict was taken. A still-broken harness parks again. Proof unavailable
+   still **fails** after its repairs, or when a repair leaves its plan unchanged.
+   Every calibration, plan, and harness commit stays on the record.
 5. **Cycles**, at most `cycles` of them. In each, the tuner is given the ranked
    opportunities and every earlier Cycle's result, and commits one change on the Run's
    branch. Collie runs the Run's checks, all but those left to CI, and measures the
@@ -1178,6 +1244,9 @@ with no Discover or Harness Output fails the Run, naming the files it looked for
    then checks that the head and files are that tree again before anything else; a revert
    that leaves another tree fails the Run, naming both, rather than lose anyone's work. The findings are rewritten after each Cycle. A reverted Cycle, or one that
    changed nothing, still counts, and a restarted host resumes in the Cycle it was in.
+
+   If the host refuses a Cycle's Measurement, its Step parks with the reason. Resume
+   measures again. A refused final Measurement also parks its Step and measures again on resume.
 
    The Cycles stop early, with the reason in the Run's log and its findings, when the tuner
    says no measured opportunity is left or names an unsafe tradeoff, when two Cycles in a
@@ -1257,14 +1326,18 @@ with no Discover or Harness Output fails the Run, naming the files it looked for
 only where `performance` is proved: a `final` Measurement of the delivered head against the
 merge base showing a `gain` with every guardrail held, the checks passing, and a review of
 that same tree reporting both `behavior_preserved` and `measurement_valid`. Each end says
-which of four it is:
+which result it reached:
 
 - **verified gain**: the merge request;
 - **no gain**: no Cycle was kept, or the `final` Measurement shows no gain or a guardrail not
   held. There is no merge request and the Run is not failed. Its result is that file, then
   `no gain:` and why the Cycles stopped or the `final` Measurement's verdict;
-- **harness broken** and **proof unavailable**: calibration and its repairs could not make
-  the plan provable. The Run fails, its reason that file, then the class and each metric.
+- **proof unavailable**: calibration and its repairs could not make the plan provable.
+  The Run fails, its reason that file, then the class and each metric.
+
+A **harness broken** after its repairs parks at Calibrate, retaining its work for resume.
+A refused Cycle or final Measurement also parks; resume measures again. These parks are
+not terminal results, and a Measurement's verdict remains terminal.
 
 With no gain, the Run is back on its base tree: with no kept Cycle the branch already is, and a change that lost its gain is dropped back to the base
 tree at the latest merge base, in a commit that changes only the files it needs, keeps
@@ -1291,3 +1364,31 @@ Review, Checks, Merge request and External report.
 Module: [`workflows/tune-up.workflow.ts`](../workflows/tune-up.workflow.ts), with its
 prompts in [`workflows/tune-up.md`](../workflows/tune-up.md) and its agent's Persona in
 [`personas/tuner.md`](../personas/tuner.md).
+
+## `heal`
+
+**For:** a parked Run Collie's own recovery could not move. You never start it: the host
+does, once per park, before the park would tell you it needs you. See
+[Stop and resume](cli.md#stop-and-resume) for when.
+
+**Input:** `run` and `park`, the parked Run and the park it is for.
+
+**What happens:** one healer reads everything about the parked Run (its record, its agents'
+panes and transcripts, its checks and pipeline), tells the agent that missed something what
+it missed, and resumes the Run. It never does the Run's work. The host refuses everything
+else from it: answering a Decision, lifting a Hold, undoing a Stop, taking an offer, and
+anything on another Run. Its resume applies only while the Run is still at the park the
+Heal was started for and neither it nor a Run under it has a Stop, checked as one change with any Stop. It returns `{ diagnosis, actions, result, needs_person, finding }`,
+where `result` is `resumed` or `escalate`, `needs_person` says why only a person can move
+the Run and is required with `escalate`, and `finding` is required: `collie_defect`, `key`,
+`root_cause`, `fix` and `regression`, stated for everyone who runs Collie. An Output without
+a finding, or an escalation without `needs_person`, is sent back for repair. The host judges the parked Run's facts, never `result`.
+
+The host finds it by its declaration, `heals: true`, never by its id; a project's fork that
+declares it replaces the shipped one.
+
+Its Flow forecasts one Step, Heal, which produces evidence.
+
+Module: [`workflows/heal.workflow.ts`](../workflows/heal.workflow.ts), with its prompt in
+[`workflows/heal.md`](../workflows/heal.md) and its agent's Persona in
+[`personas/healer.md`](../personas/healer.md).

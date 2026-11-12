@@ -19,6 +19,7 @@ import {
 } from "effect";
 import type { PlatformServices } from "./platform";
 import type { Records } from "./records";
+import { readEnv } from "./env";
 import {
   FrontDoor,
   mrLabel,
@@ -386,12 +387,14 @@ export const generationsSweeper = (dir: string): Sweeper => {
 
 /**
  * What the settled rule reads beside the checkout: whose work has landed, by the merge
- * watch's answers or a Disposition; which branch's merge request is still open; and which
- * checkouts' Tasks still have their workspace open.
+ * watch's answers or what settled it on the board; which branch's merge request is still
+ * open; and which checkouts' Tasks still have their workspace open.
  */
 export const settlingOf = (opts: {
   stateDir: string;
   runs: ReadonlyArray<RunFacts>;
+  /** The board's Tasks, which say what each still owes; null where it could not be built. */
+  views: ReadonlyArray<TaskView> | null;
   tasks: ReadonlyArray<TaskRecord>;
   sessions: ReadonlyArray<Herdr>;
   protect: ReadonlyArray<string>;
@@ -399,37 +402,66 @@ export const settlingOf = (opts: {
   Effect.gen(function* () {
     const states = yield* readMrStates(opts.stateDir);
     const forge = yield* readForge(opts.stateDir);
+    const views =
+      opts.views === null
+        ? []
+        : yield* (yield* Effect.promise(() => import("./board"))).buildBoard({
+            env: readEnv({ HERDR_PLUGIN_STATE_DIR: opts.stateDir }),
+            runs: opts.runs,
+            tasks: opts.tasks,
+            includeHistory: true,
+          });
+    const viewOf = new Map(Arr.map([...views, ...(opts.views ?? [])], (view) => [view.id, view]));
     const landedAt = new Map<string, Landed>();
     const landedOn = new Map<string, Landed>();
     const openOn = new Map<string, string>();
+    const owedAt = new Set<string>();
+    const owedOn = new Set<string>();
     for (const run of opts.runs) {
-      const disposed = latest(
-        yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => [])),
-      );
       const label = run.mr === null ? null : mrLabel(run.mr);
       const id = run.mr === null ? null : yield* mrIdIn(run.mr, run.cwd, shell);
       const state = id === null ? undefined : states.get(id);
+      const branch = run.branch ?? run.worktree?.branch ?? "";
+      const view =
+        viewOf.get(run.task ?? run.id) ??
+        Arr.findFirst(views, (one) => Arr.some(one.children, (child) => child.run === run.id)).pipe(
+          Option.getOrUndefined,
+        );
+      const item = Option.getOrUndefined(Arr.findFirst(view?.mrs ?? [], (one) => one.id === id));
+      // Whatever a Run's line says, a Task keeps what it still owes on.
+      const owed = opts.views === null || (view !== undefined && !view.landed);
+      const openLabel = state === "open" && branch !== "" ? label : null;
+      if (owed) {
+        if (run.worktree !== null) owedAt.add(run.worktree.path);
+        if (branch !== "") owedOn.add(onBranch(run.project, branch));
+        if (openLabel !== null) openOn.set(onBranch(run.project, branch), openLabel);
+        continue;
+      }
       const head = id === null ? null : (forge.get(id)?.head ?? null);
       // Only a merge's head is on the remote: a closed merge request's never landed.
       const heads =
         head !== null && state !== undefined && state !== "open" && state !== "closed"
           ? [head]
           : [];
+      const settledBy =
+        item?.settled ??
+        latest(yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => [])))?.kind ??
+        null;
       const landed: Landed | null =
-        disposed !== null
-          ? { why: `${disposed.kind}, as recorded`, heads }
-          : state === undefined || state === "open"
+        state !== undefined && state !== "open"
+          ? { why: `${state === "closed" ? "closed" : "merged"} in ${label}`, heads }
+          : settledBy === null
             ? null
-            : { why: `${state === "closed" ? "closed" : "merged"} in ${label}`, heads };
-      const branch = run.branch ?? run.worktree?.branch ?? "";
+            : { why: `${settledBy}, as recorded`, heads };
       if (landed === null) {
-        if (state === "open" && branch !== "" && label !== null)
-          openOn.set(onBranch(run.project, branch), label);
+        if (openLabel !== null) openOn.set(onBranch(run.project, branch), openLabel);
         continue;
       }
       if (run.worktree !== null) landedAt.set(run.worktree.path, landed);
       if (branch !== "") landedOn.set(onBranch(run.project, branch), landed);
     }
+    for (const path of owedAt) landedAt.delete(path);
+    for (const key of owedOn) landedOn.delete(key);
     const open = new Set<string>();
     let unknown = false;
     for (const session of opts.sessions) {
@@ -438,6 +470,7 @@ export const settlingOf = (opts: {
       else for (const one of listed.value) open.add(one.workspaceId);
     }
     const workspaceHolds = new Map<string, string>();
+    for (const path of owedAt) workspaceHolds.set(path, "its Task still owes work");
     for (const run of opts.runs) {
       if (run.worktree?.created_by_collie !== true || run.task === null) continue;
       const task = Option.getOrUndefined(Arr.findFirst(opts.tasks, (one) => one.id === run.task));
@@ -450,6 +483,8 @@ export const settlingOf = (opts: {
         workspaceHolds.set(run.worktree.path, "its Task's workspace is still open");
     }
     return {
+      owedAt,
+      owedOn,
       landedAt,
       landedOn,
       openOn,
@@ -467,7 +502,7 @@ export const worktreesSweeper = (opts: {
   registered: ReadonlyArray<AgentEntry>;
   cwd: string;
   /** Read when it judges, so a workspace closed earlier in the same sweep counts as closed. */
-  settling?: Effect.Effect<Settling, never, PlatformServices>;
+  settling?: Effect.Effect<Settling, never, PlatformServices | Records>;
 }): Sweeper => {
   const kind = "worktree";
   return {
@@ -817,6 +852,7 @@ export const runnersSweeper = (dir: string, running: string): Sweeper => {
 const FINISHED_GRACE_MS = 60 * 60_000;
 const SECTION_SAID: Record<Section, string> = {
   "needs-you": "needs you",
+  "ready-to-ship": "ready to ship",
   waiting: "waiting on you",
   working: "working",
   finished: "Finished",

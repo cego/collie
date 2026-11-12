@@ -356,10 +356,12 @@ A worktree is **settled**, and only then removed, when all five hold
    repository's roaming checkouts, which the next roaming start would take over anyway, and
    the idle agents of the runs that finished or failed inside one hold it no more than
    their own run would;
-4. its work has landed: the merge watch read its merge request as merged or closed, on
-   GitHub or GitLab (`board/mr-states.json`), a Disposition of merged, abandoned or
-   superseded was recorded on a Run that recorded it, or, with neither, its branch is gone
-   from the remote; an open merge request keeps it;
+4. its work has landed: no Task whose Runs used it still owes anything on it, as the
+   board derives it (**Landed** in `CONTEXT.md`), and the merge watch read its merge
+   request as merged or closed, on GitHub or GitLab (`board/mr-states.json`), the board
+   says what settled it, or, with neither, its branch is gone from the remote; an open
+   merge request keeps it, and a board that could not be built leaves only the remote
+   branch to go by;
 5. its Task's workspace has closed — by cleanup or by a human — so a checkout never goes
    from under a workspace someone is looking at.
 
@@ -422,9 +424,15 @@ and at settlement, beside its outcome report. The `linkNotice` call validates th
 Machine and the requesting Run's agent, and records each request once on that Run. The
 Flow hangs the link under the Step whose launch made the start and keeps that placement
 when settlement arrives. Settlement takes precedence over an admission delivered late.
-The started Run records each notice's delivery result in `linkNotices`, shown by
-`collie run show`; an undelivered notice is recorded and not resent. Nothing polls another
-Machine for a linked Run. On one host, the Flow reads the requested Run's current facts
+The started Run records each try's result in `linkNotices`, shown by `collie run show`,
+and keeps each notice as first sent in `link-notices.jsonl`. Each time a paired Machine's
+link comes up, `onLink` tells the reports layer. While that link stays up and anything is
+still owed to the Machine, every five seconds it asks the Machine's host for its identity
+and, once that answers, sends again every undelivered notice to it, unchanged and under
+its request id, and every report that did not reach it (`unreached`: the Machine or its
+host was not reached, as opposed to a host that refused). A report still being written or
+closed waits for the next round. The receiver's `once` makes a repeat change nothing.
+Nothing polls a Machine whose link is down. On one host, the Flow reads the requested Run's current facts
 directly, and its link's `asOf` is null.
 
 Run records are served by their owning host through `run-record.ts`. Intent changes,

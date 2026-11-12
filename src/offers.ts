@@ -22,6 +22,7 @@ export const SELF = "";
 
 /** What a workflow declares it offers, whichever kind of workflow declared it. */
 export interface Declared {
+  readonly entry?: ((facts: ActionFacts) => string) | undefined;
   readonly connections?: ReadonlyArray<ConnectionId>;
   readonly id: string;
   readonly title: string;
@@ -38,6 +39,7 @@ export interface Declared {
 
 /** One offer as a front door shows it. */
 export interface Offer {
+  readonly textField?: string;
   readonly id: string;
   readonly title: string;
   readonly workflow: string;
@@ -83,7 +85,7 @@ export function offersFrom(
     if (unavailable !== null && options.keepUnavailable !== true) continue;
     offers.push({
       id: one.id,
-      title: one.title,
+      title: one.entry === undefined ? one.title : `${one.title} — ${one.entry(facts)}`,
       workflow: one.workflow === SELF ? (options.self ?? SELF) : one.workflow,
       arguments: one.arguments,
       kind: one.kind,

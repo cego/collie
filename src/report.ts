@@ -10,9 +10,9 @@ import { Schema, flow, Result } from "effect";
 import { STOP, type RunView } from "./engine";
 import { isSuperseded, isUnanswered } from "./store";
 import type { Metrics } from "./board-model";
-import { epochMs } from "./time";
+import { epochMs, took } from "./time";
 import { measuresOf, type Measures, type OutcomeRecords } from "./outcomes";
-import type { Metric } from "./metrics";
+import type { Metric, RecoveryAction } from "./metrics";
 
 const asJsonText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
 const isText = Schema.is(Schema.String);
@@ -176,6 +176,14 @@ const capped = (lines: ReadonlyArray<string>, cap = 20): string[] =>
 
 const percent = (share: number | null) => (share === null ? "" : ` (${Math.round(share * 100)}%)`);
 
+/** What a recovery's time to recover is measured over. */
+const RECOVERED_FROM: Readonly<Record<RecoveryAction, string>> = {
+  reminded: "turn end to Output",
+  rechecked: "park to next step",
+  resumed: "park to next step",
+  healed: "Heal start to its judgement",
+};
+
 /** The Runs a measure counts, as far as the text has room for. */
 const citing = (runs: ReadonlyArray<string>, cap = 10) =>
   runs.length === 0
@@ -184,7 +192,8 @@ const citing = (runs: ReadonlyArray<string>, cap = 10) =>
 
 /** The measures, as `run report` prints them under the tallies. */
 const measureLines = (measures: Measures): string[] => {
-  const { rounds, dispositions, steering, verifications, parks, peakContext } = measures;
+  const { rounds, dispositions, steering, verifications, parks, recoveries, peakContext } =
+    measures;
   const recorded = Arr.filter(peakContext, (one) => one.tokens !== null);
   return [
     `review rounds: ${rounds.runs.length} Runs with a rally, median ${rounds.median ?? "none"}, ${rounds.atCap.count} hit the cap${citing(rounds.atCap.runs)}`,
@@ -214,6 +223,26 @@ const measureLines = (measures: Measures): string[] => {
       ),
     ),
     `verifications: ${verifications.total}, ${verifications.byCollector.collie} by Collie, ${verifications.byCollector.agent} by agents; ${verifications.repeated.count} repeated${citing(verifications.repeated.runs)}; ${verifications.executableOnly.count} named only by their executable${citing(verifications.executableOnly.runs)}`,
+    `parks by cause: ${Arr.reduce(parks.byCause, 0, (sum, one) => sum + one.count)}`,
+    ...Arr.map(
+      parks.byCause,
+      (one) =>
+        `  ${one.cause}  ${one.count} park${one.count === 1 ? "" : "s"}; ${
+          one.toNextStep === null
+            ? "none moved on yet"
+            : `to next step median ${took(one.toNextStep.median)}, max ${took(one.toNextStep.max)}`
+        }; ${one.humanResumes} human resume${one.humanResumes === 1 ? "" : "s"}${citing(one.runs)}`,
+    ),
+    `recoveries: ${Arr.reduce(recoveries.byCause, 0, (sum, one) => sum + one.count)}`,
+    ...Arr.map(
+      recoveries.byCause,
+      (one) =>
+        `  ${one.cause} ${one.action}  ${one.count} time${one.count === 1 ? "" : "s"}; ${one.recovered} recovered${one.falseRecoveries === undefined ? "" : `; ${one.falseRecoveries} false recover${one.falseRecoveries === 1 ? "y" : "ies"}`}${one.escalations === undefined ? "" : `; ${one.escalations} escalation${one.escalations === 1 ? "" : "s"}`}${
+          one.toRecover === null
+            ? ""
+            : `; ${RECOVERED_FROM[one.action]} median ${took(one.toRecover)}`
+        }${one.healMs === undefined ? "" : `; Heals ran ${took(one.healMs)} in all`}${citing(one.runs)}`,
+    ),
     `parks: ${parks.collectExpiries.count} collect-budget expiries${citing(parks.collectExpiries.runs)}`,
     ...capped(
       Arr.map(

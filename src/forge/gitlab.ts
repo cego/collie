@@ -35,7 +35,15 @@ import type {
   TagPipelineRead,
   Readiness,
 } from "./forge";
-import { ForgeHttp, pagesAs, request, requestAs, type Answered, type ForgeLogin } from "./http";
+import {
+  ForgeHttp,
+  loginReadiness,
+  pagesAs,
+  request,
+  requestAs,
+  type Answered,
+  type ForgeLogin,
+} from "./http";
 import {
   listIssues,
   createIssue,
@@ -284,17 +292,14 @@ export function gitlabForProject<R>(
   project: string | null,
   cwd: string,
   run: Runner<R>,
-): Effect.Effect<Readiness, never, R> {
+): Effect.Effect<Readiness, never, R | ForgeHttp> {
   return Effect.gen(function* () {
     const glab = yield* run("glab", ["--version"], cwd);
     if (glab.code !== 0) return { ok: false, reason: "glab is not installed" };
 
     const host = hostOf(project);
     if (!host) return { ok: true, reason: "" };
-    const auth = yield* run("glab", ["auth", "status", "--hostname", host], cwd);
-    return auth.code === 0
-      ? { ok: true, reason: "" }
-      : { ok: false, reason: `glab is not logged in to ${host}` };
+    return yield* loginReadiness(glabLoginTo(host), cwd, run);
   });
 }
 

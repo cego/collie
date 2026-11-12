@@ -1,6 +1,7 @@
 import { Host, Run, WorkflowError, agentWork, contentOf, defineWorkflow, step } from "collie";
 import { Effect, Schema } from "effect";
 import markdown from "./general.md" with { type: "text" };
+import { measuredBy } from "./measuring.ts";
 
 const content = contentOf(markdown);
 
@@ -8,6 +9,7 @@ const task = content.template("task", {
   inputs: Schema.Struct({ goal: Schema.String }),
   run: Schema.Struct({ dir: Schema.String, id: Schema.String }),
   rooting: Schema.String,
+  measure: Schema.String,
 });
 
 const Done = Schema.Struct({
@@ -50,6 +52,7 @@ export default defineWorkflow({
         input: {
           inputs: { goal: asked.goal },
           run: { dir: place.dir, id: run.id },
+          measure: measuredBy("measure.task", `${place.dir}/handoffs/<slug>.benchmark.json`),
           rooting:
             place.options.workspace === "projects-root"
               ? (content.sections.get("projects-root") ?? "")
