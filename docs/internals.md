@@ -107,12 +107,13 @@ advance. The lease is restored only while live, including after errors or cancel
 The answer keeps the board's read-your-writes coverage and updated readiness and merge-request facts.
 Slice boundaries hold for at most 250 ms.
 
-Physical file operations release only the requesting lease's background hold while they wait.
+Physical file operations and commands release only the requesting lease's background hold while they wait.
 They retain its scheduler priority and original deadline. The hold returns after all overlapping
 waits finish, only while the lease remains live. Errors and cancellation use the same cleanup.
 `foregroundFileSystem` wraps the physical service before host components capture it; file handles
 also wrap reads and writes, including those used by the platform's stream and sink constructors.
 Other requests retain their holds. A late I/O completion cannot restore an expired stream lease.
+The shared command runner applies the same wait through process completion and scoped cleanup.
 
 `collie_run` reads its context through the existing model's related-Run query, avoiding polls of
 unrelated live executions. An active check still reads all Runs to report other checks and usual durations.

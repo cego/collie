@@ -23,6 +23,7 @@ import {
 import { FORGES, forgeOf, forgeOfHost, type Forge } from "./forge/forge";
 import type { ForgeHttp } from "./forge/http";
 import type { MrReady, Posted } from "./sdk";
+import { waitingForIO } from "./foreground";
 
 /** Variables a command gets on top of this process's environment. */
 export type RunnerEnv = Record<string, string | Redacted.Redacted<string>>;
@@ -225,6 +226,7 @@ export function shell(
     return { code: Number(code), stdout, stderr };
   }).pipe(
     Effect.scoped,
+    waitingForIO,
     Effect.catch((cause) => Effect.succeed({ code: 127, stdout: "", stderr: String(cause) })),
   );
 }

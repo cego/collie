@@ -7,7 +7,7 @@ import { Channel, Context, Effect, Fiber, FileSystem, Latch, Layer, Stream } fro
 export const PATIENCE = "250 millis";
 
 export interface ForegroundApi {
-  /** `effect`, holding background slices except while it awaits physical file I/O or a dependency. */
+  /** `effect`, holding background slices except while it awaits physical I/O or a dependency. */
   readonly serve: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   /** Awaits a dependency without holding this request's lease, restoring it only while live. */
   readonly wait: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
@@ -43,7 +43,8 @@ export const servedNow = () => {
   return foreground ? active.has(foreground) : false;
 };
 
-const waitingForIO: ForegroundApi["wait"] = (effect) =>
+/** Release only the requesting hold during physical I/O, retaining its priority and deadline. */
+export const waitingForIO: ForegroundApi["wait"] = (effect) =>
   Effect.flatMap(Serving, (lease) =>
     lease !== null && live.has(lease) ? lease.io(effect) : effect,
   );
