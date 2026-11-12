@@ -12,9 +12,10 @@ sorting and projection, and journals for rows the native board did not draw.
 
 [ADR-0063](0063-the-terminal-board-finishes-a-refresh-before-reading-again.md) removed
 refresh cancellation and feedback loops. A fresh profile after installing that change
-found a different scaling cost: this installation had 1,004 Runs but only 13 Task cards.
-Warm application loads spent about 90–140 ms of client CPU before native rendering.
-The larger population made the duplicate read path worth removing.
+found a duplicate read path in the live host, which held 165 Runs and showed 13 Task
+cards. Warm application loads spent about 90–140 ms of client CPU before native
+rendering. A separate synthetic fixture with 1,004 Runs grouped into 13 Tasks measured
+how that unnecessary work scaled; it was not the live installation's Run count.
 
 ## Decision
 
