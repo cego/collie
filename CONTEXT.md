@@ -838,6 +838,8 @@ whole `recheck` (ADR-0034, amended 2026-10-15).
 
 **Wave** — The Change runs a fan-out starts together: those whose tickets are blocked by no ticket of a Change run still going. Ticket order inside a Change is its Change run's; order between Changes, in one repository or several, is the wave's. A plan whose Changes block each other in a cycle has no wave order and is refused, as is one whose "Blocked by" line names something that is not a ticket of the plan, or which numbers two tickets the same so that such a line cannot say which it means.
 
+**Prerequisite** — another Run's Change that a ticket needs merged before it is built. The ticket names it on its `Needs merged:` line, as a Run id and that Run's Change name, with no name for the Run's default Change. It is always in the ticket's own repository. Its Change run builds what it can, then waits until the prerequisite is on the default branch, and merges that branch in before the ticket's build. A ticket of the same plan is named by `Blocked by` instead (ADR-draft-a-change-waits-on-another-runs-change-to-merge).
+
 **Deferred** — Architecture candidates the architect chose not to apply unattended, kept in the summary for the human.
 
 **View** — What the board's nav switches between, one at a time, each a projection of

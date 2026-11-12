@@ -248,7 +248,21 @@ import {
 } from "./intent";
 import { latest, readDispositions } from "./disposition";
 import { openFindingsIn } from "./output";
-import { changeKey, changeOfKey, isSingleRepo, planIssuesIn, planReposOf } from "./plan";
+import {
+  changeKey,
+  changeOfKey,
+  isSingleRepo,
+  planIssuesIn,
+  planReposOf,
+  prerequisitesOf,
+} from "./plan";
+import {
+  judgePrerequisites,
+  mergeRequestFor,
+  type MrLanding,
+  type PrerequisiteStanding,
+  type RunDetail,
+} from "./prerequisites";
 import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
 import { isOutcome, REQUESTABLE } from "./outcome";
 import { Foreground } from "./foreground";
@@ -718,6 +732,14 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** Whether a standing is still waiting on a teammate's approval, among whatever else. */
   export function waitsOnApproval(standing: ReviewStanding): boolean;
 
+  /** Whether the Changes a ticket needs merged have landed; a wait returns every one but Waiting. */
+  export type PrerequisiteStanding =
+    | { readonly _tag: "Landed" }
+    | { readonly _tag: "Waiting"; readonly on: string; readonly who: string }
+    | { readonly _tag: "Never"; readonly why: string }
+    | { readonly _tag: "Held" };
+  export const PrerequisiteStandingSchema: Schema.Codec<PrerequisiteStanding, unknown, never, never>;
+
   /** The merge request's head, which of a round's commits it carries, and its open external comments. */
   export interface ReviewHead {
     readonly head: string;
@@ -1124,6 +1146,25 @@ export const SDK_DECLARATIONS = `declare module "collie" {
        */
       readonly whileConflicting?: boolean;
     }) => Effect.Effect<ReviewStanding, WorkflowError>;
+    /**
+     * One read of whether the Changes the ticket at \`ticket\` names on its **Needs merged:** line
+     * have landed on origin's default branch: Landed, Waiting or Never. Take it inside an Activity.
+     */
+    readonly prerequisites: (options: {
+      readonly runId: string;
+      readonly cwd: string;
+      readonly ticket: string;
+    }) => Effect.Effect<PrerequisiteStanding, WorkflowError>;
+    /**
+     * Reads the ticket's Prerequisites every 5 minutes, with no agent turn, until they are
+     * Landed, one is Never, or a Hold or Stop ends the wait (Held). Take it inside an Activity,
+     * and suspend on \`Held\` there.
+     */
+    readonly awaitPrerequisites: (options: {
+      readonly runId: string;
+      readonly cwd: string;
+      readonly ticket: string;
+    }) => Effect.Effect<PrerequisiteStanding, WorkflowError>;
     /** Replies to comment \`comment\` of the recorded merge request, signed and recorded on the Run, unless it is answered already; a \`disputed\` one is News. Take it inside an Activity. */
     readonly reply: (options: {
       readonly runId: string;
@@ -2192,6 +2233,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly criteria: ReadonlyArray<string>;
     /** The benchmark plan its speed-up criterion is measured by, as benchmarkIn reads it. */
     readonly benchmark: string | null;
+    readonly prerequisites: ReadonlyArray<Prerequisite>;
+  }
+
+  /** Another Run's Change a ticket needs merged first; change is null for that Run's default Change. */
+  export interface Prerequisite {
+    readonly run: string;
+    readonly change: string | null;
   }
 
   /** The verification names a ticket's **Checks:** line promises. */
@@ -2266,7 +2314,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       | "outside-root"
       | "unknown-blocker"
       | "duplicate-ticket"
-      | "bad-change";
+      | "bad-change"
+      | "bad-prerequisite";
     readonly message: string;
   }
 
@@ -4339,6 +4388,85 @@ export const hostLayer = (options: {
             return yield* new WorkflowError({ reason: `${mr} could not be read: ${read.reason}` });
           return { mr, ref, read };
         });
+      /** Where a recorded merge request went: merged lands only once origin's default branch has it. */
+      const landingOf = (mr: string, cwd: string) =>
+        under(
+          Effect.gen(function* () {
+            const ref = mrRefOf(mr);
+            if (ref === null) return { _tag: "Unreadable" } satisfies MrLanding;
+            const read = yield* forgeOf(ref).readReview(ref, cwd, runShell);
+            if (!read.ok) return { _tag: "Unreadable" } satisfies MrLanding;
+            if (read.state === "open") return { _tag: "Open" } satisfies MrLanding;
+            if (read.state === "closed") return { _tag: "Closed" } satisfies MrLanding;
+            const sha = read.merged?.sha ?? "";
+            const branch = yield* defaultBase(runShell, cwd);
+            if (sha === "" || branch === null)
+              return { _tag: "Merged", onDefault: false } satisfies MrLanding;
+            yield* runShell("git", ["fetch", "-q", "origin", branch], cwd);
+            const carried = yield* runShell(
+              "git",
+              ["merge-base", "--is-ancestor", sha, `origin/${branch}`],
+              cwd,
+            );
+            return { _tag: "Merged", onDefault: carried.code === 0 } satisfies MrLanding;
+          }),
+        );
+      const prerequisitesRead = (asked: {
+        readonly runId: string;
+        readonly cwd: string;
+        readonly ticket: string;
+      }) =>
+        Effect.gen(function* () {
+          const text = yield* fs.readFileString(asked.ticket).pipe(
+            Effect.mapError(
+              (cause) =>
+                new WorkflowError({
+                  reason: `the ticket ${asked.ticket} could not be read: ${cause.message}`,
+                }),
+            ),
+          );
+          const prerequisites = prerequisitesOf(text);
+          if (prerequisites === null)
+            return {
+              _tag: "Never",
+              why: `the **Needs merged:** line of ${asked.ticket} cannot be read, so nothing it names can be waited on`,
+            } satisfies PrerequisiteStanding;
+          if (prerequisites.length === 0) return { _tag: "Landed" } satisfies PrerequisiteStanding;
+          const rows = yield* store.runs;
+          const optionsOf = (run: string) =>
+            decodeStrings(
+              Option.getOrUndefined(Arr.findFirst(rows, (row) => row.run === run))?.options ?? "{}",
+            ).pipe(Effect.orElseSucceed((): Record<string, string> => ({})));
+          const details = new Map<string, RunDetail>();
+          for (const run of Arr.dedupe(
+            Arr.flatMap(prerequisites, (one) => [one.run, ...descendantsOf(rows, one.run)]),
+          )) {
+            const options = yield* optionsOf(run);
+            details.set(run, {
+              repo: options.repo || ".",
+              change: options.change || null,
+              ended:
+                (yield* set(STOP, run)) ||
+                (yield* fs
+                  .exists(`${runDir(dir, run)}/terminal.json`)
+                  .pipe(Effect.orElseSucceed(() => false))),
+              mr: yield* mergeRequestOf(fs, dir, run),
+            });
+          }
+          const repo = (yield* optionsOf(asked.runId)).repo || ".";
+          const landings = new Map<string, MrLanding>();
+          for (const prerequisite of prerequisites) {
+            const mr = mergeRequestFor(prerequisite, repo, rows, details);
+            if (mr !== null && !landings.has(mr)) landings.set(mr, yield* landingOf(mr, asked.cwd));
+          }
+          return judgePrerequisites({
+            asking: { run: asked.runId, repo },
+            prerequisites,
+            rows,
+            details,
+            landings,
+          });
+        });
       const host = Host.of({
         dir,
         build: manifest.version,
@@ -5157,6 +5285,24 @@ export const hostLayer = (options: {
               }
             });
             const standing = yield* Effect.raceFirst(controlled, polled);
+            yield* waitOn(asked.runId, null);
+            return standing;
+          }),
+        prerequisites: prerequisitesRead,
+        awaitPrerequisites: (asked) =>
+          Effect.gen(function* () {
+            const controlled = untilSet(asked.runId, HOLD, STOP).pipe(
+              Effect.as({ _tag: "Held" } satisfies PrerequisiteStanding),
+            );
+            const polled = Effect.gen(function* () {
+              for (;;) {
+                const standing = yield* prerequisitesRead(asked);
+                if (standing._tag !== "Waiting") return standing;
+                yield* waitOn(asked.runId, standing);
+                yield* Effect.sleep(options.reviewPoll ?? "5 minutes");
+              }
+            });
+            const standing: PrerequisiteStanding = yield* Effect.raceFirst(controlled, polled);
             yield* waitOn(asked.runId, null);
             return standing;
           }),

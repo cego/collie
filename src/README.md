@@ -62,6 +62,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `heal.ts`              | Whether a park goes to a Heal or straight to you, the healer a project declares, and a Heal's Output                        |
 | `landing.ts`           | A Run's merge at a head: its landing record, and the one rule settling an attempt a restart interrupted                     |
 | `review-wait.ts`       | Where a merge request's review stands for a Release Run, and the wait's parked line                                         |
+| `prerequisites.ts`     | Whether the other Runs' Changes a ticket needs merged have landed, and the wait's awaited line                              |
 | `releasing.ts`         | A Release Run's checkout fast-forward, and its tag, stage and production read from the forge                                |
 | `shipping.ts`          | Shipping Go declarations, the forge freshness window and the host's recorded stage proof                                    |
 | `checks.ts`            | The one reading of a Run's running and finished checks that every door uses                                                 |

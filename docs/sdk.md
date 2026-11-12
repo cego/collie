@@ -910,6 +910,31 @@ Hold or Stop ends it (`Held`). A head pushed while it still conflicts keeps it w
 release takes it before it proves a head and when a check left to CI finds the conflict. Take either inside an Activity, and suspend on `Held`
 there, so a resume waits again.
 
+`host.prerequisites({ runId, cwd, ticket })` reads the ticket file at `ticket` again, and
+asks once whether every Change its `**Needs merged:**` line names has landed. It answers a
+`PrerequisiteStanding` (`PrerequisiteStandingSchema` journals it), one of:
+
+- `Landed`: every named Change has landed, or the ticket names none. A Change has landed
+  when the forge says its merge request merged and the merge commit is on origin's default
+  branch, fetched in `cwd`.
+- `Waiting`: at least one Change has not landed yet. The standing carries the card's `on`
+  and `who`.
+- `Never`: a Change can never land, and `why` says which and why. This happens when the
+  named Run is unknown on this host, when it is this Run or one of its ancestors, when it
+  ended with no merge request for that Change, or when that merge request was closed
+  without merging.
+
+A Change is the merge request recorded by the named Run, or by one of its descendants,
+whose `repo` and `change` options match this Run's repository and the named Change.
+
+`host.awaitPrerequisites` takes the same options. It reads every five minutes, at no token
+cost, until the standing is `Landed` or `Never`, or a Hold or Stop ends it as `Held`. While
+it waits, the card reads `Waiting for run-ac644eef's card to merge.` under Working (a
+default Change reads `<run>'s Change`). The wait has a person's 2-day patience, then parks
+as overdue. The line is cleared when it returns. Editing the ticket so that it no longer
+names the Change ends the wait at the next read. Take either inside an Activity, and
+suspend on `Held` there.
+
 `host.shareForApproval({ runId, cwd, channel })` posts the Run's recorded merge request through its host's Slack Connection.
 It reads the title from the forge and returns `{ posted, link?, why? }` without failing the Run.
 `link` is Slack's permalink; `why` records a refused post or a missing permalink.
