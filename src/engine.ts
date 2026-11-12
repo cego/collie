@@ -1860,7 +1860,15 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly inputs?: Readonly<Record<string, Source>>;
     /** A further condition on the facts, where how it ended is not the whole of it. */
     readonly eligible?: (facts: ActionFacts) => boolean;
+    readonly given?: OfferGiven;
+    readonly ships?: Ships;
+    readonly confirm?: string;
   }
+
+  /** Inputs an offer always starts its workflow with; never asked for, and never the caller's. */
+  export type OfferGiven = Readonly<Record<string, Schema.Json>>;
+  /** What taking an offer ships: \`merge\` only merges, \`release\` also tags and deploys. */
+  export type Ships = "merge" | "release";
 
   /** What an action decides eligibility from: facts, never a workflow's name. */
   export interface ActionFacts {
@@ -1891,6 +1899,10 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly eligible: (facts: ActionFacts) => boolean;
     /** What Collie fills in from the Run itself; the rest is the caller's to give. */
     readonly inputs?: Readonly<Record<string, Source>>;
+    readonly given?: OfferGiven;
+    readonly ships?: Ships;
+    /** What taking it does, which a front door shows and asks about before taking it. */
+    readonly confirm?: string;
   }
 
   /** Names the host supplies at launch; an input of one of these is refused. */
