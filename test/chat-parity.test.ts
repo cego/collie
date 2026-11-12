@@ -25,7 +25,8 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
-import { Effect, Fiber, FileSystem, Option, Schema, Stream, flow, Result } from "effect";
+import { Clock, Effect, Fiber, FileSystem, Option, Schema, Stream, flow, Result } from "effect";
+import { TestClock } from "effect/testing";
 import { hostname } from "node:os";
 import { afterAll, expect, test } from "bun:test";
 import { app } from "../src/collie";
@@ -34,7 +35,7 @@ import { registeredKinds, resetExecutors } from "../src/executors";
 import { registerRunExecutors } from "../src/operations";
 import { readEnv } from "../src/env";
 import type { JsonObject } from "../src/schema";
-import { checkLines, TOOLS, toolNamed } from "../src/tools";
+import { answerRead, checkLines, TOOLS, toolNamed } from "../src/tools";
 import { herdLines } from "../src/toolkit";
 import { boardLines, buildBoard } from "../src/board";
 import { Flow, SECTIONS, sortBoard, recordIn } from "../src/board-model";
@@ -623,6 +624,40 @@ test("collie_run and collie_herd say what a running check's card says", () =>
       );
       expect((yield* checkLines(run, [run], now))[0]).toBe(`Check running: ${card!.sentence}`);
       expect(herdLines([card!], now)).toContain(card!.sentence);
+      const other = yield* madeRun(stateDir, { id: "r-other-check" });
+      yield* fs.copyFile(`${run.dir}/verifying`, `${other.dir}/verifying`);
+      expect((yield* checkLines(run, [run], now, Effect.succeed([run, other])))[0]).toBe(
+        `Check running: ${card!.sentence} 1 other check is running.`,
+      );
+    }),
+  ));
+
+test("a Run with no check answers without waiting for another Run's marker", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-check-answer-" });
+      const run = yield* madeRun(stateDir, { id: "r-settled" });
+      const other = yield* madeRun(stateDir, { id: "r-other" });
+      const clock = yield* TestClock.make();
+      const absent = FileSystem.makeNoop({});
+      yield* Effect.gen(function* () {
+        const reading = yield* checkLines(run, [run, other], 0).pipe(Effect.forkScoped);
+        yield* clock.adjust("1 millis");
+        expect(reading.pollUnsafe()).toBeDefined();
+        expect(yield* Fiber.join(reading)).toEqual([]);
+      }).pipe(
+        Effect.provideService(Clock.Clock, clock),
+        Effect.provideService(
+          FileSystem.FileSystem,
+          FileSystem.makeNoop({
+            readFileString: (path, encoding) =>
+              path === `${other.dir}/verifying`
+                ? Effect.never
+                : absent.readFileString(path, encoding),
+          }),
+        ),
+      );
     }),
   ));
 
@@ -735,6 +770,32 @@ test(
   // A host, and a Run of it waiting on its decision.
   60_000,
 );
+
+test("collie_run answers from related Runs without polling unrelated live executions", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-related-answer-" });
+      const run = yield* madeRun(dir, { id: "r-parent", state: "succeeded" });
+      const child = yield* madeRun(dir, { id: "r-child", parent: run.id });
+      const reads = {
+        runs: Effect.die("unrelated live executions were polled"),
+        related: Effect.succeed([run, child]),
+        offers: () => Effect.succeed("Nothing is offered."),
+        progress: () => Effect.succeed(null),
+        flow: () => Effect.succeed(null),
+        launches: () => Effect.succeed([]),
+      };
+      const answer = yield* answerRead(
+        readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project", PATH: "" }),
+        "collie_run",
+        { run: run.id },
+        reads,
+      );
+      expect(answer).toContain("Status: succeeded");
+      expect(answer).toContain("run r-child: implement, running");
+    }),
+  ));
 
 test("a Machine's Native chat and Desktop's Flock chat are given the same Standing direction", () =>
   runEffect(

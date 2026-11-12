@@ -3663,11 +3663,22 @@ const frontDoorHandlers = (
                 const { describeOffers, refusal } = yield* Effect.promise(
                   () => import("./lifecycle"),
                 );
-                const runs = yield* Effect.cached(Effect.map(shared.runs, newestFirst));
+                const runs = Effect.map(shared.runs, newestFirst);
+                const runId = Option.getOrUndefined(
+                  Schema.decodeUnknownOption(Schema.String)(input.run),
+                );
+                const related = yield* Effect.cached(
+                  record !== undefined && runId !== undefined
+                    ? record
+                        .related(runId, record.model.planned(runId))
+                        .pipe(Effect.map(newestFirst))
+                    : runs,
+                );
                 const offers = (id: string) =>
                   registry.offers(id).pipe(Effect.provideContext(hosted));
                 return yield* answerRead(askerEnv(client), tool, input, {
-                  runs,
+                  runs: record === undefined ? related : runs,
+                  related,
                   offers: (id) =>
                     offers(id).pipe(
                       Effect.map((listed) =>
@@ -3691,7 +3702,7 @@ const frontDoorHandlers = (
                           return yield* taskFlowOf(
                             {
                               env: askerEnv(client),
-                              runs: yield* runs,
+                              runs: yield* related,
                               alive: yield* shared.aliveNow,
                               offers: (run) => offers(run).pipe(Effect.orElseSucceed(() => [])),
                             },
