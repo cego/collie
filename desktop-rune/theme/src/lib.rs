@@ -7,7 +7,7 @@
 use std::sync::OnceLock;
 
 use rune::color::hex;
-use rune::{Color, El, Icon, el, icon};
+use rune::{Color, El, Image, ImageCache, el};
 use rune_kit::{Kit, Palette, StateColors};
 
 /// Colours Collie means something by that the kit has no field for.
@@ -251,22 +251,22 @@ pub fn tones(dark: bool) -> &'static Tones {
     })
 }
 
-/// Collie's mark: a collie's head, floppy ears and the white blaze from brow to nose, in one colour.
-pub static MARK: Icon = Icon {
-    name: "collie-mark",
-    view: 24.0,
-    body: r#"<path fill="currentColor" d="M6.4 6C4 5.4 1.6 6.8 1.4 9.8C1.2 12.6 2.2 15.6 3.6 16.2C4.4 16.6 4.9 15.9 4.6 14.8C4.1 13 3.9 10.8 4.3 9.2C4.7 7.6 5.5 6.6 6.4 6ZM17.6 6C20 5.4 22.4 6.8 22.6 9.8C22.8 12.6 21.8 15.6 20.4 16.2C19.6 16.6 19.1 15.9 19.4 14.8C19.9 13 20.1 10.8 19.7 9.2C19.3 7.6 18.5 6.6 17.6 6Z"/><path fill="currentColor" fill-rule="evenodd" d="M12 5C16 5 19 7.6 19 11.6C19 16.2 15.8 19.6 12 19.6C8.2 19.6 5 16.2 5 11.6C5 7.6 8 5 12 5ZM12 5.6C11.5 5.6 11.2 6.1 11.1 6.8L10.8 11.8C9.3 12.3 8.4 13.8 8.4 15.4C8.4 17.4 10 18.9 12 18.9C14 18.9 15.6 17.4 15.6 15.4C15.6 13.8 14.7 12.3 13.2 11.8L12.9 6.8C12.8 6.1 12.5 5.6 12 5.6ZM9.65 10.8C9.65 11.38 9.18 11.85 8.6 11.85C8.02 11.85 7.55 11.38 7.55 10.8C7.55 10.22 8.02 9.75 8.6 9.75C9.18 9.75 9.65 10.22 9.65 10.8ZM16.45 10.8C16.45 11.38 15.98 11.85 15.4 11.85C14.82 11.85 14.35 11.38 14.35 10.8C14.35 10.22 14.82 9.75 15.4 9.75C15.98 9.75 16.45 10.22 16.45 10.8Z"/><path fill="currentColor" d="M12 13.2C13.1 13.2 13.8 13.7 13.8 14.4C13.8 15.2 12.9 15.8 12 15.8C11.1 15.8 10.2 15.2 10.2 14.4C10.2 13.7 10.9 13.2 12 13.2Z"/>"#,
-};
+/// The official Collie tile, embedded so installed apps need no source checkout.
+/// Decode during app construction, once; drawing only shares its immutable pixels.
+pub struct Logo(Image);
 
-/// Collie's mark in white on a solid iris tile `size` points square: the one place the brand is
-/// at full strength.
-pub fn mark(k: &Kit, size: f32) -> El {
-    el().size(size, size)
-        .radius(size * 0.3)
-        .fill(k.c.bg_accent)
-        .center()
-        .a11y_hidden()
-        .child(icon(&MARK, size * 0.75).color(k.c.text_contrast))
+impl Default for Logo {
+    fn default() -> Self {
+        let images = ImageCache::new(std::sync::Arc::new(|| {}));
+        let logo =
+            images.load(&include_bytes!("../../../assets/brand/logos/collie-tile-256.png")[..]);
+        logo.wait().expect("the bundled Collie logo is a valid PNG");
+        Self(logo)
+    }
+}
+
+pub fn mark(logo: &Logo, size: f32) -> El {
+    el().size(size, size).a11y_hidden().pixels(logo.0.pixels())
 }
 
 /// `top` painted over `under` as a browser blends it, in sRGB.

@@ -53,7 +53,7 @@ pub fn view_in(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         && board.trouble.is_none()
         && app.ended.is_none();
     if connecting {
-        body = body.child(connecting_placeholder(k));
+        body = body.child(connecting_placeholder(app, k));
     } else {
         let reaching = model::reaching(&app.machines, &board.flock);
         let mut top = col().w_full().gap(10.0).child(header(app, k, &placed));
@@ -213,13 +213,13 @@ pub fn view_in(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
 }
 
 /// Before the core has said anything: that the board is coming.
-fn connecting_placeholder(k: &Kit) -> El {
+fn connecting_placeholder(app: &App, k: &Kit) -> El {
     col()
         .w_full()
         .pt(140.0)
         .gap(12.0)
         .items_center()
-        .child(collie_desktop_theme::mark(k, 48.0).mb(4.0))
+        .child(collie_desktop_theme::mark(&app.chat.logo, 48.0).mb(4.0))
         .child(Loader::new().size(20.0).build(k).a11y_hidden())
         .child(
             text("Connecting to your Flock…")
