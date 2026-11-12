@@ -46,6 +46,7 @@ import {
   decodeOutput,
   promptFor,
   type AgentHost,
+  type RanOut,
 } from "../src/agents";
 import { Children, Host, Run, WorkflowAgents, jsonSchemaFor, step, withAgents } from "../src/sdk";
 import { asRun, enveloped } from "./support/enveloped";
@@ -66,7 +67,7 @@ import {
 import { readStepLines } from "../src/steps";
 import { readMetrics } from "../src/metrics";
 import { measuresOf } from "../src/outcomes";
-import { recordLaunch } from "../src/launches";
+import { launchDir, recordLaunch, stemOf } from "../src/launches";
 import { Collected } from "../src/agents";
 import { Collecting } from "../src/collecting";
 import { holdsBudgetOf, memoryWaitOf, waitForMemory } from "../src/memory-wait";
@@ -3087,6 +3088,43 @@ const claudeOut = {
   ] satisfies ReadonlyArray<UsageReading>),
 };
 const launchOf = (runId: string) => launchedAt(dir, runId, "review");
+
+test("an exhaustion result is observed only after its operation's usage wait is durable", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* rig.queueOutputs([null]);
+      yield* session(
+        Effect.gen(function* () {
+          const agents = yield* Agents;
+          const launched = yield* agents.launch({
+            runId: "r1",
+            operation: "review",
+            role: "reviewer",
+            workflow: "agent-work",
+            harness: "claude",
+            agent: null,
+            model: "opus",
+            effort: null,
+            permissions: null,
+            task: null,
+            cwd: rig.projectDir,
+            prompt: "Review the diff.",
+            output: outputPath("r1"),
+            skill: null,
+          });
+          const wait = `${launchDir(dir, "r1")}/${stemOf(launched)}.usage-wait`;
+          expect(yield* fs.exists(wait)).toBe(false);
+          const result = yield* agents.ranOut(launched);
+          expect(result._tag).toBe("RanOut");
+          expect(yield* fs.exists(wait)).toBe(true);
+          expect(yield* agents.usageIncident(launched)).toEqual(result);
+        }),
+        claudeOut,
+      );
+    }),
+  ));
+
 test("an agent's launch record keeps the harness session herdr reports for it", () =>
   runEffect(
     Effect.gen(function* () {
@@ -3476,12 +3514,15 @@ test("an agent that ran out with nothing to take over, and whose harness then st
 test("a replay rechecks a fallback after the earlier host recorded that nothing had room", () =>
   runEffect(
     Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
       yield* rig.queueOutputs([null, { verdict: "clean", note: "recovered on codex" }]);
       yield* interrupted("r1", parked("r1"), {
         ...claudeOut,
         fallbacks: Effect.succeed([]),
         collectMs: 2_000,
       });
+      const wait = `${launchDir(dir, "r1")}/${stemOf(yield* launchOf("r1"))}.usage-wait`;
+      expect(yield* fs.exists(wait)).toBe(true);
       const result = yield* releasedInto("r1", {
         ...claudeOut,
         fallbacks: Effect.succeed(["codex/gpt-6.1-sol"]),
@@ -3490,6 +3531,7 @@ test("a replay rechecks a fallback after the earlier host recorded that nothing 
       expect(result._tag === "Success" && result.success.note).toBe("recovered on codex");
       expect(harnessesStarted(yield* rig.calls())).toEqual(["claude", "codex"]);
       expect(closedPanes(yield* rig.calls())).toHaveLength(1);
+      expect(yield* fs.exists(wait)).toBe(false);
     }),
   ));
 
@@ -3651,6 +3693,340 @@ test("a Codex agent whose own app server says its limit is reached is replaced",
         "review: codex/default ran out (weekly 100%, resets",
       );
     }),
+  ));
+
+test("quota incident publication waits for an admitted managed-server revival", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const managed = yield* managedCodex;
+      const retiring = yield* Deferred.make<void>();
+      const proceed = yield* Deferred.make<void>();
+      const wait = `${launchDir(dir, "r1")}/review.usage-wait`;
+      let writing = false;
+      const observedFs: FileSystem.FileSystem = {
+        ...fs,
+        writeFileString: (path, data, options) =>
+          Effect.sync(() => {
+            if (pipe(path, Str.startsWith(wait))) writing = true;
+          }).pipe(Effect.andThen(fs.writeFileString(path, data, options))),
+      };
+      const ports: CompactionPorts = {
+        codex: {
+          ...managed.ports.codex!,
+          stop: (target, note, budgetMs) =>
+            Deferred.succeed(retiring, undefined).pipe(
+              Effect.andThen(Deferred.await(proceed)),
+              Effect.andThen(COMPACTION_PORTS.codex!.stop!(target, note, budgetMs)),
+            ),
+        },
+      };
+      yield* rig.queueOutputs([null, null]);
+      yield* session(
+        Effect.gen(function* () {
+          const agents = yield* Agents;
+          const ask = {
+            runId: "r1",
+            operation: "review",
+            role: "reviewer",
+            workflow: "agent-work",
+            harness: "codex",
+            agent: null,
+            model: "default",
+            effort: null,
+            permissions: null,
+            task: null,
+            cwd: rig.projectDir,
+            prompt: "Review the diff.",
+            output: outputPath("r1"),
+            skill: null,
+          };
+          const launched = yield* agents.launch(ask);
+          managed.state.reachable = false;
+          managed.children[0]!.kill();
+          yield* Effect.promise(() => managed.children[0]!.exited);
+          const recovery = yield* Effect.forkChild(agents.revive(ask, undefined, true));
+          yield* Deferred.await(retiring);
+          const incident: RanOut = {
+            _tag: "RanOut",
+            why: "weekly limit reached during recovery",
+            transcript: null,
+            resetsAt: null,
+          };
+          // Run to the first suspension: publication must wait at recovery admission,
+          // before it can enter the real filesystem write observed above.
+          const publishing = yield* Effect.forkChild(agents.usageWaiting(launched, incident), {
+            startImmediately: true,
+          });
+          const cancelled = yield* Effect.forkChild(
+            agents.usageWaiting(launched, { ...incident, why: "cancelled publisher" }),
+            { startImmediately: true },
+          );
+          yield* Fiber.interrupt(cancelled);
+          const unrelated = { ...launched, runId: "r2" };
+          yield* fs.makeDirectory(launchDir(dir, unrelated.runId), { recursive: true });
+          const independent = yield* agents
+            .usageWaiting(unrelated, incident)
+            .pipe(Effect.timeoutOption("1 minute"));
+          expect(independent._tag).toBe("Some");
+          expect(yield* agents.usageIncident(unrelated)).toEqual(incident);
+          const wroteBeforeRelease = writing;
+          yield* Deferred.succeed(proceed, undefined);
+          expect(wroteBeforeRelease).toBe(false);
+          expect(yield* Fiber.join(recovery)).toBe(true);
+          yield* Fiber.join(publishing);
+          expect(writing).toBe(true);
+          expect(yield* fs.exists(wait)).toBe(true);
+          expect(yield* agents.usageIncident(launched)).toEqual(incident);
+          expect(everyLaunch(yield* rig.calls())).toHaveLength(2);
+
+          managed.state.reachable = false;
+          managed.children[1]!.kill();
+          yield* Effect.promise(() => managed.children[1]!.exited);
+          expect(yield* agents.revive(ask, undefined, true)).toBe(false);
+          expect(everyLaunch(yield* rig.calls())).toHaveLength(2);
+        }).pipe(Effect.ensuring(Deferred.succeed(proceed, undefined))),
+        { harness: "codex", model: "default", ports },
+      ).pipe(Effect.provideService(FileSystem.FileSystem, observedFs));
+    }).pipe(Effect.scoped),
+  ));
+
+test("a quota incident survives a host crash before its collection result is recorded", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const managed = yield* managedCodex;
+      yield* rig.queueOutputs([
+        null,
+        { verdict: "clean", note: "recovered the unrecorded incident" },
+      ]);
+      const now = yield* Clock.currentTimeMillis;
+      const exhausted: UsageReading = {
+        subscription: "chatgpt",
+        account: "acct",
+        accountLabel: null,
+        plan: "pro",
+        windows: [
+          {
+            kind: "weekly",
+            label: "Weekly",
+            model: null,
+            usedPercent: 100,
+            resetsAt: isoAt(now + 3_600_000),
+            reached: true,
+          },
+        ],
+        at: isoAt(now),
+        source: "codex-app-server",
+        problem: null,
+      };
+      const available = {
+        ...exhausted,
+        windows: [{ ...exhausted.windows[0]!, usedPercent: 0, reached: false }],
+      };
+      const wait = `${launchDir(dir, "r1")}/review.usage-wait`;
+      const written = yield* Deferred.make<void>();
+      const pauseAfterWrite = (path: string) =>
+        path === wait
+          ? Deferred.succeed(written, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.interruptible,
+            )
+          : Effect.void;
+      const crashingFs: FileSystem.FileSystem = {
+        ...fs,
+        writeFileString: (path, data, options) =>
+          fs.writeFileString(path, data, options).pipe(Effect.tap(() => pauseAfterWrite(path))),
+        rename: (from, to) => fs.rename(from, to).pipe(Effect.tap(() => pauseAfterWrite(to))),
+      };
+      const herdr = new FakeHerdr(rig.pluginEnv());
+      const over = {
+        herdr,
+        harness: "codex",
+        model: "default",
+        ports: managed.ports,
+        fallbacks: Effect.succeed([]),
+        collectMs: 2_000,
+      };
+      yield* interrupted("r1", Deferred.isDone(written), {
+        ...over,
+        readings: Effect.succeed([{ ...available, at: isoAt(now - 60_000) }]),
+        ownReading: () => Effect.succeed(exhausted),
+      }).pipe(Effect.provideService(FileSystem.FileSystem, crashingFs));
+      expect(yield* fs.exists(wait)).toBe(true);
+      expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
+      managed.state.reachable = false;
+      managed.children[0]!.kill();
+      yield* Effect.promise(() => managed.children[0]!.exited);
+      const terminal = Option.getOrThrow(
+        Arr.findFirst(yield* herdr.agentList(), (one) => one.name === agentFor("r1")),
+      );
+      yield* herdr.paneClose(terminal.paneId);
+
+      const result = yield* session(started("r1").pipe(Effect.timeoutOption("2 minutes")), {
+        ...over,
+        readings: Effect.succeed([
+          {
+            ...available,
+            at: isoAt(yield* Clock.currentTimeMillis),
+            windows: [{ ...available.windows[0]!, resetsAt: isoAt(now + 7_200_000) }],
+          },
+        ]),
+        ownReading: () => Effect.succeed(null),
+      });
+      expect(result._tag).toBe("Some");
+      expect(
+        result._tag === "Some" && result.value._tag === "Success" && result.value.success.note,
+      ).toBe("recovered the unrecorded incident");
+      expect(everyLaunch(yield* rig.calls())).toHaveLength(2);
+      expect(managed.children).toHaveLength(2);
+      expect(yield* fs.exists(wait)).toBe(false);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a quota wait does not revive a dead managed Codex server before its usage recovers", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const managed = yield* managedCodex;
+      const herdr = new StaleWorkingTerminal(rig.pluginEnv());
+      yield* rig.queueOutputs([null, { verdict: "clean", note: "after usage recovered" }]);
+      const now = yield* Clock.currentTimeMillis;
+      const exhausted: UsageReading = {
+        subscription: "chatgpt",
+        account: "acct",
+        accountLabel: null,
+        plan: "pro",
+        windows: [
+          {
+            kind: "weekly",
+            label: "Weekly",
+            model: null,
+            usedPercent: 100,
+            resetsAt: isoAt(now + 3_600_000),
+            reached: true,
+          },
+        ],
+        at: isoAt(now),
+        source: "codex-app-server",
+        problem: null,
+      };
+      const available = {
+        ...exhausted,
+        windows: [{ ...exhausted.windows[0]!, usedPercent: 0, reached: false }],
+      };
+      let machine: UsageReading = { ...available, at: isoAt(now - 60_000) };
+      const result = yield* session(
+        Effect.gen(function* () {
+          const waiting = yield* Effect.forkChild(started("r1"));
+          yield* until(parkedSays("before writing"));
+          herdr.stale = true;
+          managed.state.reachable = false;
+          managed.children[0]!.kill();
+          yield* Effect.promise(() => managed.children[0]!.exited);
+          yield* spend(20_000);
+          expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
+          expect(managed.children).toHaveLength(1);
+
+          machine = {
+            ...available,
+            at: isoAt(yield* Clock.currentTimeMillis),
+            windows: [{ ...available.windows[0]!, resetsAt: isoAt(now + 7_200_000) }],
+          };
+          yield* TestClock.adjust("1 minute");
+          return yield* Fiber.join(waiting).pipe(Effect.timeoutOption("2 minutes"));
+        }),
+        {
+          herdr,
+          harness: "codex",
+          model: "default",
+          ports: managed.ports,
+          fallbacks: Effect.succeed([]),
+          readings: Effect.sync(() => [machine]),
+          ownReading: (agent) => Effect.succeed(agent === agentFor("r1") ? exhausted : null),
+          collectMs: 2_000,
+        },
+      );
+      expect(result._tag).toBe("Some");
+      expect(
+        result._tag === "Some" && result.value._tag === "Success" && result.value.success.note,
+      ).toBe("after usage recovered");
+      const calls = yield* rig.calls();
+      expect(harnessesStarted(calls)).toEqual(["codex", "codex"]);
+      expect(closedPanes(calls)).toHaveLength(1);
+      expect(sent(calls, "Your task for this step")).toBe(2);
+      expect(managed.children).toHaveLength(2);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a quota fallback keeps valid late Output written while retiring its managed Codex server", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const managed = yield* managedCodex;
+      const ports: CompactionPorts = {
+        codex: {
+          ...managed.ports.codex!,
+          stop: (target, note, budgetMs) =>
+            Effect.gen(function* () {
+              yield* fs.writeFileString(
+                outputPath("r1"),
+                '{"verdict":"clean","note":"finished during retirement"}',
+              );
+              managed.children[0]!.kill();
+              yield* Effect.promise(() => managed.children[0]!.exited);
+              return yield* COMPACTION_PORTS.codex!.stop!(target, note, budgetMs);
+            }).pipe(Effect.orDie),
+        },
+      };
+      yield* rig.queueOutputs([null, { verdict: "clean", note: "unnecessary successor" }]);
+      const now = yield* Clock.currentTimeMillis;
+      const exhausted: UsageReading = {
+        subscription: "chatgpt",
+        account: "acct",
+        accountLabel: null,
+        plan: "pro",
+        windows: [
+          {
+            kind: "weekly",
+            label: "Weekly",
+            model: null,
+            usedPercent: 100,
+            resetsAt: isoAt(now + 3_600_000),
+            reached: true,
+          },
+        ],
+        at: isoAt(now),
+        source: "codex-app-server",
+        problem: null,
+      };
+      let fallbacks: ReadonlyArray<string> = [];
+      const result = yield* session(
+        Effect.gen(function* () {
+          const waiting = yield* Effect.forkChild(started("r1"));
+          yield* until(parkedSays("before writing"));
+          expect(harnessesStarted(yield* rig.calls())).toEqual(["codex"]);
+          fallbacks = ["claude/opus"];
+          yield* TestClock.adjust("1 minute");
+          return yield* Fiber.join(waiting);
+        }),
+        {
+          harness: "codex",
+          model: "default",
+          ports,
+          fallbacks: Effect.sync(() => fallbacks),
+          readings: Effect.succeed([{ ...exhausted, windows: [] }]),
+          ownReading: (agent) => Effect.succeed(agent === agentFor("r1") ? exhausted : null),
+          collectMs: 2_000,
+        },
+      );
+      expect(result._tag === "Success" && result.success.note).toBe("finished during retirement");
+      const calls = yield* rig.calls();
+      expect(everyLaunch(calls)).toHaveLength(1);
+      expect(sent(calls, "Your task for this step")).toBe(1);
+      expect(closedPanes(calls)).toHaveLength(1);
+      expect(managed.children).toHaveLength(1);
+      expect(managed.children[0]!.signalCode).toBe("SIGTERM");
+    }).pipe(Effect.scoped),
   ));
 
 for (const recovery of ["a newer matching reset", "its known reset passing"])

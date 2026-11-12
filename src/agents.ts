@@ -309,12 +309,17 @@ export const RanOut = Schema.TaggedStruct("RanOut", {
 });
 export type RanOut = typeof RanOut.Type;
 const isRanOut = Schema.is(RanOut);
+const RanOutJson = Schema.fromJsonString(RanOut);
+const encodeRanOut = flow(Schema.encodeResult(RanOutJson), Result.getOrThrow);
 type SpentChoice = Pick<RanOut, "why" | "resetsAt" | "exhaustion"> & {
   readonly on: AgentChoice;
 };
 
 const TurnEnded = Schema.TaggedStruct("TurnEnded", { endedAt: Schema.Finite });
 const isTurnEnded = Schema.is(TurnEnded);
+const CollectedBeforeFallback = Schema.TaggedStruct("CollectedBeforeFallback", {
+  text: Schema.String,
+});
 
 /** Output text, an expired budget, exhausted usage, or a turn ending without Output. */
 export const Collected = Schema.Union([Schema.String, Schema.Null, RanOut, TurnEnded]);
@@ -489,6 +494,12 @@ export interface AgentsApi {
     /** Where given, an Output it refuses is read again until the agent's turn has ended. */
     usable?: (text: string) => boolean,
   ) => Effect.Effect<string | null, AgentUncertain | AgentParked>;
+  /** One read of its Output, without reconciling or sending any delivery. */
+  readonly peekOutput: (launched: Launched) => Effect.Effect<string | null>;
+  /** Keep this operation's exhaustion across interruption until it is collected or retired. */
+  readonly usageWaiting: (launched: Launched, incident: RanOut | null) => Effect.Effect<void>;
+  /** An incident persisted before its collect Activity could record the result. */
+  readonly usageIncident: (launched: Launched) => Effect.Effect<RanOut | null>;
   /** Waits for working → idle/done with absent Output and permission to remind. */
   readonly endedWithoutOutput: (
     launched: Launched,
@@ -963,10 +974,10 @@ export const agentWork = <
         Effect.andThen(Effect.never),
       );
     // Each budget spent idle, one that has gone is started again, as a resume once did.
-    const untilWritten = (on: Launched, from: AgentAsk) =>
+    const untilWritten = (on: Launched, from: AgentAsk, canRevive = true) =>
       Effect.gen(function* () {
         for (;;) {
-          yield* reviving(from);
+          if (canRevive) yield* reviving(from);
           const text = yield* watching(agents.collect(on, null, questions));
           if (text !== null) return text;
         }
@@ -986,7 +997,7 @@ export const agentWork = <
               () =>
                 pastBudget(on, waiting).pipe(
                   Effect.flatMap((why) => host.parked(runId, why, "idle-budget")),
-                  Effect.andThen(untilWritten(on, from)),
+                  Effect.andThen(untilWritten(on, from, waiting === undefined)),
                 ),
             ),
           ),
@@ -999,16 +1010,18 @@ export const agentWork = <
       );
       return stoppable(
         parkedWhenStuck(
-          reviving(from).pipe(
-            Effect.andThen(
-              Effect.raceFirst(
-                waiting === undefined
-                  ? Effect.raceFirst(Effect.raceFirst(output, ended), agents.ranOut(on))
-                  : output,
-                recovering(from),
-              ),
-            ),
-          ),
+          waiting === undefined
+            ? Effect.gen(function* () {
+                // Reconcile a crash before the incident was journaled, before idle reminders race it.
+                const incident = yield* agents.usageIncident(on);
+                if (incident !== null) return incident;
+                yield* reviving(from);
+                return yield* Effect.raceFirst(
+                  Effect.raceFirst(Effect.raceFirst(output, ended), agents.ranOut(on)),
+                  recovering(from),
+                );
+              })
+            : output,
           host,
           work.runId,
         ),
@@ -1136,6 +1149,8 @@ export const agentWork = <
       const out: RanOut = collected;
       const on = choiceOfLaunch(current);
       spent.push({ ...out, on });
+      // Also seeds the marker when an older recorded RanOut is replayed.
+      yield* agents.usageWaiting(current, out);
       const next = yield* Activity.make({
         name: `${work.operation}.fallback-${n}.agent`,
         success: AgentChoiceSchema,
@@ -1207,12 +1222,30 @@ export const agentWork = <
           work.runId,
         ),
       });
-      current = yield* Activity.make({
+      yield* agents.usageWaiting(current, null);
+      const replacement = yield* Activity.make({
         name: `${work.operation}.fallback-${n}.launch`,
-        success: Launched,
+        // An older recorded launch still replays as Launched, without a new Output read.
+        success: Schema.Union([Launched, CollectedBeforeFallback]),
         error: AgentUncertain,
-        execute: launching(nextAsk),
+        execute: Effect.gen(function* () {
+          const instance = yield* WorkflowEngine.WorkflowInstance;
+          if (yield* host.stopRequested(runId)) return yield* Workflow.suspend(instance);
+          // Retirement proved Quiet; a tool may have finished its Output while it stopped.
+          const late = yield* agents.peekOutput(current);
+          if (late !== null && decodeOutput(work.output, late, plain).ok) {
+            if (yield* host.stopRequested(runId)) return yield* Workflow.suspend(instance);
+            yield* host.parked(runId, null);
+            return CollectedBeforeFallback.make({ text: late });
+          }
+          return yield* launching(nextAsk);
+        }),
       });
+      if (Schema.is(CollectedBeforeFallback)(replacement)) {
+        collected = replacement.text;
+        break;
+      }
+      current = replacement;
       currentAsk = nextAsk;
       collected = yield* reminding(
         `${work.operation}.fallback-${n}`,
@@ -1234,6 +1267,7 @@ export const agentWork = <
     }
     const read = decodeOutput(work.output, first, plain);
     if (read.ok) {
+      yield* agents.usageWaiting(current, null);
       yield* recovered();
       return yield* carded(read.value);
     }
@@ -1336,6 +1370,7 @@ export const agentWork = <
       repaired = reread.ok ? reread : yield* repairing(round + 1, now, reread.problem);
     }
     yield* recovered();
+    yield* agents.usageWaiting(current, null);
     return yield* carded(repaired.value);
   }).pipe(
     Effect.catchTag("AgentUncertain", (cause) =>
@@ -1803,6 +1838,59 @@ type Under = <A, E>(effect: Effect.Effect<A, E, AgentServices>) => Effect.Effect
 const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): AgentsApi => {
   const dirFor = (runId: string) => launchDir(host.dir, runId);
   const outputFor = (runId: string, operation: string) => `${dirFor(runId)}/${operation}.json`;
+  // A recovery already admitted finishes before its quota incident is published. Once
+  // published, no recovery may pass the incident check and start the spent agent again.
+  const recoveryGates = new Map<string, { gate: Semaphore.Semaphore; users: number }>();
+  const withRecoveryGate =
+    (runId: string) =>
+    <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => {
+          let entry = recoveryGates.get(runId);
+          if (entry === undefined) {
+            entry = { gate: Semaphore.makeUnsafe(1), users: 0 };
+            recoveryGates.set(runId, entry);
+          }
+          entry.users++;
+          return entry;
+        }),
+        (entry) => entry.gate.withPermits(1)(effect),
+        (entry) =>
+          Effect.sync(() => {
+            if (--entry.users === 0) recoveryGates.delete(runId);
+          }),
+      );
+  const usageWaitPath = (launched: Pick<AgentAsk, "runId" | "operation" | "sequence">) =>
+    `${dirFor(launched.runId)}/${stemOf(launched)}.usage-wait`;
+  const usageWaiting = (launched: Launched, incident: RanOut | null) =>
+    under(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = usageWaitPath(launched);
+        if (incident === null) return yield* fs.remove(path, { force: true });
+        const temporary = `${path}.${yield* (yield* SecureRandom.SecureRandom).uuidV4()}.new`;
+        yield* fs
+          .writeFileString(temporary, encodeRanOut(incident))
+          .pipe(
+            Effect.andThen(fs.rename(temporary, path)),
+            Effect.ensuring(fs.remove(temporary, { force: true }).pipe(Effect.ignore)),
+          );
+      }).pipe(withRecoveryGate(launched.runId), Effect.orDie),
+    );
+  const usageIncident = (launched: Launched) =>
+    under(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const text = yield* fs
+          .readFileString(usageWaitPath(launched))
+          .pipe(
+            Effect.catchTag("PlatformError", (error) =>
+              error.reason._tag === "NotFound" ? Effect.succeed(null) : Effect.fail(error),
+            ),
+          );
+        return text === null ? null : yield* Schema.decodeEffect(RanOutJson)(text);
+      }).pipe(Effect.orDie),
+    );
   /** What went out as a step's prompt or its repair, kept so a resend is the same words. */
   const sentPath = (about: Launched, kind: "step" | "repair") =>
     `${dirFor(about.runId)}/${stemOf(about)}.${kind}.md`;
@@ -3414,6 +3502,12 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       const own = Arr.filter(launches, (one) => one.agent === agent);
       const latest = own.at(-1);
       if (latest === undefined) return [];
+      const usage = yield* fs.exists(usageWaitPath(latest)).pipe(Effect.result);
+      if (usage._tag === "Failure") {
+        yield* log(runId, `${agent}: not started again on core: its usage wait could not be read`);
+        return [];
+      }
+      if (usage.success) return [];
       const adapter = adapterFor(started.harness ?? host.harness);
       const had = yield* sessionHad(runId, agent, adapter.kind);
       const out =
@@ -3521,61 +3615,66 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
 
   const resumeLost = (runId: string, run: RunNow) =>
     under(
-      resuming.withPermits(1)(
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const agents = Arr.map(
-            Arr.filter(
-              yield* fs
-                .readDirectory(startedDir(host.env.stateDir, runId))
-                .pipe(Effect.orElseSucceed(() => [])),
-              (name) => pipe(name, Str.endsWith(".json")),
-            ),
-            (name) => pipe(name, Str.slice(0, -".json".length)),
-          );
-          if (agents.length === 0 || !(yield* run.running)) return;
-          const backs = Arr.map(agents, (agent) => ({ agent, back: Deferred.makeUnsafe<void>() }));
-          for (const { agent, back } of backs) comingBack.set(agent, back);
-          const released = Effect.forEach(backs, ({ agent, back }) =>
-            Effect.suspend(() => {
-              if (comingBack.get(agent) === back) comingBack.delete(agent);
-              return Deferred.succeed(back, undefined);
-            }),
-          );
-          yield* Effect.gen(function* () {
-            const listedAt = yield* nowIso;
-            const listing = yield* host.herdr.agentList().pipe(Effect.option);
-            // Nothing is started on a list core did not give.
-            if (Option.isNone(listing)) return;
-            const launches = yield* launchesOf(runId);
-            const tells: Array<Effect.Effect<void, never, AgentServices>> = [];
-            for (const agent of agents) {
-              if (Arr.some(listing.value, (one) => one.name === agent)) continue;
-              // A launch already under way starts it.
-              if (stepsGoingOut.has(agent)) continue;
-              tells.push(
-                ...(yield* withRelaunchLock(
-                  host.env.stateDir,
-                  runId,
-                  log(
+      resuming
+        .withPermits(1)(
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const agents = Arr.map(
+              Arr.filter(
+                yield* fs
+                  .readDirectory(startedDir(host.env.stateDir, runId))
+                  .pipe(Effect.orElseSucceed(() => [])),
+                (name) => pipe(name, Str.endsWith(".json")),
+              ),
+              (name) => pipe(name, Str.slice(0, -".json".length)),
+            );
+            if (agents.length === 0 || !(yield* run.running)) return;
+            const backs = Arr.map(agents, (agent) => ({
+              agent,
+              back: Deferred.makeUnsafe<void>(),
+            }));
+            for (const { agent, back } of backs) comingBack.set(agent, back);
+            const released = Effect.forEach(backs, ({ agent, back }) =>
+              Effect.suspend(() => {
+                if (comingBack.get(agent) === back) comingBack.delete(agent);
+                return Deferred.succeed(back, undefined);
+              }),
+            );
+            yield* Effect.gen(function* () {
+              const listedAt = yield* nowIso;
+              const listing = yield* host.herdr.agentList().pipe(Effect.option);
+              // Nothing is started on a list core did not give.
+              if (Option.isNone(listing)) return;
+              const launches = yield* launchesOf(runId);
+              const tells: Array<Effect.Effect<void, never, AgentServices>> = [];
+              for (const agent of agents) {
+                if (Arr.some(listing.value, (one) => one.name === agent)) continue;
+                // A launch already under way starts it.
+                if (stepsGoingOut.has(agent)) continue;
+                tells.push(
+                  ...(yield* withRelaunchLock(
+                    host.env.stateDir,
                     runId,
-                    `${agent}: not started again on core: an end of it is still under way`,
-                  ).pipe(Effect.as([])),
-                  relaunch(runId, agent, launches, { agents: listing.value, listedAt }, run),
-                ).pipe(
-                  Effect.catch((cause) =>
                     log(
                       runId,
-                      `${agent}: could not be started again on core (${reason(cause)})`,
+                      `${agent}: not started again on core: an end of it is still under way`,
                     ).pipe(Effect.as([])),
-                  ),
-                )),
-              );
-            }
-            for (const tell of tells) yield* tell;
-          }).pipe(Effect.ensuring(released));
-        }),
-      ),
+                    relaunch(runId, agent, launches, { agents: listing.value, listedAt }, run),
+                  ).pipe(
+                    Effect.catch((cause) =>
+                      log(
+                        runId,
+                        `${agent}: could not be started again on core (${reason(cause)})`,
+                      ).pipe(Effect.as([])),
+                    ),
+                  )),
+                );
+              }
+              for (const tell of tells) yield* tell;
+            }).pipe(Effect.ensuring(released));
+          }),
+        )
+        .pipe(withRecoveryGate(runId)),
     );
 
   const retireLost = (ask: AgentAsk, listed: ReadonlyArray<AgentInfo>) =>
@@ -3603,10 +3702,12 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   const revive = (ask: AgentAsk, unless?: string | null, onlyDeadServer = false) =>
     under(
       Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        if (yield* fs.exists(usageWaitPath(ask)).pipe(Effect.orElseSucceed(() => true)))
+          return false;
         const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1);
         const lost = yield* lostServer(compactionDeps(host, ask.runId), agent);
         if (onlyDeadServer && lost === null) return false;
-        const fs = yield* FileSystem.FileSystem;
         const written = yield* fs.readFileString(ask.output).pipe(Effect.orElseSucceed(() => ""));
         if (Str.trim(written) !== "" && written !== unless) return false;
         // The host starts an agent on core again, in the session it had.
@@ -3638,7 +3739,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         );
         yield* launch(ask, true);
         return true;
-      }),
+      }).pipe(withRecoveryGate(ask.runId)),
     );
 
   const handOff = (options: {
@@ -3715,6 +3816,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   const ranOut = (launched: Launched) =>
     under(
       Effect.gen(function* () {
+        const incident = yield* usageIncident(launched);
+        if (incident !== null) return incident;
         const dir = yield* controlDir(host.env.stateDir, launched.agent);
         const on = pinned(choiceOfLaunch(launched));
         let readAt = Number.NEGATIVE_INFINITY;
@@ -3771,6 +3874,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               resetsAt,
             };
             if (exhaustion !== undefined) result.exhaustion = exhaustion;
+            // Core recovery must see the wait even before this RanOut is journaled.
+            yield* usageWaiting(launched, result);
             return result;
           }
           yield* Effect.sleep(Duration.millis(host.pollMs ?? DEFAULT_POLL_MS));
@@ -4182,6 +4287,16 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     handOff,
     halt,
     collect,
+    peekOutput: (launched) =>
+      under(
+        FileSystem.FileSystem.pipe(
+          Effect.flatMap((fs) => fs.readFileString(launched.output)),
+          Effect.map((text) => (Str.trim(text) === "" ? null : text)),
+          Effect.orElseSucceed(() => null),
+        ),
+      ),
+    usageWaiting,
+    usageIncident,
     collectedDuring: (launched, waiting) =>
       collecting.during(launched.runId, launched.agent, waiting),
     repair,
