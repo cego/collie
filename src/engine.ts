@@ -6813,6 +6813,8 @@ export interface RegistryApi {
     readonly input: Readonly<Record<string, Schema.Json>>;
     readonly request: string;
     readonly attachments?: ReadonlyArray<string> | undefined;
+    /** The human who took the offer, recorded as who started the Run it starts. */
+    readonly started?: Started | undefined;
   }) => Effect.Effect<Admitted, HostRefused | RequestConflict, HostServices>;
   /** The generation a run is on and the execution it was admitted as. */
   readonly routed: (
@@ -9601,6 +9603,7 @@ const makeRegistry: (
       readonly input: Readonly<Record<string, Schema.Json>>;
       readonly request: string;
       readonly attachments?: ReadonlyArray<string> | undefined;
+      readonly started?: Started | undefined;
     }) {
       const { row, generation, facts, where, refused, input } = yield* offeredBy(options.runId);
       // Asked again here, of the module as it is now: the card this was read from may
@@ -9651,6 +9654,7 @@ const makeRegistry: (
         parent: row.run,
         verify: inherited,
         attachments: options.attachments,
+        started: options.started,
         // A follow-up carries on the parent's work, so it is on the parent's branch.
         options: carried,
       });

@@ -744,7 +744,9 @@ why. It never resolves a thread, because that is the reviewer's call.
 
 **Go** — The answer that lets a Run do what cannot be taken back: start a release (claim,
 stage, merge, tag), and send one to production. It is asked on the Run once the work is
-ready, never at its start. The first holds for one head: a head that moves takes it back.
+ready, never at its start, except that a human's own **Release** that started a Release Run
+is that Run's first Go for the head it read at its start, while nobody's approval is withdrawn.
+The first holds for one head: a head that moves takes it back.
 The second holds for what it sends. Before a merge, that is the head on stage, so the same
 rule applies. After one, it is one tag and the production jobs that tag names. Who answered
 is recorded, never a reason to refuse. A Workflow can declare the Go's action and head

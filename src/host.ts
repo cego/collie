@@ -2857,7 +2857,14 @@ const frontDoorHandlers = (
               () => runId,
               { operation: "invoke", request, ...whoOf(client), asked, result: Started },
               registry
-                .invoke({ runId, offer, input, request, attachments })
+                .invoke({
+                  runId,
+                  offer,
+                  input,
+                  request,
+                  attachments,
+                  started: startedOf(whoOf(client).origin, whoOf(client).said, input, undefined),
+                })
                 .pipe(Effect.map(saying(removed))),
             ),
           );

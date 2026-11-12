@@ -13148,6 +13148,148 @@ const refusingCheckout = (refused: string): HostOverride =>
     }),
   );
 
+/**
+ * A host that says who gave this Release Run its go: a human's own start of it from an offer,
+ * or its parent implement Run's **Release**, answered at `answered`'s door. `afterStart`
+ * happens once the Run has read the merge request at its start, as a push landing then.
+ */
+const goGiven = (
+  given: { readonly started?: "board"; readonly answered?: "board" | "agent" },
+  afterStart: Effect.Effect<void, never, FileSystem.FileSystem> = Effect.void,
+): HostOverride =>
+  Layer.effect(Host)(
+    Effect.gen(function* () {
+      const host = yield* Host;
+      const services = yield* Effect.context<PlatformServices>();
+      return Host.of({
+        ...host,
+        place: (runId) =>
+          host.place(runId).pipe(
+            Effect.map((place) => ({
+              ...place,
+              lineage: [runId, "r-implement"],
+              authority: {
+                ...place.authority,
+                started: given.started === undefined ? null : { door: given.started, words: "" },
+              },
+            })),
+          ),
+        asked: (runId) =>
+          runId !== "r-implement"
+            ? host.asked(runId)
+            : Effect.succeed(
+                given.answered === undefined
+                  ? []
+                  : [{ name: "next", answer: "Release", by: { origin: given.answered } }],
+              ),
+        autoMerging: (cwd) =>
+          afterStart.pipe(Effect.provideContext(services), Effect.andThen(host.autoMerging(cwd))),
+      });
+    }),
+  );
+
+{
+  const { mr, target } = RELEASING.gitlab;
+
+  for (const given of [{ answered: "board" }, { started: "board" }] as const)
+    scenario(
+      `release: a human's Release at an unchanged head is the go (${"started" in given ? "a human took the offer" : "a human answered implement"}), so it merges and tags without asking it again`,
+      () =>
+        runEffect(
+          Effect.gen(function* () {
+            const { bin, forge, head, merged } = yield* releasable("gitlab");
+            claimed.length = 0;
+            const runId = `r-release-go-${"started" in given ? "offer" : "answer"}`;
+            yield* rig.queueOutputs([PACKAGED, TAGGED]);
+            const status = yield* driven(
+              {
+                entry: shipped("release"),
+                runId,
+                input: { mr: target },
+                host: Layer.provide(goGiven(given), releaseHost()),
+              },
+              (run) => ended(run.status),
+            );
+            const model = yield* forge.model();
+            yield* bin.restore();
+            expect(outcomeText(status)).toBe(`${mr} merged at ${merged}, released as v1.2.0`);
+            expect(Arr.map(model.merges ?? [], (one) => one.sha)).toEqual([head]);
+            expect(yield* questions(runId)).toEqual([]);
+            expect(yield* runLog(runId)).toContain(
+              `go 1: the human's Release at ${pipe(head, Str.slice(0, 8))} is the go, so nobody was asked`,
+            );
+          }),
+        ),
+      120_000,
+    );
+
+  scenario(
+    "release: a human's Release is asked again once the head has moved since it was given",
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, head, changed } = yield* releasable("gitlab");
+          claimed.length = 0;
+          const runId = "r-release-go-moved";
+          yield* rig.queueOutputs([PACKAGED]);
+          let moved = "";
+          const pushed = Effect.gen(function* () {
+            moved = yield* pushedBySomebody(head);
+            yield* changed({ head: moved });
+          }).pipe(Effect.orDie);
+          const status = yield* driven(
+            {
+              entry: shipped("release"),
+              runId,
+              input: { mr: target },
+              host: Layer.provide(goGiven({ answered: "board" }, pushed), releaseHost()),
+            },
+            (run) =>
+              Effect.gen(function* () {
+                const go = yield* goAsked(run.asked, "go-1");
+                expect(go.prompt).toContain(pipe(moved, Str.slice(0, 8)));
+                yield* run.answer("go-1", "Finish");
+                return yield* ended(run.status);
+              }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was left open`);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    "release: an agent's Release on implement is no human's go, so the go is asked",
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin } = yield* releasable("gitlab");
+          claimed.length = 0;
+          const runId = "r-release-go-agent";
+          yield* rig.queueOutputs([PACKAGED]);
+          const status = yield* driven(
+            {
+              entry: shipped("release"),
+              runId,
+              input: { mr: target },
+              host: Layer.provide(goGiven({ answered: "agent" }), releaseHost()),
+            },
+            (run) =>
+              Effect.gen(function* () {
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Finish");
+                return yield* ended(run.status);
+              }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was left open`);
+        }),
+      ),
+    120_000,
+  );
+}
+
 scenario(
   "a refused checkout fails Stage and Release on their checkout step, before anything is assessed",
   () =>

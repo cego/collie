@@ -710,8 +710,15 @@ Once ready, it asks **`go-<n>`**, naming the head and who approved it: **Release
 **Finish** for a package. For an application it offers **Stage the merge request** where
 the assessment named a stage deploy of its merge request pipelines, **Merge, tag and stage**
 where it named one of its tag pipelines, and **Finish**, and says what each does. Anyone
-may answer, from any door, and the answer is recorded with who gave it. **Finish** ends the
-Run with the merge request left open. Any other answer claims, in Helle, every project the
+may answer, from any door, and the answer is recorded with who gave it. A Release Run a
+human's own **Release** started — their answer to implement's **What next?**, or their
+taking a Run's **Release** offer, from the board, Desktop, a terminal or chat in their own
+words — asks no `go-<n>` while the head is the one the Run read at its start and nobody
+who had approved it then has withdrawn: that **Release** is the go, its first option is
+taken, and its log says `go <n>: the human's Release at <head> is the go, so nobody was
+asked`. A moved head or a withdrawn approval asks as above, and every wait before it stays
+([ADR-draft-a-humans-release-is-the-go-for-its-head](adr/draft-a-humans-release-is-the-go-for-its-head.md)).
+**Finish** ends the Run with the merge request left open. Any other answer claims, in Helle, every project the
 release deploys under, one at a time in a fixed order and each waited for — before it waits
 for one it does not hold, whether it lost it, or is resumed or tried again, it gives back
 the later ones it holds or is queued for, and takes them again in order — asking first to

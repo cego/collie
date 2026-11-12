@@ -205,6 +205,52 @@ test(
   120_000,
 );
 
+test(
+  "an offer a human takes starts a Run recorded as theirs, and one a command takes does not",
+  () =>
+    proves(
+      "collie-actor-offer-human-",
+      (world) =>
+        Effect.gen(function* () {
+          const host = yield* connect(world.state);
+          const started = yield* host.start({
+            project: world.project,
+            id: "offered",
+            request: "start-offered",
+            input: { note: "x" },
+          });
+          yield* until(
+            () => host.status({ runId: started.runId }),
+            (status) => status.status === "complete",
+          );
+          const board = yield* frontDoor(socketOf(world.state));
+          yield* board.declare({ frontDoor: "board" });
+          const taken = yield* board.invoke({
+            runId: started.runId,
+            offer: "look-again",
+            input: { note: "y" },
+            request: "invoke-board",
+          });
+          const delegated = yield* host.invoke({
+            runId: started.runId,
+            offer: "look-again",
+            input: { note: "z" },
+            request: "invoke-command",
+          });
+          for (const runId of [taken.runId, delegated.runId])
+            yield* until(
+              () => host.status({ runId }),
+              (status) => status.status === "complete",
+            );
+          yield* stopHost(world.state);
+          expect(yield* startedOf(world.state, taken.runId)).toEqual({ door: "board", words: "y" });
+          expect(yield* startedOf(world.state, delegated.runId)).toBeNull();
+        }).pipe(Effect.orDie),
+      ["offered.workflow.ts", "graded.workflow.ts"],
+    ),
+  120_000,
+);
+
 test("a terminal is a human's only in a pane herdr does not report as an agent's", () => {
   expect(cliOrigin({ terminal: false, pane: null, agentPanes: [] })).toBe("cli");
   expect(cliOrigin({ terminal: true, pane: null, agentPanes: [] })).toBe("cli-tty");
