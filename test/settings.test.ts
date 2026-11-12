@@ -207,6 +207,7 @@ describe("Each setting explains itself", () => {
       "handoff_timeout_ms",
       "memory_hold",
       "recovery.resume",
+      "recovery.heal",
       "release.share_for_approval",
       "release.approval_channel",
       "review.follow_through",

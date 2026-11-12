@@ -680,7 +680,14 @@ more line naming its [**Park cause**](../CONTEXT.md) and what that cause lets Co
 section adds why a person is needed; `collie run show` gives the same as `park` with its
 `cause` and `kind`. Recheck parks stay quiet while Collie checks their facts and resumes
 those whose cause clears. After three automatic tries for the same cause, another park
-needs you and lists the tries. A card keeps its latest two recovery actions, and the drawer's
+needs you and lists the tries. Before a park tells you it needs you, the host first starts
+one **Heal**, a Run of the [`heal`](workflows.md#heal) workflow whose agent may only message
+the parked Run's own agents and resume it. While it runs the line reads
+`Parked: output-absent · being healed by run-1a2b3c4d` and nobody is notified; you hear once,
+`run-healed` when it got the Run moving, or `needs-you` with its diagnosis, what it tried and
+why a person is needed when it could not. A Run with a Decision, Hold or Stop, a cause only a
+person can act on such as a missing login, and a Heal's own park go to you at once.
+`collie settings set recovery.heal false` sends every such park to you at once. A card keeps its latest two recovery actions, and the drawer's
 **recovery** section keeps the latest 20, including after the Run moves on. A park that needs
 you is notified once per cause. You can turn automatic resume off with
 `collie settings set recovery.resume false`; rechecks continue. See
@@ -3175,7 +3182,8 @@ holds or delays work: only an agent that may still be writing does.
 `notifications` turns a kind of toast off: `{"run-done": false}`, and a kind left out is on.
 The host raises one when a run finishes (`run-done`), fails (`run-failed`), asks you
 something or parks until you act (`needs-you`, as where an agent's Output could not be used
-after its repair), or records a merge request it opened
+after its repair), gets a parked run moving through a Heal before it needed you
+(`run-healed`), or records a merge request it opened
 (`mr-opened`); when a card is something you could go and try (`slice-ready`); and when
 Collie corrects a run's drift by itself (`correction-sent`) or gives up on it
 (`drift-unresolved`) — each once per run and thing, however often the work is replayed or

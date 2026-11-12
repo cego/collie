@@ -13,9 +13,9 @@ Run's agents as itself). It relies on
 [ADR-draft-a-fixable-failure-parks-its-step](draft-a-fixable-failure-parks-its-step.md)
 (#301) turning a fixable failure into a park.
 
-**Built so far:** D2 to D5, and D6's records and report. The Heal (D1's second step, D7, D9)
-and `self-improve`'s `park-<cause>` issues (the rest of D6) are decided, not built: a park
-past its recheck budget, or of a needs-you cause, goes to you.
+**Built so far:** D2 to D5, D6's records and report, and the Heal (D1's second step, D7, D9).
+`self-improve`'s `park-<cause>` issues and the Heals' findings as its input (the rest of D6)
+are decided, not built.
 
 ## What was true before
 

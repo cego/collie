@@ -240,6 +240,7 @@ const NOTIFICATION_WORDS = {
   "needs-you": ["A Run needs you", "a Run stops to ask you something"],
   "run-done": ["A Run finished", "a Run finishes well"],
   "run-failed": ["A Run failed", "a Run fails"],
+  "run-healed": ["A Run was healed", "a Heal gets a parked Run moving before it needs you"],
   "mr-opened": [
     "A merge request or pull request opened",
     "a Run opens a merge request or pull request",
@@ -375,6 +376,12 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     label: "Resume cleared parks",
     description:
       "Whether the host resumes a parked Run once its read-only recheck clears. Off still records rechecks.",
+  }),
+  of("recovery.heal", "boolean", "true", {
+    group: "Runs",
+    label: "Heal parks before they need you",
+    description:
+      "Whether a park that needs you first gets one Heal: a Run of the healer workflow that may only message the parked Run's agents and resume it. Off sends the park to you at once.",
   }),
   of("release.share_for_approval", "boolean", "false", {
     group: "Runs",

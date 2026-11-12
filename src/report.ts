@@ -12,7 +12,7 @@ import { isSuperseded, isUnanswered } from "./store";
 import type { Metrics } from "./board-model";
 import { epochMs, took } from "./time";
 import { measuresOf, type Measures, type OutcomeRecords } from "./outcomes";
-import type { Metric } from "./metrics";
+import type { Metric, RecoveryAction } from "./metrics";
 
 const asJsonText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
 const isText = Schema.is(Schema.String);
@@ -176,6 +176,14 @@ const capped = (lines: ReadonlyArray<string>, cap = 20): string[] =>
 
 const percent = (share: number | null) => (share === null ? "" : ` (${Math.round(share * 100)}%)`);
 
+/** What a recovery's time to recover is measured over. */
+const RECOVERED_FROM: Readonly<Record<RecoveryAction, string>> = {
+  reminded: "turn end to Output",
+  rechecked: "park to next step",
+  resumed: "park to next step",
+  healed: "Heal start to its judgement",
+};
+
 /** The Runs a measure counts, as far as the text has room for. */
 const citing = (runs: ReadonlyArray<string>, cap = 10) =>
   runs.length === 0
@@ -229,11 +237,11 @@ const measureLines = (measures: Measures): string[] => {
     ...Arr.map(
       recoveries.byCause,
       (one) =>
-        `  ${one.cause} ${one.action}  ${one.count} time${one.count === 1 ? "" : "s"}; ${one.recovered} recovered${one.falseRecoveries === undefined ? "" : `; ${one.falseRecoveries} false recover${one.falseRecoveries === 1 ? "y" : "ies"}`}${
+        `  ${one.cause} ${one.action}  ${one.count} time${one.count === 1 ? "" : "s"}; ${one.recovered} recovered${one.falseRecoveries === undefined ? "" : `; ${one.falseRecoveries} false recover${one.falseRecoveries === 1 ? "y" : "ies"}`}${one.escalations === undefined ? "" : `; ${one.escalations} escalation${one.escalations === 1 ? "" : "s"}`}${
           one.toRecover === null
             ? ""
-            : `; ${one.action === "resumed" ? "park to next step" : "turn end to Output"} median ${took(one.toRecover)}`
-        }${citing(one.runs)}`,
+            : `; ${RECOVERED_FROM[one.action]} median ${took(one.toRecover)}`
+        }${one.healMs === undefined ? "" : `; Heals ran ${took(one.healMs)} in all`}${citing(one.runs)}`,
     ),
     `parks: ${parks.collectExpiries.count} collect-budget expiries${citing(parks.collectExpiries.runs)}`,
     ...capped(

@@ -76,7 +76,7 @@ import type { RunState } from "../../src/runs";
 import { registeredAt, runFacts } from "./records";
 import { readReplies } from "../../src/replies";
 import { disputesIn } from "../../src/proactive";
-import { AwaitingJson } from "../../src/awaiting";
+import { AwaitingJson, awaitingLine } from "../../src/awaiting";
 import { installFakeSkills } from "./defs";
 import { Agents, agentsLayer, type AgentHost } from "../../src/agents";
 import {
@@ -156,6 +156,7 @@ const UNRELATED = {
   "self-improve": "look-back",
   stage: "try-it-out",
   "tune-up": "make-haste",
+  heal: "mend-it",
 } as const;
 type Shipped = keyof typeof UNRELATED;
 
@@ -580,6 +581,7 @@ const undeclaredWork = () =>
           "investigate",
           "self-improve",
           "tune-up",
+          "heal",
         ] as const,
         shipped,
       ),
@@ -3747,6 +3749,65 @@ scenario(
   120_000,
 );
 
+const HEALED = {
+  diagnosis: "The reviewer finished its turn without writing its Output.",
+  actions: ["told the reviewer where its Output goes", "resumed the Run"],
+  result: "resumed",
+  finding: {
+    collie_defect: true,
+    key: "output-path-lost",
+    root_cause: "A reminder does not repeat the Output path once the agent's context is compacted.",
+    fix: "Repeat the Output path in every Output reminder.",
+    regression: "A reminder after compaction names the Output path.",
+  },
+};
+
+scenario(
+  "heal asks one healer about the parked Run and sends an Output without a finding back for repair",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { finding: _, ...unfound } = HEALED;
+        yield* rig.queueOutputs([unfound, HEALED]);
+        const result = yield* ran({
+          entry: shipped("heal"),
+          runId: "r-heal",
+          input: { run: "run-parked", park: "park-1" },
+        });
+        expect(result).toMatchObject({ _tag: "Success", success: HEALED });
+        const messages = yield* prompts();
+        expect(messages).toHaveLength(2);
+        expect(messages[1]).toContain("finding");
+        expect(yield* asked("r-heal", "heal")).toContain("Run run-parked is parked (park park-1)");
+        expect(yield* persona("r-heal", "heal")).toContain("healer");
+        expect((yield* loadEntry(shipped("heal"))).metadata?.heals).toBe(true);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "heal sends an escalation that does not say why a person is needed back for repair",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const escalated = { ...HEALED, result: "escalate" };
+        const reasoned = { ...escalated, needs_person: "Only you can pick the release date." };
+        yield* rig.queueOutputs([escalated, reasoned]);
+        const result = yield* ran({
+          entry: shipped("heal"),
+          runId: "r-heal-escalates",
+          input: { run: "run-parked", park: "park-1" },
+        });
+        expect(result).toMatchObject({ _tag: "Success", success: reasoned });
+        const messages = yield* prompts();
+        expect(messages).toHaveLength(2);
+        expect(messages[1]).toContain("needs_person");
+      }),
+    ),
+  120_000,
+);
+
 const asApproved = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Array(VerifySpecSchema))),
   Result.getOrThrow,
@@ -6042,6 +6103,302 @@ const withOrigin = () =>
         ),
     };
   });
+
+const PREREQUISITE_MR = `https://${PROJECT.gitlab}/-/merge_requests/41`;
+
+const prerequisiteOpen = (runId: string) =>
+  Effect.gen(function* () {
+    const origin = yield* withOrigin();
+    const bin = yield* FakeBin.make(`${rig.root}/bin`);
+    const open: ForgeModel = {
+      installed: true,
+      loggedIn: [FORGE_HOST.gitlab],
+      login: "tester",
+      mrs: [{ project: PROJECT.gitlab, iid: "41", state: "open", head: "feed41" }],
+    };
+    const forge = yield* forgeOnPath(bin, "gitlab", open);
+    const other = `${runId}-other`;
+    yield* session(
+      Effect.gen(function* () {
+        yield* admit({ runId: other, workflow: "implement", input: {} });
+        yield* (yield* Host).mergeRequest(other, PREREQUISITE_MR);
+      }),
+    );
+    return {
+      ...origin,
+      bin,
+      forge,
+      open,
+      other,
+      land: Effect.gen(function* () {
+        const merged = yield* origin.moveMaster("prerequisite.txt", "landed\n");
+        yield* forge.set({
+          ...open,
+          mrs: [{ ...open.mrs[0]!, state: "merged", mergedSha: merged }],
+        });
+        return merged;
+      }),
+    };
+  });
+
+const awaitingPrerequisite = (runId: string) =>
+  Effect.gen(function* () {
+    const prerequisite = yield* prerequisiteOpen(runId);
+    const ticket = `${rig.root}/${runId}-ticket.md`;
+    yield* (yield* FileSystem.FileSystem)
+      .writeFileString(ticket, `# 02: needs the other\n\n**Needs merged:** ${prerequisite.other}\n`)
+      .pipe(Effect.orDie);
+    return {
+      ...prerequisite,
+      run: {
+        entry: `${fixtures}/awaits-prerequisites.workflow.ts`,
+        runId,
+        input: { ticket, cwd: rig.projectDir },
+      },
+    };
+  });
+
+scenario(
+  "a ticket's wait on another Run's Change goes on through a merge elsewhere, and lands once master has it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-prerequisite-lands";
+        const { git, bin, forge, open, other, run } = yield* awaitingPrerequisite(runId);
+        const waiting = yield* Effect.forkChild(ran(run));
+        const line = `${other}'s Change to merge`;
+        expect(
+          yield* until(
+            () => awaitingOn(runId),
+            (on) => on !== "",
+          ),
+        ).toBe(line);
+
+        const upstream = `${rig.root}/upstream`;
+        yield* git(upstream, "switch", "-qc", "side");
+        yield* (yield* FileSystem.FileSystem)
+          .writeFileString(`${upstream}/side.txt`, "side\n")
+          .pipe(Effect.orDie);
+        yield* git(upstream, "add", "side.txt");
+        yield* git(upstream, "commit", "-qm", "the other Run's Change");
+        yield* git(upstream, "push", "-q", "origin", "side");
+        const merged = yield* git(upstream, "rev-parse", "HEAD");
+        yield* forge.set({
+          ...open,
+          mrs: [{ ...open.mrs[0]!, state: "merged", mergedSha: merged }],
+        });
+        const asked = forge.requests().length;
+        yield* until(
+          () => Effect.sync(() => forge.requests().length),
+          (now) => now >= asked + 2,
+        );
+        expect(yield* awaitingOn(runId)).toBe(line);
+
+        yield* git(upstream, "switch", "-q", "master");
+        yield* git(upstream, "merge", "-q", "--no-edit", "side");
+        yield* git(upstream, "push", "-q", "origin", "master");
+        const result = yield* Fiber.join(waiting);
+        yield* bin.restore();
+        expect(said(result)).toBe("Landed");
+        expect(yield* awaitingOn(runId)).toBe("");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a hold ends a ticket's wait on another Run's Change, and clears what it awaited",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-prerequisite-held";
+        const { bin, other, run } = yield* awaitingPrerequisite(runId);
+        const status = yield* running(run, (status) =>
+          Effect.gen(function* () {
+            yield* until(
+              () => awaitingOn(runId),
+              (on) => on === `${other}'s Change to merge`,
+            );
+            const fs = yield* FileSystem.FileSystem;
+            yield* fs.writeFileString(controlPath(dir, HOLD, runId), "").pipe(Effect.orDie);
+            return yield* until(
+              () => status,
+              (got) => got === "suspended",
+            );
+          }),
+        );
+        yield* bin.restore();
+        expect(status).toBe("suspended");
+        expect(yield* awaitingOn(runId)).toBe("");
+      }),
+    ),
+  120_000,
+);
+
+/**
+ * Implement started over a plan of tickets with these bodies. Each agent is answered from
+ * `outputs`, where null is one the scenario answers with `answer` once it has looked.
+ */
+const implementing = (
+  runId: string,
+  tickets: ReadonlyArray<{ readonly file: string; readonly body: string }>,
+  outputs: ReadonlyArray<Schema.Json | null>,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const plan = yield* planOf(
+      Arr.map(tickets, (one) => ({
+        ...one,
+        title: pipe(one.file, Str.replace(/\.md$/, "")),
+        checks: "unit",
+      })),
+    );
+    yield* approve(runId, ["unit"]);
+    yield* rig.queueOutputs(outputs);
+    const running = yield* Effect.forkChild(
+      ran({ entry: shipped("implement"), runId, input: { plan, ...FINISH } }),
+    );
+    const agents = `${dir}/agents/${runId}`;
+    const logged = () =>
+      fs.readFileString(`${runDir(dir, runId)}/log.txt`).pipe(Effect.orElseSucceed(() => ""));
+    return {
+      logged,
+      launched: (operation: string) =>
+        until(
+          () => fs.readFileString(`${agents}/agents.log`).pipe(Effect.orElseSucceed(() => "")),
+          (said) =>
+            pipe(said, Str.includes(`: launched for ${operation}\n`)) ||
+            pipe(said, Str.includes(`: reattached to ${operation}\n`)),
+        ),
+      answer: (operation: string) =>
+        fs.writeFileString(`${agents}/${operation}.json`, asJson(BUILT)),
+      /** Waits until it parks on opening its merge request, as it does with no forge at origin. */
+      untilParked: Effect.gen(function* () {
+        yield* until(logged, (said) => pipe(said, Str.includes("Cannot open the merge request")));
+        yield* Fiber.interrupt(running);
+        return yield* logged();
+      }),
+      interrupt: Fiber.interrupt(running),
+    };
+  });
+
+scenario(
+  "implement builds the ticket it can, waits for another Run's Change to merge, then builds on it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-prerequisite-build";
+        const { git, bin, other, land } = yield* prerequisiteOpen(runId);
+        const { launched, answer, untilParked } = yield* implementing(
+          runId,
+          [
+            { file: "01-first.md", body: "" },
+            { file: "02-second.md", body: `\n**Needs merged:** ${other}\n` },
+          ],
+          [BUILT, null, CLEAN_SYNTHESIS],
+        );
+        expect(
+          yield* until(
+            () => awaitedLine(runId),
+            (line) => line !== "",
+          ),
+        ).toBe(`Waiting for ${other}'s Change to merge.`);
+        expect(yield* wasAsked(runId, "01-first.md")).toBe(true);
+        expect(yield* wasAsked(runId, "02-second.md")).toBe(false);
+
+        const merged = yield* land;
+        yield* launched("02-second.md");
+        yield* git(rig.projectDir, "merge-base", "--is-ancestor", merged, "HEAD");
+        yield* answer("02-second.md");
+        const log = yield* untilParked;
+        yield* bin.restore();
+        expect(log).toContain(`integrated master@${merged}`);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a ticket needing a Run this host does not have parks once the rest is built, naming both",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-prerequisite-nowhere";
+        const { interrupt } = yield* implementing(
+          runId,
+          [
+            { file: "01-first.md", body: "" },
+            { file: "02-second.md", body: "\n**Needs merged:** run-nowhere\n" },
+          ],
+          [BUILT],
+        );
+        const why = yield* until(
+          () => parkedWhy(runId),
+          (why) => why !== "",
+        );
+        yield* interrupt;
+        expect(yield* wasAsked(runId, "01-first.md")).toBe(true);
+        expect(yield* parkedCause(runId)).toBe("step-failed");
+        expect(why).toContain("run-nowhere");
+        expect(why).toContain("02-second.md");
+        expect(yield* wasAsked(runId, "02-second.md")).toBe(false);
+      }),
+    ),
+  120_000,
+);
+
+scenario("a ticket blocked by one that waits for another Run's Change waits with it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const runId = "r-prerequisite-blocked";
+      const { bin, other } = yield* prerequisiteOpen(runId);
+      const { interrupt } = yield* implementing(
+        runId,
+        [
+          { file: "01-first.md", body: `\n**Needs merged:** ${other}\n` },
+          { file: "02-second.md", body: "\n**Blocked by:** 01\n" },
+        ],
+        [BUILT, BUILT, CLEAN_SYNTHESIS],
+      );
+      yield* until(
+        () => awaitingOn(runId),
+        (on) => on !== "",
+      );
+      yield* interrupt;
+      yield* bin.restore();
+      expect(yield* wasAsked(runId, "02-second.md")).toBe(false);
+    }),
+  ),
+);
+
+scenario(
+  "a one-ticket plan waits for the Change its ticket needs, and is built on top of it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-prerequisite-whole";
+        const { git, bin, other, land } = yield* prerequisiteOpen(runId);
+        const { launched, answer, untilParked } = yield* implementing(
+          runId,
+          [{ file: "01-first.md", body: `\n**Needs merged:** ${other}\n` }],
+          [null, CLEAN_SYNTHESIS],
+        );
+        yield* until(
+          () => awaitingOn(runId),
+          (on) => on !== "",
+        );
+        expect(yield* wasAsked(runId, "build")).toBe(false);
+
+        const merged = yield* land;
+        yield* launched("build");
+        yield* git(rig.projectDir, "merge-base", "--is-ancestor", merged, "HEAD");
+        yield* answer("build");
+        yield* untilParked;
+        yield* bin.restore();
+      }),
+    ),
+  120_000,
+);
 
 type Step = Effect.Effect<void, never, ChildProcessSpawner.ChildProcessSpawner>;
 
@@ -10652,6 +11009,14 @@ const awaitingOn = (runId: string) =>
     Effect.flatMap((fs) => fs.readFileString(controlPath(dir, AWAITING, runId))),
     Effect.flatMap(Schema.decodeUnknownEffect(AwaitingJson)),
     Effect.map((awaiting) => awaiting.on),
+    Effect.orElseSucceed(() => ""),
+  );
+
+const awaitedLine = (runId: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.readFileString(controlPath(dir, AWAITING, runId))),
+    Effect.flatMap(Schema.decodeUnknownEffect(AwaitingJson)),
+    Effect.map(awaitingLine),
     Effect.orElseSucceed(() => ""),
   );
 
@@ -19932,6 +20297,49 @@ scenario(
         expect(reverted["1"]).toEqual(started["1"]);
         expect(yield* runLog(runId)).toContain("guardrail bench.size inconclusive");
         expect(said(result)).toContain("cycles spent: 1 of 1");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up whose harness was repaired after it was written reaches its Cycle's verdict",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-harness-repaired";
+        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        yield* checkedBy(runId, "unit", "sh", ["-c", "test ! -e broken"]);
+        const fixed = repaired(
+          {
+            ...tunePlan(commit, [STEADY_PRIMARY, SIZE_GUARDRAIL]),
+            harness: { commits: [commit, "REPAIR_SHA"], paths: ["bench"] },
+          },
+          "bench.sh reads a steady count",
+        );
+        yield* rig.queueOutputs([
+          TUNE_DISCOVERED,
+          tunePlan(commit, [NOISY_PRIMARY]),
+          {
+            writes: [
+              { path: `${rig.root}/repaired.sh`, text: CYCLE_BENCH },
+              { path: `${rig.root}/repaired.json`, text: asJson(fixed) },
+            ],
+            sh: inCheckout(
+              `cp '${rig.root}/repaired.sh' bench/bench.sh && git commit -qam repair && sed "s/REPAIR_SHA/$(git rev-parse HEAD)/" '${rig.root}/repaired.json' > "$OUTPUT_PATH"`,
+            ),
+            output: null,
+          },
+          NO_CHANGE(),
+          RESET(),
+        ]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        expect(result._tag).toBe("Success");
+        expect(yield* runLog(runId)).toContain("benchmark plan 2: repair 1");
+        const [measured] = yield* cyclesMeasured(runId);
+        expect(measured?.pass).toBe("cycle 1");
+        expect(measured?.result._tag).toBe("Judged");
+        expect(yield* runLog(runId)).toContain("cycle 1 reverted to");
       }),
     ),
   120_000,

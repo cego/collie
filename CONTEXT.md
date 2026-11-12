@@ -469,6 +469,12 @@ cause has cleared. Bounded per Run and cause, recorded with its outcome, and pro
 fact the park waited for, never by inactivity or an acknowledgement. It never answers a
 **Decision**, lifts a **Hold**, undoes a **Stop** or passes a gate.
 
+**Heal** — A Run the host starts for a park its **Recovery** could not clear, before the park
+needs you: its agent may only message the parked Run's own agents and resume it. Judged by
+the parked Run's facts, never its Output, and it always records a finding for everyone who
+runs Collie. One per park, three per Run, one at a time per Machine; never for a Run with a
+**Decision**, **Hold** or **Stop**, or for a Heal (ADR-draft-a-run-recovers-where-it-parks).
+
 **Wait** — What holds a Run up at a moment: a **Decision** on it, **Stalled**, a **Hold**,
 **Short of memory**, or something it awaits that ends by itself. A Check Collie runs for it
 is shown the same way. A Run can have several at once, and each front door says the one it
@@ -846,6 +852,8 @@ whole `recheck` (ADR-0034, amended 2026-10-15).
 **Stacked** — A Change blocked by another Change in the same repository. Its branch is cut from the blocker's, and its merge request targets the blocker's branch. When the blocker merges, Collie reads the retarget from the forge and never makes it itself.
 
 **Wave** — The Change runs a fan-out starts together: those whose tickets are blocked by no ticket of a Change run still going. Ticket order inside a Change is its Change run's; order between Changes, in one repository or several, is the wave's. A plan whose Changes block each other in a cycle has no wave order and is refused, as is one whose "Blocked by" line names something that is not a ticket of the plan, or which numbers two tickets the same so that such a line cannot say which it means.
+
+**Prerequisite** — another Run's Change that a ticket needs merged before it is built. The ticket names it on its `Needs merged:` line, as a Run id and that Run's Change name, with no name for the Run's default Change. It is always in the ticket's own repository. Its Change run builds what it can, then waits until the prerequisite is on the default branch, and merges that branch in before the ticket's build. A ticket of the same plan is named by `Blocked by` instead (ADR-draft-a-change-waits-on-another-runs-change-to-merge).
 
 **Deferred** — Architecture candidates the architect chose not to apply unattended, kept in the summary for the human.
 

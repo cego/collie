@@ -246,7 +246,7 @@ has the whole of it.
 
 All shipped workflows request `high` effort. Planning, design, implementation, review,
 release, self-improve and general use `opus`; renovate uses the pinned default, and investigate
-uses the configured harness and model. These preferences live in the workflow's `agents`,
+and heal use the configured harness and model. These preferences live in the workflow's `agents`,
 which is what a fork overrides.
 
 The auto mode is passed unless `permissions` says `bypass` or `harness`, in your

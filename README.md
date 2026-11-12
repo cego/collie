@@ -67,6 +67,7 @@ and `collie host restart` restarts the host.
 | `investigate`  | Runs one investigator on the Machine that can observe the problem, reports findings to the requesting agent, then closes                                  |
 | `renovate`     | Merges the month's Renovate merge requests on one repository, tags a release, and checks the repository off the team's Renovate issue                     |
 | `general`      | One agent does one ad-hoc task where you started it, with no branch or merge request, and the run ends with its summary                                   |
+| `heal`         | Started by the host, not you, for a park its own recovery could not clear: gets the Run moving through its own agents before it needs you                 |
 
 The bundled workflows are a shared starting point, not a restriction. `collie workflow
 fork <id>` writes a module of your own that imports what it keeps and replaces what it
