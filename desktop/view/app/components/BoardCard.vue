@@ -153,7 +153,11 @@ const doing = (action: CardAction, primary: boolean) => {
     }
     case "offer": {
       return {
-        label: primary && view.shipping === "merge" ? "Merge" : action.offer.title,
+        label:
+          primary && view.shipping === "merge"
+            ? "Merge"
+            : `${action.offer.title}${action.offer.unavailable === undefined ? "" : ` — ${action.offer.unavailable}`}`,
+        disabled: action.offer.unavailable !== undefined,
         press: () => (offering.value = offeringOf(runId, action.offer)),
       };
     }
@@ -220,6 +224,7 @@ const menu = computed(() =>
       : [
           {
             label: one.label,
+            disabled: "disabled" in one && one.disabled,
             onSelect: one.press,
           },
         ];

@@ -55,7 +55,7 @@ export interface LaneContext {
   readonly children: ReadonlyArray<ChildFact>;
   readonly toCome: ReadonlyArray<{ readonly repo: string; readonly wave: number }>;
   readonly wait: LaneWait | null;
-  readonly offer: { readonly id: string; readonly title: string } | null;
+  readonly offer: { readonly id: string; readonly title: string; readonly run?: string } | null;
   readonly readiness: string | null;
 }
 
@@ -173,7 +173,7 @@ export interface TaskFacts {
   /** Whether the Task's work has settled, so nothing is current. */
   readonly settled: boolean;
   readonly waitOf: (run: RunFacts) => LaneWait | null;
-  readonly offer: { readonly id: string; readonly title: string } | null;
+  readonly offer: { readonly id: string; readonly title: string; readonly run?: string } | null;
   readonly mr: string | null;
   /** The Run whose merge request the Task's is. */
   readonly merging: string;
@@ -311,7 +311,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
       children,
       toCome: Arr.filter(waves, (one) => one.run === null),
       wait: task.waitOf(run),
-      offer: run.id === task.leader.id ? task.offer : null,
+      offer: run.id === (task.offer?.run ?? task.leader.id) ? task.offer : null,
       readiness: run.id === task.merging ? task.readiness : null,
     });
     const links = Arr.map(yield* readRunLinks(run.dir), (one) => ({

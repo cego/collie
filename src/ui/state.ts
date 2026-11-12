@@ -1224,6 +1224,7 @@ export interface MenuItem {
   key: string;
   label: string;
   command: Command;
+  disabled?: boolean;
 }
 
 /** A card's action as this board draws it: the key beside it, its label, and its command. */
@@ -1246,7 +1247,11 @@ function itemFor(view: TaskView, action: CardAction, primary: boolean): MenuItem
     case "offer":
       return {
         key: "i",
-        label: primary && view.shipping === "merge" ? "Merge" : action.offer.title,
+        label:
+          primary && view.shipping === "merge"
+            ? "Merge"
+            : `${action.offer.title}${action.offer.unavailable === undefined ? "" : ` — ${action.offer.unavailable}`}`,
+        disabled: action.offer.unavailable === undefined ? undefined : true,
         command: { _tag: "InvokeOffer", runId: action.offer.run ?? runId, offer: action.offer.id },
       };
     case "check-output":

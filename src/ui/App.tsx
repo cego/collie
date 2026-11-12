@@ -432,7 +432,7 @@ export function App(props: AppProps) {
       const item = Option.getOrUndefined(
         Arr.findFirst(menu.items, (one) => one.key !== "" && one.key === pressed),
       );
-      return item === undefined ? undefined : act(item.command);
+      return item === undefined || item.disabled === true ? undefined : act(item.command);
     }
     if (steering()) return typeIntoSteer(key);
     // Before the board's own keys: while a card is being typed into, `q` is a letter of

@@ -731,7 +731,7 @@ read; it last answered 6 minutes ago.` A `merged` recorded by hand is outranked 
 reading the merge request open after it, and the card is owed again. Where
 every gate holds on fresh evidence at its head, it is **Ready to release** and moves
 to **Ready to ship** with Merge. Its sentence says: `Ready to
-release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: merge it, or tell
+release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: Release, or tell
 builder to.` The agent is named only while it is alive. A GitHub pull request reads as
 `owner/repo#30`, a GitLab merge request as `group/project!42`. A Run that ended with
 nothing to file — no branch, no merge request, no plan, no question — is finished, not
@@ -940,7 +940,9 @@ open, and adds **Mark merged** and **Mark abandoned** once the work is over — 
 [beside the run's status, never over it](cli.md#what-became-of-the-work), with its merge request
 as the reference where the board knows one. A Task with several merge requests has one of
 each per merge request, `Mark merged app!12`, and `Open MR app!12`, with no key of their
-own; **What it offers…** lists each owning Run's offers, `Release app!12`, made by that Run.
+own. A finished delivery's card menu lists **Release** and **Stage** for each merge request,
+on the Run that owns it: **Release app!12**, for example. Available offers come first;
+an unavailable offer shows its reason. **What it offers…** lists the same owning Runs' offers.
 Its first button is about the first one waiting on you: one closed with nobody saying why,
 then one ready to release. Nothing on the card acts on all of them at once. A Task with a
 decision open shows **Answer above** instead, which closes the drawer to the card whose

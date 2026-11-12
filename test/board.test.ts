@@ -45,6 +45,7 @@ import {
   SECTIONS,
   sortBoard,
   primaryAction,
+  cardActions,
   type TaskMr,
   TaskView,
 } from "../src/board-model";
@@ -1844,7 +1845,7 @@ test("Merge uses the Release offer even when an unrelated follow-up is primary",
       const [ready] = yield* read([unrelated, release]);
       expect(primaryAction(ready!)).toEqual({
         kind: "offer",
-        offer: { id: "release", title: "Release" },
+        offer: { id: "release", title: "Release", run: "r-second" },
       });
       for (const offers of [
         [unrelated],
@@ -1910,7 +1911,7 @@ test("fresh green work has a Merge shipping action, revoked by a moved head, fai
       expect(sectionsOf(desktop, "").ready).toHaveLength(1);
       expect(primaryAction(desktop[0]!)).toEqual({
         kind: "offer",
-        offer: { id: "release", title: "Release" },
+        offer: { id: "release", title: "Release", run: "r-second" },
       });
       const text = Arr.join(boardLines([received]), "\n");
       expect(text).toContain("Ready to ship · 1");
@@ -3371,10 +3372,10 @@ const PR = "https://github.com/cego/collie/pull/30";
 test("an open merge request says whether it is ready, what failed, and the next move", () => {
   const open = (over: Partial<Sentence>) => sentenceFor(facts({ state: "done", mr: PR, ...over }));
   expect(open({ checks: { state: "passed", at: "1a2b3c4d5e" }, agent: "builder" })).toBe(
-    "Ready to release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: merge it, or tell builder to.",
+    "Ready to release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: Release, or tell builder to.",
   );
   expect(open({ checks: { state: "passed", at: "1a2b3c4d5e" } })).toBe(
-    "Ready to release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: merge it.",
+    "Ready to release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: Release.",
   );
   expect(
     open({
@@ -3408,7 +3409,7 @@ test.each([
   const done = (over: Partial<Sentence>) =>
     sentenceFor(facts({ state: "done", mr: one.mr, ...over }));
   expect(done({ checks: { state: "passed", at: "1a2b3c4d5e" } })).toBe(
-    `Ready to release: ${one.label} is open and its checks passed at 1a2b3c4. Next: merge it.`,
+    `Ready to release: ${one.label} is open and its checks passed at 1a2b3c4. Next: Release.`,
   );
   expect(done({ checks: { state: "failed", name: "lint", at: "1a2b3c4d5e" } })).toBe(
     `${one.label} is open, but lint failed at 1a2b3c4. Next: fix lint.`,
@@ -3545,7 +3546,7 @@ test("a succeeded Run's open merge request is ready only on checks at its branch
       expect(green[0]!.readiness).toEqual({ ready: true, missing: [] });
       expect(sectionOf(green[0]!)).toBe("ready-to-ship");
       expect(green[0]!.sentence).toBe(
-        `Ready to release: cego/collie#30 is open and its checks passed at ${pipe(head, Str.slice(0, 7))}. Next: merge it, or tell builder to.`,
+        `Ready to release: cego/collie#30 is open and its checks passed at ${pipe(head, Str.slice(0, 7))}. Next: Release, or tell builder to.`,
       );
       // The forge's approval rules are its own: green and unapproved is not ready.
       const unapproved = yield* forgeSays({ state: "blocked", said: "not approved" });
@@ -4387,6 +4388,228 @@ const boardAndFlows = Effect.fn("board.boardAndFlows")(function* (
 
 const BUILD = declared("build");
 const SHIP = declared("ship", { produces: "merge-request" });
+
+const deliveryOffers: ReadonlyArray<OfferView> = [
+  {
+    id: "release",
+    title: "Release",
+    workflow: "release",
+    arguments: null,
+    kind: "follow-up",
+    primary: true,
+    unavailable: null,
+  },
+  {
+    id: "stage",
+    title: "Stage",
+    workflow: "stage",
+    arguments: null,
+    kind: "follow-up",
+    primary: false,
+    unavailable: null,
+  },
+];
+
+test("an Improvement's finished delivery names Release and Stage on its implement Run, including its Flow", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const improvement = yield* madeRun(dir, {
+        id: "improve",
+        workflow: "self-improve",
+        task: "task-1",
+        state: "succeeded",
+        created: "2026-09-14T08:00:00Z",
+      });
+      const plan = yield* madeRun(dir, {
+        id: "plan",
+        parent: improvement.id,
+        workflow: "plan",
+        task: "task-1",
+        state: "succeeded",
+        created: "2026-09-14T08:30:00Z",
+        // oxlint-disable-next-line unicorn/no-thenable -- The Workflow's input is named then.
+        settled: { inputs: { then: "implement" }, strategies: {}, sources: {} },
+      });
+      const implement = yield* madeRun(dir, {
+        id: "implement",
+        parent: plan.id,
+        task: "task-1",
+        state: "succeeded",
+        mr: M,
+        created: "2026-09-14T09:00:00Z",
+        // oxlint-disable-next-line unicorn/no-thenable -- The Workflow's input is named then.
+        settled: { inputs: { then: "finish" }, strategies: {}, sources: {} },
+      });
+      yield* appendVerification(implement.evidence, checked("test", M_HEAD));
+      yield* stepsRecorded(
+        implement,
+        [BUILD, SHIP],
+        [
+          { step: BUILD, left: true },
+          { step: SHIP, left: true },
+        ],
+      );
+      const { views, flow } = yield* boardAndFlows(env, [implement, plan, improvement], {
+        mrStates: new Map([[M_ID, "open"]]),
+        forge: new Map([
+          [
+            M_ID,
+            {
+              checks: { state: "passed" },
+              head: M_HEAD,
+              mergeable: { state: "mergeable", said: "approved" },
+              read: "2026-09-14T10:04:00Z",
+            },
+          ],
+        ]),
+        head: () => Effect.succeed(M_HEAD),
+        offers: (run) => Effect.succeed(run === implement.id ? deliveryOffers : []),
+      });
+      const card = views[0]!;
+      expect(primaryAction(card)).toEqual({
+        kind: "offer",
+        offer: { id: "release", title: "Release", run: implement.id },
+      });
+      expect(Arr.filter(cardActions(card), (action) => action.kind === "offer")).toEqual([
+        { kind: "offer", offer: { id: "release", title: "Release", run: implement.id } },
+        { kind: "offer", offer: { id: "stage", title: "Stage", run: implement.id } },
+      ]);
+      const lane = Option.getOrThrow(
+        Arr.findFirst(flow("task-1").lanes, (lane) => lane.run === implement.id),
+      );
+      expect(lane.nodes.at(-1)).toMatchObject({ id: "offer:release", primary: "start" });
+      expect(card.flow?.glyphs.at(-1)?.title).toBe("Release");
+      expect(card.sentence).toContain("Next: Release");
+    }),
+  ));
+
+test("a fan-out lists Release and Stage per Change, with no Offer on its leading Run", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const runs = yield* fannedOut(dir, [
+        ["api", 7],
+        ["web", 8],
+      ]);
+      for (const run of Arr.filter(runs, (run) => run.mr !== null))
+        yield* appendVerification(run.evidence, checked("test", M_HEAD));
+      const [card] = yield* board(env, runs, {
+        mrStates: new Map([
+          [idOf("api", 7), "open"],
+          [idOf("web", 8), "open"],
+        ]),
+        forge: new Map(
+          Arr.map(["api", "web"], (repo, at) => [
+            idOf(repo, at + 7),
+            {
+              checks: { state: "passed" as const },
+              head: M_HEAD,
+              mergeable: { state: "mergeable" as const, said: "approved" },
+              read: "2026-09-14T10:04:00Z",
+            },
+          ]),
+        ),
+        head: () => Effect.succeed(M_HEAD),
+        offers: (run) => Effect.succeed(run === "r-fan" ? [] : deliveryOffers),
+      });
+      expect(Arr.filter(cardActions(card!), (action) => action.kind === "offer")).toEqual([
+        { kind: "offer", offer: { id: "release", title: "Release api!7", run: "r-api" } },
+        { kind: "offer", offer: { id: "stage", title: "Stage api!7", run: "r-api" } },
+        { kind: "offer", offer: { id: "release", title: "Release web!8", run: "r-web" } },
+        { kind: "offer", offer: { id: "stage", title: "Stage web!8", run: "r-web" } },
+      ]);
+      expect(primaryAction(card!)).toEqual({
+        kind: "offer",
+        offer: { id: "release", title: "Release", run: "r-api" },
+      });
+      expect(card!.flow?.glyphs.at(-1)?.title).toBe("Release");
+    }),
+  ));
+
+test("an attended implement answered Finish keeps named Offers as CI becomes green on the same board", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const implement = yield* madeRun(dir, {
+        id: "r-attended",
+        task: "task-1",
+        state: "succeeded",
+        mr: M,
+        answered: [{ name: "next", prompt: "What next?", options: [], answer: "finish" }],
+      });
+      yield* appendVerification(implement.evidence, checked("test", M_HEAD));
+      const cards = { revision: () => 1, kept: new Map(), markers: new Map() };
+      const read = (state: "running" | "passed") =>
+        board(env, [implement], {
+          cards,
+          mrStates: new Map([[M_ID, "open"]]),
+          forge: new Map([
+            [
+              M_ID,
+              {
+                checks: { state },
+                head: M_HEAD,
+                mergeable: { state: "mergeable", said: "approved" },
+                read: "2026-09-14T10:04:00Z",
+              },
+            ],
+          ]),
+          head: () => Effect.succeed(M_HEAD),
+          offers: () => Effect.succeed(deliveryOffers),
+        });
+      const [pending] = yield* read("running");
+      expect(sectionOf(pending!)).toBe("waiting");
+      expect(pending!.sentence).toContain("pipeline is still running");
+      expect(Arr.filter(cardActions(pending!), (action) => action.kind === "offer")).toEqual([
+        { kind: "offer", offer: { id: "release", title: "Release", run: implement.id } },
+        { kind: "offer", offer: { id: "stage", title: "Stage", run: implement.id } },
+      ]);
+      const [ready] = yield* read("passed");
+      expect(sectionOf(ready!)).toBe("ready-to-ship");
+      expect(primaryAction(ready!)).toEqual({
+        kind: "offer",
+        offer: { id: "release", title: "Release", run: implement.id },
+      });
+    }),
+  ));
+
+test("a card keeps unavailable Offers and their host's reasons after the available ones", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const { first, second } = yield* supersededChain(dir);
+      for (const [state, reasons] of [
+        ["open", ["a Release of this merge request is still going: r-release", null]],
+        ["merged", [`${M} is merged`, `${M} is merged`]],
+      ] as const) {
+        const [card] = yield* board(env, [second, first], {
+          mrStates: new Map([[M_ID, state]]),
+          offers: (run) =>
+            Effect.succeed(
+              run === second.id
+                ? Arr.map(deliveryOffers, (offer, at) => ({ ...offer, unavailable: reasons[at]! }))
+                : [],
+            ),
+        });
+        const offers = Arr.flatMap(cardActions(card!), (action) =>
+          action.kind === "offer" ? [action.offer] : [],
+        );
+        expect(offers).toEqual(
+          state === "open"
+            ? [
+                { id: "stage", title: "Stage", run: second.id },
+                { id: "release", title: "Release", run: second.id, unavailable: reasons[0] },
+              ]
+            : [
+                { id: "release", title: "Release", run: second.id, unavailable: reasons[0] },
+                { id: "stage", title: "Stage", run: second.id, unavailable: reasons[1] },
+              ],
+        );
+        expect(primaryAction(card!)?.kind).not.toBe("offer");
+      }
+    }),
+  ));
 
 test("a launch from before a Run's Steps is drawn as the Step it was, once", () =>
   runEffect(

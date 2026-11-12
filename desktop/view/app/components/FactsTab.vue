@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import * as Arr from "effect/Array";
-import { requestedByLine } from "../../../../src/board-model";
+import { cardActions, requestedByLine } from "../../../../src/board-model";
 import type { RunDetail, TaskView } from "../../../../src/board-model";
 import { attachmentsShown } from "../../../src/shared/attachments";
 import { agentRows } from "../../../src/shared/run-agents";
@@ -8,6 +8,9 @@ import { agentRows } from "../../../src/shared/run-agents";
 const props = defineProps<{ task: TaskView; detail: RunDetail | null; installation: string }>();
 const attached = computed(() => attachmentsShown(props.detail?.attachments ?? []));
 const agents = computed(() => agentRows(props.detail?.agents ?? []));
+const offers = computed(() =>
+  Arr.flatMap(cardActions(props.task), (action) => (action.kind === "offer" ? [action.offer] : [])),
+);
 </script>
 
 <template>
@@ -17,6 +20,15 @@ const agents = computed(() => agentRows(props.detail?.agents ?? []));
     <p v-if="detail?.report">
       Report {{ detail.report.state }}: {{ detail.report.note }} {{ detail.report.closure }}
     </p>
+    <section v-if="offers.length > 0" aria-label="Offers">
+      <h3 class="font-semibold">Offers</h3>
+      <ul>
+        <li v-for="offer in offers" :key="`${offer.run ?? task.run}:${offer.id}`">
+          {{ offer.title }} · {{ offer.run ?? task.run
+          }}<span v-if="offer.unavailable"> — {{ offer.unavailable }}</span>
+        </li>
+      </ul>
+    </section>
     <section
       v-if="detail && attached.thumbnails.length + attached.named.length > 0"
       class="flex flex-col gap-2"

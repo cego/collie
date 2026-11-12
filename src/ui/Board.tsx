@@ -736,7 +736,7 @@ export function CardMenu(props: {
               style={{ flexDirection: "row" }}
               onMouseDown={(event: MouseEvent) => {
                 event.stopPropagation();
-                props.onAct(item.command);
+                if (item.disabled !== true) props.onAct(item.command);
               }}
             >
               <text fg={C.text} style={{ flexGrow: 1 }}>
