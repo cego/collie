@@ -10,7 +10,7 @@ import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 
 const WORKSPACE = new URL("../desktop-rune/", import.meta.url).pathname;
-const STAND_IN = new URL("../desktop-rune/core/electrobun-stdio.ts", import.meta.url).pathname;
+const STAND_IN = new URL("../desktop-rune/core/platform.ts", import.meta.url).pathname;
 const cargo = Bun.which("cargo");
 
 // The main process's side: the board's window takes the stand-in's stdout, then a Run asks.

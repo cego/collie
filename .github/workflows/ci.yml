@@ -53,13 +53,16 @@ jobs:
 
   # The required check. Never skipped, which a required check would read as passing.
   test:
-    needs: [static, suite]
+    needs: [static, suite, desktop, desktop-rune, desktop-native]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - run: |
           echo "static: ${{ needs.static.result }}, suite: ${{ needs.suite.result }}"
           test "${{ needs.static.result }}" = success && test "${{ needs.suite.result }}" = success
+          test "${{ needs.desktop.result }}" = success
+          test "${{ needs.desktop-rune.result }}" = success
+          test "${{ needs.desktop-native.result }}" = success
 
   # The runner built and smoked on a Mac, and the installers' signature check run with the
   # Mac's own LibreSSL. Not the whole suite: a Mac-only defect past these is when to add it.
@@ -80,21 +83,8 @@ jobs:
         env:
           COLLIE_OPENSSL: /usr/bin/openssl
 
-  # Desktop built for Apple silicon, signed ad hoc, and the gate the release runs on its bundles.
-  desktop-macos:
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4"
-      - run: bun install --frozen-lockfile
-      - run: bun run build
-        working-directory: desktop
-        env:
-          ELECTROBUN_DEVELOPER_ID: "-"
-      - run: sh tools/verify-mac-app.sh desktop
-      - run: ls desktop/artifacts
+  desktop-native:
+    uses: ./.github/workflows/rune-bundle.yml
 
   desktop:
     runs-on: ubuntu-latest
@@ -107,12 +97,8 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
         working-directory: desktop
-      # The release builds the view on a fresh checkout, so CI does too.
-      - run: bun run view
-        working-directory: desktop
 
-  # The Rune spike (desktop-rune/README.md), which no release ships, so `test` does not need
-  # it. Its view test draws on lavapipe, Mesa's software Vulkan. libghostty-vt builds from the
+  # The native view tests draw on lavapipe, Mesa's software Vulkan. libghostty-vt builds from the
   # vendor/ghostty submodule with the Zig it pins, and bindgen needs libclang.
   desktop-rune:
     runs-on: ubuntu-latest

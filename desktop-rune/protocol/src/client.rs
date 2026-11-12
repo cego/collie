@@ -53,6 +53,8 @@ pub struct Client {
     open: Open,
     next: Arc<AtomicU64>,
     notices: Arc<Mutex<Option<Receiver<Notice>>>>,
+    restarts: Arc<Mutex<Option<Receiver<()>>>>,
+    restarting: Arc<AtomicBool>,
 }
 
 impl Client {
@@ -66,9 +68,14 @@ impl Client {
             open: Arc::new(Mutex::new(Some(HashMap::new()))),
             next: Arc::new(AtomicU64::new(0)),
             notices: Arc::new(Mutex::new(None)),
+            restarts: Arc::new(Mutex::new(None)),
+            restarting: Arc::new(AtomicBool::new(false)),
         };
         let (notify, notices) = channel();
         *client.notices.lock().unwrap() = Some(notices);
+        let (restart, restarts) = channel();
+        *client.restarts.lock().unwrap() = Some(restarts);
+        let restarting = client.restarting.clone();
         client.send(&ToCore::Hello)?;
         let open = client.open.clone();
         std::thread::spawn(move || {
@@ -102,6 +109,10 @@ impl Client {
                     Ok(FromCore::Notify(notice)) => {
                         let _ = notify.send(notice);
                     }
+                    Ok(FromCore::Restart) => {
+                        restarting.store(true, Ordering::Release);
+                        let _ = restart.send(());
+                    }
                     Ok(FromCore::Pong) | Err(_) => {}
                 }
             }
@@ -113,6 +124,14 @@ impl Client {
     /// The notifications the core asks for, once; they end with the core.
     pub fn notices(&self) -> Option<Receiver<Notice>> {
         self.notices.lock().unwrap().take()
+    }
+
+    pub fn restarts(&self) -> Option<Receiver<()>> {
+        self.restarts.lock().unwrap().take()
+    }
+
+    pub fn restarting(&self) -> bool {
+        self.restarting.load(Ordering::Acquire)
     }
 
     fn send(&self, frame: &ToCore) -> io::Result<()> {

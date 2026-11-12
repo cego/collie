@@ -1,6 +1,6 @@
 # Collie Desktop is drawn by Rune
 
-**Status: draft, gate held for evidence.** Decided by the human on run-d9db315d.implement
+**Status: draft; the side-by-side gate is superseded by the [direct cutover decision](draft-collie-replaces-the-webview-desktop-in-place.md).** Decided by the human on run-d9db315d.implement
 (ticket 07), 2026-11-10. Go or no-go waits for the after-merge evidence below. The product
 decisions recorded here stand whichever way the gate goes.
 
@@ -87,7 +87,7 @@ background are the app's own text and surface, so the pane sits in the record wi
 or seam, in light and dark (the human, after trying it). D2's three required items are built: selection and copy with every mouse button
 reaching the pane (Rune reports a secondary press and release together, so a right-button
 drag is not reported), raw HTML keeping its text, and a dialog that picks several files.
-Zoom is still missing. Until the gate, it installs beside stable Desktop as "Collie (Rune)".
+Zoom is still missing. The earlier spike installed beside stable Desktop as "Collie (Rune)"; the direct cutover decision replaces that installation model.
 
 ## Prerequisites
 
@@ -123,7 +123,7 @@ No figure here is a gain or a regression: no Measurement has judged one.
 
 ## Consequences
 
-- Nothing here ships. `desktop-rune/` and its CI jobs stay experimental until the gate
+- Historical spike gate (superseded by the direct cutover decision): `desktop-rune/` and its CI jobs stayed experimental until the gate
   decides. On no-go they are removed and ticket 01's marks and harness stay; on go the
   post-gate plan (`plan/post-gate.md` of run-d9db315d) is revised against the evidence, and
   `AGENTS.md` names this ADR and the Rust workspace.

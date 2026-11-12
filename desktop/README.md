@@ -1,249 +1,33 @@
-Collie Desktop's source (Electrobun, Vue). What it does for a human is
-[`docs/using.md`](../docs/using.md#collie-desktop). Desktop has its own `package.json`;
-Effect is the root's, so the board's Schemas exist once. It reaches a Machine through
-`collie bridge`, never the host client. The main process's behaviour is tested in the
-root's `test/desktop-*.test.ts` and `test/flock-*.test.ts`; the view's logic in `desktop/test/`.
+# Collie desktop core
 
-## The board and the record
+The desktop app is Collie, drawn by Rune. This directory holds its TypeScript core,
+shared RPC schemas and decision logic. The Rust shell, terminal, chat, packaging and
+update installer are in [`desktop-rune/`](../desktop-rune/README.md). There is no
+Nuxt/Vue view or Electrobun UI runtime.
 
-`src/shared/flow-strip.ts`'s `cardFlow` gives BoardCard its glyph groups, fold, label
-and accessible name. `FlowGlyph.vue` draws the eight states with Nuxt UI tokens.
-`src/shared/flow.ts` owns `selectNode`, `selectEntry`, `inspectorOf`, `openIn`,
-`flowKey`, `nodeName` and `flowAnnouncements`. `FlowMap`, `FlowInspector` and
-`FlowTab` render those decisions. `src/shared/flow-window.ts` says which Steps FlowMap
-has drawn yet: a large Flow draws those around where the work is first, and the rest a
-few a frame after. `recordTabs` puts Flow first where the host sends
-one; RunRecord can keep that map while subscribing to an earlier Run of its Task.
-`src/shared/flow-actions.ts` maps the host's node and lane capabilities to labels,
-icons and existing Desktop routes; `nextMove` and `retryCaption` supply their context.
-`useFlowActions` dispatches those routes, and `FlowActions` and `FlowDecision` render
-the inspector's controls without deriving capabilities themselves.
-`src/shared/step-steering.ts` describes pause marks, unread badges and note lists;
-`src/shared/step-timing.ts` supplies elapsed and usual text to the inspector and hover.
+The core reaches Machines through `collie bridge`, keeps the Flock chat and settings,
+and serves `DesktopRpcs` over stdin/stdout through `desktop-rune/core/platform.ts`.
+A release compiles it to `collie-core`; users need no separate Bun installation.
+Effect and the host schemas come from the repository root.
 
-`src/shared/step-inspector.ts` scopes log lines and Verifications and chooses the
-initial part and available parts. `StepWork` reuses TerminalTab, LogTab and EvidenceTab;
-only the visible terminal holds its pane, keyed by Run and agent so a Step of another
-agent opens that agent's pane. `src/shared/flow-layout.ts` sizes `FlowWorkspace`'s rail
-and context column, stacks them on a narrow record and reads the Focus keys;
-`useFlowLayout` keeps the chosen sizes across records. `src/shared/terminal-size.ts`
-sends a terminal's size once a resize settles.
+Run the scripts in `package.json` for core typechecking and the native bundle build.
+Core behavior is covered by `test/desktop-*.test.ts` and `test/flock-*.test.ts` at the
+root. `desktop/test/` retains tests of shared logic; native interaction tests live
+under the Rust crates. The previous Vue-only tests and browser benchmark driver
+were removed with the view. Benchmark fixture and analysis utilities remain reusable.
 
-| File                                    | What it owns                                                                                                                                                                                                                                           |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `src/bun/machine.ts`                    | A Machine reached through `collie bridge`; `act` carries out an action, `Deliver` as one `deliver`, word for word (`test/desktop-deliver.test.ts`)                                                                                                     |
-| `src/bun/index.ts`                      | The window, and its navigation rule                                                                                                                                                                                                                    |
-| `src/bun/records.ts`                    | A record's host subscription while the view holds it, resumed from the revision it holds, and how current it is (`test/desktop-kept-records.test.ts`, `test/desktop-reconnect.test.ts`)                                                                |
-| `src/shared/kept-records.ts`            | Which records the view keeps, and `keptHolder`, which holds them: the open one, the last 8, a card pointed at for 150 ms, under 16 MB (`desktop/test/kept-records.test.ts`); `view/app/kept.ts` holds them in the view                                 |
-| `src/shared/`                           | The view's RPC and the Flock it folds                                                                                                                                                                                                                  |
-| `view/app/components/RunRecord.vue`     | A card's record, one of the pages `usePage` lays over the board's column, with `SettingsPage.vue`, `MachinesPage.vue`, `UsagePage.vue` and `WorkflowsPage.vue` (the Flock's Workflows and Personas, read with `definitionsIn` in `src/bun/machine.ts`) |
-| `src/shared/card-mrs.ts`                | A card's merge request lines and Opens, and `flockMrs`: one drawn once across the Flock, with a link to each Machine's Task holding it (`test/desktop-view.test.ts`, `test/desktop-peers.test.ts`)                                                     |
-| `src/shared/markdown.ts`                | What agent markdown may keep (`desktop/test/markdown.test.ts`)                                                                                                                                                                                         |
-| `src/shared/board-clicks.ts`            | `afterGesture`: what a click, a double-click, a name, a page's back button and Escape do to the selected card and the open page (`test/desktop-view.test.ts`); where a gesture landed (`desktop/test/board-clicks.test.ts`)                            |
-| `src/shared/in-sync.ts`                 | Whether a Machine is In sync (`test/desktop-view.test.ts`)                                                                                                                                                                                             |
-| `src/shared/flock-settings.ts`          | The Settings rows, shared with each host's settings ([ADR-0043](../docs/adr/0043-a-shared-setting-is-its-latest-edit.md); `test/desktop-settings.test.ts`)                                                                                             |
-| `src/shared/standing-setup.ts`          | When Desktop offers to help write the Standing direction, and the setup conversation's first turn; `src/bun/standing-setup.ts` is the only caller of a host's `ownWords`, on the dialog's **Read my messages** (`test/standing-setup.test.ts`)         |
-| `src/shared/machine-own.ts`             | Each Machine's local values and read time for Settings' `MachineOwnTable.vue` (`test/desktop-machine-own.test.ts`)                                                                                                                                     |
-| `src/shared/usage.ts`                   | The header's Usage entries and the Usage page, one per Subscription account across the live Machines (`test/desktop-usage.test.ts`)                                                                                                                    |
-| `src/shared/machine-cleanup.ts`         | The Cleanup dialog's rows: what a sweep would remove on each Machine, or why it can't be cleaned, which are chosen, and each chosen one's sweep and toast (`test/desktop-machine-cleanup.test.ts`, with `cleanupOn` in `src/bun/machine.ts`)           |
-| `src/bun/machine.ts`'s `sweepOn`        | Sweeps one chosen Machine: resent under its request only over a renewed connection, 10 minutes in all, and kept in `actions.log` (`test/desktop-machine-sweep.test.ts`)                                                                                |
-| `view/app/components/CleanupDialog.vue` | The Cleanup dialog the Machines page's **Clean up…** opens, drawn from it; `useCleanup.ts` reads each Machine's listing on its own whenever it opens with no sweep running, and keeps the sweeps past the dialog                                       |
+## Installation and updates
 
-## Go to pane
-
-[ADR-0044](../docs/adr/0044-go-to-pane-opens-the-pane-in-desktop.md). Desktop draws the pane and
-decides nothing from it.
-
-| File                                  | What it owns                                                                |
-| ------------------------------------- | --------------------------------------------------------------------------- |
-| `src/bun/terminal.ts`                 | herdr's terminal controller, or core's attach, run over the Machine's route |
-| `view/app/components/TerminalTab.vue` | The pane, drawn                                                             |
-| `src/shared/terminal-input.ts`        | What the human does, as herdr is told it                                    |
-
-## The Flock chat
-
-[ADR-0011](../docs/adr/0011-the-conversation-is-a-native-harness.md#amended-2026-10-05-a-herds-chat-per-home-and-one-flock-chat-per-desktop)
-and its [harness amendment](../docs/adr/0011-the-conversation-is-a-native-harness.md#amended-2026-10-09-the-flock-chat-runs-on-the-harness-settings-names).
-The message box uses `UChatPrompt`, with the harness, model and effort selects in its wrapping footer. Its header holds the About chip, attachments and file refusals. A model change waits for the next message and keeps the conversation; a harness change waits too, with a notice and Stay to restore the window's last choice. During a reply, another notice names what is answering and what answers next. Stop recovers the queue before closing the human's reply reader. Every window follows the `chatChoices` stream: the account of the harness the conversation is held on, what its session runs on, whether a turn is under way, and what each harness offers. Tested in
-`test/flock-chat-pi.test.ts`, `test/flock-chat-endpoint.test.ts`, `test/flock-chat-turns.test.ts`,
-`test/desktop-settings.test.ts`, `test/desktop-chat-choices.test.ts`, `test/flock-chat-window.test.ts`,
-`test/desktop-claude-models.test.ts`, `test/desktop-pi-models.test.ts`,
-`test/desktop-harness-lists.test.ts` and `test/flock-tools.test.ts`.
-
-| File                                | What it owns                                                                                                                                                                                                                     |
-| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/bun/chat.ts`                   | The session, its turns and the conversation                                                                                                                                                                                      |
-| `src/bun/driver.ts`                 | The session's driver interface                                                                                                                                                                                                   |
-| `src/bun/claude-driver.ts`          | Claude through the Agent SDK                                                                                                                                                                                                     |
-| `src/bun/claude.ts`                 | The Agent SDK it runs on, and Collie's tools served to it                                                                                                                                                                        |
-| `src/bun/claude-models.ts`          | Claude Code's own model names, descriptions and effort levels, read through an SDK query that sends no message and closes after the read                                                                                         |
-| `src/bun/harness-lists.ts`          | The lists kept in memory until Desktop quits; lazy reads shared by every window, their reading and failure states, retries after failure, the first open's 20-second wait, and a list from this computer's host                  |
-| `src/bun/pi-driver.ts`              | Pi over RPC                                                                                                                                                                                                                      |
-| `src/bun/pi-servers.ts`             | The human's Claude Code servers as Pi registers them, those left out and why, and what the Pi chat is told of them                                                                                                               |
-| `src/bun/pi-models.ts`              | Pi's models and per-model thinking levels, read serially by RPC without setup, a session or a package check                                                                                                                      |
-| `src/bun/pi-agui.ts`                | Pi events as AG-UI                                                                                                                                                                                                               |
-| `src/bun/pi-transcript.ts`          | Pi session files read back                                                                                                                                                                                                       |
-| `src/bun/agui.ts`                   | SDK messages as AG-UI                                                                                                                                                                                                            |
-| `src/bun/transcript.ts`             | A conversation read back                                                                                                                                                                                                         |
-| `src/bun/session.ts`                | What the session runs with                                                                                                                                                                                                       |
-| `src/bun/chat-endpoint.ts`          | The authenticated loopback MCP endpoint                                                                                                                                                                                          |
-| `src/bun/tool-server.ts`            | Both servers' tools                                                                                                                                                                                                              |
-| `src/bun/flock-tools.ts`            | The Toolkit over each Machine's `chat` channel                                                                                                                                                                                   |
-| `src/bun/settings.ts`               | Desktop's own switches, the proactive one and the Machine rule among them; the Flock chat's harness, model and effort, checked through `src/harness-choice.ts` as a Run's are, and an effort against the efforts its model lists |
-| `src/bun/chat-choices.ts`           | The harness's own list or Collie's table after a failed read, Pi's own configuration read, what the session opens on, and when the `chatChoices` account is told again                                                           |
-| `src/shared/chat-choices.ts`        | The resolver of what an unset model and effort run as, the `chatChoices` account's shape, the selects, notices, what Stay restores, what Stop recovers and the live announcements                                                |
-| `src/shared/chat-stream.ts`         | The reply reader's lifetime, bound to the chat client's abort signal                                                                                                                                                             |
-| `view/app/components/FlockChat.vue` | The message rows and message box, rendering the shared module's choices and notices; keyboard, paste, drop and Stop actions                                                                                                      |
-| `src/shared/chat-view.ts`           | What the window says of a tool call, and the card a message is about                                                                                                                                                             |
-| `src/shared/chat-width.ts`          | The chat's width beside the board: its least and greatest, a drag, the ← and → nudges and the start width (`test/desktop-chat-width.test.ts`); `useChatWidth.ts` keeps the chosen one as `chatWidth` in Desktop's settings       |
-
-The Toolkit both chats share is the root's `src/toolkit.ts`.
-
-## Attachments
-
-[ADR-0046](../docs/adr/0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md), tested in
-`test/flock-*.test.ts`.
-
-| File                        | What it owns                     |
-| --------------------------- | -------------------------------- |
-| `src/bun/attachments.ts`    | Desktop's copies                 |
-| `src/bun/carried.ts`        | Files carried to a Run's Machine |
-| `src/bun/file-tools.ts`     | The chat's file tools            |
-| `src/shared/attachments.ts` | What the view shows of them      |
-
-## Writes to a host
-
-Done only on the host's reply, and kept in `actions.log`. Tested in
-`test/desktop-confirm.test.ts`, `test/desktop-pending-answer.test.ts` and
-`test/desktop-questionnaire.test.ts`, whose tables the Rune view's reducer is checked against.
-
-| File                           | What it owns                                                                                                                                               |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/bun/sent.ts`              | The 30 s wait, 3 tries under one request, and `actions.log`; a Cleanup sweep alone is resent only over a renewed connection, within 10 minutes (`sweepOn`) |
-| `src/shared/actions.ts`        | One request per gesture, which **Try again** sends again                                                                                                   |
-| `src/shared/pending-answer.ts` | What a card shows of an answer until the board no longer asks                                                                                              |
-| `src/shared/questionnaire.ts`  | One question's selection, keys, Submit, Hold, steering, status and the request a retry sends again; the dialog and the Flow decision only draw it          |
-
-## Review comments and the Diff tab
-
-[ADR-0051](../docs/adr/0051-a-review-comment-is-written-on-desktops-own-views.md). Desktop never
-knows the delivery cap or the paste budget.
-
-| File                                     | What it owns                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/shared/review-comments.ts`          | Drafts, anchors, whether a line is in a hunk, and the composed message (`desktop/test/review-comments.test.ts`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `src/shared/record-terminal.ts`          | `recipients`: who may get them                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `src/shared/diff-view.ts`                | The Diff tab's tree in drawn order with its single-folder chains merged into one row, filtered by a path, the folder rows whose open state is kept, each row's hover text, the row geometry the view draws from, the pane's width clamped to the tab and stepped by ← and →, and the room it leaves a row's name and whether its counts show, each file row's facts, its viewed ticks and their count, whether a file is open and Expand or Collapse all, the file beside the active one, the folders on a path, the file being read, and the height a file holds while it is read (`test/desktop-diff-view.test.ts`) |
-| `view/app/composables/useViewedFiles.ts` | Each Run's viewed ticks on its Diff, held in memory per Machine and Run while Desktop runs                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `view/app/composables/useTreeWidth.ts`   | The Diff tree's chosen width, held in memory and shared by every record while Desktop runs                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `src/shared/evidence.ts`                 | The Evidence tab's files sorted (`desktop/test/evidence.test.ts`), and whether it has anything to show (`test/desktop-evidence.test.ts`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `src/shared/record.ts`                   | A record's tabs, the one shown, each tab's scroll memory and the Log's place, where a jump lands, its keys, and what its Summary says (`test/desktop-record.test.ts`)                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `src/shared/plan-view.ts`                | The Plan tab's "N of M tickets done" and the spec's headings for its contents (`test/desktop-plan-view.test.ts`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `view/app/components/DiffFile.vue`       | Each file, drawn with `@pierre/diffs`' `FileDiff`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-
-## Scale and Zoom
-
-[ADR-0047](../docs/adr/0047-desktop-draws-at-its-monitors-own-scale.md). Page zoom, never CSS
-`zoom`. Tested in `test/desktop-scale.test.ts`.
-
-| File                  | What it owns                                                            |
-| --------------------- | ----------------------------------------------------------------------- |
-| `src/shared/scale.ts` | A window's monitor from `hyprctl -j`, the zoom, and the "Drawn at" line |
-| `src/bun/scale.ts`    | Reading the scales and setting each window's page zoom as it moves      |
-
-## macOS
-
-[ADR-0048](../docs/adr/0048-collie-is-released-for-macos-on-apple-silicon.md).
-
-| File                     | What it owns                                   |
-| ------------------------ | ---------------------------------------------- |
-| `src/bun/login-path.ts`  | Desktop's PATH, from the login shell           |
-| `scripts/mac-signing.ts` | Desktop's macOS build: Developer ID, or ad hoc |
-
-Checked by the root's `tools/verify-mac-app.sh`, `test/desktop-mac-signing.test.ts` and
-`test/desktop-build-hook.test.ts`; the installer by `test/install-desktop.test.ts`.
-
-## Measuring a record open natively
-
-`bench/record-open/` times record opens in headless Chrome; WKWebView and WebKitGTK are
-measured by hand.
-
-1. In Settings, turn **Record timing** on. Desktop then appends each open's marks to
-   `record-timing.log` in `$XDG_STATE_HOME/collie-desktop`, else
-   `~/.local/state/collie-desktop`, on macOS and Linux alike.
-2. For each cell, open cards by clicking their names, then move the log aside under the
-   cell's name, as in `mv record-timing.log first.log`:
-
-   | Cell     | Opens | What each opens                        |
-   | -------- | ----- | -------------------------------------- |
-   | `first`  | 20    | a settled Run's card not opened before |
-   | `repeat` | 20    | a card just opened and closed          |
-   | `large`  | 10    | a Run of over 200 Steps                |
-
-3. `bun bench/record-open/summarize.ts first.log repeat.log large.log` prints each cell's
-   p50, p95, max and n from click to usable, as the bench does. `unmatched` counts a usable
-   mark whose click the log does not have; it is not counted as an open.
-
-With Record timing on, Desktop also logs these marks, each with the time in epoch
-milliseconds and a `card` naming what it is about:
-
-| Mark                             | When                                                                        |
-| -------------------------------- | --------------------------------------------------------------------------- |
-| `launch`                         | Desktop's main process started                                              |
-| `board-usable`                   | the first board with its cards drawn, once that frame was painted           |
-| `terminal-key`, `terminal-drawn` | a key sent to a Go to pane terminal, and its echo painted                   |
-| `chat-chunk`, `chat-drawn`       | a Flock chat text chunk the view received, and it painted                   |
-| `frame`                          | each frame while the Log tab or the Diff tab scrolls, one `card` per scroll |
-
-A key or chunk typed or received before the last one was drawn is not marked again. These
-cells are measured by hand, each into a log of its own as above:
-
-| Cell   | What to do                                                                            | Metric           |
-| ------ | ------------------------------------------------------------------------------------- | ---------------- |
-| `echo` | in a Go to pane terminal on a local pane's shell, type 50 keys, one at a time         | `key_to_echo`    |
-| `chat` | ask the Flock chat for a reply of about 4k tokens with code blocks, and let it stream | `chunk_to_drawn` |
-| `log`  | scroll a Run's Log tab of at least 2,000 lines, top to bottom and back                | `frame_interval` |
-| `diff` | scroll a merge request's Diff tab of at least 5,000 lines, top to bottom and back     | `frame_interval` |
-
-There is no checked-in log or diff fixture: pick a Run of your own and a merge request of
-your own, and write the Run's id, the merge request, and their real line counts into the
-summary. Use the same Run and merge request for any later comparison; a frame figure from
-another log or diff is not comparable.
-
-The summariser prints, beside a cell's opens, p50, p95, max and n of `launch_to_board_usable`,
-`key_to_echo`, `chunk_to_drawn` and `frame_interval` wherever the log has them. `unmatched`
-counts a start never ended, or an end never started, under its `card`; neither is a sample.
-
-Run it on macOS (mk-laptop) and on Linux, and add the summaries to the Run's evidence, each
-naming the device, OS, display scale and Desktop commit.
+The existing `dk.cego.collie.desktop` stable identity, launcher paths and data roots
+are retained. Signed `stable-<os>-<arch>` archives replace the old app in place;
+settings, connection credentials and chat state remain where the core reads them.
+The user-facing name is Collie on both platforms. See
+[the cutover decision](../docs/adr/draft-collie-replaces-the-webview-desktop-in-place.md)
+for the legacy updater contract and remaining platform verification.
 
 ## Measuring Desktop's start
 
-`bench/desktop-start/run.ts` launches the built Desktop and prints, as its last stdout line,
-`{"board_usable_ms":…,"idle_rss_mib":…}` for `collie measure`:
-
-```sh
-bun run --cwd desktop build
-bun bench/desktop-start/run.ts --install  # Linux only, once per build
-bun bench/desktop-start/run.ts            # or --app <launcher> on macOS
-```
-
-It refuses the user's own state directory and waits while another process holds the Machine
-Measurement lock. In `bench/record-open`'s world (a state directory of its own and the fake
-herdr) it prepares a board of 50 Runs, one of 40 Steps, starts the host, then launches
-Desktop with Record timing on. `board_usable_ms` is from the launch to the `board-usable`
-mark; `idle_rss_mib` is the RSS of Desktop's whole process tree (main process, webview and
-CEF helpers) 60 seconds later, leaving out the Collie processes Desktop starts (its bridges and
-`collie doctor`) and the host. It then ends the
-app, its whole process group included, which holds what it started even after it has ended.
-Without `--app` it takes the launcher under `desktop/build`. On Linux that launcher only
-installs Desktop under its data home, from where alone Desktop runs, and installing warms the
-page cache, so `--install` installs it, untimed, into a home kept between samples
-(`.scratch/desktop-start/home`, or `--home <dir>`), and a sample times that install and refuses
-without one. Install before a cold sample's reboot or cache drop. Take it cold and warm, with 2 warm-ups and 10 samples, as
-`collie measure` does by a plan whose command is `bun bench/desktop-start/run.ts`.
-
-## The Rune spike
-
-[`desktop-rune/`](../desktop-rune/README.md) is an experiment that no release ships. It draws
-the board in a Rune shell, and it runs this main process unchanged as its core over stdio.
+`bench/desktop-start/run.ts --rune <bundle>/bin/launcher` measures an isolated
+native bundle's board-ready time and process-tree RSS. On macOS, pass the bundle's
+`Contents/MacOS/launcher`. Measurements from the earlier webview and Rune spike
+remain historical observations, not results for the cutover build.

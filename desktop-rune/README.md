@@ -1,10 +1,10 @@
-# desktop-rune: the Rune spike
+# Collie: the native desktop app
 
-An experiment, which no release ships. It asks whether a [Rune](https://github.com/anomalyco/rune)
-shell can draw Desktop's board with today's main process as its core. The app starts
-`desktop/src/bun/index.ts` as a child process. `core/electrobun-stdio.ts` stands in for
-`electrobun/bun`, so Desktop's own code is unchanged. It then speaks `DesktopRpcs` to the core
-as Effect RPC over NDJSON on the core's stdio, subscribes to `flock`, and draws each Machine and
+Collie uses a [Rune](https://github.com/anomalyco/rune) shell and the TypeScript
+core in `desktop/src/bun/index.ts`, compiled into the release as `collie-core`.
+`core/platform.ts` carries Effect RPC over stdio and supplies the core's shell port.
+The old Nuxt view and Electrobun UI runtime have been removed. The shell speaks `DesktopRpcs`,
+subscribes to `flock`, and draws each Machine and
 its cards. Pressing a card opens its Run's record on the Terminal tab, and its Flow strip on the
 Flow tab at the Run's active Step; on Terminal, and only there, Rune draws the pane's
 terminal from the `terminal` stream, through libghostty-vt, and sends what the human does back
@@ -17,26 +17,26 @@ clear of the chat. Each Machine's saved board is drawn as soon as
 output and Attach files. The toolbar shows each Subscription account's Usage, as today's header
 does. An `act` that the host refused has no Try again.
 
-| Crate or file                | What it owns                                                                                                                                         |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `protocol/src/generated.rs`  | The Rust types of the RPCs spoken (`flock`, `syncNow`, `terminal`, `terminalSend`, `say`, `runDetail`, `runFile`), generated; never edited by hand   |
-| `protocol/src/rpc.rs`        | Effect RPC's envelope (Request, Chunk, Exit, Ack, Interrupt) and Desktop's `Hello`, written by hand                                                  |
-| `protocol/src/client.rs`     | The NDJSON client: requests, streams acked chunk by chunk, interrupts, the core gone                                                                 |
-| `protocol/src/bin/roundtrip` | Decodes and re-encodes frames through the Rust types, for `test/rune-contract.test.ts`                                                               |
-| `board/`                     | The app, and the board in `board/src/board/`: `applyItem`'s whole fold, today's sections and cards, alerts, actions, offers, questions, proposals    |
-| `board/src/pages/settings/`  | Settings: the Flock's settings, each checked by the core, Record timing, Connections and their tokens, About                                         |
-| `board/src/record/`          | An open Run's record: its tabs, the Diff tab and review comments, evidence, acting through `act`                                                     |
-| `board/src/flow/`            | The Flow map's actions, next move and inspector, ported from Desktop's `flow-actions.ts` and `flow-inspector.ts`                                     |
-| `protocol/src/core.rs`       | Starts Desktop's main process as the core, for the app and the recorders                                                                             |
-| `theme/`                     | Collie's palette over OpenCode's kit for the board and chat: paper and ink surfaces, an iris accent that lightens under the pointer, a hue per state, the mark, dialogs on the raised surface, an AA and a hue test |
-| `chat/`                      | The Flock chat: its state, pane, AG-UI reducer, markdown policy, highlighter and file dialog                                                         |
-| `terminal/`                  | Go to pane's terminal: the VT state, a renderer drawn as Ghostty draws, input as `terminal-input` maps it, settled resizes                           |
-| `ghostty-sys/`               | Builds libghostty-vt from `vendor/ghostty` with Zig and binds its C API with bindgen                                                                 |
-| `vendor/ghostty`             | Ghostty, a submodule at one pinned commit                                                                                                            |
-| `core/`                      | The stdio stand-in for `electrobun/bun`, and the tsconfig that points Desktop's imports at it                                                        |
-| `fixtures/`                  | The test Flock and NDJSON transcripts of Effect's own client and server, written by `tools/rune-fixtures.ts`                                         |
-| `fixtures/terminal/`         | `terminal` streams recorded by `core/record-terminal.ts`                                                                                             |
-| `fixtures/chat/`             | `say` streams recorded by `chat/src/bin/record-say.rs`                                                                                               |
+| Crate or file                | What it owns                                                                                                                                                                                                                                 |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `protocol/src/generated.rs`  | The Rust types of the RPCs spoken (`flock`, `syncNow`, `terminal`, `terminalSend`, `say`, `runDetail`, `runFile`), generated; never edited by hand                                                                                           |
+| `protocol/src/rpc.rs`        | Effect RPC's envelope (Request, Chunk, Exit, Ack, Interrupt) and Desktop's `Hello`, written by hand                                                                                                                                          |
+| `protocol/src/client.rs`     | The NDJSON client: requests, streams acked chunk by chunk, interrupts, the core gone                                                                                                                                                         |
+| `protocol/src/bin/roundtrip` | Decodes and re-encodes frames through the Rust types, for `test/rune-contract.test.ts`                                                                                                                                                       |
+| `board/`                     | The app, and the board in `board/src/board/`: `applyItem`'s whole fold, today's sections and cards, alerts, actions, offers, questions, proposals                                                                                            |
+| `board/src/pages/settings/`  | Settings: the Flock's settings, each checked by the core, Record timing, Connections and their tokens, About                                                                                                                                 |
+| `board/src/record/`          | An open Run's record: its tabs, the Diff tab and review comments, evidence, acting through `act`                                                                                                                                             |
+| `board/src/flow/`            | The Flow map's actions, next move and inspector, ported from Desktop's `flow-actions.ts` and `flow-inspector.ts`                                                                                                                             |
+| `protocol/src/core.rs`       | Starts Desktop's main process as the core, for the app and the recorders                                                                                                                                                                     |
+| `theme/`                     | Collie's palette over OpenCode's kit for the board and chat: paper and ink surfaces, an iris accent that lightens under the pointer, a hue per state, the official embedded Collie tile, dialogs on the raised surface, an AA and a hue test |
+| `chat/`                      | The Flock chat: its state, pane, AG-UI reducer, markdown policy, highlighter and file dialog                                                                                                                                                 |
+| `terminal/`                  | Go to pane's terminal: the VT state, a renderer drawn as Ghostty draws, input as `terminal-input` maps it, settled resizes                                                                                                                   |
+| `ghostty-sys/`               | Builds libghostty-vt from `vendor/ghostty` with Zig and binds its C API with bindgen                                                                                                                                                         |
+| `vendor/ghostty`             | Ghostty, a submodule at one pinned commit                                                                                                                                                                                                    |
+| `core/`                      | The native stdio platform adapter imported by the TypeScript core                                                                                                                                                                            |
+| `fixtures/`                  | The test Flock and NDJSON transcripts of Effect's own client and server, written by `tools/rune-fixtures.ts`                                                                                                                                 |
+| `fixtures/terminal/`         | `terminal` streams recorded by `core/record-terminal.ts`                                                                                                                                                                                     |
+| `fixtures/chat/`             | `say` streams recorded by `chat/src/bin/record-say.rs`                                                                                                                                                                                       |
 
 ## Commands
 
@@ -47,7 +47,7 @@ bun run tools/rune-types.ts --write    # regenerate protocol/src/generated.rs fr
 bun run tools/rune-types.ts --check    # fail where it differs (test/rune-types.test.ts does this)
 bun run tools/rune-fixtures.ts         # rewrite fixtures/ from test/support/rune-fixtures.ts
 bun run desktop-rune/scripts/bundle.ts [out]   # the shipped bundle and update archive, in dist/
-bun bench/desktop-start/run.ts --rune desktop-rune/dist/build/linux-x64/collie-desktop/collie-desktop   # board_usable_ms, idle_rss_mib
+bun bench/desktop-start/run.ts --rune desktop-rune/dist/build/linux-x64/collie-desktop/bin/launcher   # board_usable_ms, idle_rss_mib
 
 git submodule update --init desktop-rune/vendor/ghostty
 
@@ -65,18 +65,18 @@ cargo run --release -p collie-desktop-chat --example highlight-cost -- <dir of .
 cargo run -p collie-desktop-board --example read-diff -- <installation> <run>
 ```
 
-Run `bun install` at the root first, since the core is Desktop's source run by `bun`
-(`COLLIE_RUNE_BUN` names another). The core keeps its state under
-`$XDG_STATE_HOME/collie-desktop-rune-spike/`, apart from a Desktop running beside it, through
-`COLLIE_DESKTOP_STATE_HOME`: what the core starts keeps your `XDG_STATE_HOME`, since herdr reads
-its paired Machines from there. With no GPU,
+Run `bun install` at the root first. A checkout runs the core under Bun
+(`COLLIE_RUNE_BUN` names another); a bundle runs its own compiled core. Collie reuses
+stable Desktop's `$XDG_STATE_HOME/collie-desktop` (or `~/.local/state/collie-desktop`)
+and its existing `dk.cego.collie.desktop` channel data. Tests must supply an isolated
+HOME and state directory. With no GPU,
 point Vulkan at lavapipe: `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`. On
 Linux, building needs `libxkbcommon-dev` and `libwayland-dev`, and lavapipe is in
 `mesa-vulkan-drivers`. libghostty-vt needs Zig 0.16.0 (`zig` on `PATH`, or `ZIG` naming it)
 and bindgen needs libclang; its first build takes about four minutes. CI's `desktop-rune` job runs `cargo fmt --check`, `cargo clippy -D
 warnings`, `cargo test`, and the contract, drift and shell tests.
 
-## Spike notes
+## Implementation and historical spike notes
 
 ### What the generator could not map faithfully
 
@@ -290,8 +290,8 @@ reconnecting, popped, queued and long states on no core.
 
 ### The app's log
 
-The app keeps its own log in `$XDG_STATE_HOME/collie-desktop-rune/desktop.log` (else
-`~/.local/state/collie-desktop-rune/desktop.log`; `COLLIE_RUNE_LOG_DIR` moves it), kept once as
+The app keeps its own log in `$XDG_STATE_HOME/collie-desktop/desktop.log` (else
+`~/.local/state/collie-desktop/desktop.log`; `COLLIE_RUNE_LOG_DIR` moves it), kept once as
 `desktop.log.1` past 1 MiB, as the core keeps `actions.log`. Each line is JSON: `at`, `area`,
 `what`, a `reason` and ids, never a message's words, an answer or a file. `board/src/calls.rs`
 logs every request and stream that fails, by its RPC, and every stream that ends; the chat logs
@@ -502,48 +502,41 @@ was sent to the pane and `terminal-drawn` at the frame after its output; `chat-c
 live turn's event arrives and `chat-drawn` at the frame that draws it; `frame` for each frame
 while the Diff tab's rows move. rune-kit's Diff reports no scrolling, so a move of its rows
 stands for one. The log is under the core's own state,
-`$XDG_STATE_HOME/collie-desktop-rune-spike/state/collie-desktop/`, and
+`$XDG_STATE_HOME/collie-desktop/`, and
 `bench/desktop-start/run.ts --rune` reads it there; the summariser reads it as it reads
 Desktop's.
 
-### Packaging, signing and updates
+### Bundle and direct cutover
 
-`scripts/bundle.ts` builds what a release would carry, for the platform it runs on: the shell
-(`cargo build --release`), Desktop's main process compiled by `bun build --compile` against
-the stdio stand-in, an icon and a desktop entry. It writes `dist/build/<os>-<arch>/` and
-`dist/artifacts/`, laid out as Desktop's release lays out Electrobun's, so
-`tools/verify-mac-app.sh` checks it with only its wording changed. The workflow `rune-bundle.yml` runs it on
-Linux and macOS and keeps the artefacts. No release publishes them.
+`bun run desktop-rune/scripts/bundle.ts` builds the only released desktop app.
+CI and the release pipeline share `rune-bundle.yml`; required CI includes the
+native build, Rust tests and protocol checks.
 
-| Platform | Bundle                                                                                           |
-| -------- | ------------------------------------------------------------------------------------------------ |
-| Linux    | `collie-desktop/{collie-desktop, collie-core, collie.png, collie-desktop.desktop, version.json}` |
-| macOS    | `Collie.app/Contents/{Info.plist, MacOS/collie-desktop, MacOS/collie-core, Resources/…}`         |
+Linux carries `collie-desktop/bin/{launcher,collie-core}` and `Resources/version.json`.
+The installer places it at the existing stable channel's `app/` and keeps the
+`collie-desktop.desktop` launcher. macOS carries `collie-desktop.app`, whose displayed
+name is Collie, with `Contents/MacOS/{launcher,collie-core}`. Both retain
+`dk.cego.collie.desktop`. The legacy filenames preserve automatic update compatibility.
 
-On Linux the window's Wayland `app_id` (X11 `WM_CLASS`) is `dk.cego.collie.desktop.rune`, which the
-entry's `StartupWMClass` names, so a desktop shows the window as its own launcher's.
+`stable-<os>-<arch>-update.json` and the signed update archive replace the old app
+through its existing updater. A native install/uninstall helper from signed release
+0.132.2 is retained because the old updater validates it before swapping bundles.
+No webview, CEF or Electrobun UI runtime travels with it. Linux Setup and macOS DMG
+assets keep the names read by `install-desktop.sh`.
 
-The update archive is `rune-stable-<os>-<arch>-collie-desktop[.app].tar.zst`, beside
-`rune-stable-<os>-<arch>-update.json`. The `rune-` prefix and the identifier
-`dk.cego.collie.desktop.rune` keep them apart from Electrobun's files in the same release.
+The core checks and verifies updates, stages the tar, signature and requested identity,
+then asks the shell to restart. The shell stops its core, re-executes, verifies the
+archive again, checks metadata and runnable files, and atomically exchanges bundles.
+An installation lock serializes launches; one waiting through an update re-executes
+the installed shell too. A refused update leaves the current app in place and is not
+retried at each launch.
+Mac signing uses the existing Apple release secrets, notarizing and stapling when
+credentials are available; `tools/verify-mac-app.sh` verifies built and archived apps.
 
-**macOS signing.** Inside out, `collie-core`, then the shell, then the app, each with the
-hardened runtime and `MAC_ENTITLEMENTS` (now exported by `desktop/scripts/mac-signing.ts`, which
-Electrobun's config also reads). With `ELECTROBUN_DEVELOPER_ID` set, it signs with that identity
-and a timestamp, and with the Apple ID or API key `macSigning` reads, it notarises with
-`notarytool` and staples. Without one it signs ad hoc.
+The cutover decision and verification scope are in
+[the ADR](../docs/adr/draft-collie-replaces-the-webview-desktop-in-place.md).
 
-**Updates.** Desktop's `updates.ts` checks, downloads and verifies against `release.pub`
-unchanged; the stand-in's `Updater` answers it. Restart to update stages the verified tar
-and its `.tar.sig` at `<install>/.update/<bundle>.tar`, where the shell looks at its next
-launch. `update/` verifies the signature again (Ed25519, as `src/signing.ts`), unpacks beside
-the installed bundle, and swaps the two in one rename (`renameat2` with `RENAME_EXCHANGE` on
-Linux, `renamex_np` with `RENAME_SWAP` on macOS), so the bundle's path never stands empty. It then
-re-execs itself. A bad or missing signature is refused and the installed bundle keeps running.
-The shell does
-not relaunch itself after Restart to update; the update lands when Collie next opens.
-
-Sizes on vm-mk (Linux x64):
+Historical spike Sizes on vm-mk (Linux x64):
 
 | What                                   | Bytes       |
 | -------------------------------------- | ----------- |

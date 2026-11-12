@@ -6,7 +6,7 @@ use collie_desktop_protocol::generated::{StagePathsPayload, StagedOrRefusedItem}
 use serde_json::Value;
 
 #[test]
-fn the_core_keeps_desktops_state_apart_and_its_children_see_the_users() {
+fn the_core_reuses_desktops_state_and_its_children_see_the_users() {
     let dir = std::env::temp_dir().join(format!("collie-rune-core-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -55,12 +55,8 @@ fn the_core_keeps_desktops_state_apart_and_its_children_see_the_users() {
         staged.expect("staged").as_slice(),
         [StagedOrRefusedItem::StagedOrRefusedItem0(_)]
     ));
-    assert!(
-        state
-            .join("collie-desktop-rune-spike/state/collie-desktop/attachments")
-            .is_dir()
-    );
-    assert!(!state.join("collie-desktop").exists());
+    assert!(state.join("collie-desktop/attachments").is_dir());
+    assert!(!state.join("collie-desktop-rune-spike").exists());
     assert_eq!(heard.expect("the login shell ran"), state.to_str().unwrap());
     let _ = std::fs::remove_dir_all(&dir);
 }

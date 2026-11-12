@@ -1,10 +1,10 @@
-// Electrobun's main-process API as the Rune spike's core gets it: no window and no webview,
-// and the first window's RPC frames carried as NDJSON on stdin and stdout, framed by Effect's
-// own `RpcSerialization.ndjson`, so Desktop's code runs unchanged behind the Rune shell.
+// Native shell port for the desktop core. Effect RPC frames travel as NDJSON on stdio;
+// platform actions are handled by the Rune shell. The window-shaped core interfaces
+// remain private adapters and do not create a webview.
 
 import { Effect, Schema } from "effect";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
-import { rename } from "node:fs/promises";
+import { rename, rm } from "node:fs/promises";
 import type { FrameSchema } from "../../desktop/src/shared/channel";
 import { PreparedRecord, preparedRecordOf, releaseOf } from "../../src/desktop";
 import { appliedSignatureOf } from "../../src/signing";
@@ -12,7 +12,7 @@ import { appliedSignatureOf } from "../../src/signing";
 type Frame = FrameSchema["messages"]["frame"];
 interface Rpc {
   readonly handlers: { readonly messages: { readonly frame: (frame: Frame) => void } };
-  send?: { frame: (frame: Frame) => void };
+  send: { frame: (frame: Frame) => void };
 }
 
 // stdout carries frames alone, so whatever Desktop logs goes to stderr.
@@ -22,6 +22,9 @@ console.debug = console.error;
 
 const ndjson = RpcSerialization.ndjson.makeUnsafe();
 const userData = Bun.env.COLLIE_RUNE_USER_DATA ?? "";
+// Do not retry an archive the shell already refused at this launch.
+if (Bun.env.COLLIE_RUNE_UPDATE_REFUSED === "1")
+  await rm(preparedRecordOf(userData), { force: true });
 let shell: Rpc | undefined;
 
 const listen = async () => {
@@ -33,7 +36,7 @@ const listen = async () => {
   process.exit(0);
 };
 
-const on = () => {};
+const on = (_event: string, _listener: () => void) => {};
 
 /** Asks the shell to post it: a line of its own beside Effect's frames. */
 const showNotification = ({ title, body = "", silent = false }: Notification) =>
@@ -44,25 +47,38 @@ interface Notification {
   readonly silent?: boolean;
 }
 
-export const BrowserView = { defineRPC: (rpc: Rpc) => rpc };
+export const BrowserView = {
+  defineRPC: (rpc: {
+    readonly maxRequestTime: number;
+    readonly handlers: Rpc["handlers"] & { readonly requests: {} };
+  }): Rpc => ({ ...rpc, send: { frame: (_frame: Frame) => {} } }),
+};
 
 export class BrowserWindow {
   readonly frame = { x: 0, y: 0, width: 1280, height: 900 };
-  readonly webview: { rpc: Rpc; setNavigationRules: () => void };
-  constructor({ rpc }: { rpc: Rpc }) {
+  readonly webview: { rpc: Rpc; setNavigationRules: (rules: ReadonlyArray<string>) => void };
+  constructor({
+    rpc,
+  }: {
+    rpc: Rpc;
+    title?: string;
+    url?: string;
+    renderer?: string;
+    frame?: BrowserWindow["frame"];
+  }) {
     // The board's window is the first; any other, the popped-out chat, has no shell yet.
     if (shell === undefined) {
       shell = rpc;
       rpc.send = { frame: (frame) => void process.stdout.write(ndjson.encode(frame) ?? "") };
       void listen();
     }
-    this.webview = { rpc, setNavigationRules: on };
+    this.webview = { rpc, setNavigationRules: (_rules) => {} };
   }
   getFrame = () => this.frame;
-  setPageZoom = on;
+  setPageZoom = (_zoom: number) => {};
   on = on;
-  activate = on;
-  close = on;
+  activate = () => {};
+  close = () => {};
 }
 
 const DISPLAY = { bounds: { x: 0, y: 0, width: 1280, height: 900 }, scaleFactor: 1 };
@@ -70,12 +86,15 @@ export const Screen = { getAllDisplays: () => [DISPLAY], getPrimaryDisplay: () =
 
 export const Utils = {
   paths: { userData },
-  openExternal: on,
+  openExternal: (_url: string) => {},
   showNotification,
   clipboardReadText: () => "",
-  clipboardWriteText: on,
-  clipboardAvailableFormats: () => [],
-  openFileDialog: () => Promise.resolve([]),
+  clipboardWriteText: (_text: string) => {},
+  clipboardAvailableFormats: (): string[] => [],
+  openFileDialog: (_options: {
+    canChooseDirectory: boolean;
+    allowsMultipleSelection: boolean;
+  }): Promise<string[]> => Promise.resolve([]),
 };
 
 /** A bundle's own version.json, as `desktop-rune/scripts/bundle.ts` writes it. */
@@ -84,15 +103,16 @@ const Local = Schema.fromJsonString(
 );
 const UpdateManifest = Schema.fromJsonString(
   Schema.Struct({
-    identifier: Schema.String,
-    channel: Schema.String,
-    platform: Schema.String,
-    arch: Schema.String,
+    schemaVersion: Schema.Literal(1),
+    identifier: Schema.Literal("dk.cego.collie.desktop"),
+    channel: Schema.Literal("stable"),
+    platform: Schema.Literal(process.platform === "darwin" ? "macos" : "linux"),
+    arch: Schema.Literal(process.arch),
     version: Schema.String,
     // Both name files on disk, so neither may name a path.
     hash: Schema.String.check(Schema.isPattern(/^[a-z0-9]{1,13}$/)),
     artifact: Schema.Struct({
-      file: Schema.String.check(Schema.isPattern(/^rune-stable-[\w.-]+\.tar\.zst$/)),
+      file: Schema.String.check(Schema.isPattern(/^stable-[\w.-]+\.tar\.zst$/)),
     }),
   }),
 );
@@ -116,9 +136,7 @@ const fetched = async (url: string) => {
 const latest = async () =>
   Effect.runPromise(
     Schema.decodeEffect(UpdateManifest)(
-      await (
-        await fetched(`${(await local()).baseUrl}/rune-stable-${PLATFORM}-update.json`)
-      ).text(),
+      await (await fetched(`${(await local()).baseUrl}/stable-${PLATFORM}-update.json`)).text(),
     ),
   );
 
@@ -186,11 +204,22 @@ export const Updater = {
       await fetched(`${releaseOf((await local()).baseUrl, prepared.version)}/${named}`)
     ).text();
     await Bun.write(`${staged}.sig`, signature);
+    await Bun.write(`${staged}.json`, JSON.stringify(prepared));
     await Bun.write(`${staged}.partial`, Bun.file(prepared.retained_tar_path));
     await rename(`${staged}.partial`, staged);
+    process.stdout.write(`${JSON.stringify({ _tag: "Restart" })}\n`);
     status = [{ message: `Collie ${prepared.version} is installed when Collie next opens` }];
   },
   getStatusHistory: () => status,
 };
 
-export default { ApplicationMenu: { setApplicationMenu: on }, events: { on } };
+export interface ApplicationMenuItemConfig {
+  readonly role?: string;
+  readonly type?: "separator";
+  readonly label?: string;
+  readonly submenu?: ReadonlyArray<ApplicationMenuItemConfig>;
+}
+export default {
+  ApplicationMenu: { setApplicationMenu: (_menu: ReadonlyArray<ApplicationMenuItemConfig>) => {} },
+  events: { on },
+};

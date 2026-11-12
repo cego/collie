@@ -11,7 +11,7 @@ import { runEffect } from "./support/effect";
 const FIXTURES = new URL("../desktop-rune/fixtures/update/", import.meta.url).pathname;
 const OS = process.platform === "darwin" ? "macos" : "linux";
 const PLATFORM = `${OS}-${process.arch}`;
-const ARCHIVE = `rune-stable-${PLATFORM}-collie-desktop.tar.zst`;
+const ARCHIVE = `stable-${PLATFORM}-collie-desktop.tar.zst`;
 const KEY = await Bun.file(`${FIXTURES}release-test.pub`).text();
 const TAR = await Bun.file(`${FIXTURES}bundle.tar`).bytes();
 
@@ -21,9 +21,10 @@ const server = Bun.serve({
   port: 0,
   fetch: (request) => {
     const path = new URL(request.url).pathname;
-    if (path === `/latest/download/rune-stable-${PLATFORM}-update.json`)
+    if (path === `/latest/download/stable-${PLATFORM}-update.json`)
       return Response.json({
-        identifier: "dk.cego.collie.desktop.rune",
+        schemaVersion: 1,
+        identifier: "dk.cego.collie.desktop",
         channel: "stable",
         platform: OS,
         arch: process.arch,
@@ -32,7 +33,7 @@ const server = Bun.serve({
         artifact: { file: ARCHIVE },
       });
     if (path === `/latest/download/${ARCHIVE}`) return new Response(Bun.zstdCompressSync(TAR));
-    if (path === `/download/0.131.0/rune-stable-${PLATFORM}-collie-desktop.tar.sig`)
+    if (path === `/download/0.131.0/stable-${PLATFORM}-collie-desktop.tar.sig`)
       return new Response(signature);
     return new Response("not found", { status: 404 });
   },
@@ -49,7 +50,7 @@ const VersionJson = Schema.fromJsonString(
 );
 
 let install = "";
-let standIn: typeof import("../desktop-rune/core/electrobun-stdio");
+let standIn: typeof import("../desktop-rune/core/platform");
 beforeAll(() =>
   runEffect(
     Effect.gen(function* () {
@@ -61,7 +62,7 @@ beforeAll(() =>
         yield* Schema.encodeEffect(VersionJson)({
           version: "0.130.0",
           channel: "stable",
-          identifier: "dk.cego.collie.desktop.rune",
+          identifier: "dk.cego.collie.desktop",
           baseUrl: `http://localhost:${server.port}/latest/download`,
           hash: "old0130",
         }),
@@ -69,7 +70,7 @@ beforeAll(() =>
       Bun.env.COLLIE_RUNE_VERSION = `${install}/collie-desktop/version.json`;
       Bun.env.COLLIE_RUNE_STAGED = `${install}/.update/collie-desktop.tar`;
       Bun.env.COLLIE_RUNE_USER_DATA = `${install}/data`;
-      standIn = yield* Effect.promise(() => import("../desktop-rune/core/electrobun-stdio"));
+      standIn = yield* Effect.promise(() => import("../desktop-rune/core/platform"));
     }),
   ),
 );
