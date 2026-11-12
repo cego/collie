@@ -1164,7 +1164,13 @@ what the review read says, never on an agent's Output
   later comment by Collie's login in its thread, any comment by Collie's login linking it,
   or a resolved thread). **Approved** means the forge's rules are met without Collie's
   own approval: GitLab counts each approval rule again without Collie's login (the
-  approvals read is one rule where the tier has no approval state); GitHub's `APPROVED`
+  approvals read is one rule where the tier has no approval state). Where GitLab returns
+  approval rules, the reported approvers are the distinct usernames recorded on those
+  same rules, excluding Collie's login. This binds a release go to the approvals used for
+  readiness without mixing snapshots from two endpoints. Approvals outside all rules are
+  not included; with no rules or no approval-state endpoint, the approvals endpoint still
+  supplies the names. See GitLab's [approval details](https://docs.gitlab.com/api/merge_request_approvals/#retrieve-approval-details-for-a-merge-request).
+  GitHub's `APPROVED`
   stands where Collie's login has no approving review, else only where others reach the
   base branch's required count, from its protection and rulesets. A count that cannot be
   read, or code owners' review, is not approved, and the read says why.
