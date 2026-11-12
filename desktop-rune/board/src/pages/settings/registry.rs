@@ -63,7 +63,7 @@ fn harness_title(harness: &str) -> &'static str {
     }
 }
 
-const NOTIFICATIONS: [(&str, &str, &str); 9] = [
+const NOTIFICATIONS: [(&str, &str, &str); 10] = [
     (
         "needs-you",
         "A Run needs you",
@@ -71,6 +71,11 @@ const NOTIFICATIONS: [(&str, &str, &str); 9] = [
     ),
     ("run-done", "A Run finished", "a Run finishes well"),
     ("run-failed", "A Run failed", "a Run fails"),
+    (
+        "run-healed",
+        "A Run was healed",
+        "a Heal gets a parked Run moving before it needs you",
+    ),
     (
         "mr-opened",
         "A merge request or pull request opened",
@@ -360,6 +365,16 @@ pub fn settings() -> Vec<Setting> {
                 "Runs",
                 "Resume cleared parks",
                 "Whether the host resumes a parked Run once its read-only recheck clears. Off still records rechecks.",
+            ),
+        ),
+        of(
+            "recovery.heal",
+            Boolean,
+            "true",
+            words(
+                "Runs",
+                "Heal parks before they need you",
+                "Whether a park that needs you first gets one Heal: a Run of the healer workflow that may only message the parked Run's agents and resume it. Off sends the park to you at once.",
             ),
         ),
         of(
