@@ -73,6 +73,7 @@ import {
   awaitReady,
   controlDir,
   installControls,
+  lostServer,
   readControl,
   NotQuiet,
   notStopped,
@@ -425,6 +426,7 @@ export interface AgentsApi {
   readonly revive: (
     ask: AgentAsk,
     unless?: string | null,
+    onlyDeadServer?: boolean,
   ) => Effect.Effect<boolean, AgentUncertain | AgentParked>;
   /**
    * Hands a message, through the one sender, to the live agent in this role of a Run this
@@ -917,13 +919,22 @@ export const agentWork = <
         ),
       );
     // Uninterruptible, so a stop racing a restart waits for it and finds its agent to stop.
-    const reviving = (from: AgentAsk, unless?: string | null) =>
+    const reviving = (from: AgentAsk, unless?: string | null, onlyDeadServer = false) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
           if (yield* host.stopRequested(runId)) return;
-          if ((yield* agents.revive(from, unless)) && (yield* host.stopRequested(runId)))
+          if (
+            (yield* agents.revive(from, unless, onlyDeadServer)) &&
+            (yield* host.stopRequested(runId))
+          )
             yield* haltLate;
         }),
+      );
+    // A stale working status must not hide a dead server for the entire idle budget.
+    const recovering = (from: AgentAsk, unless?: string | null) =>
+      reviving(from, unless, true).pipe(
+        Effect.repeat(Schedule.spaced(Duration.millis(agents.pollMs))),
+        Effect.andThen(Effect.never),
       );
     // Each budget spent idle, one that has gone is started again, as a resume once did.
     const untilWritten = (on: Launched, from: AgentAsk) =>
@@ -964,9 +975,12 @@ export const agentWork = <
         parkedWhenStuck(
           reviving(from).pipe(
             Effect.andThen(
-              waiting === undefined
-                ? Effect.raceFirst(Effect.raceFirst(output, ended), agents.ranOut(on))
-                : output,
+              Effect.raceFirst(
+                waiting === undefined
+                  ? Effect.raceFirst(Effect.raceFirst(output, ended), agents.ranOut(on))
+                  : output,
+                recovering(from),
+              ),
             ),
           ),
           host,
@@ -1253,7 +1267,13 @@ export const agentWork = <
                 parkedWhenStuck(
                   reviving(currentAsk, unusable).pipe(
                     Effect.andThen(
-                      Effect.raceFirst(recollecting(unusable, since), parksOnStop(current, since)),
+                      Effect.raceFirst(
+                        Effect.raceFirst(
+                          recollecting(unusable, since),
+                          parksOnStop(current, since),
+                        ),
+                        recovering(currentAsk, unusable),
+                      ),
                     ),
                   ),
                   host,
@@ -1869,6 +1889,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       readonly workflowNotice?: string;
     },
   ) {
+    const lost = yield* lostServer(compactionDeps(host, about.runId), about.agent);
+    if (lost !== null) return { sent: false, why: lost, gone: true };
     const through = delivery.herdr === undefined ? deps : { ...deps, herdr: delivery.herdr };
     const found = yield* entryFor(about, about.agent, null, through);
     if (found.entry === null)
@@ -2563,6 +2585,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         const live = Option.getOrUndefined(
           Arr.findFirst(listing.success, (one) => one.name === agent),
         );
+        if (live !== undefined && (yield* retireLost(ask, listing.success)))
+          return yield* launch(ask, false, note);
         const alive = live !== undefined && !fresh;
         const back = live === undefined ? comingBack.get(agent) : undefined;
         if (back !== undefined) {
@@ -2736,7 +2760,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         // The sender reads a failed listing as no agent, so only one that answers settles it.
         if (alive && asked.gone === true) {
           const again = yield* host.herdr.agentList().pipe(Effect.result);
-          if (again._tag === "Success" && isGone(agent, again.success, asked.why)) {
+          if (
+            again._tag === "Success" &&
+            (isGone(agent, again.success, asked.why) || (yield* retireLost(ask, again.success)))
+          ) {
             // Nothing reached it, so a new one is this work's agent rather than a second.
             yield* log(
               ask.runId,
@@ -3488,18 +3515,53 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       ),
     );
 
-  const revive = (ask: AgentAsk, unless?: string | null) =>
+  const retireLost = (ask: AgentAsk, listed: ReadonlyArray<AgentInfo>) =>
+    Effect.gen(function* () {
+      const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1);
+      const lost = yield* lostServer(compactionDeps(host, ask.runId), agent);
+      if (lost === null) return false;
+      const launched = Arr.findLast(yield* launchesOf(ask.runId), (one) => one.agent === agent);
+      if (Option.isNone(launched))
+        return yield* unsettled(ask, `${lost}; its terminal has no launch identity`);
+      const ended = yield* endAgent(endsOf(ask.runId), launched.value, lost, "close", listed).pipe(
+        Effect.mapError((cause) =>
+          unsettled(ask, `${lost}; it could not be ended (${reason(cause)})`),
+        ),
+      );
+      if (ended._tag !== "Closed" || !ended.ended)
+        return yield* unsettled(
+          ask,
+          `${lost}; ${"reason" in ended ? ended.reason : "its terminal changed before it could be ended"}`,
+        );
+      yield* log(ask.runId, `${agent}: ${lost}; recovering its work in the same Run`);
+      return true;
+    });
+
+  const revive = (ask: AgentAsk, unless?: string | null, onlyDeadServer = false) =>
     under(
       Effect.gen(function* () {
+        const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1);
+        const lost = yield* lostServer(compactionDeps(host, ask.runId), agent);
+        if (onlyDeadServer && lost === null) return false;
         const fs = yield* FileSystem.FileSystem;
         const written = yield* fs.readFileString(ask.output).pipe(Effect.orElseSucceed(() => ""));
         if (Str.trim(written) !== "" && written !== unless) return false;
-        const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1);
         // The host starts an agent on core again, in the session it had.
-        if (yield* fs.exists(startedPath(ask.runId, agent)).pipe(Effect.orElseSucceed(() => false)))
+        if (
+          lost === null &&
+          (yield* fs.exists(startedPath(ask.runId, agent)).pipe(Effect.orElseSucceed(() => false)))
+        )
           return false;
         const listing = yield* host.herdr.agentList().pipe(Effect.option);
         if (listing._tag === "None") return false;
+        if (lost !== null) {
+          if (!(yield* retireLost(ask, listing.value))) return false;
+          // A surviving tool can finish the Output while its old server is being retired.
+          const after = yield* fs.readFileString(ask.output).pipe(Effect.orElseSucceed(() => ""));
+          if (Str.trim(after) !== "" && after !== unless) return false;
+          yield* launch(ask);
+          return true;
+        }
         // Asked only of one herdr lists: it has no delivery to say whether it is inactive.
         const refusal = Arr.some(listing.value, (one) => one.name === agent)
           ? yield* host.herdr

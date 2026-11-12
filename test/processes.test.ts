@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
-import { Clock, Effect, FileSystem, Stream } from "effect";
+import { Clock, Effect, FileSystem, PlatformError, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
   bindingsOf,
@@ -9,6 +9,8 @@ import {
   commandOf,
   groupOf,
   processOf,
+  processAbsent,
+  sessionOf,
   startedOf,
 } from "../src/processes";
 import { runEffect } from "./support/effect";
@@ -24,6 +26,45 @@ test("a process's command and start time read alone are what reading it whole sa
 
 test("a process that is not running has no start time", () =>
   runEffect(Effect.map(startedOf(2 ** 22 + 1), (started) => expect(started).toBeNull())));
+
+test.each(["listing", "member", "ps"])(
+  "an unreadable process %s does not prove an empty session",
+  (at) =>
+    runEffect(
+      Effect.gen(function* () {
+        const refused = Effect.fail(
+          PlatformError.systemError({
+            _tag: "PermissionDenied",
+            module: "FileSystem",
+            method: "read",
+          }),
+        );
+        const fs = FileSystem.makeNoop({
+          exists: () => Effect.succeed(at !== "ps"),
+          readDirectory: () => (at === "listing" ? refused : Effect.succeed(["123"])),
+          readFileString: () => refused,
+        });
+        const found = yield* sessionOf(7).pipe(
+          Effect.provideService(FileSystem.FileSystem, fs),
+          Effect.provideService(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() => refused),
+          ),
+          Effect.result,
+        );
+        expect(found._tag).toBe("Failure");
+      }),
+    ),
+);
+
+test("only an absent pid proves exit; live and invalid process probes do not", () =>
+  runEffect(
+    Effect.gen(function* () {
+      expect(yield* processAbsent(process.pid)).toBe(false);
+      expect(yield* processAbsent(2 ** 22 + 1)).toBe(true);
+      expect(yield* processAbsent(Number.NaN)).toBe(false);
+    }),
+  ));
 
 test.skipIf(process.platform !== "linux")(
   "a process gone from /proc is not looked for with ps",
