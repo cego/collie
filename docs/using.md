@@ -606,6 +606,14 @@ Each card carries a strip of its Task's [**Flow**](../CONTEXT.md): the Steps its
 Run has taken and expects, then its merge request's way to production, with each wait drawn
 on the Step it holds up. `collie run show --json` and chat's `collie_run` carry the whole of it.
 
+When a finished Run's pushed branch advances, its card shows the commit count, new head,
+and the head it finished on. A failed record is marked stale; the Run still says failed.
+A succeeded Run can show the same movement. Missing branches, unavailable history, and
+force-pushed or divergent history are named without counting them as forward progress.
+Chat, the CLI, Desktop, and the terminal board read the same facts. The recovery offer
+names where its [implement follow-up enters](workflows.md#implement); taking it reads the
+branch and review evidence again. Sending a message to the old agent starts no follow-up.
+
 It is a board, not an engine: it draws the Runs the host holds, the register of live agents
 and the steering journals, so closing it loses nothing — the host starts it again. The run
 itself is executed by the host, which has no pane at all.
@@ -666,9 +674,20 @@ teammate's approval, review threads resolved, its turn in a Helle claim's queue,
 carrying a deploy: it stays under Working and says what it waits for and on whom
 (`Waiting for CI and a teammate's approval on group/app!345.`), with no notification and
 nothing in News. Once such a wait outlasts its patience — 2 hours where nobody acts, 2 days
-where a person does — it parks, and the card goes to Needs you. A Run watching a merge
-request for its author to change it (`Waiting for the author to change group/app!345.`) has
-no patience to outlast: the author owes Collie nothing, so it never parks. While Collie runs
+where a person does — it parks, and the card goes to Needs you. A parked card carries one
+more line naming its [**Park cause**](../CONTEXT.md) and what that cause lets Collie do —
+`Parked: ci-job-absent · Collie rechecks`, or `· needs you` — and the drawer's **parked**
+section adds why a person is needed; `collie run show` gives the same as `park` with its
+`cause` and `kind`. Recheck parks stay quiet while Collie checks their facts and resumes
+those whose cause clears. After three automatic tries for the same cause, another park
+needs you and lists the tries. A card keeps its latest two recovery actions, and the drawer's
+**recovery** section keeps the latest 20, including after the Run moves on. A park that needs
+you is notified once per cause. You can turn automatic resume off with
+`collie settings set recovery.resume false`; rechecks continue. See
+[Stop and resume](cli.md#stop-and-resume) for the rechecks and their limits. A Run watching a
+merge request for its author to change it (`Waiting for the author to change group/app!345.`)
+has no patience to outlast: the author owes Collie nothing, so it never parks for waiting.
+While Collie runs
 one of the Run's checks itself, the sentence is about that check rather than the last step:
 which check, which pass and why, how long it has run against the median of its last five
 runs in this repository, and how many other checks this host is running —
@@ -2928,9 +2947,11 @@ directory that is not a checkout of it, will review and comment fine, but chaini
 **Fix findings** is refused the same way, with the menu back. Clone that project and start
 the fix round from there.
 
-A step pointed at a merge request needs its forge's CLI logged in to its host: `glab` and
-`glab auth status --hostname <host>` on GitLab, `gh` and `gh auth status --hostname
-github.com` on GitHub. In a directory that is not a checkout there is no branch and no
+A step pointed at a merge request needs its forge's CLI installed (`glab` on GitLab, `gh` on
+GitHub) and a login its host accepts: Collie asks the forge who the CLI's token belongs to.
+No token, a 401, or a 403 saying "Bad credentials" parks the Run as `login-missing`, for you to log in again; a forge that
+cannot be reached or fails to answer parks it as `forge-unavailable`, which clears by
+itself. In a directory that is not a checkout there is no branch and no
 working tree to review, so the target menu is one entry — **Type it…**.
 
 ## Releasing a merge request

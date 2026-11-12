@@ -206,6 +206,7 @@ describe("Each setting explains itself", () => {
       "max_iterations",
       "handoff_timeout_ms",
       "memory_hold",
+      "recovery.resume",
       "release.share_for_approval",
       "release.approval_channel",
       "review.follow_through",

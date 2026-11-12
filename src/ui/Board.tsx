@@ -23,6 +23,7 @@ import {
 } from "../board-model";
 import type { UsagePhrase } from "../usage-model";
 import { newerLine } from "../workspace";
+import { parkLine } from "../park-cause";
 import { ALL_KEYS, type Command, type MenuItem, type Older, primaryFor } from "./state";
 import { C, cardEdge, sentenceColour, stateGlyph, stepGlyph } from "./sections";
 
@@ -566,6 +567,13 @@ function Card(props: {
       <Show when={props.view.held !== null}>
         <text fg={C.dim}>{props.view.held}</text>
       </Show>
+
+      <Show when={props.view.park != null}>
+        <text fg={C.dim}>{parkLine(props.view.park!)}</text>
+      </Show>
+      <For each={(props.view.recovery ?? []).slice(-2)}>
+        {(line) => <text fg={C.dim}>{line}</text>}
+      </For>
 
       <Show when={props.batch.stopping(props.view)}>
         <text fg={C.dim}>■ stopping…</text>

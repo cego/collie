@@ -32,6 +32,7 @@ type Case =
   | "human-pane"
   | "gone"
   | "away"
+  | "away-close"
   | "restart"
   | "upstream"
   | "stale"
@@ -85,10 +86,11 @@ const story = (mode: Case, harness = "claude") =>
             `${root}workflows/investigate.workflow.ts`,
             `${first.world.install}/workflows/investigate.workflow.ts`,
           );
-          yield* fs.copyFile(
-            `${root}workflows/investigate.md`,
-            `${first.world.install}/workflows/investigate.md`,
-          );
+          for (const name of ["investigate.md", "measuring.ts", "measuring.md"])
+            yield* fs.copyFile(
+              `${root}workflows/${name}`,
+              `${first.world.install}/workflows/${name}`,
+            );
           yield* fs.makeDirectory(`${first.world.install}/personas`, { recursive: true });
           yield* fs.copyFile(
             `${root}personas/investigator.md`,
@@ -103,6 +105,9 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           const reportText =
             mode === "failed" ? "The laptop cannot reproduce this goal" : result.summary;
           const socket = `${first.world.home}/herdr.sock`;
+          let closeAsked = false;
+          const held = Promise.withResolvers<void>();
+          const closeHeld = mode === "away-close" ? held.promise : Promise.resolve();
           const server = createServer((connection) => {
             let pending = "";
             connection.on("data", (chunk) => {
@@ -129,12 +134,20 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
                 )(line);
                 const answer =
                   request.method === "workspace.close"
-                    ? runEffect(
-                        fakeHerdr(
-                          ["workspace", "close", "--workspace", request.params?.workspace_id ?? ""],
-                          first.env,
+                    ? ((closeAsked = true),
+                      closeHeld.then(() =>
+                        runEffect(
+                          fakeHerdr(
+                            [
+                              "workspace",
+                              "close",
+                              "--workspace",
+                              request.params?.workspace_id ?? "",
+                            ],
+                            first.env,
+                          ),
                         ),
-                      )
+                      ))
                     : Promise.resolve({ code: 0, stdout: "", stderr: "" });
                 void answer.then((reply) =>
                   connection.write(
@@ -379,7 +392,7 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
               label: "my shell",
             })).paneId;
           if (mode === "gone") yield* new Herdr(readEnv(second.env)).paneClose(requester.paneId);
-          if (mode === "away") yield* stopHost(second.world.state);
+          if (mode === "away" || mode === "away-close") yield* stopHost(second.world.state);
           const before = mode === "restart" ? yield* ownerOf(first.world.state) : null;
           if (mode !== "failed")
             yield* fs.writeFileString(
@@ -400,6 +413,27 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
                 .envelope.ok,
             ).toBe(true);
           }
+          const linkedLines = () =>
+            fs.readFileString(`${first.world.state}/host.log`).pipe(
+              Effect.map(
+                (log) =>
+                  Arr.filter(Str.split(log, "\n"), (line) =>
+                    pipe_(line, Str.includes("second is linked: ")),
+                  ).length,
+              ),
+              Effect.orElseSucceed(() => 0),
+            );
+          if (mode === "away-close") {
+            // The requester's link comes back while the report's close is still running.
+            yield* until(
+              () => Effect.sync(() => closeAsked),
+              (asked) => asked,
+            );
+            const linkedBefore = yield* linkedLines();
+            yield* second.cli(["board"], { FAKE_HERDR_OUTPUTS: farOutputs });
+            yield* until(linkedLines, (count) => count > linkedBefore);
+            held.resolve();
+          }
           const readReport = () =>
             fs.readFileString(`${runDir(first.world.state, runId)}/report.json`).pipe(
               Effect.map((text) =>
@@ -418,7 +452,11 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
               ),
               Effect.orElseSucceed(() => null),
             );
-          const report = yield* until(readReport, (report) => report?.closed === true).pipe(
+          const report = yield* until(
+            readReport,
+            (report) =>
+              report?.closed === true && (mode !== "away-close" || report.state === "delivered"),
+          ).pipe(
             Effect.catchCause(() =>
               Effect.gen(function* () {
                 throw new Error(
@@ -480,6 +518,23 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
               report: { state: report!.state, closed: true },
             },
           });
+          if (mode === "gone") {
+            const before = yield* linkedLines();
+            const recorded = yield* fs.readFileString(
+              `${runDir(first.world.state, runId)}/report.json`,
+            );
+            yield* stopHost(first.world.state);
+            yield* first.cli(["board"], { ...boot, FAKE_HERDR_OUTPUTS: localOutputs });
+            yield* until(linkedLines, (count) => count > before);
+            expect(
+              yield* fs.readFileString(`${runDir(first.world.state, runId)}/report.json`),
+            ).toBe(recorded);
+            expect(
+              Arr.filter(Str.split(yield* fs.readFileString(second.herdrLog), "\n"), (line) =>
+                pipe_(line, Str.includes(` of ${runId} on `)),
+              ),
+            ).toHaveLength(0);
+          }
         }),
       ["attended.workflow.ts", "completed-agent.workflow.ts"],
     ),
@@ -496,13 +551,14 @@ test(
   180_000,
 );
 test(
-  "a report to a gone agent is recorded undelivered and still closes",
+  "a report to a gone agent is recorded undelivered, still closes and is not sent again",
   () => story("gone"),
   180_000,
 );
+test("a report to an away Machine is bounded and recorded", () => story("away"), 180_000);
 test(
-  "a report to an away Machine is bounded, recorded and never queued",
-  () => story("away"),
+  "a report to a Machine that comes back while the Run is closing is sent again once it closes",
+  () => story("away-close"),
   180_000,
 );
 test(

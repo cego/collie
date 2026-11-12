@@ -1,6 +1,7 @@
 import { Host, Run, agentWork, contentOf, defineWorkflow, step } from "collie";
 import { Effect, Schema } from "effect";
 import markdown from "./investigate.md" with { type: "text" };
+import { measuredBy } from "./measuring.ts";
 
 const Findings = Schema.Struct({
   summary: Schema.String,
@@ -37,8 +38,13 @@ export default defineWorkflow({
         instructions: content.template("investigate", {
           goal: Schema.String,
           run: Schema.Struct({ dir: Schema.String }),
+          measure: Schema.String,
         }),
-        input: { goal: input.goal, run: { dir: place.dir } },
+        input: {
+          goal: input.goal,
+          run: { dir: place.dir },
+          measure: measuredBy("measure.task", `${place.dir}/handoffs/<slug>.benchmark.json`),
+        },
         output: Findings,
       });
     }).pipe(investigate),

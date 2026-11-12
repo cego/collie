@@ -458,6 +458,17 @@ that Collie could not put on the Run, which herdr reports as a `blocked` agent �
 not take a prompt. Either way the work has stopped, so the card says which pane to go to
 rather than what the step was doing.
 
+**Park cause** — Why a Run parked, from one closed list: what the host may do about it.
+A cause either asks the Run's own agent something, or rechecks the fact it parked on, or
+needs you and says why. An unclassified park is `unknown`, never a guess. Counted per cause
+in `collie run report` (ADR-draft-a-run-recovers-where-it-parks).
+
+**Recovery** — What the host does about a park, without being asked: an **Output reminder**
+to an agent whose turn ended without writing its Output, and a resume once a recheck shows the
+cause has cleared. Bounded per Run and cause, recorded with its outcome, and proved only by the
+fact the park waited for, never by inactivity or an acknowledgement. It never answers a
+**Decision**, lifts a **Hold**, undoes a **Stop** or passes a gate.
+
 **Wait** — What holds a Run up at a moment: a **Decision** on it, **Stalled**, a **Hold**,
 **Short of memory**, or something it awaits that ends by itself. A Check Collie runs for it
 is shown the same way. A Run can have several at once, and each front door says the one it
@@ -714,6 +725,13 @@ was started from. It starts as a child from an implement Run's end menu, from a 
 implement Run's `Release` offer — on the card, from the CLI or from chat — or on its own, and then it is still the **Task**'s whose
 merge request it is (ADR-draft-a-merge-request-is-released-on-a-humans-go,
 ADR-draft-a-tasks-work-is-what-its-runs-worked-on).
+
+Given a set, it starts one child Release Run per merge request. Each keeps its review,
+Checks, Go and Helle claims, merges and ends **merged**, without tagging or production.
+Once a repository's children have ended, one more Release Run tags their merged work
+together and, for an application, stages the tag and asks for production once.
+A failed or open child does not prevent that tag; a repository with nothing merged gets
+none (ADR-draft-a-release-set-tags-once).
 
 **Stage Run** — One execution of the `stage` Workflow: one open merge request's head put
 on stage for testing, unmerged. It is not a release. It asks for no approval, answered or

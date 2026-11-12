@@ -28,10 +28,12 @@ import {
   type ForgeChecks,
   type Mergeability,
   type MrState,
+  type OfferView,
 } from "../src/board-model";
 import { encodeStepLine, STEPS_FILE, type StepLine, type StepMeta } from "../src/steps";
 import { machineName } from "../src/peers";
 import { nothingToLandFile } from "../src/standing";
+import { writeStageProof } from "../src/shipping";
 import {
   Answered,
   Controlled,
@@ -42,9 +44,11 @@ import {
   sectionsOf,
   SECTIONS,
   sortBoard,
+  primaryAction,
   type TaskMr,
-  type TaskView,
+  TaskView,
 } from "../src/board-model";
+import { applyItem, EMPTY_FLOCK, flockCards } from "../desktop/src/shared/flock";
 import { recordAudit } from "../src/audit";
 import { recordDisposition } from "../src/disposition";
 import { markSeenSince, recordSeen } from "../src/seen";
@@ -75,6 +79,196 @@ import { epochMs } from "../src/time";
 import { seedIntent, writeIntent } from "../src/intent";
 import { approvedFile, encodeApproved } from "../src/verify-spec";
 import { planDirOf } from "../src/run-detail";
+import { connect } from "../src/host";
+import { readCards } from "../src/cards";
+import { toolNamed } from "../src/tools";
+import { fixtures } from "./support/host";
+
+test(
+  "a finished Run shows pushed branch movement without rewriting its failed record",
+  () =>
+    proves(
+      "collie-board-moved-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const clean = {
+            verdict: "clean",
+            summary: "The requested work is complete.",
+            scope_met: true,
+            findings: [],
+            dropped: [],
+            fixed: [],
+          };
+          const outputs = `${world.home}/outputs.json`;
+          yield* fs.writeFileString(
+            outputs,
+            yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))([clean]),
+          );
+          yield* fs.writeFileString(
+            `${world.user}/historical-builder.workflow.ts`,
+            `export { default } from "${fixtures}/reviewed-parent.workflow.ts";\n`,
+          );
+          const origin = `${world.home}/origin.git`;
+          yield* exec(["git", "init", "--bare", "-q", origin], { cwd: world.project });
+          for (const args of [
+            ["init", "-q"],
+            ["config", "user.name", "test"],
+            ["config", "user.email", "test@example.com"],
+            ["remote", "add", "origin", origin],
+            ["remote", "add", "upstream", "https://gitlab.example.com/group/project.git"],
+            ["commit", "--allow-empty", "-qm", "base"],
+            ["push", "-qu", "origin", "HEAD"],
+            ["remote", "set-head", "origin", "-a"],
+          ])
+            yield* exec(["git", ...args], { cwd: world.project });
+          const client = yield* connect(world.state, {
+            hostEnv: { FAKE_HERDR_OUTPUTS: outputs },
+          }).pipe(Effect.orDie);
+          const started = yield* client
+            .start({
+              project: world.project,
+              id: "recovery",
+              request: "failed",
+              taskLabel: "recover work",
+              input: { goal: "recover work" },
+              options: { branch: "feature" },
+              verify: [{ name: "unit", executable: "true", argv: [], cwd: "worktree" }],
+            })
+            .pipe(Effect.orDie);
+          const finished = yield* until(
+            () => client.run({ runId: started.runId }).pipe(Effect.orDie),
+            (view) => view?.status.status === "failed",
+          );
+          expect(finished?.branch).not.toBeNull();
+          const cards = yield* until(
+            () => readCards(`${world.state}/runs/${started.runId}`).pipe(Effect.orDie),
+            (cards) => Arr.some(cards, (card) => card.kind === "final"),
+          );
+          const ended = cards.at(-1)!.revision.head_sha;
+          const cwd = finished!.cwd;
+          yield* exec(["git", "commit", "--allow-empty", "-qm", "finish after the Run"], { cwd });
+          yield* exec(["git", "push", "-qu", "origin", "HEAD"], { cwd });
+          const head = Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd })).stdout);
+          yield* stopHost(world.state);
+          yield* connect(world.state, { hostEnv: { FAKE_HERDR_OUTPUTS: outputs } }).pipe(
+            Effect.orDie,
+          );
+          const board = yield* collie(world, ["board"]);
+          const data = yield* Schema.decodeUnknownEffect(
+            Schema.Struct({
+              tasks: Schema.Array(
+                Schema.Struct({ state: Schema.String, drift: Schema.NullOr(Schema.String) }),
+              ),
+            }),
+          )(board.envelope.data).pipe(Effect.orDie);
+          expect(data.tasks[0]?.state).toBe("failed");
+          expect(data.tasks[0]?.drift).toContain(`1 commit past ${ended}`);
+          expect(data.tasks[0]?.drift).toContain(head);
+          expect(data.tasks[0]?.drift).toContain("failed record is stale");
+          const shown = yield* collie(world, ["run", "show", started.runId]);
+          expect(
+            (yield* Schema.decodeUnknownEffect(Schema.Struct({ branchProgress: Schema.String }))(
+              shown.envelope.data,
+            ).pipe(Effect.orDie)).branchProgress,
+          ).toContain(head);
+          expect(
+            (yield* (yield* connect(world.state).pipe(Effect.orDie))
+              .run({ runId: started.runId })
+              .pipe(Effect.orDie))?.status.status,
+          ).toBe("failed");
+          expect(
+            (yield* readCards(`${world.state}/runs/${started.runId}`)).at(-1)?.revision.head_sha,
+          ).toBe(ended);
+          const env = readEnv({
+            HERDR_PLUGIN_ROOT: world.install,
+            HERDR_PLUGIN_STATE_DIR: world.state,
+            COLLIE_USER_DIR: world.config,
+            HOME: world.home,
+            COLLIE_CWD: world.project,
+          });
+          const answer = yield* toolNamed("collie_run")!.call(env, { run: started.runId });
+          expect(answer).toContain(head);
+          expect(answer).toContain("failed record is stale");
+          let current = yield* connect(world.state).pipe(Effect.orDie);
+          expect(
+            (yield* current.offers({ runId: started.runId }).pipe(Effect.orDie))[0]?.title,
+          ).toContain("Review");
+          const reviewed = yield* current
+            .start({
+              project: world.project,
+              id: "historical-builder",
+              request: "review-advanced",
+              parent: started.runId,
+              task: finished!.task!,
+              input: { plan: "recover work" },
+              options: { workspace: cwd },
+            })
+            .pipe(Effect.orDie);
+          yield* until(
+            () => current.run({ runId: reviewed.runId }).pipe(Effect.orDie),
+            (view) => view?.status.status === "failed",
+          );
+          yield* stopHost(world.state);
+          current = yield* connect(world.state, { hostEnv: { FAKE_HERDR_OUTPUTS: outputs } }).pipe(
+            Effect.orDie,
+          );
+          const offered = yield* current.offers({ runId: started.runId }).pipe(Effect.orDie);
+          expect(offered[0]?.title).toContain("Checks");
+          const child = yield* current
+            .followUp({
+              runId: started.runId,
+              text: "recover work",
+              request: "recover-reviewed-head",
+            })
+            .pipe(Effect.orDie);
+          const checked = yield* until(
+            () => current.run({ runId: child.runId }).pipe(Effect.orDie),
+            (view) => view?.status.status === "complete" || view?.status.status === "failed",
+          );
+          expect(checked?.status).toMatchObject({
+            status: "complete",
+            value: "Checked existing head",
+          });
+          expect(checked?.branch).toBe(finished?.branch);
+          expect(checked?.cwd).toBe(cwd);
+          expect(yield* current.launches({ run: child.runId }).pipe(Effect.orDie)).toHaveLength(0);
+          const records = yield* readVerifications(`${world.state}/evidence/${child.runId}`);
+          expect(records[0]?.end.head_sha).toBe(head);
+          expect(
+            (yield* current.run({ runId: started.runId }).pipe(Effect.orDie))?.status.status,
+          ).toBe("failed");
+          expect(
+            (yield* readCards(`${world.state}/runs/${started.runId}`)).at(-1)?.revision.head_sha,
+          ).toBe(ended);
+          const listed = yield* current.offers({ runId: started.runId }).pipe(Effect.orDie);
+          expect(listed[0]?.title).toContain("Checks");
+          yield* exec(["git", "commit", "--allow-empty", "-qm", "work after the offer"], { cwd });
+          yield* exec(["git", "push", "-q", "origin", "HEAD"], { cwd });
+          const stale = yield* current
+            .invoke({
+              runId: started.runId,
+              offer: "recover",
+              input: {},
+              request: "recheck-stale-offer",
+            })
+            .pipe(Effect.orDie);
+          const refused = yield* until(
+            () => current.run({ runId: stale.runId }).pipe(Effect.orDie),
+            (view) => view?.status.status === "failed" || view?.status.status === "complete",
+          );
+          expect(refused?.status).toMatchObject({
+            status: "failed",
+            reason: "A review is required",
+          });
+          expect(yield* readVerifications(`${world.state}/evidence/${stale.runId}`)).toHaveLength(
+            0,
+          );
+        }),
+      ["recovery.workflow.ts"],
+    ),
+  120_000,
+);
 
 function facts(over: Partial<Sentence> = {}): Sentence {
   return {
@@ -1531,6 +1725,7 @@ const unapproved = (state: MrState = "open") => ({
         checks: { state: "passed" as const },
         head: M_HEAD,
         mergeable: { state: "blocked" as const, said: "not approved" },
+        read: "2026-09-14T10:04:00Z",
       },
     ],
   ]),
@@ -1570,6 +1765,99 @@ for (const state of ["failed", "stopped"] as const)
       }),
     ));
 
+test("an owed Task discloses a removed checkout and refreshes when it is restored", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const fs = yield* FileSystem.FileSystem;
+      const path = `${dir}/removed-checkout`;
+      const run = yield* madeRun(dir, {
+        task: TASK.id,
+        state: "succeeded",
+        branch: "mk/recovered",
+        mr: M,
+        worktree: {
+          path,
+          branch: "mk/recovered",
+          created_by_collie: true,
+          created_branch: false,
+          created_on: null,
+          managed_by: "git",
+          workspace_id: null,
+          made_at: null,
+          root_tab_id: null,
+          root_pane_id: null,
+        },
+      });
+      const cards = { revision: () => 1, kept: new Map(), markers: new Map() };
+      const read = () => board(env, [run], { ...unapproved(), cards });
+      const [missing] = yield* read();
+      expect(sectionOf(missing!)).toBe("waiting");
+      expect(missing!.sentence).toContain("no checkout");
+      expect(missing!.sentence).toContain("mk/support!279");
+      expect(yield* fs.exists(path)).toBe(false);
+      const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(TaskView))(missing!);
+      const received = yield* Schema.decodeEffect(Schema.fromJsonString(TaskView))(encoded);
+      expect(Arr.join(boardLines([received]), "\n")).toContain("no checkout");
+      expect(herdLines([received], epochMs("2026-09-14T10:05:00Z"))).toContain("no checkout");
+      yield* fs.makeDirectory(path);
+      const [restored] = yield* read();
+      expect(restored!.sentence).not.toContain("no checkout");
+      yield* fs.remove(path, { recursive: true });
+      const [removed] = yield* read();
+      expect(removed!.sentence).toContain("no checkout");
+      const [landed] = yield* board(env, [run], { ...unapproved("merged"), cards });
+      expect(landed!.sentence).not.toContain("no checkout");
+    }),
+  ));
+
+test("Merge uses the Release offer even when an unrelated follow-up is primary", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const { second } = yield* supersededChain(dir);
+      const release: OfferView = {
+        id: "release",
+        title: "Release",
+        workflow: "renamed-delivery",
+        arguments: null,
+        kind: "follow-up" as const,
+        primary: false,
+        unavailable: null,
+      };
+      const unrelated = { ...release, id: "follow-up", title: "Keep going on this", primary: true };
+      const read = (offers: ReadonlyArray<typeof release>) =>
+        board(env, [second], {
+          ...unapproved(),
+          forge: new Map([
+            [
+              M_ID,
+              {
+                ...unapproved().forge.get(M_ID)!,
+                mergeable: { state: "mergeable", said: "approved" },
+              },
+            ],
+          ]),
+          head: () => Effect.succeed(M_HEAD),
+          offers: () => Effect.succeed(offers),
+        });
+      const [ready] = yield* read([unrelated, release]);
+      expect(primaryAction(ready!)).toEqual({
+        kind: "offer",
+        offer: { id: "release", title: "Release" },
+      });
+      for (const offers of [
+        [unrelated],
+        [unrelated, { ...release, unavailable: "not connected" }],
+        [],
+      ]) {
+        const [card] = yield* read(offers);
+        expect(card!.offer).toBeNull();
+        expect(primaryAction(card!)?.kind).toBe("open-mr");
+      }
+    }),
+  ));
+
 test("fresh green work has a Merge shipping action, revoked by a moved head, failed CI, stale answer or unknown mergeability", () =>
   runEffect(
     Effect.gen(function* () {
@@ -1586,14 +1874,50 @@ test("fresh green work has a Merge shipping action, revoked by a moved head, fai
           mrStates: new Map([[M_ID, "open"]]),
           forge: new Map([[M_ID, { ...fresh, ...facts }]]),
           head: () => Effect.succeed(M_HEAD),
+          offers: () =>
+            Effect.succeed([
+              {
+                id: "release",
+                title: "Release",
+                workflow: "release",
+                arguments: null,
+                kind: "follow-up",
+                primary: true,
+                unavailable: null,
+              },
+            ]),
         });
       const [ready] = yield* read(fresh);
       expect(sectionOf(ready!)).toBe("ready-to-ship");
       expect(ready!.shipping).toBe("merge");
       expect(ready!.shippingMr).toBe(M);
-      expect(Arr.join(boardLines([ready!]), "\n")).toContain("Ready to ship");
-      expect(herdLines([ready!], epochMs("2026-09-14T10:05:00Z"))).toContain("Ready to ship");
-      expect(sectionsOf([ready!], "").ready).toEqual([ready!]);
+      const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(TaskView))(ready!);
+      const received = yield* Schema.decodeEffect(Schema.fromJsonString(TaskView))(encoded);
+      const desktop = flockCards(
+        applyItem(EMPTY_FLOCK, {
+          machine: { installation: "host", profile: "local", name: "host" },
+          message: {
+            _tag: "Snapshot",
+            installation: "host",
+            build: "dev",
+            protocol: 5,
+            herds: [],
+            tasks: [received],
+            seq: 1,
+          },
+        }),
+      ).tasks;
+      expect(sectionsOf(desktop, "").ready).toHaveLength(1);
+      expect(primaryAction(desktop[0]!)).toEqual({
+        kind: "offer",
+        offer: { id: "release", title: "Release" },
+      });
+      const text = Arr.join(boardLines([received]), "\n");
+      expect(text).toContain("Ready to ship · 1");
+      expect(text).toContain("Merge: Ready to release: mk/support!279");
+      const chat = herdLines([received], epochMs("2026-09-14T10:05:00Z"));
+      expect(chat).toContain("## Ready to ship · 1");
+      expect(chat).toContain("Merge: Ready to release: mk/support!279");
       const cards = { revision: () => 1, kept: new Map(), markers: new Map() };
       const cached = (now: string) =>
         board(env, [second], {
@@ -1684,7 +2008,8 @@ test("a declared shipping Go holds only at its head and gates; an ordinary quest
         expect(ready!.shippingMr).toBe(M);
         const [moved] = yield* read(action, "new-head");
         expect(sectionOf(moved!)).toBe("needs-you");
-        expect(moved!.sentence).toContain("no longer holds");
+        expect(moved!.sentence).toContain("no longer holds for 77215b1");
+        expect(moved!.shipping).toBeNull();
         const [blocked] = yield* read(action, M_HEAD, false);
         expect(sectionOf(blocked!)).toBe("needs-you");
         expect(blocked!.sentence).toContain("not approved");
@@ -1692,6 +2017,49 @@ test("a declared shipping Go holds only at its head and gates; an ordinary quest
       for (const workflow of ["release", "stage"]) {
         const [ordinary] = yield* read(null, M_HEAD, true, workflow);
         expect(sectionOf(ordinary!)).toBe("needs-you");
+      }
+    }),
+  ));
+
+test("a head Deploy Go needs a current forge answer whose read time is not in the future", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, {
+        task: TASK.id,
+        mr: M,
+        state: "waiting",
+        asking: [
+          {
+            name: "production",
+            prompt: "Ship it?",
+            options: [],
+            shipping: { action: "deploy", head: M_HEAD },
+          },
+        ],
+      });
+      yield* writeStageProof(run.dir, { head: M_HEAD, tag: null, proved: true, why: null });
+      const read = (read: string, asked = read) =>
+        board(env, [run], {
+          mrStates: new Map([[M_ID, "open"]]),
+          forge: new Map([[M_ID, { head: M_HEAD, read, asked, checks: { state: "unknown" } }]]),
+        });
+
+      const [future] = yield* read("2026-09-14T10:06:00Z");
+      expect(sectionOf(future!)).toBe("needs-you");
+      expect(future!.shipping).toBeNull();
+      expect(future!.sentence).toContain("no longer holds for 77215b1");
+      const [fresh] = yield* read("2026-09-14T10:04:00Z");
+      expect(sectionOf(fresh!)).toBe("ready-to-ship");
+      expect(fresh!.shipping).toBe("deploy");
+      for (const [readAt, askedAt] of [
+        ["invalid", "invalid"],
+        ["2026-09-14T09:54:00Z", "2026-09-14T09:54:00Z"],
+        ["2026-09-14T10:04:00Z", "2026-09-14T10:05:00Z"],
+      ] as const) {
+        const [card] = yield* read(readAt, askedAt);
+        expect(sectionOf(card!)).toBe("needs-you");
+        expect(card!.shipping).toBeNull();
       }
     }),
   ));
@@ -1746,6 +2114,11 @@ test("a follow-up that finished at an open merge request leaves its Task owing i
       expect(sectionOf(card!)).toBe("waiting");
       expect(card!.sentence).toContain("mk/support!279");
       expect(card!.sentence).toContain("not approved");
+      expect(card!.readiness?.missing).toContainEqual({
+        fact: "mergeable",
+        said: "the forge says it cannot merge: not approved",
+        settling: false,
+      });
       expect(card!.sentence).not.toContain("Superseded by");
     }),
   ));

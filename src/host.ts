@@ -17,6 +17,7 @@
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as Num from "effect/Number";
 import * as Arr from "effect/Array";
+import { branchMovement } from "./recovery";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
 import { pipe } from "effect/Function";
@@ -33,6 +34,7 @@ import {
   Context,
   Data,
   Deferred,
+  Ref,
   Duration,
   Effect,
   Exit,
@@ -150,6 +152,8 @@ import { readDefinitions } from "./authoring";
 import { SharedDefinition } from "./definitions-model";
 import { DefinitionRefused, sharedDefinitions, takeDefinitions } from "./shared-definitions";
 import { sideJobs } from "./side-jobs";
+import { recoverParks } from "./park-recovery";
+import { machineMemory } from "./memory";
 import { Usage, usageLayer } from "./usage";
 import { HarnessCatalogues, catalogueLayer } from "./catalogue";
 import { connectionsOnMachine } from "./connections";
@@ -297,6 +301,8 @@ import { editString, globFiles, grepFiles, readPart, writeWhole } from "./host-f
 import { receive, uploadsDir } from "./uploads";
 import { ownInventory, readOwnWords, SESSION_STORES } from "./own-words";
 import {
+  configValue,
+  readConfig,
   loadDefaults,
   SettingRefused,
   sharedSettings,
@@ -418,6 +424,7 @@ export class HostVersionMismatch extends Data.TaggedError("HostVersionMismatch")
 }> {}
 
 const RunShown = Schema.Struct({
+  branchProgress: Schema.optionalKey(Schema.NullOr(Schema.String)),
   view: RunView,
   agents: Schema.Array(RunAgent),
   disposition: Schema.NullOr(Disposition),
@@ -902,6 +909,12 @@ const handlers = (
             const hosted = yield* Effect.context<HostServices>();
             return {
               view,
+              branchProgress: yield* branchMovement({
+                cwd: view.cwd,
+                dir: runDir(dir, runId),
+                branch: view.branch,
+                state: view.status.status === "complete" ? "succeeded" : view.status.status,
+              }),
               agents: yield* runAgents(runId),
               disposition: latest(
                 yield* readDispositions(runDir(dir, runId)).pipe(Effect.orElseSucceed(() => [])),
@@ -1744,6 +1757,7 @@ const frontDoorHandlers = (
   declared: Declared,
   stamp: string,
   toasted: PubSub.PubSub<Toasted>,
+  reconnects: Effect.Effect<number>,
 ) =>
   FrontDoorRpcs.toLayer(
     Effect.gen(function* () {
@@ -2111,7 +2125,7 @@ const frontDoorHandlers = (
        * A Run picked up again: what current files allow is registered, then its stop cleared.
        * One stopped after its merge request landed is left stopped, as a card reads the landing.
        */
-      const takeUp = Effect.fn("Host.takeUp")(function* (runId: string) {
+      const takeUp = Effect.fn("Host.takeUp")(function* (runId: string, recoveryPark?: string) {
         const view = yield* registry.view(runId);
         const run = view === null ? null : factsOfView(env.stateDir, view);
         const mr = run?.state === "stopped" ? mrOf(run) : null;
@@ -2121,7 +2135,8 @@ const frontDoorHandlers = (
             : (yield* readMrStates(env.stateDir).pipe(Effect.orElseSucceed(() => new Map()))).get(
                 (yield* mrIdIn(mr, run!.cwd, shell)) ?? "",
               );
-        if (state === undefined || !LANDED_STATES.has(state)) return yield* registry.resume(runId);
+        if (state === undefined || !LANDED_STATES.has(state))
+          return yield* registry.resume(runId, recoveryPark);
         return {
           runId,
           control: STOP,
@@ -2153,6 +2168,33 @@ const frontDoorHandlers = (
             mrs: card?.mrs,
           };
         }).pipe(Effect.provideContext(bun));
+      yield* Effect.forkScoped(
+        recoverParks({
+          env,
+          herdr,
+          views: registry.views(null),
+          reconnects,
+          panels,
+          resume: (view, request, park) =>
+            auditedControl(view.runId, "resume", request, { origin: "host" })(
+              Effect.gen(function* () {
+                if (
+                  (yield* machineMemory(env)).short ||
+                  configValue(yield* readConfig(env.userDir), "recovery.resume") === false
+                )
+                  return {
+                    runId: view.runId,
+                    control: STOP,
+                    set: false,
+                    left: [],
+                    applied: false,
+                    detail: "Recovery waits for memory or its setting",
+                  };
+                return yield* takeUp(view.runId, park);
+              }).pipe(Effect.mapError((cause) => new HostRefused({ reason: reason(cause) }))),
+            ),
+        }).pipe(Effect.provideContext(hosted)),
+      );
       return FrontDoorRpcs.of({
         declare: ({ frontDoor, session, from, stamp: stamped, ...voice }, { client }) => {
           // Which Machine a channel came from is said by this host's own link, never by the channel.
@@ -3620,7 +3662,10 @@ const frontDoorHandlers = (
                   return yield* new HostRefused({
                     reason: `${runId} declares no follow-up, so there is nothing to carry on with`,
                   });
-                const into = followUpField(offered.arguments);
+                const into =
+                  offered.textField === undefined
+                    ? followUpField(offered.arguments)
+                    : { field: offered.textField };
                 if ("refused" in into)
                   return yield* new HostRefused({
                     reason: `${runId}'s follow-up "${offered.id}" ${into.refused}`,
@@ -4080,7 +4125,16 @@ const locateIn =
       }),
     );
 
-const isCrashPoint = Schema.is(Schema.Literals(["admitted", "executed", "answered", "reported"]));
+const isCrashPoint = Schema.is(
+  Schema.Literals([
+    "admitted",
+    "executed",
+    "answered",
+    "reported",
+    "recovery-park-cleared",
+    "recovery-entered",
+  ]),
+);
 
 /** Where a test has this host kill itself mid-start; unset for every other host. */
 const crashPoint = Config.option(Config.String("COLLIE_HOST_CRASH_AT")).pipe(
@@ -4169,7 +4223,11 @@ const own = (
     const declared: Declared = new Map();
     const stamp = yield* (yield* SecureRandom.SecureRandom).uuidV4();
     const toasted = yield* PubSub.unbounded<Toasted>();
+    const reconnects = yield* Ref.make(0);
+    // Kept until the reports layer takes them, so a link up before it starts is not missed.
+    const linked = yield* Queue.unbounded<Peer>();
     const peers = yield* startPeers({
+      reconnected: Ref.update(reconnects, (count) => count + 1),
       dir,
       userDir: env.userDir,
       build: BUILD,
@@ -4195,6 +4253,7 @@ const own = (
         Effect.map((backend) => backend === "herdr"),
         Effect.provideContext(bun),
       ),
+      linked: (peer) => Queue.offer(linked, peer).pipe(Effect.asVoid),
       tell: (peer) =>
         Effect.scoped(
           connectPeer(dir, peer.name, { as: "host", client: machineName(), stamp }).pipe(
@@ -4212,7 +4271,16 @@ const own = (
         Layer.provide(
           Layer.mergeAll(
             handlers(dir, installation, development, declared, peers),
-            frontDoorHandlers(dir, installation, development, panels, declared, stamp, toasted),
+            frontDoorHandlers(
+              dir,
+              installation,
+              development,
+              panels,
+              declared,
+              stamp,
+              toasted,
+              Ref.get(reconnects),
+            ),
             sideJobsLayer(panels),
             doorFeedLayer(door, panels),
             questionsLayer,
@@ -4220,7 +4288,9 @@ const own = (
             Layer.effectDiscard(
               Effect.gen(function* () {
                 const { reportsLayer } = yield* Effect.promise(() => import("./reports"));
-                yield* Layer.build(reportsLayer({ env, installation, stamp, crashAt }));
+                yield* Layer.build(
+                  reportsLayer({ env, installation, stamp, crashAt, linked, live: peers.live }),
+                );
               }),
             ),
           ).pipe(

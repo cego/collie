@@ -528,8 +528,10 @@ for (const name of ["gitlab", "github"] as const) {
     test("is ready only with its CLI installed and logged in to the host", () =>
       runEffect(
         Effect.gen(function* () {
-          const ask = (over: Partial<ForgeModel>) =>
-            forge.ready(PROJECT[name], "/w", fakeForge(name, model(name, over)).run);
+          const ask = (over: Partial<ForgeModel>) => {
+            const fake = fakeForge(name, model(name, over));
+            return forge.ready(PROJECT[name], "/w", fake.run).pipe(Effect.provide(fake.layer));
+          };
           expect(yield* ask({})).toEqual({ ok: true, reason: "" });
           expect(yield* ask({ installed: false })).toEqual({
             ok: false,
@@ -538,7 +540,39 @@ for (const name of ["gitlab", "github"] as const) {
           expect(yield* ask({ loggedIn: [] })).toEqual({
             ok: false,
             reason: `${CLI[name]} is not logged in to ${host}`,
+            cause: "login-missing",
           });
+        }),
+      ));
+
+    test("needs login repair when the forge refuses the token its CLI holds", () =>
+      runEffect(
+        Effect.gen(function* () {
+          for (const over of [
+            { revoked: true },
+            { httpFault: { status: 403, message: "Bad credentials" } },
+          ]) {
+            const fake = fakeForge(name, model(name, over));
+            expect(
+              yield* forge.ready(PROJECT[name], "/w", fake.run).pipe(Effect.provide(fake.layer)),
+            ).toEqual({
+              ok: false,
+              reason: `${CLI[name]} is not logged in to ${host}`,
+              cause: "login-missing",
+            });
+          }
+        }),
+      ));
+
+    test("stays recoverable when the forge cannot be reached or fails to answer", () =>
+      runEffect(
+        Effect.gen(function* () {
+          for (const httpFault of ["network", { status: 503 }, { status: 403 }] as const) {
+            const fake = fakeForge(name, model(name, { httpFault }));
+            expect(
+              yield* forge.ready(PROJECT[name], "/w", fake.run).pipe(Effect.provide(fake.layer)),
+            ).toMatchObject({ ok: false, cause: "forge-unavailable" });
+          }
         }),
       ));
 

@@ -16,6 +16,7 @@ import {
   ask,
   mrSet,
   type ActionFacts,
+  type ChildAsk,
   type JobLink,
 } from "collie";
 import { Effect, Schema, Option } from "effect";
@@ -278,6 +279,7 @@ export interface SetMember {
   readonly id: string;
   readonly target: string;
   readonly url: string;
+  readonly checkout?: string;
 }
 
 const PRIMES: Array<number> = [];
@@ -335,8 +337,10 @@ const sha256 = (text: string) => {
 };
 
 // The id's SHA-256 keeps two MR ids apart, and the capped slug a child's Run directory short.
-export const invocationFor = (workflow: "release" | "stage", member: SetMember) =>
-  `${workflow}-${pipe_(member.id, Str.replace(/[^a-z0-9]+/g, "-"), Str.slice(0, 40))}-${sha256(member.id)}`;
+export const invocationFor = (workflow: "release" | "stage" | "tag", member: SetMember) =>
+  workflow === "tag"
+    ? `tag-${sha256(member.id)}`
+    : `${workflow}-${pipe_(member.id, Str.replace(/[^a-z0-9]+/g, "-"), Str.slice(0, 40))}-${sha256(member.id)}`;
 
 /** Whether a Run was started with one merge request: a set is never offered again whole. */
 export const startedWithOne = (facts: ActionFacts) => {
@@ -345,15 +349,29 @@ export const startedWithOne = (facts: ActionFacts) => {
 };
 
 /** A Run of this workflow on `member` alone, waited on: its result, or why it failed. */
-export const runOn = (workflow: "release" | "stage", member: SetMember) =>
+export const runOn = (
+  workflow: "release" | "stage",
+  member: SetMember,
+  phase?: "merge" | "tag",
+  together?: ReadonlyArray<string>,
+) =>
   Effect.gen(function* () {
     const children = yield* Children;
+    const input: ChildAsk["input"] =
+      phase === "merge"
+        ? { mr: member.target, merge_only: true }
+        : together === undefined
+          ? { mr: member.target }
+          : { mr: member.target, together };
+    const ask = {
+      invocation: invocationFor(phase === "tag" ? "tag" : workflow, member),
+      workflow: "self",
+      input,
+    };
     const child = yield* children
-      .start({
-        invocation: invocationFor(workflow, member),
-        workflow: "self",
-        input: { mr: member.target },
-      })
+      .start(
+        member.checkout === undefined ? ask : { ...ask, options: { workspace: member.checkout } },
+      )
       .pipe(Effect.result);
     if (child._tag === "Failure")
       return { ok: false, said: `not started: ${child.failure.reason}` };

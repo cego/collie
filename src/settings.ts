@@ -370,6 +370,12 @@ export const SETTINGS: ReadonlyArray<Setting> = [
       "While available memory is under this percent of the Machine's total, or memory pressure is high, a new agent, Check pass or collie verify waits. 0 never holds, and turns the pressure rule off too.",
     unit: "percent",
   }),
+  of("recovery.resume", "boolean", "true", {
+    group: "Runs",
+    label: "Resume cleared parks",
+    description:
+      "Whether the host resumes a parked Run once its read-only recheck clears. Off still records rechecks.",
+  }),
   of("release.share_for_approval", "boolean", "false", {
     group: "Runs",
     label: "Ask before sharing a merge request for approval",

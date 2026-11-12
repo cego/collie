@@ -15,12 +15,14 @@ import {
   FixOutputSchema,
   Host,
   ReviewOutputSchema,
+  ReviewScope,
   Run,
   SynthesisSchema,
   WorkflowError,
   agentWork,
   contentOf,
   findingKey,
+  findingsIn,
   panelOf,
   formatFindings,
   isBlocking,
@@ -156,11 +158,13 @@ export interface ReviewAsk {
   /** What the implementer has already stood on, so a reviewer answers it or drops it. */
   readonly disputed: ReadonlyArray<Finding>;
   readonly prefix?: string;
+  readonly reviewers?: string;
   readonly obstacle?: string;
   /** The commit a worktree's change is diffed against: the default branch as last integrated. */
   readonly base?: string;
   /** What the builder says of each criterion, and its assumptions, for the reviewer to check. */
   readonly criteria?: string;
+  readonly source?: string | null;
 }
 
 /** What the reviewers and the synthesis are both told, beside the section they are given. */
@@ -201,8 +205,7 @@ export const reviewPass = (ask: ReviewAsk) =>
     const { id } = yield* Run;
     const host = yield* Host;
     const { dir, cwd } = yield* host.place(id);
-    const input = told(ask, { dir, id });
-    const record = (report: SynthesisReport) =>
+    const keepLedger = (report: SynthesisReport) =>
       Effect.gen(function* () {
         if (ask.head)
           yield* Activity.make({
@@ -290,26 +293,55 @@ export const reviewPass = (ask: ReviewAsk) =>
     const seats = Arr.map(yield* panelOf("reviewer"), (seat, at) => ({
       seat,
       operation: reviewOp(seat.name ?? String(at + 1)),
+      agent:
+        ask.reviewers === undefined
+          ? undefined
+          : `${ask.reviewers}review-${seat.name ?? String(at + 1)}`,
     }));
+    const scope = yield* Activity.make({
+      name: `${synthesis}.scope`,
+      success: Schema.NullOr(ReviewScope),
+      execute: Effect.gen(function* () {
+        if (ask.source === null || (ask.target !== "" && ask.target !== "worktree")) return null;
+        const fs = yield* FileSystem.FileSystem;
+        const collected = yield* Effect.forEach(seats, ({ operation }) =>
+          fs.exists(agents.outputFor(id, operation)),
+        );
+        // Earlier passes without a journaled scope cannot acquire one on replay.
+        if (Arr.some(collected, Boolean)) return null;
+        return yield* host.reviewScope(id, ask.source ?? ask.plan, ask.proves, ask.risks);
+      }).pipe(Effect.orDie),
+    });
+    const input = told({ ...ask, base: scope?.target ?? ask.base }, { dir, id });
+    const record = (review: SynthesisReport) =>
+      Activity.make({
+        name: `${synthesis}.record`,
+        success: Schema.Void,
+        execute: host.recordReview(id, scope, scope?.target ?? ask.base ?? "", review),
+      });
     // One seat is one review, already the one the human reads: its prompt asks a lone
     // reviewer for the synthesis's own fields, so a second agent would only copy it.
     if (seats.length === 1) {
       const [only] = seats;
       const alone: SynthesisReport = yield* agentWork({
         operation: only!.operation,
+        agent: only!.agent,
         role: "reviewer",
         seat: only!.seat,
         instructions: REVIEW,
         input: { ...input, checks, criteria: ask.criteria ?? "" },
         output: SynthesisSchema,
       });
-      return yield* record(alone);
+      const recorded = yield* keepLedger(alone);
+      yield* record(recorded);
+      return recorded;
     }
     yield* Effect.forEach(
       seats,
-      ({ seat, operation }) =>
+      ({ seat, operation, agent }) =>
         agentWork({
           operation,
+          agent,
           role: "reviewer",
           seat,
           instructions: REVIEW,
@@ -322,6 +354,7 @@ export const reviewPass = (ask: ReviewAsk) =>
     const reconciled: SynthesisReport = yield* synthesisStep(
       agentWork({
         operation: synthesis,
+        agent: ask.reviewers === undefined ? undefined : `${ask.reviewers}synthesize`,
         role: "reviewer",
         instructions: SYNTHESIZE,
         input: {
@@ -335,7 +368,9 @@ export const reviewPass = (ask: ReviewAsk) =>
       }),
     );
     // The prose a human reads and the findings a card counts, where both are looked for.
-    return yield* record(reconciled);
+    const recorded = yield* keepLedger(reconciled);
+    yield* record(recorded);
+    return recorded;
   });
 
 /** At most four rounds per rally; it leaves at the first review with nothing blocking. */
@@ -372,10 +407,12 @@ export const rally = (ask: {
   readonly risks: string;
   /** What the change is held to beside the spec, for the reviewer. */
   readonly criteria: string;
+  readonly source?: string | null;
   /** Before every operation's name, telling this rally's rounds from another's. */
   readonly prefix: string;
   /** What every round's reviewers are told beside the change; empty for nothing. */
   readonly obstacle: string;
+  readonly resume?: { readonly previous: Rallied; readonly reviewers: string };
   /** Integrates the default branch, answering with what a review is diffed against. */
   readonly integrate: (
     operation: string,
@@ -396,10 +433,37 @@ export const rally = (ask: {
     let disputed: Finding[] = [];
     let seen: { readonly at: number; readonly keys: ReadonlyArray<string> } | null = null;
 
+    const repair = Effect.gen(function* () {
+      const resumed = ask.resume;
+      if (resumed === undefined) return;
+      const fixed = yield* ask.fix({
+        operation: `${prefix}fix`,
+        at: 1,
+        proves: yield* ask.proves,
+        findings: formatFindings([
+          ...Arr.filter(
+            resumed.previous.reviewed.findings,
+            (one) =>
+              !Arr.some(
+                resumed.previous.disputes,
+                (dispute) => findingKey(dispute) === findingKey(one),
+              ),
+          ),
+          ...resumed.previous.disputes,
+        ]),
+      });
+      const settled = new Set(Arr.map([...fixed.fixed, ...fixed.disputed], findingKey));
+      disputed = [
+        ...Arr.filter(resumed.previous.disputes, (one) => !settled.has(findingKey(one))),
+        ...fixed.disputed,
+      ];
+    });
+
     for (let at = 1; at <= ROUNDS; at++) {
       ask.rounds.n += 1;
       const ended = yield* reviewRound(
         Effect.gen(function* () {
+          yield* repair;
           const merged = yield* ask.integrate(`${prefix}merge-${at}`);
           const proves = yield* ask.proves;
           const synthesis = yield* reviewPass({
@@ -407,17 +471,24 @@ export const rally = (ask: {
             // built, rather than a merge request somebody else has to be pointed at.
             target: "",
             plan: ask.plan,
+            source: ask.source,
             proves,
             previous: "",
             // The last round's fix, which a follow-up review checks each of its findings against.
-            answered: at === 1 ? "" : agents.outputFor(runId, `${prefix}fix-${at - 1}`),
+            answered:
+              ask.resume !== undefined
+                ? agents.outputFor(runId, `${prefix}fix`)
+                : at === 1
+                  ? ""
+                  : agents.outputFor(runId, `${prefix}fix-${at - 1}`),
             prefix,
+            reviewers: ask.resume?.reviewers,
             obstacle: ask.obstacle,
             risks: ask.risks,
             criteria: ask.criteria,
             base: merged.base,
             at,
-            of: ROUNDS,
+            of: ask.resume === undefined ? ROUNDS : 1,
             disputed,
           });
           const split = splitDisputed(synthesis.findings, disputed);
@@ -465,6 +536,14 @@ export const rally = (ask: {
               reviewed: synthesis,
             };
           }
+          if (ask.resume !== undefined)
+            return {
+              halted: `round_unresolved: ${formatFindings(round.live)}`,
+              unreviewed: "",
+              unsettled: disputesOf(disputed),
+              disputes: Arr.filter(disputed, isBlocking),
+              reviewed: synthesis,
+            };
           seen = { at, keys: round.keys };
 
           const fixed = yield* ask.fix({
@@ -508,7 +587,18 @@ export const rally = (ask: {
         }),
         { round: ask.rounds.n },
       );
-      if (ended !== null) return ended;
+      if (ended !== null) {
+        if (ended.disputes.length > 0) {
+          const dir = (yield* host.place(runId)).dir;
+          const keys = new Set(Arr.map(ended.disputes, findingKey));
+          const onFile = yield* findingsIn(dir);
+          yield* leaveOutstanding(dir, [
+            ...Arr.filter(onFile, (one) => !keys.has(findingKey(one))),
+            ...ended.disputes,
+          ]);
+        }
+        return ended;
+      }
     }
     return yield* new WorkflowError({ reason: "the rally ran no rounds at all" });
   });

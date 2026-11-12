@@ -651,13 +651,15 @@ Examples:
 collie run start review --input target=https://gitlab.example.com/acme/app/-/merge_requests/2 --input plan= --input proves=
 collie run start review --input target=https://github.com/acme/app/pull/30 --input plan= --input proves=
 collie run start review --input target=worktree --input plan= --input proves=
-collie run start implement --input plan=ENG-123 --input then=
+collie run start implement --input plan=ENG-123 --input recovery= --input then=
 collie run start plan --input goal="one registry" --input then= --input workspace=projects-root
 ```
 
 `plan` takes `goal` and `then`. `then=implement` builds the plan as soon as its tickets are
 written, with nothing asked of anyone; empty, its end menu is asked
-([`plan`](workflows.md#plan)). `implement` takes `plan` and `then`: `then=release` releases
+([`plan`](workflows.md#plan)). `implement` takes `plan`, `recovery`, and `then`. Leave
+`recovery=` empty for new work; an explicit follow-up supplies the finished Run it recovers.
+`then=release` releases
 its merge request on a human's go, `finish` ends at the merge request, and empty asks
 ([`implement`](workflows.md#implement)).
 
@@ -787,7 +789,9 @@ times, text and read times (null until read). Chat and CLI can arm a hold with
 failed resumable Step also offers `retry-noted`, a note followed by resume.
 Their `link.asOf` is null for live local state, or the last admission or settlement
 notice from a paired Machine. `run.linkNotices` records those deliveries on the started
-Run; human output names undelivered notices. A missed notice is not retried or polled.
+Run, one entry per try; human output names undelivered notices. A missed notice is sent
+again, unchanged, once the requesting Machine's link comes back, until it is delivered
+or the link drops again.
 
 Each node's optional `primary` names its first action and `actions` lists the rest,
 without repeating it. A lane's `actions` are its own Run controls. `agent` names the
@@ -1009,6 +1013,23 @@ the same request asked while it runs gets that one result.
 Delivery reconciliation remains explicit: `not-sent` permits one resend, while `sent` waits
 for Output. An unresolved delivery stays uncertain.
 
+A park whose cause rechecks can resume automatically. The host checks for the named CI job
+at the parked head, an answering forge or herdr, or a clean Collie checkout. Rechecks start
+after one minute and double up to one hour. Host startup, a peer reconnecting, or a matching
+forge or pipeline update resets that wait to one minute. The resumed Step still runs its own gate.
+
+Automatic resumes use Actor `host` and request ids `recover:<run>:<park>:<n>`. A durable claim
+lets a restarted host finish the same request. They leave Decisions, Holds, Stops, and work
+on a superseded question alone, including controls on child Runs. At most two run at once
+on a Machine, and none starts while it is Short of memory. After three automatic resumes
+for one cause, another park for that cause needs you and lists the tries. A recheck park
+stays quiet until then; recovery itself sends no notification.
+
+`collie settings set recovery.resume false` turns automatic resume off across the Flock;
+rechecks are still recorded. Set it to `true` to turn it on again, its default. Three failed
+recheck rounds in a row raise one News item, `recovery-failing:<machine>`, which clears
+after a successful round. A failed round resumes nothing.
+
 A finished execution keeps its recorded result; `resume` does not reopen its steps. Use
 the Run's follow-up action to continue unfinished work on the same Task and branch.
 
@@ -1028,7 +1049,7 @@ inherits that one's as it stands. `run intent` reads and amends it; `run intent
 verification` names one of the run's checks through the host (below).
 
 ```sh
-collie --json run start implement --input plan=./plans/steering \
+collie --json run start implement --input plan=./plans/steering --input recovery= \
   --goal "land steering behind the existing envelope" \
   --constraint "rule:protected_paths:src/**,test/**" --severity block \
   --constraint "no new dependencies"
@@ -1426,7 +1447,7 @@ and as attention `drift_unresolved`, and a cross-run check that was owed and nev
 ## Outcomes
 
 ```sh
-collie run start implement --input plan=<source> --input outcome=bug
+collie run start implement --input plan=<source> --input recovery= --input outcome=bug
 ```
 
 What kind of result a run has to prove, and so what evidence closes it:
@@ -1632,17 +1653,30 @@ Then the measures a change to Collie is judged by, under `measures` in `--json`.
 counted from what the Runs in the window recorded, and each names the Run ids it counts
 (`runs`), so an issue can cite them. Chat reads the same report through `collie_report`.
 
-| Field           | What it counts                                                                                                                                                                                                                                               |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `rounds`        | Runs with a review rally (a review allowed more than one round): `runs[]` with the round each `reached` and its `cap`, the `median` round (`null` for none), and `atCap`, the Runs that reached their cap.                                                   |
-| `dispositions`  | `merged`, `superseded` and `abandoned`, each a `count`, its `runs` and its `share` of the three (`null` where none was recorded).                                                                                                                            |
-| `steering`      | `runs[]`: each Run's `steer`, `followup`, `deliver` and `correction` counts and `byOrigin`. `byOrigin`: who asked — `human` (the board, Desktop, a terminal), `chat`, `agent` (an agent or a non-interactive CLI) and `host` (Collie's own corrections).     |
-| `verifications` | `total`, `runs[]` with each Run's `total` and how many an `agent` and `collie` collected, `byCollector`, `repeated` (same Run, check, start tree, result and collector as one before it) and `executableOnly` (named only by its executable, such as `bun`). |
-| `parks`         | `byReason`: each park's `reason`, with the Run, pane, path and command it named taken out so like counts with like, and `collectExpiries`: an agent that had written nothing when its collect budget ran out.                                                |
-| `peakContext[]` | Each Run's largest context sample at a work boundary, in `tokens`, and the `agent` it was on. A sample, not tokens consumed; `null` is not recorded, and is never estimated.                                                                                 |
+| Field           | What it counts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rounds`        | Runs with a review rally (a review allowed more than one round): `runs[]` with the round each `reached` and its `cap`, the `median` round (`null` for none), and `atCap`, the Runs that reached their cap.                                                                                                                                                                                                                                                                                                                  |
+| `dispositions`  | `merged`, `superseded` and `abandoned`, each a `count`, its `runs` and its `share` of the three (`null` where none was recorded).                                                                                                                                                                                                                                                                                                                                                                                           |
+| `steering`      | `runs[]`: each Run's `steer`, `followup`, `deliver` and `correction` counts and `byOrigin`. `byOrigin`: who asked — `human` (the board, Desktop, a terminal), `chat`, `agent` (an agent or a non-interactive CLI) and `host` (Collie's own corrections).                                                                                                                                                                                                                                                                    |
+| `verifications` | `total`, `runs[]` with each Run's `total` and how many an `agent` and `collie` collected, `byCollector`, `repeated` (same Run, check, start tree, result and collector as one before it) and `executableOnly` (named only by its executable, such as `bun`).                                                                                                                                                                                                                                                                |
+| `parks`         | `byCause`: each **Park cause**'s `count` of parks, its `runs`, `toNextStep` (the `median` and `max` milliseconds from a park to the Run's next Step, `null` while none has moved on) and `humanResumes` (resumes a person asked for, from the board, Desktop or a terminal, while the Run was parked for it). `byReason`: each park's `reason`, with the Run, pane, path and command it named taken out so like counts with like, and `collectExpiries`: an agent that had written nothing when its collect budget ran out. |
+| `recoveries`    | `byCause`: each `cause` and `action` (`reminded`, `rechecked`, or `resumed`), its `count` and `runs`, how many `recovered`, and `toRecover`, the median milliseconds to recovery (`null` where none has). Resumes add `falseRecoveries`: an automatic resume followed by another park for the same cause. Reminders time from the first turn ending without Output to decoded Output; successful resumes time from the park to the next Step.                                                                               |
+| `peakContext[]` | Each Run's largest context sample at a work boundary, in `tokens`, and the `agent` it was on. A sample, not tokens consumed; `null` is not recorded, and is never estimated.                                                                                                                                                                                                                                                                                                                                                |
 
 Every field before `measures` is unchanged. A park is recorded as a `halt` line in the Run's
-metrics each time it parks, or parks for a different reason, and a context sample as a
+metrics each time it parks, or parks for a different reason or cause, with its `cause` and the
+`build` of the host that parked it; a halt from before causes were recorded counts as `unknown`.
+Each Output reminder records a `recovery` line when sent, with its `cause`, `action`,
+`recoveryId`, `outcome` (`still-absent`) and the host's `build`. Once the Output decodes,
+another line records `output-written` under the same `recoveryId`. The report counts each
+reminder once, using its latest outcome, including an Output corrected by the existing repair.
+Rechecks record their result, build, and backoff. An automatic resume records a claim and its
+outcome under one `recoveryId`; the report counts a completed resume once. A false recovery
+counts as a resume, but contributes no successful recovery time. `run show` and the card
+retain the latest recovery actions after the park clears; the drawer lists the latest 20.
+Plain `run show`, chat's Run details, and Desktop's card and Run record show the park cause,
+kind, and recovery actions too. Desktop cards show the latest two actions; the record shows the latest 20.
+A context sample is recorded as a
 `context` line wherever Collie samples a reused agent's context at a work boundary. A Run
 from before those were recorded counts none of either. The text caps each list at 20 lines and each list of Run ids
 at 10.
@@ -1820,7 +1854,7 @@ its own `.collie/verify.json` at its own base, or remembered checks. No start is
 checks.
 
 ```sh
-collie run start implement --input plan=… \
+collie run start implement --input plan=… --input recovery= \
   --verify '{"name":"tests","executable":"bun","argv":["test"],"cwd":"worktree"}'
 ```
 
@@ -2152,8 +2186,8 @@ the effect. Choose one per intended action — any unique string — and reuse i
 retry of that action:
 
 ```sh
-collie --json run start implement --input plan="$PWD/plan" --request-id start-plan-1 \
-  || collie --json run start implement --input plan="$PWD/plan" --request-id start-plan-1
+collie --json run start implement --input plan="$PWD/plan" --input recovery= --request-id start-plan-1 \
+  || collie --json run start implement --input plan="$PWD/plan" --input recovery= --request-id start-plan-1
 ```
 
 A receipt is reserved before the action starts. If execution is interrupted before its

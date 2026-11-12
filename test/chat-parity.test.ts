@@ -587,6 +587,7 @@ test("chat and the text board list the sections in the board's one order", () =>
       landed: false,
       shipping: "merge",
       shippingMr: "mr:gitlab.cego.dk/mk/collie!65",
+      sentence: "Ready to release: mk/collie!65 is open.",
     }),
     task({ id: "waiting", name: "Shippable", state: "done", landed: false }),
     task({ id: "blocked", name: "Asking", state: "blocked" }),
@@ -598,6 +599,10 @@ test("chat and the text board list the sections in the board's one order", () =>
     );
   expect(titled(Str.split(herdLines(views, 0), "\n"))).toEqual(order);
   expect(titled(boardLines(views))).toEqual(order);
+  expect(herdLines(views, 0)).toContain("Merge: Ready to release: mk/collie!65 is open.");
+  expect(Arr.join(boardLines(views), "\n")).toContain(
+    "Merge: Ready to release: mk/collie!65 is open.",
+  );
 });
 
 test("collie_run and collie_herd say what a running check's card says", () =>

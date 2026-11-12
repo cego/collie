@@ -98,9 +98,18 @@ const senderLine = (actor: Asker | undefined, at: number): string | null => {
 };
 
 /** The exact message whose size is bounded and which reaches the agent. */
-export const deliveryText = (words: string, actor: Asker | undefined, at: number): string => {
+export const deliveryText = (
+  words: string,
+  actor: Asker | undefined,
+  at: number,
+  workflowNotice?: string,
+): string => {
   const line = senderLine(actor, at);
-  return line === null ? words : `${line}\n${words}`;
+  const heading = Arr.join(
+    Arr.filter([line, workflowNotice], (one) => one != null),
+    " ",
+  );
+  return heading === "" ? words : `${heading}\n${words}`;
 };
 
 /**
@@ -127,9 +136,11 @@ export const fitDelivery = Effect.fn("Dispatcher.fitDelivery")(function* (
   token: string,
   words: string,
   actor: Asker | undefined,
+  workflowNotice?: string,
 ) {
   const at = yield* Clock.currentTimeMillis;
-  if (fits(`${token}\n${deliveryText(words, actor, at)}`)) return { words, actor, kept: null };
+  if (fits(`${token}\n${deliveryText(words, actor, at, workflowNotice)}`))
+    return { words, actor, kept: null };
   const said =
     actor?.origin === "chat" && actor.said !== undefined && actor.said !== ""
       ? scrub(actor.said).text
@@ -143,7 +154,7 @@ export const fitDelivery = Effect.fn("Dispatcher.fitDelivery")(function* (
   return {
     words: told,
     actor: unquoted,
-    kept: fits(`${token}\n${deliveryText(told, unquoted, at)}`)
+    kept: fits(`${token}\n${deliveryText(told, unquoted, at, workflowNotice)}`)
       ? KEPT
       : `${KEPT} Even this is over the budget, so it may arrive as pasted content.`,
   };
@@ -160,6 +171,7 @@ export interface DeliveryDraft {
   readonly requestId: string;
   readonly actor?: Asker;
   readonly note?: string;
+  readonly workflowNotice?: string;
   readonly idleOnly?: boolean;
   /** Whose words it carries, where they are a human's. */
   readonly human?: HumanDoor | null;
@@ -332,7 +344,12 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
       agent: entry.agent,
       submit: (words, draft) =>
         Effect.gen(function* () {
-          const text = deliveryText(words, draft.actor, yield* Clock.currentTimeMillis);
+          const text = deliveryText(
+            words,
+            draft.actor,
+            yield* Clock.currentTimeMillis,
+            draft.workflowNotice,
+          );
           if (closed)
             return yield* new DispatcherDefect({
               why: `${entry.agent}'s channel was used after its transaction closed`,
@@ -428,7 +445,7 @@ function deliveryOf(
   at: string,
   state: Delivery["state"],
 ): Delivery {
-  const line: Delivery = {
+  let line: Delivery = {
     id: `${draft.requestId}-${draft.attempt}`,
     at,
     run: draft.run,
@@ -443,6 +460,7 @@ function deliveryOf(
     attempt: draft.attempt,
     state,
   };
+  if (draft.workflowNotice !== undefined) line = { ...line, workflowNotice: draft.workflowNotice };
   return draft.human == null ? line : { ...line, human: draft.human };
 }
 
