@@ -894,7 +894,8 @@ recorded once, judged against `proved`, the head its Checks were proved on, and 
 `at` when), `Closed`, `Moved` (the head is no longer `proved`), `Unanswered` (external
 comments nobody answered, other than those named in `seen`), `Ready` (approved, green and
 mergeable at `proved`, with its `approvers`), `Waiting` with `why` it is not, or
-`Unreadable` with the forge's `reason`. A repository with no pipeline has none to wait for.
+`Unreadable` with the forge's `reason`. `Unanswered` and `Waiting` name the `approvers` the
+forge has too, absent from a standing journaled before they did. A repository with no pipeline has none to wait for.
 `host.awaitReview` takes the same options and reads every five minutes, at no token cost,
 until the standing is anything but `Waiting` or `Unreadable`, or a Hold or Stop ends it as
 `Held`. Meanwhile what it waits for that comes by itself — CI, a teammate's approval, review

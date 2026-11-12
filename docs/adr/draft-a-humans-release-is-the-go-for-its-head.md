@@ -25,7 +25,9 @@ who started it, which the host records only for a human. Nothing an Input or an 
 is read, so no agent can give a go by starting a Run.
 
 **D2. It holds while nothing it was given on is worse.** The Release Run reads the merge
-request when it starts: its head, and who had approved it where it was then ready. At D5's
+request when it starts, which the human's Release itself does: its head, and who the forge
+names as approving it then, however far from ready it is, since a pipeline still running
+is the usual state right after a merge request opens. At D5's
 readiness it takes the go without asking, records that it did, and goes on to claim and
 merge, where the head is that head and every approver then still approves. A moved head or
 a lost approval asks D5's go as before. Readiness already requires the pipeline green and

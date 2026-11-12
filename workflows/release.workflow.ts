@@ -46,6 +46,7 @@ import { connection } from "./connections.ts";
 import * as Workflow from "effect/workflow/Workflow";
 import { WorkflowInstance } from "effect/workflow/WorkflowEngine";
 import { IMPLEMENTER } from "./reviewing.ts";
+import { GivenGo, givenAt, holdsFor } from "./release-go.ts";
 import {
   Assessed,
   RolledBack,
@@ -579,10 +580,6 @@ interface Landed {
   readonly production: ProductionGo | null;
 }
 
-/** A human's Release this Run was started by: the head it was given at, and who had approved. */
-const GivenGo = Schema.Struct({ head: Schema.String, approvers: Schema.Array(Schema.String) });
-type GivenGo = typeof GivenGo.Type;
-
 /** A front door a human types into, or chat carrying the human's own words. */
 const humanVoice = (by: { readonly origin: string; readonly said?: string }) =>
   ["board", "desktop", "cli-tty"].includes(by.origin) ||
@@ -609,10 +606,6 @@ const releasedByHuman = (place: {
       onSome: (one) => one.by !== undefined && humanVoice(one.by),
     });
   });
-
-/** Whether the go a human gave still holds: the same head, and nobody's approval gone since. */
-const holdsFor = (given: GivenGo, ready: Extract<ReviewStanding, { _tag: "Ready" }>) =>
-  given.head === ready.head && Arr.every(given.approvers, (one) => ready.approvers.includes(one));
 
 /** Why a standing is not the ready one a go was given for. */
 const notReady = (standing: ReviewStanding) => {
@@ -785,7 +778,7 @@ export default defineWorkflow({
                 const at = yield* host
                   .review({ runId, cwd, proved: start.head, seen: [] })
                   .pipe(Effect.orElseSucceed(() => null));
-                return { head: start.head, approvers: at?._tag === "Ready" ? at.approvers : [] };
+                return givenAt(start.head, at);
               }),
             });
       const tagMerges: string[] = [];

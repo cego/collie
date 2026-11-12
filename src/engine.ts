@@ -721,12 +721,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** Where a merge request's review stands, judged against the head the Run's Checks were proved on. */
   export type ReviewStanding =
     | { readonly _tag: "Ready"; readonly head: string; readonly approvers: ReadonlyArray<string> }
-    | { readonly _tag: "Unanswered"; readonly head: string; readonly comments: ReadonlyArray<OpenComment> }
+    | { readonly _tag: "Unanswered"; readonly head: string; readonly comments: ReadonlyArray<OpenComment>; readonly approvers?: ReadonlyArray<string> }
     | { readonly _tag: "Moved"; readonly head: string }
     | { readonly _tag: "Merged"; readonly sha: string; readonly by: string; readonly at: string }
     | { readonly _tag: "Closed" }
     | { readonly _tag: "Held" }
-    | { readonly _tag: "Waiting"; readonly why: ReadonlyArray<string> }
+    | { readonly _tag: "Waiting"; readonly why: ReadonlyArray<string>; readonly approvers?: ReadonlyArray<string> }
     | { readonly _tag: "Unreadable"; readonly reason: string };
   export const ReviewStandingSchema: Schema.Codec<ReviewStanding, unknown, never, never>;
   /** Whether a standing is still waiting on a teammate's approval, among whatever else. */

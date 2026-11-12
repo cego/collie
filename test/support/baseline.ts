@@ -13265,6 +13265,38 @@ const goGiven = (
   );
 
   scenario(
+    "release: a human's Release given while the pipeline ran is asked again once an approver of it is gone",
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, changed } = yield* releasable("gitlab", STILL_RUNNING);
+          claimed.length = 0;
+          const runId = "r-release-go-unapproved";
+          yield* rig.queueOutputs([PACKAGED]);
+          const swapped = changed({ ...PIPELINE_PASSED, approvers: ["bob"] }).pipe(Effect.orDie);
+          const status = yield* driven(
+            {
+              entry: shipped("release"),
+              runId,
+              input: { mr: target },
+              host: Layer.provide(goGiven({ answered: "board" }, swapped), releaseHost()),
+            },
+            (run) =>
+              Effect.gen(function* () {
+                const go = yield* goAsked(run.asked, "go-1");
+                expect(go.prompt).toContain("approved by bob");
+                yield* run.answer("go-1", "Finish");
+                return yield* ended(run.status);
+              }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was left open`);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
     "release: an agent's Release on implement is no human's go, so the go is asked",
     () =>
       runEffect(
