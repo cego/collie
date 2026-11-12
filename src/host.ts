@@ -1381,6 +1381,7 @@ const hostBoard = (dir: string) =>
       herdr,
       bun,
       listing,
+      runs,
       kept,
       factsOf,
       offered,
@@ -3656,15 +3657,7 @@ const frontDoorHandlers = (
                 const { describeOffers, refusal } = yield* Effect.promise(
                   () => import("./lifecycle"),
                 );
-                const runs = yield* Effect.cached(
-                  registry
-                    .views(null)
-                    .pipe(
-                      Effect.map((views) =>
-                        newestFirst(Arr.map(views, (view) => factsOfView(dir, view))),
-                      ),
-                    ),
-                );
+                const runs = yield* Effect.cached(Effect.map(shared.runs, newestFirst));
                 const offers = (id: string) =>
                   registry.offers(id).pipe(Effect.provideContext(hosted));
                 return yield* answerRead(askerEnv(client), tool, input, {
