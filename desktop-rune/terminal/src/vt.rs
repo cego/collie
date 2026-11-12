@@ -141,6 +141,24 @@ fn ok(r: GhosttyResult, what: &str) {
     assert!(r == GHOSTTY_SUCCESS, "{what} failed: {r}");
 }
 
+/// Ghostty's buffer APIs report the required byte count on OUT_OF_SPACE. Keep the
+/// allocation in Rust, and accept only a successful write that fits that allocation.
+fn read_text(mut read: impl FnMut(&mut [u8], &mut usize) -> GhosttyResult) -> Option<String> {
+    let mut needed = 0;
+    if read(&mut [], &mut needed) != GHOSTTY_OUT_OF_SPACE || needed == 0 {
+        return None;
+    }
+    let mut buf = Vec::new();
+    buf.try_reserve_exact(needed).ok()?;
+    buf.resize(needed, 0);
+    let mut written = 0;
+    if read(&mut buf, &mut written) != GHOSTTY_SUCCESS {
+        return None;
+    }
+    let bytes = buf.get(..written)?;
+    (!bytes.is_empty()).then(|| String::from_utf8_lossy(bytes).into_owned())
+}
+
 unsafe extern "C" fn on_render_hold(t: GhosttyTerminal, userdata: *mut c_void, held: bool) {
     let shared = unsafe { &mut *(userdata as *mut Shared) };
     if held {
@@ -775,28 +793,31 @@ impl Vt {
             end: grid,
             rectangle: false,
         };
-        let r = unsafe {
-            match unit {
-                Unit::Cell => return Some((at, at)),
-                Unit::Word => {
-                    let options = GhosttyTerminalSelectWordOptions {
-                        size: std::mem::size_of::<GhosttyTerminalSelectWordOptions>(),
-                        ref_: grid,
-                        boundary_codepoints: std::ptr::null(),
-                        boundary_codepoints_len: 0,
-                    };
-                    ghostty_terminal_select_word(self.term, &options, &mut sel)
-                }
-                Unit::Line => {
-                    let options = GhosttyTerminalSelectLineOptions {
-                        size: std::mem::size_of::<GhosttyTerminalSelectLineOptions>(),
-                        ref_: grid,
-                        whitespace: std::ptr::null(),
-                        whitespace_len: 0,
-                        semantic_prompt_boundary: false,
-                    };
-                    ghostty_terminal_select_line(self.term, &options, &mut sel)
-                }
+        let r = match unit {
+            Unit::Cell => return Some((at, at)),
+            Unit::Word => {
+                let options = GhosttyTerminalSelectWordOptions {
+                    size: std::mem::size_of::<GhosttyTerminalSelectWordOptions>(),
+                    ref_: grid,
+                    boundary_codepoints: std::ptr::null(),
+                    boundary_codepoints_len: 0,
+                };
+                // SAFETY: grid_ref validated this cell in the live terminal, which
+                // cannot be mutated during this borrow. Both structs are initialized
+                // and live for the call. selection.h defines NULL/0 as default boundaries.
+                unsafe { ghostty_terminal_select_word(self.term, &options, &mut sel) }
+            }
+            Unit::Line => {
+                let options = GhosttyTerminalSelectLineOptions {
+                    size: std::mem::size_of::<GhosttyTerminalSelectLineOptions>(),
+                    ref_: grid,
+                    whitespace: std::ptr::null(),
+                    whitespace_len: 0,
+                    semantic_prompt_boundary: false,
+                };
+                // SAFETY: the same live-grid and output-struct invariants as above;
+                // selection.h defines NULL/0 as Ghostty's default line whitespace.
+                unsafe { ghostty_terminal_select_line(self.term, &options, &mut sel) }
             }
         };
         if r != GHOSTTY_SUCCESS {
@@ -849,37 +870,30 @@ impl Vt {
             trim: true,
             selection: std::ptr::null(),
         };
-        let mut ptr: *mut u8 = std::ptr::null_mut();
-        let mut len = 0usize;
-        let r = unsafe {
-            ghostty_terminal_selection_format_alloc(
-                self.term,
-                std::ptr::null(),
-                options,
-                &mut ptr,
-                &mut len,
-            )
-        };
-        if r != GHOSTTY_SUCCESS || ptr.is_null() {
-            return None;
-        }
-        let text =
-            String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(ptr, len) }).into_owned();
-        unsafe { ghostty_free(std::ptr::null(), ptr, len) };
-        (!text.is_empty()).then_some(text)
+        read_text(|buf, written| {
+            // SAFETY: the handle stays live and immutable through both reads. The C
+            // writer honors buf.len(), including the zero-capacity size query; Rust
+            // owns initialized storage and the out-length reference for the whole call.
+            unsafe {
+                ghostty_terminal_selection_format_buf(
+                    self.term,
+                    options,
+                    buf.as_mut_ptr(),
+                    buf.len(),
+                    written,
+                )
+            }
+        })
     }
 
     /// The OSC 8 hyperlink under column `x` of viewport row `y`.
     pub fn hyperlink_at(&self, x: u16, y: u16) -> Option<String> {
         let grid = self.grid_ref(GHOSTTY_POINT_TAG_VIEWPORT, x, u32::from(y))?;
-        let mut len = 0usize;
-        unsafe { ghostty_grid_ref_hyperlink_uri(&grid, std::ptr::null_mut(), 0, &mut len) };
-        if len == 0 {
-            return None;
-        }
-        let mut buf = vec![0u8; len];
-        let r = unsafe { ghostty_grid_ref_hyperlink_uri(&grid, buf.as_mut_ptr(), len, &mut len) };
-        (r == GHOSTTY_SUCCESS).then(|| String::from_utf8_lossy(&buf[..len]).into_owned())
+        read_text(|buf, written| {
+            // SAFETY: grid came from this terminal and no write can invalidate it
+            // during this borrow. Ghostty bounds the copy by the supplied slice length.
+            unsafe { ghostty_grid_ref_hyperlink_uri(&grid, buf.as_mut_ptr(), buf.len(), written) }
+        })
     }
 
     /// What to tell the program when the terminal gains or loses focus, if it asked (mode 1004).
@@ -973,22 +987,60 @@ impl Vt {
         (x, y): (f32, f32),
         cell: (u32, u32),
     ) -> Vec<u8> {
-        unsafe {
+        let Some(screen_width) = u32::from(self.cols).checked_mul(cell.0) else {
+            return Vec::new();
+        };
+        let Some(screen_height) = u32::from(self.rows).checked_mul(cell.1) else {
+            return Vec::new();
+        };
+        if screen_width == 0 || screen_height == 0 {
+            return Vec::new();
+        }
+        // Ghostty converts to u16 cells before clamping, and SGR-Pixels rounds into
+        // i32 pixels. Reject values those conversions cannot represent, including
+        // NaN/inf, while preserving normal releases outside the pane's bounds.
+        let coordinate_fits = |value: f32, cell: u32| {
+            let pixel = f64::from(value);
+            pixel.is_finite()
+                && pixel.round() >= f64::from(i32::MIN)
+                && pixel.round() <= f64::from(i32::MAX)
+                && pixel.max(0.0) / f64::from(cell) < f64::from(u16::MAX) + 1.0
+        };
+        if !coordinate_fits(x, cell.0)
+            || !coordinate_fits(y, cell.1)
+            || !matches!(
+                action,
+                GHOSTTY_MOUSE_ACTION_PRESS
+                    | GHOSTTY_MOUSE_ACTION_RELEASE
+                    | GHOSTTY_MOUSE_ACTION_MOTION
+            )
+            || button.is_some_and(|button| {
+                !(GHOSTTY_MOUSE_BUTTON_UNKNOWN..=GHOSTTY_MOUSE_BUTTON_ELEVEN).contains(&button)
+            })
+        {
+            return Vec::new();
+        }
+        let size = GhosttyMouseEncoderSize {
+            size: std::mem::size_of::<GhosttyMouseEncoderSize>(),
+            screen_width,
+            screen_height,
+            cell_width: cell.0,
+            cell_height: cell.1,
+            ..Default::default()
+        };
+        let e = self.mouse_event;
+        let mut buf = [0u8; 64];
+        let mut len = 0usize;
+        // SAFETY: these handles are owned by Vt until Drop. The sized option is
+        // initialized, its dimensions and event values were checked above, and it
+        // is copied by setopt. encode writes only within the live buffer's capacity.
+        let r = unsafe {
             ghostty_mouse_encoder_setopt_from_terminal(self.mouse, self.term);
-            let size = GhosttyMouseEncoderSize {
-                size: std::mem::size_of::<GhosttyMouseEncoderSize>(),
-                screen_width: u32::from(self.cols) * cell.0,
-                screen_height: u32::from(self.rows) * cell.1,
-                cell_width: cell.0,
-                cell_height: cell.1,
-                ..Default::default()
-            };
             ghostty_mouse_encoder_setopt(
                 self.mouse,
                 GHOSTTY_MOUSE_ENCODER_OPT_SIZE,
                 &size as *const _ as *const c_void,
             );
-            let e = self.mouse_event;
             ghostty_mouse_event_set_action(e, action);
             match button {
                 Some(b) => ghostty_mouse_event_set_button(e, b),
@@ -996,20 +1048,18 @@ impl Vt {
             }
             ghostty_mouse_event_set_mods(e, mods);
             ghostty_mouse_event_set_position(e, GhosttyMousePosition { x, y });
-            let mut buf = [0u8; 64];
-            let mut len = 0usize;
-            let r = ghostty_mouse_encoder_encode(
+            ghostty_mouse_encoder_encode(
                 self.mouse,
                 e,
                 buf.as_mut_ptr() as *mut _,
                 buf.len(),
                 &mut len,
-            );
-            if r != GHOSTTY_SUCCESS {
-                return Vec::new();
-            }
-            buf[..len].to_vec()
+            )
+        };
+        if r != GHOSTTY_SUCCESS {
+            return Vec::new();
         }
+        buf.get(..len).unwrap_or_default().to_vec()
     }
 }
 
@@ -1024,6 +1074,39 @@ impl Drop for Vt {
             ghostty_render_state_row_iterator_free(self.rows_it);
             ghostty_render_state_free(self.shared.state);
             ghostty_terminal_free(self.term);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_read_refuses_an_unallocatable_length_before_the_second_call() {
+        let mut calls = 0;
+        let text = read_text(|_, written| {
+            calls += 1;
+            *written = usize::MAX;
+            GHOSTTY_OUT_OF_SPACE
+        });
+        assert_eq!(text, None);
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn text_read_refuses_an_output_length_beyond_its_buffer() {
+        for result in [GHOSTTY_SUCCESS, GHOSTTY_OUT_OF_SPACE] {
+            let text = read_text(|buf, written| {
+                if buf.is_empty() {
+                    *written = 2;
+                    GHOSTTY_OUT_OF_SPACE
+                } else {
+                    *written = 3;
+                    result
+                }
+            });
+            assert_eq!(text, None);
         }
     }
 }
