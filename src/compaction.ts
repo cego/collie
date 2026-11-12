@@ -33,7 +33,7 @@ import type { AgentQuestion, HarnessVersionError, Submitting } from "./compactor
 import { LOCK_CLAIM_SPACING_MS, ensureLockDir, withLock } from "./lock";
 import { reason } from "./naming";
 import { COMPACTION_OFF } from "./settings";
-import { commandOf, processOf, stillRunning, terminate } from "./processes";
+import { commandOf, processAbsent, processOf, stillRunning, terminate } from "./processes";
 
 /**
  * How long Collie waits for a compaction request to resolve before it pauses the Run.
@@ -750,6 +750,33 @@ export const unlistedServers = Effect.fn("Compaction.unlistedServers")(function*
     if (record !== null && (yield* mayWrite(record))) found.push(record);
   }
   return found;
+});
+
+/** A listed terminal does not prove its owned server is alive. */
+export const lostServer = Effect.fn("Compaction.lostServer")(function* (
+  deps: Pick<CompactionDeps, "ports" | "stateDir">,
+  agent: string,
+) {
+  const record = yield* readControl(deps.stateDir, agent).pipe(Effect.orElseSucceed(() => null));
+  if (
+    record === null ||
+    record.agent !== agent ||
+    record.pid === null ||
+    Str.trim(record.started ?? "") === "" ||
+    Str.trim(record.command ?? "") === "" ||
+    !record.endpoint
+  )
+    return null;
+  const port = deps.ports[record.harness];
+  if (port?.ready === undefined || port.stop === undefined) return null;
+  // Cheap while healthy: no network request and no scan of the machine's agents.
+  if (!(yield* processAbsent(record.pid))) return null;
+  const ready = yield* port.ready(record).pipe(
+    Effect.orElseSucceed(() => false),
+    Effect.timeoutOption(2_000),
+  );
+  if (Option.isNone(ready) || ready.value) return null;
+  return `${record.harness} server pid ${record.pid} has exited and ${record.endpoint} is unavailable`;
 });
 
 /**

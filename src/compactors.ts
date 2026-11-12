@@ -74,6 +74,7 @@ import {
 } from "./compaction";
 import {
   processOf,
+  processAbsent,
   readsSessions,
   sessionOf,
   stillRunning,
@@ -1376,8 +1377,19 @@ const stopCodex = (
       left: [],
       noted: target.noted,
     });
+    if (server === null && !(yield* processAbsent(target.pid)))
+      return refused(`pid ${target.pid} is live but its process identity could not be read`);
     if (server === null)
-      return yield* survivors(target.pid, target.noted, null, deadline, "failed", signalled, once);
+      return yield* survivors(
+        target.pid,
+        target.noted,
+        null,
+        deadline,
+        "failed",
+        signalled,
+        once,
+        false,
+      );
     if (!pipe(server.command, Str.includes(target.command)))
       return refused(`pid ${target.pid} is \`${server.command}\`, not \`${target.command}\``);
     if (target.started !== null && server.started !== target.started)
@@ -1386,6 +1398,7 @@ const stopCodex = (
     let turns: Stopped["turns"] = null;
     let session: ProcessInfo[] = [];
     const noted = [...target.noted];
+    let inspected = false;
     let submitted = 0;
     let acknowledged = 0;
     const short = (): Stopped["state"] =>
@@ -1411,6 +1424,7 @@ const stopCodex = (
         );
         turns = running;
         session = yield* sessionOf(target.pid);
+        inspected = yield* stillRunning(server);
         for (const one of session)
           if (!Arr.some(noted, (seen) => seen.pid === one.pid && seen.started === one.started))
             noted.push(seen(one));
@@ -1439,7 +1453,16 @@ const stopCodex = (
         const busy = Arr.filter(threads, (thread) => thread.running.length > 0);
         for (;;) {
           if (!(yield* stillRunning(server)))
-            return yield* survivors(target.pid, noted, running, deadline, short(), signalled, once);
+            return yield* survivors(
+              target.pid,
+              noted,
+              running,
+              deadline,
+              short(),
+              signalled,
+              once,
+              inspected,
+            );
           // Read back rather than assumed: a lost connection is not a turn that ended.
           let unread: string | null = null;
           const unended: typeof running = [];
@@ -1488,7 +1511,16 @@ const stopCodex = (
       Effect.catch((cause) =>
         Effect.gen(function* () {
           if (yield* stillRunning(server)) return notQuiet(reason(cause));
-          return yield* survivors(target.pid, noted, turns, deadline, short(), signalled, once);
+          return yield* survivors(
+            target.pid,
+            noted,
+            turns,
+            deadline,
+            short(),
+            signalled,
+            once,
+            inspected,
+          );
         }),
       ),
     );
@@ -1511,12 +1543,45 @@ const survivors = (
   short: Stopped["state"],
   signalled: ReadonlyArray<SeenProcess>,
   once: (one: SeenProcess) => Effect.Effect<void>,
+  inspected: boolean,
 ) =>
   Effect.gen(function* () {
     const proven = (one: SeenProcess) =>
       Arr.some(noted, (seen) => seen.pid === one.pid && seen.started === one.started);
     const sessions = yield* readsSessions;
-    const remaining = sessions ? sessionOf(root) : Effect.filter(noted, (one) => stillRunning(one));
+    if (!sessions && !inspected)
+      return {
+        state: "failed",
+        turns,
+        reason:
+          "its server exited before its session could be inspected; this platform cannot establish whether its child processes have stopped",
+        signalled,
+        left: noted,
+        noted,
+      } satisfies Stopped;
+    const absent = yield* processAbsent(root).pipe(
+      Effect.repeat({
+        until: Boolean,
+        schedule: Schedule.spaced(50).pipe(Schedule.while(({ now }) => now < deadline)),
+      }),
+    );
+    if (!absent)
+      return yield* new Cause.UnknownError(root, `server process ${root} is not proven absent`);
+    const remaining = Effect.gen(function* () {
+      return sessions
+        ? yield* sessionOf(root)
+        : yield* Effect.filter(noted, (one) =>
+            Effect.gen(function* () {
+              const now = yield* processOf(one.pid);
+              if (now !== null) return now.started === one.started;
+              if (yield* processAbsent(one.pid)) return false;
+              return yield* new Cause.UnknownError(
+                one.pid,
+                `process ${one.pid} could not be inspected`,
+              );
+            }),
+          );
+    });
     for (const one of yield* remaining) if (proven(one)) yield* once(one);
     const until = Math.max(deadline, (yield* Clock.currentTimeMillis) + SURVIVOR_GRACE_MS);
     const left = yield* remaining.pipe(
@@ -1547,7 +1612,18 @@ const survivors = (
       left: Arr.map(left, (one) => ({ pid: one.pid, started: one.started })),
       noted,
     } satisfies Stopped;
-  });
+  }).pipe(
+    Effect.catch((cause) =>
+      Effect.succeed<Stopped>({
+        state: "failed",
+        turns,
+        reason: `its server or child processes could not be proven stopped (${reason(cause)})`,
+        signalled,
+        left: noted,
+        noted,
+      }),
+    ),
+  );
 
 /** Codex's port, over the App Server `server` starts: `codex app-server`, or a test's stand-in. */
 export const codexPort = (server: string): CompactionPort => ({

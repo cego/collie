@@ -73,6 +73,7 @@ import {
   awaitReady,
   controlDir,
   installControls,
+  lostServer,
   readControl,
   NotQuiet,
   notStopped,
@@ -211,7 +212,14 @@ import { isString, type JsonObject } from "./schema";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
 import { Collecting, collectingLayer, type CollectingApi } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
-import { causalKey, deliveriesAbout, deliveriesOf, SENT_STATES, toldLine } from "./steering";
+import {
+  causalKey,
+  deliveriesAbout,
+  deliveriesOf,
+  isUnobserved,
+  SENT_STATES,
+  toldLine,
+} from "./steering";
 import type { Records } from "./records";
 import { readTask, withTaskLock, writeTask } from "./task";
 import { malformedIn, mentionedSkills, renderTemplate, skillMention, skillsIn } from "./template";
@@ -379,6 +387,8 @@ export interface AgentsApi {
   readonly pollMs: number;
   /** How long an agent may sit idle without writing its Output. */
   readonly collectMs: number;
+  /** Continuous managed endpoint failure, bounded independently of the idle budget. */
+  readonly unhealthy: (launched: Launched) => Effect.Effect<string>;
   /**
    * The agent these preferences come to over the operator's configuration, lowest first,
    * moved on to one with room where its Subscription is spent.
@@ -425,6 +435,7 @@ export interface AgentsApi {
   readonly revive: (
     ask: AgentAsk,
     unless?: string | null,
+    onlyDeadServer?: boolean,
   ) => Effect.Effect<boolean, AgentUncertain | AgentParked>;
   /**
    * Hands a message, through the one sender, to the live agent in this role of a Run this
@@ -917,13 +928,28 @@ export const agentWork = <
         ),
       );
     // Uninterruptible, so a stop racing a restart waits for it and finds its agent to stop.
-    const reviving = (from: AgentAsk, unless?: string | null) =>
+    const reviving = (from: AgentAsk, unless?: string | null, onlyDeadServer = false) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
           if (yield* host.stopRequested(runId)) return;
-          if ((yield* agents.revive(from, unless)) && (yield* host.stopRequested(runId)))
+          if (
+            (yield* agents.revive(from, unless, onlyDeadServer)) &&
+            (yield* host.stopRequested(runId))
+          )
             yield* haltLate;
         }),
+      );
+    // A stale working status must not hide a dead server for the entire idle budget.
+    const recovering = (on: Launched, from: AgentAsk, unless?: string | null) =>
+      Effect.raceFirst(
+        reviving(from, unless, true).pipe(
+          Effect.repeat(Schedule.spaced(Duration.millis(agents.pollMs))),
+          Effect.andThen(Effect.never),
+        ),
+        agents.unhealthy(on).pipe(
+          Effect.flatMap((why) => host.parked(runId, why, "output-absent")),
+          Effect.andThen(Effect.never),
+        ),
       );
     // Each budget spent idle, one that has gone is started again, as a resume once did.
     const untilWritten = (on: Launched, from: AgentAsk) =>
@@ -964,9 +990,12 @@ export const agentWork = <
         parkedWhenStuck(
           reviving(from).pipe(
             Effect.andThen(
-              waiting === undefined
-                ? Effect.raceFirst(Effect.raceFirst(output, ended), agents.ranOut(on))
-                : output,
+              Effect.raceFirst(
+                waiting === undefined
+                  ? Effect.raceFirst(Effect.raceFirst(output, ended), agents.ranOut(on))
+                  : output,
+                recovering(on, from),
+              ),
             ),
           ),
           host,
@@ -1253,7 +1282,13 @@ export const agentWork = <
                 parkedWhenStuck(
                   reviving(currentAsk, unusable).pipe(
                     Effect.andThen(
-                      Effect.raceFirst(recollecting(unusable, since), parksOnStop(current, since)),
+                      Effect.raceFirst(
+                        Effect.raceFirst(
+                          recollecting(unusable, since),
+                          parksOnStop(current, since),
+                        ),
+                        recovering(current, currentAsk, unusable),
+                      ),
                     ),
                   ),
                   host,
@@ -1871,6 +1906,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       readonly workflowNotice?: string;
     },
   ) {
+    const lost = yield* lostServer(compactionDeps(host, about.runId), about.agent);
+    if (lost !== null) return { sent: false, why: lost, gone: true };
     const through = delivery.herdr === undefined ? deps : { ...deps, herdr: delivery.herdr };
     const found = yield* entryFor(about, about.agent, null, through);
     if (found.entry === null)
@@ -2565,6 +2602,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         const live = Option.getOrUndefined(
           Arr.findFirst(listing.success, (one) => one.name === agent),
         );
+        if (live !== undefined && (yield* retireLost(ask, listing.success)))
+          return yield* launch(ask, false, note);
         const alive = live !== undefined && !fresh;
         const back = live === undefined ? comingBack.get(agent) : undefined;
         if (back !== undefined) {
@@ -2738,7 +2777,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         // The sender reads a failed listing as no agent, so only one that answers settles it.
         if (alive && asked.gone === true) {
           const again = yield* host.herdr.agentList().pipe(Effect.result);
-          if (again._tag === "Success" && isGone(agent, again.success, asked.why)) {
+          if (
+            again._tag === "Success" &&
+            (isGone(agent, again.success, asked.why) || (yield* retireLost(ask, again.success)))
+          ) {
             // Nothing reached it, so a new one is this work's agent rather than a second.
             yield* log(
               ask.runId,
@@ -3126,6 +3168,48 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       }),
     ).pipe(Effect.orElseSucceed(() => undefined));
 
+  const unhealthy = (launched: Launched) =>
+    under(
+      Effect.gen(function* () {
+        let failedAt: number | null = null;
+        let endpoint: string | null = null;
+        const budgetMs = host.readyMs ?? READY_TIMEOUT_MS;
+        return yield* Effect.gen(function* () {
+          const record = yield* readControl(host.env.stateDir, launched.agent).pipe(
+            Effect.orElseSucceed(() => null),
+          );
+          const ready = record === null ? undefined : ports[record.harness]?.ready;
+          if (record?.endpoint == null || ready === undefined) {
+            failedAt = null;
+            return null;
+          }
+          const since = yield* Clock.currentTimeMillis;
+          if (endpoint !== record.endpoint) failedAt = null;
+          endpoint = record.endpoint;
+          const up = yield* ready(record).pipe(
+            Effect.orElseSucceed(() => false),
+            Effect.timeoutOption(2_000),
+          );
+          if (Option.isSome(up) && up.value) {
+            failedAt = null;
+            return null;
+          }
+          failedAt ??= since;
+          if ((yield* Clock.currentTimeMillis) - failedAt < budgetMs) return null;
+          return `${launched.agent}: ${record.harness} server health at ${endpoint} remained unavailable or unproved for ${Math.round(budgetMs / 1000)}s. Collie keeps collecting usable Output; replacement requires proven death and a Quiet predecessor.`;
+        }).pipe(
+          Effect.repeat({
+            until: (why) => why !== null,
+            schedule: Schedule.spaced(host.pollMs ?? DEFAULT_POLL_MS),
+          }),
+          Effect.filterOrElse(
+            (why): why is string => why !== null,
+            () => Effect.never,
+          ),
+        );
+      }),
+    );
+
   const collect = (
     launched: Launched,
     unless?: string | null,
@@ -3350,6 +3434,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           .pipe(Effect.orElseSucceed(() => "")),
         authority: yield* run.authority,
       };
+      if (out) yield* uncertainStep(ask);
       const session: StartSession | null =
         had !== null
           ? { id: had, resumed: true }
@@ -3491,32 +3576,98 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       ),
     );
 
-  const revive = (ask: AgentAsk, unless?: string | null) =>
-    under(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const written = yield* fs.readFileString(ask.output).pipe(Effect.orElseSucceed(() => ""));
-        if (Str.trim(written) !== "" && written !== unless) return false;
-        const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1);
-        // The host starts an agent on core again, in the session it had.
-        if (yield* fs.exists(startedPath(ask.runId, agent)).pipe(Effect.orElseSucceed(() => false)))
-          return false;
-        const listing = yield* host.herdr.agentList().pipe(Effect.option);
-        if (listing._tag === "None") return false;
-        // Asked only of one herdr lists: it has no delivery to say whether it is inactive.
-        const refusal = Arr.some(listing.value, (one) => one.name === agent)
-          ? yield* host.herdr
-              .agentStatus(agent)
-              .pipe(Effect.match({ onFailure: herdrFailureReason, onSuccess: () => "" }))
-          : "";
-        if (!isGone(agent, listing.value, refusal)) return false;
-        yield* log(
-          ask.runId,
-          `${agent}: gone before ${ask.operation} was written; starting it again`,
+  const uncertainStep = (ask: AgentAsk) =>
+    Effect.gen(function* () {
+      const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1);
+      const held = Arr.findFirst(
+        yield* deliveriesOf(ask.runId),
+        (one) =>
+          one.agent === agent &&
+          (one.cause.kind === "step" || one.cause.kind === "repair") &&
+          one.cause.ref === stemOf(ask) &&
+          (one.state === "unknown" || one.state === "reserved" || isUnobserved(one)),
+      );
+      if (Option.isSome(held))
+        return yield* new AgentParked({
+          operation: ask.operation,
+          reason: `${agent}: delivery ${held.value.id} remains ${held.value.state}; server loss does not say whether it was received. Settle it with \`collie run deliveries ${ask.runId} --reconcile ${held.value.id} --as sent|not-sent\`, then \`collie run resume ${ask.runId}\`.`,
+        });
+    });
+
+  const retireLost = (ask: AgentAsk, listed: ReadonlyArray<AgentInfo>) =>
+    Effect.gen(function* () {
+      const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1);
+      const lost = yield* lostServer(compactionDeps(host, ask.runId), agent);
+      if (lost === null) return false;
+      yield* uncertainStep(ask);
+      const owned = yield* readControl(host.env.stateDir, agent).pipe(
+        Effect.orElseSucceed(() => null),
+      );
+      if (owned?.runLog !== `${dirFor(ask.runId)}/agents.log` || owned.cwd !== ask.cwd)
+        return yield* unsettled(
+          ask,
+          `${lost}; its control identity does not match this Run and checkout`,
         );
-        yield* launch(ask, true);
-        return true;
-      }),
+      const launched = Arr.findLast(yield* launchesOf(ask.runId), (one) => one.agent === agent);
+      if (Option.isNone(launched))
+        return yield* unsettled(ask, `${lost}; its terminal has no launch identity`);
+      const ended = yield* endAgent(endsOf(ask.runId), launched.value, lost, "close", listed).pipe(
+        Effect.mapError((cause) =>
+          unsettled(ask, `${lost}; it could not be ended (${reason(cause)})`),
+        ),
+      );
+      if (ended._tag !== "Closed" || !ended.ended)
+        return yield* unsettled(
+          ask,
+          `${lost}; ${"reason" in ended ? ended.reason : "its terminal changed before it could be ended"}`,
+        );
+      yield* log(ask.runId, `${agent}: ${lost}; recovering its work in the same Run`);
+      return true;
+    });
+
+  const revive = (ask: AgentAsk, unless?: string | null, onlyDeadServer = false) =>
+    under(
+      resuming.withPermits(1)(
+        Effect.gen(function* () {
+          const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1);
+          const lost = yield* lostServer(compactionDeps(host, ask.runId), agent);
+          if (onlyDeadServer && lost === null) return false;
+          const fs = yield* FileSystem.FileSystem;
+          const written = yield* fs.readFileString(ask.output).pipe(Effect.orElseSucceed(() => ""));
+          if (Str.trim(written) !== "" && written !== unless) return false;
+          // The host starts an agent on core again, in the session it had.
+          if (
+            lost === null &&
+            (yield* fs
+              .exists(startedPath(ask.runId, agent))
+              .pipe(Effect.orElseSucceed(() => false)))
+          )
+            return false;
+          const listing = yield* host.herdr.agentList().pipe(Effect.option);
+          if (listing._tag === "None") return false;
+          if (lost !== null) {
+            if (!(yield* retireLost(ask, listing.value))) return false;
+            // A surviving tool can finish the Output while its old server is being retired.
+            const after = yield* fs.readFileString(ask.output).pipe(Effect.orElseSucceed(() => ""));
+            if (Str.trim(after) !== "" && after !== unless) return false;
+            yield* launch(ask);
+            return true;
+          }
+          // Asked only of one herdr lists: it has no delivery to say whether it is inactive.
+          const refusal = Arr.some(listing.value, (one) => one.name === agent)
+            ? yield* host.herdr
+                .agentStatus(agent)
+                .pipe(Effect.match({ onFailure: herdrFailureReason, onSuccess: () => "" }))
+            : "";
+          if (!isGone(agent, listing.value, refusal)) return false;
+          yield* log(
+            ask.runId,
+            `${agent}: gone before ${ask.operation} was written; starting it again`,
+          );
+          yield* launch(ask, true);
+          return true;
+        }),
+      ),
     );
 
   const handOff = (options: {
@@ -3928,6 +4079,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       ),
     pollMs: host.pollMs ?? DEFAULT_POLL_MS,
     collectMs: host.collectMs ?? DEFAULT_COLLECT_MS,
+    unhealthy,
     choose: (layers, { runId, operation }, spent = []) =>
       under(
         Effect.gen(function* () {

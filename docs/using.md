@@ -404,6 +404,18 @@ that run's checkout, and every run of the task uses the new one from then on; a 
 that has gone as well leaves the run parked, saying so, until you restore it or start
 again.
 
+Collie checks a managed server while its Step awaits Output, independently of the
+terminal's status. A server proven dead is replaced only after the old incarnation
+is Quiet. Recovery continues the unfinished Step in the same Run and checkout,
+resuming its recorded conversation where supported. Usable Output received before
+replacement completes the Step without another worker. Uncertain server health
+parks within the readiness budget, while collection keeps watching for late Output.
+An unreachable live server, an uncertain identity, or surviving tools cannot
+authorize replacement. Existing delivery receipts retain their uncertainty; a
+server exit does not establish whether an earlier message was received.
+
+See [ADR-draft-an-owned-server-is-checked-apart-from-its-terminal](adr/draft-an-owned-server-is-checked-apart-from-its-terminal.md).
+
 ### What a task workspace is called
 
 The name is worked out, not asked for: `<Project or theme> | <what this work is>`, for

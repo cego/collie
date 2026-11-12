@@ -19,6 +19,8 @@ import { TestClock } from "effect/testing";
 import { Agents, agentsLayer, type AgentHost, type RunNow } from "../src/agents";
 import { endAgent } from "../src/agent-end";
 import type { Backend } from "../src/herdr";
+import { readControl } from "../src/compaction";
+import { processAbsent } from "../src/processes";
 import { readLaunches } from "../src/launches";
 import {
   PARK_CAUSE,
@@ -260,6 +262,74 @@ const sendsSince = (calls: ReadonlyArray<Call>, from: number, cmd = "terminal.se
   );
 
 const after = (argv: ReadonlyArray<string>, flag: string) => argv[argv.indexOf(flag) + 1];
+
+test(
+  "a dead owned server on core resumes its conversation once despite competing recovery, and later stop reaches its replacement",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* rig.startCore();
+        yield* rig.queueOutputs([null, null, null, null, null, null]);
+        let agents: typeof Agents.Service | undefined;
+        let recovering: string | null = null;
+        const competitions: Array<Fiber.Fiber<void>> = [];
+        class CompetingRecovery extends FakeHerdr {
+          override paneClose(pane: string, backend?: Backend) {
+            return super.paneClose(pane, backend).pipe(
+              Effect.tap(() => {
+                if (agents === undefined || recovering === null) return Effect.void;
+                return Effect.forkChild(agents.resumeLost(recovering, runningNow)).pipe(
+                  Effect.tap((fiber) => Effect.sync(() => competitions.push(fiber))),
+                  Effect.asVoid,
+                );
+              }),
+            );
+          }
+        }
+        const result = yield* hosted(
+          Effect.gen(function* () {
+            agents = yield* Agents;
+            const runId = yield* started("codex", "dead-owned-core");
+            const agent = agentName(runId, "codex", null, 1);
+            const session = yield* recordedSession(runId, "codex");
+            const old = (yield* readLaunches(runId))[0]!;
+            const control = (yield* readControl(dir(), agent))!;
+            const before = coreCalls(yield* rig.calls()).length;
+            recovering = runId;
+            process.kill(control.pid!, "SIGKILL");
+            yield* until(() => processAbsent(control.pid!), Boolean);
+            const again = yield* until(
+              () => Effect.flatMap(rig.calls(), (calls) => launchesSince(calls, before)),
+              (launches) => launches.length > 0,
+            );
+            yield* Fiber.joinAll(competitions);
+            yield* until(
+              () => deliveredTo(dir(), runId),
+              (receipts) => Arr.filter(receipts, (one) => one.cause.kind === "step").length === 2,
+            );
+            const now = (yield* readLaunches(runId))[0]!;
+            expect(now.terminalId).not.toBe(old.terminalId);
+            expect(again).toHaveLength(1);
+            expect(again[0]!.argv.slice(0, 3)).toEqual(["codex", "resume", session.value]);
+            expect(again[0]!.cwd).toBe(rig.projectDir);
+            yield* fs.writeFileString(now.output, '{"verdict":"recovered"}');
+            expect((yield* finished(runId))?.status.status).toBe("complete");
+            recovering = null;
+            const replacement = (yield* readControl(dir(), agent))!;
+            const halt = yield* agents.halt(runId);
+            expect(halt).toEqual({ stopped: [agent], left: [] });
+            expect(yield* processAbsent(replacement.pid!)).toBe(true);
+            expect(yield* launchesSince(yield* rig.calls(), before)).toHaveLength(1);
+            return now;
+          }),
+          { ...hostOf(), herdr: new CompetingRecovery(env()) },
+        );
+        expect(result.agentSession).toEqual({ kind: "codex", value: THREAD });
+      }),
+    ),
+  120_000,
+);
 
 test(
   "a core holder loss mid-Run starts each agent of the Run again in its own session, tells the one whose work is out to carry on, and the Run completes",

@@ -7,7 +7,7 @@ import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
-import { Effect, FileSystem, Stream } from "effect";
+import { Effect, FileSystem, PlatformError, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 export interface ProcessInfo {
@@ -64,17 +64,25 @@ const fromProc = (pid: number) =>
     } satisfies ProcessInfo;
   });
 
-const ps = (args: ReadonlyArray<string>) =>
+const readPs = (args: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const handle = yield* spawner.spawn(
       ChildProcess.make("ps", args, { stdout: "pipe", stderr: "ignore" }),
     );
-    return yield* Stream.mkString(Stream.decodeText(handle.stdout));
-  }).pipe(
-    Effect.scoped,
-    Effect.orElseSucceed(() => ""),
-  );
+    const text = yield* Stream.mkString(Stream.decodeText(handle.stdout));
+    const code = yield* handle.exitCode;
+    if (code !== 0)
+      return yield* PlatformError.systemError({
+        _tag: "Unknown",
+        module: "ChildProcess",
+        method: "ps",
+        description: `ps exited ${code}; its process listing is unproved`,
+      });
+    return text;
+  }).pipe(Effect.scoped);
+
+const ps = (args: ReadonlyArray<string>) => readPs(args).pipe(Effect.orElseSucceed(() => ""));
 
 /** `pid ppid lstart…` rows, where `lstart` is five words. */
 const psRows = (text: string): ProcessInfo[] =>
@@ -124,15 +132,27 @@ export const sessionOf = Effect.fn("Processes.sessionOf")(function* (root: numbe
   if (yield* readsSessions) {
     const fs = yield* FileSystem.FileSystem;
     const found: ProcessInfo[] = [];
-    for (const name of yield* fs.readDirectory(PROC).pipe(Effect.orElseSucceed(() => []))) {
+    for (const name of yield* fs.readDirectory(PROC)) {
       const pid = Number(name);
       if (!Number.isInteger(pid) || pid === root) continue;
-      const one = yield* fromProc(pid).pipe(Effect.orElseSucceed(() => null));
+      const one = yield* Effect.gen(function* () {
+        const fields = yield* statFields(pid);
+        // Do not read unrelated users' command lines: only this session can contain its tools.
+        if (fields[0] === "Z" || Number(fields[3]) !== root) return null;
+        return yield* fromProc(pid);
+      }).pipe(
+        Effect.catchTag("PlatformError", (cause) =>
+          processAbsent(pid).pipe(
+            // ESRCH independently proves a raced read was of an exiting process.
+            Effect.flatMap((absent) => (absent ? Effect.succeed(null) : Effect.fail(cause))),
+          ),
+        ),
+      );
       if (one !== null && one.session === root) found.push(one);
     }
     return found;
   }
-  const all = psRows(yield* ps(["-A", "-ww", "-o", "pid=,ppid=,lstart=,command="]));
+  const all = psRows(yield* readPs(["-A", "-ww", "-o", "pid=,ppid=,lstart=,command="]));
   const tree = new Set([root]);
   for (let grew = true; grew;) {
     grew = false;
@@ -209,6 +229,17 @@ export const boundProcesses = Effect.fn("Processes.boundProcesses")(function* (
 /** Whether this process is still the one that was looked at. */
 export const stillRunning = (one: Pick<ProcessInfo, "pid" | "started">) =>
   processOf(one.pid).pipe(Effect.map((now) => now !== null && now.started === one.started));
+
+/** Only ESRCH proves absence; a failed process inspection or permission check does not. */
+export const processAbsent = (pid: number) =>
+  Effect.sync(() => {
+    try {
+      process.kill(pid, 0);
+      return false;
+    } catch (cause) {
+      return cause instanceof Error && "code" in cause && cause.code === "ESRCH";
+    }
+  });
 
 /** One SIGTERM. Never repeated and never SIGKILL: a forced end is not a stop anyone can vouch for. */
 export const terminate = (pid: number) =>
