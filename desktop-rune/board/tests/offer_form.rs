@@ -34,7 +34,7 @@ fn each_field_takes_the_control_its_schema_draws_with_its_label_help_and_default
     assert_eq!(of("confirmed").initial.as_deref(), Some("false"));
     assert_eq!(
         of("then").control,
-        Control::Enum(vec!["".into(), "finish".into(), "release".into()])
+        Control::Enum(vec![json!(""), json!("finish"), json!("release")])
     );
     assert_eq!(of("count").control, Control::Integer);
     assert_eq!(of("ratio").control, Control::Number);
@@ -138,4 +138,55 @@ fn an_optional_choice_can_be_left_unset_and_a_required_one_cannot() {
         [Some("true".into()), Some("false".into())]
     );
     assert_eq!(offer_choices(of("then"))[1].0, "(empty)");
+}
+
+#[test]
+fn an_enum_of_numbers_booleans_or_null_is_a_choice_of_exactly_those_values_sent_as_themselves() {
+    let drawn = json!({"type": "object", "properties": {
+        "priority": {"type": "number", "enum": [1, 2], "default": 2},
+        "mode": {"enum": ["fast", true, null]},
+        "level": {"anyOf": [{"type": "string", "enum": ["low"]}, {"type": "number", "enum": [1]},
+            {"type": "boolean", "enum": [true]}]},
+    }});
+    let fields = offer_fields(Some(&drawn));
+    let of = |name: &str| fields.iter().find(|f| f.name == name).unwrap();
+    assert_eq!(
+        of("priority").control,
+        Control::Enum(vec![json!(1), json!(2)])
+    );
+    assert_eq!(of("priority").initial.as_deref(), Some("2"));
+    assert_eq!(
+        of("level").control,
+        Control::Enum(vec![json!("low"), json!(1), json!(true)])
+    );
+    assert_eq!(
+        offer_choices(of("mode")),
+        [
+            ("Not set".to_string(), None),
+            ("fast".to_string(), Some("fast".to_string())),
+            ("true".to_string(), Some("true".to_string())),
+            ("null".to_string(), Some("null".to_string())),
+        ]
+    );
+    assert_eq!(
+        offer_input(
+            Some(&drawn),
+            &entries(&[("priority", "1"), ("mode", "true"), ("level", "1")])
+        ),
+        Ok(json!({"priority": 1, "mode": true, "level": 1}))
+    );
+    assert_eq!(
+        offer_input(
+            Some(&drawn),
+            &entries(&[("priority", "3"), ("mode", "slow"), ("level", "2")])
+        ),
+        Err(vec![
+            ("level".into(), "Level must be one of: low, 1, true".into()),
+            (
+                "mode".into(),
+                "Mode must be one of: fast, true, null".into()
+            ),
+            ("priority".into(), "Priority must be one of: 1, 2".into()),
+        ])
+    );
 }
