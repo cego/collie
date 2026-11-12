@@ -25,7 +25,7 @@ beforeEach(() =>
 afterEach(() => runEffect(rig.close()));
 
 /**
- * A state that says which focus produced it. `repo` rather than `note`, because the note
+ * A state that says which focus produced it. `newer` rather than `note`, because the note
  * is the footer's own line: a load keeps whatever the last command said there.
  */
 function stateFor(selected: string | null): AppState {
@@ -35,24 +35,12 @@ function stateFor(selected: string | null): AppState {
     tasks: [],
     now: epochMs("2026-09-16T12:00:00.000Z"),
     density: "comfortable",
-    wide: null,
-    board: {
-      repo: selected ?? "none",
-      cwd: "/w/collie",
-      worktrees: [],
-      behind: null,
-      now: 0,
-      agents: [],
-      extraAgents: 0,
-      active: [],
-      recent: [],
-    },
+    newer: selected ?? "none",
     note: null,
     history: null,
     definitions: null,
     settings: null,
     detail: null,
-    marks: {},
     live: null,
     previewing: null,
     stopping: [],
@@ -102,11 +90,11 @@ test("a newer focus interrupts the read in flight, and the newer one lands", () 
         yield* until("the first read to start", () => started.includes("run:a"));
 
         driven.dispatch({ _tag: "Select", id: "run:b", on: null });
-        yield* until("the second read to land", () => driven.state().board.repo === "run:b");
+        yield* until("the second read to land", () => driven.state().newer === "run:b");
 
         // Superseded, not merely ignored: the fiber was actually stopped.
         expect(interrupted).toContain("run:a");
-        expect(driven.state().board.repo).toBe("run:b");
+        expect(driven.state().newer).toBe("run:b");
       }),
     ),
   ));
@@ -159,7 +147,7 @@ test("writes during a refresh let it finish and request one fresh read afterward
       expect(interrupted).toBe(false);
       expect(reads).toBe(2);
       yield* Deferred.succeed(held, undefined);
-      yield* until("the pending refresh to finish", () => driven.state().board.repo === "3");
+      yield* until("the pending refresh to finish", () => driven.state().newer === "3");
       expect(reads).toBe(3);
     }),
   ));
@@ -200,10 +188,7 @@ test("host logs do not refresh the board, but Run writes still do", () =>
       yield* Effect.sleep("20 millis");
       expect(reads).toBe(before);
       yield* Queue.offer(events, { _tag: "Update", path: "runs/one/output.json" });
-      yield* until(
-        "the Run write to be shown",
-        () => driven.state().board.repo === String(before + 1),
-      );
+      yield* until("the Run write to be shown", () => driven.state().newer === String(before + 1));
     }),
   ));
 
@@ -244,10 +229,10 @@ test("a usage audit written by a read does not trigger another read", () =>
       yield* until("the first audit to be watched", () => auditsSeen >= 1);
       yield* Effect.sleep("50 millis");
       expect(reads).toBe(2);
-      expect(driven.state().board.repo).toBe("2");
+      expect(driven.state().newer).toBe("2");
 
       yield* Queue.offer(events, { _tag: "Update", path: "runs/one/output.json" });
-      yield* until("the Run change to refresh the board", () => driven.state().board.repo === "3");
+      yield* until("the Run change to refresh the board", () => driven.state().newer === "3");
       yield* until("the next audit to be watched", () => auditsSeen >= 2);
       yield* Effect.sleep("50 millis");
       expect(reads).toBe(3);
@@ -289,7 +274,7 @@ test("one watcher follows focus changes and closes with the bridge", () =>
           yield* until("the watcher to open", () => opened > 0);
           for (let i = 0; i < 10; i++) {
             driven.dispatch({ _tag: "Select", id: `run:${i}`, on: null });
-            yield* until("the new focus", () => driven.state().board.repo === `run:${i}`);
+            yield* until("the new focus", () => driven.state().newer === `run:${i}`);
           }
           expect(opened).toBe(1);
           expect(closed).toBe(0);
@@ -326,9 +311,9 @@ test("a command that takes its time does not stall the next keypress", () =>
         // The Selection moves while that is still going: it is a focus change, so it
         // never joins the queue the command is sitting in.
         driven.dispatch({ _tag: "Select", id: "run:b", on: null });
-        yield* until("the Selection to land", () => driven.state().board.repo === "run:b");
+        yield* until("the Selection to land", () => driven.state().newer === "run:b");
 
-        expect(driven.state().board.repo).toBe("run:b");
+        expect(driven.state().newer).toBe("run:b");
         yield* Deferred.succeed(slow, undefined);
       }),
     ),
