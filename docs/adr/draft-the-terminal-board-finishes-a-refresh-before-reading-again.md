@@ -65,3 +65,25 @@ bounded refreshes and diagnostic-log filtering it was still 24.05 CPU-seconds: c
 reads alone did not break the audit cycle. These are fixture measurements, not a promise
 about a live installation; the fake herdr subprocess is much more expensive than the
 installed CLI. Real read-only agent/workspace list probes complete in a few milliseconds.
+
+## Native widgets belong to grid cells
+
+Fresh Task snapshots also supplied fresh row arrays to nested identity-based lists.
+Those lists destroyed and rebuilt every native card, even when the grid's shape stayed
+the same. Profiles attributed substantial work to Yoga layout and text-buffer destruction.
+
+Rows and cells now use Solid's `Index`: the native widgets belong to a position, and the
+Task at that position is a reactive value. A Card keeps no Task-local state; decisions,
+drafts and selection belong to its parent. Every callback reads the current Task. A
+regression verifies node retention, changed text, reordering and the new click target.
+This follows [Solid's positional list semantics](https://docs.solidjs.com/reference/components/index-component).
+
+Across five six-second idle windows on the same fixture, board-own CPU fell from 3.15
+to 1.07 seconds and ending board RSS from 364.4 to 230.5 MiB. Average sampled process-tree
+RSS fell from 527.6 to 455.0 MiB; process-tree peaks overlap, so a peak-memory reduction
+is not established. No data or expensive calculation is cached by this change.
+
+The remaining board-own CPU is below the investigation's materiality threshold even if
+eliminated entirely. Wide-builder measurements and real herdr calls are also small, and
+the remaining host profile identifies no dominant avoidable loop. Further protocol or
+data-model rewrites need new evidence rather than extending this change speculatively.

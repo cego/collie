@@ -4,7 +4,7 @@
 
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
-import { For, Show, type JSX } from "solid-js";
+import { For, Index, Show, type JSX } from "solid-js";
 import { TextAttributes, type MouseEvent } from "@opentui/core";
 import { agentCount, finishedLabel, whereItIs, workingLabel, waitingLabel } from "../board";
 import {
@@ -428,7 +428,11 @@ function Section(props: { label: string; fg?: string; children: JSX.Element }) {
   );
 }
 
-/** The cards, `columns` across. A row of them, so every card in it is the same width. */
+/**
+ * The cards, `columns` across. Rows and cells own their native widgets by position;
+ * a fresh Task snapshot updates the cell instead of destroying its text and layout.
+ * Cards keep no Task-local state, and every action reads the cell's current Task.
+ */
 function Grid(props: {
   views: ReadonlyArray<TaskView>;
   columns: number;
@@ -449,27 +453,27 @@ function Grid(props: {
   };
   return (
     <box style={{ flexDirection: "column", flexShrink: 0 }}>
-      <For each={rows()}>
+      <Index each={rows()}>
         {(row) => (
           <box style={{ flexDirection: "row", flexShrink: 0 }}>
-            <For each={row}>
+            <Index each={row()}>
               {(view) => (
                 <Card
-                  view={view}
+                  view={view()}
                   width={props.width - 2 * SIDE}
                   columns={props.columns}
-                  open={props.open === view.id}
-                  onOpen={() => props.onOpen(view)}
+                  open={props.open === view().id}
+                  onOpen={() => props.onOpen(view())}
                   onMenu={props.onMenu}
                   onAct={props.onAct}
                   decide={props.decide}
                   batch={props.batch}
                 />
               )}
-            </For>
+            </Index>
           </box>
         )}
-      </For>
+      </Index>
     </box>
   );
 }
