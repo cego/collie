@@ -4021,6 +4021,39 @@ scenario(
 );
 
 scenario(
+  "an empty recovery is new work, built as an ordinary start",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-work.md", title: "work", checks: "unit" }]);
+        yield* approve("r-empty-recovery", ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+
+        // An agent's start gives every Input, one it leaves out as "" (docs/cli.md), and the
+        // branch of new work was never pushed, so there is nothing to recover from.
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-empty-recovery",
+          input: { plan, recovery: "", ...FINISH },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        const launches = yield* launchesAt(dir, "r-empty-recovery");
+        expect(Arr.map(launches, (launch) => launch.operation)).toEqual([
+          "build",
+          "review-1",
+          "mr",
+        ]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "implement builds a plan one ticket at a time on one implementer, then reviews what it built",
   () =>
     runEffect(
