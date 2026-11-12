@@ -59,7 +59,8 @@ jobs:
     steps:
       - run: |
           echo "static: ${{ needs.static.result }}, suite: ${{ needs.suite.result }}"
-          test "${{ needs.static.result }}" = success && test "${{ needs.suite.result }}" = success
+          test "${{ needs.static.result }}" = success
+          test "${{ needs.suite.result }}" = success
           test "${{ needs.desktop.result }}" = success
           test "${{ needs.desktop-rune.result }}" = success
           test "${{ needs.desktop-native.result }}" = success

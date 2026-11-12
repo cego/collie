@@ -6,6 +6,7 @@ import { expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
 import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { approvedFrom } from "../src/verify-spec";
+import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 
 const workflowSchema = Schema.Struct({
@@ -39,7 +40,9 @@ const workflow = (name: string) =>
   );
 
 const commands = (job: (typeof workflowSchema.Type.jobs)[string] | undefined) =>
-  job !== undefined && "steps" in job ? Arr.map(job.steps, (step) => step.run) : [];
+  job !== undefined && "steps" in job
+    ? Arr.flatMap(job.steps, (step) => (step.run === undefined ? [] : [step.run]))
+    : [];
 
 test("Collie's own check is left to the CI job whose needs run each part of it", () =>
   runEffect(
@@ -88,7 +91,7 @@ test("CI requires the same native desktop builds that the release publishes", ()
         });
       for (const name of ["desktop", "desktop-rune", "desktop-native"]) {
         expect(ci.jobs.test?.needs).toContain(name);
-        expect(commands(ci.jobs.test).join("\n")).toContain(
+        expect(Arr.join(commands(ci.jobs.test), "\n")).toContain(
           `test "\${{ needs.${name}.result }}" = success`,
         );
       }
@@ -96,5 +99,31 @@ test("CI requires the same native desktop builds that the release publishes", ()
       for (const platform of ["linux", "macos"])
         expect(commands(native.jobs[platform])).toContain("bun run desktop-rune/scripts/bundle.ts");
       expect(commands(native.jobs.macos)).toContain("sh tools/verify-mac-app.sh desktop-rune/dist");
+    }),
+  ));
+
+test("the required CI gate refuses each failed, cancelled or skipped dependency", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const ci = yield* workflow("ci");
+      const gate = ci.jobs.test;
+      const needs = [gate?.needs ?? []].flat();
+      const script = Arr.join(commands(gate), "\n");
+      const check = (failed: string | undefined, result: string) =>
+        exec([
+          "bash",
+          "-e",
+          "-c",
+          Arr.reduce(needs, script, (text, name) =>
+            pipe_(
+              text,
+              Str.replaceAll(`\${{ needs.${name}.result }}`, name === failed ? result : "success"),
+            ),
+          ),
+        ]);
+      expect((yield* check(undefined, "success")).exitCode).toBe(0);
+      for (const name of needs)
+        for (const result of ["failure", "cancelled", "skipped"])
+          expect((yield* check(name, result)).exitCode).not.toBe(0);
     }),
   ));
