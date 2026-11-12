@@ -302,7 +302,7 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
   const closed = Effect.raceFirst(ended, Deferred.await(broken));
   yield* Effect.raceFirst(
     Effect.promise(() => ready.promise),
-    closed,
+    ended,
   ).pipe(
     Effect.timeoutOrElse({
       duration: "20 seconds",
@@ -2051,6 +2051,7 @@ export const syncNow = (
     const failed = yield* steps.sync;
     const unshared = yield* steps.syncDefinitions;
     const gave = yield* steps.give;
+    yield* steps.reopen;
     const said = Arr.join(
       [
         `${machine.name}: ${failed === null ? "settings synced" : `settings didn't sync: ${failed}`}`,
@@ -2064,7 +2065,7 @@ export const syncNow = (
       "; ",
     );
     return {
-      said,
+      said: `${said}; reopening its connection`,
       failed:
         failed !== null || unshared !== null || Arr.some(gave, ({ failed: why }) => why !== null),
     };

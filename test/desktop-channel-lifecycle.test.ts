@@ -16,6 +16,8 @@ import {
   flockStream,
   openDoors,
   recordEvents,
+  syncNow,
+  type RouteChange,
   type BoardSource,
   type Doors,
   type Route,
@@ -167,3 +169,41 @@ test("failed channel renewals close each generation before capped backoff, and s
       expect(times).toHaveLength(9);
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   ));
+
+test(
+  "Sync now renews a same-version connection and restores calls on a fresh client",
+  () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const doors = new DoorMap<Doors>();
+        const changes = yield* Queue.unbounded<RouteChange>();
+        const items = yield* Queue.unbounded<FlockItem>();
+        let generation = 0;
+        const route: Route = {
+          machine,
+          open: () =>
+            openDoors(machine, (as) => [process.execPath, bridge, as, String(++generation)]),
+          collie: () => Effect.die("no upgrade expected"),
+        };
+        yield* flockStream([route], doors, "0.132.3", Stream.fromQueue(changes)).pipe(
+          Stream.runForEach((item) => Queue.offer(items, item)),
+          Effect.forkScoped,
+        );
+        yield* Queue.take(items);
+        const before = yield* readIdentity(doors.get("fixture-vm")!.chat);
+        const result = yield* syncNow(machine, [], {
+          reopen: Queue.offer(changes, { _tag: "Reopen", profile: machine.profile }),
+          sync: Effect.succeed(null),
+          syncDefinitions: Effect.succeed(null),
+          give: Effect.succeed([]),
+        });
+        expect(result.failed).toBe(false);
+        yield* Queue.take(items).pipe(Effect.timeout("2 seconds"));
+        yield* Queue.take(items).pipe(Effect.timeout("2 seconds"));
+        const after = yield* readIdentity(doors.get("fixture-vm")!.chat);
+        expect(after.pid).not.toBe(before.pid);
+        expect(after.channel).toBe("chat");
+      }).pipe(Effect.scoped),
+    ),
+  10_000,
+);

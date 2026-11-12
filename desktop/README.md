@@ -4,6 +4,24 @@ Effect is the root's, so the board's Schemas exist once. It reaches a Machine th
 `collie bridge`, never the host client. The main process's behaviour is tested in the
 root's `test/desktop-*.test.ts` and `test/flock-*.test.ts`; the view's logic in `desktop/test/`.
 
+## Machine connections
+
+The board, record and chat bridges share one connection lifetime. An exit, socket read/write
+failure or RPC transport failure on any of them retires all three, including when the board
+is still streaming. Their scopes close before reconnecting, with backoff capped at 60 seconds;
+removing a route or closing Desktop stops its reconnects. Sync now also renews a same-version
+connection. `test/desktop-channel-lifecycle.test.ts` exercises this with isolated stdio bridges.
+
+Rune's native shell uses this same core: its `desktop-rune/core/tsconfig.json` substitutes
+`electrobun/bun` while compiling `desktop/src/bun/index.ts`. Rebuild that core to carry this
+behavior into Rune; changing the Rust shell alone cannot replace a poisoned Machine client.
+
+A transport failure does not establish a version mismatch. Chat names the transport failure
+and reserves upgrade advice for an unknown operation or an incompatible protocol. A submitted
+write cut off before its reply has an unknown outcome and is not replayed on the new connection.
+An explicit `collie_do` retry takes the returned batch id as `request_id`, with the same actions;
+each action keeps its original host request. Inspect the recorded result before retrying.
+
 ## The board and the record
 
 `src/shared/flow-strip.ts`'s `cardFlow` gives BoardCard its glyph groups, fold, label

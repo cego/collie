@@ -892,7 +892,7 @@ test("Sync now on a Machine behind on settings, definitions or credentials syncs
     Effect.gen(function* () {
       const did: string[] = [];
       const steps = (failed: string | null, definitions: string | null = null) => ({
-        reopen: Effect.die("not reopened"),
+        reopen: Effect.sync(() => void did.push("reopen")),
         sync: Effect.sync(() => void did.push("sync")).pipe(Effect.as(failed)),
         syncDefinitions: Effect.sync(() => void did.push("definitions")).pipe(
           Effect.as(definitions),
@@ -906,36 +906,43 @@ test("Sync now on a Machine behind on settings, definitions or credentials syncs
       });
       const vm = { profile: "p-vm", name: "vm" };
       expect(yield* syncNow(vm, ["credentials"], steps(null))).toEqual({
-        said: "vm: settings synced; definitions synced; the GitLab token given; Helle's token not given: ssh: connection reset",
+        said: "vm: settings synced; definitions synced; the GitLab token given; Helle's token not given: ssh: connection reset; reopening its connection",
         failed: true,
       });
       expect(yield* syncNow(vm, ["settings"], steps("host refused"))).toEqual({
-        said: "vm: settings didn't sync: host refused; definitions synced; the GitLab token given; Helle's token not given: ssh: connection reset",
+        said: "vm: settings didn't sync: host refused; definitions synced; the GitLab token given; Helle's token not given: ssh: connection reset; reopening its connection",
         failed: true,
       });
       expect(
         yield* syncNow(vm, ["settings"], { ...steps(null), give: Effect.succeed([]) }),
-      ).toEqual({ said: "vm: settings synced; definitions synced", failed: false });
+      ).toEqual({
+        said: "vm: settings synced; definitions synced; reopening its connection",
+        failed: false,
+      });
       expect(
         yield* syncNow(vm, ["definitions"], {
           ...steps(null, "no such operation"),
           give: Effect.succeed([]),
         }),
       ).toEqual({
-        said: "vm: settings synced; definitions didn't sync: no such operation",
+        said: "vm: settings synced; definitions didn't sync: no such operation; reopening its connection",
         failed: true,
       });
       expect(did).toEqual([
         "sync",
         "definitions",
         "give",
+        "reopen",
         "sync",
         "definitions",
         "give",
+        "reopen",
         "sync",
         "definitions",
+        "reopen",
         "sync",
         "definitions",
+        "reopen",
       ]);
     }),
   ));
