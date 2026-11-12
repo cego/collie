@@ -2447,7 +2447,9 @@ const JSON_ANY: OfferControl = { kind: "json", holds: null };
 
 const optionEntries = (options: ReadonlyArray<Schema.Json>): ReadonlyArray<string> => {
   const plain = Arr.map(options, (option) => (isText(option) ? option : encodeJson(option)));
-  return new Set(plain).size === plain.length ? plain : Arr.map(options, encodeJson);
+  return new Set(plain).size === plain.length
+    ? plain
+    : Arr.map(options, (option) => encodeJson(option));
 };
 const optionLabel = (entry: string) => (entry === "" ? EMPTY_OPTION : entry);
 

@@ -170,17 +170,27 @@ test("an enum of numbers, booleans or null is a choice of exactly those values, 
 });
 
 test("an enum holding a string and a value that writes the same is still a choice between the two", () => {
-  const shadowed = jsonSchemaFor(
-    Schema.Struct({ pick: Schema.Literals(["1", 1, "true", true, "null", null]) }),
+  const sdk = jsonSchemaFor(
+    Schema.Struct({ pick: Schema.Literals(["1", 1, "true", true]) }),
   ).document;
-  const [pick] = offerFields(shadowed);
-  const choices = Arr.filter(offerChoices(pick!), (one) => one.entry !== undefined);
-  expect(new Set(Arr.map(choices, (one) => one.entry)).size).toBe(6);
-  expect(new Set(Arr.map(choices, (one) => one.label)).size).toBe(6);
-  expect(
-    Arr.map(choices, (one) => {
-      const read = offerInput(shadowed, { pick: one.entry });
-      return read._tag === "Valid" ? read.input.pick : read;
-    }),
-  ).toEqual(["1", 1, "true", true, "null", null]);
+  const drawn: Schema.Json = {
+    type: "object",
+    properties: { pick: { enum: ["null", null, "{}", {}] } },
+  };
+  const picked = (schema: Schema.Json) => {
+    const [pick] = offerFields(schema);
+    const entries = Arr.flatMap(offerChoices(pick!), (one) =>
+      one.entry === undefined ? [] : [one.entry],
+    );
+    const labels = Arr.map(offerChoices(pick!), (one) => one.label);
+    return {
+      distinct: new Set(entries).size === entries.length && new Set(labels).size === labels.length,
+      sent: Arr.map(entries, (entry) => {
+        const read = offerInput(schema, { pick: entry });
+        return read._tag === "Valid" ? read.input.pick : read;
+      }),
+    };
+  };
+  expect(picked(sdk)).toEqual({ distinct: true, sent: ["1", 1, "true", true] });
+  expect(picked(drawn)).toEqual({ distinct: true, sent: ["null", null, "{}", {}] });
 });
