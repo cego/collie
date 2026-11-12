@@ -47,8 +47,9 @@ A Run whose tree is back to its base tree, every change reverted, ends without a
 with its findings, not failed.
 
 **D4. Base and candidate share a Machine and a harness.** The base tree is a detached
-worktree Collie makes at the base commit, with the Run's harness-only commits applied on
-top. It is Collie's to clean up ([ADR-0045](0045-collie-removes-what-it-made-once-nothing-needs-it.md)).
+worktree Collie makes at the base commit, with the Run's harness-only commits it does not
+already contain applied on top, so a base that already holds the harness, as a Cycle's
+starting head does, is measured as it is. It is Collie's to clean up ([ADR-0045](0045-collie-removes-what-it-made-once-nothing-needs-it.md)).
 Measurements on different Machines are never compared. Only one Measurement runs on a
 Machine at a time. Others wait, and say so, while no other work does. A Measurement waits
 while its Machine is **Short of memory**, like a Check.
@@ -66,7 +67,8 @@ The host decides from the candidate's checkout:
 - **Every harness path exists:** the candidate carries the harness and is sampled in its
   own checkout, as before.
 - **None exists:** the host samples it in a scratch worktree at the candidate's head with
-  the harness commits cherry-picked onto it, exactly as it makes the base tree. The checkout
+  every harness commit cherry-picked onto it, although its history contains them, because
+  cleanup removed their content in commits of its own. The checkout
   is left as it was.
 - **Some but not all exist:** the candidate is refused, naming the missing paths.
 - **The candidate has uncommitted work and no harness:** it is refused, because a scratch

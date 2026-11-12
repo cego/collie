@@ -19532,6 +19532,49 @@ scenario(
 );
 
 scenario(
+  "a tune-up whose harness was repaired after it was written reaches its Cycle's verdict",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-harness-repaired";
+        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        yield* checkedBy(runId, "unit", "sh", ["-c", "test ! -e broken"]);
+        const fixed = repaired(
+          {
+            ...tunePlan(commit, [STEADY_PRIMARY, SIZE_GUARDRAIL]),
+            harness: { commits: [commit, "REPAIR_SHA"], paths: ["bench"] },
+          },
+          "bench.sh reads a steady count",
+        );
+        yield* rig.queueOutputs([
+          TUNE_DISCOVERED,
+          tunePlan(commit, [NOISY_PRIMARY]),
+          {
+            writes: [
+              { path: `${rig.root}/repaired.sh`, text: CYCLE_BENCH },
+              { path: `${rig.root}/repaired.json`, text: asJson(fixed) },
+            ],
+            sh: inCheckout(
+              `cp '${rig.root}/repaired.sh' bench/bench.sh && git commit -qam repair && sed "s/REPAIR_SHA/$(git rev-parse HEAD)/" '${rig.root}/repaired.json' > "$OUTPUT_PATH"`,
+            ),
+            output: null,
+          },
+          NO_CHANGE(),
+          RESET(),
+        ]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        expect(result._tag).toBe("Success");
+        expect(yield* runLog(runId)).toContain("benchmark plan 2: repair 1");
+        const [measured] = yield* cyclesMeasured(runId);
+        expect(measured?.pass).toBe("cycle 1");
+        expect(measured?.result._tag).toBe("Judged");
+        expect(yield* runLog(runId)).toContain("cycle 1 reverted to");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "a tune-up Cycle whose checks fail is reverted though it measures a gain, and the Run completes with its findings",
   () =>
     runEffect(
