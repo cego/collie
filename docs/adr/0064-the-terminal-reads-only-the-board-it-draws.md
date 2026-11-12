@@ -1,6 +1,6 @@
 # The terminal reads only the board it draws
 
-**Status: draft** (2026-11-12).
+**Status: accepted** (2026-11-12).
 
 ## What was true before
 
