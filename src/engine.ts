@@ -8947,6 +8947,7 @@ const makeRegistry: (
   const registering = yield* Semaphore.make(1);
   // A grant is a read and a write of one file: two at once would each drop the other's.
   const granting = yield* Semaphore.make(1);
+  const invoking = yield* Semaphore.make(1);
 
   const mint = Effect.fn("Engine.Registry.mint")(function* (file: string) {
     // Read as it is now to learn the id this file claims, then register the next
@@ -9009,7 +9010,10 @@ const makeRegistry: (
       Effect.orElseSucceed(() => offer),
     );
 
-  const offeredBy = Effect.fn("Engine.Registry.offeredBy")(function* (runId: string) {
+  const offeredBy = Effect.fn("Engine.Registry.offeredBy")(function* (
+    runId: string,
+    request?: string,
+  ) {
     const row = yield* store.run(runId);
     if (row === null) {
       return yield* new HostRefused({ reason: `no run "${runId}" was started here` });
@@ -9056,7 +9060,7 @@ const makeRegistry: (
       facts.recovery = yield* recoveryFor(store, dir, runId, runId, workSource).pipe(
         Effect.provideContext(bun),
       );
-    const available: Declared[] = [];
+    const refused = new Map<string, string>();
     const readings = new Map<ConnectionId, ConnectionReading>();
     for (const offer of generation.offers) {
       const ids = yield* connectionIds(
@@ -9065,7 +9069,6 @@ const makeRegistry: (
         placedOf(row, options).cwd,
         input,
       );
-      let usable = true;
       for (const id of ids) {
         const reading =
           readings.get(id) ??
@@ -9073,12 +9076,11 @@ const makeRegistry: (
             Effect.provideContext(bun),
           ));
         readings.set(id, reading);
-        if (reading.state !== "ok") usable = false;
+        if (reading.state !== "ok" && !refused.has(offer.id))
+          refused.set(offer.id, `needs ${id}: ${reading.detail}. Fix: ${reading.fix}`);
       }
-      if (usable) available.push(offer);
     }
     // A plan spanning repositories is a fan-out, which an offer does not start.
-    const refused = new Map<string, string>();
     for (const offer of generation.offers) {
       const field = Option.getOrUndefined(
         Arr.findFirst(Rec.toEntries(offer.inputs), ([, source]) => source === "plan-dir"),
@@ -9139,7 +9141,37 @@ const makeRegistry: (
       }).pipe(Effect.provideContext(bun));
       if (still !== null) for (const offer of again) refused.set(offer.id, still);
     }
-    return { row, generation: { ...generation, offers: available }, facts, where, refused, input };
+    const runs = yield* store.runs;
+    const mr = facts.mrUrl;
+    const mrId = mr === null ? null : yield* mrIdIn(mr, placedOf(row, options).cwd, runShell);
+    const merged = mrId === null ? undefined : (yield* readMrStates(dir)).get(mrId);
+    for (const offer of generation.offers) {
+      const fields = Arr.filter(
+        Rec.toEntries(offer.inputs),
+        ([, source]) => source === "merge-request",
+      );
+      const withMr = mr !== null && fields.length > 0;
+      if (withMr && (merged === "merged" || merged === "on-stage" || merged === "in-prod"))
+        refused.set(offer.id, `${mr} is merged`);
+      const workflow = offer.workflow === SELF ? generation.id : offer.workflow;
+      for (const candidate of runs) {
+        if (candidate.workflow !== workflow || candidate.request === request) continue;
+        if (candidate.parent !== runId) {
+          if (!withMr) continue;
+          const given = yield* decodeInput(candidate.input).pipe(
+            Effect.orElseSucceed((): Record<string, Schema.Json> => ({})),
+          );
+          if (!Arr.some(fields, ([name]) => given[name] === mr)) continue;
+        }
+        if (yield* workflowEnded(candidate.run)) continue;
+        refused.set(
+          offer.id,
+          `a ${offer.title}${withMr ? ` of ${mr}` : ""} is still going: ${candidate.run}`,
+        );
+        break;
+      }
+    }
+    return { row, generation, facts, where, refused, input };
   });
 
   const connectionIds = Effect.fn("Engine.Registry.connectionIds")(function* (
@@ -9620,7 +9652,10 @@ const makeRegistry: (
       readonly attachments?: ReadonlyArray<string> | undefined;
       readonly started?: Started | undefined;
     }) {
-      const { row, generation, facts, where, refused, input } = yield* offeredBy(options.runId);
+      const { row, generation, facts, where, refused, input } = yield* offeredBy(
+        options.runId,
+        options.request,
+      );
       // Asked again here, of the module as it is now: the card this was read from may
       // have been drawn before the file was edited, and a card is not authority.
       const offer = Option.getOrUndefined(
@@ -9673,7 +9708,7 @@ const makeRegistry: (
         // A follow-up carries on the parent's work, so it is on the parent's branch.
         options: carried,
       });
-    }),
+    }, invoking.withPermits(1)),
 
     start: startWork,
     check: (options) => settleStart(options, "run-check").pipe(Effect.asVoid),

@@ -28,6 +28,7 @@ import {
   benchmarkRefusalOf,
   contentOf,
   defineWorkflow,
+  forecast,
   formatFindings,
   planReposOf,
   renderApproved,
@@ -267,6 +268,7 @@ export default defineWorkflow({
       const run = yield* Run;
       const place = yield* host.place(run.id);
       const nobodyAsked = asked.then === "implement";
+      if (nobodyAsked) yield* forecast([grill, spec, tickets]);
       const input = {
         inputs: { goal: asked.goal },
         run: { dir: place.dir, id: run.id },

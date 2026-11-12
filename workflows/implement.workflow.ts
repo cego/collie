@@ -274,6 +274,7 @@ const next = step({
   description: "Whether the open merge request is released, staged or left as it is.",
   kind: "question",
 });
+const delivery = [building, reviewRound, gate, mergeRequest];
 const repoRuns = step({
   id: "repo-runs",
   title: "Change runs",
@@ -328,7 +329,7 @@ export default defineWorkflow({
   agents: { roles: { implementer: IMPLEMENTER, reviewer: REVIEWER } },
   // oxlint-disable-next-line unicorn/no-thenable -- the Input is named `then`
   hints: { plan: "work-source", then: "reach" },
-  path: [building, reviewRound, gate, mergeRequest, next],
+  path: [...delivery, next],
   // The branch it builds, on a worktree of its own, so two Runs never share an index.
   checkout: "branch",
   // What kind of result this Run has to prove is the human's to say, and an unclassified
@@ -374,6 +375,7 @@ export default defineWorkflow({
       const runId = (yield* Run).id;
       const place = yield* host.place(runId);
       const cwd = place.cwd;
+      if ((asked.then ?? "") !== "") yield* forecast(delivery);
       const source = yield* Activity.make({
         name: "work-source",
         success: Schema.Struct({ kind: Schema.String, value: Schema.String }),
@@ -1135,7 +1137,10 @@ const releasing = (delivered: {
             ),
           ),
       });
-      if (merging !== null) return mr;
+      if (merging !== null) {
+        yield* forecast(delivery);
+        return mr;
+      }
       let stageFailed = "";
       let failedStage = "";
       // Why another Stage would still be refused at the checkout the last one was refused

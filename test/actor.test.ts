@@ -231,17 +231,20 @@ test(
             input: { note: "y" },
             request: "invoke-board",
           });
+          yield* until(
+            () => host.status({ runId: taken.runId }),
+            (status) => status.status === "complete",
+          );
           const delegated = yield* host.invoke({
             runId: started.runId,
             offer: "look-again",
             input: { note: "z" },
             request: "invoke-command",
           });
-          for (const runId of [taken.runId, delegated.runId])
-            yield* until(
-              () => host.status({ runId }),
-              (status) => status.status === "complete",
-            );
+          yield* until(
+            () => host.status({ runId: delegated.runId }),
+            (status) => status.status === "complete",
+          );
           yield* stopHost(world.state);
           expect(yield* startedOf(world.state, taken.runId)).toEqual({ door: "board", words: "y" });
           expect(yield* startedOf(world.state, delegated.runId)).toBeNull();

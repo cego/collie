@@ -48,7 +48,7 @@ import { connect, frontDoor, socketOf } from "../src/host";
 import { hosted, hostedRun, settledRun } from "./support/hosted";
 import { readDispositions } from "../src/disposition";
 import { until } from "./support/host";
-import { save } from "./support/world";
+import { collie, save } from "./support/world";
 import { Rig } from "./support/recorder";
 import { chatContextFor } from "../src/statusline";
 import { takeShared } from "../src/config";
@@ -537,6 +537,37 @@ test(
       }),
     ),
   // A host, and a Run of it that finishes, then one it starts.
+  60_000,
+);
+
+test(
+  "chat taking an offer whose work is still going gets the refusal run action gets",
+  () =>
+    hosted("hw-parity-twice-", ({ world, env }) =>
+      Effect.gen(function* () {
+        yield* save(world.user, ["delivers.workflow.ts", "ships.workflow.ts"]);
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const mr = "https://gitlab.cego.dk/cego/app/-/merge_requests/12";
+        const { runId } = yield* client
+          .start({ project: world.project, id: "delivers", request: "req-d", input: { mr } })
+          .pipe(Effect.orDie);
+        yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (view) => view?.status.status === "complete",
+        );
+        const first = yield* client
+          .invoke({ runId, offer: "ship", input: {}, request: "ship-1" })
+          .pipe(Effect.orDie);
+
+        const typed = yield* collie(world, ["run", "action", runId, "ship"]);
+        const refused = typed.envelope.error?.message ?? "run action started a second Ship";
+        expect(refused).toContain(`is still going: ${first.runId}`);
+        const chat = yield* toolNamed("collie_do")!.call(env, {
+          actions: [{ kind: "take_offer", run: runId, offer: "ship" }],
+        });
+        expect(chat).toContain(refused);
+      }),
+    ),
   60_000,
 );
 

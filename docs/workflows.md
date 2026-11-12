@@ -83,8 +83,8 @@ plan `collie measure` would refuse fails the Tickets step with its reason, befor
 **Its [Flow](../CONTEXT.md)** forecasts **Grill**, **Spec**, **Tickets** and **End menu**,
 the menu a run per round. Unbuildable, Second opinion and its Revise, Offload to Linear and
 Refine are drawn off the path, each after the Step before it. Started with `then=implement`,
-End menu is never asked and ends not run. The implement or architecture Run it starts is a
-row of its own.
+it forecasts Grill, Spec and Tickets alone: End menu is never asked, so it is not drawn. The
+implement or architecture Run it starts is a row of its own.
 
 Module: [`workflows/plan.workflow.ts`](../workflows/plan.workflow.ts), with its prompts in
 [`workflows/plan.md`](../workflows/plan.md).
@@ -328,7 +328,9 @@ dispute rule are shared.
 
 **Its [Flow](../CONTEXT.md)** forecasts **Build**, a run per ticket, then **Review**, a run
 per review-and-fix round, **Checks**, the gate with its fix rounds, **Merge request** and
-**What next**. A CI fix round is drawn off the path. A plan that spans repositories forecasts
+**What next**. With `then` set to `finish` or `release`, and once its merge request reads
+that it merges itself, **What next** is never asked, so the Run forecasts without it. A CI fix
+round is drawn off the path. A plan that spans repositories forecasts
 again once it is read, to **Change runs** alone, a run per Change. **What next** has a run
 per question, and each Stage Run and the release Run it starts is a row of its own. Checks still unproved after the gate's fixes park the Run with **Checks** failed,
 and a resume runs them again.
