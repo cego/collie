@@ -499,8 +499,11 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       yield* watch(run);
       if (heads.has(key)) return heads.get(key) ?? null;
       const watched = watching.has(run.cwd);
+      const at = checkouts.get(run.cwd) ?? 0;
       const read = yield* readBranchHead(run).pipe(Effect.orElseSucceed(() => null));
-      if (watched) heads.set(key, read);
+      // A checkout that moved while its head was read may have moved after git read it: kept,
+      // that head would stand until the next move, and the board would never show this one.
+      if (watched && (checkouts.get(run.cwd) ?? 0) === at) heads.set(key, read);
       return read;
     }).pipe(Effect.provideContext(spawning));
 

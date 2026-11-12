@@ -294,7 +294,15 @@ Run ended, `bodil remote down <name>` takes the instance down once you are done 
 4. Where anything was inferred, one row says where the run starts and each Input as
    `name = value (inferred from …)` or `(given)`: Enter starts it, Esc starts nothing. A
    start with nothing inferred starts at once. The run records which Inputs were inferred,
-   and `collie run show` lists each with where it came from.
+   and `collie run show` lists each with where it came from. A workflow with a
+   [Reach](../CONTEXT.md) — how far it goes before it asks, `plan`'s and `implement`'s
+   `then` — offers one such row per choice instead, even with nothing inferred: `plan`
+   **Ask when the plan is written** or **Build it**, `implement` **Ask at the merge
+   request**, **End at the merge request** or **Release it**. The row you start from is
+   remembered for that workflow in that project, or for the Projects root where the start is
+   rooted there, across the Flock, and offered first next
+   time; with nothing remembered the first row asks, as before. Telling chat to start one
+   does the same: it passes how far you said, else the remembered choice.
 5. The run's card appears on the [Control Plane](#the-control-plane).
 6. The run's own tabs hold agents and nothing else: one tab per agent it starts, labelled
    with the agent's role — `implementer`, `reviewer` — in the order they started, each
@@ -302,8 +310,10 @@ Run ended, `bodil remote down <name>` takes the instance down once you are done 
    nothing. The label carries no state: the run's card on the board says what it is doing,
    and herdr's own agent-status column says what each agent is.
 7. `plan`, `architecture`, `review` and `implement` end in a question — **What next?** —
-   answered from the run's card's answer menu, with `collie run answer`, or in chat. Launching asks nothing about it: a
-   question is asked when the run reaches it, so you decide with the work in front of you.
+   answered from the run's card's answer menu, with `collie run answer`, or in chat, unless
+   the start said how far it goes: **Build it** and **End at the merge request** or
+   **Release it** answer it at launch. Otherwise a question is asked when the run reaches
+   it, so you decide with the work in front of you.
    `collie run resume <id>` asks the host to pick a run that is still going back up.
 
 The same operations are available without opening UI, which is how an agent drives Collie:
@@ -3747,12 +3757,20 @@ triage is told: a Collie fix counts as already fixed only where its commit is in
 release's tag, so a fix merged but not yet installed leaves the finding filed or commented
 on as a recurrence.
 
-It waits for its Improvements, then writes `summary.md` in its Run directory: each issue
-filed or commented, by category; each Improvement's Run and how it ended; and each finding
+It measures the questions its window's Runs asked, computed from the report rather than
+judged by the agent: how many were asked per merge request that landed in the window, and
+how many implement Runs reached a merge request without failing, of those that reached one
+or ended. A class of question — one workflow's question by its name, however many times a
+Run numbers it — answered the same at least nine times in ten over at least ten answers is
+a `defect` finding, `repeated-answer-<workflow>-<question>`: Collie asks what it already
+knows. Like any `defect`, it is filed only with `runs=machine`.
+
+It waits for its Improvements, then writes `summary.md` in its Run directory: those two
+question measures; each issue filed or commented, by category; each Improvement's Run and how it ended; and each finding
 left out, with why. An Improvement that fails is listed there, and the Run still succeeds.
 Beside it, `improvements.json` keeps each Improvement's name, issues and how it ended.
-When the forge cannot be read, the retrospective still runs and `summary.md` keeps its
-findings, evidence and proposed improvements, with the reason nothing was filed. No issue,
+When the forge cannot be read, the retrospective still runs and `summary.md` keeps the
+question measures, its findings, evidence and proposed improvements, with the reason nothing was filed. No issue,
 comment or Improvement is started on that path.
 
 An Improvement that failed to start, because its issues could not be read back, is started

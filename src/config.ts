@@ -24,6 +24,7 @@ import {
   WORKTREES_DIRECTORY,
 } from "./settings";
 import type { SharedSetting, SharedSettings } from "./board-model";
+import { isReachKey, REACH_SETTING, reachKey } from "./reach";
 import type { StandingDirection } from "./standing-direction";
 import { isYamlMap, YamlMapSchema, type YamlMap, type YamlValue } from "./yaml";
 
@@ -163,8 +164,14 @@ const readShared = Effect.fn("Config.sharedSettings")(function* (userDir: string
     Effect.map((info) => Option.getOrUndefined(info.mtime)?.toISOString()),
     Effect.orElseSucceed(() => undefined),
   );
-  const shared = Arr.filter(SETTINGS, (setting) => setting.machine !== true);
-  const settings = Arr.flatMap(shared, ({ key }): ReadonlyArray<SharedSetting> => {
+  const shared = [
+    ...Arr.map(
+      Arr.filter(SETTINGS, (setting) => setting.machine !== true),
+      ({ key }) => key,
+    ),
+    ...new Set([...reachKeysIn(raw), ...Arr.filter(Rec.keys(stamps.set), isReachKey)]),
+  ];
+  const settings = Arr.flatMap(shared, (key): ReadonlyArray<SharedSetting> => {
     const value = configValue(raw, key) ?? null;
     const at = stamps.set[key] ?? (value === null ? undefined : written);
     return at === undefined ? [] : [{ key, value, at }];
@@ -181,6 +188,40 @@ const readShared = Effect.fn("Config.sharedSettings")(function* (userDir: string
     });
   return { settings, flock: stamps.flock ?? null } satisfies SharedSettings;
 });
+
+function reachKeysIn(raw: YamlMap): ReadonlyArray<string> {
+  const held = raw[REACH_SETTING];
+  if (held === undefined || !isYamlMap(held)) return [];
+  return Arr.flatMap(Rec.toEntries(held), ([workflow, projects]) =>
+    isYamlMap(projects)
+      ? Arr.map(Rec.toEntries(projects), ([project]) => `${REACH_SETTING}.${workflow}.${project}`)
+      : [],
+  );
+}
+
+/** How far the last launch of `workflow` in `project` went, or null where none was saved. */
+export const savedReach = (userDir: string, workflow: string, project: string) =>
+  readConfig(userDir).pipe(
+    Effect.map((raw) => {
+      const value = configValue(raw, reachKey(workflow, project));
+      return isString(value) && value !== "" ? value : null;
+    }),
+    Effect.orElseSucceed(() => null),
+  );
+
+export const savedReaches = (userDir: string) =>
+  readConfig(userDir).pipe(
+    Effect.map((raw) =>
+      Arr.flatMap(reachKeysIn(raw), (key) => {
+        const value = configValue(raw, key);
+        const [, workflow = "", project = ""] = Str.split(key, ".");
+        return isString(value) && value !== ""
+          ? [{ workflow, project: decodeURIComponent(project), value }]
+          : [];
+      }),
+    ),
+    Effect.orElseSucceed(() => []),
+  );
 
 /** This Machine's settings a Flock shares: each ever set, and when, the file's time where unrecorded. */
 export const sharedSettings = (userDir: string) => settingsLocked(userDir, readShared(userDir));

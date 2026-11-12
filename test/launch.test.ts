@@ -6,7 +6,7 @@ import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { ConfigProvider, Effect, FileSystem, Schema, Scope } from "effect";
 import type { PlatformServices } from "../src/platform";
-import { writeConfigValue } from "../src/config";
+import { savedReaches, writeConfigValue } from "../src/config";
 import { currentEnv, type PluginEnv } from "../src/env";
 import { pickFlow, type FlowPrompts } from "../src/flows";
 import { Herdr } from "../src/herdr";
@@ -24,6 +24,7 @@ const MODULES = [
   "planned.workflow.ts",
   "sourced.workflow.ts",
   "plan-stand-in.workflow.ts",
+  "reached.workflow.ts",
 ];
 
 const QUESTION = "What do you want?";
@@ -148,6 +149,94 @@ test(
           expect(decoded.data.run.provenance).toEqual({ target: "inferred" });
         }),
       ),
+    ),
+  240_000,
+);
+
+test(
+  "the start says how far the Run goes, and the next launch offers that choice first",
+  () =>
+    launching("collie-launch-reach-", (world) =>
+      Effect.gen(function* () {
+        const env = yield* currentEnv;
+        // A typed start's choice is its own: it is not what the next launch offers.
+        yield* collie(world, [
+          "run",
+          "start",
+          "reached",
+          "--input",
+          "goal=typed",
+          "--input",
+          "then=ship",
+        ]);
+
+        const first = answering(["reached", "one registry", "reach:ship"]);
+        expect(yield* pickFlow(new Herdr(env), env, first.prompts)).toBe(0);
+        expect(first.asked.slice(1)).toEqual([QUESTION, "Go as far as asked"]);
+        expect(Arr.map(first.rows.slice(-2), (row) => [row.id, row.title])).toEqual([
+          ["reach:", "Ask at the end"],
+          ["reach:ship", "Ship it"],
+        ]);
+        expect(first.rows.at(-1)?.subtitle).toBe(
+          `Starting in ${world.project} · goal = one registry (given)`,
+        );
+
+        const second = answering(["reached", "another registry", "reach:ship"]);
+        expect(yield* pickFlow(new Herdr(env), env, second.prompts)).toBe(0);
+        expect(Arr.map(second.rows.slice(-2), (row) => row.id)).toEqual(["reach:ship", "reach:"]);
+
+        const runs = (yield* runViews(env, null)).runs;
+        const launched = Arr.map(
+          Arr.filter(runs, (run) => run.input.goal !== "typed"),
+          (run) => run.input,
+        );
+        expect(launched).toHaveLength(2);
+        // oxlint-disable-next-line unicorn/no-thenable -- the Input is named `then`
+        expect(launched).toContainEqual({ goal: "another registry", then: "ship" });
+        // oxlint-disable-next-line unicorn/no-thenable -- the Input is named `then`
+        expect(launched).toContainEqual({ goal: "one registry", then: "ship" });
+      }),
+    ),
+  240_000,
+);
+
+test(
+  "with nothing saved, the first row leaves how far it goes empty, as a launch did before",
+  () =>
+    launching("collie-launch-reach-unsaid-", () =>
+      Effect.gen(function* () {
+        const env = yield* currentEnv;
+        const { prompts, rows } = answering(["reached", "one registry", "reach:"]);
+        expect(yield* pickFlow(new Herdr(env), env, prompts)).toBe(0);
+        const runs = (yield* runViews(env, null)).runs;
+        expect(Arr.map(rows.slice(-2), (row) => row.id)).toEqual(["reach:", "reach:ship"]);
+        // oxlint-disable-next-line unicorn/no-thenable -- the Input is named `then`
+        expect(runs[0]?.input).toEqual({ goal: "one registry", then: "" });
+      }),
+    ),
+  240_000,
+);
+
+test(
+  "a launch from the Home rooted at the Projects root remembers how far it goes for projects-root",
+  () =>
+    launching("collie-launch-reach-root-", (world) =>
+      Effect.gen(function* () {
+        const root = `${world.home}/projects`;
+        yield* (yield* FileSystem.FileSystem).makeDirectory(root, { recursive: true });
+        yield* writeConfigValue(world.config, "projects.root", root);
+        const home = yield* onTheBoard(world);
+
+        const first = answering(["reached", "one registry", "reach:ship"]);
+        expect(yield* pickFlow(new Herdr(home), home, first.prompts)).toBe(0);
+        expect(yield* savedReaches(home.userDir)).toEqual([
+          { workflow: "reached", project: "projects-root", value: "ship" },
+        ]);
+
+        const second = answering(["reached", "another registry", "reach:ship"]);
+        expect(yield* pickFlow(new Herdr(home), home, second.prompts)).toBe(0);
+        expect(Arr.map(second.rows.slice(-2), (row) => row.id)).toEqual(["reach:ship", "reach:"]);
+      }),
     ),
   240_000,
 );
