@@ -690,36 +690,49 @@ test(
       Effect.gen(function* () {
         yield* rig.startCore();
         yield* rig.queueOutputs([null]);
-        const { ended, left } = yield* hosted(
+        const { runId, launched } = yield* hosted(
           Effect.gen(function* () {
             const runId = yield* started("pi", "r1");
             const agent = agentName(runId, "pi", null, 1);
             yield* idleAfterItsStep(agent);
-            const agents = yield* Agents;
-            const recoveries: Array<Fiber.Fiber<void>> = [];
-            class ExitSeenWhileClosing extends FakeHerdr {
-              override paneClose(paneId: string, backend?: Backend) {
-                return super.paneClose(paneId, backend).pipe(
-                  Effect.andThen(Effect.forkChild(agents.resumeLost(runId, runningNow))),
-                  Effect.map((recovery) => {
-                    recoveries.push(recovery);
-                  }),
-                );
-              }
-            }
-            const herdr = new ExitSeenWhileClosing(env());
+            yield* recordedSession(runId, "pi");
             const launched = Option.getOrThrow(
               Arr.findLast(yield* readLaunches(runId), (one) => one.agent === agent),
             );
-            const ended = yield* endAgent(
-              { herdr, stateDir: dir(), ports: {}, log: () => Effect.void, cwd: rig.projectDir },
-              launched,
-              "it ran out",
-              "close",
-            );
-            yield* Fiber.joinAll(recoveries);
-            return { ended, left: yield* herdr.agentList() };
+            return { runId, launched };
           }),
+        );
+        // Stop the workflow host before testing recovery's race with endAgent. Its
+        // still-active Output collection would otherwise be another recovery caller.
+        const { ended, left } = yield* Effect.gen(function* () {
+          const agents = yield* Agents;
+          const recoveries: Array<Fiber.Fiber<void>> = [];
+          class ExitSeenWhileClosing extends FakeHerdr {
+            override paneClose(paneId: string, backend?: Backend) {
+              return super.paneClose(paneId, backend).pipe(
+                Effect.andThen(Effect.forkChild(agents.resumeLost(runId, runningNow))),
+                Effect.map((recovery) => {
+                  recoveries.push(recovery);
+                }),
+              );
+            }
+          }
+          const herdr = new ExitSeenWhileClosing(env());
+          const ended = yield* endAgent(
+            { herdr, stateDir: dir(), ports: {}, log: () => Effect.void, cwd: rig.projectDir },
+            launched,
+            "it ran out",
+            "close",
+          );
+          yield* Fiber.joinAll(recoveries);
+          return { ended, left: yield* herdr.agentList() };
+        }).pipe(
+          Effect.provide(
+            agentsLayer(hostOf()).pipe(
+              Layer.provideMerge(foundationLayer({ dir: dir(), userDir: rig.userDir })),
+            ),
+          ),
+          Effect.scoped,
         );
         expect(ended).toEqual({ _tag: "Closed", ended: true });
         expect(left).toEqual([]);
