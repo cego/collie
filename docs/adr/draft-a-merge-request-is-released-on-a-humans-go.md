@@ -8,6 +8,9 @@ branch's checkout), [ADR-0022](0022-a-workflow-is-made-of-workflows.md) (childre
 [ADR-0025](0025-a-card-is-facts-and-an-offer-is-a-declaration.md) (offers). It takes the
 claim, the stage step and the production wait from `renovate`.
 
+The confirmed-conflict wait in D5 and its D3/D7 return paths are superseded by
+[ADR-draft-release-repairs-actionable-forge-blockers](draft-release-repairs-actionable-forge-blockers.md).
+
 An implement Run ends once its merge request is open and its checks left to CI are proved.
 Everything after that is done by hand. Someone answers the reviewers' comments, fixes what
 they found, pushes and chases the approval. Then they claim the project in Helle, deploy to

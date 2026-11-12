@@ -5,6 +5,7 @@ import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import {
   AnswerSchema,
+  CONFLICTS,
   FindingSchema,
   FixOutputSchema,
   Host,
@@ -614,6 +615,8 @@ const notReady = (standing: ReviewStanding) => {
       return Arr.join(standing.why, "; ");
     case "Moved":
       return `its head moved to ${short(standing.head)}`;
+    case "Conflicting":
+      return CONFLICTS;
     case "Unanswered":
       return `${standing.comments.length} unanswered comment(s)`;
     case "Unreadable":
@@ -931,12 +934,12 @@ export default defineWorkflow({
           production: null,
         };
       } else {
-        const moveTo = (name: string, head: string) =>
+        const moveTo = (name: string, head: string, branch?: string) =>
           Activity.make({
             name,
             success: Schema.String,
             execute: Effect.gen(function* () {
-              const moved = yield* host.fastForward({ runId, cwd, head });
+              const moved = yield* host.fastForward({ runId, cwd, head, branch });
               if (moved._tag === "Refused") return yield* park(moved.why);
               return moved.head;
             }),
@@ -1049,36 +1052,97 @@ export default defineWorkflow({
         const unconflicted = () =>
           Effect.gen(function* () {
             const n = conflicts++;
-            const { at, standing } = yield* Activity.make({
-              name: `conflict-${n}`,
-              success: Schema.Struct({ at: Schema.String, standing: ReviewStandingSchema }),
-              error: WorkflowError,
-              execute: Effect.gen(function* () {
-                const at = (yield* host.evidence(runId, cwd)).final.head_sha;
-                const standing = yield* host.awaitReview({
-                  runId,
-                  cwd,
-                  proved: at,
-                  seen: [],
-                  whileConflicting: true,
-                });
-                if (standing._tag === "Held")
-                  return yield* Workflow.suspend(yield* WorkflowInstance);
-                return { at, standing };
-              }),
-            });
-            yield* gone(standing);
-            // Taken even where the head is the checkout's own, which refuses changes it does not carry.
-            yield* moveTo(
-              `conflict-${n}.fast-forward`,
-              standing._tag === "Moved" ? standing.head : at,
-            );
-            return n;
+            let previous: string | null = null;
+            for (let round = 0; ; round++) {
+              const name = `conflict-${n}${round === 0 ? "" : `.repair-${round}`}`;
+              const { at, standing } = yield* Activity.make({
+                name,
+                success: Schema.Struct({ at: Schema.String, standing: ReviewStandingSchema }),
+                error: WorkflowError,
+                execute: Effect.gen(function* () {
+                  const at = (yield* host.evidence(runId, cwd)).final.head_sha;
+                  const read = host.awaitReview({
+                    runId,
+                    cwd,
+                    proved: at,
+                    seen: [],
+                    whileConflicting: true,
+                    returnConflicts: true,
+                  });
+                  let standing = yield* read;
+                  // A push can reach git before the forge's head and mergeability read.
+                  for (
+                    let poll = 0;
+                    previous !== null &&
+                    at !== previous &&
+                    standing._tag === "Conflicting" &&
+                    poll < 3;
+                    poll++
+                  ) {
+                    yield* Effect.sleep("2 seconds");
+                    standing = yield* read;
+                  }
+                  if (standing._tag === "Held")
+                    return yield* Workflow.suspend(yield* WorkflowInstance);
+                  // Leave this read unfinished when parking: resume must read the forge again.
+                  if (standing._tag === "Conflicting") {
+                    if (standing.head === previous)
+                      return yield* park(
+                        `${mr} still conflicts with its target after fix-${fixes}; its remote head did not advance from ${short(standing.head)}`,
+                      );
+                    if (round >= ROUNDS)
+                      return yield* park(
+                        `${mr} still conflicts with its target after ${ROUNDS} repair rounds at ${short(standing.head)}`,
+                      );
+                  }
+                  return { at, standing };
+                }),
+              });
+              yield* gone(standing);
+              if (standing._tag !== "Conflicting") {
+                yield* moveTo(
+                  `${name}.fast-forward`,
+                  standing._tag === "Moved" ? standing.head : at,
+                );
+                return n;
+              }
+              const branches = yield* Activity.make({
+                name: `${name}.target`,
+                success: Schema.Struct({ source: Schema.String, target: Schema.String }),
+                error: WorkflowError,
+                execute: Effect.gen(function* () {
+                  const read = yield* host.readMergeRequest({ cwd, mr });
+                  if (read._tag === "Unreadable")
+                    return yield* park(`Cannot read ${mr}'s conflict target: ${read.why}`);
+                  if (
+                    !["open", "opened", "draft"].includes(read.state) ||
+                    read.source === "" ||
+                    read.target === ""
+                  )
+                    return yield* park(
+                      `Cannot repair ${mr}'s conflict: its open source and target branches could not be confirmed`,
+                    );
+                  return { source: read.source, target: read.target };
+                }),
+              });
+              yield* moveTo(`${name}.fast-forward`, standing.head, branches.source);
+              previous = standing.head;
+              yield* fixRound(
+                [
+                  {
+                    severity: "blocker",
+                    title: "The merge request conflicts with its target branch",
+                    detail: `The forge confirms a target conflict at ${standing.head}. Its source branch is ${branches.source}; its actual target branch is ${branches.target}. Fetch and merge the current target into this source branch, resolve the conflict preserving both branches' work, and commit and plain-push the repair. Confirm the target on the forge before working; do not assume the repository's default branch. Collie must read the pushed head and prove its checks before a new release go.`,
+                  },
+                ],
+                round + 1,
+              );
+            }
           });
         /**
          * The head proved by the checks, after as many fix rounds as it takes, up to ROUNDS.
-         * A merge request conflicting with its target has no pipeline to prove, so no head is
-         * taken or checked while it conflicts.
+         * A confirmed target conflict goes to the fixer before any checks; only the repaired,
+         * pushed head is proved. An unchanged remote head or exhausted repair bound parks.
          */
         const proving = (
           name: string,
@@ -1117,6 +1181,7 @@ export default defineWorkflow({
               proved,
               seen: [],
               untilBlocked,
+              returnConflicts: true,
             });
             if (standing._tag === "Held") return yield* Workflow.suspend(yield* WorkflowInstance);
             return standing;
@@ -1224,7 +1289,7 @@ export default defineWorkflow({
           if (!shared && askedAt !== proved) yield* offerShare(waits);
           const standing = yield* reviewWait(awaited(waits, proved));
           yield* gone(standing);
-          if (standing._tag === "Moved") {
+          if (standing._tag === "Moved" || standing._tag === "Conflicting") {
             proved = yield* proveHead(proving(`checks.${waits}`, null));
             continue;
           }
