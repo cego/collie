@@ -1961,7 +1961,9 @@ compositor or an X11 session, it says the scale is not known and why, and Zoom a
 marks to `record-timing.log` in Desktop's state directory: `record:click`, `record:mounted`,
 `record:frame` and `record:usable`, one JSON line each with the card and the time. Desktop
 sets the same marks as User Timing marks either way ([Measuring a record
-open](internals.md#measuring-a-record-open)).
+open](internals.md#measuring-a-record-open)). It also logs Desktop's launch, its first usable
+board, a terminal key and its echo, a chat chunk and its draw, and each frame of a scroll
+(`desktop/README.md`, Measuring a record open natively).
 
 **Settings** also holds **Collie**: every setting the TUI's Settings offers — each default a
 Run reads, `proactive`, the extra `models.<harness>` and each `notifications.<kind>` — with
@@ -2193,6 +2195,8 @@ machine's shared SSH connection, so the host is started with the environment `co
 so nothing its model does is ever recorded as yours. For a herdr machine on a session other than `default`, the host is handed that
 session's socket. Desktop never starts, signals or connects to a host by any other route.
 `COLLIE_DESKTOP_COLLIE` replaces how `collie` is run here, as a JSON array.
+`COLLIE_DESKTOP_STATE_HOME` moves where Desktop keeps its own state from `$XDG_STATE_HOME`;
+what Desktop starts, `collie` and herdr among it, still gets your `XDG_STATE_HOME`.
 
 ### The Flock chat
 

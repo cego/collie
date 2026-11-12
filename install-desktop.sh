@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs Collie Desktop for this user: on Linux with a desktop entry, on a Mac into
+# Installs Collie for this user: on Linux with a desktop entry, on a Mac into
 # ~/Applications:
 #
 #   curl -fsSL https://github.com/cego/collie/releases/latest/download/install-desktop.sh | sh
@@ -15,10 +15,10 @@ case "$(uname -s) $(uname -m)" in
   "Linux x86_64" | "Linux amd64") ASSET=linux-x64-collie-desktop-Setup.tar.gz ;;
   "Darwin arm64") ASSET=macos-arm64-collie-desktop.dmg ;;
   Darwin\ *)
-    echo "Collie Desktop is released for Apple silicon only; the TUI plugin (setup.sh) works on this Mac." >&2
+    echo "Collie is released for Apple silicon only; the TUI plugin (setup.sh) works on this Mac." >&2
     exit 1
     ;;
-  *) echo "Collie Desktop is not released for $(uname -s) $(uname -m)" >&2; exit 1 ;;
+  *) echo "Collie is not released for $(uname -s) $(uname -m)" >&2; exit 1 ;;
 esac
 
 # `release-p256.pub`, inline because this script runs on its own: the key install.sh checks a
@@ -70,13 +70,13 @@ case "$ASSET" in
       cp -R "$app" "$staged"
       rm -rf "$HOME/Applications/$name"
       mv "$staged" "$HOME/Applications/$name"
-      echo "installed Collie Desktop from ${BASE}; open it from Spotlight, or: open -a \"$HOME/Applications/$name\""
+      echo "installed Collie from ${BASE}; open it from Spotlight, or: open -a \"$HOME/Applications/$name\""
     done
     ;;
   *)
-    tar -xzf "$work/download" -C "$work" ./installer
-    # Electrobun's installer: per user, under ~/.local/share, with a desktop entry.
+    tar -xzf "$work/download" -C "$work"
+    # The native installer's bundle: per user, under ~/.local/share, with a desktop entry.
     "$work/installer"
-    echo "installed Collie Desktop from ${BASE}"
+    echo "installed Collie from ${BASE}"
     ;;
 esac

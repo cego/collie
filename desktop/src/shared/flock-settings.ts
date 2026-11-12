@@ -110,7 +110,7 @@ const DESKTOP_SETTINGS: ReadonlyArray<DesktopSetting> = [
     group: "Board",
     label: "Record timing",
     description:
-      "Logs how long each record took to open, to record-timing.log in Desktop's state directory.",
+      "Logs how long each record took to open, and Desktop's launch, terminal, chat and scrolling, to record-timing.log in Desktop's state directory.",
     read: (desktop: DesktopSettings) => (desktop.recordTiming === true ? "on" : "off"),
     change: (typed) => ({ recordTiming: typed === "on" }),
   },

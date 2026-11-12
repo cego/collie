@@ -8,6 +8,17 @@ import { fastForward, runEffect } from "./support/effect";
 import { until } from "./support/host";
 import { alive } from "./support/sweep";
 
+test("a fixture command receives its input bytes and EOF", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const ran = yield* exec(
+        [process.execPath, "-e", "await Bun.write(Bun.stdout, await Bun.stdin.text());"],
+        { stdin: Buffer.from("ø🙂\nsecond line\n") },
+      );
+      expect(ran).toEqual({ exitCode: 0, stdout: "ø🙂\nsecond line\n", stderr: "" });
+    }),
+  ));
+
 test("a fixture command drains both pipes, keeps its exit code, and inherits the current environment", () =>
   runEffect(
     Effect.gen(function* () {

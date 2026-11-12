@@ -5,10 +5,9 @@
   "scripts": {
     "prepare": "effect-tsgo patch --oxlint",
     "postinstall": "bun install --cwd desktop --frozen-lockfile",
-    "lint": "bun run lint:ts && bun run lint:vue",
-    "lint:ts": "effect-tsgo oxlint --vue-plugin",
-    "lint:vue": "bun tools/lint-vue.ts",
-    "lint:fix": "effect-tsgo oxlint --vue-plugin --fix && bun run lint:vue",
+    "lint": "bun run lint:ts",
+    "lint:ts": "effect-tsgo oxlint",
+    "lint:fix": "effect-tsgo oxlint --fix",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "test": "bun run tools/test.ts",

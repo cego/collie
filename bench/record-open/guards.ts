@@ -3,6 +3,7 @@
 import { Effect, FileSystem, Option, Path, pipe } from "effect";
 import * as Str from "effect/String";
 import { ensureLockDir, lockHolder, withLock } from "../../src/lock";
+import { processOf } from "../../src/processes";
 
 /** The state directory a host uses when nothing names another. */
 export const userStateDir = (home: string, env: Readonly<Record<string, string | undefined>>) =>
@@ -22,20 +23,7 @@ export const refusal = Effect.fnUntraced(function* (
   return null;
 });
 
-// ponytail: reads /proc, so a Measurement is recognised on Linux only.
-const parentOf = (pid: number) =>
-  Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(`/proc/${pid}/stat`)).pipe(
-    // The fields after the command's closing parenthesis: state, then the parent's pid.
-    Effect.map((stat) =>
-      Number(
-        Str.split(
-          Str.slice(Option.getOrElse(Str.lastIndexOf(")")(stat), () => -2) + 2)(stat),
-          " ",
-        )[1],
-      ),
-    ),
-    Effect.orElseSucceed(() => 0),
-  );
+const parentOf = (pid: number) => Effect.map(processOf(pid), (one) => one?.parent ?? 0);
 
 const ancestorsOf = Effect.fnUntraced(function* (pid: number) {
   const found: number[] = [];

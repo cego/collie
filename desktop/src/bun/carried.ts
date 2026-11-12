@@ -8,7 +8,9 @@ import { Clock, Effect, FileSystem, Result } from "effect";
 import * as Base64 from "effect/encoding/Base64";
 import { ATTACHMENT_BYTES, sha256Hex } from "../../../src/attachments";
 import { HostRefused, type HostFile, PART_BYTES } from "../../../src/board-model";
-import { type FlockChat, reach, type Reached } from "./flock-tools";
+import { describeAttachment } from "./attachments";
+import { type ChatDoor, type FlockChat, reach, type Reached } from "./flock-tools";
+import { reasonOf } from "./sent";
 
 const tooLarge = (path: string) =>
   new HostRefused({ reason: `${path} is larger than ${ATTACHMENT_BYTES / 1024 / 1024} MB` });
@@ -40,14 +42,14 @@ const REMEMBERED = 24 * 60 * 60 * 1000;
 
 /** `bytes` on `machine`, uploaded unless this session did today, and their path there. */
 const uploaded = Effect.fn("Carried.upload")(function* (
-  flock: FlockChat,
-  machine: Reached,
+  uploads: FlockChat["uploaded"],
+  machine: { readonly name: string; readonly door: Pick<ChatDoor, "upload"> },
   name: string,
   bytes: Uint8Array,
 ) {
   const sha256 = sha256Hex(bytes);
-  const known = flock.uploaded.get(machine.name) ?? new Map();
-  flock.uploaded.set(machine.name, known);
+  const known = uploads.get(machine.name) ?? new Map();
+  uploads.set(machine.name, known);
   const now = yield* Clock.currentTimeMillis;
   const held = known.get(sha256);
   if (held !== undefined && now - held.at < REMEMBERED) return held.path;
@@ -106,7 +108,7 @@ export const carriedPaths = Effect.fn("Carried.paths")(function* (
     else if (on !== undefined)
       paths.push(
         yield* uploaded(
-          flock,
+          flock.uploaded,
           machine,
           name,
           (yield* readWhole(yield* reach(on), path, undefined, ATTACHMENT_BYTES)).bytes,
@@ -119,11 +121,60 @@ export const carriedPaths = Effect.fn("Carried.paths")(function* (
       if (info.type !== "File") return yield* unreadable();
       if (Number(info.size) > ATTACHMENT_BYTES) return yield* tooLarge(path);
       const bytes = yield* fs.readFile(path).pipe(Effect.mapError(unreadable));
-      paths.push(yield* uploaded(flock, machine, name, bytes));
+      paths.push(yield* uploaded(flock.uploaded, machine, name, bytes));
     } else
       return yield* new HostRefused({
         reason: `${one} is neither a path on this computer nor <machine>:<path>. Nothing was done.`,
       });
   }
+  return paths;
+});
+
+/** A Machine a pane is on, as placing a file there needs it. */
+export interface PlacedOn {
+  readonly name: string;
+  /** Whether its host takes files, as its latest Snapshot said. */
+  readonly files: boolean;
+  readonly door: Pick<ChatDoor, "upload">;
+}
+
+/**
+ * Desktop's copies, by id, placed on the Machine a pane is on, and their paths there, in
+ * order; the first that cannot be placed fails the whole, naming it.
+ */
+export const placeStaged = Effect.fn("Carried.place")(function* (
+  held: FlockChat["uploaded"],
+  machine: PlacedOn,
+  dir: string,
+  ids: ReadonlyArray<string>,
+) {
+  if (!machine.files)
+    return yield* new HostRefused({
+      reason: `${machine.name}'s Collie does not take files; upgrade Collie on ${machine.name}. Nothing was pasted.`,
+    });
+  const fs = yield* FileSystem.FileSystem;
+  const copies = [];
+  for (const id of ids) {
+    const copy = yield* describeAttachment(dir, id);
+    const name = copy?.name ?? Str.split(id, "/").at(-1) ?? id;
+    const bytes = copy === null ? undefined : yield* fs.readFile(copy.path).pipe(Effect.option);
+    if (bytes === undefined || Option.isNone(bytes))
+      return yield* new HostRefused({
+        reason: `${name} is no longer held by Desktop; paste it again`,
+      });
+    copies.push({ name, bytes: bytes.value });
+  }
+  const paths: string[] = [];
+  for (const { name, bytes } of copies)
+    paths.push(
+      yield* uploaded(held, machine, name, bytes).pipe(
+        Effect.mapError(
+          (cause) =>
+            new HostRefused({
+              reason: `${name} could not be placed on ${machine.name}: ${reasonOf(cause)}`,
+            }),
+        ),
+      ),
+    );
   return paths;
 });
