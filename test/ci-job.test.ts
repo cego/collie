@@ -726,6 +726,48 @@ for (const name of ["gitlab", "github"] as const)
       }),
     ));
 
+for (const name of ["gitlab", "github"] as const)
+  test(`a ${name} failed own test keeps its file when another job names an untouched test the same`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { asked, forge } = yield* waiting(
+          "passed",
+          name === "gitlab" ? MR : PULL,
+          undefined,
+          {
+            jobs: [
+              {
+                name: "nuxi-typecheck",
+                state: "passed",
+                id: 201,
+                attempts: [{ id: 1, state: "failed" }],
+              },
+              {
+                name: "suite (old)",
+                state: "passed",
+                id: 203,
+                attempts: [
+                  { id: 3, state: "failed", trace: "test/old-thing.test.ts:\n(fail) works\n" },
+                ],
+              },
+              {
+                name: "suite (new)",
+                state: "passed",
+                id: 202,
+                attempts: [{ id: 2, state: "failed", trace: `${OWN_FILE}:\n(fail) works\n` }],
+              },
+            ],
+          },
+          name,
+          BRANCH,
+        );
+        const result = yield* read({ ...asked, settle: true }, forge);
+        expect(result).toMatchObject({ state: "failed" });
+        expect("unproved" in result ? result.unproved : "").toContain('own test "works"');
+        expect(yield* journalOf(asked)).toEqual([]);
+      }),
+    ));
+
 test("a GitHub job that passes its rerun, after a failed suite job named a test the branch adds, is failed", () =>
   runEffect(
     Effect.gen(function* () {

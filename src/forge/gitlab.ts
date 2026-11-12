@@ -833,7 +833,7 @@ function failedAttempt(
     const tests = Arr.flatMap(traces, (trace) =>
       trace.ok ? failedTestsIn(plainTrace(trace.value)) : [],
     );
-    return { url, tests: Arr.dedupeWith(tests, (a, b) => a.name === b.name) };
+    return { url, tests: Arr.dedupeWith(tests, (a, b) => a.name === b.name && a.file === b.file) };
   });
 }
 

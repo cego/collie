@@ -1047,7 +1047,7 @@ function failedAttempt(
       (one) => requestText(LOGIN, cwd, `repos/${repo}/actions/jobs/${one.id}/logs`),
     );
     const tests = Arr.flatMap(logs, (log) => (log.ok ? failedTestsIn(plainLog(log.value)) : []));
-    return { url, tests: Arr.dedupeWith(tests, (a, b) => a.name === b.name) };
+    return { url, tests: Arr.dedupeWith(tests, (a, b) => a.name === b.name && a.file === b.file) };
   });
 }
 
