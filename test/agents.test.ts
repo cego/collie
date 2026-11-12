@@ -71,6 +71,7 @@ import { Collected } from "../src/agents";
 import { Collecting } from "../src/collecting";
 import { holdsBudgetOf, memoryWaitOf, waitForMemory } from "../src/memory-wait";
 import type { UsageReading } from "../src/usage-model";
+import { isoAt } from "../src/time";
 import { readCards } from "../src/cards";
 import { readDrift } from "../src/drift";
 import { FixOutputSchema, SynthesisSchema } from "../src/output";
@@ -3246,6 +3247,216 @@ test("a Codex agent whose own app server says its limit is reached is replaced",
       expect(harnessesStarted(yield* rig.calls())).toEqual(["codex", "claude"]);
       expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
         "review: codex/default ran out (weekly 100%, resets",
+      );
+    }),
+  ));
+
+for (const recovery of ["a newer matching reset", "its known reset passing"])
+  test(
+    `a spent subscription recovers on ${recovery} without resuming the Run`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          yield* rig.queueOutputs([
+            null,
+            { verdict: "clean", note: "the subscription has room again" },
+          ]);
+          const now = yield* Clock.currentTimeMillis;
+          const exhausted: UsageReading = {
+            subscription: "chatgpt",
+            account: "acct",
+            accountLabel: null,
+            plan: "pro",
+            windows: [
+              {
+                kind: "weekly",
+                label: "Weekly",
+                model: null,
+                usedPercent: 100,
+                resetsAt: isoAt(
+                  now + (recovery === "its known reset passing" ? 120_000 : 3_600_000),
+                ),
+                reached: true,
+              },
+            ],
+            at: isoAt(now),
+            source: "codex-app-server",
+            problem: null,
+          };
+          const available = {
+            ...exhausted,
+            windows: [{ ...exhausted.windows[0]!, usedPercent: 0, reached: false }],
+          };
+          let machine: UsageReading = { ...available, at: isoAt(now - 60_000) };
+          const result = yield* session(
+            Effect.gen(function* () {
+              const waiting = yield* Effect.forkChild(started("r1"));
+              yield* until(parkedSays("before writing"));
+              expect(harnessesStarted(yield* rig.calls())).toEqual(["codex"]);
+              if (recovery === "its known reset passing") yield* TestClock.adjust("3 minutes");
+              else {
+                machine = {
+                  ...available,
+                  at: isoAt(yield* Clock.currentTimeMillis),
+                  windows: [{ ...available.windows[0]!, resetsAt: isoAt(now + 7_200_000) }],
+                };
+                yield* TestClock.adjust("1 minute");
+              }
+              return yield* Fiber.join(waiting).pipe(Effect.timeoutOption("2 minutes"));
+            }),
+            {
+              harness: "codex",
+              model: "default",
+              fallbacks: Effect.succeed([]),
+              readings: Effect.sync(() => [machine]),
+              ownReading: (agent) => Effect.succeed(agent === agentFor("r1") ? exhausted : null),
+              collectMs: 2_000,
+            },
+          );
+          expect(result._tag).toBe("Some");
+          expect(
+            result._tag === "Some" && result.value._tag === "Success" && result.value.success.note,
+          ).toBe("the subscription has room again");
+          const calls = yield* rig.calls();
+          expect(harnessesStarted(calls)).toEqual(["codex", "codex"]);
+          expect(closedPanes(calls)).toHaveLength(1);
+          expect(yield* (yield* FileSystem.FileSystem).exists(controlPath(dir, PARKED, "r1"))).toBe(
+            false,
+          );
+        }),
+      ),
+    30_000,
+  );
+
+test("a spent subscription stays unavailable without proof that its exhausted window reset", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const reset = isoAt(now + 3_600_000);
+      const spent = [
+        {
+          on: { harness: "codex", model: "default", effort: null },
+          why: "weekly limit reached",
+          resetsAt: reset,
+          exhaustion: {
+            at: now - 60_000,
+            account: "acct",
+            windows: [{ kind: "weekly" as const, model: null, resetsAt: reset }],
+          },
+        },
+      ];
+      const fresh: UsageReading = {
+        subscription: "chatgpt",
+        account: "acct",
+        accountLabel: null,
+        plan: "pro",
+        windows: [
+          {
+            kind: "weekly",
+            label: "Weekly",
+            model: null,
+            usedPercent: 0,
+            resetsAt: isoAt(now + 7_200_000),
+            reached: false,
+          },
+        ],
+        at: isoAt(now),
+        source: "codex-app-server",
+        problem: null,
+      };
+      let readings: ReadonlyArray<UsageReading> = [];
+      yield* session(
+        Effect.gen(function* () {
+          const agents = yield* Agents;
+          for (const candidate of [
+            { ...fresh, windows: [{ ...fresh.windows[0]!, resetsAt: reset }] },
+            { ...fresh, at: isoAt(now - 120_000) },
+            { ...fresh, at: isoAt(now + 3_600_000) },
+            { ...fresh, at: "not a timestamp" },
+            { ...fresh, problem: "The usage source could not be read" },
+            { ...fresh, windows: [] },
+            { ...fresh, account: "another-account" },
+            {
+              ...fresh,
+              windows: [
+                ...fresh.windows,
+                { ...fresh.windows[0]!, kind: "session" as const, usedPercent: 100, reached: true },
+              ],
+            },
+          ]) {
+            readings = [candidate];
+            const chosen = yield* agents.choose([], { runId: "r1", operation: "review" }, spent);
+            expect(chosen.why).toStartWith("nothing has room");
+          }
+          readings = [fresh];
+          const previous = {
+            ...spent[0]!,
+            resetsAt: isoAt(now - 1),
+            exhaustion: {
+              ...spent[0]!.exhaustion,
+              at: now - 120_000,
+              windows: [{ ...spent[0]!.exhaustion.windows[0]!, resetsAt: isoAt(now - 1) }],
+            },
+          };
+          const latest = { ...spent[0]!, exhaustion: { ...spent[0]!.exhaustion, at: now } };
+          const repeated = yield* agents.choose([], { runId: "r1", operation: "review" }, [
+            previous,
+            latest,
+          ]);
+          expect(repeated.why).toStartWith("nothing has room");
+          readings = [{ ...fresh, at: isoAt(now - 10 * 60_000) }];
+          const staleRecovery = yield* agents.choose([], { runId: "r1", operation: "review" }, [
+            {
+              ...spent[0]!,
+              exhaustion: { ...spent[0]!.exhaustion, at: now - 20 * 60_000 },
+            },
+          ]);
+          expect(staleRecovery.why).toStartWith("nothing has room");
+        }),
+        {
+          harness: "codex",
+          model: "default",
+          fallbacks: Effect.succeed([]),
+          readings: Effect.sync(() => readings),
+        },
+      );
+      expect(harnessesStarted(yield* rig.calls())).toEqual([]);
+    }),
+  ));
+
+test("a legacy spent subscription decodes without exhaustion metadata and only recovers after its known reset", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      yield* session(
+        Effect.gen(function* () {
+          const agents = yield* Agents;
+          for (const hasReset of [false, true]) {
+            const legacy = {
+              _tag: "RanOut" as const,
+              why: "weekly limit reached",
+              transcript: null,
+            };
+            const saved = hasReset ? { ...legacy, resetsAt: isoAt(now - 1) } : legacy;
+            expect(flow(Schema.decodeUnknownResult(Collected), Result.getOrThrow)(saved)).toEqual(
+              saved,
+            );
+            const chosen = yield* agents.choose([], { runId: "r1", operation: "review" }, [
+              {
+                ...saved,
+                on: { harness: "codex", model: "default", effort: null },
+              },
+            ]);
+            if (hasReset) expect(chosen.why).toBeUndefined();
+            else expect(chosen.why).toStartWith("nothing has room");
+          }
+        }),
+        {
+          harness: "codex",
+          model: "default",
+          fallbacks: Effect.succeed([]),
+          readings: Effect.succeed([]),
+        },
       );
     }),
   ));

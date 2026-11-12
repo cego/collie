@@ -167,11 +167,20 @@ import { agentName, agentTabLabel, launchedAs, reason, unsafePathComponent } fro
 import { machineName } from "./peers";
 import type { MachineCatalogue } from "./harness-choice";
 import { askRouteTo } from "./handoff";
-import { nowIso } from "./time";
+import { epochMs, nowIso } from "./time";
 import { noteContext, noteReminder, type RecoveryOutcome } from "./metrics";
 import manifest from "../herdr-plugin.toml";
-import { roomFor, subscriptionOf, usedFor, type UsageReading } from "./usage-model";
-import { ownCodexReading } from "./usage";
+import {
+  appliesTo,
+  current as currentUsageWindow,
+  isFull,
+  roomFor,
+  subscriptionOf,
+  usedFor,
+  UsageWindow,
+  type UsageReading,
+} from "./usage-model";
+import { ownCodexReading, USAGE_INTERVAL_MS } from "./usage";
 import {
   lineageAgent,
   registerAgent,
@@ -282,9 +291,26 @@ export const RanOut = Schema.TaggedStruct("RanOut", {
   transcript: Schema.NullOr(Schema.String),
   /** When its Subscription resets, where a reading says. */
   resetsAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /** The exhausted windows that substantiated this incident, kept across replay. */
+  exhaustion: Schema.optionalKey(
+    Schema.Struct({
+      at: Schema.Finite,
+      account: Schema.NullOr(Schema.String),
+      windows: Schema.Array(
+        Schema.Struct({
+          kind: UsageWindow.fields.kind,
+          model: UsageWindow.fields.model,
+          resetsAt: UsageWindow.fields.resetsAt,
+        }),
+      ),
+    }),
+  ),
 });
 export type RanOut = typeof RanOut.Type;
 const isRanOut = Schema.is(RanOut);
+type SpentChoice = Pick<RanOut, "why" | "resetsAt" | "exhaustion"> & {
+  readonly on: AgentChoice;
+};
 
 const TurnEnded = Schema.TaggedStruct("TurnEnded", { endedAt: Schema.Finite });
 const isTurnEnded = Schema.is(TurnEnded);
@@ -386,8 +412,8 @@ export interface AgentsApi {
   readonly choose: (
     layers: ReadonlyArray<Preferences | undefined>,
     work: { readonly runId: string; readonly operation: string },
-    /** Agents that ran out on this work, and why; their Subscriptions count as Exhausted. */
-    spent?: ReadonlyArray<{ readonly on: AgentChoice; readonly why: string }>,
+    /** Agents that ran out on this work; their incident stands until its limits recover. */
+    spent?: ReadonlyArray<SpentChoice>,
   ) => Effect.Effect<ChosenAgent, WorkflowError>;
   /**
    * What this Run's agent of that name runs on, as its newest incarnation, where it is
@@ -1091,11 +1117,11 @@ export const agentWork = <
     );
     // Each agent that ran out is closed and replaced by one on the next choice with room
     // (ADR-0049 D8), every step its own Activity so a replay starts no third agent.
-    const spent: Array<{ readonly on: AgentChoice; readonly why: string }> = [];
+    const spent: Array<SpentChoice> = [];
     for (let n = 1; isRanOut(collected); n++) {
-      const out = collected;
+      const out: RanOut = collected;
       const on = choiceOfLaunch(current);
-      spent.push({ on, why: out.why });
+      spent.push({ ...out, on });
       const next = yield* Activity.make({
         name: `${work.operation}.fallback-${n}.agent`,
         success: AgentChoiceSchema,
@@ -1664,6 +1690,43 @@ const nothingHasRoom = (chosen: ChosenAgent) =>
 const sameUsage = (one: AgentChoice, other: AgentChoice) => {
   const drawn = subscriptionOf(one);
   return said(one) === said(other) || (drawn !== null && drawn === subscriptionOf(other));
+};
+
+/** A previous exhaustion stops excluding a Subscription only when its limits recover. */
+const usageRecovered = (spent: SpentChoice, readings: ReadonlyArray<UsageReading>, now: number) => {
+  const resetPassed = (at: string | null | undefined) =>
+    at != null && Number.isFinite(epochMs(at)) && epochMs(at) <= now;
+  const held = spent.exhaustion;
+  // Older Activities recorded just this reset. Do not invent observation times on replay.
+  if (held === undefined) return resetPassed(spent.resetsAt);
+  if (held.windows.length === 0 || !Number.isFinite(held.at) || held.at > now) return false;
+  return Arr.every(held.windows, (window) => {
+    if (resetPassed(window.resetsAt)) return true;
+    if (window.resetsAt === null || !Number.isFinite(epochMs(window.resetsAt))) return false;
+    const previousReset = epochMs(window.resetsAt);
+    return (
+      held.account !== null &&
+      Arr.some(
+        readings,
+        (reading) =>
+          reading.subscription === subscriptionOf(spent.on) &&
+          reading.account === held.account &&
+          reading.problem === null &&
+          epochMs(reading.at) > held.at &&
+          epochMs(reading.at) <= now &&
+          now - epochMs(reading.at) <= USAGE_INTERVAL_MS &&
+          Arr.some(
+            reading.windows,
+            (next) =>
+              next.kind === window.kind &&
+              next.model === window.model &&
+              !isFull(next) &&
+              next.resetsAt !== null &&
+              epochMs(next.resetsAt) > previousReset,
+          ),
+      )
+    );
+  });
 };
 
 /**
@@ -3599,6 +3662,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           const now = yield* Clock.currentTimeMillis;
           // The Machine's reading at most once a minute, and whenever the harness reports.
           let exhausted: string | null = null;
+          let exhaustion: RanOut["exhaustion"];
           if (reported !== null || now - readAt >= READING_EVERY_MS) {
             readAt = now;
             const machine = yield* host.readings ?? Effect.succeed([]);
@@ -3610,16 +3674,43 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                 : [own, ...Arr.filter(machine, (one) => one.subscription !== own.subscription)];
             const judged = roomFor(readings, now)(on, undefined);
             exhausted = judged.room ? null : judged.why;
-            resetsAt = usedFor(readings, on, now)?.resetsAt ?? null;
+            resetsAt = exhausted === null ? null : (usedFor(readings, on, now)?.resetsAt ?? null);
+            const reading = Arr.findFirst(
+              readings,
+              (one) =>
+                one.subscription === subscriptionOf(on) &&
+                one.problem === null &&
+                Arr.some(
+                  one.windows,
+                  (window) =>
+                    appliesTo(window, on.model) && isFull(currentUsageWindow(window, now)),
+                ),
+            );
+            if (Option.isSome(reading))
+              exhaustion = {
+                at: now,
+                account: reading.value.account,
+                windows: Arr.map(
+                  Arr.filter(
+                    reading.value.windows,
+                    (window) =>
+                      appliesTo(window, on.model) && isFull(currentUsageWindow(window, now)),
+                  ),
+                  ({ kind, model, resetsAt }) => ({ kind, model, resetsAt }),
+                ),
+              };
           }
-          if (reported !== null)
-            return RanOut.make({
-              why: exhausted ?? reported.why,
-              transcript: reported.transcript,
+          const why = exhausted ?? reported?.why;
+          if (why !== undefined) {
+            const result: Types.Mutable<RanOut> = {
+              _tag: "RanOut",
+              why,
+              transcript: reported?.transcript ?? null,
               resetsAt,
-            });
-          if (exhausted !== null)
-            return RanOut.make({ why: exhausted, transcript: null, resetsAt });
+            };
+            if (exhaustion !== undefined) result.exhaustion = exhaustion;
+            return result;
+          }
           yield* Effect.sleep(Duration.millis(host.pollMs ?? DEFAULT_POLL_MS));
         }
       }).pipe(Effect.orDie),
@@ -3952,15 +4043,19 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               Effect.map(({ fallbacks }) => fallbacks),
               Effect.orElseSucceed(() => []),
             );
-          const read = roomFor(readings, yield* Clock.currentTimeMillis);
-          const out = Arr.map(spent, ({ on, why }) => ({ on: pinned(on), why }));
+          const now = yield* Clock.currentTimeMillis;
+          const read = roomFor(readings, now);
+          const out = Arr.map(spent, (one) => ({ ...one, on: pinned(one.on) }));
           const resolved = resolveWithRoom(
             [configured, ...layers],
             yield* chain,
             (choice, upTo) => {
               const judged = read(choice, upTo);
               const ran = Option.getOrUndefined(
-                Arr.findFirst(out, ({ on }) => sameUsage(on, choice)),
+                Arr.findFirst(
+                  out,
+                  (one) => sameUsage(one.on, choice) && !usageRecovered(one, readings, now),
+                ),
               );
               return judged.room && ran !== undefined ? { room: false, why: ran.why } : judged;
             },
