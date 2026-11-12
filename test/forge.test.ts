@@ -3364,6 +3364,31 @@ describe("GitLab's OAuth login over HTTP", () => {
   });
 });
 
+test("GitLab identifies a retry from job IDs without a retried response field", () => {
+  const fake = fakeForge(
+    "gitlab",
+    model("gitlab", {
+      mrs: [
+        mr("gitlab", {
+          jobs: [
+            { name: "test", state: "passed", id: 101, attempts: [{ id: 1, state: "failed" }] },
+          ],
+        }),
+      ],
+    }),
+  );
+  return runEffect(
+    Effect.gen(function* () {
+      expect(yield* gitlab.job(ref("gitlab"), "test", "/w", fake.run)).toMatchObject({
+        ok: true,
+        state: "passed",
+        id: "101",
+        retryOf: "1",
+      });
+    }).pipe(Effect.provide(fake.layer)),
+  );
+});
+
 const gated = () =>
   fakeForge(
     "github",

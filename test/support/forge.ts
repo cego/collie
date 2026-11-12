@@ -1154,20 +1154,24 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
         ...Arr.map(retriedToo ? (job.attempts ?? []) : [], (one) => ({
           ...one,
           name: job.name,
-          retried: true,
         })),
-        { ...job, retried: false },
+        job,
       ]);
       return mr === undefined || listed === undefined
         ? no()
         : json(
-            Arr.map(pageOf(route, attempts), (job) => ({
-              id: job.id,
-              name: job.name,
-              status: GITLAB_JOB[job.state],
-              web_url: `https://${mr.project}/-/jobs/${job.id}`,
-              retried: job.retried,
-            })),
+            Arr.map(
+              pageOf(
+                route,
+                Arr.sortWith(attempts, (job) => -job.id, Order.Number),
+              ),
+              (job) => ({
+                id: job.id,
+                name: job.name,
+                status: GITLAB_JOB[job.state],
+                web_url: `https://${mr.project}/-/jobs/${job.id}`,
+              }),
+            ),
           );
     }
     const commit = /\/repository\/commits\/([^/?]+)$/.exec(route);

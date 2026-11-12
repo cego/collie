@@ -614,8 +614,6 @@ const Job = Schema.Struct({
   name: Schema.String,
   status: Schema.String,
   web_url: optionalText,
-  /** A later attempt of it ran: it is listed only with `include_retried`. */
-  retried: Schema.optionalKey(Schema.Boolean),
 });
 const Jobs = Schema.Array(Job);
 const AttemptJob = Schema.Struct({
@@ -793,14 +791,7 @@ const pipelineJobs = (reached: Reached, cwd: string, id: number) =>
 const jobIn = (reached: Reached, cwd: string, id: number, name: string) =>
   Effect.map(pipelineJobs(reached, cwd, id), (listed) => {
     if (!listed.ok) return listed;
-    const named = Arr.filter(listed.value, (one) => one.name === name);
-    const found = Option.getOrUndefined(Arr.findFirst(named, (one) => one.retried !== true));
-    const before = Arr.reduce(
-      Arr.filter(named, (one) => one.retried === true),
-      undefined,
-      (newest: typeof Job.Type | undefined, one) =>
-        newest === undefined || one.id > newest.id ? one : newest,
-    );
+    const [found, before] = Arr.filter(listed.value, (one) => one.name === name);
     return {
       ok: true,
       value: {
