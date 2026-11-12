@@ -114,6 +114,11 @@ waits finish, only while the lease remains live. Errors and cancellation use the
 also wrap reads and writes, including those used by the platform's stream and sink constructors.
 Other requests retain their holds. A late I/O completion cannot restore an expired stream lease.
 
+`collie_run` reads its context through the existing model's related-Run query, avoiding polls of
+unrelated live executions. An active check still reads all Runs to report other checks and usual durations.
+A Flow-only read derives the same card and completion markers as the full record, without building
+the unused detail or listing its attachments and evidence. Full records still include those fields.
+
 `bench/front-door-wait.ts` measures `verify` first values and `read` answers
 against the record-open fixture's host while its live Runs keep the board building.
 The harness disables OTLP and records every board-build duration through `COLLIE_RECORD_MARKS`,
