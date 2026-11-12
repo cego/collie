@@ -7,7 +7,7 @@ import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
-import { Effect, FileSystem, Layer, type Schema, type Scope } from "effect";
+import { Effect, FileSystem, Layer, Schema, type Scope } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { fastForward, runEffect as runLive } from "./support/effect";
@@ -29,6 +29,7 @@ import { Store } from "../src/store";
 import { writeTask } from "../src/task";
 import { socketOf } from "../src/host";
 import { reportsLayer } from "../src/reports";
+import { DEFAULT_AUTHORITY, IntentSchema } from "../src/intent";
 
 const ROOT = new URL("../", import.meta.url).pathname;
 
@@ -168,6 +169,54 @@ const write = (path: string, text: string) =>
   );
 
 const REPORT = '{"state":"delivered","at":"2026-10-15T00:00:00.000Z","note":"done","closed":true}';
+
+test("Run listings and related views use their supplied reader for intent and displayed controls", () =>
+  runEffect(
+    hosted(
+      Effect.gen(function* () {
+        const registry = yield* Registry;
+        const fs = yield* FileSystem.FileSystem;
+        const run = yield* started(yield* loaded("quiet"), "reader-snapshot", {});
+        yield* settled(run.runId, "complete");
+        const intent = yield* Schema.encodeEffect(Schema.fromJsonString(IntentSchema))({
+          version: 1,
+          run: run.runId,
+          goal: "Reader snapshot",
+          outcome: "performance",
+          constraints: [],
+          authority: DEFAULT_AUTHORITY,
+          parent: null,
+          history: [],
+        });
+        const reader: FileSystem.FileSystem = {
+          ...fs,
+          readFileString: (path, encoding) =>
+            path === `${runDir(dir(), run.runId)}/intent.json`
+              ? Effect.succeed(intent)
+              : fs.readFileString(path, encoding),
+          exists: (path) =>
+            path === controlPath(dir(), HOLD, run.runId) ? Effect.succeed(true) : fs.exists(path),
+        };
+        const all = yield* registry.views(null, reader);
+        expect(
+          Option.getOrUndefined(Arr.findFirst(all, (view) => view.runId === run.runId)),
+        ).toMatchObject({
+          options: { outcome: "performance" },
+          controls: [HOLD],
+        });
+        const related = yield* registry.related(run.runId, [], reader);
+        expect(
+          Option.getOrUndefined(Arr.findFirst(related, (view) => view.runId === run.runId)),
+        ).toMatchObject({
+          options: { outcome: "performance" },
+          controls: [HOLD],
+        });
+        const fresh = yield* registry.view(run.runId);
+        expect(fresh?.options.outcome).not.toBe("performance");
+        expect(fresh?.controls).toEqual([]);
+      }),
+    ),
+  ));
 
 test(
   "a completed Run is polled at most once across two listings, and its files are read on each",

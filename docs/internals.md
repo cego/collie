@@ -119,6 +119,12 @@ unrelated live executions. An active check still reads all Runs to report other 
 A Flow-only read derives the same card and completion markers as the full record, without building
 the unused detail or listing its attachments and evidence. Full records still include those fields.
 
+Step steering persists only changes to its pause and note state. Entering an unarmed Step or
+re-reading the same prompt's notes does not rewrite that state and invalidate the board.
+Pause transitions and note receipts still persist; the live Steps keep writing their normal timeline.
+Model-backed Run listings use the supplied file reader for intent and displayed controls as well.
+Direct Run reads and live control decisions keep their fresh filesystem reads.
+
 `bench/front-door-wait.ts` measures `verify` first values and `read` answers
 against the record-open fixture's host while its live Runs keep the board building.
 The harness disables OTLP and records every board-build duration through `COLLIE_RECORD_MARKS`,
