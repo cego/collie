@@ -1866,6 +1866,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       /** The session the agent is in, where it is not the host's own. */
       readonly herdr?: DeliveringHerdr;
       readonly idleOnly?: boolean;
+      /** An answer the host relays for its answerer (ADR-0062): not that human's own message. */
+      readonly relayed?: true;
       readonly workflowNotice?: string;
     },
   ) {
@@ -1899,7 +1901,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       mode: delivery.mode ?? "boundary",
       idleOnly: delivery.idleOnly,
       workflowNotice: delivery.workflowNotice,
-      human: delivery.kind === "steer" ? humanOf(fitted.actor) : null,
+      human: delivery.kind === "steer" && delivery.relayed !== true ? humanOf(fitted.actor) : null,
       // Work, a repair and a steer share a causal key per thing they are about, which is
       // what makes the second copy refusable; a correction's is its constraint's.
       intentVersion: delivery.intentVersion ?? 0,
@@ -2987,6 +2989,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                   ref: names[group.at[0]!] ?? stem,
                   actor: group.by,
                   herdr: yield* herdr,
+                  relayed: true,
                 },
               );
               if (!sent.sent) sentAll = false;

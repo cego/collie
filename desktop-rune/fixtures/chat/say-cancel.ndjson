@@ -1,0 +1,22 @@
+{"said":{"about":null,"text":"Use no tools. Write about 400 words on the history of herding dogs."}}
+{"event":{"runId":"0957b074-2398-47ba-b4fa-8cf8b3a1c38b:1","threadId":"0957b074-2398-47ba-b4fa-8cf8b3a1c38b","type":"RUN_STARTED"}}
+{"event":{"messageId":"msg_011CgsWYggyCnxK9jGCBVUV9:0","type":"REASONING_START"}}
+{"event":{"messageId":"msg_011CgsWYggyCnxK9jGCBVUV9:0","role":"reasoning","type":"REASONING_MESSAGE_START"}}
+{"event":{"delta":"Now I'm dr","messageId":"msg_011CgsWYggyCnxK9jGCBVUV9:0","type":"REASONING_MESSAGE_CONTENT"}}
+{"event":{"delta":"afting a ro","messageId":"msg_011CgsWYggyCnxK9jGCBVUV9:0","type":"REASONING_MESSAGE_CONTENT"}}
+{"event":{"delta":"ughly 400-word pr","messageId":"msg_011CgsWYggyCnxK9jGCBVUV9:0","type":"REASONING_MESSAGE_CONTENT"}}
+{"event":{"delta":"ose piece with a heading or","messageId":"msg_011CgsWYggyCnxK9jGCBVUV9:0","type":"REASONING_MESSAGE_CONTENT"}}
+{"event":{"delta":" two, and I need to ke","messageId":"msg_011CgsWYggyCnxK9jGCBVUV9:0","type":"REASONING_MESSAGE_CONTENT"}}
+{"event":{"delta":"ep the","messageId":"msg_011CgsWYggyCnxK9jGCBVUV9:0","type":"REASONING_MESSAGE_CONTENT"}}
+{"event":{"delta":" fac","messageId":"msg_011CgsWYggyCnxK9jGCBVUV9:0","type":"REASONING_MESSAGE_CONTENT"}}
+{"event":{"delta":"ts accurate.","messageId":"msg_011CgsWYggyCnxK9jGCBVUV9:0","type":"REASONING_MESSAGE_CONTENT"}}
+{"event":{"delta":"\n\n","messageId":"msg_011CgsWYggyCnxK9jGCBVUV9:0","type":"REASONING_MESSAGE_CONTENT"}}
+{"event":{"messageId":"msg_011CgsWYggyCnxK9jGCBVUV9:0","type":"REASONING_MESSAGE_END"}}
+{"event":{"messageId":"msg_011CgsWYggyCnxK9jGCBVUV9:0","type":"REASONING_END"}}
+{"event":{"messageId":"msg_011CgsWYggyCnxK9jGCBVUV9:1","role":"assistant","type":"TEXT_MESSAGE_START"}}
+{"event":{"delta":"Herding d","messageId":"msg_011CgsWYggyCnxK9jGCBVUV9:1","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"ogs are","messageId":"msg_011CgsWYggyCnxK9jGCBVUV9:1","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" among","messageId":"msg_011CgsWYggyCnxK9jGCBVUV9:1","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" the oldest working","messageId":"msg_011CgsWYggyCnxK9jGCBVUV9:1","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" partn","messageId":"msg_011CgsWYggyCnxK9jGCBVUV9:1","type":"TEXT_MESSAGE_CONTENT"}}
+{"cancelled":5}

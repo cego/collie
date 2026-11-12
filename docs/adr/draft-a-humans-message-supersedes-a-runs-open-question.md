@@ -40,7 +40,10 @@ while the question is open. Counted as a human's: the `board`, `desktop` and `cl
 doors, and chat's `collie_do` when it carries the human's message from that turn. On
 Claude, a submit the hook records as `external` also counts. Not counted: an agent's
 Delivery, Collie's own causes (`step`, `repair`, `nudge`, `handoff`, `compaction`,
-`correction`), a `harness` submit, `cli` without a terminal, `host` and `schedule`. A
+`correction`), a `harness` submit, `cli` without a terminal, `host` and `schedule`. Nor
+is the host's relay of answers to an agent's question
+([ADR-0062](0062-an-agents-question-is-asked-on-its-run.md)): it goes under its answerer
+but carries the answer, not their message, so the agent's other open questions stay. A
 harness that cannot say who typed a turn never supersedes anything. Its agent is still
 shown working.
 

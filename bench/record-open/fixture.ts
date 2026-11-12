@@ -17,7 +17,7 @@ export interface Fixture {
   readonly settled: ReadonlyArray<string>;
 }
 
-export const COUNTS = { runs: 520, large: 5, old: 40, live: 3 };
+export const COUNTS = { runs: 520, large: 5, old: 40, live: 3, largeSteps: 220 };
 
 const startEach = (inputs: ReadonlyArray<{ id: string; input: Record<string, string> }>) =>
   Effect.forEach(
@@ -99,7 +99,7 @@ export const prepare = (counts = COUNTS) =>
     const large = yield* startEach(
       Array.from({ length: counts.large }, () => ({
         id: "bench-steps",
-        input: { steps: "220", live: "no" },
+        input: { steps: String(counts.largeSteps), live: "no" },
       })),
     );
     const lives = yield* startEach(
