@@ -58,7 +58,7 @@ const project = Effect.gen(function* () {
   const harness = yield* commit("harness");
   yield* write("value", "7\n");
   yield* commit("product");
-  return { root, repo, base, harness, write, commit };
+  return { root, repo, base, harness, git, write, commit };
 });
 
 const planOf = (harness: string, commands: Plan["commands"], more: Partial<Plan> = {}): Plan => ({
@@ -424,8 +424,36 @@ test(
         yield* commit("product");
         const measured = yield* measuring(root, { base: carried, cwd: repo, plan });
         expect(resultOf(measured)._tag).toBe("Judged");
-        expect(measured.base.head_sha).not.toBe(carried);
+        const applied = yield* git("rev-list", "--count", `${carried}..${measured.base.head_sha}`);
+        expect(Str.trim(applied.stdout)).toBe("1");
         expect(readings(measured, "base")).toEqual([20, 20]);
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "a base whose own edit to a script the harness edits merges cleanly is refused, not sampled with that edit",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { root, repo, base, git, write, commit } = yield* project;
+        yield* git("reset", "-q", "--hard", base);
+        yield* exec(["mkdir", "bench"], { cwd: repo });
+        const script = (first: string, last: string) =>
+          write("bench/edited.sh", `${first}\n:\n:\n:\n:\n${last}\n`);
+        yield* script("x=1", 'echo "{\\"counter\\": $(cat value)}"');
+        const before = yield* commit("a benchmark script before the harness");
+        yield* script("x=2", 'echo "{\\"counter\\": $(cat value)}"');
+        const harness = yield* commit("harness");
+        yield* git("reset", "-q", "--hard", before);
+        yield* script("x=1", "echo '{\"counter\": 1}'");
+        const diverged = yield* commit("an edit the plan never wrote");
+        yield* write("value", "7\n");
+        yield* commit("product");
+        const plan = planOf(harness, sh("edited.sh"));
+        const refused = yield* Effect.flip(measuring(root, { base: diverged, cwd: repo, plan }));
+        expect(refused.why).toContain(`the harness commits do not apply on ${diverged}`);
       }),
     ),
   30_000,

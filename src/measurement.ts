@@ -582,6 +582,10 @@ const taking = Effect.fn("Measurement.taking")(function* (
         );
   const lacking = yield* harnessLacking(opts.repository, opts.commit, opts.harness);
   const baseRoot = yield* baseTree(opts.stateDir, ask.runId, opts.repository, opts.commit, lacking);
+  if ((yield* harnessLacking(baseRoot, "HEAD", opts.harness)).length > 0)
+    return yield* new MeasureRefused({
+      why: `the harness commits do not apply on ${opts.commit}: its harness files then differ from theirs`,
+    });
   const base = {
     commit: opts.commit,
     ...(yield* treeAt(path.join(baseRoot, path.relative(opts.repository, ask.cwd)))),
