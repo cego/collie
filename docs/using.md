@@ -905,7 +905,9 @@ request is what the host's merge watch last read, and `R` asks it again.
 **Point at a card** and, where its age was, `go to tab` and `⋯` appear; the card does not
 move or grow. `⋯` opens that Task's menu, and so does a right-click anywhere on the card —
 use `⋯` in a terminal that keeps the right button for its own menu. Clicking anywhere else
-closes it, as does Esc, and the key beside each item does it from the keyboard:
+closes it, as does Esc. Use `↑↓` to choose an item and Enter to select it.
+The key beside an item selects it directly. When several Offers share a card, choose
+each with the arrow keys:
 
 |         |                    |                                                          |
 | ------- | ------------------ | -------------------------------------------------------- |
@@ -1131,7 +1133,8 @@ and the keys are shortcuts for what is already on screen. There is no footer of 
 | `q`   | Close the tab                                                 |
 
 A card's menu takes the key beside each of its items — the table
-[above](#the-control-plane), and the second half of what `?` lists — and `Esc` closes it. A field takes its own keys and nothing
+[above](#the-control-plane), and the second half of what `?` lists. Use `↑↓` to choose
+an item and Enter to select it; `Esc` closes the menu. A field takes its own keys and nothing
 else, because every other key is being typed rather than pressed: an answer, a steer and a
 Settings value send with Enter, the search hands the keys back and keeps what you typed,
 and Esc leaves any of them — clearing the search, which is what it is for. A proposal takes
