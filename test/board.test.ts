@@ -51,6 +51,7 @@ import {
 import { applyItem, EMPTY_FLOCK, flockCards } from "../desktop/src/shared/flock";
 import { recordAudit } from "../src/audit";
 import { recordDisposition } from "../src/disposition";
+import { readLogTail } from "../src/run-log";
 import { markSeenSince, recordSeen } from "../src/seen";
 import {
   appendVerification,
@@ -1416,6 +1417,46 @@ test("an unseen report is still drawn a day later, and a seen one goes to Histor
       const seen = yield* madeRun(dir, { ...reported, id: "r-seen" });
       yield* recordSeen(seen.dir, { at: "2026-09-14T10:02:00Z", by: "human:ack-1" });
       expect(yield* board(env, [seen], later)).toEqual([]);
+    }),
+  ));
+
+test("a month-old Task pruned after its record was read goes to History, and a record read brings none back", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const now = yield* Clock.currentTimeMillis;
+      const monthAgo = DateTime.formatIso(DateTime.makeUnsafe(now - 30 * 86_400_000));
+      const opts = { now };
+      const unmerged = yield* madeRun(dir, {
+        id: "r-unmerged",
+        task: "task-1",
+        state: "failed",
+        branch: "mk/old-work",
+        created: monthAgo,
+      });
+      const bare = yield* madeRun(dir, {
+        id: "r-bare",
+        task: "task-2",
+        state: "failed",
+        created: monthAgo,
+      });
+      for (const run of [unmerged, bare]) yield* writtenAt(`${run.dir}/log.txt`, monthAgo);
+      const before = yield* board(env, [unmerged, bare], opts);
+      expect(Arr.map(before, (view) => [view.run, sectionOf(view)])).toEqual([
+        [unmerged.id, "waiting"],
+      ]);
+
+      // Reading each record first, as opening it or `collie run show` does, then pruning.
+      for (const run of [unmerged, bare]) yield* readLogTail(run.dir, 4096);
+      yield* recordDisposition(unmerged.dir, {
+        kind: "abandoned",
+        ref: "",
+        at: DateTime.formatIso(DateTime.makeUnsafe(now)),
+        by: "human",
+        note: null,
+      });
+
+      expect(yield* board(env, [unmerged, bare], opts)).toEqual([]);
     }),
   ));
 

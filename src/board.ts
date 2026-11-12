@@ -13,6 +13,7 @@ import * as Rec from "effect/Record";
 import { Clock, Effect, FileSystem, Option, Path, Result, Schema, flow } from "effect";
 import { AUDIT_FILE, readAudit } from "./audit";
 import { FINAL_DIFF, planDirOf } from "./run-detail";
+import { LOG_INDEX } from "./run-log";
 import { openReports, readDrift } from "./drift";
 import { describeAction } from "./lines";
 import type { PickItem } from "./inputs";
@@ -914,8 +915,8 @@ const FINISHED_FOR_MS = 24 * 60 * 60 * 1000;
 /**
  * When anything in this directory was last written, as `touchedDirAt` measures it but
  * without the files Collie writes about a Run from outside: a disposition, who saw it, the
- * diff kept for its drawer and the trail of who asked for what are bookkeeping, and must not
- * make a dead Run look alive or ended just now.
+ * diff kept for its drawer, its log's index written by a read, and the trail of who asked for
+ * what are bookkeeping, and must not make a dead Run look alive or ended just now.
  */
 const writtenIn = Effect.fn("Board.writtenIn")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -927,7 +928,7 @@ const writtenIn = Effect.fn("Board.writtenIn")(function* (dir: string) {
     );
   let newest = 0;
   for (const name of yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []))) {
-    if (name === FINAL_DIFF || name === AUDIT_FILE) continue;
+    if (name === FINAL_DIFF || name === AUDIT_FILE || name === LOG_INDEX) continue;
     if (name !== "steering") {
       newest = Math.max(newest, yield* at(path.join(dir, name)));
       continue;
