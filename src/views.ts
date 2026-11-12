@@ -53,6 +53,7 @@ import { readAudit, startedBy } from "./audit";
 import { onPath } from "./doctor-check";
 import { HARNESSES } from "./harness";
 import type { MachineOwn } from "./board-model";
+import { isReachKey } from "./reach";
 import type { Mutable } from "effect/Types";
 
 /** Long enough to answer "what did I do here", short enough to stay one read. */
@@ -710,6 +711,7 @@ export const buildMachineOwn = Effect.fn("Views.buildMachineOwn")(function* (env
       ({ key }) =>
         key !== "projects.root" &&
         key !== "chat_harness" &&
+        !isReachKey(key) &&
         !Arr.some(
           SETTINGS,
           (setting) => key === setting.key || pipe(key, Str.startsWith(`${setting.key}.`)),
