@@ -436,6 +436,7 @@ export interface AgentsApi {
     ask: AgentAsk,
     unless?: string | null,
     onlyDeadServer?: boolean,
+    usable?: (text: string) => boolean,
   ) => Effect.Effect<boolean, AgentUncertain | AgentParked>;
   /**
    * Hands a message, through the one sender, to the live agent in this role of a Run this
@@ -927,13 +928,19 @@ export const agentWork = <
           left.length === 0 ? Effect.void : host.parked(runId, Arr.join(left, "; ")),
         ),
       );
+    const usable = (text: string) => decodeOutput(work.output, text, plain).ok;
     // Uninterruptible, so a stop racing a restart waits for it and finds its agent to stop.
     const reviving = (from: AgentAsk, unless?: string | null, onlyDeadServer = false) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
           if (yield* host.stopRequested(runId)) return;
           if (
-            (yield* agents.revive(from, unless, onlyDeadServer)) &&
+            (yield* agents.revive(
+              from,
+              unless,
+              onlyDeadServer,
+              unless == null ? undefined : usable,
+            )) &&
             (yield* host.stopRequested(runId))
           )
             yield* haltLate;
@@ -1232,13 +1239,7 @@ export const agentWork = <
       Effect.gen(function* () {
         for (;;) {
           const text = yield* watching(
-            agents.collect(
-              current,
-              unusable,
-              questions,
-              undefined,
-              (text) => decodeOutput(work.output, text, plain).ok,
-            ),
+            agents.collect(current, unusable, questions, undefined, usable),
           );
           if (text !== null || (yield* agents.stopped(current, since)) === null) return text;
           yield* reviving(currentAsk, unusable);
@@ -3625,7 +3626,12 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       return true;
     });
 
-  const revive = (ask: AgentAsk, unless?: string | null, onlyDeadServer = false) =>
+  const revive = (
+    ask: AgentAsk,
+    unless?: string | null,
+    onlyDeadServer = false,
+    usable?: (text: string) => boolean,
+  ) =>
     under(
       resuming.withPermits(1)(
         Effect.gen(function* () {
@@ -3633,8 +3639,17 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           const lost = yield* lostServer(compactionDeps(host, ask.runId), agent);
           if (onlyDeadServer && lost === null) return false;
           const fs = yield* FileSystem.FileSystem;
-          const written = yield* fs.readFileString(ask.output).pipe(Effect.orElseSucceed(() => ""));
-          if (Str.trim(written) !== "" && written !== unless) return false;
+          const completed = waitForOutput(ask.output, unless ?? null, {
+            pollMs: host.pollMs ?? DEFAULT_POLL_MS,
+            budgetMs: 0,
+            counts: Effect.succeed(false),
+            usable: usable ?? (() => true),
+            settled: Effect.suspend(() => host.herdr.agentStatus(agent)).pipe(
+              Effect.orElseSucceed(() => null),
+              Effect.map((status) => status !== "working" && status !== "blocked"),
+            ),
+          });
+          if ((yield* completed) !== null) return false;
           // The host starts an agent on core again, in the session it had.
           if (
             lost === null &&
@@ -3648,8 +3663,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           if (lost !== null) {
             if (!(yield* retireLost(ask, listing.value))) return false;
             // A surviving tool can finish the Output while its old server is being retired.
-            const after = yield* fs.readFileString(ask.output).pipe(Effect.orElseSucceed(() => ""));
-            if (Str.trim(after) !== "" && after !== unless) return false;
+            if ((yield* completed) !== null) return false;
             yield* launch(ask);
             return true;
           }

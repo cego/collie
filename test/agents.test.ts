@@ -1944,6 +1944,68 @@ test.each(["before detection", "repair collection"] as const)(
     ),
 );
 
+test.each(["before retirement", "during retirement"] as const)(
+  "a partial repaired Output does not prevent server recovery %s",
+  (when) =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const managed = yield* managedCodex;
+        const partial = '{"verdict":"clean","note":';
+        const herdr = new (class extends StaleWorkingTerminal {
+          override agentStatus() {
+            return Effect.succeed("working" as const);
+          }
+          override agentPrompt(...args: Parameters<FakeHerdr["agentPrompt"]>) {
+            return super.agentPrompt(...args).pipe(Effect.as("observed" as const));
+          }
+        })(rig.pluginEnv());
+        const ports: CompactionPorts = {
+          codex: {
+            ...managed.ports.codex!,
+            stop: (target, note, budget) =>
+              (when === "during retirement"
+                ? fs.writeFileString(outputPath("r1"), partial).pipe(Effect.orDie)
+                : Effect.void
+              ).pipe(Effect.andThen(COMPACTION_PORTS.codex!.stop!(target, note, budget))),
+          },
+        };
+        yield* rig.queueOutputs([{ verdict: "wrong" }, null]);
+        const result = yield* session(
+          Effect.gen(function* () {
+            const fiber = yield* Effect.forkChild(started("r1"));
+            yield* until(
+              deliveredTo(dir, "r1").pipe(
+                Effect.orDie,
+                Effect.map((found) =>
+                  Arr.some(
+                    found,
+                    (one) => one.cause.kind === "repair" && one.state === "acknowledged",
+                  ),
+                ),
+              ),
+            );
+            herdr.stale = true;
+            if (when === "before retirement") yield* fs.writeFileString(outputPath("r1"), partial);
+            managed.state.reachable = false;
+            managed.children[0]!.kill();
+            yield* Effect.promise(() => managed.children[0]!.exited);
+            yield* spend(20_000);
+            expect(everyLaunch(yield* rig.calls())).toHaveLength(2);
+            expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
+            yield* fs.writeFileString(
+              outputPath("r1"),
+              '{"verdict":"clean","note":"partial repair recovered"}',
+            );
+            return yield* Fiber.join(fiber);
+          }),
+          { herdr, harness: "codex", model: "default", ports, collectMs: 60_000 },
+        );
+        expect(result._tag === "Success" && result.success.note).toBe("partial repair recovered");
+      }).pipe(Effect.scoped),
+    ),
+);
+
 test.each(["retirement", "launch"] as const)(
   "a stop racing managed server recovery at %s leaves no replacement running",
   (race) =>
