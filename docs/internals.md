@@ -57,7 +57,9 @@ process gone, a crash, and a restart onto the same build. A newer client that
 asked a host to stop kills it five seconds after its grace. A host that does not say who it
 is within five seconds is replaced too when `host.build`, which it writes as it starts,
 names an older build of the same installation; otherwise the client reports it as
-`HostUnavailable` with its pid.
+`HostUnavailable` with its pid. That host is asked for the same handover before it is
+signalled: one too slow to answer still hears its signal and hands its checks over, and one
+that never hears it is killed and hands over nothing.
 
 Desktop starts a host the way any client does: it runs `collie bridge --as desktop` (or
 `--as chat`), and the bridge starts `collie host --dir <state>` where none answers. Desktop

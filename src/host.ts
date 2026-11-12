@@ -4587,8 +4587,12 @@ export const restartHost = Effect.fn("Host.restart")(function* (
       build: Option.match(answered, { onNone: () => null, onSome: (who) => who.build }),
     };
     const build = options?.build ?? BUILD;
-    if (before.build !== null && newer(build, before.build))
-      yield* replaceOwner(dir, owner.pid, build);
+    // One that did not answer is judged by the build it recorded, as a client's start judges it.
+    const older =
+      before.build === null
+        ? (yield* olderSilentOwner(dir, build)) === owner.pid
+        : newer(build, before.build);
+    if (older) yield* replaceOwner(dir, owner.pid, build);
     else yield* stopOwner(dir, owner.pid);
   }
   const who = yield* ensureRunning(dir, options?.hostEnv ?? {}, options?.build ?? BUILD);
@@ -4927,7 +4931,8 @@ const ensureRunning = Effect.fn("Host.ensureRunning")(function* (
   const first = yield* ask(dir).pipe(Effect.result);
   if (first._tag === "Success") return first.success;
   const silent = yield* olderSilentOwner(dir, build);
-  if (silent !== null) yield* stopOwner(dir, silent);
+  // Too slow to answer is not gone: it still hears its signal, and hands its checks over.
+  if (silent !== null) yield* replaceOwner(dir, silent, build);
   const started = Effect.scoped(
     Effect.gen(function* () {
       const host = yield* spawnHost(dir, hostEnv);
