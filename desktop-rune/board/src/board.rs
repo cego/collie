@@ -155,7 +155,18 @@ pub struct Board {
     /// The subscription whose values count; a newer one makes an older one's late values moot.
     flock_attempt: Arc<AtomicU64>,
     failures: u32,
+    /// Subscriptions the core cut off in a row since the last value.
+    renewals: u32,
     credentials_stop: Option<Stop>,
+}
+
+fn subscribe_flock(core: &crate::calls::Core<App>, attempt: u64) -> Stop {
+    core.stream_until(
+        "flock",
+        (),
+        move |app: &mut App, item: Result<FlockItem, CallError>| app.flock_heard(attempt, item),
+        move |app: &mut App| app.flock_ended(attempt),
+    )
 }
 
 /// `min(1 s × 2^failures, 60 s)`, as `backoff` in `src/peers-model.ts`.
@@ -324,8 +335,8 @@ impl App {
         }
     }
 
-    /// The board's own subscription to `flock`, tried again after each failure, folding into
-    /// what it holds.
+    /// The board's own subscription to `flock`, tried again after each failure and each end,
+    /// folding into what it holds.
     pub fn follow_flock(&mut self) {
         let Some(core) = self.core.clone() else {
             return;
@@ -335,12 +346,7 @@ impl App {
             stop();
         }
         self.ended = None;
-        let stop = core.stream(
-            "flock",
-            (),
-            move |app: &mut App, item: Result<FlockItem, CallError>| app.flock_heard(attempt, item),
-        );
-        *self.board.flock_stop.lock().unwrap() = Some(stop);
+        *self.board.flock_stop.lock().unwrap() = Some(subscribe_flock(&core, attempt));
     }
 
     fn flock_heard(&mut self, attempt: u64, item: Result<FlockItem, CallError>) {
@@ -351,6 +357,7 @@ impl App {
             Ok(item) => {
                 self.board.trouble = None;
                 self.board.failures = 0;
+                self.board.renewals = 0;
                 self.apply(item);
             }
             Err(error) => {
@@ -361,34 +368,46 @@ impl App {
                     attempt: self.board.failures,
                     at: self.board.now() + wait,
                 });
-                let Some(core) = self.core.clone() else {
-                    return;
-                };
-                let (slot, counter) = (
-                    self.board.flock_stop.clone(),
-                    self.board.flock_attempt.clone(),
-                );
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(wait as u64));
-                    // Retry now, or another subscription, came first.
-                    let next = attempt + 1;
-                    if counter
-                        .compare_exchange(attempt, next, Ordering::SeqCst, Ordering::SeqCst)
-                        .is_err()
-                    {
-                        return;
-                    }
-                    let stop = core.stream(
-                        "flock",
-                        (),
-                        move |app: &mut App, item: Result<FlockItem, CallError>| {
-                            app.flock_heard(next, item)
-                        },
-                    );
-                    *slot.lock().unwrap() = Some(stop);
-                });
+                self.follow_flock_after(attempt, wait);
             }
         }
+    }
+
+    /// A host restarted under the core ends `flock` quietly, as Desktop's `retrying` takes
+    /// it: followed again at once, and after a growing wait while it keeps ending unheard.
+    fn flock_ended(&mut self, attempt: u64) {
+        if self.board.flock_attempt.load(Ordering::SeqCst) != attempt {
+            return;
+        }
+        let renewals = self.board.renewals;
+        self.board.renewals += 1;
+        if renewals == 0 {
+            self.follow_flock();
+        } else {
+            self.follow_flock_after(attempt, backoff(renewals));
+        }
+    }
+
+    fn follow_flock_after(&mut self, attempt: u64, wait: f64) {
+        let Some(core) = self.core.clone() else {
+            return;
+        };
+        let (slot, counter) = (
+            self.board.flock_stop.clone(),
+            self.board.flock_attempt.clone(),
+        );
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(wait as u64));
+            // Retry now, or another subscription, came first.
+            let next = attempt + 1;
+            if counter
+                .compare_exchange(attempt, next, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                return;
+            }
+            *slot.lock().unwrap() = Some(subscribe_flock(&core, next));
+        });
     }
 
     /// Retry now: a new subscription at once, whatever wait is under way.

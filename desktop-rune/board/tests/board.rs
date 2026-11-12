@@ -876,6 +876,35 @@ fn a_failing_flock_says_why_and_when_it_tries_again_and_retry_now_subscribes_at_
 }
 
 #[test]
+fn a_flock_the_core_cuts_off_is_followed_again_at_once_and_quietly() {
+    let harness = Harness::new();
+    let mut runtime = runtime_of(&harness, vec![]);
+    runtime.state.follow_flock();
+    harness.fake.push(
+        "flock",
+        Ok(snapshot(&pc(), vec![task("t1", "Busy", "active", json!({}))])),
+    );
+    settle(&harness, &mut runtime);
+    // A host restarted under the core: the core ends `flock` without an error.
+    harness.fake.end("flock");
+    settle(&harness, &mut runtime);
+    assert_eq!(harness.fake.asked_of("flock").len(), 2);
+    assert!(runtime.state.board.trouble.is_none());
+    assert_eq!(cards_in(&runtime, "working"), ["Busy"]);
+    harness.fake.push(
+        "flock",
+        Ok(snapshot(&pc(), vec![task("t2", "Again", "active", json!({}))])),
+    );
+    settle(&harness, &mut runtime);
+    assert_eq!(cards_in(&runtime, "working"), ["Again"]);
+    // Cut off again before it said anything: it waits rather than asking in a loop.
+    harness.fake.end("flock");
+    harness.fake.end("flock");
+    settle(&harness, &mut runtime);
+    assert_eq!(harness.fake.asked_of("flock").len(), 3);
+}
+
+#[test]
 fn each_machines_settings_sync_and_own_reading_are_kept_by_profile_and_dropped_with_it() {
     let harness = Harness::new();
     let synced = |part: &str, failed: Value| {
