@@ -207,6 +207,53 @@ test("host logs do not refresh the board, but Run writes still do", () =>
     }),
   ));
 
+test("a usage audit written by a read does not trigger another read", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const events = yield* Queue.unbounded<FileSystem.WatchEvent>();
+      let reads = 0;
+      let auditsSeen = 0;
+      const driven = yield* driveBridge({
+        filter: { kind: "all" },
+        origin: null,
+        stateDir: rig.stateDir,
+        load: () =>
+          Effect.gen(function* () {
+            const reading = ++reads;
+            // A board refresh asks the host for usage, which appends its audit. Bound
+            // the fake loop so a broken implementation cannot run indefinitely.
+            if (reading > 1 && reading <= 4)
+              yield* Queue.offer(events, { _tag: "Update", path: "usage/operations.jsonl" });
+            return stateFor(String(reading));
+          }),
+        act: () => Effect.succeed(null),
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          watch: () =>
+            Stream.fromQueue(events).pipe(
+              Stream.tap((event) =>
+                Effect.sync(() => {
+                  if (event.path === "usage/operations.jsonl") auditsSeen++;
+                }),
+              ),
+            ),
+        }),
+      );
+      yield* until("the first audit to be watched", () => auditsSeen >= 1);
+      yield* Effect.sleep("50 millis");
+      expect(reads).toBe(2);
+      expect(driven.state().board.repo).toBe("2");
+
+      yield* Queue.offer(events, { _tag: "Update", path: "runs/one/output.json" });
+      yield* until("the Run change to refresh the board", () => driven.state().board.repo === "3");
+      yield* until("the next audit to be watched", () => auditsSeen >= 2);
+      yield* Effect.sleep("50 millis");
+      expect(reads).toBe(3);
+    }),
+  ));
+
 test("one watcher follows focus changes and closes with the bridge", () =>
   runEffect(
     Effect.gen(function* () {

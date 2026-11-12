@@ -41,3 +41,27 @@ existing notifications. This removes a false dependency on diagnostics rather th
 delaying real changes. Filtering as well as scheduling reduced the initial burst
 measurement to 0.60 CPU-seconds and two completed refreshes. Follow-up measurements
 also account for the fake external services' subprocess CPU and sampled peak RSS.
+
+## A read's audit is not an input to the next read
+
+The native terminal check exposed a second cycle the initial headless fixture did not
+exercise: `workspaceFlow` supplies the usage reader, and the host audits each usage
+read under `stateDir/usage`. Watching that output invalidated the very read that
+produced it. Each refresh started another refresh even while the human did nothing.
+
+The terminal watcher excludes that audit namespace, including directory creation and
+the trim's temporary files and rename. The host still records every usage read. Usage
+values still come from the host's Usage service, and the recovery poll still runs every
+three seconds. Its immediate first emission is omitted because a focus already requests
+an initial read.
+
+The regression makes a read emit its own usage-audit notification and proves it reaches
+quiescence; a subsequent Run output write must still refresh the board. It failed on the
+prior implementation and passes with the corrected input boundary.
+
+On the same isolated native-terminal fixture, source-mode idle CPU across board, host
+and subprocesses fell from 30.41 to 3.66 CPU-seconds per 12-second window. With only
+bounded refreshes and diagnostic-log filtering it was still 24.05 CPU-seconds: completing
+reads alone did not break the audit cycle. These are fixture measurements, not a promise
+about a live installation; the fake herdr subprocess is much more expensive than the
+installed CLI. Real read-only agent/workspace list probes complete in a few milliseconds.

@@ -251,10 +251,16 @@ export function driveBridge<E, R>(
      */
     const ticks = yield* Stream.merge(
       fs.watch(bridge.stateDir, { recursive: true }).pipe(
-        Stream.filter((event) => !isHostLog(event.path)),
+        // Usage reads record their audit here. That is an output of this refresh,
+        // never an input: watching it makes every read request another read forever.
+        Stream.filter(
+          ({ path }) => !isHostLog(path) && path !== "usage" && !Str.startsWith("usage/")(path),
+        ),
         Stream.catchCause(() => Stream.empty),
       ),
-      Stream.tick(`${POLL_MS} millis`),
+      // Each focus already requests its initial read; the recovery tick starts after
+      // its interval instead of adding a second immediate request for that same focus.
+      Stream.tick(`${POLL_MS} millis`).pipe(Stream.drop(1)),
     ).pipe(Stream.share({ capacity: 1, strategy: "sliding", idleTimeToLive: Duration.infinity }));
 
     /**
