@@ -1715,7 +1715,7 @@ const doorFeedLayer = (door: EngineEnd, panels: MrPanels) =>
         Effect.sync(() => agentsSeen.add(agents)),
         () => Effect.sync(() => agentsSeen.delete(agents)),
       );
-      yield* Effect.map(alive, agents);
+      yield* alive.pipe(Effect.map(agents), Effect.forkScoped);
       const registry = yield* Registry;
       /** The revision its view was read at, while that view is kept; a going Run's is not. */
       const readAt = (run: RunFacts) => {
