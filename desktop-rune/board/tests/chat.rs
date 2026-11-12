@@ -1441,3 +1441,21 @@ fn p2_the_chat_logs_a_failed_turn_a_refused_choice_and_its_subscriptions_never_t
     assert!(has("subscription back", "desktopTurns"), "{logged}");
     assert!(!logged.contains("private"), "{logged}");
 }
+
+#[test]
+fn ctrl_backspace_and_ctrl_delete_in_the_composer_take_one_word() {
+    // Ctrl as Rune reports it off macOS: `cmd` and `ctrl` both.
+    let ctrl = || Mods {
+        cmd: true,
+        ctrl: true,
+        ..Mods::default()
+    };
+    let mut window = Window::reading(json!([]));
+    window.tap("composer");
+    window.type_in("one two three");
+    window.key(Key::Backspace, ctrl());
+    assert_eq!(window.rt.state.chat.composer.text, "one two ");
+    window.key(Key::Home, Mods::default());
+    window.key(Key::Delete, ctrl());
+    assert_eq!(window.rt.state.chat.composer.text, " two ");
+}

@@ -15,7 +15,7 @@ use crate::log::{chip, notice};
 use crate::words::about_line;
 use collie_desktop_protocol::generated::SetSettingsPayload;
 use rune::edit::TextEdit;
-use rune::{El, Key, icon, row, text, text_input};
+use rune::{El, Key, KeyEvent, Mods, icon, row, text, text_input};
 use rune_kit::{
     Button, ButtonVariant, Combobox, ComboboxOption, ComboboxState, ControlSize, IconButton,
     IconButtonVariant, Kit, Menu, MenuItem, Placement,
@@ -23,6 +23,24 @@ use rune_kit::{
 
 fn composer<S: Host>(s: &mut S) -> &mut TextEdit {
     &mut s.chat_mut().composer
+}
+
+/// Off macOS, Rune reads Ctrl as Cmd, and Cmd+Backspace takes the whole line; Ctrl+Backspace
+/// and Ctrl+Delete take one word there, as Alt does in Rune's editor.
+fn word_delete(key: &KeyEvent) -> Option<KeyEvent> {
+    let m = key.mods;
+    (cfg!(not(target_os = "macos"))
+        && m.ctrl
+        && !m.alt
+        && matches!(key.key, Key::Backspace | Key::Delete))
+    .then(|| KeyEvent {
+        key: key.key.clone(),
+        mods: Mods {
+            shift: m.shift,
+            alt: true,
+            ..Mods::default()
+        },
+    })
 }
 
 fn model_menu<S: Host>(s: &mut S) -> &mut ComboboxState {
@@ -197,6 +215,10 @@ fn prompt<S: Host>(chat: &Chat, k: &Kit, layer: &mut Vec<El>) -> El {
             tx.scroll_to_bottom("chat-log");
         })
         .on_input_key(|s: &mut S, key, tx| {
+            if let Some(word) = word_delete(key) {
+                composer(s).key(&word, None);
+                return true;
+            }
             let now = key.key == Key::Enter && key.mods.cmd;
             if now {
                 send(s, true);
