@@ -2954,6 +2954,11 @@ own comments, bots' and system notes start nothing: to tell the Run something, s
 (`collie run steer <run> "<words>"`, or from the card) rather than commenting. Collie
 never resolves a thread; that stays the reviewer's. A check that fails on a pushed head
 goes to a fix round, and four of them in a row park the Run for you to repair and resume.
+A confirmed conflict with the merge request's target also goes to the fixer. It merges
+the actual target branch into the source, preserves both branches' work, and plain-pushes
+the repair. Collie then proves the pushed head before asking a fresh release go. Four
+unsuccessful conflict repairs, or a repair that leaves the remote head unchanged, park
+the Run with the reason; repair it and resume to have Collie read the forge again.
 
 To have it ask before it shares the merge request with your team, turn on
 `release.share_for_approval` and name your Slack channel in `release.approval_channel`
