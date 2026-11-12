@@ -4394,6 +4394,8 @@ scenario(
         yield* approve(runId, ["unit"]);
         yield* rig.queueOutputs([
           BUILT,
+          // The first stall is handed back without asking; the second is asked about.
+          { ...BUILT, findings: [{ severity: "blocker", title: "dependency unavailable" }] },
           { ...BUILT, findings: [{ severity: "blocker", title: "dependency unavailable" }] },
           {
             ...BUILT,
@@ -5211,7 +5213,7 @@ const stallAsked = (
   ).pipe(Effect.map(([rows]) => Arr.filter(rows, (row) => row.decision === name)));
 
 scenario(
-  "a criteria hand-back that changed nothing and reported a blocker asks, and Stop parks before any review",
+  "a first criteria hand-back that changed nothing and reported a blocker is handed back without asking, a second asks, and Stop parks before any review",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -5243,7 +5245,7 @@ scenario(
                 recommended: "Hand back",
                 shortfall: null,
               });
-              expect(Arr.join(yield* prompts(), "\n")).not.toContain(
+              expect(Arr.join(yield* prompts(), "\n")).toContain(
                 "01-first.md.criteria-2.prompt.md",
               );
               yield* run.answer("01-first.md.criteria-stalled-1", "Stop");
@@ -5256,8 +5258,11 @@ scenario(
           "01-first.md: a criteria hand-back reported a blocker and changed nothing, so no review starts",
         );
         expect(why).toContain("**Named.** Each one is named in the log.");
+        expect(yield* runLog("r-stalled")).toContain(
+          "01-first.md: a criteria hand-back reported a blocker and changed nothing; Collie handed it back without asking, and asks if it does again",
+        );
         const sent = Arr.join(yield* prompts(), "\n");
-        expect(sent).not.toContain("01-first.md.criteria-2.prompt.md");
+        expect(sent).not.toContain("01-first.md.criteria-3.prompt.md");
         expect(sent).not.toContain("review-1");
       }),
     ),
@@ -5277,7 +5282,7 @@ scenario(
           { file: "02-second.md", title: "the second one", checks: "unit" },
         ]);
         yield* approve("r-handed-again", ["unit"]);
-        yield* rig.queueOutputs([COUNTED_ONLY, BLOCKED, BLOCKED]);
+        yield* rig.queueOutputs([COUNTED_ONLY, BLOCKED, BLOCKED, BLOCKED]);
         yield* driven(
           { entry: shipped("implement"), runId: "r-handed-again", input: { plan, ...FINISH } },
           (run) =>
@@ -5295,10 +5300,10 @@ scenario(
         );
         yield* bin.restore();
 
-        expect(yield* asked("r-handed-again", "01-first.md.criteria-2")).toContain(
+        expect(yield* asked("r-handed-again", "01-first.md.criteria-3")).toContain(
           "acceptance criterion not answered: **Named.** Each one is named in the log.",
         );
-        expect(Arr.join(yield* prompts(), "\n")).not.toContain("01-first.md.criteria-3.prompt.md");
+        expect(Arr.join(yield* prompts(), "\n")).not.toContain("01-first.md.criteria-4.prompt.md");
       }),
     ),
   120_000,

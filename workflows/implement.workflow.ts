@@ -878,8 +878,18 @@ export default defineWorkflow({
               if (unmet.length === 0) break;
               if (blockers.length > 0) {
                 stalls += 1;
+                // Answered Hand back 18 of 19 times, so the first is taken without asking.
+                if (stalls === 1) {
+                  yield* host.record(
+                    runId,
+                    `${item}: a criteria hand-back reported a blocker and changed nothing; Collie handed it back without asking, and asks if it does again`,
+                  );
+                  blockers = [];
+                  tries = 1;
+                  continue;
+                }
                 const chosen = yield* ask({
-                  name: `${operation}.criteria-stalled-${stalls}`,
+                  name: `${operation}.criteria-stalled-${stalls - 1}`,
                   prompt: `${item}: a criteria hand-back reported a blocker and changed nothing.\n\nIts blockers:\n${formatFindings(blockers)}\n\nStill unmet:\n${formatFindings(unmet)}\n\nAmend the ticket or clear the blocker, then hand it back, or stop the Run.`,
                   options: CRITERIA_OPTIONS,
                 });

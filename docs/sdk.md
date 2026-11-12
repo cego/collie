@@ -1825,7 +1825,8 @@ formatting still counts, so an answer to earlier wording does not answer an amen
 `implement` hands what is unmet back to the builder before any reviewer is launched, and
 asks about any still unmet after two hand-backs (`<ticket>.criteria-unmet-<n>`), so no
 reviewer starts on it. A hand-back that leaves the tree's content unchanged and
-reports a blocking finding is asked about sooner (`<ticket>.criteria-stalled-<n>`). To
+reports a blocking finding is handed back once without asking, which the Run's log records
+as Collie's, and asked about sooner the next time (`<ticket>.criteria-stalled-<n>`). To
 either, `Hand back` reads the ticket again and, if any criterion is still unmet, hands it
 back with two tries fresh; `Stop` stops the work. A text work
 source's criteria are its own checkboxes; a Linear issue's are read from `plan/SPEC.md`, the

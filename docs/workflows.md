@@ -156,8 +156,10 @@ criteria needs an answer, and one left unanswered or not met goes back to the bu
 criteria are read from the ticket again before each hand-back, so a ticket the planner
 amended is judged as it reads now. A ticket goes back twice at most, and the Run then asks
 rather than fails: the question names the ticket and the criteria still unmet, so the
-ticket can be amended. It asks sooner when a hand-back leaves the tree as it found it and
-reports a blocking finding, since another could not move that blocker, and that question
+ticket can be amended. A hand-back that leaves the tree as it found it and reports a
+blocking finding is handed back once more without asking, with two tries fresh, as **Hand
+back** was answered 18 of 19 times, and the log says Collie did it. The next time that
+ticket does so it asks, since another could not move that blocker, and that question
 names the blockers too. **Hand back** reads the ticket again, goes on with no builder turn if
 nothing is unmet any more, and otherwise hands it back with two tries fresh. **Stop** parks
 the Run with that reason, before any review. A resume asks the builder again under a new
