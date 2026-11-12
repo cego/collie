@@ -3565,7 +3565,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                   Effect.catch((cause) =>
                     log(
                       runId,
-                      `${agent}: could not be started again on core (${reason(cause)})`,
+                      `${agent}: could not be started again on core (${isParked(cause) ? cause.reason : reason(cause)})`,
                     ).pipe(Effect.as([])),
                   ),
                 )),
@@ -3580,12 +3580,16 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   const uncertainStep = (ask: AgentAsk) =>
     Effect.gen(function* () {
       const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1);
+      const stem = stemOf(ask);
       const held = Arr.findFirst(
         yield* deliveriesOf(ask.runId),
         (one) =>
           one.agent === agent &&
           (one.cause.kind === "step" || one.cause.kind === "repair") &&
-          one.cause.ref === stemOf(ask) &&
+          (one.cause.ref === stem ||
+            (one.cause.kind === "repair" &&
+              pipe(one.cause.ref, Str.startsWith(`${stem}.`)) &&
+              /^[1-9]\d*$/.test(pipe(one.cause.ref, Str.slice(stem.length + 1))))) &&
           (one.state === "unknown" || one.state === "reserved" || isUnobserved(one)),
       );
       if (Option.isSome(held))

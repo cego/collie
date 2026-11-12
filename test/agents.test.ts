@@ -1752,22 +1752,25 @@ test.each(["failed", "hung", "transient", "dead hung"] as const)(
         const fs = yield* FileSystem.FileSystem;
         const managed = yield* managedCodex;
         let unhealthy = false;
+        let healthyProbes = 0;
         const ports: CompactionPorts = {
           codex: {
             ...managed.ports.codex!,
             ready: () =>
-              Effect.suspend(() =>
-                !unhealthy
-                  ? Effect.succeed(true)
-                  : failure === "hung" || failure === "dead hung"
-                    ? Effect.never
-                    : Effect.fail(
-                        new HerdrError({
-                          message: "health probe failed",
-                          detail: "endpoint unreachable",
-                        }),
-                      ),
-              ),
+              Effect.suspend(() => {
+                if (!unhealthy) {
+                  healthyProbes += 1;
+                  return Effect.succeed(true);
+                }
+                return failure === "hung" || failure === "dead hung"
+                  ? Effect.never
+                  : Effect.fail(
+                      new HerdrError({
+                        message: "health probe failed",
+                        detail: "endpoint unreachable",
+                      }),
+                    );
+              }),
           },
         };
         yield* rig.queueOutputs([null]);
@@ -1776,6 +1779,8 @@ test.each(["failed", "hung", "transient", "dead hung"] as const)(
           Effect.gen(function* () {
             const fiber = yield* Effect.forkChild(started("r1"));
             yield* until(acknowledgedStep(yield* Path.Path));
+            const seen = healthyProbes;
+            yield* until(Effect.sync(() => healthyProbes > seen));
             herdr.stale = true;
             unhealthy = true;
             if (failure === "dead hung") {
@@ -1842,6 +1847,62 @@ test.each([false, true])(
             expect(yield* steps("r1")).toMatchObject([
               { state: "unknown", note: "submission outcome was lost" },
             ]);
+          }),
+          over,
+        );
+      }).pipe(Effect.scoped),
+    ),
+);
+
+test.each([
+  ["unknown", false],
+  ["unknown", true],
+  ["reserved", false],
+  ["reserved", true],
+  ["submitted", false],
+  ["submitted", true],
+] as const)(
+  "server loss preserves a later-round %s repair receipt (host replay: %p)",
+  (state, replay) =>
+    runEffect(
+      Effect.gen(function* () {
+        const managed = yield* managedCodex;
+        const herdr = new StaleWorkingTerminal(rig.pluginEnv());
+        const over = { herdr, harness: "codex", model: "default", ports: managed.ports };
+        const note = state === "submitted" ? "unobserved" : "repair outcome was lost";
+        yield* rig.queueOutputs([null]);
+        const lose = Effect.gen(function* () {
+          yield* until(acknowledgedStep(yield* Path.Path));
+          const [receipt] = yield* steps("r1");
+          yield* appendLine({
+            ...receipt!,
+            id: "repair-round-two",
+            request_id: "repair-round-two",
+            cause: { kind: "repair", ref: `${receipt!.cause.ref}.2` },
+            causal_key: `r1:repair:${receipt!.cause.ref}.2:0`,
+            state,
+            note,
+          }).pipe(Effect.provide(recordsAt(dir)));
+          herdr.stale = true;
+          managed.state.reachable = false;
+          managed.children[0]!.kill();
+          yield* Effect.promise(() => managed.children[0]!.exited);
+        });
+        if (replay)
+          yield* session(Effect.forkChild(started("r1")).pipe(Effect.andThen(lose)), over);
+        yield* session(
+          Effect.gen(function* () {
+            yield* Effect.forkChild(started("r1"));
+            if (!replay) yield* lose;
+            yield* spend(20_000);
+            expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
+            expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
+            expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(
+              "--reconcile repair-round-two --as sent|not-sent",
+            );
+            expect(
+              Arr.filter(yield* deliveredTo(dir, "r1"), (one) => one.id === "repair-round-two"),
+            ).toMatchObject([{ state, note }]);
           }),
           over,
         );

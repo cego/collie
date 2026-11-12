@@ -8,7 +8,7 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Deferred, Effect, Fiber, FileSystem, Layer, Result, Schema, flow } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Layer, Result, Schema, flow, pipe } from "effect";
 import type * as MessageStorage from "effect/cluster/MessageStorage";
 import type { SqlClient } from "effect/sql";
 import type { PlatformServices } from "../src/platform";
@@ -33,7 +33,8 @@ import {
 } from "../src/engine";
 import type { Store } from "../src/store";
 import { agentName } from "../src/naming";
-import { deliveredTo } from "./support/records";
+import { deliveredTo, recordsAt } from "./support/records";
+import { appendLine } from "../src/steering";
 import { COMPACT_AT_TOKENS } from "../src/settings";
 import { COMPACTION_PORTS, codexPort } from "../src/compactors";
 import { isString } from "../src/schema";
@@ -329,6 +330,56 @@ test(
       }),
     ),
   120_000,
+);
+
+test.each(["unknown", "reserved", "submitted"] as const)(
+  "core recovery preserves a later-round %s repair receipt",
+  (state) =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const core = yield* rig.startCore();
+        yield* rig.queueOutputs([null]);
+        yield* hosted(
+          Effect.gen(function* () {
+            const runId = yield* started("pi", "round-two-repair");
+            const agent = agentName(runId, "pi", null, 1);
+            yield* idleAfterItsStep(agent);
+            const receipt = Option.getOrThrow(
+              Arr.findFirst(yield* deliveredTo(dir(), runId), (one) => one.cause.kind === "step"),
+            );
+            const note = state === "submitted" ? "unobserved" : "repair outcome was lost";
+            yield* appendLine({
+              ...receipt,
+              id: "repair-round-two",
+              request_id: "repair-round-two",
+              cause: { kind: "repair", ref: `${receipt.cause.ref}.2` },
+              causal_key: `${runId}:repair:${receipt.cause.ref}.2:0`,
+              state,
+              note,
+            }).pipe(Effect.provide(recordsAt(dir())));
+            const before = coreCalls(yield* rig.calls()).length;
+            yield* core.lose;
+            yield* (yield* Agents).resumeLost(runId, runningNow);
+            expect(yield* launchesSince(yield* rig.calls(), before)).toHaveLength(0);
+            expect(
+              Arr.filter(
+                sendsSince(yield* rig.calls(), before),
+                (send) =>
+                  pipe(send.text, Str.includes("Your task for this step")) ||
+                  pipe(send.text, Str.includes("Carry on with your step")),
+              ),
+            ).toHaveLength(0);
+            expect(yield* fs.readFileString(`${dir()}/agents/${runId}/agents.log`)).toContain(
+              "--reconcile repair-round-two --as sent|not-sent",
+            );
+            expect(
+              Arr.filter(yield* deliveredTo(dir(), runId), (one) => one.id === "repair-round-two"),
+            ).toMatchObject([{ state, note }]);
+          }),
+        );
+      }),
+    ),
 );
 
 test(
