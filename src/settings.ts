@@ -11,6 +11,7 @@ import { NOTIFICATION_KINDS } from "./notify";
 import { parseProfile } from "./profile";
 import { parseSubagents } from "./subagents";
 import { isString } from "./schema";
+import { isReachKey } from "./reach";
 
 /**
  * What the Control Plane's Runs view is a board of: `local` is this Session's own
@@ -492,8 +493,17 @@ export function autoCompactWindowOf(
       };
 }
 
+const reachSetting = (key: string): Setting =>
+  of(key, "text", "", {
+    group: "Runs",
+    label: "How far a launch goes",
+    description:
+      "What the last launch of this workflow in this project chose; the next offers it first.",
+  });
+
 export const settingOf = (key: string) =>
-  Option.getOrUndefined(Arr.findFirst(SETTINGS, (setting) => setting.key === key));
+  Option.getOrUndefined(Arr.findFirst(SETTINGS, (setting) => setting.key === key)) ??
+  (isReachKey(key) ? reachSetting(key) : undefined);
 
 /**
  * What was typed, as the value written; `null` unsets it. Trimmed, and empty is unset:

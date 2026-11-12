@@ -26,7 +26,8 @@ import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { insideCheckout } from "./agent-start";
 import { placeableUnder, placedByUrl, routed, routerDeps } from "./route";
 import { offerFields, offerInput, StepResult, type RunDetail } from "./board-model";
-import { gitlabHostOf, loadDefaults, setSetting } from "./config";
+import { gitlabHostOf, loadDefaults, savedReach, setSetting } from "./config";
+import { reachOf, savedFirst } from "./reach";
 import { parseSetting, settingText } from "./settings";
 import { herdDir, machineHerd } from "./steering";
 import { liveFor, markedOf, type Ledgers } from "./live";
@@ -52,6 +53,7 @@ import {
   hostTasks,
   type DetailKey,
   invokeOffer,
+  launchProject,
   type BoardRead,
   offersOf,
   resumeRun,
@@ -409,12 +411,29 @@ const startModule = Effect.fn("Flows.startModule")(function* (
       return null;
     }
   }
-  if (inferred.size > 0) {
-    const inputs = Arr.map(
-      Rec.toEntries(text),
-      ([name, value]) =>
-        `${name} = ${value} (${inferred.has(name) ? `inferred from ${inferred.get(name)}` : "given"})`,
+  const inputs = Arr.map(
+    Rec.toEntries(text),
+    ([name, value]) =>
+      `${name} = ${value} (${inferred.has(name) ? `inferred from ${inferred.get(name)}` : "given"})`,
+  );
+  const reach = reachOf(module.inputs);
+  if (reach !== null && text[reach.name] === undefined) {
+    const saved = yield* savedReach(
+      env.userDir,
+      module.id,
+      yield* launchProject(at.cwd, rooted ? PROJECTS_ROOT_OPTION : undefined),
     );
+    const chosen = yield* prompts.menu(
+      Arr.map(savedFirst(reach, saved), (choice) => ({
+        id: `${REACH_ROW}${choice.value}`,
+        title: choice.title,
+        subtitle: Arr.join([`Starting in ${at.cwd}`, ...inputs], " · "),
+      })),
+      { header: module.title, footer: "↑↓ how far it goes · Enter start · Esc cancel" },
+    );
+    if (chosen === null) return null;
+    text[reach.name] = pipe_(chosen.id, Str.slice(REACH_ROW.length));
+  } else if (inferred.size > 0) {
     const confirmed = yield* prompts.menu(
       [{ id: "start", title: `Starting in ${at.cwd}`, subtitle: Arr.join(inputs, " · ") }],
       { header: module.title, footer: "Enter start · Esc cancel" },
@@ -450,6 +469,9 @@ const startModule = Effect.fn("Flows.startModule")(function* (
 
 /** The one question a start asks: what the human wants, in their own words. */
 const WHAT_DO_YOU_WANT = "What do you want?";
+
+/** A start row's id is this and the reach it starts with. */
+const REACH_ROW = "reach:";
 
 /** The row a start from the Home that no one checkout fits is offered instead. */
 const PLAN_INSTEAD = "plan-instead";

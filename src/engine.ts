@@ -721,12 +721,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** Where a merge request's review stands, judged against the head the Run's Checks were proved on. */
   export type ReviewStanding =
     | { readonly _tag: "Ready"; readonly head: string; readonly approvers: ReadonlyArray<string> }
-    | { readonly _tag: "Unanswered"; readonly head: string; readonly comments: ReadonlyArray<OpenComment> }
+    | { readonly _tag: "Unanswered"; readonly head: string; readonly comments: ReadonlyArray<OpenComment>; readonly approvers?: ReadonlyArray<string> }
     | { readonly _tag: "Moved"; readonly head: string }
     | { readonly _tag: "Merged"; readonly sha: string; readonly by: string; readonly at: string }
     | { readonly _tag: "Closed" }
     | { readonly _tag: "Held" }
-    | { readonly _tag: "Waiting"; readonly why: ReadonlyArray<string> }
+    | { readonly _tag: "Waiting"; readonly why: ReadonlyArray<string>; readonly approvers?: ReadonlyArray<string> }
     | { readonly _tag: "Unreadable"; readonly reason: string };
   export const ReviewStandingSchema: Schema.Codec<ReviewStanding, unknown, never, never>;
   /** Whether a standing is still waiting on a teammate's approval, among whatever else. */
@@ -962,7 +962,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     /** Every question this run has been asked, oldest first, with its answer once it has one. */
     readonly asked: (
       runId: string,
-    ) => Effect.Effect<ReadonlyArray<{ readonly name: string; readonly answer: string | null }>>;
+    ) => Effect.Effect<ReadonlyArray<{
+      readonly name: string;
+      readonly answer: string | null;
+      /** Who answered it, where the Run's audit says: a front door, and for chat the human's words that turn. */
+      readonly by?: { readonly origin: string; readonly said?: string };
+    }>>;
     /** Answers an open question with \`value\` as Collie, waking nothing that waits on it. */
     readonly close: (runId: string, decision: string, value: string) => Effect.Effect<void>;
     /** What has been verified for this run, and the tree in front of it now. */
@@ -1281,6 +1286,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly status: "pending" | "suspended" | "complete" | "failed";
       /** The issues its input says \`Closes #n\` for. */
       readonly closes: ReadonlyArray<number>;
+      readonly mr: string | null;
+      /** Its merge request's disposition was recorded as merged. */
+      readonly merged: boolean;
+      /** The questions it asked that were not set aside, with what answered each. */
+      readonly questions: ReadonlyArray<{ readonly name: string; readonly answer: string | null }>;
     }>;
     readonly workflows: ReadonlyArray<WorkflowTally>;
     readonly failed: ReadonlyArray<{ runId: string; workflow: string; reason: string }>;
@@ -6813,6 +6823,8 @@ export interface RegistryApi {
     readonly input: Readonly<Record<string, Schema.Json>>;
     readonly request: string;
     readonly attachments?: ReadonlyArray<string> | undefined;
+    /** The human who took the offer, recorded as who started the Run it starts. */
+    readonly started?: Started | undefined;
   }) => Effect.Effect<Admitted, HostRefused | RequestConflict, HostServices>;
   /** The generation a run is on and the execution it was admitted as. */
   readonly routed: (
@@ -9601,6 +9613,7 @@ const makeRegistry: (
       readonly input: Readonly<Record<string, Schema.Json>>;
       readonly request: string;
       readonly attachments?: ReadonlyArray<string> | undefined;
+      readonly started?: Started | undefined;
     }) {
       const { row, generation, facts, where, refused, input } = yield* offeredBy(options.runId);
       // Asked again here, of the module as it is now: the card this was read from may
@@ -9651,6 +9664,7 @@ const makeRegistry: (
         parent: row.run,
         verify: inherited,
         attachments: options.attachments,
+        started: options.started,
         // A follow-up carries on the parent's work, so it is on the parent's branch.
         options: carried,
       });

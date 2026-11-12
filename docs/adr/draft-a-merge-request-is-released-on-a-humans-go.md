@@ -104,7 +104,9 @@ the forge says it conflicts the Run waits, parked with a line saying its branch 
 target. It spends no fix round on it and never takes the target into the branch itself. It
 goes on by itself once the forge no longer says so, proving the head it then has. Whoever answers is
 recorded, and who it was is never a reason to refuse ([AGENTS.md](../../AGENTS.md), Invariant 1). `Finish` ends the Run where it
-stands, with the merge request open.
+stands, with the merge request open. A Release Run a human's own **Release** started takes
+that as its go for the head it was given at, and asks only once that head or its approval
+is worse ([ADR-draft-a-humans-release-is-the-go-for-its-head](draft-a-humans-release-is-the-go-for-its-head.md)).
 
 **D6. The Run decides what kind of repository it is before the go, and claims it after.**
 Before the review wait, its agent reads the repository and decides, with the evidence,

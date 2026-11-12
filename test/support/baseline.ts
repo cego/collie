@@ -4394,6 +4394,8 @@ scenario(
         yield* approve(runId, ["unit"]);
         yield* rig.queueOutputs([
           BUILT,
+          // The first stall is handed back without asking; the second is asked about.
+          { ...BUILT, findings: [{ severity: "blocker", title: "dependency unavailable" }] },
           { ...BUILT, findings: [{ severity: "blocker", title: "dependency unavailable" }] },
           {
             ...BUILT,
@@ -5211,7 +5213,7 @@ const stallAsked = (
   ).pipe(Effect.map(([rows]) => Arr.filter(rows, (row) => row.decision === name)));
 
 scenario(
-  "a criteria hand-back that changed nothing and reported a blocker asks, and Stop parks before any review",
+  "a first criteria hand-back that changed nothing and reported a blocker is handed back without asking, a second asks, and Stop parks before any review",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -5243,7 +5245,7 @@ scenario(
                 recommended: "Hand back",
                 shortfall: null,
               });
-              expect(Arr.join(yield* prompts(), "\n")).not.toContain(
+              expect(Arr.join(yield* prompts(), "\n")).toContain(
                 "01-first.md.criteria-2.prompt.md",
               );
               yield* run.answer("01-first.md.criteria-stalled-1", "Stop");
@@ -5256,8 +5258,11 @@ scenario(
           "01-first.md: a criteria hand-back reported a blocker and changed nothing, so no review starts",
         );
         expect(why).toContain("**Named.** Each one is named in the log.");
+        expect(yield* runLog("r-stalled")).toContain(
+          "01-first.md: a criteria hand-back reported a blocker and changed nothing; Collie handed it back without asking, and asks if it does again",
+        );
         const sent = Arr.join(yield* prompts(), "\n");
-        expect(sent).not.toContain("01-first.md.criteria-2.prompt.md");
+        expect(sent).not.toContain("01-first.md.criteria-3.prompt.md");
         expect(sent).not.toContain("review-1");
       }),
     ),
@@ -5277,7 +5282,7 @@ scenario(
           { file: "02-second.md", title: "the second one", checks: "unit" },
         ]);
         yield* approve("r-handed-again", ["unit"]);
-        yield* rig.queueOutputs([COUNTED_ONLY, BLOCKED, BLOCKED]);
+        yield* rig.queueOutputs([COUNTED_ONLY, BLOCKED, BLOCKED, BLOCKED]);
         yield* driven(
           { entry: shipped("implement"), runId: "r-handed-again", input: { plan, ...FINISH } },
           (run) =>
@@ -5295,10 +5300,10 @@ scenario(
         );
         yield* bin.restore();
 
-        expect(yield* asked("r-handed-again", "01-first.md.criteria-2")).toContain(
+        expect(yield* asked("r-handed-again", "01-first.md.criteria-3")).toContain(
           "acceptance criterion not answered: **Named.** Each one is named in the log.",
         );
-        expect(Arr.join(yield* prompts(), "\n")).not.toContain("01-first.md.criteria-3.prompt.md");
+        expect(Arr.join(yield* prompts(), "\n")).not.toContain("01-first.md.criteria-4.prompt.md");
       }),
     ),
   120_000,
@@ -13148,6 +13153,180 @@ const refusingCheckout = (refused: string): HostOverride =>
     }),
   );
 
+/**
+ * A host that says who gave this Release Run its go: a human's own start of it from an offer,
+ * or its parent implement Run's **Release**, answered at `answered`'s door. `afterStart`
+ * happens once the Run has read the merge request at its start, as a push landing then.
+ */
+const goGiven = (
+  given: { readonly started?: "board"; readonly answered?: "board" | "agent" },
+  afterStart: Effect.Effect<void, never, FileSystem.FileSystem> = Effect.void,
+): HostOverride =>
+  Layer.effect(Host)(
+    Effect.gen(function* () {
+      const host = yield* Host;
+      const services = yield* Effect.context<PlatformServices>();
+      return Host.of({
+        ...host,
+        place: (runId) =>
+          host.place(runId).pipe(
+            Effect.map((place) => ({
+              ...place,
+              lineage: [runId, "r-implement"],
+              authority: {
+                ...place.authority,
+                started: given.started === undefined ? null : { door: given.started, words: "" },
+              },
+            })),
+          ),
+        asked: (runId) =>
+          runId !== "r-implement"
+            ? host.asked(runId)
+            : Effect.succeed(
+                given.answered === undefined
+                  ? []
+                  : [{ name: "next", answer: "Release", by: { origin: given.answered } }],
+              ),
+        autoMerging: (cwd) =>
+          afterStart.pipe(Effect.provideContext(services), Effect.andThen(host.autoMerging(cwd))),
+      });
+    }),
+  );
+
+{
+  const { mr, target } = RELEASING.gitlab;
+
+  for (const given of [{ answered: "board" }, { started: "board" }] as const)
+    scenario(
+      `release: a human's Release at an unchanged head is the go (${"started" in given ? "a human took the offer" : "a human answered implement"}), so it merges and tags without asking it again`,
+      () =>
+        runEffect(
+          Effect.gen(function* () {
+            const { bin, forge, head, merged } = yield* releasable("gitlab");
+            claimed.length = 0;
+            const runId = `r-release-go-${"started" in given ? "offer" : "answer"}`;
+            yield* rig.queueOutputs([PACKAGED, TAGGED]);
+            const status = yield* driven(
+              {
+                entry: shipped("release"),
+                runId,
+                input: { mr: target },
+                host: Layer.provide(goGiven(given), releaseHost()),
+              },
+              (run) => ended(run.status),
+            );
+            const model = yield* forge.model();
+            yield* bin.restore();
+            expect(outcomeText(status)).toBe(`${mr} merged at ${merged}, released as v1.2.0`);
+            expect(Arr.map(model.merges ?? [], (one) => one.sha)).toEqual([head]);
+            expect(yield* questions(runId)).toEqual([]);
+            expect(yield* runLog(runId)).toContain(
+              `go 1: the human's Release at ${pipe(head, Str.slice(0, 8))} is the go, so nobody was asked`,
+            );
+          }),
+        ),
+      120_000,
+    );
+
+  scenario(
+    "release: a human's Release is asked again once the head has moved since it was given",
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, head, changed } = yield* releasable("gitlab");
+          claimed.length = 0;
+          const runId = "r-release-go-moved";
+          yield* rig.queueOutputs([PACKAGED]);
+          let moved = "";
+          const pushed = Effect.gen(function* () {
+            moved = yield* pushedBySomebody(head);
+            yield* changed({ head: moved });
+          }).pipe(Effect.orDie);
+          const status = yield* driven(
+            {
+              entry: shipped("release"),
+              runId,
+              input: { mr: target },
+              host: Layer.provide(goGiven({ answered: "board" }, pushed), releaseHost()),
+            },
+            (run) =>
+              Effect.gen(function* () {
+                const go = yield* goAsked(run.asked, "go-1");
+                expect(go.prompt).toContain(pipe(moved, Str.slice(0, 8)));
+                yield* run.answer("go-1", "Finish");
+                return yield* ended(run.status);
+              }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was left open`);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    "release: a human's Release given while the pipeline ran is asked again once an approver of it is gone",
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, changed } = yield* releasable("gitlab", STILL_RUNNING);
+          claimed.length = 0;
+          const runId = "r-release-go-unapproved";
+          yield* rig.queueOutputs([PACKAGED]);
+          const swapped = changed({ ...PIPELINE_PASSED, approvers: ["bob"] }).pipe(Effect.orDie);
+          const status = yield* driven(
+            {
+              entry: shipped("release"),
+              runId,
+              input: { mr: target },
+              host: Layer.provide(goGiven({ answered: "board" }, swapped), releaseHost()),
+            },
+            (run) =>
+              Effect.gen(function* () {
+                const go = yield* goAsked(run.asked, "go-1");
+                expect(go.prompt).toContain("approved by bob");
+                yield* run.answer("go-1", "Finish");
+                return yield* ended(run.status);
+              }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was left open`);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    "release: an agent's Release on implement is no human's go, so the go is asked",
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin } = yield* releasable("gitlab");
+          claimed.length = 0;
+          const runId = "r-release-go-agent";
+          yield* rig.queueOutputs([PACKAGED]);
+          const status = yield* driven(
+            {
+              entry: shipped("release"),
+              runId,
+              input: { mr: target },
+              host: Layer.provide(goGiven({ answered: "agent" }), releaseHost()),
+            },
+            (run) =>
+              Effect.gen(function* () {
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Finish");
+                return yield* ended(run.status);
+              }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was left open`);
+        }),
+      ),
+    120_000,
+  );
+}
+
 scenario(
   "a refused checkout fails Stage and Release on their checkout step, before anything is assessed",
   () =>
@@ -18195,6 +18374,10 @@ let windowRuns: Array<{
   workflow?: string;
   created?: string;
   closes?: ReadonlyArray<number>;
+  status?: "complete" | "failed";
+  mr?: string;
+  merged?: boolean;
+  questions?: ReadonlyArray<{ name: string; answer: string | null }>;
 }> = [];
 let openIssues: Issue[] = [];
 let filed: Array<{ title: string; body: string }> = [];
@@ -18223,8 +18406,11 @@ const improving: HostOverride = Layer.effect(Host)(
                 parent,
                 project: "project" in rest && rest.project ? rest.project : rig.projectDir,
                 created: "created" in rest && rest.created ? rest.created : since,
-                status: "failed" as const,
+                status: "status" in rest && rest.status ? rest.status : ("failed" as const),
                 closes: "closes" in rest && rest.closes ? rest.closes : [],
+                mr: "mr" in rest && rest.mr ? rest.mr : null,
+                merged: "merged" in rest && rest.merged === true,
+                questions: "questions" in rest && rest.questions ? rest.questions : [],
               }),
             ),
             ({ created }) => epochOf(created) >= epochOf(since),
@@ -18539,6 +18725,41 @@ scenario(
         expect(prompt).toContain("r-other");
         expect(prompt).toContain("`defect` is one more");
         expect(Arr.map(filed, ({ title }) => title)).toEqual(["Project host-crash"]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "self-improve states the questions per landed merge request and files a question nine in ten answered alike",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        freshDay();
+        windowRuns = Arr.map(Arr.range(0, 9), (at) => {
+          const asked = {
+            runId: `r-asked-${at}`,
+            parent: null,
+            questions: [{ name: "next", answer: at === 9 ? "Finish" : "Release" }],
+          };
+          return at < 2
+            ? { ...asked, status: "complete" as const, mr: `https://mr/${at}`, merged: true }
+            : asked;
+        });
+        yield* rig.queueOutputs([triaged([])]);
+
+        yield* improved("r-questions", { runs: "machine", improvements: 0 });
+
+        expect(Arr.map(filed, ({ title }) => title)).toEqual([
+          'implement asks "next" and is answered "Release" 90% of the time',
+        ]);
+        const summary = yield* readText(`${runDir(dir, "r-questions")}/summary.md`);
+        expect(summary).toContain(
+          "10 questions asked over 2 merge requests landed: 5.0 per landed merge request.",
+        );
+        expect(summary).toContain(
+          "implement Runs that reached a merge request without failing: 2 of 10 (20%).",
+        );
       }),
     ),
   120_000,

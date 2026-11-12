@@ -655,7 +655,8 @@ written, with nothing asked of anyone; empty, its end menu is asked
 `recovery=` empty for new work; an explicit follow-up supplies the finished Run it recovers.
 `then=release` releases
 its merge request on a human's go, `finish` ends at the merge request, and empty asks
-([`implement`](workflows.md#implement)).
+([`implement`](workflows.md#implement)). A typed start neither reads nor saves the
+[Reach](../CONTEXT.md) the board and chat remember: what `--input then=` says is all it goes by.
 
 A start that leaves anything out comes back as `needs_input`, one entry per missing field:
 what it means (the field's own description, else what its strategy is) and the facts that
@@ -1667,7 +1668,10 @@ failed, with its reason, each that completed, with its result, and each that was
 `--since` keeps only Runs admitted at or after that date.
 
 The JSON report's `runs` list includes each Run's `runId`, `workflow`, `parent`,
-`project`, `created`, and `status`, in admission order.
+`project`, `created`, `status`, `closes`, its merge request (`mr`), whether that merge
+request's disposition was recorded as merged (`merged`), and the `questions` it asked that a
+human's message did not set aside, each with its `name` and its `answer`, null while open,
+in admission order.
 
 Then the measures a change to Collie is judged by, under `measures` in `--json`. Each one is
 counted from what the Runs in the window recorded, and each names the Run ids it counts

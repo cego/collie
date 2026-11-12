@@ -33,8 +33,10 @@ issue id or URL goes in the goal, alone or with your words around it: the planne
 it first. The goal is the only launch question, and the end menu is asked when the plan is
 written rather than before it exists.
 
-`then` is `implement` or empty. The Launch flow leaves it empty; an agent's start gives it,
-`--input then=` where unused. With `then=implement` nobody is asked anything: each prompt
+`then` is `implement` or empty, and is plan's [Reach](../CONTEXT.md): the board's start row
+offers **Ask when the plan is written** (empty) and **Build it** (`implement`), the one the
+last launch of `plan` in that project chose first. An agent's start gives it, `--input then=`
+where unused. With `then=implement` nobody is asked anything: each prompt
 tells the planner that nobody is watching, so it decides what is open and records it under
 `decided`, and it writes nothing in its checkout: each glossary or ADR change it decides goes
 into the ticket that needs it, for that ticket's build to land. The end menu is skipped for
@@ -113,8 +115,11 @@ parent of a fan-out, which sets them on each Change's run; `stacked` names the C
 same repository a run is cut from. See [Plans that span repositories](#plans-that-span-repositories).
 
 `then` says what follows the merge request: `finish` ends there, `release` releases it, and
-empty, the default, asks (see **Ends:**). A start nobody attends passes `finish`: plan's
-`then=implement`, and so a Self-improve Run's Improvements, and each Change run of a fan-out.
+empty, the default, asks (see **Ends:**). It is implement's [Reach](../CONTEXT.md): the
+board's start row offers **Ask at the merge request**, **End at the merge request** and
+**Release it**, the one the last launch of `implement` in that project chose first. A start
+nobody attends passes `finish`: plan's `then=implement`, and so a Self-improve Run's
+Improvements, and each Change run of a fan-out.
 
 **Branch:** named after the work, not the path to it — an explicit `--input branch=`, else
 the reviewed branch, else the source branch of an open merge request the work names, else
@@ -151,8 +156,10 @@ criteria needs an answer, and one left unanswered or not met goes back to the bu
 criteria are read from the ticket again before each hand-back, so a ticket the planner
 amended is judged as it reads now. A ticket goes back twice at most, and the Run then asks
 rather than fails: the question names the ticket and the criteria still unmet, so the
-ticket can be amended. It asks sooner when a hand-back leaves the tree as it found it and
-reports a blocking finding, since another could not move that blocker, and that question
+ticket can be amended. A hand-back that leaves the tree as it found it and reports a
+blocking finding is handed back once more without asking, with two tries fresh, as **Hand
+back** was answered 18 of 19 times, and the log says Collie did it. The next time that
+ticket does so it asks, since another could not move that blocker, and that question
 names the blockers too. **Hand back** reads the ticket again, goes on with no builder turn if
 nothing is unmet any more, and otherwise hands it back with two tries fresh. **Stop** parks
 the Run with that reason, before any review. A resume asks the builder again under a new
@@ -705,8 +712,15 @@ Once ready, it asks **`go-<n>`**, naming the head and who approved it: **Release
 **Finish** for a package. For an application it offers **Stage the merge request** where
 the assessment named a stage deploy of its merge request pipelines, **Merge, tag and stage**
 where it named one of its tag pipelines, and **Finish**, and says what each does. Anyone
-may answer, from any door, and the answer is recorded with who gave it. **Finish** ends the
-Run with the merge request left open. Any other answer claims, in Helle, every project the
+may answer, from any door, and the answer is recorded with who gave it. A Release Run a
+human's own **Release** started — their answer to implement's **What next?**, or their
+taking a Run's **Release** offer, from the board, Desktop, a terminal or chat in their own
+words — asks no `go-<n>` while the head is the one the Run read at its start and nobody
+who had approved it then has withdrawn: that **Release** is the go, its first option is
+taken, and its log says `go <n>: the human's Release at <head> is the go, so nobody was
+asked`. A moved head or a withdrawn approval asks as above, and every wait before it stays
+([ADR-draft-a-humans-release-is-the-go-for-its-head](adr/draft-a-humans-release-is-the-go-for-its-head.md)).
+**Finish** ends the Run with the merge request left open. Any other answer claims, in Helle, every project the
 release deploys under, one at a time in a fixed order and each waited for — before it waits
 for one it does not hold, whether it lost it, or is resumed or tried again, it gives back
 the later ones it holds or is queued for, and takes them again in order — asking first to
@@ -1137,8 +1151,10 @@ recurs is filed on the forge of the checkout it runs in, or commented on the ope
 matches. Each finding cites a record that shows it, a journal line, a verification, a
 transcript or an issue, and never a Run's goal, summary or Output read back. Up to
 `improvements` groups of newly filed issues start as `plan` Runs that build
-themselves. Nobody is asked anything, and nothing is merged. See
-[Self-improve](using.md#self-improve).
+themselves. Nobody is asked anything, and nothing is merged. It also states the
+questions asked per landed merge request and the share of implement Runs that reached a
+merge request without failing, and files, with `runs=machine`, each question answered the
+same nine times in ten over ten answers. See [Self-improve](using.md#self-improve).
 
 **Ends:** once its Improvements have, with `summary.md` in its Run directory.
 

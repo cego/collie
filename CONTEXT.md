@@ -744,7 +744,9 @@ why. It never resolves a thread, because that is the reviewer's call.
 
 **Go** — The answer that lets a Run do what cannot be taken back: start a release (claim,
 stage, merge, tag), and send one to production. It is asked on the Run once the work is
-ready, never at its start. The first holds for one head: a head that moves takes it back.
+ready, never at its start, except that a human's own **Release** that started a Release Run
+is that Run's first Go for the head it read at its start, while nobody's approval is withdrawn.
+The first holds for one head: a head that moves takes it back.
 The second holds for what it sends. Before a merge, that is the head on stage, so the same
 rule applies. After one, it is one tag and the production jobs that tag names. Who answered
 is recorded, never a reason to refuse. A Workflow can declare the Go's action and head
@@ -859,10 +861,19 @@ refused with the reason rather than asked again. Where the work happens is never
 outside the Home it is the checkout the human is in, and from the Home it is the
 **Projects root** or the checkout the words point at. What it inferred is shown in one line
 before the Run starts. It is the human's front door only: an agent's start is given
-everything explicitly (see **Input**). Nothing about the Run's questions — those
-are asked when the Run reaches them, with the work they decide about in front of the
-human. It is asked inline on the board, for `＋ New run`; a question a Run answers is a
-file in its Run directory instead.
+everything explicitly (see **Input**). The one thing it says about the Run's questions is
+its **Reach**, chosen on the start row; the rest are asked when the Run reaches them, with
+the work they decide about in front of the human. It is asked inline on the board, for
+`＋ New run`; a question a Run answers is a file in its Run directory instead.
+
+**Reach** — How far a Run goes before it asks what next: the Input a Workflow hints with
+`reach`, each value titled for the human (`plan`'s and `implement`'s `then`). The board's
+start row offers each, and a start from the board or a chat remembers the one chosen as the
+default for that Workflow in that project — `projects-root` for a start rooted at the
+Projects root, else its remote, else its directory — as the shared
+setting `launch_reach.<workflow>.<project>`, which Settings does not show. The next launch
+offers it first; with none saved the first is empty, which asks as before. A typed
+`collie run start` gives it with `--input` and neither reads nor saves it.
 
 **Flow** — A Task drawn as the work it took. Each of its Runs is shown on its Machine, as the
 **Steps** it ran and is running, each with its attempts, waits and evidence. Around them are
