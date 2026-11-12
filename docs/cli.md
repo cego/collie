@@ -655,7 +655,8 @@ written, with nothing asked of anyone; empty, its end menu is asked
 `recovery=` empty for new work; an explicit follow-up supplies the finished Run it recovers.
 `then=release` releases
 its merge request on a human's go, `finish` ends at the merge request, and empty asks
-([`implement`](workflows.md#implement)).
+([`implement`](workflows.md#implement)). A typed start neither reads nor saves the
+[Reach](../CONTEXT.md) the board and chat remember: what `--input then=` says is all it goes by.
 
 A start that leaves anything out comes back as `needs_input`, one entry per missing field:
 what it means (the field's own description, else what its strategy is) and the facts that
@@ -1024,6 +1025,28 @@ rechecks are still recorded. Set it to `true` to turn it on again, its default. 
 recheck rounds in a row raise one News item, `recovery-failing:<machine>`, which clears
 after a successful round. A failed round resumes nothing.
 
+A park that would need you, a needs-you cause or a recheck cause past its three resumes,
+first gets one **Heal**: a Run of the workflow that declares `heals: true`, the shipped
+[`heal`](workflows.md#heal) unless a project forks it. The host starts it with Actor `host`,
+request id `heal:<run>:<park>` and the input `{ run, park }`, in the parked Run's Task, and
+its record says which Run it heals. Its agent may read everything about the parked Run, and
+may only `deliver` or `steer` to the parked Run's agents and `resume` it; the host refuses
+every other operation from it, naming the Run it heals. It never answers a Decision, lifts
+a Hold, undoes a Stop, writes code or merges. One Heal per park and three per Run; one runs
+at a time on a Machine and none while it is Short of memory. No Heal starts for a Run with
+a Decision, Hold or Stop, for a cause only a person can act on (`checkout-dirty-human`,
+`login-missing`, `branch-force-pushed`), for a park of a Heal, or with
+`collie settings set recovery.heal false`: those parks need you at once.
+
+When the Heal settles, the parked Run's facts judge it, never its Output: out of the park is
+`recovered` and raises one `run-healed`; still in it, or parked again for the same cause, is
+`escalated` (`false-recovery` where the Heal said `resumed`) and needs you with its
+diagnosis, actions and `needs_person`; a Heal that failed, stopped or parked is `failed` and
+needs you at once. Its `finding` is kept on the line either way. Three `failed` Heals in a
+row raise the same `recovery-failing:<machine>` News. The claim, start and judgement are
+`healed` recovery lines under one `recoveryId`, so a restarted host neither starts a second
+Heal for the park nor loses one.
+
 A finished execution keeps its recorded result; `resume` does not reopen its steps. Use
 the Run's follow-up action to continue unfinished work on the same Task and branch.
 
@@ -1355,7 +1378,11 @@ refused, and the refusal lists the Task's. Anything else, a commit or a Run, is 
 given on the Run you named. A `superseded` whose ref names, as one of its words, the Run it
 would be recorded on is refused with `invalid_input`, and nothing is recorded: a Run cannot
 supersede itself. A free-text ref, or one naming another Run, is recorded as given. The
-board and chat's `collie_do` `disposition` take the same path.
+board and chat's `collie_do` `disposition` take the same path. A ref may name a Run as
+`<machine>:<run>`: by this Machine's hostname, or that name's first label, it is that Run
+here; by another Machine's name it is never one of this host's Runs, whatever its id, so it
+hands nothing on. The Flock chat writes a word naming the Machine the disposition goes to as
+the bare Run id, since herdr's name for a Machine need not be its hostname.
 
 Without `--as` the command reads. With it, `--as` is `merged`, `abandoned`, or
 `superseded`, and there is deliberately no value meaning the run succeeded after all.
@@ -1643,21 +1670,24 @@ failed, with its reason, each that completed, with its result, and each that was
 `--since` keeps only Runs admitted at or after that date.
 
 The JSON report's `runs` list includes each Run's `runId`, `workflow`, `parent`,
-`project`, `created`, and `status`, in admission order.
+`project`, `created`, `status`, `closes`, its merge request (`mr`), whether that merge
+request's disposition was recorded as merged (`merged`), and the `questions` it asked that a
+human's message did not set aside, each with its `name` and its `answer`, null while open,
+in admission order.
 
 Then the measures a change to Collie is judged by, under `measures` in `--json`. Each one is
 counted from what the Runs in the window recorded, and each names the Run ids it counts
 (`runs`), so an issue can cite them. Chat reads the same report through `collie_report`.
 
-| Field           | What it counts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rounds`        | Runs with a review rally (a review allowed more than one round): `runs[]` with the round each `reached` and its `cap`, the `median` round (`null` for none), and `atCap`, the Runs that reached their cap.                                                                                                                                                                                                                                                                                                                  |
-| `dispositions`  | `merged`, `superseded` and `abandoned`, each a `count`, its `runs` and its `share` of the three (`null` where none was recorded).                                                                                                                                                                                                                                                                                                                                                                                           |
-| `steering`      | `runs[]`: each Run's `steer`, `followup`, `deliver` and `correction` counts and `byOrigin`. `byOrigin`: who asked — `human` (the board, Desktop, a terminal), `chat`, `agent` (an agent or a non-interactive CLI) and `host` (Collie's own corrections).                                                                                                                                                                                                                                                                    |
-| `verifications` | `total`, `runs[]` with each Run's `total` and how many an `agent` and `collie` collected, `byCollector`, `repeated` (same Run, check, start tree, result and collector as one before it) and `executableOnly` (named only by its executable, such as `bun`).                                                                                                                                                                                                                                                                |
-| `parks`         | `byCause`: each **Park cause**'s `count` of parks, its `runs`, `toNextStep` (the `median` and `max` milliseconds from a park to the Run's next Step, `null` while none has moved on) and `humanResumes` (resumes a person asked for, from the board, Desktop or a terminal, while the Run was parked for it). `byReason`: each park's `reason`, with the Run, pane, path and command it named taken out so like counts with like, and `collectExpiries`: an agent that had written nothing when its collect budget ran out. |
-| `recoveries`    | `byCause`: each `cause` and `action` (`reminded`, `rechecked`, or `resumed`), its `count` and `runs`, how many `recovered`, and `toRecover`, the median milliseconds to recovery (`null` where none has). Resumes add `falseRecoveries`: an automatic resume followed by another park for the same cause. Reminders time from the first turn ending without Output to decoded Output; successful resumes time from the park to the next Step.                                                                               |
-| `peakContext[]` | Each Run's largest context sample at a work boundary, in `tokens`, and the `agent` it was on. A sample, not tokens consumed; `null` is not recorded, and is never estimated.                                                                                                                                                                                                                                                                                                                                                |
+| Field           | What it counts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `rounds`        | Runs with a review rally (a review allowed more than one round): `runs[]` with the round each `reached` and its `cap`, the `median` round (`null` for none), and `atCap`, the Runs that reached their cap.                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `dispositions`  | `merged`, `superseded` and `abandoned`, each a `count`, its `runs` and its `share` of the three (`null` where none was recorded).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `steering`      | `runs[]`: each Run's `steer`, `followup`, `deliver` and `correction` counts and `byOrigin`. `byOrigin`: who asked — `human` (the board, Desktop, a terminal), `chat`, `agent` (an agent or a non-interactive CLI) and `host` (Collie's own corrections).                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `verifications` | `total`, `runs[]` with each Run's `total` and how many an `agent` and `collie` collected, `byCollector`, `repeated` (same Run, check, start tree, result and collector as one before it) and `executableOnly` (named only by its executable, such as `bun`).                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `parks`         | `byCause`: each **Park cause**'s `count` of parks, its `runs`, `toNextStep` (the `median` and `max` milliseconds from a park to the Run's next Step, `null` while none has moved on) and `humanResumes` (resumes a person asked for, from the board, Desktop or a terminal, while the Run was parked for it). `byReason`: each park's `reason`, with the Run, pane, path and command it named taken out so like counts with like, and `collectExpiries`: an agent that had written nothing when its collect budget ran out.                                                                                                                                                    |
+| `recoveries`    | `byCause`: each `cause` and `action` (`reminded`, `rechecked`, `resumed`, or `healed`), its `count` and `runs`, how many `recovered`, and `toRecover`, the median milliseconds to recovery (`null` where none has). Resumes add `falseRecoveries`: an automatic resume followed by another park for the same cause. Heals add `falseRecoveries` (said `resumed`, still parked), `escalations` (ended with a person needed) and `healMs`, how long they ran in all: their usage, never enforced. Reminders time from the first turn ending without Output to decoded Output; successful resumes time from the park to the next Step, Heals from their start to their judgement. |
+| `peakContext[]` | Each Run's largest context sample at a work boundary, in `tokens`, and the `agent` it was on. A sample, not tokens consumed; `null` is not recorded, and is never estimated.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 Every field before `measures` is unchanged. A park is recorded as a `halt` line in the Run's
 metrics each time it parks, or parks for a different reason or cause, with its `cause` and the
@@ -1700,6 +1730,12 @@ the result; changing any byte makes it about an earlier tree.
 That pair is the point: a pass on a tree that changed while the command ran says nothing
 about either tree, so such a result is `unstable` and never `pass`. So is a tree too large
 to fingerprint at all, because two unmeasured trees are not one tree.
+
+Reading the tree writes nothing in the checkout. Collie's status of a checkout runs with
+`GIT_OPTIONAL_LOCKS=0`, so it never holds `index.lock` and a commit made beside it is never
+refused for one. The tree is staged in a copy of the index that keeps the index's own
+time, so an edit that leaves a file's size as it was, in the second the file was staged,
+still moves the tree.
 
 What the command prints is shown as it runs — its stdout on stdout and its stderr on
 stderr, or both on stderr under `--json`, where stdout is the one envelope — and the exit
@@ -1888,7 +1924,7 @@ A **Measurement** proves a speed-up, which a Check cannot: it compares two trees
 Machine on many samples
 ([ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement](adr/draft-a-performance-gain-is-proved-by-the-hosts-measurement.md)).
 The host makes the **base tree** as a detached worktree at `--base` with the plan's harness
-commits applied, under `measurements/trees/<run>/` in its state directory, and keeps it for
+commits it lacks applied, judged by content: those after the longest run of them whose files `--base` holds exactly as they left them, whatever their SHAs, under `measurements/trees/<run>/` in its state directory, and keeps it for
 the Run's later Measurements of the same base. It also keeps every such tree, whatever its
 Run's state, while a Measurement is running on this Machine, so `--run` may name a Run that
 has ended; once none is running, an ended Run's trees are removed. The **candidate** is the

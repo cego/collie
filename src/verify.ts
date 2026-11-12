@@ -247,7 +247,19 @@ const workingTree = Effect.fn("Verify.workingTree")(
         Effect.gen(function* () {
           const env = { GIT_INDEX_FILE: path.join(scratch, "index") };
           // A repository nothing was ever staged in has no index yet.
-          if (yield* fs.exists(index)) yield* fs.copyFile(index, env.GIT_INDEX_FILE);
+          if (yield* fs.exists(index)) {
+            // Read before the copy, so an index written meanwhile is never dated later than it was.
+            const written = (yield* fs.stat(index)).mtime;
+            yield* fs.copyFile(index, env.GIT_INDEX_FILE);
+            // Git takes a file whose size and times match its entry as unchanged, unless the
+            // index is no newer than the file. A copy dated now would be newer than every
+            // file, and an edit of the same size in the second its file was staged would
+            // stage nothing. So the copy keeps the index's own time, to the second below it.
+            if (Option.isSome(written)) {
+              const at = Math.floor(written.value.getTime() / 1000);
+              yield* fs.utimes(env.GIT_INDEX_FILE, at, at);
+            }
+          }
           if ((yield* shell("git", ["add", "-A"], cwd, env)).code !== 0) return UNMEASURED;
           const tree = yield* shell("git", ["write-tree"], cwd, env);
           return tree.code === 0 ? Str.trim(tree.stdout) : UNMEASURED;

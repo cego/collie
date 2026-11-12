@@ -5,7 +5,8 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Rec from "effect/Record";
-import { releasesOf } from "./releases";
+import { newerRelease, releasesOf, RELEASES } from "./releases";
+import manifest from "../herdr-plugin.toml";
 import { withNotice } from "./redact";
 import {
   Cause,
@@ -20,13 +21,15 @@ import {
   Queue,
   Schedule,
   Schema,
+  Stream,
 } from "effect";
 import { EXCLUSIVE_STRATEGIES, strategyMeaning } from "./strategies";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { insideCheckout } from "./agent-start";
 import { placeableUnder, placedByUrl, routed, routerDeps } from "./route";
 import { offerFields, offerInput, StepResult, type RunDetail } from "./board-model";
-import { gitlabHostOf, loadDefaults, setSetting } from "./config";
+import { gitlabHostOf, loadDefaults, savedReach, setSetting } from "./config";
+import { reachOf, savedFirst } from "./reach";
 import { parseSetting, settingText } from "./settings";
 import { herdDir, machineHerd } from "./steering";
 import { liveFor, markedOf, type Ledgers } from "./live";
@@ -52,6 +55,7 @@ import {
   hostTasks,
   type DetailKey,
   invokeOffer,
+  launchProject,
   type BoardRead,
   offersOf,
   resumeRun,
@@ -98,7 +102,6 @@ import {
   agentForKey,
   askingRun,
   buildView,
-  buildWideView,
   renderWorkspace,
   type Asking,
   type RunRow,
@@ -409,12 +412,29 @@ const startModule = Effect.fn("Flows.startModule")(function* (
       return null;
     }
   }
-  if (inferred.size > 0) {
-    const inputs = Arr.map(
-      Rec.toEntries(text),
-      ([name, value]) =>
-        `${name} = ${value} (${inferred.has(name) ? `inferred from ${inferred.get(name)}` : "given"})`,
+  const inputs = Arr.map(
+    Rec.toEntries(text),
+    ([name, value]) =>
+      `${name} = ${value} (${inferred.has(name) ? `inferred from ${inferred.get(name)}` : "given"})`,
+  );
+  const reach = reachOf(module.inputs);
+  if (reach !== null && text[reach.name] === undefined) {
+    const saved = yield* savedReach(
+      env.userDir,
+      module.id,
+      yield* launchProject(at.cwd, rooted ? PROJECTS_ROOT_OPTION : undefined),
     );
+    const chosen = yield* prompts.menu(
+      Arr.map(savedFirst(reach, saved), (choice) => ({
+        id: `${REACH_ROW}${choice.value}`,
+        title: choice.title,
+        subtitle: Arr.join([`Starting in ${at.cwd}`, ...inputs], " · "),
+      })),
+      { header: module.title, footer: "↑↓ how far it goes · Enter start · Esc cancel" },
+    );
+    if (chosen === null) return null;
+    text[reach.name] = pipe_(chosen.id, Str.slice(REACH_ROW.length));
+  } else if (inferred.size > 0) {
     const confirmed = yield* prompts.menu(
       [{ id: "start", title: `Starting in ${at.cwd}`, subtitle: Arr.join(inputs, " · ") }],
       { header: module.title, footer: "Enter start · Esc cancel" },
@@ -450,6 +470,9 @@ const startModule = Effect.fn("Flows.startModule")(function* (
 
 /** The one question a start asks: what the human wants, in their own words. */
 const WHAT_DO_YOU_WANT = "What do you want?";
+
+/** A start row's id is this and the reach it starts with. */
+const REACH_ROW = "reach:";
 
 /** The row a start from the Home that no one checkout fits is offered instead. */
 const PLAN_INSTEAD = "plan-instead";
@@ -757,6 +780,13 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
   const platform = yield* Effect.context<
     FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
   >();
+  // A file write can arrive before the host publishes its new board. That publication
+  // must wake the terminal too, rather than relying on the duration of a prior read.
+  const changes = yield* Queue.sliding<void>(1);
+  yield* Effect.addFinalizer(() => Queue.shutdown(changes));
+  const changed = () => {
+    Queue.offerUnsafe(changes, undefined);
+  };
   const session: ControlSession = {
     herdr,
     ...scopeFor(env, env.cwd),
@@ -770,8 +800,8 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     // asks, and reports that the compaction is in the air; the human presses the key
     // again when the pane says it has finished. No work is sent either way.
     compaction: { waitMs: 0 },
-    tasksOf: yield* followBoard(env),
-    detailOf: yield* followRunDetail(env),
+    tasksOf: yield* followBoard(env, changed),
+    detailOf: yield* followRunDetail(env, changed),
     usageOf: () =>
       usageReadings(env, "board").pipe(
         Effect.map((read) => (read.ok ? read.value : [])),
@@ -797,6 +827,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
       const navigate = (run: string) =>
         dispatch?.({ _tag: "SetFilter", filter: { kind: "run", id: run } });
       yield* runApp({
+        changes: Stream.fromQueue(changes),
         onReady: (own) => {
           dispatch = own;
         },
@@ -856,115 +887,38 @@ export function appState(session: ControlSession, env: PluginEnv) {
   const runsOf = session.runsOf ?? listRuns;
   /** The board from the last read, for whatever `rereads` says may be taken from it. */
   let last: { focus: Focus; state: AppState } | null = null;
-  /** One row per Run: a Run on the local board is on the wide one too. */
-  const dedupe = (rows: ReadonlyArray<{ id: string; dir: string }>) => [
-    ...new Map(Arr.map(rows, (row) => [row.id, { id: row.id, dir: row.dir }])).values(),
-  ];
-
   const load = Effect.fn("Flows.appState.load")(function* (focus: Focus) {
     const again = rereads(last?.focus ?? null, focus);
     const reuse = again.reuse ? last : null;
-    // One scan of the run dirs per read, shared by the board and History: they are two
-    // Views over the same directory, and reading it twice doubles the cost of a refresh.
-    const scanned = reuse ? undefined : yield* scan(env, session);
-    const runs = scanned?.runs;
-    // One read of the register and the workspace list for both boards: a wide tick
-    // costs the local board's calls plus nothing, and the two boards cannot reconcile
-    // a tab label from two different answers about the same agent.
-    const live = reuse ? undefined : yield* liveOf(session);
-    const board = reuse ? reuse.state.board : yield* boardOf(session, scanned!, live);
-    // Read only while the Runs view is showing it: a local board, and every other View,
-    // must cost no group it is not going to draw.
-    const widening = focus.filter.kind !== "workspace" && focus.view === "runs";
-    const wide = widening
-      ? reuse
-        ? reuse.state.wide
-        : yield* wideOf(session, scanned!, live)
-      : null;
-    // Before the Selection is resolved, because a History row is a row too: the board
-    // keeps five finished runs and History keeps two hundred from every session that ran
-    // here, so looking the Selection up in the board alone left every older row's panel
-    // empty while its row carried the target all along.
+    // The native board draws the host's Tasks. Only History needs the full Run list;
+    // rebuilding the text board here duplicated the host's work for invisible rows.
     const history = reuse
       ? reuse.state.history
       : focus.shown.includes("history")
-        ? yield* buildHistory({ cwd: env.cwd, runs: runs ?? (yield* runsOf(env)) })
+        ? yield* buildHistory({ cwd: env.cwd, runs: yield* runsOf(env) })
         : null;
     const runId = runIdOf(focus.selected);
-    // The wide groups too: a row the human is on may belong to another workspace, and
-    // looking only at this one left its panel empty while its row carried the target.
-    const selected = runId
-      ? Option.getOrUndefined(
-          Arr.findFirst(
-            [
-              ...board.active,
-              ...board.recent,
-              ...(Option.getOrUndefined(
-                Option.map(Option.fromNullishOr(wide), (present) =>
-                  Arr.flatMap(present.groups, (g) => [...g.active, ...g.recent]),
-                ),
-              ) ?? []),
-              ...(history ?? []),
-            ],
-            (r) => r.id === runId,
-          ),
-        )
-      : undefined;
-    // The Run itself, not the row: what a card is about is on the record, and a row
-    // carries only what its list needed. One record, for the one Run selected.
-    const selectedRun =
-      runId === null
-        ? null
-        : (Option.getOrUndefined(
-            Arr.findFirst(runs ?? (yield* runsOf(env)), (run) => run.id === runId),
-          ) ?? null);
-    const where =
-      selected !== undefined
-        ? { id: selected.id, dir: selected.dir }
-        : selectedRun === null
-          ? null
-          : { id: selectedRun.id, dir: selectedRun.dir };
-    /**
-     * Every Run on whichever board is showing, for the marks and for the Herd-wide
-     * cards. From the boards rather than from the store's whole list: History keeps two
-     * hundred finished Runs, and reading each one's journals per tick to mark rows
-     * nobody is looking at is the cost this used to pay for nothing.
-     */
-    const onBoard = [
-      ...board.active,
-      ...board.recent,
-      ...(Option.getOrUndefined(
-        Option.map(Option.fromNullishOr(wide), (present_) =>
-          Arr.flatMap(present_.groups, (g) => [...g.active, ...g.recent]),
-        ),
-      ) ?? []),
-    ];
-    /** What each Run's record says about it that a row does not carry. */
-    const recorded = new Map(
-      Arr.map(runs ?? [], (run) => [run.id, markedOf(run, scanned?.registered ?? [])]),
-    );
-    /**
-     * The Live region and every row's marks, from one pass over the same journals. The
-     * region is the Runs view's alone — nothing else draws it, and the journals of every
-     * Run on the board are not worth reading to fill a field Settings will not look at —
-     * but the marks are on a History row too, so a reuse tick outside the Runs view is
-     * the one that keeps the marks it already had.
-     */
+    // A moved Selection always reads its own record, including on a focus-only load.
+    const detail = runId
+      ? yield* detailRead(session, env, {
+          runId,
+          tail: focus.tail,
+          pages: focus.reviewPages,
+          refreshMr: again.forceMr,
+        })
+      : yield* session.detailOf?.(null) ?? Effect.succeed(null);
+    // A drawer's own verified record supplies its journal directory. With no drawer,
+    // only Herd proposals are drawn; cards and marks for the old lists are not inputs.
     const found =
-      reuse && focus.view !== "runs"
+      focus.view !== "runs"
         ? null
         : yield* liveFor({
             stateDir: env.stateDir,
             socketPath: env.socketPath,
             ledgers: session.ledgers ?? ledgersOf(env),
-            run: where === null ? null : { id: where.id, dir: where.dir },
-            // From the scan this read already made, never a second read per Run: the
-            // facts are the only thing the marks need that a row does not carry.
-            runs: Arr.map(dedupe(onBoard), (row) => ({
-              ...row,
-              ...(recorded.get(row.id) ?? { held: false, harnesses: [] }),
-            })),
-            region: focus.view === "runs",
+            run: detail === null ? null : { id: detail.id, dir: detail.dir },
+            runs: [],
+            region: true,
           });
     const defaults = yield* loadDefaults(env.userDir);
     const read = reuse ? null : yield* boardRead(session, env);
@@ -977,8 +931,7 @@ export function appState(session: ControlSession, env: PluginEnv) {
       tasks: tasksBuilt,
       now: yield* Clock.currentTimeMillis,
       density: defaults.density,
-      wide,
-      board,
+      newer: reuse ? reuse.state.newer : yield* boardRelease(session),
       // A reuse read the board not at all, so what it said last still holds.
       note: read === null ? reuse!.state.note : read.unreadable,
       history,
@@ -992,22 +945,12 @@ export function appState(session: ControlSession, env: PluginEnv) {
         : focus.shown.includes("settings")
           ? yield* buildSettings(env)
           : null,
-      marks: found?.marks ?? reuse?.state.marks ?? {},
       usage: reuse ? reuse.state.usage : yield* session.usageOf?.() ?? Effect.succeed([]),
       previewing: focus.previewing,
       live: found?.live ?? null,
-      // Always re-read: this is the one thing a moved Selection actually changes.
       // The bridge's own, and it overlays what it is holding onto every load.
       stopping: [],
-      // The host's, followed while the drawer is open; `R` asks its merge watch again.
-      detail: runId
-        ? yield* detailRead(session, env, {
-            runId,
-            tail: focus.tail,
-            pages: focus.reviewPages,
-            refreshMr: again.forceMr,
-          })
-        : yield* session.detailOf?.(null) ?? Effect.succeed(null),
+      detail,
     } satisfies AppState;
     last = { focus, state };
     return state;
@@ -1674,25 +1617,15 @@ const boardOf = Effect.fn("Flows.boardOf")(function* (
   return view;
 });
 
-/**
- * The whole herdr session as groups, from one `workspace list`, one `agent list` and
- * the run scan the local board has already done: a wide board costs one call more than
- * a local one, whatever is in the session.
- */
-const wideOf = Effect.fn("Flows.wideOf")(function* (
-  session: ControlSession,
-  scanned: Scanned,
-  seen?: SessionNow,
-) {
-  const live = seen ?? (yield* liveOf(session));
-  return yield* buildWideView({
-    session: session.session,
-    stateDir: session.stateDir,
-    workspaces: live.workspaces,
-    alive: live.alive,
-    ...scanned,
-    quietMs: yield* boardQuietMs(session.userDir),
-  });
+/** The release notice is independent of either board's Run and workspace lists. */
+const boardRelease = Effect.fn("Flows.boardRelease")(function* (session: ControlSession) {
+  const fs = yield* FileSystem.FileSystem;
+  if (yield* fs.exists(`${session.pluginRoot}/.git`)) return null;
+  return yield* newerRelease(
+    session.releases ?? RELEASES,
+    manifest.version,
+    yield* Clock.currentTimeMillis,
+  );
 });
 
 /** A banner above a question: definition load errors, above the list they were skipped from. */

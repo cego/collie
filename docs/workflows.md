@@ -1,6 +1,6 @@
 # Workflows
 
-Collie ships eleven workflows. This page is the "which one do I want" level: what each is
+Collie ships twelve workflows. This page is the "which one do I want" level: what each is
 for, what it needs from you, and how they chain. The files under
 [`workflows/`](../workflows) are canonical for step-by-step behavior: each is a TypeScript
 module with its Markdown beside it as content ([the SDK](sdk.md)). Any of them is a fork
@@ -33,8 +33,10 @@ issue id or URL goes in the goal, alone or with your words around it: the planne
 it first. The goal is the only launch question, and the end menu is asked when the plan is
 written rather than before it exists.
 
-`then` is `implement` or empty. The Launch flow leaves it empty; an agent's start gives it,
-`--input then=` where unused. With `then=implement` nobody is asked anything: each prompt
+`then` is `implement` or empty, and is plan's [Reach](../CONTEXT.md): the board's start row
+offers **Ask when the plan is written** (empty) and **Build it** (`implement`), the one the
+last launch of `plan` in that project chose first. An agent's start gives it, `--input then=`
+where unused. With `then=implement` nobody is asked anything: each prompt
 tells the planner that nobody is watching, so it decides what is open and records it under
 `decided`, and it writes nothing in its checkout: each glossary or ADR change it decides goes
 into the ticket that needs it, for that ticket's build to land. The end menu is skipped for
@@ -81,8 +83,8 @@ plan `collie measure` would refuse fails the Tickets step with its reason, befor
 **Its [Flow](../CONTEXT.md)** forecasts **Grill**, **Spec**, **Tickets** and **End menu**,
 the menu a run per round. Unbuildable, Second opinion and its Revise, Offload to Linear and
 Refine are drawn off the path, each after the Step before it. Started with `then=implement`,
-End menu is never asked and ends not run. The implement or architecture Run it starts is a
-row of its own.
+it forecasts Grill, Spec and Tickets alone: End menu is never asked, so it is not drawn. The
+implement or architecture Run it starts is a row of its own.
 
 Module: [`workflows/plan.workflow.ts`](../workflows/plan.workflow.ts), with its prompts in
 [`workflows/plan.md`](../workflows/plan.md).
@@ -113,8 +115,11 @@ parent of a fan-out, which sets them on each Change's run; `stacked` names the C
 same repository a run is cut from. See [Plans that span repositories](#plans-that-span-repositories).
 
 `then` says what follows the merge request: `finish` ends there, `release` releases it, and
-empty, the default, asks (see **Ends:**). A start nobody attends passes `finish`: plan's
-`then=implement`, and so a Self-improve Run's Improvements, and each Change run of a fan-out.
+empty, the default, asks (see **Ends:**). It is implement's [Reach](../CONTEXT.md): the
+board's start row offers **Ask at the merge request**, **End at the merge request** and
+**Release it**, the one the last launch of `implement` in that project chose first. A start
+nobody attends passes `finish`: plan's `then=implement`, and so a Self-improve Run's
+Improvements, and each Change run of a fan-out.
 
 **Branch:** named after the work, not the path to it — an explicit `--input branch=`, else
 the reviewed branch, else the source branch of an open merge request the work names, else
@@ -151,8 +156,10 @@ criteria needs an answer, and one left unanswered or not met goes back to the bu
 criteria are read from the ticket again before each hand-back, so a ticket the planner
 amended is judged as it reads now. A ticket goes back twice at most, and the Run then asks
 rather than fails: the question names the ticket and the criteria still unmet, so the
-ticket can be amended. It asks sooner when a hand-back leaves the tree as it found it and
-reports a blocking finding, since another could not move that blocker, and that question
+ticket can be amended. A hand-back that leaves the tree as it found it and reports a
+blocking finding is handed back once more without asking, with two tries fresh, as **Hand
+back** was answered 18 of 19 times, and the log says Collie did it. The next time that
+ticket does so it asks, since another could not move that blocker, and that question
 names the blockers too. **Hand back** reads the ticket again, goes on with no builder turn if
 nothing is unmet any more, and otherwise hands it back with two tries fresh. **Stop** parks
 the Run with that reason, before any review. A resume asks the builder again under a new
@@ -328,7 +335,9 @@ dispute rule are shared.
 
 **Its [Flow](../CONTEXT.md)** forecasts **Build**, a run per ticket, then **Review**, a run
 per review-and-fix round, **Checks**, the gate with its fix rounds, **Merge request** and
-**What next**. A CI fix round is drawn off the path. A plan that spans repositories forecasts
+**What next**. With `then` set to `finish` or `release`, and once its merge request reads
+that it merges itself, **What next** is never asked, so the Run forecasts without it. A CI fix
+round is drawn off the path. A plan that spans repositories forecasts
 again once it is read, to **Change runs** alone, a run per Change. **What next** has a run
 per question, and each Stage Run and the release Run it starts is a row of its own. Checks still unproved after the gate's fixes park the Run with **Checks** failed,
 and a resume runs them again.
@@ -355,6 +364,23 @@ its repository and its name, so `schema` in `api` and `schema` in `web` are two 
 name git would refuse in a branch name stops the hand-off, quoting the ticket, and so does
 `schema` in `api` beside a repository called `api--schema`, since both would be run as
 `api--schema`.
+
+A ticket may need a Change another plan's Run is building merged before it is built. It
+names that **Prerequisite** on a `**Needs merged:**` line: Run ids separated by commas, each
+followed by that Run's Change name, or by nothing for its default Change, like
+`**Needs merged:** run-ac644eef card, run-e15f4a62`. The Change is always in the ticket's own
+repository. A ticket of the same plan goes on `**Blocked by:**` instead, and another
+repository's release is cego/collie#338's. The Run building the ticket builds every other
+ticket it can first. Then it waits, and its card reads `Waiting for <run>'s <change> to
+merge.` It checks every 5 minutes, spends no model tokens, and ends on a Hold or a Stop. A
+Prerequisite has landed once its merge request has merged and its merge commit is on the
+default branch. The Run then merges the default branch in and builds the ticket on it. Each
+check reads the ticket again, so taking the entry off the line is how to go on without it.
+The wait needs you only when it can never end by itself: the named Run is not on this host,
+or is this Run or one it came out of, or ended with no merge request for that Change, or that
+merge request closed without merging. The Run then parks as a failed Step that names the Run,
+and resuming it reads the ticket again. A wait past 2 days parks as overdue, as any wait on a
+person does. See [ADR-draft-a-change-waits-on-another-runs-change-to-merge](adr/draft-a-change-waits-on-another-runs-change-to-merge.md).
 
 A plan is single-repository only when its tickets all say `.`, or carry no line at all, and
 are all in one Change. A plan whose tickets all name one repository _by path_ is not one of
@@ -394,8 +420,8 @@ its result names what each repository ended as.
   is recorded and shown on the Run, and the menu comes back; started directly, the start is
   refused with it before any Run is admitted. The same reading checks
   the tickets when the planner writes them, and a plan it refuses goes back to the planner
-  once, so most of these never reach the menu. The reasons are a cycle between Changes, a
-  `Change:` name git would refuse in a branch name or that names another repository, a
+  once, so most of these never reach the menu. The reasons are a cycle between Changes or
+  between one Change's tickets, a `Change:` name git would refuse in a branch name or that names another repository, a
   ticket with no `Repo:` line where its siblings have one, a repository with no checkout
   under the root — Collie does not clone — a `Repo:` that is not a path under the root, two
   tickets wearing one number, or a "Blocked by" line naming something that is not a ticket
@@ -698,8 +724,15 @@ Once ready, it asks **`go-<n>`**, naming the head and who approved it: **Release
 **Finish** for a package. For an application it offers **Stage the merge request** where
 the assessment named a stage deploy of its merge request pipelines, **Merge, tag and stage**
 where it named one of its tag pipelines, and **Finish**, and says what each does. Anyone
-may answer, from any door, and the answer is recorded with who gave it. **Finish** ends the
-Run with the merge request left open. Any other answer claims, in Helle, every project the
+may answer, from any door, and the answer is recorded with who gave it. A Release Run a
+human's own **Release** started — their answer to implement's **What next?**, or their
+taking a Run's **Release** offer, from the board, Desktop, a terminal or chat in their own
+words — asks no `go-<n>` while the head is the one the Run read at its start and nobody
+who had approved it then has withdrawn: that **Release** is the go, its first option is
+taken, and its log says `go <n>: the human's Release at <head> is the go, so nobody was
+asked`. A moved head or a withdrawn approval asks as above, and every wait before it stays
+([ADR-draft-a-humans-release-is-the-go-for-its-head](adr/draft-a-humans-release-is-the-go-for-its-head.md)).
+**Finish** ends the Run with the merge request left open. Any other answer claims, in Helle, every project the
 release deploys under, one at a time in a fixed order and each waited for — before it waits
 for one it does not hold, whether it lost it, or is resumed or tried again, it gives back
 the later ones it holds or is queued for, and takes them again in order — asking first to
@@ -1130,8 +1163,10 @@ recurs is filed on the forge of the checkout it runs in, or commented on the ope
 matches. Each finding cites a record that shows it, a journal line, a verification, a
 transcript or an issue, and never a Run's goal, summary or Output read back. Up to
 `improvements` groups of newly filed issues start as `plan` Runs that build
-themselves. Nobody is asked anything, and nothing is merged. See
-[Self-improve](using.md#self-improve).
+themselves. Nobody is asked anything, and nothing is merged. It also states the
+questions asked per landed merge request and the share of implement Runs that reached a
+merge request without failing, and files, with `runs=machine`, each question answered the
+same nine times in ten over ten answers. See [Self-improve](using.md#self-improve).
 
 **Ends:** once its Improvements have, with `summary.md` in its Run directory.
 
@@ -1173,9 +1208,10 @@ other checkout, or a URL, is refused at the start.
 With `from` naming an earlier tune-up Run, the Run does not discover again. It carries that
 Run's Discover Output and its latest benchmark plan, the last repair's where it made one and
 otherwise Harness's, and says so in its log. No Discover or Harness agent runs. It
-cherry-picks that plan's harness commits onto its own branch, skipping any whose files the
-branch already holds as that commit left them, so the branch is where Harness would have left
-it. A harness that an earlier Cleanup took off is put back, though its commits are in the
+cherry-picks onto its own branch the harness commits it lacks, by the rule the base tree
+uses: those after the longest run of them whose files the branch already holds as they left
+them, so the branch is where Harness would have left it, and a Cycle's base holding these
+copies is measured as it is. A harness that an earlier Cleanup took off is put back, though its commits are in the
 branch's history. A commit that does not apply fails
 the Run, naming it. A Run started this way can itself be named by a later `from`. A `from`
 with no Discover or Harness Output fails the Run, naming the files it looked for.
@@ -1355,3 +1391,31 @@ Review, Checks, Merge request and External report.
 Module: [`workflows/tune-up.workflow.ts`](../workflows/tune-up.workflow.ts), with its
 prompts in [`workflows/tune-up.md`](../workflows/tune-up.md) and its agent's Persona in
 [`personas/tuner.md`](../personas/tuner.md).
+
+## `heal`
+
+**For:** a parked Run Collie's own recovery could not move. You never start it: the host
+does, once per park, before the park would tell you it needs you. See
+[Stop and resume](cli.md#stop-and-resume) for when.
+
+**Input:** `run` and `park`, the parked Run and the park it is for.
+
+**What happens:** one healer reads everything about the parked Run (its record, its agents'
+panes and transcripts, its checks and pipeline), tells the agent that missed something what
+it missed, and resumes the Run. It never does the Run's work. The host refuses everything
+else from it: answering a Decision, lifting a Hold, undoing a Stop, taking an offer, and
+anything on another Run. Its resume applies only while the Run is still at the park the
+Heal was started for and neither it nor a Run under it has a Stop, checked as one change with any Stop. It returns `{ diagnosis, actions, result, needs_person, finding }`,
+where `result` is `resumed` or `escalate`, `needs_person` says why only a person can move
+the Run and is required with `escalate`, and `finding` is required: `collie_defect`, `key`,
+`root_cause`, `fix` and `regression`, stated for everyone who runs Collie. An Output without
+a finding, or an escalation without `needs_person`, is sent back for repair. The host judges the parked Run's facts, never `result`.
+
+The host finds it by its declaration, `heals: true`, never by its id; a project's fork that
+declares it replaces the shipped one.
+
+Its Flow forecasts one Step, Heal, which produces evidence.
+
+Module: [`workflows/heal.workflow.ts`](../workflows/heal.workflow.ts), with its prompt in
+[`workflows/heal.md`](../workflows/heal.md) and its agent's Persona in
+[`personas/healer.md`](../personas/healer.md).

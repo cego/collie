@@ -184,6 +184,10 @@ export interface Measures {
         /** Median ms to recovery, from the missing Output's turn end or the park; null where none. */
         readonly toRecover: number | null;
         readonly falseRecoveries?: number;
+        /** Heals that ended with the park sent to a person. */
+        readonly escalations?: number;
+        /** How long its Heals ran, in ms, all told: their usage, recorded and never enforced. */
+        readonly healMs?: number;
       }
     >;
   };
@@ -254,6 +258,8 @@ export function measuresOf(
       runs: string[];
       waits: number[];
       falseRecoveries: number;
+      escalations: number;
+      healMs: number;
     }
   >();
   const peakContext: Array<Measures["peakContext"][number]> = [];
@@ -281,6 +287,8 @@ export function measuresOf(
     for (const line of recoveriesIn(metrics)) {
       if (line.action === undefined) continue;
       if (line.action === "resumed" && line.outcome !== "resumed") continue;
+      if (line.action === "healed" && (line.outcome === "skipped" || line.outcome === "claimed"))
+        continue;
       const cause = line.cause ?? "unknown";
       const key = `${cause} ${line.action}`;
       const kept = recoveries.get(key) ?? {
@@ -289,10 +297,18 @@ export function measuresOf(
         runs: [],
         waits: [],
         falseRecoveries: 0,
+        escalations: 0,
+        healMs: 0,
       };
       recoveries.set(key, kept);
       kept.runs.push(runId);
       if (line.outcome === "output-written") kept.waits.push(line.value);
+      if (line.action === "healed" && line.outcome !== "started") {
+        kept.healMs += line.value;
+        if (line.outcome === "recovered") kept.waits.push(line.value);
+        else kept.escalations += 1;
+        if (line.outcome === "false-recovery") kept.falseRecoveries += 1;
+      }
       if (line.action === "resumed") {
         const claim =
           Option.getOrUndefined(
@@ -444,17 +460,25 @@ export function measuresOf(
     },
     recoveries: {
       byCause: Arr.sortWith(
-        Arr.map([...recoveries.values()], ({ cause, action, runs, waits, falseRecoveries }) => {
-          const result: Types.Mutable<Measures["recoveries"]["byCause"][number]> = {
-            cause,
-            action,
-            ...counted(runs),
-            recovered: waits.length,
-            toRecover: median(waits),
-          };
-          if (action === "resumed") result.falseRecoveries = falseRecoveries;
-          return result;
-        }),
+        Arr.map(
+          [...recoveries.values()],
+          ({ cause, action, runs, waits, falseRecoveries, escalations, healMs }) => {
+            const result: Types.Mutable<Measures["recoveries"]["byCause"][number]> = {
+              cause,
+              action,
+              ...counted(runs),
+              recovered: waits.length,
+              toRecover: median(waits),
+            };
+            if (action === "resumed" || action === "healed")
+              result.falseRecoveries = falseRecoveries;
+            if (action === "healed") {
+              result.escalations = escalations;
+              result.healMs = healMs;
+            }
+            return result;
+          },
+        ),
         (value) => value,
         (a, b) => Num.sign(b.count - a.count || pipe(a.cause, Str.localeCompare(b.cause))),
       ),

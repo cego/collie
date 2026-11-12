@@ -20,7 +20,7 @@ import type { Metrics } from "./board-model";
 import { epochMs } from "./time";
 import { ParkCause } from "./park-cause";
 
-export const RecoveryAction = Schema.Literals(["reminded", "rechecked", "resumed"]);
+export const RecoveryAction = Schema.Literals(["reminded", "rechecked", "resumed", "healed"]);
 export type RecoveryAction = typeof RecoveryAction.Type;
 export const RecoveryOutcome = Schema.Literals([
   "output-written",
@@ -31,8 +31,24 @@ export const RecoveryOutcome = Schema.Literals([
   "claimed",
   "resumed",
   "skipped",
+  "started",
+  "recovered",
+  "escalated",
+  "false-recovery",
+  "failed",
 ]);
 export type RecoveryOutcome = typeof RecoveryOutcome.Type;
+
+/** What a Heal found about Collie itself, stated for everyone who runs it. */
+export const HealFinding = Schema.Struct({
+  collie_defect: Schema.Boolean,
+  key: Schema.String,
+  root_cause: Schema.String,
+  /** The fix, or a new Park cause with its message or recheck. */
+  fix: Schema.String,
+  /** The test that would show it. */
+  regression: Schema.String,
+});
 
 export const MetricSchema = Schema.Struct({
   at: Schema.String,
@@ -62,6 +78,10 @@ export const MetricSchema = Schema.Struct({
   park: Schema.optionalKey(Schema.String),
   since: Schema.optionalKey(Schema.String),
   entries: Schema.optionalKey(Schema.Int),
+  /** The Heal Run a `healed` line is about. */
+  heal: Schema.optionalKey(Schema.String),
+  /** What a Heal found about Collie, as its Output said it. */
+  finding: Schema.optionalKey(HealFinding),
 });
 export type Metric = Schema.Schema.Type<typeof MetricSchema>;
 const MetricJson = Schema.fromJsonString(MetricSchema);

@@ -7,6 +7,7 @@ import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import {
   Clock,
+  DateTime,
   Deferred,
   type Duration,
   Effect,
@@ -30,10 +31,13 @@ import {
   TaskView,
   type BoardSnapshot,
   recordIn,
+  sectionOf,
 } from "../src/board-model";
+import { buildBoard } from "../src/board";
 import { boardMessages, shareBoard } from "../src/board-stream";
 import { recordDisposition } from "../src/disposition";
-import { currentEnv } from "../src/env";
+import { currentEnv, readEnv } from "../src/env";
+import { readLogTail } from "../src/run-log";
 import { Herdr } from "../src/herdr";
 import { BUILD, boardWrites, connect, frontDoor, socketOf } from "../src/host";
 import { drawerWrites } from "../src/record";
@@ -48,7 +52,7 @@ import { TestClock } from "effect/testing";
 import { fastForward, runEffect } from "./support/effect";
 import { stopHost, until } from "./support/host";
 import { task } from "./support/task";
-import { recordsAt } from "./support/records";
+import { madeRun, recordsAt } from "./support/records";
 import { collie, proves } from "./support/world";
 
 const asSessions = Schemaflow(
@@ -977,5 +981,67 @@ test("a Run's open drawer lists a handoff's new size while the board's watch let
       expect(yield* grown.pipe(Effect.timeoutOption("2 seconds"))).toEqual(Option.some(7));
       yield* write("tasks/marker.json");
       expect(yield* through(["tasks/marker.json"])).toEqual(Option.some(["tasks/marker.json"]));
+    }),
+  ));
+
+test("a client subscribed before a month-old card is read and pruned is told it is Removed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-board-pruned-" });
+      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" });
+      const now = yield* Clock.currentTimeMillis;
+      const monthAgo = DateTime.makeUnsafe(now - 30 * 86_400_000);
+      const run = yield* madeRun(dir, {
+        id: "r-old",
+        task: "task-1",
+        state: "failed",
+        branch: "mk/old-work",
+        created: DateTime.formatIso(monthAgo),
+      });
+      yield* fs.writeFileString(`${run.dir}/log.txt`, "started\n");
+      yield* fs.utimes(
+        `${run.dir}/log.txt`,
+        DateTime.toDateUtc(monthAgo),
+        DateTime.toDateUtc(monthAgo),
+      );
+      const model = yield* makeRunModel(dir, "installation");
+      const cards = { revision: model.highest, kept: new Map(), markers: new Map() };
+      const build = Effect.gen(function* () {
+        yield* model.observe([run]);
+        return yield* buildBoard({
+          env,
+          runs: [run],
+          tasks: [],
+          registered: [],
+          proposals: [],
+          mrStates: new Map(),
+          cards,
+        }).pipe(Effect.provideService(FileSystem.FileSystem, model.reading));
+      });
+      const { boards } = yield* shareBoard({ build, changed: boardWrites(dir, model) });
+      const told = yield* Queue.unbounded<BoardMessage>();
+      yield* boardMessages({
+        head: { installation: "installation", build: BUILD, protocol: PROTOCOL, herds: [] },
+        boards,
+      }).pipe(
+        Stream.runForEach((message) => Queue.offer(told, message)),
+        Effect.forkScoped,
+      );
+      const first = yield* Queue.take(told);
+      const card = first._tag === "Snapshot" ? first.tasks[0] : undefined;
+      expect(card && sectionOf(card)).toBe("waiting");
+
+      yield* readLogTail(run.dir, 4096);
+      yield* recordDisposition(run.dir, {
+        kind: "abandoned",
+        ref: "",
+        at: DateTime.formatIso(DateTime.makeUnsafe(now)),
+        by: "human",
+        note: null,
+      });
+
+      const next = yield* Queue.take(told).pipe(Effect.timeout("10 seconds"));
+      expect(next).toMatchObject({ _tag: "Remove", id: card!.id });
     }),
   ));

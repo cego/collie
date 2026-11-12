@@ -58,7 +58,7 @@ const project = Effect.gen(function* () {
   const harness = yield* commit("harness");
   yield* write("value", "7\n");
   yield* commit("product");
-  return { root, repo, base, harness, write, commit };
+  return { root, repo, base, harness, git, write, commit };
 });
 
 const planOf = (harness: string, commands: Plan["commands"], more: Partial<Plan> = {}): Plan => ({
@@ -322,6 +322,156 @@ test(
           Option.getOrUndefined(Arr.findFirst(again.samples, (one) => one.tree === "base"))
             ?.readings["bench.counter"],
         ).toBe(10);
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "a base that already holds its repaired harness is sampled as it is, with nothing applied",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { root, repo, harness, write, commit } = yield* project;
+        yield* exec(["git", "reset", "-q", "--hard", harness], { cwd: repo });
+        yield* write("bench/bench.sh", 'echo "{\\"counter\\": $(( $(cat value) * 2 ))}"\n');
+        const repair = yield* commit("repair");
+        yield* write("value", "7\n");
+        yield* commit("product");
+        const plan = planOf(harness, sh("bench.sh"), {
+          harness: { commits: [harness, repair], paths: ["bench"] },
+        });
+        const measured = yield* measuring(root, { base: repair, cwd: repo, plan });
+        expect(resultOf(measured)._tag).toBe("Judged");
+        expect(measured.base.commit).toBe(repair);
+        expect(measured.base.head_sha).toBe(repair);
+        const readings = (tree: string) =>
+          Arr.map(
+            Arr.filter(measured.samples, (one) => one.tree === tree),
+            (one) => one.readings["bench.counter"],
+          );
+        expect(readings("base")).toEqual([20, 20]);
+        expect(readings("candidate")).toEqual([14, 14]);
+      }),
+    ),
+  30_000,
+);
+
+const DOUBLED = 'echo "{\\"counter\\": $(( $(cat value) * 2 ))}"\n';
+
+/**
+ * The harness repaired, with a rename and a deletion, the plan naming both, and the repo on a
+ * commit after `base` without them.
+ */
+const repairedProject = Effect.gen(function* () {
+  const { root, repo, base, harness, write, commit } = yield* project;
+  const git = (...args: ReadonlyArray<string>) =>
+    exec(["git", "-c", "user.name=t", "-c", "user.email=t@example.test", ...args], { cwd: repo });
+  yield* git("reset", "-q", "--hard", harness);
+  yield* write("bench/bench.sh", DOUBLED);
+  yield* git("mv", "bench/slow.sh", "bench/slower.sh");
+  yield* git("rm", "-q", "bench/marks.sh");
+  const repair = yield* commit("repair");
+  yield* git("reset", "-q", "--hard", base);
+  // So a copy cannot come out with its original's SHA.
+  yield* write("upstream", "moved on\n");
+  yield* commit("the default branch moves on");
+  const plan = planOf(harness, sh("bench.sh"), {
+    harness: { commits: [harness, repair], paths: ["bench"] },
+  });
+  const readings = (measured: Measurement, tree: string) =>
+    Arr.map(
+      Arr.filter(measured.samples, (one) => one.tree === tree),
+      (one) => one.readings["bench.counter"],
+    );
+  return { root, repo, base, harness, repair, plan, git, write, commit, readings };
+});
+
+for (const squashed of [false, true])
+  test(
+    `a base that holds ${squashed ? "one squashed commit" : "carried copies"} of its repaired harness, under other SHAs, is sampled as it is`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { root, repo, harness, repair, plan, git, write, commit, readings } =
+            yield* repairedProject;
+          if (squashed) yield* git("merge", "--squash", repair);
+          else yield* git("cherry-pick", harness, repair);
+          const carried = squashed
+            ? yield* commit("squashed")
+            : Str.trim((yield* git("rev-parse", "HEAD")).stdout);
+          yield* write("value", "7\n");
+          yield* commit("product");
+          const measured = yield* measuring(root, { base: carried, cwd: repo, plan });
+          expect(resultOf(measured)._tag).toBe("Judged");
+          expect(measured.base.head_sha).toBe(carried);
+          expect(readings(measured, "base")).toEqual([20, 20]);
+          expect(readings(measured, "candidate")).toEqual([14, 14]);
+        }),
+      ),
+    30_000,
+  );
+
+test(
+  "a base that holds a copy of only the first harness commit gets the rest applied",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { root, repo, harness, plan, git, write, commit, readings } = yield* repairedProject;
+        yield* git("cherry-pick", harness);
+        const carried = Str.trim((yield* git("rev-parse", "HEAD")).stdout);
+        yield* write("value", "7\n");
+        yield* commit("product");
+        const measured = yield* measuring(root, { base: carried, cwd: repo, plan });
+        expect(resultOf(measured)._tag).toBe("Judged");
+        const applied = yield* git("rev-list", "--count", `${carried}..${measured.base.head_sha}`);
+        expect(Str.trim(applied.stdout)).toBe("1");
+        expect(readings(measured, "base")).toEqual([20, 20]);
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "a base whose own edit to a script the harness edits merges cleanly is refused, not sampled with that edit",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { root, repo, base, git, write, commit } = yield* project;
+        yield* git("reset", "-q", "--hard", base);
+        yield* exec(["mkdir", "bench"], { cwd: repo });
+        const script = (first: string, last: string) =>
+          write("bench/edited.sh", `${first}\n:\n:\n:\n:\n${last}\n`);
+        yield* script("x=1", 'echo "{\\"counter\\": $(cat value)}"');
+        const before = yield* commit("a benchmark script before the harness");
+        yield* script("x=2", 'echo "{\\"counter\\": $(cat value)}"');
+        const harness = yield* commit("harness");
+        yield* git("reset", "-q", "--hard", before);
+        yield* script("x=1", "echo '{\"counter\": 1}'");
+        const diverged = yield* commit("an edit the plan never wrote");
+        yield* write("value", "7\n");
+        yield* commit("product");
+        const plan = planOf(harness, sh("edited.sh"));
+        const refused = yield* Effect.flip(measuring(root, { base: diverged, cwd: repo, plan }));
+        expect(refused.why).toContain(`the harness commits do not apply on ${diverged}`);
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "a base whose history holds the harness but whose harness files were changed since is refused, not sampled as holding it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { root, repo, repair, plan, git, write, commit } = yield* repairedProject;
+        yield* git("reset", "-q", "--hard", repair);
+        yield* write("bench/bench.sh", 'echo "{\\"counter\\": 1}"\n');
+        const changed = yield* commit("an edit outside the plan");
+        yield* write("value", "7\n");
+        yield* commit("product");
+        const refused = yield* Effect.flip(measuring(root, { base: changed, cwd: repo, plan }));
+        expect(refused.why).toContain(`the harness commits do not apply on ${changed}`);
       }),
     ),
   30_000,

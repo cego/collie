@@ -294,7 +294,15 @@ Run ended, `bodil remote down <name>` takes the instance down once you are done 
 4. Where anything was inferred, one row says where the run starts and each Input as
    `name = value (inferred from …)` or `(given)`: Enter starts it, Esc starts nothing. A
    start with nothing inferred starts at once. The run records which Inputs were inferred,
-   and `collie run show` lists each with where it came from.
+   and `collie run show` lists each with where it came from. A workflow with a
+   [Reach](../CONTEXT.md) — how far it goes before it asks, `plan`'s and `implement`'s
+   `then` — offers one such row per choice instead, even with nothing inferred: `plan`
+   **Ask when the plan is written** or **Build it**, `implement` **Ask at the merge
+   request**, **End at the merge request** or **Release it**. The row you start from is
+   remembered for that workflow in that project, or for the Projects root where the start is
+   rooted there, across the Flock, and offered first next
+   time; with nothing remembered the first row asks, as before. Telling chat to start one
+   does the same: it passes how far you said, else the remembered choice.
 5. The run's card appears on the [Control Plane](#the-control-plane).
 6. The run's own tabs hold agents and nothing else: one tab per agent it starts, labelled
    with the agent's role — `implementer`, `reviewer` — in the order they started, each
@@ -302,8 +310,10 @@ Run ended, `bodil remote down <name>` takes the instance down once you are done 
    nothing. The label carries no state: the run's card on the board says what it is doing,
    and herdr's own agent-status column says what each agent is.
 7. `plan`, `architecture`, `review` and `implement` end in a question — **What next?** —
-   answered from the run's card's answer menu, with `collie run answer`, or in chat. Launching asks nothing about it: a
-   question is asked when the run reaches it, so you decide with the work in front of you.
+   answered from the run's card's answer menu, with `collie run answer`, or in chat, unless
+   the start said how far it goes: **Build it** and **End at the merge request** or
+   **Release it** answer it at launch. Otherwise a question is asked when the run reaches
+   it, so you decide with the work in front of you.
    `collie run resume <id>` asks the host to pick a run that is still going back up.
 
 The same operations are available without opening UI, which is how an agent drives Collie:
@@ -680,7 +690,14 @@ more line naming its [**Park cause**](../CONTEXT.md) and what that cause lets Co
 section adds why a person is needed; `collie run show` gives the same as `park` with its
 `cause` and `kind`. Recheck parks stay quiet while Collie checks their facts and resumes
 those whose cause clears. After three automatic tries for the same cause, another park
-needs you and lists the tries. A card keeps its latest two recovery actions, and the drawer's
+needs you and lists the tries. Before a park tells you it needs you, the host first starts
+one **Heal**, a Run of the [`heal`](workflows.md#heal) workflow whose agent may only message
+the parked Run's own agents and resume it. While it runs the line reads
+`Parked: output-absent · being healed by run-1a2b3c4d` and nobody is notified; you hear once,
+`run-healed` when it got the Run moving, or `needs-you` with its diagnosis, what it tried and
+why a person is needed when it could not. A Run with a Decision, Hold or Stop, a cause only a
+person can act on such as a missing login, and a Heal's own park go to you at once.
+`collie settings set recovery.heal false` sends every such park to you at once. A card keeps its latest two recovery actions, and the drawer's
 **recovery** section keeps the latest 20, including after the Run moves on. A park that needs
 you is notified once per cause. You can turn automatic resume off with
 `collie settings set recovery.resume false`; rechecks continue. See
@@ -741,6 +758,9 @@ abandoned, or superseded while closed or by a Run of another Task; a plan with a
 disposition; or nothing to file at all — as one line, `3 finished today,
 1 failed`, until you click it open; anything older than a day is behind `older…`, which
 reads it from this checkout's history rather than carding every Run Collie has ever kept.
+The day counts from when the Task's Runs last worked: opening a record, or recording what
+became of the work, is not work, so a month-old Task marked abandoned today goes straight
+behind `older…`.
 Only landed work goes behind `older…`: a Task that still owes a merge request stays on the
 board however old it is.
 An **Unseen** card — a Run that ended by itself with a report and nothing to land, which
@@ -3121,7 +3141,8 @@ holds or delays work: only an agent that may still be writing does.
 `notifications` turns a kind of toast off: `{"run-done": false}`, and a kind left out is on.
 The host raises one when a run finishes (`run-done`), fails (`run-failed`), asks you
 something or parks until you act (`needs-you`, as where an agent's Output could not be used
-after its repair), or records a merge request it opened
+after its repair), gets a parked run moving through a Heal before it needed you
+(`run-healed`), or records a merge request it opened
 (`mr-opened`); when a card is something you could go and try (`slice-ready`); and when
 Collie corrects a run's drift by itself (`correction-sent`) or gives up on it
 (`drift-unresolved`) — each once per run and thing, however often the work is replayed or
@@ -3736,12 +3757,20 @@ triage is told: a Collie fix counts as already fixed only where its commit is in
 release's tag, so a fix merged but not yet installed leaves the finding filed or commented
 on as a recurrence.
 
-It waits for its Improvements, then writes `summary.md` in its Run directory: each issue
-filed or commented, by category; each Improvement's Run and how it ended; and each finding
+It measures the questions its window's Runs asked, computed from the report rather than
+judged by the agent: how many were asked per merge request that landed in the window, and
+how many implement Runs reached a merge request without failing, of those that reached one
+or ended. A class of question — one workflow's question by its name, however many times a
+Run numbers it — answered the same at least nine times in ten over at least ten answers is
+a `defect` finding, `repeated-answer-<workflow>-<question>`: Collie asks what it already
+knows. Like any `defect`, it is filed only with `runs=machine`.
+
+It waits for its Improvements, then writes `summary.md` in its Run directory: those two
+question measures; each issue filed or commented, by category; each Improvement's Run and how it ended; and each finding
 left out, with why. An Improvement that fails is listed there, and the Run still succeeds.
 Beside it, `improvements.json` keeps each Improvement's name, issues and how it ended.
-When the forge cannot be read, the retrospective still runs and `summary.md` keeps its
-findings, evidence and proposed improvements, with the reason nothing was filed. No issue,
+When the forge cannot be read, the retrospective still runs and `summary.md` keeps the
+question measures, its findings, evidence and proposed improvements, with the reason nothing was filed. No issue,
 comment or Improvement is started on that path.
 
 An Improvement that failed to start, because its issues could not be read back, is started

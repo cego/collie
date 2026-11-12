@@ -527,7 +527,7 @@ export function App(props: AppProps) {
             columns={columns()}
             header={header()}
             usage={usage()}
-            newer={props.state().board.newer ?? null}
+            newer={props.state().newer ?? null}
             logo={props.logo ?? null}
             query={query()}
             searching={searching()}

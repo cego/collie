@@ -1,13 +1,16 @@
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { Clock, Config, Duration, Effect, Schedule, Schema } from "effect";
 import type { RunView } from "./engine";
 import type { PluginEnv } from "./env";
 import { configValue, readConfig } from "./config";
 import { appendMetric, readMetrics, recoveriesIn, type Metric } from "./metrics";
 import { recheckPark } from "./park-recheck";
-import { PARK_CAUSES } from "./park-cause";
+import { PARK_CAUSES, healInFlight } from "./park-cause";
 import type { Herdr } from "./herdr";
+import type { NotificationKind } from "./notify";
+import { HealOutput, healOn, healerFor } from "./heal";
 import manifest from "../herdr-plugin.toml";
 import { currentPid, signalProcess } from "./lock";
 import { machineMemory } from "./memory";
@@ -37,6 +40,30 @@ export const canRecover = (view: RunView) =>
       isSetAside(view.waiting, one) ||
       (one.asker != null && one.answer === null),
   );
+
+/** Raises, or clears, the one News item saying recovery keeps failing on this Machine. */
+export const recoveryFailing = (
+  env: PluginEnv,
+  herdr: Herdr,
+  failing: { readonly run: string; readonly text: string } | null,
+) =>
+  Effect.gen(function* () {
+    const own = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
+    const herds = yield* liveHerds(herdr, env).pipe(Effect.orElseSucceed(() => []));
+    const key = `recovery-failing:${machineName()}`;
+    for (const herd of new Set([own, ...Arr.map(herds, (one) => one.herd)])) {
+      if (herd === null) continue;
+      const file = yield* newsPath(env.stateDir, herd);
+      if (failing !== null)
+        yield* appendNews(file, {
+          key,
+          run: failing.run,
+          text: failing.text,
+          significance: "consequential",
+        });
+      else yield* supersede(file, (item) => item.key !== key);
+    }
+  });
 
 export const recoverParks = <E, R>(opts: {
   readonly env: PluginEnv;
@@ -69,21 +96,16 @@ export const recoverParks = <E, R>(opts: {
         yield* appendJournal(roundsFile, RoundJson, { at: yield* nowIso, failed });
         failures = failed ? failures + 1 : 0;
         if (failed && failures < 3) return;
-        const own = yield* machineHerd(opts.env).pipe(Effect.orElseSucceed(() => null));
-        const herds = yield* liveHerds(opts.herdr, opts.env).pipe(Effect.orElseSucceed(() => []));
-        const key = `recovery-failing:${machineName()}`;
-        for (const herd of new Set([own, ...Arr.map(herds, (one) => one.herd)])) {
-          if (herd === null) continue;
-          const file = yield* newsPath(opts.env.stateDir, herd);
-          if (failed)
-            yield* appendNews(file, {
-              key,
-              run,
-              text: `Recovery is failing on ${machineName()}: ${failures} recheck rounds failed in a row. Runs are waiting for people.`,
-              significance: "consequential",
-            });
-          else yield* supersede(file, (item) => item.key !== key);
-        }
+        yield* recoveryFailing(
+          opts.env,
+          opts.herdr,
+          failed
+            ? {
+                run,
+                text: `Recovery is failing on ${machineName()}: ${failures} recheck rounds failed in a row. Runs are waiting for people.`,
+              }
+            : null,
+        );
       });
     yield* Effect.sleep(every);
     yield* Effect.gen(function* () {
@@ -226,6 +248,203 @@ export const recoverParks = <E, R>(opts: {
           Effect.ignore,
         ),
       ),
+      Effect.repeat(Schedule.spaced(every)),
+    );
+  });
+
+/** Whether a park, as its Run reads now, is still the one a Heal was asked about. */
+const stillParked = (view: RunView, claim: Metric) =>
+  view.status.status !== "complete" &&
+  view.park != null &&
+  (view.park.id === claim.park || view.park.cause === claim.cause);
+
+const unsettled = (view: RunView) =>
+  (view.status.status === "pending" || view.status.status === "suspended") &&
+  view.parked === null &&
+  !view.controls.includes("stop");
+
+const waitsOnYou = (view: RunView) =>
+  view.controls.length > 0 || Arr.some(view.waiting, (one) => one.answer === null);
+
+const said = (output: HealOutput | null, heal: string) =>
+  output === null
+    ? `Its Heal ${heal} wrote nothing Collie could read.`
+    : Arr.join(
+        [
+          `Its Heal ${heal} found: ${output.diagnosis}`,
+          `It tried: ${output.actions.length === 0 ? "nothing" : Arr.join(output.actions, "; ")}.`,
+          ...(output.needs_person === undefined
+            ? []
+            : [`A person is needed: ${output.needs_person}`]),
+        ],
+        "\n",
+      );
+
+export const healParks = <E, R, E2, R2>(opts: {
+  readonly env: PluginEnv;
+  readonly herdr: Herdr;
+  readonly views: Effect.Effect<ReadonlyArray<RunView>, E, R>;
+  /** Starts the healer for a park under its claim; the Heal's Run id. */
+  readonly start: (
+    view: RunView,
+    healer: string,
+    request: string,
+    park: string,
+  ) => Effect.Effect<string, E2, R2>;
+  readonly notify: (
+    runId: string,
+    kind: NotificationKind,
+    body: string,
+    key: string,
+  ) => Effect.Effect<void>;
+}) =>
+  Effect.gen(function* () {
+    const every = yield* Config.Duration("COLLIE_RECOVERY_EVERY").pipe(
+      Config.withDefault(Duration.minutes(1)),
+    );
+    const crashAt = yield* Config.String("COLLIE_RECOVERY_CRASH_AT").pipe(Config.withDefault(""));
+    const evidence = (run: string) => `${opts.env.stateDir}/evidence/${run}`;
+    const close = (view: RunView, claim: Metric, line: Partial<Metric>) =>
+      Effect.gen(function* () {
+        const closed = { ...claim, at: yield* nowIso, build: manifest.version, ...line };
+        yield* appendMetric(evidence(view.runId), closed);
+        return closed;
+      });
+    /** Three judged Heals in a row that failed say so once, until one does not. */
+    const noteFailures = (judged: ReadonlyArray<Metric>) =>
+      Effect.gen(function* () {
+        const ended = Arr.filter(
+          judged,
+          (line) => line.action === "healed" && !healInFlight(line) && line.outcome !== "skipped",
+        ).sort((a, b) => Str.localeCompare(b.at)(a.at));
+        const last = ended.slice(-3);
+        if (last.length === 0) return;
+        const failing = last.length === 3 && Arr.every(last, (line) => line.outcome === "failed");
+        if (failing || last.at(-1)?.outcome !== "failed")
+          yield* recoveryFailing(
+            opts.env,
+            opts.herdr,
+            failing
+              ? {
+                  run: last.at(-1)!.subject,
+                  text: `Recovery is failing on ${machineName()}: 3 Heals failed in a row. Runs are waiting for people.`,
+                }
+              : null,
+          );
+      });
+    yield* Effect.gen(function* () {
+      const views = yield* opts.views;
+      const byId = new Map(Arr.map(views, (view) => [view.runId, view] as const));
+      const claims: Array<{ view: RunView; claim: Metric }> = [];
+      const all: Array<Metric> = [];
+      let judged = false;
+      // Only a Heal its claim names: one started before a crash recorded it is taken up again.
+      let flying = false;
+      for (const view of views) {
+        const lines = recoveriesIn(yield* readMetrics(evidence(view.runId)));
+        all.push(...lines);
+        for (const claim of Arr.filter(lines, healInFlight)) {
+          if (claim.outcome === "claimed") {
+            claims.push({ view, claim });
+            continue;
+          }
+          const heal = byId.get(claim.heal ?? "");
+          if (heal !== undefined && unsettled(heal)) {
+            flying = true;
+            continue;
+          }
+          judged = true;
+          const ended = yield* Clock.currentTimeMillis;
+          const took = { value: Math.max(0, ended - epochMs(heal?.created ?? claim.at)) };
+          if (heal === undefined || heal.status.status !== "complete") {
+            const why =
+              heal?.parked ??
+              (heal?.status.status === "failed" ? heal.status.reason : "it was stopped");
+            all.push(yield* close(view, claim, { ...took, outcome: "failed", note: why }));
+            yield* opts.notify(
+              view.runId,
+              "needs-you",
+              `${view.parked ?? "It parked"}\nIts Heal ${claim.heal} could not finish: ${why}`,
+              `heal:${claim.park}`,
+            );
+            continue;
+          }
+          const output = Option.getOrNull(
+            Schema.decodeUnknownOption(HealOutput)(heal.status.value),
+          );
+          const finding = output === null ? {} : { finding: output.finding };
+          const words = said(output, heal.runId);
+          if (!stillParked(view, claim)) {
+            all.push(
+              yield* close(view, claim, {
+                ...took,
+                ...finding,
+                outcome: "recovered",
+                note: output?.diagnosis ?? "",
+              }),
+            );
+            yield* opts.notify(view.runId, "run-healed", words, `heal:${claim.park}`);
+            continue;
+          }
+          all.push(
+            yield* close(view, claim, {
+              ...took,
+              ...finding,
+              outcome: output?.result === "resumed" ? "false-recovery" : "escalated",
+              note: words,
+            }),
+          );
+          yield* opts.notify(
+            view.runId,
+            "needs-you",
+            `${view.parked ?? ""}\n${words}`,
+            `heal:${claim.park}`,
+          );
+        }
+      }
+      if (judged) yield* noteFailures(recoveriesIn(all));
+      if (flying || claims.length === 0 || (yield* machineMemory(opts.env)).short) return;
+      // Read after the claims, so a claim's park, written before it, is in what is read.
+      const now = new Map(Arr.map(yield* opts.views, (view) => [view.runId, view] as const));
+      for (const { view, claim } of claims.sort((a, b) =>
+        Str.localeCompare(b.claim.at)(a.claim.at),
+      )) {
+        const current = now.get(view.runId) ?? view;
+        if (!stillParked(current, claim)) {
+          yield* close(current, claim, {
+            outcome: "skipped",
+            note: "the Run left its park before its Heal started",
+          });
+          continue;
+        }
+        if (waitsOnYou(current)) continue;
+        const healer = (yield* healOn(opts.env.userDir))
+          ? yield* healerFor(opts.env, current.project)
+          : null;
+        if (healer === null) {
+          yield* close(current, claim, {
+            outcome: "skipped",
+            note: "recovery.heal is off, or no workflow declares itself the healer",
+          });
+          yield* opts.notify(
+            current.runId,
+            "needs-you",
+            current.parked ?? "",
+            `parked:${claim.cause}`,
+          );
+          continue;
+        }
+        const heal = yield* opts.start(current, healer.id, claim.recoveryId!, claim.park!);
+        if (crashAt === "heal-claimed") yield* signalProcess(yield* currentPid, "SIGKILL");
+        yield* close(current, claim, {
+          outcome: "started",
+          heal,
+          at: isoAt(yield* Clock.currentTimeMillis),
+        });
+        return;
+      }
+    }).pipe(
+      Effect.catchCause((cause) => Effect.logWarning("heal round failed", cause)),
       Effect.repeat(Schedule.spaced(every)),
     );
   });

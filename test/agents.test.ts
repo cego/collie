@@ -1775,14 +1775,11 @@ test(
           /and again after each of 2 reminders, sent \d{4}-\d\d-\d\dT\S+ and \d{4}-\d\d-\d\dT\S+\./,
         );
         expect(yield* read(outputPath("r1"))).toBe("");
-        const recoveries = Arr.filter(
+        const reminded = Arr.filter(
           yield* readMetrics(evidenceDir(dir, "r1")),
-          (line) => line.kind === "recovery",
+          (line) => line.kind === "recovery" && line.action === "reminded",
         );
-        expect(Arr.map(recoveries, (line) => [line.action, line.outcome])).toEqual([
-          ["reminded", "still-absent"],
-          ["reminded", "still-absent"],
-        ]);
+        expect(Arr.map(reminded, (line) => line.outcome)).toEqual(["still-absent", "still-absent"]);
       }),
     ),
   60_000,

@@ -324,6 +324,10 @@ test(
     runEffect(
       Effect.gen(function* () {
         const { wf, state } = yield* workspace("collie-engine-toolchain-");
+        const fs = yield* FileSystem.FileSystem;
+        // Here alone: a healer in every workspace would heal the other tests' parks.
+        for (const name of ["heal.workflow.ts", "heal.md"])
+          yield* fs.copyFile(`${root}workflows/${name}`, `${wf}/${name}`).pipe(Effect.orDie);
         const host = yield* openHost(state);
 
         // Before provisioning there is no compiler, and that is what it says rather than
@@ -380,6 +384,7 @@ test(
           "general",
           // Its benchmark plan is built from the declared schema's fields.
           "tune-up",
+          "heal",
         ];
         const checked = yield* host.ask({
           op: "checks",
