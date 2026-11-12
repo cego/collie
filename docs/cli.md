@@ -655,7 +655,8 @@ written, with nothing asked of anyone; empty, its end menu is asked
 `recovery=` empty for new work; an explicit follow-up supplies the finished Run it recovers.
 `then=release` releases
 its merge request on a human's go, `finish` ends at the merge request, and empty asks
-([`implement`](workflows.md#implement)).
+([`implement`](workflows.md#implement)). A typed start neither reads nor saves the
+[Reach](../CONTEXT.md) the board and chat remember: what `--input then=` says is all it goes by.
 
 A start that leaves anything out comes back as `needs_input`, one entry per missing field:
 what it means (the field's own description, else what its strategy is) and the facts that

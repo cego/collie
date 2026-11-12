@@ -227,7 +227,10 @@ export default defineWorkflow({
     goal: Schema.String,
     // oxlint-disable-next-line unicorn/no-thenable -- The workflow input selects the next step using string values.
     then: Schema.optionalKey(
-      Schema.Literals(["", "implement"]).annotate({
+      Schema.Union([
+        Schema.Literal("").annotate({ title: "Ask when the plan is written" }),
+        Schema.Literal("implement").annotate({ title: "Build it" }),
+      ]).annotate({
         description:
           "implement to build the plan as soon as it is written, with nobody asked anything; empty to be asked what next",
       }),
@@ -242,7 +245,8 @@ export default defineWorkflow({
     effort: "high",
     roles: { reviewer: { harness: "claude", model: "opus", effort: "high" } },
   },
-  hints: { goal: "goal" },
+  // oxlint-disable-next-line unicorn/no-thenable -- the Input is named `then`
+  hints: { goal: "goal", then: "reach" },
   path: [grill, spec, tickets, menu],
   // A plan proves it wrote tickets; nobody chooses that, so it is fixed rather than asked.
   outcome: { fixed: "plan" },

@@ -294,7 +294,7 @@ test(
           );
         expect(inputsOf((yield* cli(["--json", "workflow", "show", "plan"])).stdout)).toEqual([
           ["goal", "goal"],
-          ["then", null],
+          ["then", "reach"],
         ]);
         expect(
           inputsOf((yield* cli(["--json", "workflow", "show", "architecture"])).stdout),

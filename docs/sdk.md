@@ -1746,7 +1746,10 @@ export default defineWorkflow({
   and in a recorded Run), and a module with inputs hints exactly one
   field with one of them ([one launch Input](authoring.md#writing-one)). They are exclusive: one field each, so renaming `plan` to `spec` changes
   nothing about how it is inferred, what it names a branch after, which label its Run is
-  listed under, or which previous review it is given.
+  listed under, or which previous review it is given. `reach` marks the field that says how
+  far the Run goes before it asks, its [Reach](../CONTEXT.md): a closed set whose values each
+  carry a `title`, as `Schema.Union([Schema.Literal("").annotate({ title: "Ask at the end" }),
+  …])`, which the board's start row offers one row each and remembers.
 - **`outcome`** is `fixed` or `selectable`, never both. `selectable` offers only the kinds
   a human may ask an implement Run for — `review` and `plan` are what a workflow proves.
 - **`checkout`** is what the workflow needs of the repository. `branch` builds on a

@@ -314,7 +314,11 @@ export default defineWorkflow({
     ),
     // oxlint-disable-next-line unicorn/no-thenable -- The workflow input selects the next step using string values.
     then: Schema.optionalKey(
-      Schema.Literals(["", "finish", "release"]).annotate({
+      Schema.Union([
+        Schema.Literal("").annotate({ title: "Ask at the merge request" }),
+        Schema.Literal("finish").annotate({ title: "End at the merge request" }),
+        Schema.Literal("release").annotate({ title: "Release it" }),
+      ]).annotate({
         description:
           "What follows the merge request: finish to end there, release to release it on a human's go, empty to be asked",
       }),
@@ -322,7 +326,8 @@ export default defineWorkflow({
   }),
   output: Schema.String,
   agents: { roles: { implementer: IMPLEMENTER, reviewer: REVIEWER } },
-  hints: { plan: "work-source" },
+  // oxlint-disable-next-line unicorn/no-thenable -- the Input is named `then`
+  hints: { plan: "work-source", then: "reach" },
   path: [building, reviewRound, gate, mergeRequest, next],
   // The branch it builds, on a worktree of its own, so two Runs never share an index.
   checkout: "branch",

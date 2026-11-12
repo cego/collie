@@ -33,8 +33,10 @@ issue id or URL goes in the goal, alone or with your words around it: the planne
 it first. The goal is the only launch question, and the end menu is asked when the plan is
 written rather than before it exists.
 
-`then` is `implement` or empty. The Launch flow leaves it empty; an agent's start gives it,
-`--input then=` where unused. With `then=implement` nobody is asked anything: each prompt
+`then` is `implement` or empty, and is plan's [Reach](../CONTEXT.md): the board's start row
+offers **Ask when the plan is written** (empty) and **Build it** (`implement`), the one the
+last launch of `plan` in that project chose first. An agent's start gives it, `--input then=`
+where unused. With `then=implement` nobody is asked anything: each prompt
 tells the planner that nobody is watching, so it decides what is open and records it under
 `decided`, and it writes nothing in its checkout: each glossary or ADR change it decides goes
 into the ticket that needs it, for that ticket's build to land. The end menu is skipped for
@@ -113,8 +115,11 @@ parent of a fan-out, which sets them on each Change's run; `stacked` names the C
 same repository a run is cut from. See [Plans that span repositories](#plans-that-span-repositories).
 
 `then` says what follows the merge request: `finish` ends there, `release` releases it, and
-empty, the default, asks (see **Ends:**). A start nobody attends passes `finish`: plan's
-`then=implement`, and so a Self-improve Run's Improvements, and each Change run of a fan-out.
+empty, the default, asks (see **Ends:**). It is implement's [Reach](../CONTEXT.md): the
+board's start row offers **Ask at the merge request**, **End at the merge request** and
+**Release it**, the one the last launch of `implement` in that project chose first. A start
+nobody attends passes `finish`: plan's `then=implement`, and so a Self-improve Run's
+Improvements, and each Change run of a fan-out.
 
 **Branch:** named after the work, not the path to it — an explicit `--input branch=`, else
 the reviewed branch, else the source branch of an open merge request the work names, else

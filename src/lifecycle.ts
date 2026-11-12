@@ -36,6 +36,7 @@ import type { ChildProcessSpawner } from "effect/process";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
 import type { PluginEnv } from "./env";
 import { savedModules, type Fault, type Found } from "./discovery";
+import { LAUNCH_DOORS, reachKey, reachOf } from "./reach";
 import {
   connect,
   connectPeer,
@@ -92,7 +93,16 @@ import {
   type RunView,
 } from "./engine";
 import type { OfferView } from "./board-model";
-import { err, ExpectedError, HostUnread, taskFor, type Failure, type OpResult } from "./operations";
+import {
+  err,
+  ExpectedError,
+  HostUnread,
+  newRequestId,
+  taskFor,
+  type Failure,
+  type OpResult,
+} from "./operations";
+import { nowIso } from "./time";
 import { voiceOf, type Asker, type ProposalLine } from "./proposals";
 import type { TaskChoice, TaskRecord } from "./task";
 import { encodeApprovedFile, rememberedFile, renderApproved, type VerifySpec } from "./verify-spec";
@@ -606,7 +616,7 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
     options.options?.workspace === PROJECTS_ROOT_OPTION && !elsewhere
       ? (yield* projectsRoot(env)).path
       : undefined;
-  return yield* asks(
+  const started = yield* asks(
     env,
     (client) =>
       client.start({
@@ -640,6 +650,38 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
         : answered,
     ),
   );
+  if (started.ok && !elsewhere)
+    yield* rememberReach(env, options.door, options.id, options.input.text);
+  return started;
+});
+
+/** The project a launch's reach is remembered for: its remote, or the directory without one. */
+export const launchProject = (cwd: string) =>
+  projectHere(cwd, shell).pipe(
+    Effect.map((project) => project ?? cwd),
+    Effect.orElseSucceed(() => cwd),
+  );
+
+/** A launch door's choice of how far the Run goes, saved as what its next launch offers first. */
+const rememberReach = Effect.fn("Lifecycle.rememberReach")(function* (
+  env: PluginEnv,
+  door: Door,
+  workflow: string,
+  text: Readonly<Record<string, string>>,
+) {
+  if (!LAUNCH_DOORS.includes(isFrontDoor(door) ? door : door.origin)) return;
+  const module = yield* moduleFor(env, workflow);
+  const reach = module === null || !("inputs" in module) ? null : reachOf(module.inputs);
+  const value = reach === null ? undefined : text[reach.name];
+  if (reach === null || value === undefined) return;
+  if (!Arr.some(reach.choices, (choice) => choice.value === value)) return;
+  yield* setSharedSetting(env, {
+    door,
+    key: reachKey(workflow, yield* launchProject(env.cwd)),
+    value: value === "" ? null : value,
+    at: yield* nowIso,
+    request: yield* newRequestId(),
+  });
 });
 
 /** Every Run a listing can show, and why the rest could not be read. */

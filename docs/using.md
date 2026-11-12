@@ -294,7 +294,14 @@ Run ended, `bodil remote down <name>` takes the instance down once you are done 
 4. Where anything was inferred, one row says where the run starts and each Input as
    `name = value (inferred from …)` or `(given)`: Enter starts it, Esc starts nothing. A
    start with nothing inferred starts at once. The run records which Inputs were inferred,
-   and `collie run show` lists each with where it came from.
+   and `collie run show` lists each with where it came from. A workflow with a
+   [Reach](../CONTEXT.md) — how far it goes before it asks, `plan`'s and `implement`'s
+   `then` — offers one such row per choice instead, even with nothing inferred: `plan`
+   **Ask when the plan is written** or **Build it**, `implement` **Ask at the merge
+   request**, **End at the merge request** or **Release it**. The row you start from is
+   remembered for that workflow in that project, across the Flock, and offered first next
+   time; with nothing remembered the first row asks, as before. Telling chat to start one
+   does the same: it passes how far you said, else the remembered choice.
 5. The run's card appears on the [Control Plane](#the-control-plane).
 6. The run's own tabs hold agents and nothing else: one tab per agent it starts, labelled
    with the agent's role — `implementer`, `reviewer` — in the order they started, each
@@ -302,8 +309,10 @@ Run ended, `bodil remote down <name>` takes the instance down once you are done 
    nothing. The label carries no state: the run's card on the board says what it is doing,
    and herdr's own agent-status column says what each agent is.
 7. `plan`, `architecture`, `review` and `implement` end in a question — **What next?** —
-   answered from the run's card's answer menu, with `collie run answer`, or in chat. Launching asks nothing about it: a
-   question is asked when the run reaches it, so you decide with the work in front of you.
+   answered from the run's card's answer menu, with `collie run answer`, or in chat, unless
+   the start said how far it goes: **Build it** and **End at the merge request** or
+   **Release it** answer it at launch. Otherwise a question is asked when the run reaches
+   it, so you decide with the work in front of you.
    `collie run resume <id>` asks the host to pick a run that is still going back up.
 
 The same operations are available without opening UI, which is how an agent drives Collie:
