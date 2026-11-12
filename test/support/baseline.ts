@@ -7096,7 +7096,7 @@ scenario(
         );
         const rules = [
           "is a follow-up",
-          "unless you can answer the reason",
+          "Check the disputed reason against the code",
           "`collie verify -- <command>`",
           '`"scope_met": true`',
           "`summary` — two sentences",
