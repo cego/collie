@@ -66,6 +66,8 @@ export const Resolved = Schema.Struct({
   inputs: Schema.Array(Declared),
   /** The outcome the module fixes, or null where it fixes none. */
   outcome: Schema.NullOr(Schema.String),
+  /** Present where it declares itself the healer. */
+  heals: Schema.optionalKey(Schema.Literal(true)),
 });
 
 /** Everything the search path holds, as a client may see it. */
@@ -148,6 +150,7 @@ const claimsIn = Effect.fn("Discovery.claimsIn")(function* (root: Root) {
               path,
               inputs: declaredBy(read.success),
               outcome: read.success.metadata?.outcome?.fixed ?? null,
+              ...(read.success.metadata?.heals === true && { heals: true as const }),
               revision,
             },
           },

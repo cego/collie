@@ -466,6 +466,12 @@ cause has cleared. Bounded per Run and cause, recorded with its outcome, and pro
 fact the park waited for, never by inactivity or an acknowledgement. It never answers a
 **Decision**, lifts a **Hold**, undoes a **Stop** or passes a gate.
 
+**Heal** — A Run the host starts for a park its **Recovery** could not clear, before the park
+needs you: its agent may only message the parked Run's own agents and resume it. Judged by
+the parked Run's facts, never its Output, and it always records a finding for everyone who
+runs Collie. One per park, three per Run, one at a time per Machine; never for a Run with a
+**Decision**, **Hold** or **Stop**, or for a Heal (ADR-draft-a-run-recovers-where-it-parks).
+
 **Wait** — What holds a Run up at a moment: a **Decision** on it, **Stalled**, a **Hold**,
 **Short of memory**, or something it awaits that ends by itself. A Check Collie runs for it
 is shown the same way. A Run can have several at once, and each front door says the one it

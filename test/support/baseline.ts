@@ -155,6 +155,7 @@ const UNRELATED = {
   "self-improve": "look-back",
   stage: "try-it-out",
   "tune-up": "make-haste",
+  heal: "mend-it",
 } as const;
 type Shipped = keyof typeof UNRELATED;
 
@@ -579,6 +580,7 @@ const undeclaredWork = () =>
           "investigate",
           "self-improve",
           "tune-up",
+          "heal",
         ] as const,
         shipped,
       ),
@@ -3278,6 +3280,65 @@ scenario(
         expect(entry.metadata?.closes).toBe("reported");
         expect(entry.metadata?.outcome).toBeUndefined();
         expect(entry.metadata?.followUps ?? []).toHaveLength(0);
+      }),
+    ),
+  120_000,
+);
+
+const HEALED = {
+  diagnosis: "The reviewer finished its turn without writing its Output.",
+  actions: ["told the reviewer where its Output goes", "resumed the Run"],
+  result: "resumed",
+  finding: {
+    collie_defect: true,
+    key: "output-path-lost",
+    root_cause: "A reminder does not repeat the Output path once the agent's context is compacted.",
+    fix: "Repeat the Output path in every Output reminder.",
+    regression: "A reminder after compaction names the Output path.",
+  },
+};
+
+scenario(
+  "heal asks one healer about the parked Run and sends an Output without a finding back for repair",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { finding: _, ...unfound } = HEALED;
+        yield* rig.queueOutputs([unfound, HEALED]);
+        const result = yield* ran({
+          entry: shipped("heal"),
+          runId: "r-heal",
+          input: { run: "run-parked", park: "park-1" },
+        });
+        expect(result).toMatchObject({ _tag: "Success", success: HEALED });
+        const messages = yield* prompts();
+        expect(messages).toHaveLength(2);
+        expect(messages[1]).toContain("finding");
+        expect(yield* asked("r-heal", "heal")).toContain("Run run-parked is parked (park park-1)");
+        expect(yield* persona("r-heal", "heal")).toContain("healer");
+        expect((yield* loadEntry(shipped("heal"))).metadata?.heals).toBe(true);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "heal sends an escalation that does not say why a person is needed back for repair",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const escalated = { ...HEALED, result: "escalate" };
+        const reasoned = { ...escalated, needs_person: "Only you can pick the release date." };
+        yield* rig.queueOutputs([escalated, reasoned]);
+        const result = yield* ran({
+          entry: shipped("heal"),
+          runId: "r-heal-escalates",
+          input: { run: "run-parked", park: "park-1" },
+        });
+        expect(result).toMatchObject({ _tag: "Success", success: reasoned });
+        const messages = yield* prompts();
+        expect(messages).toHaveLength(2);
+        expect(messages[1]).toContain("needs_person");
       }),
     ),
   120_000,

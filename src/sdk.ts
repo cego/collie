@@ -617,6 +617,8 @@ export interface Declarations {
    */
   readonly checkout?: "branch" | "roaming";
   readonly closes?: "reported";
+  /** The healer: what the host starts for a park its own recovery could not clear. */
+  readonly heals?: true;
   readonly followUps?: ReadonlyArray<FollowUp>;
   readonly actions?: ReadonlyArray<ActionProvider>;
 }
@@ -1706,6 +1708,7 @@ export interface WorkflowMetadata {
    */
   readonly checkout?: typeof DeclaredCheckout.Type;
   readonly closes?: "reported";
+  readonly heals?: true;
   readonly followUps?: ReadonlyArray<FollowUp>;
   readonly actions?: ReadonlyArray<ActionProvider>;
   readonly path?: ReadonlyArray<StepMeta>;
@@ -1832,6 +1835,7 @@ const DeclaredMetadata = Schema.Struct({
   ),
   hints: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   closes: Schema.optionalKey(Schema.Literal("reported")),
+  heals: Schema.optionalKey(Schema.Literal(true)),
   outcome: Schema.optionalKey(
     Schema.Struct({
       fixed: Schema.optionalKey(Schema.String),
