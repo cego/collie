@@ -1708,13 +1708,14 @@ const doorFeedLayer = (door: EngineEnd, panels: MrPanels) =>
         Effect.forever,
         Effect.forkScoped,
       );
-      const { boards, kept, factsOf, offered, bun, agentsSeen } = yield* SharedBoard;
+      const { boards, kept, factsOf, offered, bun, agentsSeen, alive } = yield* SharedBoard;
       const agents = (alive: ReadonlyArray<AgentInfo>) =>
         door.post({ _tag: "Listed", runs: [], gone: [], order: null, alive, offers: [] });
       yield* Effect.acquireRelease(
         Effect.sync(() => agentsSeen.add(agents)),
         () => Effect.sync(() => agentsSeen.delete(agents)),
       );
+      yield* Effect.map(alive, agents);
       const registry = yield* Registry;
       /** The revision its view was read at, while that view is kept; a going Run's is not. */
       const readAt = (run: RunFacts) => {
@@ -1726,7 +1727,7 @@ const doorFeedLayer = (door: EngineEnd, panels: MrPanels) =>
       const posted = new Map<string, RunFacts>();
       let order: ReadonlyArray<string> = [];
       yield* Effect.forkScoped(
-        Stream.runForEach(boards, ({ runs, alive }) =>
+        Stream.runForEach(boards, ({ runs }) =>
           Effect.sync(() => {
             const ids = Arr.map(runs, (run) => run.id);
             const present = new Set(ids);
@@ -1744,7 +1745,6 @@ const doorFeedLayer = (door: EngineEnd, panels: MrPanels) =>
               runs: fresh,
               gone,
               order: moved ? ids : null,
-              alive,
               offers,
             });
           }),
