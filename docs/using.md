@@ -4055,6 +4055,12 @@ window, do not erase the earlier exhaustion. Runs recorded before this recovery 
 was added can still recover at their recorded reset time; no observation time is invented
 when they replay.
 
+While that wait is active, a dead server or a lost core terminal does not restart the
+exhausted agent. Recovery still starts agents on other Subscriptions. If a tool writes valid
+Output while its agent is being stopped for a fallback, Collie keeps that Output after the
+old agent is proved quiet and starts no replacement. That decision is recorded, so replay
+does not start the work again.
+
 Usage is data: it never refuses, holds or delays work.
 
 ## Troubleshooting
