@@ -182,7 +182,7 @@ export const bindingsOf = Effect.fn("Processes.bindingsOf")(function* (
 
 /**
  * Every running process whose environment binds one of `names`, with what it binds and its
- * start, read first so a pid taken over while it is read never passes for the bound one.
+ * start, read before the bindings used as proof so a reused pid never passes for the bound one.
  */
 export const boundProcesses = Effect.fn("Processes.boundProcesses")(function* (
   names: ReadonlyArray<string>,
@@ -195,6 +195,8 @@ export const boundProcesses = Effect.fn("Processes.boundProcesses")(function* (
       Effect.gen(function* () {
         const pid = Number(name);
         if (!Number.isInteger(pid)) return null;
+        const candidate = yield* bindingsOf(pid, names);
+        if (candidate === null || Rec.keys(candidate).length === 0) return null;
         const started = yield* procStarted(pid);
         if (started === null) return null;
         const bound = yield* bindingsOf(pid, names);
