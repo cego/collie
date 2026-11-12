@@ -1151,8 +1151,10 @@ recurs is filed on the forge of the checkout it runs in, or commented on the ope
 matches. Each finding cites a record that shows it, a journal line, a verification, a
 transcript or an issue, and never a Run's goal, summary or Output read back. Up to
 `improvements` groups of newly filed issues start as `plan` Runs that build
-themselves. Nobody is asked anything, and nothing is merged. See
-[Self-improve](using.md#self-improve).
+themselves. Nobody is asked anything, and nothing is merged. It also states the
+questions asked per landed merge request and the share of implement Runs that reached a
+merge request without failing, and files, with `runs=machine`, each question answered the
+same nine times in ten over ten answers. See [Self-improve](using.md#self-improve).
 
 **Ends:** once its Improvements have, with `summary.md` in its Run directory.
 

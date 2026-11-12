@@ -18342,6 +18342,10 @@ let windowRuns: Array<{
   workflow?: string;
   created?: string;
   closes?: ReadonlyArray<number>;
+  status?: "complete" | "failed";
+  mr?: string;
+  merged?: boolean;
+  questions?: ReadonlyArray<{ name: string; answer: string | null }>;
 }> = [];
 let openIssues: Issue[] = [];
 let filed: Array<{ title: string; body: string }> = [];
@@ -18370,8 +18374,11 @@ const improving: HostOverride = Layer.effect(Host)(
                 parent,
                 project: "project" in rest && rest.project ? rest.project : rig.projectDir,
                 created: "created" in rest && rest.created ? rest.created : since,
-                status: "failed" as const,
+                status: "status" in rest && rest.status ? rest.status : ("failed" as const),
                 closes: "closes" in rest && rest.closes ? rest.closes : [],
+                mr: "mr" in rest && rest.mr ? rest.mr : null,
+                merged: "merged" in rest && rest.merged === true,
+                questions: "questions" in rest && rest.questions ? rest.questions : [],
               }),
             ),
             ({ created }) => epochOf(created) >= epochOf(since),
@@ -18686,6 +18693,41 @@ scenario(
         expect(prompt).toContain("r-other");
         expect(prompt).toContain("`defect` is one more");
         expect(Arr.map(filed, ({ title }) => title)).toEqual(["Project host-crash"]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "self-improve states the questions per landed merge request and files a question nine in ten answered alike",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        freshDay();
+        windowRuns = Arr.map(Arr.range(0, 9), (at) => {
+          const asked = {
+            runId: `r-asked-${at}`,
+            parent: null,
+            questions: [{ name: "next", answer: at === 9 ? "Finish" : "Release" }],
+          };
+          return at < 2
+            ? { ...asked, status: "complete" as const, mr: `https://mr/${at}`, merged: true }
+            : asked;
+        });
+        yield* rig.queueOutputs([triaged([])]);
+
+        yield* improved("r-questions", { runs: "machine", improvements: 0 });
+
+        expect(Arr.map(filed, ({ title }) => title)).toEqual([
+          'implement asks "next" and is answered "Release" 90% of the time',
+        ]);
+        const summary = yield* readText(`${runDir(dir, "r-questions")}/summary.md`);
+        expect(summary).toContain(
+          "10 questions asked over 2 merge requests landed: 5.0 per landed merge request.",
+        );
+        expect(summary).toContain(
+          "implement Runs that reached a merge request without failing: 2 of 10 (20%).",
+        );
       }),
     ),
   120_000,

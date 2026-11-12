@@ -810,8 +810,9 @@ The shipped `renovate` workflow still requires GitLab for its merge and release 
 `host.report(since)` reads this Machine's Runs admitted at or after an ISO moment. It
 returns the same report as `collie --json run report --since`: workflow tallies, metrics,
 failed and completed results, stopped Runs, and a `runs` list. Each list entry has
-`runId`, `workflow`, `parent`, `project`, `created`, `status`, and `closes`: the issue
-numbers its input names in a `Closes #n`. An invalid date fails with
+`runId`, `workflow`, `parent`, `project`, `created`, `status`, `closes`: the issue
+numbers its input names in a `Closes #n`, `mr`, `merged`, and `questions`, as
+[`run report`](cli.md#report) lists them. An invalid date fails with
 `WorkflowError`. Read it inside an Activity when its answer decides subsequent work.
 
 `host.skill(name)` answers the installed `SKILL.md` that `{{skill:name}}` would name to an

@@ -119,6 +119,40 @@ test("answered and open decisions come from each question's answer", () => {
   expect(report.workflows[0]).toMatchObject({ answered: 2, open: 1 });
 });
 
+test("a Run lists its merge request, whether it merged, and the questions it asked that stood", () => {
+  const report = reportOf(
+    [
+      view({
+        runId: "a",
+        mr: "https://mr/1",
+        waiting: [
+          { name: "next", prompt: "What next?", options: [], answer: "Release" },
+          { name: "go-1", prompt: "Release?", options: [], answer: null },
+          { name: "set-aside", prompt: "?", options: [], answer: null, superseded: "2026-09-30" },
+        ],
+      }),
+      view({ runId: "b" }),
+    ],
+    new Map(),
+    null,
+    new Map([["a", { records: records({ disposition: "merged" }), metrics: [] }]]),
+  );
+  expect(
+    Arr.map(report.runs, ({ runId, mr, merged, questions }) => ({ runId, mr, merged, questions })),
+  ).toEqual([
+    {
+      runId: "a",
+      mr: "https://mr/1",
+      merged: true,
+      questions: [
+        { name: "next", answer: "Release" },
+        { name: "go-1", answer: null },
+      ],
+    },
+    { runId: "b", mr: null, merged: false, questions: [] },
+  ]);
+});
+
 test("since drops Runs admitted earlier, and the total says so", () => {
   const report = reportOf(
     [

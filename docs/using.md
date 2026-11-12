@@ -3753,12 +3753,20 @@ triage is told: a Collie fix counts as already fixed only where its commit is in
 release's tag, so a fix merged but not yet installed leaves the finding filed or commented
 on as a recurrence.
 
-It waits for its Improvements, then writes `summary.md` in its Run directory: each issue
-filed or commented, by category; each Improvement's Run and how it ended; and each finding
+It measures the questions its window's Runs asked, computed from the report rather than
+judged by the agent: how many were asked per merge request that landed in the window, and
+how many implement Runs reached a merge request without failing, of those that reached one
+or ended. A class of question — one workflow's question by its name, however many times a
+Run numbers it — answered the same at least nine times in ten over at least ten answers is
+a `defect` finding, `repeated-answer-<workflow>-<question>`: Collie asks what it already
+knows. Like any `defect`, it is filed only with `runs=machine`.
+
+It waits for its Improvements, then writes `summary.md` in its Run directory: those two
+question measures; each issue filed or commented, by category; each Improvement's Run and how it ended; and each finding
 left out, with why. An Improvement that fails is listed there, and the Run still succeeds.
 Beside it, `improvements.json` keeps each Improvement's name, issues and how it ended.
-When the forge cannot be read, the retrospective still runs and `summary.md` keeps its
-findings, evidence and proposed improvements, with the reason nothing was filed. No issue,
+When the forge cannot be read, the retrospective still runs and `summary.md` keeps the
+question measures, its findings, evidence and proposed improvements, with the reason nothing was filed. No issue,
 comment or Improvement is started on that path.
 
 An Improvement that failed to start, because its issues could not be read back, is started

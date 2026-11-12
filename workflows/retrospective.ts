@@ -209,9 +209,123 @@ export const restartsOf = (
   return restarts;
 };
 
+/** One of the window's Runs, as the report lists what it asked and where it ended. */
+export interface AskingRun {
+  readonly runId: string;
+  readonly workflow: string;
+  readonly status: "pending" | "suspended" | "complete" | "failed";
+  readonly mr: string | null;
+  readonly merged: boolean;
+  readonly questions: ReadonlyArray<{ readonly name: string; readonly answer: string | null }>;
+}
+
+export const QuestionMeasures = Schema.Struct({
+  asked: Schema.Int,
+  landed: Schema.Int,
+  perLanded: Schema.NullOr(Schema.Finite),
+  implement: Schema.Struct({ reached: Schema.Int, of: Schema.Int }),
+});
+export type QuestionMeasures = typeof QuestionMeasures.Type;
+
+/**
+ * Questions per merge request that landed, and how many implement Runs reached theirs
+ * without failing, of those that reached one or ended.
+ */
+export const questionMeasures = (runs: ReadonlyArray<AskingRun>): QuestionMeasures => {
+  const asked = Arr.reduce(runs, 0, (sum, run) => sum + run.questions.length);
+  const landed = new Set(Arr.flatMap(runs, ({ mr, merged }) => (merged && mr !== null ? [mr] : [])))
+    .size;
+  const settled = Arr.filter(
+    runs,
+    ({ workflow, mr, status }) =>
+      workflow === "implement" && (mr !== null || status === "complete" || status === "failed"),
+  );
+  return {
+    asked,
+    landed,
+    perLanded: landed === 0 ? null : asked / landed,
+    implement: {
+      reached: Arr.filter(settled, ({ mr, status }) => mr !== null && status !== "failed").length,
+      of: settled.length,
+    },
+  };
+};
+
+export const questionLines = ({ asked, landed, perLanded, implement }: QuestionMeasures) => [
+  perLanded === null
+    ? `- ${asked} questions asked; no merge request landed.`
+    : `- ${asked} questions asked over ${landed} merge requests landed: ${perLanded.toFixed(1)} per landed merge request.`,
+  `- implement Runs that reached a merge request without failing: ${implement.reached} of ${implement.of}${
+    implement.of === 0 ? "" : ` (${Math.round((implement.reached / implement.of) * 100)}%)`
+  }.`,
+];
+
+const REPEATED_ASKINGS = 10;
+const REPEATED_SHARE = 0.9;
+
+/** One question however often a Run asks it: `slice-02.go-3` and `go-1` are both `go`. */
+const classOf = (name: string) =>
+  pipe(
+    Arr.last(pipe(name, Str.split("."))),
+    Option.getOrElse(() => name),
+    Str.replace(/-\d+$/, ""),
+  );
+
+const slug = (text: string) =>
+  pipe(Str.toLowerCase(text), Str.replace(/[^a-z0-9]+/g, "-"), Str.replace(/^-|-$/g, ""));
+
+/**
+ * Each class of question answered the same at least nine times in ten over at least ten
+ * answers: an answer Collie already knows, so asking it is Collie's defect.
+ */
+export const repeatedAnswers = (runs: ReadonlyArray<AskingRun>): ReadonlyArray<Finding> => {
+  const classes = new Map<
+    string,
+    { workflow: string; name: string; answers: string[]; runs: string[] }
+  >();
+  for (const run of runs)
+    for (const { name, answer } of run.questions) {
+      if (answer === null) continue;
+      const id = `${run.workflow} ${classOf(name)}`;
+      const one = classes.get(id) ?? {
+        workflow: run.workflow,
+        name: classOf(name),
+        answers: [],
+        runs: [],
+      };
+      classes.set(id, one);
+      one.answers.push(answer);
+      if (!one.runs.includes(run.runId)) one.runs.push(run.runId);
+    }
+  return Arr.flatMap([...classes.values()], ({ workflow, name, answers, runs: asking }) => {
+    if (answers.length < REPEATED_ASKINGS) return [];
+    const counts = new Map<string, number>();
+    for (const answer of answers) counts.set(answer, (counts.get(answer) ?? 0) + 1);
+    const none: readonly [string, number] = ["", 0];
+    const [answer, count] = Arr.reduce([...counts], none, (top, entry) =>
+      entry[1] > top[1] ? entry : top,
+    );
+    if (count / answers.length < REPEATED_SHARE) return [];
+    const said = pipe(answer, Str.slice(0, 80));
+    return [
+      {
+        key: `repeated-answer-${slug(workflow)}-${slug(name)}`,
+        category: "defect" as const,
+        title: `${workflow} asks "${name}" and is answered "${said}" ${Math.round((count / answers.length) * 100)}% of the time`,
+        body: `${workflow}'s "${name}" question was answered "${said}" ${count} of ${answers.length} times in the window. An answer that rarely changes is one Collie already knows: take it without asking, or say what asking protects.`,
+        severity: "medium" as const,
+        runs: asking,
+        records: [],
+        issue: null,
+      },
+    ];
+  });
+};
+
 export const summaryOf = (options: {
   readonly runId: string;
   readonly since: string;
+  readonly questions: QuestionMeasures;
   readonly acted: ReadonlyArray<{ readonly finding: Finding; readonly outcome: Outcome }>;
   readonly improvements: ReadonlyArray<Ended>;
   readonly leftOut: ReadonlyArray<LeftOut>;
@@ -225,6 +339,8 @@ export const summaryOf = (options: {
     [
       `# self-improve ${options.runId}`,
       `Runs since ${options.since}.`,
+      "## Questions",
+      Arr.join(questionLines(options.questions), "\n"),
       "## Issues",
       ...(categories.length === 0
         ? ["None."]
