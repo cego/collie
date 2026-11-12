@@ -71,7 +71,7 @@ import { runDir, type RunView } from "../src/engine";
 import { isSettled } from "../src/lifecycle";
 import { appendLog } from "../src/oversight";
 import { readAudit, trimAudit } from "../src/audit";
-import { writeMrStates } from "../src/merges";
+import { storedAnswers } from "./support/forge";
 import { Flow, FrontDoorRpcs, type Declaration, type FLOCK_READS } from "../src/board-model";
 
 const encodeJson = Schemaflow(
@@ -1830,7 +1830,7 @@ test("a Run's row for a Run it started shows that Run's merge request as the mer
         `- run ${child.id}: hello, succeeded; mk/api!4 not watched`,
       );
 
-      yield* writeMrStates(
+      yield* storedAnswers(
         stateDir,
         new Map([["gitlab.cego.dk/mk/api!4", "open"]]),
         new Map([["gitlab.cego.dk/mk/api!4", { checks: { state: "passed" }, head: null }]]),
@@ -1853,7 +1853,7 @@ test("a Run's own merge request is shown as recorded, with what the merge watch 
       );
 
       const id = "github.com/cego/collie#61";
-      yield* writeMrStates(
+      yield* storedAnswers(
         stateDir,
         new Map([[id, "open"]]),
         new Map([[id, { checks: { state: "failed", name: "test" }, head: null }]]),

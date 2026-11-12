@@ -343,14 +343,19 @@ test(
           hostLockOf(rig.pluginEnv().stateDir),
           `{"pid":${process.pid},"start":null}`,
         );
-        yield* rig.queueOutputs([null, null, null]);
+        // Two more for the Output reminders its review turn draws by ending before it asks.
+        yield* rig.queueOutputs([null, null, null, null, null]);
         const agent = agentName("r1", "builder", null, 1);
-        const sends = () =>
+        const delivered = () =>
           Effect.map(rig.calls(), (calls) =>
-            Arr.map(
+            Arr.filter(
               Arr.filter(coreCalls(calls), (call) => call.cmd === "terminal.send"),
-              (call) => (isString(call.params?.text) ? call.params.text : ""),
+              (call) => !(isString(call.params?.text) && call.params.text.includes(".remind-")),
             ),
+          );
+        const sends = () =>
+          Effect.map(delivered(), (sent) =>
+            Arr.map(sent, (call) => (isString(call.params?.text) ? call.params.text : "")),
           );
         yield* session(
           Effect.gen(function* () {
@@ -439,12 +444,11 @@ test(
               "Your questions are answered: Database: SQLite; Checks: lint and typecheck",
             );
             expect(next).toContain("/fix.prompt.md");
-            expect(
-              Arr.map(
-                Arr.filter(coreCalls(yield* rig.calls()), (call) => call.cmd === "terminal.send"),
-                (call) => call.params?.terminal,
-              ),
-            ).toEqual([agent, agent, agent]);
+            expect(Arr.map(yield* delivered(), (call) => call.params?.terminal)).toEqual([
+              agent,
+              agent,
+              agent,
+            ]);
           }),
           coreOnly(core),
           piBody,

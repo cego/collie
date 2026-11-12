@@ -50,7 +50,9 @@ import {
 import { Children, Host, Run, WorkflowAgents, jsonSchemaFor, step, withAgents } from "../src/sdk";
 import { asRun, enveloped } from "./support/enveloped";
 import {
+  HOLD,
   PARKED,
+  PARK_CAUSE,
   STOP,
   controlPath,
   evidenceDir,
@@ -63,6 +65,7 @@ import {
 } from "../src/engine";
 import { readStepLines } from "../src/steps";
 import { readMetrics } from "../src/metrics";
+import { measuresOf } from "../src/outcomes";
 import { recordLaunch } from "../src/launches";
 import { Collected } from "../src/agents";
 import { Collecting } from "../src/collecting";
@@ -853,6 +856,7 @@ test("an Output still unusable after its repair parks the Step, saying what to c
       expect(why).toContain(outputPath("r1"));
       expect(why).toContain(`["note"]`);
       expect(why).toEndWith("Correct it, then resume r1.");
+      expect(yield* read(controlPath(dir, PARK_CAUSE, "r1"))).toBe("step-failed");
       expect(Arr.last(yield* readStepLines(runDir(dir, "r1")))).toEqual(
         Option.some(expect.objectContaining({ kind: "fail", key: "review", why })),
       );
@@ -1642,7 +1646,7 @@ for (const [what, herdr] of [
   ["unreadable", () => new Unreadable(rig.pluginEnv())],
 ] as const)
   test(
-    `an agent whose status is ${what} and that writes nothing parks once the budget is spent idle`,
+    `an agent whose status is ${what} and that writes nothing parks as idle-budget once the budget is spent idle`,
     () =>
       runEffect(
         Effect.gen(function* () {
@@ -1655,10 +1659,205 @@ for (const [what, herdr] of [
           expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(
             `has written nothing to ${outputPath("r1")} after 2 minutes idle. Collie keeps collecting it;`,
           );
+          expect(yield* read(controlPath(dir, PARK_CAUSE, "r1"))).toBe("idle-budget");
+          expect(Arr.map(yield* halts("r1"), (line) => line.cause)).toEqual(["idle-budget"]);
         }),
       ),
     60_000,
   );
+
+/**
+ * Each prompt starts a turn herdr reports `working` for its next reads, then `ending`;
+ * the turns after the first `ends` never end.
+ */
+class Turns extends FakeHerdr {
+  private working = 0;
+  private prompted = 0;
+  constructor(
+    private readonly ending: "idle" | "blocked" = "idle",
+    private readonly ends = Infinity,
+  ) {
+    super(rig.pluginEnv());
+  }
+  protected override exec(args: string[]) {
+    if (args[0] === "agent" && args[1] === "prompt") {
+      this.prompted += 1;
+      this.working = this.prompted > this.ends ? Infinity : 10;
+    }
+    return super.exec(args);
+  }
+  going = false;
+  override agentStatus() {
+    if (this.working === 0)
+      return Effect.succeed(this.prompted > 0 ? this.ending : ("idle" as const));
+    if (!this.going) this.working -= 1;
+    return Effect.succeed("working" as const);
+  }
+}
+
+const REMINDER = "Your turn ended without writing your Output";
+
+const reminders = Effect.map(
+  Effect.suspend(() => rig.calls()),
+  (calls) => Arr.filter(prompts(calls), (one) => pipe(one, Str.includes(REMINDER))),
+);
+
+const halts = (runId: string) =>
+  Effect.map(readMetrics(evidenceDir(dir, runId)), (lines) =>
+    Arr.filter(lines, (line) => line.kind === "halt"),
+  );
+
+test("a reminder counts as recovered once the Output decodes, including after its existing repair", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null, { verdict: "maybe" }, { verdict: "clean", note: "repaired" }]);
+      const result = yield* session(started("r1"), { herdr: new Turns(), collectMs: 60_000 });
+      expect(result._tag === "Success" && result.success.note).toBe("repaired");
+      expect(yield* reminders).toHaveLength(1);
+      expect(sent(yield* rig.calls(), "not usable")).toBe(1);
+      const recovery = Arr.filter(
+        yield* readMetrics(evidenceDir(dir, "r1")),
+        (line) => line.kind === "recovery",
+      );
+      expect(recovery.at(-1)).toMatchObject({
+        cause: "output-absent",
+        action: "reminded",
+        outcome: "output-written",
+        build: expect.any(String),
+        value: expect.any(Number),
+      });
+      expect(
+        measuresOf([{ runId: "r1", records: null, metrics: recovery }]).recoveries.byCause,
+      ).toMatchObject([{ count: 1, recovered: 1 }]);
+    }),
+  ));
+
+test(
+  "an agent whose turn ends without its Output is reminded at once, and the Output of its next turn is collected",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([null, { verdict: "clean", note: "after the reminder" }]);
+        const result = yield* session(Effect.raceFirst(started("r1"), untilParked("r1")), {
+          herdr: new Turns(),
+          collectMs: 60_000,
+        });
+        expect(result !== "parked" && result._tag === "Success" && result.success.note).toBe(
+          "after the reminder",
+        );
+        const sent = yield* reminders;
+        expect(sent).toHaveLength(1);
+        expect(sent[0]).toContain(`OUTPUT_PATH: ${outputPath("r1")}`);
+        expect(sent[0]).toContain("A chat message is not the Output");
+        expect(yield* halts("r1")).toEqual([]);
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "an agent that writes no Output after two reminders parks its step as output-absent, and is not reminded again",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([null, null, null, null]);
+        const result = yield* session(
+          Effect.raceFirst(
+            started("r1"),
+            untilParked("r1").pipe(Effect.andThen(spend(5_000)), Effect.as("parked" as const)),
+          ),
+          { herdr: new Turns(), collectMs: 600_000 },
+        );
+        expect(result).toBe("parked");
+        expect(yield* reminders).toHaveLength(2);
+        expect(yield* read(controlPath(dir, PARK_CAUSE, "r1"))).toBe("output-absent");
+        expect(yield* read(controlPath(dir, PARKED, "r1"))).toMatch(
+          /and again after each of 2 reminders, sent \d{4}-\d\d-\d\dT\S+ and \d{4}-\d\d-\d\dT\S+\./,
+        );
+        expect(yield* read(outputPath("r1"))).toBe("");
+        const reminded = Arr.filter(
+          yield* readMetrics(evidenceDir(dir, "r1")),
+          (line) => line.kind === "recovery" && line.action === "reminded",
+        );
+        expect(Arr.map(reminded, (line) => line.outcome)).toEqual(["still-absent", "still-absent"]);
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "a host stopped once its first reminder went out does not send that reminder again when it starts",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* rig.queueOutputs([null, null]);
+        const remindedOnce: Reached = Effect.gen(function* () {
+          if ((yield* reminders).length === 0) return false;
+          yield* TestClock.withLive(Effect.sleep("300 millis"));
+          return true;
+        }).pipe(Effect.orElseSucceed(() => false));
+        yield* interrupted("r1", remindedOnce, { herdr: new Turns("idle", 1), collectMs: 600_000 });
+
+        const result = yield* session(
+          Effect.gen(function* () {
+            const fiber = yield* Effect.forkChild(started("r1"));
+            yield* TestClock.withLive(Effect.sleep("500 millis"));
+            yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"late"}`);
+            return yield* Fiber.join(fiber);
+          }),
+          { herdr: new Turns(), collectMs: 600_000 },
+        );
+        expect(result._tag === "Success" && result.success.note).toBe("late");
+        expect(yield* reminders).toHaveLength(1);
+      }),
+    ),
+  60_000,
+);
+
+test("an agent herdr reports blocked when its turn stops is not reminded", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* rig.queueOutputs([null, null]);
+      const result = yield* session(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(started("r1"));
+          yield* until(prompted("Your task for this step"));
+          yield* spend(30_000);
+          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"answered"}`);
+          return yield* Fiber.join(fiber);
+        }),
+        { herdr: new Turns("blocked"), collectMs: 600_000 },
+      );
+      expect(result._tag === "Success" && result.success.note).toBe("answered");
+      expect(yield* reminders).toEqual([]);
+    }),
+  ));
+
+test("an agent whose turn ends while its Run is held is reminded only once the Hold is lifted", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null, { verdict: "clean", note: "after the hold" }]);
+      const herdr = new Turns();
+      herdr.going = true;
+      const result = yield* session(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(started("r1"));
+          yield* until(prompted("Your task for this step"));
+          yield* control(HOLD, "r1", true);
+          herdr.going = false;
+          yield* spend(30_000);
+          expect(yield* reminders).toEqual([]);
+          yield* control(HOLD, "r1", false);
+          return yield* Fiber.join(fiber);
+        }),
+        { herdr, collectMs: 600_000 },
+      );
+      expect(result._tag === "Success" && result.success.note).toBe("after the hold");
+      expect(yield* reminders).toHaveLength(1);
+    }),
+  ));
 
 /** Claude's `PreToolUse` for one `AskUserQuestion` call of two questions. */
 const askedTwo = flow(
@@ -3589,6 +3788,7 @@ test("a herdr that cannot say what it has parks the work rather than starting an
       const why = yield* parkedOn(`{"agent list":"herdr is not answering"}`);
       expect(why).toContain("herdr cannot say which agents it has");
       expect(why).toContain("herdr is not answering");
+      expect(yield* read(controlPath(dir, PARK_CAUSE, "r1"))).toBe("herdr-unavailable");
       // What uncertainty must never be rounded down to.
       expect(why).toContain("Nothing here says the agent did no work.");
       expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(0);
@@ -5213,12 +5413,12 @@ for (const busy of ["working", "blocked"])
       Effect.gen(function* () {
         const { result, seen } = yield* listedWhile(`idle,${busy},${busy},${busy},idle`);
         expect(result._tag === "Success" && result.success).toBe("01-api:first+02-ui:second");
-        // The first read is the first prompt's own, as it went in.
-        const boundary = seen.slice(seen.indexOf("prompt 01-api") + 2);
-        expect(boundary.slice(0, 5)).toEqual([busy, busy, busy, "idle", "compact"]);
-        expect(Arr.filter(boundary, (one) => pipe(one, Str.startsWith("prompt")))).toEqual([
-          "prompt 02-ui",
-        ]);
+        const boundary = seen.slice(seen.indexOf("prompt 01-api") + 1);
+        expect(boundary).toContain(busy);
+        expect(boundary[boundary.indexOf("compact") - 1]).toBe("idle");
+        expect(
+          Arr.filter(boundary, (one) => one === "compact" || pipe(one, Str.startsWith("prompt"))),
+        ).toEqual(["compact", "prompt 02-ui"]);
         const log = yield* read(`${dir}/agents/r1/agents.log`);
         expect(
           Option.getOrNull(pipe(log, Str.match(/still working; 02-ui waits for its turn to end/g))),

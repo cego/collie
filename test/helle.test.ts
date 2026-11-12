@@ -1540,9 +1540,10 @@ test(
           yield* readAudit(dir),
           (line) => line.operation === "helle_claimed",
         );
+        const { requested: _, ...asked } = onHost!;
         expect(onRun).toEqual([
           {
-            ...onHost!,
+            ...asked,
             at: onRun[0]!.at,
             result: "happytiger",
           },

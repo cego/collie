@@ -10,7 +10,7 @@ import { expect, test } from "bun:test";
 import { Effect, Schedule } from "effect";
 import { createSignal } from "solid-js";
 import { testRender } from "@opentui/solid";
-import { TextAttributes } from "@opentui/core";
+import { TextAttributes, TextRenderable, type BaseRenderable } from "@opentui/core";
 import { runEffect } from "../support/effect";
 import { task } from "../support/task";
 import { App } from "../../src/ui/App";
@@ -100,6 +100,21 @@ const mount = Effect.fn("board.mount")(function* (
   yield* flush;
   return {
     commands,
+    /** The card containing this unique name, for checking renderer ownership. */
+    cardNode(name: string) {
+      const find = (node: BaseRenderable): BaseRenderable | undefined => {
+        if (node instanceof TextRenderable && node.plainText === name) return node;
+        for (const child of node.getChildren()) {
+          const found = find(child);
+          if (found) return found;
+        }
+        return undefined;
+      };
+      const text = find(t.renderer.root);
+      const card = text?.parent?.parent?.parent;
+      if (!card) throw new Error(`no card containing ${JSON.stringify(name)}`);
+      return card;
+    },
     acted: () => Arr.filter(commands, (c) => c._tag !== "Select"),
     flush,
     frame: () => t.captureCharFrame(),
@@ -292,6 +307,50 @@ const HERD = [
     run: "r3",
   }),
 ];
+
+test("fresh Task snapshots keep card nodes and use the current Task on click", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const alpha = task({ id: "alpha", run: "run-alpha", name: "Alpha work" });
+      const beta = task({ id: "beta", run: "run-beta", name: "Beta work" });
+      const app = yield* mount(appState({ tasks: [alpha, beta] }));
+      const first = app.cardNode("Alpha work");
+      const second = app.cardNode("Beta work");
+
+      yield* app.setState(
+        appState({
+          tasks: [
+            { ...alpha, name: "Alpha updated" },
+            { ...beta, name: "Beta updated" },
+          ],
+        }),
+      );
+      const refreshedFirst = app.cardNode("Alpha updated");
+      const refreshedSecond = app.cardNode("Beta updated");
+
+      yield* app.setState(
+        appState({
+          tasks: [
+            { ...beta, id: "new-beta", run: "new-run-beta", name: "New beta" },
+            { ...alpha, name: "Alpha reordered" },
+          ],
+        }),
+      );
+      const reorderedFirst = app.cardNode("New beta");
+      const reorderedSecond = app.cardNode("Alpha reordered");
+      expect(app.said()).toContain("New beta");
+      yield* app.clickOn("New beta");
+      expect(app.commands).toContainEqual({
+        _tag: "Select",
+        id: "run:new-run-beta",
+        on: { task: "new-beta", run: "new-run-beta", name: "New beta" },
+      });
+      expect(refreshedFirst.num).toBe(first.num);
+      expect(refreshedSecond.num).toBe(second.num);
+      expect(reorderedFirst.num).toBe(first.num);
+      expect(reorderedSecond.num).toBe(second.num);
+    }),
+  ));
 
 test("the board opens on three sections under one sentence about the herd", () =>
   runEffect(
@@ -1896,16 +1955,27 @@ test("the Home board draws its sections in the board's one order", () =>
           tasks: [
             ...HERD,
             task({ id: "t4", name: "Shippable", state: "done", landed: false, run: "r4" }),
+            task({
+              id: "t5",
+              name: "Green and approved",
+              state: "done",
+              landed: false,
+              shipping: "merge",
+              run: "r5",
+            }),
           ],
         }),
+        120,
+        60,
       );
       const lines = Arr.map(
-        ["Needs you", "Waiting on you · 1", "Working · 2", "1 finished today"],
+        ["Needs you", "Ready to ship · 1", "Waiting on you · 1", "Working · 2", "1 finished today"],
         (label) => app.lineOf(label),
       );
       expect(lines).toEqual([...lines].sort((a, b) => a - b));
       expect(Arr.map(SECTIONS, ([, title]) => title)).toEqual([
         "Needs you",
+        "Ready to ship",
         "Waiting on you",
         "Working",
         "Finished",

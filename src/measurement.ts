@@ -360,6 +360,7 @@ const recordedFor = (
     Arr.findFirst(
       records,
       (one) =>
+        one.result._tag === "Judged" &&
         sameTree({ fingerprint: key.print }, one.candidate) &&
         one.base.commit === key.commit &&
         one.plan_digest === key.digest &&
@@ -578,13 +579,11 @@ const taking = Effect.fn("Measurement.taking")(function* (
           yield* baseTree(opts.stateDir, ask.runId, opts.repository, own.head_sha, opts.applied),
           path.relative(opts.repository, ask.cwd),
         );
-  const baseRoot = yield* baseTree(
-    opts.stateDir,
-    ask.runId,
-    opts.repository,
-    opts.commit,
-    opts.harness,
-  );
+  const lacking: Array<string> = [];
+  for (const one of opts.harness)
+    if ((yield* git(["merge-base", "--is-ancestor", one, opts.commit], opts.repository)).code !== 0)
+      lacking.push(one);
+  const baseRoot = yield* baseTree(opts.stateDir, ask.runId, opts.repository, opts.commit, lacking);
   const base = {
     commit: opts.commit,
     ...(yield* treeAt(path.join(baseRoot, path.relative(opts.repository, ask.cwd)))),
