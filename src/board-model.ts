@@ -2,7 +2,6 @@
 // and count its cards, decide what each one offers and read what it names. No I/O and no
 // Bun-only import: a browser bundle imports this too.
 
-import * as Struct from "effect/Struct";
 import * as Str from "effect/String";
 import { flow, pipe } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -2278,7 +2277,7 @@ export function mrTarget(project: string | null, iid: string): string {
 /** How a front door asks for one field of an offer's arguments, drawn from its JSON Schema. */
 export type OfferControl =
   | { readonly kind: "text" | "boolean" | "number" | "integer" | "list" }
-  | { readonly kind: "enum"; readonly options: ReadonlyArray<string> }
+  | { readonly kind: "enum"; readonly options: ReadonlyArray<Schema.Json> }
   /** JSON as typed, which must be an object or a list where `holds` says so. */
   | { readonly kind: "json"; readonly holds: "object" | "array" | null };
 
@@ -2388,8 +2387,8 @@ export const offerChoices = (field: OfferField): ReadonlyArray<OfferChoice> => {
     ...unset,
     ...Arr.map(control.options, (option, at) => ({
       key: `option-${at}`,
-      label: option === "" ? EMPTY_OPTION : option,
-      entry: option,
+      label: optionLabel(option),
+      entry: optionEntry(option),
     })),
   ];
 };
@@ -2404,7 +2403,14 @@ const DrawnField = Schema.Struct({
   type: Schema.optional(Schema.String),
   enum: Schema.optional(Schema.Array(Schema.Json)),
   items: Schema.optional(Schema.Struct({ type: Schema.optional(Schema.String) })),
-  anyOf: Schema.optional(Schema.Array(Schema.Struct({ type: Schema.optional(Schema.String) }))),
+  anyOf: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        type: Schema.optional(Schema.String),
+        enum: Schema.optional(Schema.Array(Schema.Json)),
+      }),
+    ),
+  ),
   description: Schema.optional(Schema.String),
   default: Schema.optional(Schema.Json),
 });
@@ -2415,11 +2421,11 @@ const decodeField = Schema.decodeUnknownOption(DrawnField);
 const isText = Schema.is(Schema.String);
 
 const controlOf = (field: DrawnField): OfferControl => {
-  if (field.enum !== undefined)
-    return Arr.every(field.enum, isText)
-      ? { kind: "enum", options: Arr.filter(field.enum, isText) }
-      : JSON_ANY;
-  const number = Arr.some(field.anyOf ?? [], (one) => one.type === "number");
+  if (field.enum !== undefined) return { kind: "enum", options: field.enum };
+  const anyOf = field.anyOf ?? [];
+  if (Arr.isReadonlyArrayNonEmpty(anyOf) && Arr.every(anyOf, (one) => one.enum !== undefined))
+    return { kind: "enum", options: Arr.flatMap(anyOf, (one) => one.enum ?? []) };
+  const number = Arr.some(anyOf, (one) => one.type === "number");
   switch (number ? "number" : field.type) {
     case "string":
       return { kind: "text" };
@@ -2438,6 +2444,10 @@ const controlOf = (field: DrawnField): OfferControl => {
   }
 };
 const JSON_ANY: OfferControl = { kind: "json", holds: null };
+
+/** A string option's entry is itself; any other is its JSON. */
+const optionEntry = (option: Schema.Json) => (isText(option) ? option : encodeJson(option));
+const optionLabel = (option: Schema.Json) => (option === "" ? EMPTY_OPTION : optionEntry(option));
 
 const labelOf = (name: string) =>
   pipe(name, Str.replaceAll("_", " "), Str.replaceAll("-", " "), Str.capitalize);
@@ -2458,15 +2468,16 @@ const readEntry = (field: OfferField, entry: string | undefined): Entry => {
   if (entry === undefined) return { _tag: "Unset" };
   const { control } = field;
   if (control.kind === "enum")
-    return control.options.includes(entry)
-      ? { _tag: "Read", value: entry }
-      : {
+    return Option.match(
+      Arr.findFirst(control.options, (one) => optionEntry(one) === entry),
+      {
+        onSome: (value): Entry => ({ _tag: "Read", value }),
+        onNone: (): Entry => ({
           _tag: "Refused",
-          why: `must be one of: ${Arr.join(
-            Arr.map(control.options, (one) => (one === "" ? EMPTY_OPTION : one)),
-            ", ",
-          )}`,
-        };
+          why: `must be one of: ${Arr.join(Arr.map(control.options, optionLabel), ", ")}`,
+        }),
+      },
+    );
   const text = Str.trim(entry);
   if (text === "") return { _tag: "Unset" };
   switch (control.kind) {

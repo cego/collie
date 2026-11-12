@@ -3,7 +3,8 @@
 
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import type { Schema } from "effect";
+import { Schema } from "effect";
+import { jsonSchemaFor } from "../src/sdk";
 import { asksBeforeTaking, offerChoices, offerFields, offerInput } from "../src/board-model";
 
 const drawn: Schema.Json = {
@@ -129,4 +130,41 @@ test("an optional choice can be left unset, a required one cannot, and an empty 
     ["release", "release"],
   ]);
   expect(new Set(Arr.map(offerChoices(then!), (one) => one.key)).size).toBe(4);
+});
+
+test("an enum of numbers, booleans or null is a choice of exactly those values, sent as themselves", () => {
+  const priorities: Schema.Json = {
+    type: "object",
+    properties: {
+      priority: { type: "number", enum: [1, 2], default: 2 },
+      mode: { enum: ["fast", true, null] },
+    },
+  };
+  const [priority, mode] = offerFields(priorities);
+  expect(priority!.control).toEqual({ kind: "enum", options: [1, 2] });
+  expect(priority!.initial).toBe("2");
+  expect(Arr.map(offerChoices(mode!), (one) => [one.label, one.entry])).toEqual([
+    ["Not set", undefined],
+    ["fast", "fast"],
+    ["true", "true"],
+    ["null", "null"],
+  ]);
+  expect(offerInput(priorities, { priority: "1", mode: "true" })).toEqual({
+    _tag: "Valid",
+    input: { priority: 1, mode: true },
+  });
+  expect(offerInput(priorities, { priority: "3", mode: "slow" })).toEqual({
+    _tag: "Invalid",
+    errors: {
+      priority: "Priority must be one of: 1, 2",
+      mode: "Mode must be one of: fast, true, null",
+    },
+  });
+  const mixed = jsonSchemaFor(Schema.Struct({ level: Schema.Literals(["low", 1, true]) })).document;
+  expect(offerFields(mixed)[0]!.control).toEqual({ kind: "enum", options: ["low", 1, true] });
+  expect(offerInput(mixed, { level: "1" })).toEqual({ _tag: "Valid", input: { level: 1 } });
+  expect(offerInput(mixed, { level: "2" })).toEqual({
+    _tag: "Invalid",
+    errors: { level: "Level must be one of: low, 1, true" },
+  });
 });
