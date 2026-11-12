@@ -850,7 +850,7 @@ fn opening_settings_asks_the_core_for_everything_it_shows_and_draws_it() {
     );
     assert_eq!(
         said(&runtime, "settings-count").as_deref(),
-        Some("42 settings")
+        Some("44 settings")
     );
     assert!(element(&runtime, "connection-gitlab").is_some());
 }
@@ -1057,6 +1057,60 @@ fn helles_token_is_saved_only_once_helle_says_whose_it_is() {
 }
 
 #[test]
+fn helles_copy_button_writes_the_command_to_the_clipboard() {
+    let (harness, mut runtime) = opened();
+    let clipboard = rune::clipboard::memory();
+    clipboard.set_text("what was copied before");
+    runtime.use_clipboard(&clipboard);
+
+    tap(&mut runtime, "details-helle", 1000.0);
+    tap(&mut runtime, "helle-copy", 1200.0);
+
+    assert_eq!(
+        clipboard.text().as_deref().map(String::as_str),
+        Some("/helle token")
+    );
+    assert!(harness.fake.asked_of("copyText").is_empty());
+}
+
+#[test]
+fn gitlab_paste_reads_the_clipboard_and_uses_the_typed_tokens_save() {
+    let (harness, mut runtime) = opened();
+    let clipboard = rune::clipboard::memory();
+    clipboard.set_text(" \t glpat-from-clipboard \n");
+    runtime.use_clipboard(&clipboard);
+
+    tap(&mut runtime, "details-gitlab", 1000.0);
+    tap(&mut runtime, "paste-gitlab", 1200.0);
+    runtime.frame(1400.0);
+
+    assert_eq!(
+        harness.fake.asked_of("saveGitlab"),
+        [json!({ "token": "glpat-from-clipboard" })]
+    );
+    assert!(harness.fake.asked_of("pasteGitlab").is_empty());
+    harness.fake.answer(
+        "saveGitlab",
+        Err(CallError("GitLab refused the token: 401".into())),
+    );
+    settle(&harness, &mut runtime, 1600.0);
+    assert_eq!(
+        said(&runtime, "gitlab-said").as_deref(),
+        Some("GitLab refused the token: 401")
+    );
+    assert!(!runtime.state.pages.settings.gitlab.saving);
+
+    // The typed-token path refuses blank input. A blank paste must not resubmit the
+    // preceding token, either, and it never asks the core to read the clipboard.
+    clipboard.set_text(" \t\n ");
+    tap(&mut runtime, "paste-gitlab", 1800.0);
+    runtime.frame(2000.0);
+    assert_eq!(harness.fake.asked_of("saveGitlab").len(), 1);
+    assert!(harness.fake.asked_of("pasteGitlab").is_empty());
+    assert!(!runtime.state.pages.settings.gitlab.saving);
+}
+
+#[test]
 fn a_connections_primary_action_reuses_a_login_and_says_what_came_of_it() {
     let (harness, mut runtime) = opened();
     harness.fake.will_answer(
@@ -1103,7 +1157,7 @@ fn the_search_keeps_the_rows_it_names_and_says_how_many() {
     type_text(&mut runtime, "quiet", 1100.0);
     assert_eq!(
         said(&runtime, "settings-count").as_deref(),
-        Some("2 of 42 settings shown")
+        Some("2 of 44 settings shown")
     );
     assert!(element(&runtime, "setting-flock-quiet_ms").is_some());
     assert!(element(&runtime, "setting-flock-trust").is_none());
@@ -1111,7 +1165,7 @@ fn the_search_keeps_the_rows_it_names_and_says_how_many() {
     tap(&mut runtime, "settings-only-set", 1300.0);
     assert_eq!(
         said(&runtime, "settings-count").as_deref(),
-        Some("1 of 42 settings shown")
+        Some("1 of 44 settings shown")
     );
 }
 

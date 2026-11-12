@@ -1181,7 +1181,11 @@ fn gitlab_details(page: &Settings, k: &Kit) -> Vec<El> {
                     .variant(ButtonVariant::Outline)
                     .control_size(ControlSize::Small)
                     .disabled(page.gitlab.saving)
-                    .on_press(super::paste_gitlab)
+                    .on_press_tx(|_: &mut App, tx| {
+                        tx.read_clipboard(|app: &mut App, held, _| {
+                            super::paste_gitlab(app, held.text())
+                        });
+                    })
                     .build(k)
                     .key("paste-gitlab"),
             )
@@ -1298,9 +1302,7 @@ fn helle_details(k: &Kit, page: &Settings) -> Vec<El> {
                     .child(
                         IconButton::new(k.glyph.copy)
                             .label(format!("Copy {COMMAND}"))
-                            .on_press(|app: &mut App| {
-                                super::fire(app, "copyText", json!({ "text": COMMAND }))
-                            })
+                            .on_press_tx(|_: &mut App, tx| tx.copy(COMMAND))
                             .build(k)
                             .key("helle-copy"),
                     ),
@@ -1763,7 +1765,7 @@ fn about_view(page: &Settings, k: &Kit) -> El {
     let ready = matches!(updates.news, News::Ready(_));
     let working = page.checking || matches!(updates.news, News::Checking(_) | News::Downloading(_));
     let action = if ready {
-        Button::new("Restart Desktop")
+        Button::new("Restart Collie")
             .variant(ButtonVariant::Contrast)
             .control_size(ControlSize::Small)
             .on_press(super::restart)
@@ -1797,7 +1799,7 @@ fn about_view(page: &Settings, k: &Kit) -> El {
                         .w_full()
                         .center_y()
                         .child(
-                            text(format!("Collie Desktop {}", updates.version))
+                            text(format!("Collie {}", updates.version))
                                 .font(k.ty.ui_medium)
                                 .color(k.c.text_strong)
                                 .grow(1.0),

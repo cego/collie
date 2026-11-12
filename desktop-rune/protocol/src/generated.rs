@@ -195,6 +195,8 @@ pub struct Park {
     pub since: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub healing: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
