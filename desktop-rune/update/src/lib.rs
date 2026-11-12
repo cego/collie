@@ -80,6 +80,11 @@ pub fn installed_from(exe: &Path) -> Option<(PathBuf, String)> {
 }
 
 pub fn apply_staged(install: &Path, bundle: &str, release_key: &str) -> Applied {
+    // The shell supplies its installed basename. Keep that boundary here as well: callers
+    // must never turn an archive, metadata or exchange target into a path outside install.
+    if bundle.is_empty() || matches!(bundle, "." | "..") || bundle.contains(['/', '\\', '\0']) {
+        return Applied::Refused("the installed bundle name is not a single filename".into());
+    }
     let staged = install.join(".update");
     let archive = staged.join(format!("{bundle}.tar"));
     let pending = archive.is_file();
@@ -148,13 +153,12 @@ fn swap(tar: &[u8], staged: &Path, installed: &Path, bundle: &str) -> io::Result
     if !next.is_dir() {
         return Err(io::Error::other(format!("the update holds no {bundle}")));
     }
-    let resources = if bundle.ends_with(".app") {
-        "Contents/Resources"
+    let metadata = if bundle.ends_with(".app") {
+        next.join("Contents/Resources/version.json")
     } else {
-        "Resources"
+        next.join("Resources/version.json")
     };
-    let actual: Identity =
-        serde_json::from_slice(&fs::read(next.join(resources).join("version.json"))?)?;
+    let actual: Identity = serde_json::from_slice(&fs::read(metadata)?)?;
     if actual != expected
         || actual.identifier != "dk.cego.collie.desktop"
         || actual.channel != "stable"

@@ -93,6 +93,41 @@ fn nothing_staged_leaves_the_installed_bundle_alone() {
 }
 
 #[test]
+fn an_update_bundle_name_cannot_escape_its_installation() {
+    let install = installed();
+    stage(
+        install.path(),
+        &fixture("bundle.tar"),
+        Some(&fixture("bundle.tar.sig")),
+    );
+    for name in [
+        "",
+        ".",
+        "..",
+        "../app",
+        "/app",
+        "other/app",
+        "app/.",
+        "other\\app",
+        "app\0",
+    ] {
+        assert!(
+            matches!(
+                apply_staged(install.path(), name, &key()),
+                Applied::Refused(_)
+            ),
+            "accepted {name:?}"
+        );
+        assert!(
+            !install.path().join(".collie-update.lock").exists(),
+            "invalid names must be rejected before filesystem writes"
+        );
+        assert!(install.path().join(".update/app.tar").is_file());
+        assert_eq!(launched(install.path()), "0.130.0");
+    }
+}
+
+#[test]
 fn a_bundle_whose_signature_does_not_match_is_refused_and_the_installed_one_remains() {
     let install = installed();
     let mut tar = fixture("bundle.tar");

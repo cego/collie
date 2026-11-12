@@ -4,8 +4,10 @@
 
 import { Effect, Schema } from "effect";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import { rename, rm } from "node:fs/promises";
 import type { FrameSchema } from "../../desktop/src/shared/channel";
+import { downloadRelease } from "../../desktop/src/bun/release-download";
 import { PreparedRecord, preparedRecordOf, releaseOf } from "../../src/desktop";
 import { appliedSignatureOf } from "../../src/signing";
 
@@ -127,16 +129,20 @@ const local = async () =>
 
 const PLATFORM = `${process.platform === "darwin" ? "macos" : "linux"}-${process.arch}`;
 
-const fetched = async (url: string) => {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`${url} answered ${response.status}`);
-  return response;
-};
+const fetched = (url: string) =>
+  Effect.runPromise(
+    downloadRelease(url).pipe(
+      Effect.flatMap((response) => response.arrayBuffer),
+      Effect.provide(FetchHttpClient.layer),
+    ),
+  );
 
 const latest = async () =>
   Effect.runPromise(
     Schema.decodeEffect(UpdateManifest)(
-      await (await fetched(`${(await local()).baseUrl}/stable-${PLATFORM}-update.json`)).text(),
+      new TextDecoder().decode(
+        await fetched(`${(await local()).baseUrl}/stable-${PLATFORM}-update.json`),
+      ),
     ),
   );
 
@@ -163,9 +169,9 @@ export const Updater = {
     downloadFailed = "";
     try {
       const found = await latest();
-      const archive = await (
-        await fetched(`${(await local()).baseUrl}/${found.artifact.file}`)
-      ).bytes();
+      const archive = new Uint8Array(
+        await fetched(`${(await local()).baseUrl}/${found.artifact.file}`),
+      );
       const retained = `${userData}/self-extraction/${found.hash}.tar`;
       await Bun.write(retained, Bun.zstdDecompressSync(archive));
       await Bun.write(
@@ -200,9 +206,9 @@ export const Updater = {
       Schema.decodeEffect(PreparedRecord)(await Bun.file(preparedRecordOf(userData)).text()),
     );
     const named = appliedSignatureOf(prepared.artifact_file);
-    const signature = await (
-      await fetched(`${releaseOf((await local()).baseUrl, prepared.version)}/${named}`)
-    ).text();
+    const signature = new TextDecoder().decode(
+      await fetched(`${releaseOf((await local()).baseUrl, prepared.version)}/${named}`),
+    );
     await Bun.write(`${staged}.sig`, signature);
     await Bun.write(`${staged}.json`, JSON.stringify(prepared));
     await Bun.write(`${staged}.partial`, Bun.file(prepared.retained_tar_path));
