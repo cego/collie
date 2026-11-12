@@ -31,12 +31,16 @@ export const ReviewStandingSchema = Schema.Union([
   Schema.TaggedStruct("Unanswered", {
     head: Schema.String,
     comments: Schema.Array(OpenCommentSchema),
+    approvers: Schema.optionalKey(Schema.Array(Schema.String)),
   }),
   Schema.TaggedStruct("Moved", { head: Schema.String }),
   Schema.TaggedStruct("Merged", { sha: Schema.String, by: Schema.String, at: Schema.String }),
   Schema.TaggedStruct("Closed", {}),
   Schema.TaggedStruct("Held", {}),
-  Schema.TaggedStruct("Waiting", { why: Schema.Array(Schema.String) }),
+  Schema.TaggedStruct("Waiting", {
+    why: Schema.Array(Schema.String),
+    approvers: Schema.optionalKey(Schema.Array(Schema.String)),
+  }),
   Schema.TaggedStruct("Unreadable", { reason: Schema.String }),
 ]);
 export type ReviewStanding = typeof ReviewStandingSchema.Type;
@@ -85,6 +89,7 @@ export function standingOf(
         file,
         line,
       })),
+      approvers: read.approvers,
     };
   const short = pipe(read.head, Str.slice(0, 8));
   const why = [
@@ -104,7 +109,7 @@ export function standingOf(
   ];
   return why.length === 0
     ? { _tag: "Ready", head: read.head, approvers: read.approvers }
-    : { _tag: "Waiting", why };
+    : { _tag: "Waiting", why, approvers: read.approvers };
 }
 
 /** The merge request's head, which of a round's commits it carries, and its open external comments. */

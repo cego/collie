@@ -87,6 +87,7 @@ import type { Integration } from "./integrate";
 import type { BenchmarkPlan, Measurement } from "./measurement-model";
 import type { MergeOutcome, Takeover } from "./landing";
 import type { ReviewHead, ReviewStanding } from "./review-wait";
+import type { PrerequisiteStanding } from "./prerequisites";
 import type {
   FastForward,
   MergeRequestRead,
@@ -128,7 +129,11 @@ export {
   type Calibration,
   type Measurement,
 } from "./measurement-model";
+/** The harness commits a tree lacks, decided by content (`carryHarness`, the base tree). */
+export { harnessLacking } from "./harness-held";
 export { MergeOutcomeSchema, TakeoverSchema, type MergeOutcome, type Takeover } from "./landing";
+/** Whether the Changes a ticket needs merged have landed (`HostApi.awaitPrerequisites`). */
+export { PrerequisiteStandingSchema, type PrerequisiteStanding } from "./prerequisites";
 /** Where a merge request's review stands for a Release Run (`HostApi.awaitReview`). */
 export {
   AnswerSchema,
@@ -617,6 +622,8 @@ export interface Declarations {
    */
   readonly checkout?: "branch" | "roaming";
   readonly closes?: "reported";
+  /** The healer: what the host starts for a park its own recovery could not clear. */
+  readonly heals?: true;
   readonly followUps?: ReadonlyArray<FollowUp>;
   readonly actions?: ReadonlyArray<ActionProvider>;
 }
@@ -1110,6 +1117,28 @@ export interface HostApi {
      */
     readonly whileConflicting?: boolean;
   }) => Effect.Effect<ReviewStanding, WorkflowError>;
+  /**
+   * One read of whether the Changes the ticket at `ticket` names on its `**Needs merged:**`
+   * line have landed: merged, with the merge commit on origin's default branch as fetched in
+   * `cwd`. `Landed` where every one has, or none is named; `Waiting` with the card's line
+   * otherwise; `Never` where one never can, saying why. Take it inside an Activity.
+   */
+  readonly prerequisites: (options: {
+    readonly runId: string;
+    readonly cwd: string;
+    readonly ticket: string;
+  }) => Effect.Effect<PrerequisiteStanding, WorkflowError>;
+  /**
+   * Reads the ticket's Prerequisites every 5 minutes, spending no model tokens, until they
+   * are `Landed`, one is `Never`, or a Hold or Stop ends the wait (`Held`). Meanwhile the card
+   * reads "Waiting for <run>'s <change> to merge.", with a person's 2-day patience, cleared
+   * when it returns. Take it inside an Activity, and suspend the Run on `Held` there.
+   */
+  readonly awaitPrerequisites: (options: {
+    readonly runId: string;
+    readonly cwd: string;
+    readonly ticket: string;
+  }) => Effect.Effect<PrerequisiteStanding, WorkflowError>;
   /**
    * Replies to the comment with id `comment` on the merge request this Run recorded, posting
    * `body` with a last line naming the Run and its Machine, in the comment's thread where it
@@ -1706,6 +1735,7 @@ export interface WorkflowMetadata {
    */
   readonly checkout?: typeof DeclaredCheckout.Type;
   readonly closes?: "reported";
+  readonly heals?: true;
   readonly followUps?: ReadonlyArray<FollowUp>;
   readonly actions?: ReadonlyArray<ActionProvider>;
   readonly path?: ReadonlyArray<StepMeta>;
@@ -1832,6 +1862,7 @@ const DeclaredMetadata = Schema.Struct({
   ),
   hints: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   closes: Schema.optionalKey(Schema.Literal("reported")),
+  heals: Schema.optionalKey(Schema.Literal(true)),
   outcome: Schema.optionalKey(
     Schema.Struct({
       fixed: Schema.optionalKey(Schema.String),

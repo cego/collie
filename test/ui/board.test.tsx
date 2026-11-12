@@ -10,7 +10,7 @@ import { expect, test } from "bun:test";
 import { Effect, Schedule } from "effect";
 import { createSignal } from "solid-js";
 import { testRender } from "@opentui/solid";
-import { TextAttributes } from "@opentui/core";
+import { TextAttributes, TextRenderable, type BaseRenderable } from "@opentui/core";
 import { runEffect } from "../support/effect";
 import { task } from "../support/task";
 import { App } from "../../src/ui/App";
@@ -27,7 +27,7 @@ import { NO_RUN_OUTCOME } from "../../src/views";
 import type { Live } from "../../src/live";
 import type { Card } from "../../src/cards";
 import type { Delivery } from "../../src/steering";
-import { NO_OUTCOME, type WorkspaceView } from "../../src/workspace";
+import { NO_OUTCOME } from "../../src/workspace";
 import { currentEnv } from "../../src/env";
 import { appState as homeState } from "../../src/flows";
 import { Herdr } from "../../src/herdr";
@@ -40,21 +40,6 @@ import type { UsageReading } from "../../src/usage-model";
 
 const NOW = epochMs("2026-09-16T12:00:00.000Z");
 
-function board(over: Partial<WorkspaceView> = {}): WorkspaceView {
-  return {
-    repo: "collie",
-    cwd: "/w/collie",
-    worktrees: [],
-    behind: null,
-    now: NOW,
-    agents: [],
-    extraAgents: 0,
-    active: [],
-    recent: [],
-    ...over,
-  };
-}
-
 function appState(over: Partial<AppState> = {}): AppState {
   return {
     view: "runs",
@@ -62,14 +47,11 @@ function appState(over: Partial<AppState> = {}): AppState {
     tasks: [],
     now: epochMs("2026-09-16T12:00:00.000Z"),
     density: "comfortable",
-    board: board(),
-    wide: null,
     note: null,
     history: null,
     definitions: null,
     settings: null,
     detail: null,
-    marks: {},
     live: null,
     previewing: null,
     stopping: [],
@@ -100,6 +82,21 @@ const mount = Effect.fn("board.mount")(function* (
   yield* flush;
   return {
     commands,
+    /** The card containing this unique name, for checking renderer ownership. */
+    cardNode(name: string) {
+      const find = (node: BaseRenderable): BaseRenderable | undefined => {
+        if (node instanceof TextRenderable && node.plainText === name) return node;
+        for (const child of node.getChildren()) {
+          const found = find(child);
+          if (found) return found;
+        }
+        return undefined;
+      };
+      const text = find(t.renderer.root);
+      const card = text?.parent?.parent?.parent;
+      if (!card) throw new Error(`no card containing ${JSON.stringify(name)}`);
+      return card;
+    },
     acted: () => Arr.filter(commands, (c) => c._tag !== "Select"),
     flush,
     frame: () => t.captureCharFrame(),
@@ -292,6 +289,50 @@ const HERD = [
     run: "r3",
   }),
 ];
+
+test("fresh Task snapshots keep card nodes and use the current Task on click", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const alpha = task({ id: "alpha", run: "run-alpha", name: "Alpha work" });
+      const beta = task({ id: "beta", run: "run-beta", name: "Beta work" });
+      const app = yield* mount(appState({ tasks: [alpha, beta] }));
+      const first = app.cardNode("Alpha work");
+      const second = app.cardNode("Beta work");
+
+      yield* app.setState(
+        appState({
+          tasks: [
+            { ...alpha, name: "Alpha updated" },
+            { ...beta, name: "Beta updated" },
+          ],
+        }),
+      );
+      const refreshedFirst = app.cardNode("Alpha updated");
+      const refreshedSecond = app.cardNode("Beta updated");
+
+      yield* app.setState(
+        appState({
+          tasks: [
+            { ...beta, id: "new-beta", run: "new-run-beta", name: "New beta" },
+            { ...alpha, name: "Alpha reordered" },
+          ],
+        }),
+      );
+      const reorderedFirst = app.cardNode("New beta");
+      const reorderedSecond = app.cardNode("Alpha reordered");
+      expect(app.said()).toContain("New beta");
+      yield* app.clickOn("New beta");
+      expect(app.commands).toContainEqual({
+        _tag: "Select",
+        id: "run:new-run-beta",
+        on: { task: "new-beta", run: "new-run-beta", name: "New beta" },
+      });
+      expect(refreshedFirst.num).toBe(first.num);
+      expect(refreshedSecond.num).toBe(second.num);
+      expect(reorderedFirst.num).toBe(first.num);
+      expect(reorderedSecond.num).toBe(second.num);
+    }),
+  ));
 
 test("the board opens on three sections under one sentence about the herd", () =>
   runEffect(
@@ -1983,7 +2024,7 @@ test(
 test("a newer release is said in the board's header, with the command", () =>
   runEffect(
     Effect.gen(function* () {
-      const stale = yield* mount(appState({ board: board({ newer: "99.0.0" }) }), 200);
+      const stale = yield* mount(appState({ newer: "99.0.0" }), 200);
       expect(stale.said()).toContain("Collie 99.0.0 is out — collie upgrade");
 
       const current = yield* mount(appState(), 200);
@@ -1998,7 +2039,7 @@ test("a newer release is said in full on a narrow pane, and hides none of the he
         const header = (app: { frame: () => string }) =>
           Arr.join(Str.split(app.frame(), "\n").slice(0, 5), "\n");
         const current = header(yield* mount(appState(), width));
-        const stale = header(yield* mount(appState({ board: board({ newer: "99.0.0" }) }), width));
+        const stale = header(yield* mount(appState({ newer: "99.0.0" }), width));
         for (const control of ["⌕", "+ New run", "≡"]) {
           expect(pipe_(stale, Str.includes(control))).toBe(pipe_(current, Str.includes(control)));
         }

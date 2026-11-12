@@ -139,7 +139,14 @@ import { helleUrlOf } from "./helle-url";
 import { currentPid, signalProcess } from "./lock";
 import { skillDirs, skillFile, type CheckoutKind, type InputStrategy } from "./definitions";
 import { EXCLUSIVE_STRATEGIES } from "./strategies";
-import { appendMetric, noteVerification, metricsOf, readMetrics, recoveriesIn } from "./metrics";
+import {
+  appendMetric,
+  noteVerification,
+  metricsOf,
+  readMetrics,
+  recoveriesIn,
+  type Metric,
+} from "./metrics";
 import { ForgeHttp, forgeHttpLayer } from "./forge/http";
 import { EngineTouches, engineTouchesLayer, touching } from "./engine-touches";
 import { ciJob } from "./ci-job";
@@ -179,7 +186,15 @@ import {
 import { redact } from "./redact";
 import { reportOf, type Recorded } from "./report";
 import { outcomeRecordsOf, type OutcomeRecords } from "./outcomes";
-import { Park, ParkCause, parkOf, parkWithRecovery, recoveryLine } from "./park-cause";
+import {
+  Park,
+  ParkCause,
+  healInFlight,
+  parkOf,
+  parkWithRecovery,
+  recoveryLine,
+} from "./park-cause";
+import { healOn, healRequest, healerFor, passedOver } from "./heal";
 import type { Metrics, Solution } from "./board-model";
 import {
   forgeOfRef,
@@ -233,7 +248,21 @@ import {
 } from "./intent";
 import { latest, readDispositions } from "./disposition";
 import { openFindingsIn } from "./output";
-import { changeKey, changeOfKey, isSingleRepo, planIssuesIn, planReposOf } from "./plan";
+import {
+  changeKey,
+  changeOfKey,
+  isSingleRepo,
+  planIssuesIn,
+  planReposOf,
+  prerequisitesOf,
+} from "./plan";
+import {
+  judgePrerequisites,
+  mergeRequestFor,
+  type MrLanding,
+  type PrerequisiteStanding,
+  type RunDetail,
+} from "./prerequisites";
 import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
 import { isOutcome, REQUESTABLE } from "./outcome";
 import { Foreground } from "./foreground";
@@ -649,6 +678,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly _tag: "HarnessBroken"; readonly why: ReadonlyArray<string> }
     | { readonly _tag: "ProofUnavailable"; readonly lost: ReadonlyArray<{ readonly metric: string; readonly why: string }> };
   export function calibrationOf(measured: Pick<Measurement, "plan" | "result">): Calibration;
+  /**
+   * The harness \`commits\` that \`at\` lacks, in order: those after the longest prefix whose touched
+   * files \`at\` holds exactly as that prefix left them, whatever their SHAs.
+   */
+  export function harnessLacking(cwd: string, at: string, commits: ReadonlyArray<string>): Effect.Effect<ReadonlyArray<string>, never, ChildProcessSpawner.ChildProcessSpawner>;
 
   /** What a merge at a head came to: \`MergedOutside\` is a merge this Run did not make. */
   export type MergeOutcome =
@@ -692,16 +726,24 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** Where a merge request's review stands, judged against the head the Run's Checks were proved on. */
   export type ReviewStanding =
     | { readonly _tag: "Ready"; readonly head: string; readonly approvers: ReadonlyArray<string> }
-    | { readonly _tag: "Unanswered"; readonly head: string; readonly comments: ReadonlyArray<OpenComment> }
+    | { readonly _tag: "Unanswered"; readonly head: string; readonly comments: ReadonlyArray<OpenComment>; readonly approvers?: ReadonlyArray<string> }
     | { readonly _tag: "Moved"; readonly head: string }
     | { readonly _tag: "Merged"; readonly sha: string; readonly by: string; readonly at: string }
     | { readonly _tag: "Closed" }
     | { readonly _tag: "Held" }
-    | { readonly _tag: "Waiting"; readonly why: ReadonlyArray<string> }
+    | { readonly _tag: "Waiting"; readonly why: ReadonlyArray<string>; readonly approvers?: ReadonlyArray<string> }
     | { readonly _tag: "Unreadable"; readonly reason: string };
   export const ReviewStandingSchema: Schema.Codec<ReviewStanding, unknown, never, never>;
   /** Whether a standing is still waiting on a teammate's approval, among whatever else. */
   export function waitsOnApproval(standing: ReviewStanding): boolean;
+
+  /** Whether the Changes a ticket needs merged have landed; a wait returns every one but Waiting. */
+  export type PrerequisiteStanding =
+    | { readonly _tag: "Landed" }
+    | { readonly _tag: "Waiting"; readonly on: string; readonly who: string }
+    | { readonly _tag: "Never"; readonly why: string }
+    | { readonly _tag: "Held" };
+  export const PrerequisiteStandingSchema: Schema.Codec<PrerequisiteStanding, unknown, never, never>;
 
   /** The merge request's head, which of a round's commits it carries, and its open external comments. */
   export interface ReviewHead {
@@ -925,7 +967,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     /** Every question this run has been asked, oldest first, with its answer once it has one. */
     readonly asked: (
       runId: string,
-    ) => Effect.Effect<ReadonlyArray<{ readonly name: string; readonly answer: string | null }>>;
+    ) => Effect.Effect<ReadonlyArray<{
+      readonly name: string;
+      readonly answer: string | null;
+      /** Who answered it, where the Run's audit says: a front door, and for chat the human's words that turn. */
+      readonly by?: { readonly origin: string; readonly said?: string };
+    }>>;
     /** Answers an open question with \`value\` as Collie, waking nothing that waits on it. */
     readonly close: (runId: string, decision: string, value: string) => Effect.Effect<void>;
     /** What has been verified for this run, and the tree in front of it now. */
@@ -1109,6 +1156,25 @@ export const SDK_DECLARATIONS = `declare module "collie" {
        */
       readonly whileConflicting?: boolean;
     }) => Effect.Effect<ReviewStanding, WorkflowError>;
+    /**
+     * One read of whether the Changes the ticket at \`ticket\` names on its **Needs merged:** line
+     * have landed on origin's default branch: Landed, Waiting or Never. Take it inside an Activity.
+     */
+    readonly prerequisites: (options: {
+      readonly runId: string;
+      readonly cwd: string;
+      readonly ticket: string;
+    }) => Effect.Effect<PrerequisiteStanding, WorkflowError>;
+    /**
+     * Reads the ticket's Prerequisites every 5 minutes, with no agent turn, until they are
+     * Landed, one is Never, or a Hold or Stop ends the wait (Held). Take it inside an Activity,
+     * and suspend on \`Held\` there.
+     */
+    readonly awaitPrerequisites: (options: {
+      readonly runId: string;
+      readonly cwd: string;
+      readonly ticket: string;
+    }) => Effect.Effect<PrerequisiteStanding, WorkflowError>;
     /** Replies to comment \`comment\` of the recorded merge request, signed and recorded on the Run, unless it is answered already; a \`disputed\` one is News. Take it inside an Activity. */
     readonly reply: (options: {
       readonly runId: string;
@@ -1225,6 +1291,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly status: "pending" | "suspended" | "complete" | "failed";
       /** The issues its input says \`Closes #n\` for. */
       readonly closes: ReadonlyArray<number>;
+      readonly mr: string | null;
+      /** Its merge request's disposition was recorded as merged. */
+      readonly merged: boolean;
+      /** The questions it asked that were not set aside, with what answered each. */
+      readonly questions: ReadonlyArray<{ readonly name: string; readonly answer: string | null }>;
     }>;
     readonly workflows: ReadonlyArray<WorkflowTally>;
     readonly failed: ReadonlyArray<{ runId: string; workflow: string; reason: string }>;
@@ -1383,6 +1454,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     /** A worktree the host cuts before the Run exists; absent works where it was started. */
     readonly checkout?: "branch" | "roaming";
     readonly closes?: "reported";
+    /** The healer: what the host starts for a park its own recovery could not clear. */
+    readonly heals?: true;
     readonly followUps?: ReadonlyArray<FollowUp>;
     readonly actions?: ReadonlyArray<ActionProvider>;
   }
@@ -2175,6 +2248,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly criteria: ReadonlyArray<string>;
     /** The benchmark plan its speed-up criterion is measured by, as benchmarkIn reads it. */
     readonly benchmark: string | null;
+    readonly prerequisites: ReadonlyArray<Prerequisite>;
+  }
+
+  /** Another Run's Change a ticket needs merged first; change is null for that Run's default Change. */
+  export interface Prerequisite {
+    readonly run: string;
+    readonly change: string | null;
   }
 
   /** The verification names a ticket's **Checks:** line promises. */
@@ -2249,7 +2329,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       | "outside-root"
       | "unknown-blocker"
       | "duplicate-ticket"
-      | "bad-change";
+      | "bad-change"
+      | "bad-prerequisite";
     readonly message: string;
   }
 
@@ -2561,7 +2642,7 @@ const isWritten = (exported: unknown): exported is WrittenDefinition =>
 
 /** A definition as the entry the rest of the host reads. */
 const entryOf = (definition: WorkflowDefinition): WorkflowEntry => {
-  const { outcome, checkout, closes, followUps, actions, connections } = definition;
+  const { outcome, checkout, closes, heals, followUps, actions, connections } = definition;
   const path = Option.getOrUndefined(
     Option.map(Option.fromNullishOr(definition.path), (present) =>
       Arr.map(present, (one) => one.meta),
@@ -2578,7 +2659,17 @@ const entryOf = (definition: WorkflowDefinition): WorkflowEntry => {
         );
   const declared = Rec.fromEntries(
     Arr.filter(
-      Rec.toEntries({ hints, outcome, checkout, closes, followUps, actions, path, connections }),
+      Rec.toEntries({
+        hints,
+        outcome,
+        checkout,
+        closes,
+        heals,
+        followUps,
+        actions,
+        path,
+        connections,
+      }),
       ([, value]) => value !== undefined,
     ),
   );
@@ -3728,6 +3819,33 @@ export const hostLayer = (options: {
       yield* ensureStepDurations(dir, yield* store.runs);
       const toast = options.toast;
       const notifying = yield* Semaphore.make(1);
+      /** Why this needs-you park goes straight to a person, or null where a Heal takes it first. */
+      const passedOverHere = (runId: string, cause: ParkCause, recoveries: ReadonlyArray<Metric>) =>
+        Effect.gen(function* () {
+          const row = yield* store.run(runId);
+          const placing = Option.getOrUndefined(decodePlacing(row?.placing ?? ""));
+          const env = Option.getOrUndefined(yield* currentEnv.pipe(Effect.option));
+          const userDir = options.userDir ?? env?.userDir ?? dir;
+          const audit = yield* under(readAudit(runDir(dir, runId))).pipe(
+            Effect.orElseSucceed(() => []),
+          );
+          const questions = yield* askedQuestions(yield* store.asked(runId), audit);
+          const passed = passedOver({
+            cause,
+            isHeal: placing?.heals !== undefined,
+            on: yield* under(healOn(userDir)).pipe(Effect.orElseSucceed(() => true)),
+            waitsOnYou:
+              (yield* anySet(runId, HOLD, STOP)) ||
+              Arr.some(questions, (one) => one.answer === null),
+            recoveries,
+          });
+          if (passed !== null) return passed;
+          const healer =
+            row === null || env === undefined
+              ? null
+              : yield* under(healerFor({ pluginRoot: env.pluginRoot, userDir }, row.project));
+          return healer === null ? "no workflow declares itself the healer" : null;
+        });
       const notify: Notifier["Service"]["notify"] = (runId, kind, body, about = {}) =>
         under(
           Effect.gen(function* () {
@@ -4285,6 +4403,85 @@ export const hostLayer = (options: {
             return yield* new WorkflowError({ reason: `${mr} could not be read: ${read.reason}` });
           return { mr, ref, read };
         });
+      /** Where a recorded merge request went: merged lands only once origin's default branch has it. */
+      const landingOf = (mr: string, cwd: string) =>
+        under(
+          Effect.gen(function* () {
+            const ref = mrRefOf(mr);
+            if (ref === null) return { _tag: "Unreadable" } satisfies MrLanding;
+            const read = yield* forgeOf(ref).readReview(ref, cwd, runShell);
+            if (!read.ok) return { _tag: "Unreadable" } satisfies MrLanding;
+            if (read.state === "open") return { _tag: "Open" } satisfies MrLanding;
+            if (read.state === "closed") return { _tag: "Closed" } satisfies MrLanding;
+            const sha = read.merged?.sha ?? "";
+            const branch = yield* defaultBase(runShell, cwd);
+            if (sha === "" || branch === null)
+              return { _tag: "Merged", onDefault: false } satisfies MrLanding;
+            yield* runShell("git", ["fetch", "-q", "origin", branch], cwd);
+            const carried = yield* runShell(
+              "git",
+              ["merge-base", "--is-ancestor", sha, `origin/${branch}`],
+              cwd,
+            );
+            return { _tag: "Merged", onDefault: carried.code === 0 } satisfies MrLanding;
+          }),
+        );
+      const prerequisitesRead = (asked: {
+        readonly runId: string;
+        readonly cwd: string;
+        readonly ticket: string;
+      }) =>
+        Effect.gen(function* () {
+          const text = yield* fs.readFileString(asked.ticket).pipe(
+            Effect.mapError(
+              (cause) =>
+                new WorkflowError({
+                  reason: `the ticket ${asked.ticket} could not be read: ${cause.message}`,
+                }),
+            ),
+          );
+          const prerequisites = prerequisitesOf(text);
+          if (prerequisites === null)
+            return {
+              _tag: "Never",
+              why: `the **Needs merged:** line of ${asked.ticket} cannot be read, so nothing it names can be waited on`,
+            } satisfies PrerequisiteStanding;
+          if (prerequisites.length === 0) return { _tag: "Landed" } satisfies PrerequisiteStanding;
+          const rows = yield* store.runs;
+          const optionsOf = (run: string) =>
+            decodeStrings(
+              Option.getOrUndefined(Arr.findFirst(rows, (row) => row.run === run))?.options ?? "{}",
+            ).pipe(Effect.orElseSucceed((): Record<string, string> => ({})));
+          const details = new Map<string, RunDetail>();
+          for (const run of Arr.dedupe(
+            Arr.flatMap(prerequisites, (one) => [one.run, ...descendantsOf(rows, one.run)]),
+          )) {
+            const options = yield* optionsOf(run);
+            details.set(run, {
+              repo: options.repo || ".",
+              change: options.change || null,
+              ended:
+                (yield* set(STOP, run)) ||
+                (yield* fs
+                  .exists(`${runDir(dir, run)}/terminal.json`)
+                  .pipe(Effect.orElseSucceed(() => false))),
+              mr: yield* mergeRequestOf(fs, dir, run),
+            });
+          }
+          const repo = (yield* optionsOf(asked.runId)).repo || ".";
+          const landings = new Map<string, MrLanding>();
+          for (const prerequisite of prerequisites) {
+            const mr = mergeRequestFor(prerequisite, repo, rows, details);
+            if (mr !== null && !landings.has(mr)) landings.set(mr, yield* landingOf(mr, asked.cwd));
+          }
+          return judgePrerequisites({
+            asking: { run: asked.runId, repo },
+            prerequisites,
+            rows,
+            details,
+            landings,
+          });
+        });
       const host = Host.of({
         dir,
         build: manifest.version,
@@ -4561,9 +4758,29 @@ export const hostLayer = (options: {
                       yield* Schema.encodeEffect(ParkJson)(info).pipe(Effect.orDie),
                     );
                   }
+                  if (Option.getOrNull(before) === why && causeBefore === cause) {
+                    yield* put(causePath, cause);
+                    yield* put(path, why);
+                    return;
+                  }
+                  // Decided before the park shows: a resume that comes while the Run is still
+                  // in this call is lost, and finding the healer loads every module.
+                  const recoveries = recoveriesIn(
+                    yield* readMetrics(evidenceDir(dir, runId)).pipe(Effect.provideContext(bun)),
+                  );
+                  const park = parkWithRecovery(info, recoveries);
+                  const healing = Arr.findFirst(recoveries, healInFlight);
+                  const claims =
+                    park.kind !== "rechecks" &&
+                    !Arr.some(
+                      recoveries,
+                      (line) => line.action === "healed" && line.park === park.id,
+                    ) &&
+                    // A park its Heal caused again is that Heal's to settle.
+                    !(healing._tag === "Some" && healing.value.cause === cause);
+                  const passed = claims ? yield* passedOverHere(runId, cause, recoveries) : null;
                   yield* put(causePath, cause);
                   yield* put(path, why);
-                  if (Option.getOrNull(before) === why && causeBefore === cause) return;
                   yield* under(
                     Effect.gen(function* () {
                       yield* appendMetric(evidenceDir(dir, runId), {
@@ -4578,19 +4795,30 @@ export const hostLayer = (options: {
                       });
                     }),
                   );
-                  const park = parkWithRecovery(
-                    info,
-                    recoveriesIn(
-                      yield* readMetrics(evidenceDir(dir, runId)).pipe(Effect.provideContext(bun)),
-                    ),
+                  if (!claims) return;
+                  yield* under(
+                    appendMetric(evidenceDir(dir, runId), {
+                      at: yield* nowIso,
+                      kind: "recovery",
+                      subject: runId,
+                      value: 0,
+                      note: passed ?? why,
+                      cause,
+                      build: manifest.version,
+                      action: "healed",
+                      outcome: passed === null ? "claimed" : "skipped",
+                      recoveryId: healRequest(runId, park.id!),
+                      park: park.id,
+                      since: park.since,
+                    }),
                   );
-                  if (park.kind !== "rechecks")
-                    yield* notify(
-                      runId,
-                      "needs-you",
-                      Arr.join([why, ...(park.history ?? [])], "\n"),
-                      { key: `parked:${cause}` },
-                    );
+                  if (passed === null) return;
+                  yield* notify(
+                    runId,
+                    "needs-you",
+                    Arr.join([why, ...(park.history ?? [])], "\n"),
+                    { key: `parked:${cause}` },
+                  );
                 })
           ).pipe(Effect.andThen(store.announce));
         },
@@ -5072,6 +5300,24 @@ export const hostLayer = (options: {
               }
             });
             const standing = yield* Effect.raceFirst(controlled, polled);
+            yield* waitOn(asked.runId, null);
+            return standing;
+          }),
+        prerequisites: prerequisitesRead,
+        awaitPrerequisites: (asked) =>
+          Effect.gen(function* () {
+            const controlled = untilSet(asked.runId, HOLD, STOP).pipe(
+              Effect.as({ _tag: "Held" } satisfies PrerequisiteStanding),
+            );
+            const polled = Effect.gen(function* () {
+              for (;;) {
+                const standing = yield* prerequisitesRead(asked);
+                if (standing._tag !== "Waiting") return standing;
+                yield* waitOn(asked.runId, standing);
+                yield* Effect.sleep(options.reviewPoll ?? "5 minutes");
+              }
+            });
+            const standing: PrerequisiteStanding = yield* Effect.raceFirst(controlled, polled);
             yield* waitOn(asked.runId, null);
             return standing;
           }),
@@ -5985,6 +6231,8 @@ type Cut = typeof Cut.Type;
  */
 const Placing = Schema.Struct({
   requestedBy: Schema.optional(RequestedBy),
+  /** The Run this one is a Heal of. */
+  heals: Schema.optionalKey(Schema.String),
   /** The human door that started it and their words, where one did. */
   started: Schema.optional(StartedSchema),
   branchBase: Schema.optional(Schema.String),
@@ -6263,6 +6511,8 @@ export { Steered };
 
 export const RunView = Schema.Struct({
   requestedBy: Schema.optional(RequestedBy),
+  /** The parked Run this one is a Heal of; absent for every other Run. */
+  heals: Schema.optionalKey(Schema.String),
   report: Schema.optional(RunReport),
   linkNotices: Schema.optional(Schema.Array(LinkDelivery)),
   stepNotes: Schema.optional(Schema.Array(SteeringNote)),
@@ -6553,6 +6803,11 @@ export interface RegistryApi {
   readonly resume: (
     runId: string,
     recoveryPark?: string,
+    /**
+     * The park a Heal's resume was started for: it applies only while the Run is still there
+     * and neither it nor a Run under it has a Stop, which a Heal must never undo.
+     */
+    healing?: string,
   ) => Effect.Effect<typeof Controlled.Type, HostRefused, HostServices>;
   /**
    * What this Run offers to do next, decided by the module as it is now rather than as it
@@ -6573,6 +6828,8 @@ export interface RegistryApi {
     readonly input: Readonly<Record<string, Schema.Json>>;
     readonly request: string;
     readonly attachments?: ReadonlyArray<string> | undefined;
+    /** The human who took the offer, recorded as who started the Run it starts. */
+    readonly started?: Started | undefined;
   }) => Effect.Effect<Admitted, HostRefused | RequestConflict, HostServices>;
   /** The generation a run is on and the execution it was admitted as. */
   readonly routed: (
@@ -6583,6 +6840,8 @@ export interface RegistryApi {
 /** What a start is given. */
 export interface StartOptions {
   readonly requestedBy?: RequestedBy;
+  /** The parked Run this one is started to heal. */
+  readonly heals?: string;
   /** The human door that started it and their words, where one did. */
   readonly started?: Started;
   readonly branchBase?: string | undefined;
@@ -7918,6 +8177,7 @@ const makeRegistry: (
     );
     const admitted = {
       requestedBy: placing?.requestedBy,
+      ...(placing?.heals !== undefined && { heals: placing.heals }),
       closes: placing?.closes,
       report,
       linkNotices: linkNotices.length === 0 ? undefined : linkNotices,
@@ -8629,10 +8889,23 @@ const makeRegistry: (
     set: boolean,
     recovered?: ReadonlySet<string>,
     alone = false,
+    healing?: string,
   ) {
     // A stop reaches the children a Run started: they are its work too.
     const runs =
       control === STOP && !alone ? [runId, ...descendantsOf(yield* store.runs, runId)] : [runId];
+    if (healing !== undefined && control === STOP && !set) {
+      for (const one of runs) {
+        if ((yield* controlsOf(one)).includes(STOP))
+          return yield* new HostRefused({
+            reason: `${one}: a person stopped it, and only a person resumes it`,
+          });
+      }
+      if ((yield* view(runId))?.park?.id !== healing)
+        return yield* new HostRefused({
+          reason: `${runId} has left park ${healing}, the one its Heal was started for`,
+        });
+    }
     // Written before anything is woken, so a run that wakes up never finds the request
     // that stopped it still there.
     const stopped = new Set<string>();
@@ -8674,6 +8947,7 @@ const makeRegistry: (
   const registering = yield* Semaphore.make(1);
   // A grant is a read and a write of one file: two at once would each drop the other's.
   const granting = yield* Semaphore.make(1);
+  const invoking = yield* Semaphore.make(1);
 
   const mint = Effect.fn("Engine.Registry.mint")(function* (file: string) {
     // Read as it is now to learn the id this file claims, then register the next
@@ -8736,7 +9010,10 @@ const makeRegistry: (
       Effect.orElseSucceed(() => offer),
     );
 
-  const offeredBy = Effect.fn("Engine.Registry.offeredBy")(function* (runId: string) {
+  const offeredBy = Effect.fn("Engine.Registry.offeredBy")(function* (
+    runId: string,
+    request?: string,
+  ) {
     const row = yield* store.run(runId);
     if (row === null) {
       return yield* new HostRefused({ reason: `no run "${runId}" was started here` });
@@ -8783,7 +9060,7 @@ const makeRegistry: (
       facts.recovery = yield* recoveryFor(store, dir, runId, runId, workSource).pipe(
         Effect.provideContext(bun),
       );
-    const available: Declared[] = [];
+    const refused = new Map<string, string>();
     const readings = new Map<ConnectionId, ConnectionReading>();
     for (const offer of generation.offers) {
       const ids = yield* connectionIds(
@@ -8792,7 +9069,6 @@ const makeRegistry: (
         placedOf(row, options).cwd,
         input,
       );
-      let usable = true;
       for (const id of ids) {
         const reading =
           readings.get(id) ??
@@ -8800,12 +9076,11 @@ const makeRegistry: (
             Effect.provideContext(bun),
           ));
         readings.set(id, reading);
-        if (reading.state !== "ok") usable = false;
+        if (reading.state !== "ok" && !refused.has(offer.id))
+          refused.set(offer.id, `needs ${id}: ${reading.detail}. Fix: ${reading.fix}`);
       }
-      if (usable) available.push(offer);
     }
     // A plan spanning repositories is a fan-out, which an offer does not start.
-    const refused = new Map<string, string>();
     for (const offer of generation.offers) {
       const field = Option.getOrUndefined(
         Arr.findFirst(Rec.toEntries(offer.inputs), ([, source]) => source === "plan-dir"),
@@ -8866,7 +9141,37 @@ const makeRegistry: (
       }).pipe(Effect.provideContext(bun));
       if (still !== null) for (const offer of again) refused.set(offer.id, still);
     }
-    return { row, generation: { ...generation, offers: available }, facts, where, refused, input };
+    const runs = yield* store.runs;
+    const mr = facts.mrUrl;
+    const mrId = mr === null ? null : yield* mrIdIn(mr, placedOf(row, options).cwd, runShell);
+    const merged = mrId === null ? undefined : (yield* readMrStates(dir)).get(mrId);
+    for (const offer of generation.offers) {
+      const fields = Arr.filter(
+        Rec.toEntries(offer.inputs),
+        ([, source]) => source === "merge-request",
+      );
+      const withMr = mr !== null && fields.length > 0;
+      if (withMr && (merged === "merged" || merged === "on-stage" || merged === "in-prod"))
+        refused.set(offer.id, `${mr} is merged`);
+      const workflow = offer.workflow === SELF ? generation.id : offer.workflow;
+      for (const candidate of runs) {
+        if (candidate.workflow !== workflow || candidate.request === request) continue;
+        if (candidate.parent !== runId) {
+          if (!withMr) continue;
+          const given = yield* decodeInput(candidate.input).pipe(
+            Effect.orElseSucceed((): Record<string, Schema.Json> => ({})),
+          );
+          if (!Arr.some(fields, ([name]) => given[name] === mr)) continue;
+        }
+        if (yield* workflowEnded(candidate.run)) continue;
+        refused.set(
+          offer.id,
+          `a ${offer.title}${withMr ? ` of ${mr}` : ""} is still going: ${candidate.run}`,
+        );
+        break;
+      }
+    }
+    return { row, generation, facts, where, refused, input };
   });
 
   const connectionIds = Effect.fn("Engine.Registry.connectionIds")(function* (
@@ -9018,6 +9323,7 @@ const makeRegistry: (
       options: launch,
       placing: encodePlacing({
         requestedBy: options.requestedBy,
+        ...(options.heals !== undefined && { heals: options.heals }),
         started: options.started,
         branchBase: options.branchBase,
         closes: generation.closes,
@@ -9270,7 +9576,11 @@ const makeRegistry: (
 
     recover: recover().pipe(Effect.map((result) => result.registrations)),
 
-    resume: Effect.fn("Engine.Registry.resume")(function* (runId: string, recoveryPark?: string) {
+    resume: Effect.fn("Engine.Registry.resume")(function* (
+      runId: string,
+      recoveryPark?: string,
+      healing?: string,
+    ) {
       const recovered = yield* recover(
         new Set(
           recoveryPark === undefined
@@ -9281,7 +9591,7 @@ const makeRegistry: (
       entryCauses.set(runId, "resumed");
       const controlled = yield* (
         recoveryPark === undefined
-          ? applyControl(runId, STOP, false, recovered.takenUp)
+          ? applyControl(runId, STOP, false, recovered.takenUp, false, healing)
           : Effect.gen(function* () {
               const found = yield* routed(runId);
               const woken = yield* wake(runId, found, recoveryPark);
@@ -9292,7 +9602,7 @@ const makeRegistry: (
       if (controlled._tag === "Failure")
         return {
           ...recorded,
-          applied: recovered.takenUp.has(runId),
+          applied: healing === undefined && recovered.takenUp.has(runId),
           detail: controlled.failure.reason,
         };
       if (recovered.takenUp.has(runId) || controlled.success.woken.includes(runId))
@@ -9340,8 +9650,12 @@ const makeRegistry: (
       readonly input: Readonly<Record<string, Schema.Json>>;
       readonly request: string;
       readonly attachments?: ReadonlyArray<string> | undefined;
+      readonly started?: Started | undefined;
     }) {
-      const { row, generation, facts, where, refused, input } = yield* offeredBy(options.runId);
+      const { row, generation, facts, where, refused, input } = yield* offeredBy(
+        options.runId,
+        options.request,
+      );
       // Asked again here, of the module as it is now: the card this was read from may
       // have been drawn before the file was edited, and a card is not authority.
       const offer = Option.getOrUndefined(
@@ -9390,10 +9704,11 @@ const makeRegistry: (
         parent: row.run,
         verify: inherited,
         attachments: options.attachments,
+        started: options.started,
         // A follow-up carries on the parent's work, so it is on the parent's branch.
         options: carried,
       });
-    }),
+    }, invoking.withPermits(1)),
 
     start: startWork,
     check: (options) => settleStart(options, "run-check").pipe(Effect.asVoid),

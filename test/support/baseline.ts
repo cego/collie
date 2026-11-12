@@ -75,7 +75,7 @@ import type { RunState } from "../../src/runs";
 import { registeredAt, runFacts } from "./records";
 import { readReplies } from "../../src/replies";
 import { disputesIn } from "../../src/proactive";
-import { AwaitingJson } from "../../src/awaiting";
+import { AwaitingJson, awaitingLine } from "../../src/awaiting";
 import { installFakeSkills } from "./defs";
 import { Agents, agentsLayer, type AgentHost } from "../../src/agents";
 import {
@@ -155,6 +155,7 @@ const UNRELATED = {
   "self-improve": "look-back",
   stage: "try-it-out",
   "tune-up": "make-haste",
+  heal: "mend-it",
 } as const;
 type Shipped = keyof typeof UNRELATED;
 
@@ -579,6 +580,7 @@ const undeclaredWork = () =>
           "investigate",
           "self-improve",
           "tune-up",
+          "heal",
         ] as const,
         shipped,
       ),
@@ -1856,7 +1858,7 @@ scenario(
 );
 
 scenario(
-  "Flow: a plan started to build never reaches its End menu, which is not run",
+  "Flow: a plan started to build forecasts no End menu, and its Steps before it are done",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -1871,7 +1873,6 @@ scenario(
           ["grill", "done"],
           ["spec", "done"],
           ["tickets", "done"],
-          ["menu", "not-run"],
         ]);
       }),
     ),
@@ -3283,6 +3284,65 @@ scenario(
   120_000,
 );
 
+const HEALED = {
+  diagnosis: "The reviewer finished its turn without writing its Output.",
+  actions: ["told the reviewer where its Output goes", "resumed the Run"],
+  result: "resumed",
+  finding: {
+    collie_defect: true,
+    key: "output-path-lost",
+    root_cause: "A reminder does not repeat the Output path once the agent's context is compacted.",
+    fix: "Repeat the Output path in every Output reminder.",
+    regression: "A reminder after compaction names the Output path.",
+  },
+};
+
+scenario(
+  "heal asks one healer about the parked Run and sends an Output without a finding back for repair",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { finding: _, ...unfound } = HEALED;
+        yield* rig.queueOutputs([unfound, HEALED]);
+        const result = yield* ran({
+          entry: shipped("heal"),
+          runId: "r-heal",
+          input: { run: "run-parked", park: "park-1" },
+        });
+        expect(result).toMatchObject({ _tag: "Success", success: HEALED });
+        const messages = yield* prompts();
+        expect(messages).toHaveLength(2);
+        expect(messages[1]).toContain("finding");
+        expect(yield* asked("r-heal", "heal")).toContain("Run run-parked is parked (park park-1)");
+        expect(yield* persona("r-heal", "heal")).toContain("healer");
+        expect((yield* loadEntry(shipped("heal"))).metadata?.heals).toBe(true);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "heal sends an escalation that does not say why a person is needed back for repair",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const escalated = { ...HEALED, result: "escalate" };
+        const reasoned = { ...escalated, needs_person: "Only you can pick the release date." };
+        yield* rig.queueOutputs([escalated, reasoned]);
+        const result = yield* ran({
+          entry: shipped("heal"),
+          runId: "r-heal-escalates",
+          input: { run: "run-parked", park: "park-1" },
+        });
+        expect(result).toMatchObject({ _tag: "Success", success: reasoned });
+        const messages = yield* prompts();
+        expect(messages).toHaveLength(2);
+        expect(messages[1]).toContain("needs_person");
+      }),
+    ),
+  120_000,
+);
+
 const asApproved = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Array(VerifySpecSchema))),
   Result.getOrThrow,
@@ -3960,6 +4020,39 @@ scenario(
 );
 
 scenario(
+  "an empty recovery is new work, built as an ordinary start",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-work.md", title: "work", checks: "unit" }]);
+        yield* approve("r-empty-recovery", ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+
+        // An agent's start gives every Input, one it leaves out as "" (docs/cli.md), and the
+        // branch of new work was never pushed, so there is nothing to recover from.
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-empty-recovery",
+          input: { plan, recovery: "", ...FINISH },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        const launches = yield* launchesAt(dir, "r-empty-recovery");
+        expect(Arr.map(launches, (launch) => launch.operation)).toEqual([
+          "build",
+          "review-1",
+          "mr",
+        ]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "implement builds a plan one ticket at a time on one implementer, then reviews what it built",
   () =>
     runEffect(
@@ -4300,6 +4393,8 @@ scenario(
         yield* approve(runId, ["unit"]);
         yield* rig.queueOutputs([
           BUILT,
+          // The first stall is handed back without asking; the second is asked about.
+          { ...BUILT, findings: [{ severity: "blocker", title: "dependency unavailable" }] },
           { ...BUILT, findings: [{ severity: "blocker", title: "dependency unavailable" }] },
           {
             ...BUILT,
@@ -5117,7 +5212,7 @@ const stallAsked = (
   ).pipe(Effect.map(([rows]) => Arr.filter(rows, (row) => row.decision === name)));
 
 scenario(
-  "a criteria hand-back that changed nothing and reported a blocker asks, and Stop parks before any review",
+  "a first criteria hand-back that changed nothing and reported a blocker is handed back without asking, a second asks, and Stop parks before any review",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -5149,7 +5244,7 @@ scenario(
                 recommended: "Hand back",
                 shortfall: null,
               });
-              expect(Arr.join(yield* prompts(), "\n")).not.toContain(
+              expect(Arr.join(yield* prompts(), "\n")).toContain(
                 "01-first.md.criteria-2.prompt.md",
               );
               yield* run.answer("01-first.md.criteria-stalled-1", "Stop");
@@ -5162,8 +5257,11 @@ scenario(
           "01-first.md: a criteria hand-back reported a blocker and changed nothing, so no review starts",
         );
         expect(why).toContain("**Named.** Each one is named in the log.");
+        expect(yield* runLog("r-stalled")).toContain(
+          "01-first.md: a criteria hand-back reported a blocker and changed nothing; Collie handed it back without asking, and asks if it does again",
+        );
         const sent = Arr.join(yield* prompts(), "\n");
-        expect(sent).not.toContain("01-first.md.criteria-2.prompt.md");
+        expect(sent).not.toContain("01-first.md.criteria-3.prompt.md");
         expect(sent).not.toContain("review-1");
       }),
     ),
@@ -5183,7 +5281,7 @@ scenario(
           { file: "02-second.md", title: "the second one", checks: "unit" },
         ]);
         yield* approve("r-handed-again", ["unit"]);
-        yield* rig.queueOutputs([COUNTED_ONLY, BLOCKED, BLOCKED]);
+        yield* rig.queueOutputs([COUNTED_ONLY, BLOCKED, BLOCKED, BLOCKED]);
         yield* driven(
           { entry: shipped("implement"), runId: "r-handed-again", input: { plan, ...FINISH } },
           (run) =>
@@ -5201,10 +5299,10 @@ scenario(
         );
         yield* bin.restore();
 
-        expect(yield* asked("r-handed-again", "01-first.md.criteria-2")).toContain(
+        expect(yield* asked("r-handed-again", "01-first.md.criteria-3")).toContain(
           "acceptance criterion not answered: **Named.** Each one is named in the log.",
         );
-        expect(Arr.join(yield* prompts(), "\n")).not.toContain("01-first.md.criteria-3.prompt.md");
+        expect(Arr.join(yield* prompts(), "\n")).not.toContain("01-first.md.criteria-4.prompt.md");
       }),
     ),
   120_000,
@@ -5578,6 +5676,302 @@ const withOrigin = () =>
         ),
     };
   });
+
+const PREREQUISITE_MR = `https://${PROJECT.gitlab}/-/merge_requests/41`;
+
+const prerequisiteOpen = (runId: string) =>
+  Effect.gen(function* () {
+    const origin = yield* withOrigin();
+    const bin = yield* FakeBin.make(`${rig.root}/bin`);
+    const open: ForgeModel = {
+      installed: true,
+      loggedIn: [FORGE_HOST.gitlab],
+      login: "tester",
+      mrs: [{ project: PROJECT.gitlab, iid: "41", state: "open", head: "feed41" }],
+    };
+    const forge = yield* forgeOnPath(bin, "gitlab", open);
+    const other = `${runId}-other`;
+    yield* session(
+      Effect.gen(function* () {
+        yield* admit({ runId: other, workflow: "implement", input: {} });
+        yield* (yield* Host).mergeRequest(other, PREREQUISITE_MR);
+      }),
+    );
+    return {
+      ...origin,
+      bin,
+      forge,
+      open,
+      other,
+      land: Effect.gen(function* () {
+        const merged = yield* origin.moveMaster("prerequisite.txt", "landed\n");
+        yield* forge.set({
+          ...open,
+          mrs: [{ ...open.mrs[0]!, state: "merged", mergedSha: merged }],
+        });
+        return merged;
+      }),
+    };
+  });
+
+const awaitingPrerequisite = (runId: string) =>
+  Effect.gen(function* () {
+    const prerequisite = yield* prerequisiteOpen(runId);
+    const ticket = `${rig.root}/${runId}-ticket.md`;
+    yield* (yield* FileSystem.FileSystem)
+      .writeFileString(ticket, `# 02: needs the other\n\n**Needs merged:** ${prerequisite.other}\n`)
+      .pipe(Effect.orDie);
+    return {
+      ...prerequisite,
+      run: {
+        entry: `${fixtures}/awaits-prerequisites.workflow.ts`,
+        runId,
+        input: { ticket, cwd: rig.projectDir },
+      },
+    };
+  });
+
+scenario(
+  "a ticket's wait on another Run's Change goes on through a merge elsewhere, and lands once master has it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-prerequisite-lands";
+        const { git, bin, forge, open, other, run } = yield* awaitingPrerequisite(runId);
+        const waiting = yield* Effect.forkChild(ran(run));
+        const line = `${other}'s Change to merge`;
+        expect(
+          yield* until(
+            () => awaitingOn(runId),
+            (on) => on !== "",
+          ),
+        ).toBe(line);
+
+        const upstream = `${rig.root}/upstream`;
+        yield* git(upstream, "switch", "-qc", "side");
+        yield* (yield* FileSystem.FileSystem)
+          .writeFileString(`${upstream}/side.txt`, "side\n")
+          .pipe(Effect.orDie);
+        yield* git(upstream, "add", "side.txt");
+        yield* git(upstream, "commit", "-qm", "the other Run's Change");
+        yield* git(upstream, "push", "-q", "origin", "side");
+        const merged = yield* git(upstream, "rev-parse", "HEAD");
+        yield* forge.set({
+          ...open,
+          mrs: [{ ...open.mrs[0]!, state: "merged", mergedSha: merged }],
+        });
+        const asked = forge.requests().length;
+        yield* until(
+          () => Effect.sync(() => forge.requests().length),
+          (now) => now >= asked + 2,
+        );
+        expect(yield* awaitingOn(runId)).toBe(line);
+
+        yield* git(upstream, "switch", "-q", "master");
+        yield* git(upstream, "merge", "-q", "--no-edit", "side");
+        yield* git(upstream, "push", "-q", "origin", "master");
+        const result = yield* Fiber.join(waiting);
+        yield* bin.restore();
+        expect(said(result)).toBe("Landed");
+        expect(yield* awaitingOn(runId)).toBe("");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a hold ends a ticket's wait on another Run's Change, and clears what it awaited",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-prerequisite-held";
+        const { bin, other, run } = yield* awaitingPrerequisite(runId);
+        const status = yield* running(run, (status) =>
+          Effect.gen(function* () {
+            yield* until(
+              () => awaitingOn(runId),
+              (on) => on === `${other}'s Change to merge`,
+            );
+            const fs = yield* FileSystem.FileSystem;
+            yield* fs.writeFileString(controlPath(dir, HOLD, runId), "").pipe(Effect.orDie);
+            return yield* until(
+              () => status,
+              (got) => got === "suspended",
+            );
+          }),
+        );
+        yield* bin.restore();
+        expect(status).toBe("suspended");
+        expect(yield* awaitingOn(runId)).toBe("");
+      }),
+    ),
+  120_000,
+);
+
+/**
+ * Implement started over a plan of tickets with these bodies. Each agent is answered from
+ * `outputs`, where null is one the scenario answers with `answer` once it has looked.
+ */
+const implementing = (
+  runId: string,
+  tickets: ReadonlyArray<{ readonly file: string; readonly body: string }>,
+  outputs: ReadonlyArray<Schema.Json | null>,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const plan = yield* planOf(
+      Arr.map(tickets, (one) => ({
+        ...one,
+        title: pipe(one.file, Str.replace(/\.md$/, "")),
+        checks: "unit",
+      })),
+    );
+    yield* approve(runId, ["unit"]);
+    yield* rig.queueOutputs(outputs);
+    const running = yield* Effect.forkChild(
+      ran({ entry: shipped("implement"), runId, input: { plan, ...FINISH } }),
+    );
+    const agents = `${dir}/agents/${runId}`;
+    const logged = () =>
+      fs.readFileString(`${runDir(dir, runId)}/log.txt`).pipe(Effect.orElseSucceed(() => ""));
+    return {
+      logged,
+      launched: (operation: string) =>
+        until(
+          () => fs.readFileString(`${agents}/agents.log`).pipe(Effect.orElseSucceed(() => "")),
+          (said) =>
+            pipe(said, Str.includes(`: launched for ${operation}\n`)) ||
+            pipe(said, Str.includes(`: reattached to ${operation}\n`)),
+        ),
+      answer: (operation: string) =>
+        fs.writeFileString(`${agents}/${operation}.json`, asJson(BUILT)),
+      /** Waits until it parks on opening its merge request, as it does with no forge at origin. */
+      untilParked: Effect.gen(function* () {
+        yield* until(logged, (said) => pipe(said, Str.includes("Cannot open the merge request")));
+        yield* Fiber.interrupt(running);
+        return yield* logged();
+      }),
+      interrupt: Fiber.interrupt(running),
+    };
+  });
+
+scenario(
+  "implement builds the ticket it can, waits for another Run's Change to merge, then builds on it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-prerequisite-build";
+        const { git, bin, other, land } = yield* prerequisiteOpen(runId);
+        const { launched, answer, untilParked } = yield* implementing(
+          runId,
+          [
+            { file: "01-first.md", body: "" },
+            { file: "02-second.md", body: `\n**Needs merged:** ${other}\n` },
+          ],
+          [BUILT, null, CLEAN_SYNTHESIS],
+        );
+        expect(
+          yield* until(
+            () => awaitedLine(runId),
+            (line) => line !== "",
+          ),
+        ).toBe(`Waiting for ${other}'s Change to merge.`);
+        expect(yield* wasAsked(runId, "01-first.md")).toBe(true);
+        expect(yield* wasAsked(runId, "02-second.md")).toBe(false);
+
+        const merged = yield* land;
+        yield* launched("02-second.md");
+        yield* git(rig.projectDir, "merge-base", "--is-ancestor", merged, "HEAD");
+        yield* answer("02-second.md");
+        const log = yield* untilParked;
+        yield* bin.restore();
+        expect(log).toContain(`integrated master@${merged}`);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a ticket needing a Run this host does not have parks once the rest is built, naming both",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-prerequisite-nowhere";
+        const { interrupt } = yield* implementing(
+          runId,
+          [
+            { file: "01-first.md", body: "" },
+            { file: "02-second.md", body: "\n**Needs merged:** run-nowhere\n" },
+          ],
+          [BUILT],
+        );
+        const why = yield* until(
+          () => parkedWhy(runId),
+          (why) => why !== "",
+        );
+        yield* interrupt;
+        expect(yield* wasAsked(runId, "01-first.md")).toBe(true);
+        expect(yield* parkedCause(runId)).toBe("step-failed");
+        expect(why).toContain("run-nowhere");
+        expect(why).toContain("02-second.md");
+        expect(yield* wasAsked(runId, "02-second.md")).toBe(false);
+      }),
+    ),
+  120_000,
+);
+
+scenario("a ticket blocked by one that waits for another Run's Change waits with it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const runId = "r-prerequisite-blocked";
+      const { bin, other } = yield* prerequisiteOpen(runId);
+      const { interrupt } = yield* implementing(
+        runId,
+        [
+          { file: "01-first.md", body: `\n**Needs merged:** ${other}\n` },
+          { file: "02-second.md", body: "\n**Blocked by:** 01\n" },
+        ],
+        [BUILT, BUILT, CLEAN_SYNTHESIS],
+      );
+      yield* until(
+        () => awaitingOn(runId),
+        (on) => on !== "",
+      );
+      yield* interrupt;
+      yield* bin.restore();
+      expect(yield* wasAsked(runId, "02-second.md")).toBe(false);
+    }),
+  ),
+);
+
+scenario(
+  "a one-ticket plan waits for the Change its ticket needs, and is built on top of it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-prerequisite-whole";
+        const { git, bin, other, land } = yield* prerequisiteOpen(runId);
+        const { launched, answer, untilParked } = yield* implementing(
+          runId,
+          [{ file: "01-first.md", body: `\n**Needs merged:** ${other}\n` }],
+          [null, CLEAN_SYNTHESIS],
+        );
+        yield* until(
+          () => awaitingOn(runId),
+          (on) => on !== "",
+        );
+        expect(yield* wasAsked(runId, "build")).toBe(false);
+
+        const merged = yield* land;
+        yield* launched("build");
+        yield* git(rig.projectDir, "merge-base", "--is-ancestor", merged, "HEAD");
+        yield* answer("build");
+        yield* untilParked;
+        yield* bin.restore();
+      }),
+    ),
+  120_000,
+);
 
 type Step = Effect.Effect<void, never, ChildProcessSpawner.ChildProcessSpawner>;
 
@@ -6013,6 +6407,7 @@ scenario(
         expect(
           Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === "next"))?.prompt,
         ).toContain(OPENED.mr_url);
+        expect(statesOf(yield* laneNow(runId, "waiting")).at(-1)).toEqual(["next", "needs-you"]);
 
         const result = yield* answered({
           entry: shipped("implement"),
@@ -6322,6 +6717,98 @@ scenario(
 
         expect(said(result)).toBe(`${OPENED.mr_url}; done`);
         expect(yield* questions(runId)).toEqual([]);
+        expect(started).toEqual([RELEASE_STARTED]);
+      }),
+    ),
+  120_000,
+);
+
+for (const following of ["finish", "release"])
+  for (const source of ["unavailable Linear", "refused plan"])
+    scenario(
+      `Flow: implement then=${following} omits What next before rejecting an ${source} source`,
+      () =>
+        runEffect(
+          Effect.gen(function* () {
+            const runId = "r-impl-source-flow";
+            const plan =
+              source === "unavailable Linear"
+                ? "APP-123"
+                : yield* planOf([
+                    {
+                      file: "01-outside.md",
+                      title: "Outside the root",
+                      checks: "unit",
+                      body: "\n**Repo:** ../outside\n",
+                    },
+                  ]);
+            const result = yield* ran({
+              entry: shipped("implement"),
+              runId,
+              // oxlint-disable-next-line unicorn/no-thenable -- implement's Input is named `then`
+              input: { plan, then: following },
+            });
+            expect(reasonOf(result)).toContain(
+              source === "unavailable Linear"
+                ? "Cannot read the work source APP-123"
+                : "not under the plan's root",
+            );
+            expect(Arr.map((yield* laneNow(runId, "failed")).nodes, (node) => node.id)).toEqual([
+              "build",
+              "review",
+              "checks",
+              "merge-request",
+            ]);
+            expect(yield* questions(runId)).toEqual([]);
+            expect(started).toEqual([]);
+          }),
+        ),
+      120_000,
+    );
+
+scenario(
+  "Flow: implement started with then=finish forecasts no What next, and its Steps up to the merge request are done",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-impl-finish-flow";
+        const { bin, plan } = yield* delivering(runId);
+        yield* ran({ entry: shipped("implement"), runId, input: { plan, ...FINISH } });
+        yield* bin.restore();
+
+        expect(statesOf(yield* laneNow(runId, "succeeded"))).toEqual([
+          ["build", "done"],
+          ["review", "done"],
+          ["checks", "done"],
+          ["merge-request", "done"],
+        ]);
+        expect(yield* questions(runId)).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "Flow: implement started with then=release forecasts no What next, and shows the Release it starts",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-impl-release-flow";
+        const { bin, plan } = yield* delivering(runId);
+        yield* ran({
+          entry: shipped("implement"),
+          runId,
+          // oxlint-disable-next-line unicorn/no-thenable -- implement's Input is named `then`
+          input: { plan, then: "release" },
+        });
+        yield* bin.restore();
+
+        expect(statesOf(yield* laneNow(runId, "succeeded"))).toEqual([
+          ["build", "done"],
+          ["review", "done"],
+          ["checks", "done"],
+          ["merge-request", "done"],
+        ]);
         expect(started).toEqual([RELEASE_STARTED]);
       }),
     ),
@@ -9414,6 +9901,33 @@ for (const name of ["gitlab", "github"] as const) {
   );
 
   scenario(
+    `Flow: implement forecasts no What next once its ${name} ${noun} merges itself once green`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge } = yield* deliveringOn(name, autoMerging(false));
+          const plan = yield* planOf([
+            { file: "01-only.md", title: "the only one", checks: "unit" },
+          ]);
+          const runId = `r-impl-${name}-merges-itself-flow`;
+          yield* approve(runId, ["unit"]);
+          const on = forge.holding({ ...(yield* forge.model()), mrs: autoMerging(true) });
+          yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, { writes: [on], output: OPENED }]);
+          yield* ran({ entry: shipped("implement"), runId, input: { plan } });
+          yield* bin.restore();
+
+          expect(statesOf(yield* laneNow(runId, "succeeded"))).toEqual([
+            ["build", "done"],
+            ["review", "done"],
+            ["checks", "done"],
+            ["merge-request", "done"],
+          ]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
     `implement starts no fix round once its ${name} ${noun} merges itself once green`,
     () =>
       runEffect(
@@ -10188,6 +10702,14 @@ const awaitingOn = (runId: string) =>
     Effect.flatMap((fs) => fs.readFileString(controlPath(dir, AWAITING, runId))),
     Effect.flatMap(Schema.decodeUnknownEffect(AwaitingJson)),
     Effect.map((awaiting) => awaiting.on),
+    Effect.orElseSucceed(() => ""),
+  );
+
+const awaitedLine = (runId: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.readFileString(controlPath(dir, AWAITING, runId))),
+    Effect.flatMap(Schema.decodeUnknownEffect(AwaitingJson)),
+    Effect.map(awaitingLine),
     Effect.orElseSucceed(() => ""),
   );
 
@@ -12749,6 +13271,180 @@ const refusingCheckout = (refused: string): HostOverride =>
       return Host.of({ ...host, checkoutReviewed: () => Effect.succeed({ refused }) });
     }),
   );
+
+/**
+ * A host that says who gave this Release Run its go: a human's own start of it from an offer,
+ * or its parent implement Run's **Release**, answered at `answered`'s door. `afterStart`
+ * happens once the Run has read the merge request at its start, as a push landing then.
+ */
+const goGiven = (
+  given: { readonly started?: "board"; readonly answered?: "board" | "agent" },
+  afterStart: Effect.Effect<void, never, FileSystem.FileSystem> = Effect.void,
+): HostOverride =>
+  Layer.effect(Host)(
+    Effect.gen(function* () {
+      const host = yield* Host;
+      const services = yield* Effect.context<PlatformServices>();
+      return Host.of({
+        ...host,
+        place: (runId) =>
+          host.place(runId).pipe(
+            Effect.map((place) => ({
+              ...place,
+              lineage: [runId, "r-implement"],
+              authority: {
+                ...place.authority,
+                started: given.started === undefined ? null : { door: given.started, words: "" },
+              },
+            })),
+          ),
+        asked: (runId) =>
+          runId !== "r-implement"
+            ? host.asked(runId)
+            : Effect.succeed(
+                given.answered === undefined
+                  ? []
+                  : [{ name: "next", answer: "Release", by: { origin: given.answered } }],
+              ),
+        autoMerging: (cwd) =>
+          afterStart.pipe(Effect.provideContext(services), Effect.andThen(host.autoMerging(cwd))),
+      });
+    }),
+  );
+
+{
+  const { mr, target } = RELEASING.gitlab;
+
+  for (const given of [{ answered: "board" }, { started: "board" }] as const)
+    scenario(
+      `release: a human's Release at an unchanged head is the go (${"started" in given ? "a human took the offer" : "a human answered implement"}), so it merges and tags without asking it again`,
+      () =>
+        runEffect(
+          Effect.gen(function* () {
+            const { bin, forge, head, merged } = yield* releasable("gitlab");
+            claimed.length = 0;
+            const runId = `r-release-go-${"started" in given ? "offer" : "answer"}`;
+            yield* rig.queueOutputs([PACKAGED, TAGGED]);
+            const status = yield* driven(
+              {
+                entry: shipped("release"),
+                runId,
+                input: { mr: target },
+                host: Layer.provide(goGiven(given), releaseHost()),
+              },
+              (run) => ended(run.status),
+            );
+            const model = yield* forge.model();
+            yield* bin.restore();
+            expect(outcomeText(status)).toBe(`${mr} merged at ${merged}, released as v1.2.0`);
+            expect(Arr.map(model.merges ?? [], (one) => one.sha)).toEqual([head]);
+            expect(yield* questions(runId)).toEqual([]);
+            expect(yield* runLog(runId)).toContain(
+              `go 1: the human's Release at ${pipe(head, Str.slice(0, 8))} is the go, so nobody was asked`,
+            );
+          }),
+        ),
+      120_000,
+    );
+
+  scenario(
+    "release: a human's Release is asked again once the head has moved since it was given",
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, head, changed } = yield* releasable("gitlab");
+          claimed.length = 0;
+          const runId = "r-release-go-moved";
+          yield* rig.queueOutputs([PACKAGED]);
+          let moved = "";
+          const pushed = Effect.gen(function* () {
+            moved = yield* pushedBySomebody(head);
+            yield* changed({ head: moved });
+          }).pipe(Effect.orDie);
+          const status = yield* driven(
+            {
+              entry: shipped("release"),
+              runId,
+              input: { mr: target },
+              host: Layer.provide(goGiven({ answered: "board" }, pushed), releaseHost()),
+            },
+            (run) =>
+              Effect.gen(function* () {
+                const go = yield* goAsked(run.asked, "go-1");
+                expect(go.prompt).toContain(pipe(moved, Str.slice(0, 8)));
+                yield* run.answer("go-1", "Finish");
+                return yield* ended(run.status);
+              }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was left open`);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    "release: a human's Release given while the pipeline ran is asked again once an approver of it is gone",
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, changed } = yield* releasable("gitlab", STILL_RUNNING);
+          claimed.length = 0;
+          const runId = "r-release-go-unapproved";
+          yield* rig.queueOutputs([PACKAGED]);
+          const swapped = changed({ ...PIPELINE_PASSED, approvers: ["bob"] }).pipe(Effect.orDie);
+          const status = yield* driven(
+            {
+              entry: shipped("release"),
+              runId,
+              input: { mr: target },
+              host: Layer.provide(goGiven({ answered: "board" }, swapped), releaseHost()),
+            },
+            (run) =>
+              Effect.gen(function* () {
+                const go = yield* goAsked(run.asked, "go-1");
+                expect(go.prompt).toContain("approved by bob");
+                yield* run.answer("go-1", "Finish");
+                return yield* ended(run.status);
+              }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was left open`);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    "release: an agent's Release on implement is no human's go, so the go is asked",
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin } = yield* releasable("gitlab");
+          claimed.length = 0;
+          const runId = "r-release-go-agent";
+          yield* rig.queueOutputs([PACKAGED]);
+          const status = yield* driven(
+            {
+              entry: shipped("release"),
+              runId,
+              input: { mr: target },
+              host: Layer.provide(goGiven({ answered: "agent" }), releaseHost()),
+            },
+            (run) =>
+              Effect.gen(function* () {
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Finish");
+                return yield* ended(run.status);
+              }),
+          );
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was left open`);
+        }),
+      ),
+    120_000,
+  );
+}
 
 scenario(
   "a refused checkout fails Stage and Release on their checkout step, before anything is assessed",
@@ -17797,6 +18493,10 @@ let windowRuns: Array<{
   workflow?: string;
   created?: string;
   closes?: ReadonlyArray<number>;
+  status?: "complete" | "failed";
+  mr?: string;
+  merged?: boolean;
+  questions?: ReadonlyArray<{ name: string; answer: string | null }>;
 }> = [];
 let openIssues: Issue[] = [];
 let filed: Array<{ title: string; body: string }> = [];
@@ -17825,8 +18525,11 @@ const improving: HostOverride = Layer.effect(Host)(
                 parent,
                 project: "project" in rest && rest.project ? rest.project : rig.projectDir,
                 created: "created" in rest && rest.created ? rest.created : since,
-                status: "failed" as const,
+                status: "status" in rest && rest.status ? rest.status : ("failed" as const),
                 closes: "closes" in rest && rest.closes ? rest.closes : [],
+                mr: "mr" in rest && rest.mr ? rest.mr : null,
+                merged: "merged" in rest && rest.merged === true,
+                questions: "questions" in rest && rest.questions ? rest.questions : [],
               }),
             ),
             ({ created }) => epochOf(created) >= epochOf(since),
@@ -18141,6 +18844,41 @@ scenario(
         expect(prompt).toContain("r-other");
         expect(prompt).toContain("`defect` is one more");
         expect(Arr.map(filed, ({ title }) => title)).toEqual(["Project host-crash"]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "self-improve states the questions per landed merge request and files a question nine in ten answered alike",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        freshDay();
+        windowRuns = Arr.map(Arr.range(0, 9), (at) => {
+          const asked = {
+            runId: `r-asked-${at}`,
+            parent: null,
+            questions: [{ name: "next", answer: at === 9 ? "Finish" : "Release" }],
+          };
+          return at < 2
+            ? { ...asked, status: "complete" as const, mr: `https://mr/${at}`, merged: true }
+            : asked;
+        });
+        yield* rig.queueOutputs([triaged([])]);
+
+        yield* improved("r-questions", { runs: "machine", improvements: 0 });
+
+        expect(Arr.map(filed, ({ title }) => title)).toEqual([
+          'implement asks "next" and is answered "Release" 90% of the time',
+        ]);
+        const summary = yield* readText(`${runDir(dir, "r-questions")}/summary.md`);
+        expect(summary).toContain(
+          "10 questions asked over 2 merge requests landed: 5.0 per landed merge request.",
+        );
+        expect(summary).toContain(
+          "implement Runs that reached a merge request without failing: 2 of 10 (20%).",
+        );
       }),
     ),
   120_000,
@@ -19465,6 +20203,95 @@ scenario(
         expect(reverted["1"]).toEqual(started["1"]);
         expect(yield* runLog(runId)).toContain("guardrail bench.size inconclusive");
         expect(said(result)).toContain("cycles spent: 1 of 1");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up whose harness was repaired after it was written reaches its Cycle's verdict",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-harness-repaired";
+        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        yield* checkedBy(runId, "unit", "sh", ["-c", "test ! -e broken"]);
+        const fixed = repaired(
+          {
+            ...tunePlan(commit, [STEADY_PRIMARY, SIZE_GUARDRAIL]),
+            harness: { commits: [commit, "REPAIR_SHA"], paths: ["bench"] },
+          },
+          "bench.sh reads a steady count",
+        );
+        yield* rig.queueOutputs([
+          TUNE_DISCOVERED,
+          tunePlan(commit, [NOISY_PRIMARY]),
+          {
+            writes: [
+              { path: `${rig.root}/repaired.sh`, text: CYCLE_BENCH },
+              { path: `${rig.root}/repaired.json`, text: asJson(fixed) },
+            ],
+            sh: inCheckout(
+              `cp '${rig.root}/repaired.sh' bench/bench.sh && git commit -qam repair && sed "s/REPAIR_SHA/$(git rev-parse HEAD)/" '${rig.root}/repaired.json' > "$OUTPUT_PATH"`,
+            ),
+            output: null,
+          },
+          NO_CHANGE(),
+          RESET(),
+        ]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        expect(result._tag).toBe("Success");
+        expect(yield* runLog(runId)).toContain("benchmark plan 2: repair 1");
+        const [measured] = yield* cyclesMeasured(runId);
+        expect(measured?.pass).toBe("cycle 1");
+        expect(measured?.result._tag).toBe("Judged");
+        expect(yield* runLog(runId)).toContain("cycle 1 reverted to");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up carried from one whose harness is several commits editing one file reaches its Cycle's verdict",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const first = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        yield* FileSystem.FileSystem.pipe(
+          Effect.flatMap((fs) =>
+            fs.writeFileString(`${rig.projectDir}/bench/bench.sh`, CYCLE_BENCH),
+          ),
+          Effect.orDie,
+        );
+        yield* exec(["git", "commit", "-qam", "harness, again"], { cwd: rig.projectDir });
+        const second = yield* headOf();
+        const plan = {
+          ...tunePlan(first, [STEADY_PRIMARY, SIZE_GUARDRAIL]),
+          harness: { commits: [first, second], paths: ["bench"] },
+        };
+        // One list for both Runs: the later one's Cycle and reset take the last two.
+        yield* rig.queueOutputs([TUNE_DISCOVERED, plan, EXHAUSTED, NO_CHANGE(), RESET()]);
+        expect((yield* tunedUp("r-tune-multi-first"))._tag).toBe("Success");
+        yield* exec(["git", "reset", "-q", "--hard", `${first}~1`], { cwd: rig.projectDir });
+        // So the carried copies cannot come out with their originals' SHAs.
+        yield* exec(["git", "commit", "-q", "--allow-empty", "-m", "the default branch moves on"], {
+          cwd: rig.projectDir,
+        });
+        const runId = "r-tune-multi-carried";
+        yield* checkedBy(runId, "unit", "sh", ["-c", "test ! -e broken"]);
+        const result = yield* tunedUp(runId, { from: "r-tune-multi-first", samples: 4, cycles: 1 });
+        expect(result._tag).toBe("Success");
+        expect(yield* runLog(runId)).toContain(`harness commits ${first}, ${second} carried onto`);
+        const [measured] = yield* cyclesMeasured(runId);
+        expect(measured?.pass).toBe("cycle 1");
+        expect(measured?.result._tag).toBe("Judged");
+        const copied = yield* exec(
+          ["git", "merge-base", "--is-ancestor", first, measured!.base.commit],
+          { cwd: rig.projectDir },
+        );
+        expect(copied.exitCode).not.toBe(0);
+        expect(measured!.base.head_sha).toBe(measured!.base.commit);
+        expect(yield* runLog(runId)).toContain("cycle 1 reverted to");
       }),
     ),
   120_000,
@@ -21028,7 +21855,6 @@ scenario(
           ["review", "expected"],
           ["checks", "expected"],
           ["merge-request", "expected"],
-          ["next", "expected"],
         ]);
       }),
     ),
@@ -21107,7 +21933,7 @@ scenario(
         yield* ran({
           entry: shipped("implement"),
           runId: "r-flow-fan",
-          input: { plan: `${runDir(dir, "r-flow-fan")}/plan` },
+          input: { plan: `${runDir(dir, "r-flow-fan")}/plan`, ...FINISH },
         });
         const lane = yield* laneNow("r-flow-fan", "succeeded");
         expect(statesOf(lane)).toEqual([["repo-runs", "done"]]);

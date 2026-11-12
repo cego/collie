@@ -810,8 +810,9 @@ The shipped `renovate` workflow still requires GitLab for its merge and release 
 `host.report(since)` reads this Machine's Runs admitted at or after an ISO moment. It
 returns the same report as `collie --json run report --since`: workflow tallies, metrics,
 failed and completed results, stopped Runs, and a `runs` list. Each list entry has
-`runId`, `workflow`, `parent`, `project`, `created`, `status`, and `closes`: the issue
-numbers its input names in a `Closes #n`. An invalid date fails with
+`runId`, `workflow`, `parent`, `project`, `created`, `status`, `closes`: the issue
+numbers its input names in a `Closes #n`, `mr`, `merged`, and `questions`, as
+[`run report`](cli.md#report) lists them. An invalid date fails with
 `WorkflowError`. Read it inside an Activity when its answer decides subsequent work.
 
 `host.skill(name)` answers the installed `SKILL.md` that `{{skill:name}}` would name to an
@@ -893,7 +894,8 @@ recorded once, judged against `proved`, the head its Checks were proved on, and 
 `at` when), `Closed`, `Moved` (the head is no longer `proved`), `Unanswered` (external
 comments nobody answered, other than those named in `seen`), `Ready` (approved, green and
 mergeable at `proved`, with its `approvers`), `Waiting` with `why` it is not, or
-`Unreadable` with the forge's `reason`. A repository with no pipeline has none to wait for.
+`Unreadable` with the forge's `reason`. `Unanswered` and `Waiting` name the `approvers` the
+forge has too, absent from a standing journaled before they did. A repository with no pipeline has none to wait for.
 `host.awaitReview` takes the same options and reads every five minutes, at no token cost,
 until the standing is anything but `Waiting` or `Unreadable`, or a Hold or Stop ends it as
 `Held`. Meanwhile what it waits for that comes by itself — CI, a teammate's approval, review
@@ -909,6 +911,31 @@ you with the line that says its branch must take the target, and returns the sta
 Hold or Stop ends it (`Held`). A head pushed while it still conflicts keeps it waiting. The
 release takes it before it proves a head and when a check left to CI finds the conflict. Take either inside an Activity, and suspend on `Held`
 there, so a resume waits again.
+
+`host.prerequisites({ runId, cwd, ticket })` reads the ticket file at `ticket` again, and
+asks once whether every Change its `**Needs merged:**` line names has landed. It answers a
+`PrerequisiteStanding` (`PrerequisiteStandingSchema` journals it), one of:
+
+- `Landed`: every named Change has landed, or the ticket names none. A Change has landed
+  when the forge says its merge request merged and the merge commit is on origin's default
+  branch, fetched in `cwd`.
+- `Waiting`: at least one Change has not landed yet. The standing carries the card's `on`
+  and `who`.
+- `Never`: a Change can never land, and `why` says which and why. This happens when the
+  named Run is unknown on this host, when it is this Run or one of its ancestors, when it
+  ended with no merge request for that Change, or when that merge request was closed
+  without merging.
+
+A Change is the merge request recorded by the named Run, or by one of its descendants,
+whose `repo` and `change` options match this Run's repository and the named Change.
+
+`host.awaitPrerequisites` takes the same options. It reads every five minutes, at no token
+cost, until the standing is `Landed` or `Never`, or a Hold or Stop ends it as `Held`. While
+it waits, the card reads `Waiting for run-ac644eef's card to merge.` under Working (a
+default Change reads `<run>'s Change`). The wait has a person's 2-day patience, then parks
+as overdue. The line is cleared when it returns. Editing the ticket so that it no longer
+names the Change ends the wait at the next read. Take either inside an Activity, and
+suspend on `Held` there.
 
 `host.shareForApproval({ runId, cwd, channel })` posts the Run's recorded merge request through its host's Slack Connection.
 It reads the title from the forge and returns `{ posted, link?, why? }` without failing the Run.
@@ -1283,8 +1310,10 @@ item, and the items it has not reached yet are expected runs.
 `path` lists the Steps the Workflow expects to take, in order. A Step is known by its id, so
 two values with one id are one Step, and a path that lists one id twice is refused by the
 definition check. `forecast` replaces the path from there once the Run knows which branch it
-takes; the Steps it drops are no longer drawn. A Step called off the path still runs and is
-drawn after the Step that ran before it, and a path Step the Run never reached ends `not run`.
+takes; the Steps it drops are no longer drawn. A module forecasts only what its input and
+facts let it reach, as soon as it knows: a Step its input says it will skip is left out, not
+drawn `not run`. A Step called off the path still runs and is drawn after the Step that ran
+before it, and a path Step the Run expected and never reached ends `not run`.
 The records are Activities, so a replay records nothing twice, and the host is their only
 writer ([ADR-draft-a-step-is-declared-where-its-work-is-written](adr/draft-a-step-is-declared-where-its-work-is-written.md)).
 
@@ -1707,11 +1736,12 @@ export default defineWorkflow({
   [read the Connection inside an Activity](#where-your-run-is-and-what-it-was-given) to branch without it.
   Both texts must be nonempty, and an id cannot be both needed and used.
   The definitions view carries these declarations with their text.
-  Give an offer or action its own `connections: ["linear"]` list to hide it when that
-  Connection isn't `ok`. Every listed id must also appear in the declaring workflow's
-  `uses` or `needs`. An offer with no list stays shown, even when another offer's
-  Connection is absent. Invocation reads availability again. The target's `needs`
-  are checked when starting it and refuse with their fix; they don't hide the offer.
+  Give an offer or action its own `connections: ["linear"]` list to refuse it, listed with
+  that Connection's reason and fix, when that Connection isn't `ok`. Every listed id must
+  also appear in the declaring workflow's `uses` or `needs`. An offer with no list stays
+  available, even when another offer's Connection is absent. Invocation reads availability
+  again. The target's `needs` are checked when starting it and refuse with their fix; they
+  don't change the offer's listing.
   On GitHub repositories, `github`
   stands in for a declared `gitlab` forge requirement.
 
@@ -1721,7 +1751,10 @@ export default defineWorkflow({
   and in a recorded Run), and a module with inputs hints exactly one
   field with one of them ([one launch Input](authoring.md#writing-one)). They are exclusive: one field each, so renaming `plan` to `spec` changes
   nothing about how it is inferred, what it names a branch after, which label its Run is
-  listed under, or which previous review it is given.
+  listed under, or which previous review it is given. `reach` marks the field that says how
+  far the Run goes before it asks, its [Reach](../CONTEXT.md): a closed set whose values each
+  carry a `title`, as `Schema.Union([Schema.Literal("").annotate({ title: "Ask at the end" }),
+  …])`, which the board's start row offers one row each and remembers.
 - **`outcome`** is `fixed` or `selectable`, never both. `selectable` offers only the kinds
   a human may ask an implement Run for — `review` and `plan` are what a workflow proves.
 - **`checkout`** is what the workflow needs of the repository. `branch` builds on a
@@ -1758,7 +1791,22 @@ one. Everything is decided again at that moment — that your module still decla
 offer, what your `eligible` says about the facts as they are now, and whether the child
 takes the arguments — so an offer edited away, one whose facts have moved, and arguments
 the child refuses each start nothing at all. A `followUp` is hidden once somebody has said
-what became of the work; an `action` is given `disposed` and decides for itself.
+what became of the work, unless the host lists a refusal below. An `action` is given
+`disposed` and decides for itself.
+
+The host also refuses an offer whatever your `eligible` says, and lists it with the reason
+rather than dropping it; invoking it from any door is refused with that same sentence
+([ADR-draft-an-offer-is-made-on-the-run-that-owns-its-work-and-not-twice](adr/draft-an-offer-is-made-on-the-run-that-owns-its-work-and-not-twice.md)):
+
+- **while its earlier Run is going**: a Run of the workflow it starts has not ended. It
+  either started from this Run or carries the merge request the offer fills under the same
+  input name. The reason names it: `a Release of <mr> is still going: run-5185c272`. Once
+  that Run fails, an otherwise eligible offer is open again. This is read from the store,
+  so a restart keeps it across every Run carrying the same merge request;
+- **once its merge request is merged**: an offer that fills `merge-request` is refused as
+  `<mr> is merged` when the merge watch last read it merged. An unknown answer refuses
+  nothing;
+- **when a connection it needs is unusable**: it says which connection, why, and the fix.
 
 A conflict is refused at load — before a Run, a worktree or an agent exists — and the
 refusal names every one of them rather than the first:
@@ -1797,7 +1845,8 @@ formatting still counts, so an answer to earlier wording does not answer an amen
 `implement` hands what is unmet back to the builder before any reviewer is launched, and
 asks about any still unmet after two hand-backs (`<ticket>.criteria-unmet-<n>`), so no
 reviewer starts on it. A hand-back that leaves the tree's content unchanged and
-reports a blocking finding is asked about sooner (`<ticket>.criteria-stalled-<n>`). To
+reports a blocking finding is handed back once without asking, which the Run's log records
+as Collie's, and asked about sooner the next time (`<ticket>.criteria-stalled-<n>`). To
 either, `Hand back` reads the ticket again and, if any criterion is still unmet, hands it
 back with two tries fresh; `Stop` stops the work. A text work
 source's criteria are its own checkboxes; a Linear issue's are read from `plan/SPEC.md`, the

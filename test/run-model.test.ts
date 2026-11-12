@@ -3,7 +3,8 @@ import * as Str from "effect/String";
 import * as Struct from "effect/Struct";
 import { heapStats } from "bun:jsc";
 import { expect, test } from "bun:test";
-import { Deferred, Effect, Fiber, FileSystem, Layer, Schema, Stream } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Layer, Queue, Schema, Stream } from "effect";
+import { ChildProcessSpawner } from "effect/process";
 import { TaskView } from "../src/board-model";
 import { buildBoard } from "../src/board";
 import { readEnv } from "../src/env";
@@ -12,6 +13,7 @@ import { writeTask } from "../src/task";
 import { epochMs } from "../src/time";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
+import { until } from "./support/host";
 import { madeRun, recordsAt, runFacts } from "./support/records";
 
 const RUNS = 500;
@@ -411,6 +413,84 @@ test("a branch head read before its checkout is watched is read again, so a move
       yield* model.head(run);
       yield* git("commit", "-q", "--allow-empty", "-m", "two");
       const two = Str.trim((yield* git("rev-parse", "HEAD")).stdout);
+      expect(yield* model.head(run)).toBe(two);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a branch head read while its checkout moves is not kept, so the move reaches the next read", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-run-model-" });
+      const repo = `${dir}/repo`;
+      const git = (...args: ReadonlyArray<string>) =>
+        exec(["git", "-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", ...args]);
+      yield* fs.makeDirectory(repo, { recursive: true });
+      yield* git("init", "-q", "-b", "mk/ship");
+      yield* git("commit", "-q", "--allow-empty", "-m", "one");
+      // The checkout's watches say it moved when the test does, and never by themselves.
+      const moves = yield* Queue.unbounded<FileSystem.WatchEvent>();
+      let installed = 0;
+      // One read of the head has git's answer and is held before the model takes it.
+      const gate = {
+        armed: false,
+        answered: yield* Deferred.make<void>(),
+        release: yield* Deferred.make<void>(),
+      };
+      const held = ChildProcessSpawner.make((command) =>
+        spawner.spawn(command).pipe(
+          Effect.tap((handle) =>
+            Effect.suspend(() => {
+              if (
+                !gate.armed ||
+                command._tag !== "StandardCommand" ||
+                !command.args.includes("--verify")
+              )
+                return Effect.void;
+              gate.armed = false;
+              return handle.exitCode.pipe(
+                Effect.andThen(Deferred.succeed(gate.answered, undefined)),
+                Effect.andThen(Deferred.await(gate.release)),
+              );
+            }),
+          ),
+        ),
+      );
+      const model = yield* makeRunModel(dir, "installation").pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          watch: (_, options) =>
+            Stream.unwrap(
+              Effect.sync(() => {
+                installed++;
+                options?.onReady?.();
+                return Stream.fromQueue(moves);
+              }),
+            ),
+        }),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, held),
+      );
+      const run = runFacts({ id: "r1", cwd: repo, branch: "mk/ship" });
+
+      yield* model.head(run);
+      yield* until(
+        () => Effect.sync(() => installed),
+        (count) => count === 3,
+      );
+      gate.armed = true;
+      const early = yield* Effect.forkChild(model.head(run));
+      yield* Deferred.await(gate.answered);
+      yield* git("commit", "-q", "--allow-empty", "-m", "two");
+      const two = Str.trim((yield* git("rev-parse", "HEAD")).stdout);
+      const before = yield* model.checkout(run);
+      yield* Queue.offer(moves, { _tag: "Update", path: `${repo}/.git/refs/heads/mk/ship` });
+      yield* until(
+        () => model.checkout(run),
+        (count) => count > before,
+      );
+      yield* Deferred.succeed(gate.release, undefined);
+      yield* Fiber.join(early);
       expect(yield* model.head(run)).toBe(two);
     }).pipe(Effect.scoped),
   ));

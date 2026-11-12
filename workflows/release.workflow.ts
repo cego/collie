@@ -46,6 +46,7 @@ import { connection } from "./connections.ts";
 import * as Workflow from "effect/workflow/Workflow";
 import { WorkflowInstance } from "effect/workflow/WorkflowEngine";
 import { IMPLEMENTER } from "./reviewing.ts";
+import { GivenGo, givenAt, holdsFor } from "./release-go.ts";
 import {
   Assessed,
   RolledBack,
@@ -579,6 +580,33 @@ interface Landed {
   readonly production: ProductionGo | null;
 }
 
+/** A front door a human types into, or chat carrying the human's own words. */
+const humanVoice = (by: { readonly origin: string; readonly said?: string }) =>
+  ["board", "desktop", "cli-tty"].includes(by.origin) ||
+  (by.origin === "chat" && by.said !== undefined);
+
+/**
+ * Whether a human's Release started this Run: their own start of it from its parent's offer,
+ * which the host records only for a human, or their answer to the parent's question.
+ */
+const releasedByHuman = (place: {
+  readonly lineage: ReadonlyArray<string>;
+  readonly authority: { readonly started: unknown };
+}) =>
+  Effect.gen(function* () {
+    const parent = place.lineage[1];
+    if (parent === undefined) return false;
+    if (place.authority.started !== null) return true;
+    const answered = Arr.findLast(
+      yield* (yield* Host).asked(parent),
+      (one) => one.answer === GO.release,
+    );
+    return Option.match(answered, {
+      onNone: () => false,
+      onSome: (one) => one.by !== undefined && humanVoice(one.by),
+    });
+  });
+
 /** Why a standing is not the ready one a go was given for. */
 const notReady = (standing: ReviewStanding) => {
   switch (standing._tag) {
@@ -739,6 +767,20 @@ export default defineWorkflow({
       if (start._tag === "Closed") return yield* fail(`${mr} is closed, so nothing was released`);
       if (tagOnly && start._tag !== "Merged")
         return yield* fail(`${mr} is not merged, so nothing was tagged`);
+      const given =
+        tagOnly || start._tag !== "Moved"
+          ? null
+          : yield* Activity.make({
+              name: "given-go",
+              success: Schema.NullOr(GivenGo),
+              execute: Effect.gen(function* () {
+                if (!(yield* releasedByHuman(place))) return null;
+                const at = yield* host
+                  .review({ runId, cwd, proved: start.head, seen: [] })
+                  .pipe(Effect.orElseSucceed(() => null));
+                return givenAt(start.head, at);
+              }),
+            });
       const tagMerges: string[] = [];
       if (tagOnly) {
         for (const target of asked.together ?? [mr]) {
@@ -1260,12 +1302,26 @@ export default defineWorkflow({
           const head = standing.head;
           const approvers = Arr.join(standing.approvers, ", ") || "nobody the forge names";
           const answer = yield* mergeGo(
-            ask({
-              name: `go-${gos}`,
-              shipping: { action: goes[0] === GO.test ? "stage" : "merge", head },
-              prompt: `Release ${mr} at ${short(head)}, approved by ${approvers}? ${offered} Finish leaves it open.`,
-              options: Arr.map([...goes, GO.finish], (id, at) => ({ id, recommended: at === 0 })),
-            }),
+            given !== null && holdsFor(given, standing)
+              ? Activity.make({
+                  name: `go-${gos}.given`,
+                  success: Schema.String,
+                  execute: host
+                    .record(
+                      runId,
+                      `go ${gos}: the human's Release at ${short(head)} is the go, so nobody was asked`,
+                    )
+                    .pipe(Effect.as(goes[0] ?? GO.finish)),
+                })
+              : ask({
+                  name: `go-${gos}`,
+                  shipping: { action: goes[0] === GO.test ? "stage" : "merge", head },
+                  prompt: `Release ${mr} at ${short(head)}, approved by ${approvers}? ${offered} Finish leaves it open.`,
+                  options: Arr.map([...goes, GO.finish], (id, at) => ({
+                    id,
+                    recommended: at === 0,
+                  })),
+                }),
             { round: gos },
           );
           if (answer === GO.finish) {

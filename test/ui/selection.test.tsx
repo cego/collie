@@ -18,10 +18,8 @@ import { driveBridge } from "../../src/ui/bridge";
 import type { Command } from "../../src/ui/state";
 import type { AppState } from "../../src/ui/state";
 import { readSelection, selectionPath, writeSelection } from "../../src/selection";
-import { NO_OUTCOME, type WorkspaceView } from "../../src/workspace";
 import { epochMs } from "../../src/time";
 
-const NOW = epochMs("2026-09-16T12:00:00.000Z");
 const KEY = "herd-key";
 
 let rig: Rig;
@@ -36,21 +34,6 @@ beforeEach(() =>
 
 afterEach(() => runEffect(rig.close()));
 
-function board(): WorkspaceView {
-  return {
-    repo: "collie",
-    cwd: "/w/collie",
-    worktrees: [],
-    behind: null,
-    now: NOW,
-    agents: [],
-    extraAgents: 0,
-    active: [],
-    recent: [],
-    ...NO_OUTCOME,
-  };
-}
-
 function appState(over: Partial<AppState> = {}): AppState {
   return {
     view: "runs",
@@ -58,14 +41,11 @@ function appState(over: Partial<AppState> = {}): AppState {
     tasks: [],
     now: epochMs("2026-09-16T12:00:00.000Z"),
     density: "comfortable",
-    board: board(),
-    wide: null,
     note: null,
     history: null,
     definitions: null,
     settings: null,
     detail: null,
-    marks: {},
     live: null,
     previewing: null,
     stopping: [],

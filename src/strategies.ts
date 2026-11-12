@@ -196,6 +196,7 @@ const STRATEGY_MEANINGS = new Map<InputStrategy, string>([
   ],
   ["flag", "true or false"],
   ["optional", "Anything, or empty"],
+  ["reach", "How far the Run goes before it asks; empty asks"],
 ]);
 
 export const strategyMeaning = (strategy: InputStrategy): string =>
