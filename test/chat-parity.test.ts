@@ -52,6 +52,7 @@ import { collie, save } from "./support/world";
 import { Rig } from "./support/recorder";
 import { chatContextFor } from "../src/statusline";
 import { takeShared } from "../src/config";
+import { machineName } from "../src/peers";
 import { sessionOptions } from "../desktop/src/bun/session";
 import {
   editSettings,
@@ -841,5 +842,28 @@ test(
       }),
     ),
   // A host, and a Run of it that finishes.
+  60_000,
+);
+
+test(
+  "a superseded line naming its own Run as <this machine>:<run> is refused as the bare id is",
+  () =>
+    hosted("collie-parity-self-qualified-", ({ world, env }) =>
+      Effect.gen(function* () {
+        const run = yield* settledRun(world, "retains");
+        const said = yield* toolNamed("collie_do")!.call(env, {
+          actions: [
+            {
+              kind: "disposition",
+              run: run.id,
+              became: "superseded",
+              ref: `${machineName()}:${run.id}`,
+            },
+          ],
+        });
+        expect(said).toContain(`cannot name ${run.id}, the Run it is recorded on`);
+        expect(yield* readDispositions(run.dir)).toEqual([]);
+      }),
+    ),
   60_000,
 );

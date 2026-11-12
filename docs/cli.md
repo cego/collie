@@ -1377,7 +1377,11 @@ refused, and the refusal lists the Task's. Anything else, a commit or a Run, is 
 given on the Run you named. A `superseded` whose ref names, as one of its words, the Run it
 would be recorded on is refused with `invalid_input`, and nothing is recorded: a Run cannot
 supersede itself. A free-text ref, or one naming another Run, is recorded as given. The
-board and chat's `collie_do` `disposition` take the same path.
+board and chat's `collie_do` `disposition` take the same path. A ref may name a Run as
+`<machine>:<run>`: by this Machine's hostname, or that name's first label, it is that Run
+here; by another Machine's name it is never one of this host's Runs, whatever its id, so it
+hands nothing on. The Flock chat writes a word naming the Machine the disposition goes to as
+the bare Run id, since herdr's name for a Machine need not be its hostname.
 
 Without `--as` the command reads. With it, `--as` is `merged`, `abandoned`, or
 `superseded`, and there is deliberately no value meaning the run succeeded after all.
@@ -1720,6 +1724,12 @@ the result; changing any byte makes it about an earlier tree.
 That pair is the point: a pass on a tree that changed while the command ran says nothing
 about either tree, so such a result is `unstable` and never `pass`. So is a tree too large
 to fingerprint at all, because two unmeasured trees are not one tree.
+
+Reading the tree writes nothing in the checkout. Collie's status of a checkout runs with
+`GIT_OPTIONAL_LOCKS=0`, so it never holds `index.lock` and a commit made beside it is never
+refused for one. The tree is staged in a copy of the index that keeps the index's own
+time, so an edit that leaves a file's size as it was, in the second the file was staged,
+still moves the tree.
 
 What the command prints is shown as it runs — its stdout on stdout and its stderr on
 stderr, or both on stderr under `--json`, where stdout is the one envelope — and the exit
