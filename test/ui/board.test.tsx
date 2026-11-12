@@ -27,7 +27,7 @@ import { NO_RUN_OUTCOME } from "../../src/views";
 import type { Live } from "../../src/live";
 import type { Card } from "../../src/cards";
 import type { Delivery } from "../../src/steering";
-import { NO_OUTCOME, type WorkspaceView } from "../../src/workspace";
+import { NO_OUTCOME } from "../../src/workspace";
 import { currentEnv } from "../../src/env";
 import { appState as homeState } from "../../src/flows";
 import { Herdr } from "../../src/herdr";
@@ -40,21 +40,6 @@ import type { UsageReading } from "../../src/usage-model";
 
 const NOW = epochMs("2026-09-16T12:00:00.000Z");
 
-function board(over: Partial<WorkspaceView> = {}): WorkspaceView {
-  return {
-    repo: "collie",
-    cwd: "/w/collie",
-    worktrees: [],
-    behind: null,
-    now: NOW,
-    agents: [],
-    extraAgents: 0,
-    active: [],
-    recent: [],
-    ...over,
-  };
-}
-
 function appState(over: Partial<AppState> = {}): AppState {
   return {
     view: "runs",
@@ -62,14 +47,11 @@ function appState(over: Partial<AppState> = {}): AppState {
     tasks: [],
     now: epochMs("2026-09-16T12:00:00.000Z"),
     density: "comfortable",
-    board: board(),
-    wide: null,
     note: null,
     history: null,
     definitions: null,
     settings: null,
     detail: null,
-    marks: {},
     live: null,
     previewing: null,
     stopping: [],
@@ -2042,7 +2024,7 @@ test(
 test("a newer release is said in the board's header, with the command", () =>
   runEffect(
     Effect.gen(function* () {
-      const stale = yield* mount(appState({ board: board({ newer: "99.0.0" }) }), 200);
+      const stale = yield* mount(appState({ newer: "99.0.0" }), 200);
       expect(stale.said()).toContain("Collie 99.0.0 is out — collie upgrade");
 
       const current = yield* mount(appState(), 200);
@@ -2057,7 +2039,7 @@ test("a newer release is said in full on a narrow pane, and hides none of the he
         const header = (app: { frame: () => string }) =>
           Arr.join(Str.split(app.frame(), "\n").slice(0, 5), "\n");
         const current = header(yield* mount(appState(), width));
-        const stale = header(yield* mount(appState({ board: board({ newer: "99.0.0" }) }), width));
+        const stale = header(yield* mount(appState({ newer: "99.0.0" }), width));
         for (const control of ["⌕", "+ New run", "≡"]) {
           expect(pipe_(stale, Str.includes(control))).toBe(pipe_(current, Str.includes(control)));
         }
