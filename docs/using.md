@@ -413,7 +413,9 @@ conversation with the original step. An Output that arrives while the old worker
 is collected without starting a replacement. A live server, an uncertain identity or an
 unanswered health probe never authorises a second worker. Where the platform cannot
 establish that an exited server's child processes have stopped, the Run parks with that
-reason and keeps the terminal and control record for recovery.
+reason and keeps the terminal and control record for recovery. A process that exits while
+being inspected is ignored only when the operating system proves its PID is absent;
+an unreadable live process still prevents recovery.
 
 ### What a task workspace is called
 
