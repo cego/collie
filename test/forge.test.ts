@@ -3389,6 +3389,39 @@ test("GitLab identifies a retry from job IDs without a retried response field", 
   );
 });
 
+test("GitHub finds a failed attempt beyond a page of passing reruns", () => {
+  const fake = fakeForge(
+    "github",
+    model("github", {
+      mrs: [
+        mr("github", {
+          jobs: [
+            {
+              name: "test",
+              state: "passed",
+              id: 201,
+              attempts: [
+                { id: 1, state: "failed" },
+                ...Arr.makeBy(100, (n) => ({ id: n + 2, state: "passed" as const })),
+              ],
+            },
+          ],
+        }),
+      ],
+    }),
+  );
+  return runEffect(
+    Effect.gen(function* () {
+      expect(yield* FORGES.github.job(ref("github"), "test", "/w", fake.run)).toMatchObject({
+        ok: true,
+        state: "passed",
+        id: "4030/201",
+        retryOf: "4030/1",
+      });
+    }).pipe(Effect.provide(fake.layer)),
+  );
+});
+
 const gated = () =>
   fakeForge(
     "github",

@@ -695,6 +695,37 @@ const GH_LOG = "gh run view 4031 --log-failed --repo owner/repo";
 const reruns = (requests: ReadonlyArray<FakeRequest>) =>
   Arr.filter(requests, (one) => pipe_(one.url, Str.endsWith("/rerun-failed-jobs")));
 
+for (const name of ["gitlab", "github"] as const)
+  test(`a ${name} job passing twice still fails when its earlier attempt named an own test`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { asked, forge } = yield* waiting(
+          "passed",
+          name === "gitlab" ? MR : PULL,
+          undefined,
+          {
+            jobs: [
+              {
+                name: "nuxi-typecheck",
+                state: "passed",
+                id: 201,
+                attempts: [
+                  { id: 1, state: "failed", trace: `${OWN_FILE}:\n(fail) works\n` },
+                  { id: 101, state: "passed" },
+                ],
+              },
+            ],
+          },
+          name,
+          BRANCH,
+        );
+        const result = yield* read({ ...asked, settle: true }, forge);
+        expect(result).toMatchObject({ state: "failed" });
+        expect("unproved" in result ? result.unproved : "").toContain('own test "works"');
+        expect(yield* journalOf(asked)).toEqual([]);
+      }),
+    ));
+
 test("a GitHub job that passes its rerun, after a failed suite job named a test the branch adds, is failed", () =>
   runEffect(
     Effect.gen(function* () {

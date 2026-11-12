@@ -522,14 +522,20 @@ function job(ref: MrRef, name: string, cwd: string): Effect.Effect<JobRead, neve
     const unread = (why: string) =>
       ({ ok: false, reason: `could not list the check runs on ${head}: ${why}` }) as const;
     // `filter=all` lists the attempts a rerun left behind, newest first.
-    const named = yield* checkRuns(
-      repo,
-      head,
-      `check_name=${encodeURIComponent(name)}&filter=all&per_page=100`,
-      cwd,
-    );
-    if (!named.ok) return unread(named.reason);
-    const [found, before] = named.value;
+    const named: Array<(typeof CheckRuns.Type)["check_runs"][number]> = [];
+    for (let page = 1; ; page++) {
+      const some = yield* checkRuns(
+        repo,
+        head,
+        `check_name=${encodeURIComponent(name)}&filter=all&per_page=100&page=${page}`,
+        cwd,
+      );
+      if (!some.ok) return unread(some.reason);
+      named.push(...some.value);
+      if (some.value.length < 100) break;
+    }
+    const [found, ...before] = named;
+    const failed = Option.getOrUndefined(Arr.findFirst(before, (one) => stateOf(one) === "failed"));
     let absent: JobState = "missing";
     if (found === undefined) {
       // GitHub creates a job behind `needs` only once its needs finish.
@@ -550,10 +556,7 @@ function job(ref: MrRef, name: string, cwd: string): Effect.Effect<JobRead, neve
       url: found?.html_url ?? null,
       id: actionsJob(found?.html_url),
       merge: null,
-      retryOf:
-        found !== undefined && before !== undefined && stateOf(before) === "failed"
-          ? actionsJob(before.html_url)
-          : null,
+      retryOf: actionsJob(failed?.html_url),
       target: pull.value.base.ref,
     };
   });
