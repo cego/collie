@@ -72,7 +72,8 @@ and its existing `dk.cego.collie.desktop` channel data. Tests must supply an iso
 HOME and state directory. With no GPU,
 point Vulkan at lavapipe: `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`. On
 Linux, building needs `libxkbcommon-dev` and `libwayland-dev`, and lavapipe is in
-`mesa-vulkan-drivers`. libghostty-vt needs Zig 0.16.0 (`zig` on `PATH`, or `ZIG` naming it)
+`mesa-vulkan-drivers`. Terminal fallback tests also need `fontconfig` and `fonts-noto-cjk`;
+the bundled monospace font does not contain CJK glyphs. libghostty-vt needs Zig 0.16.0 (`zig` on `PATH`, or `ZIG` naming it)
 and bindgen needs libclang; its first build takes about four minutes. CI's `desktop-rune` job runs `cargo fmt --check`, `cargo clippy -D
 warnings`, `cargo test`, and the contract, drift and shell tests.
 
