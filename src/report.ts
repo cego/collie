@@ -10,7 +10,7 @@ import { Schema, flow, Result } from "effect";
 import { STOP, type RunView } from "./engine";
 import { isSuperseded, isUnanswered } from "./store";
 import type { Metrics } from "./board-model";
-import { epochMs } from "./time";
+import { epochMs, took } from "./time";
 import { measuresOf, type Measures, type OutcomeRecords } from "./outcomes";
 import type { Metric } from "./metrics";
 
@@ -184,7 +184,8 @@ const citing = (runs: ReadonlyArray<string>, cap = 10) =>
 
 /** The measures, as `run report` prints them under the tallies. */
 const measureLines = (measures: Measures): string[] => {
-  const { rounds, dispositions, steering, verifications, parks, peakContext } = measures;
+  const { rounds, dispositions, steering, verifications, parks, recoveries, peakContext } =
+    measures;
   const recorded = Arr.filter(peakContext, (one) => one.tokens !== null);
   return [
     `review rounds: ${rounds.runs.length} Runs with a rally, median ${rounds.median ?? "none"}, ${rounds.atCap.count} hit the cap${citing(rounds.atCap.runs)}`,
@@ -214,6 +215,26 @@ const measureLines = (measures: Measures): string[] => {
       ),
     ),
     `verifications: ${verifications.total}, ${verifications.byCollector.collie} by Collie, ${verifications.byCollector.agent} by agents; ${verifications.repeated.count} repeated${citing(verifications.repeated.runs)}; ${verifications.executableOnly.count} named only by their executable${citing(verifications.executableOnly.runs)}`,
+    `parks by cause: ${Arr.reduce(parks.byCause, 0, (sum, one) => sum + one.count)}`,
+    ...Arr.map(
+      parks.byCause,
+      (one) =>
+        `  ${one.cause}  ${one.count} park${one.count === 1 ? "" : "s"}; ${
+          one.toNextStep === null
+            ? "none moved on yet"
+            : `to next step median ${took(one.toNextStep.median)}, max ${took(one.toNextStep.max)}`
+        }; ${one.humanResumes} human resume${one.humanResumes === 1 ? "" : "s"}${citing(one.runs)}`,
+    ),
+    `recoveries: ${Arr.reduce(recoveries.byCause, 0, (sum, one) => sum + one.count)}`,
+    ...Arr.map(
+      recoveries.byCause,
+      (one) =>
+        `  ${one.cause} ${one.action}  ${one.count} time${one.count === 1 ? "" : "s"}; ${one.recovered} recovered${one.falseRecoveries === undefined ? "" : `; ${one.falseRecoveries} false recover${one.falseRecoveries === 1 ? "y" : "ies"}`}${
+          one.toRecover === null
+            ? ""
+            : `; ${one.action === "resumed" ? "park to next step" : "turn end to Output"} median ${took(one.toRecover)}`
+        }${citing(one.runs)}`,
+    ),
     `parks: ${parks.collectExpiries.count} collect-budget expiries${citing(parks.collectExpiries.runs)}`,
     ...capped(
       Arr.map(

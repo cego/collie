@@ -156,6 +156,7 @@
         "src/signing.ts",
         "test/desktop-credentials.test.ts",
         "test/desktop-onboarding.test.ts",
+        "test/desktop-peers.test.ts",
         "test/desktop-updates.test.ts",
         "test/desktop-upgrade.test.ts",
         "test/install-desktop.test.ts",

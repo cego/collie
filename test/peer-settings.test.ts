@@ -315,6 +315,7 @@ test(
             setSharedDefinitions: ({ definitions }) => Effect.succeed(definitions),
           };
           const link: Link = {
+            reconnected: Effect.void,
             ...own,
             dir: "test",
             userDir: "test",
@@ -325,6 +326,7 @@ test(
             tell: () => Effect.void,
             machines: Effect.succeed([]),
             forgetsUnlisted: Effect.succeed(true),
+            linked: () => Effect.void,
           };
           yield* levelPeer(link, {
             installation: "other",

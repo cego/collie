@@ -18,12 +18,13 @@ import { DateTime } from "effect";
 import type { DesktopAction } from "../../../src/shared/flock";
 import type { Act } from "../composables/useAnswering";
 import { type Gesture, seenBy } from "../../../src/shared/board-clicks";
-import { offerKey } from "../../../src/shared/actions";
+import { offeringOf } from "../../../src/shared/actions";
 import { cardQuestion, openQuestions } from "../../../src/shared/pending-answer";
 import { cardFlow } from "../../../src/shared/flow-strip";
 import { flockMrsAtom, runDetailKey } from "../flock";
 import { useAtomValue } from "@effect/atom-vue";
 import { kept } from "../kept";
+import { recoveryOf } from "../../../src/shared/record";
 
 const props = defineProps<{
   task: TaskView;
@@ -33,6 +34,7 @@ const props = defineProps<{
   cardKey: string;
   machine: string;
 }>();
+const recovery = computed(() => recoveryOf(props.task, 2));
 const { run, openLink } = useActions();
 const pointing = (at: boolean) =>
   kept.pointed(
@@ -104,7 +106,7 @@ const repoAndBranch = computed(() =>
 /** Words a Steer or a Follow-up needs before it can be sent. */
 const asking = ref<{ title: string; send: (text: string) => DesktopAction } | null>(null);
 /** The offers dialog: closed, choosing, or on the offer a button named. */
-const offering = ref<{ offer: string | null } | null>(null);
+const offering = ref<ReturnType<typeof offeringOf> | null>(null);
 const reviewing = ref(false);
 
 const panes = usePanes();
@@ -150,11 +152,16 @@ const doing = (action: CardAction, primary: boolean) => {
         : { label: openMrLabel(action.mr, primary, action.named), press: () => openLink(url) };
     }
     case "offer": {
-      const offer = offerKey(action.offer);
-      return { label: action.offer.title, press: () => (offering.value = { offer }) };
+      return {
+        label: primary && view.shipping === "merge" ? "Merge" : action.offer.title,
+        press: () => (offering.value = offeringOf(runId, action.offer)),
+      };
     }
     case "offers":
-      return { label: "What it offers…", press: () => (offering.value = { offer: null }) };
+      return {
+        label: "What it offers…",
+        press: () => (offering.value = offeringOf(runId, null)),
+      };
     case "resume":
       return {
         label: primary ? "Resume" : "Resume run",
@@ -320,6 +327,16 @@ const menu = computed(() =>
       </button>
       <p v-if="task.held" class="text-sm text-muted">{{ task.held }}</p>
       <p v-if="task.drift" class="text-sm text-warning">{{ task.drift }}</p>
+      <p v-if="recovery.park" class="text-sm text-muted" data-testid="park-status">
+        {{ recovery.park }}
+      </p>
+      <ul
+        v-if="recovery.history.length > 0"
+        aria-label="Recovery history"
+        class="mt-2 text-xs text-muted"
+      >
+        <li v-for="(line, at) in recovery.history" :key="at">{{ line }}</li>
+      </ul>
 
       <div v-if="asked !== null" class="mt-3 flex flex-col gap-2" data-testid="question">
         <p class="line-clamp-2 text-sm font-medium">{{ asked.text }}</p>
@@ -426,7 +443,7 @@ const menu = computed(() =>
   <OffersDialog
     v-if="offering !== null"
     :installation="installation"
-    :run-id="task.run"
+    :run-id="offering.runId"
     :chosen="offering.offer"
     :as-of="() => asOf"
     @close="offering = null"

@@ -35,7 +35,7 @@ import {
   SchemaRepresentation,
   flow,
 } from "effect";
-import type { CheckEvidence } from "./output";
+import type { CheckEvidence, SynthesisSchema } from "./output";
 import type { FailedTest, Snapshot, Verification } from "./verify";
 import type { Issue, IssueRef } from "./forge/issues";
 export type { Issue, IssueRef } from "./forge/issues";
@@ -44,6 +44,8 @@ export type { Report } from "./report";
 export type { Produces, StepKind, StepMeta } from "./steps";
 import type { VerifySpec } from "./verify-spec";
 import type { CiJob } from "./ci-job";
+import type { ParkCause } from "./park-cause";
+import type { PipelineStart } from "./forge/forge";
 import type { ChildProcessSpawner } from "effect/process";
 import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
 import * as Activity from "effect/workflow/Activity";
@@ -66,6 +68,8 @@ import {
   type Outcome,
 } from "./outcome";
 import type { Source } from "./offers";
+import { ShippingGo } from "./shipping";
+export type { ShippingGo } from "./shipping";
 import {
   CurrentStep,
   runKey,
@@ -77,6 +81,8 @@ import {
 } from "./steps";
 import type { Asker } from "./proposals";
 import type { UsageReading } from "./usage-model";
+import { Recovery, ReviewScope } from "./recovery";
+export { Recovery, ReviewScope } from "./recovery";
 import type { Integration } from "./integrate";
 import type { BenchmarkPlan, Measurement } from "./measurement-model";
 import type { MergeOutcome, Takeover } from "./landing";
@@ -103,6 +109,7 @@ export { SOURCES, SOURCE_NAMES, isSource, type Source } from "./offers";
  * arguments that point a command at its project from anywhere.
  */
 export { targetKind } from "./mr";
+export { ParkCause } from "./park-cause";
 export { repoArgs } from "./forge/gitlab";
 export { mrForgeFacts } from "./forge/forge";
 /** How much of a Subscription is used, as the host reads it (ADR-0049). */
@@ -227,7 +234,7 @@ export {
 export type { FailedTest, Snapshot, Verification } from "./verify";
 export type { VerifySpec } from "./verify-spec";
 export type { CiJob } from "./ci-job";
-export type { JobState } from "./forge/forge";
+export type { JobState, PipelineStart } from "./forge/forge";
 
 /** This Run's checks as a human would type them, for a prompt to name what it faces. */
 export { renderApproved } from "./verify-spec";
@@ -732,6 +739,23 @@ const SingleClaim = Schema.NullOr(Schema.Struct({ slug: Schema.String })).pipe(
 export const ClaimedSchema = Schema.Union([Holding, SingleClaim]);
 
 export interface HostApi {
+  readonly reviewScope: (
+    runId: string,
+    source: string,
+    outcome: string,
+    risks: string,
+  ) => Effect.Effect<ReviewScope | null>;
+  readonly recordReview: (
+    runId: string,
+    scope: ReviewScope | null,
+    base: string,
+    review: typeof SynthesisSchema.Type,
+  ) => Effect.Effect<void>;
+  readonly recovery: (
+    runId: string,
+    parent: string,
+    source: string,
+  ) => Effect.Effect<Recovery, WorkflowError>;
   readonly dir: string;
   /** The Collie release this host runs, as its tag names it. */
   readonly build: string;
@@ -814,9 +838,9 @@ export interface HostApi {
   readonly step: (runId: string, note: StepNote) => Effect.Effect<void>;
   /**
    * Why this Run has parked its own work and what picks it up again, shown beside its
-   * status; null says it no longer has.
+   * status; null says it no longer has. A park naming no cause is recorded as `unknown`.
    */
-  readonly parked: (runId: string, why: string | null) => Effect.Effect<void>;
+  readonly parked: (runId: string, why: string | null, cause?: ParkCause) => Effect.Effect<void>;
   /**
    * Records the question this run is waiting on, so the host can say what may answer it.
    * `asker` is the operation whose agent asked it, which the workflow is not woken for.
@@ -928,6 +952,16 @@ export interface HostApi {
      */
     readonly settle?: boolean;
   }) => Effect.Effect<CiJob>;
+  /**
+   * A pipeline on `cwd`'s HEAD, through the forge of the merge request the Run recorded,
+   * unless that head has one that was not skipped. GitLab starts the merge request's, and the
+   * source branch's where it refuses that with 400; refused both ways with 400 is `NoneByRules`,
+   * in GitLab's words. GitHub starts nothing, since its Actions run on every push.
+   */
+  readonly startPipeline: (options: {
+    readonly runId: string;
+    readonly cwd: string;
+  }) => Effect.Effect<PipelineStart>;
   /** Puts a note on the merge request this Run recorded, sent by Collie rather than an agent. */
   readonly note: (options: {
     readonly runId: string;
@@ -1175,6 +1209,8 @@ export interface HostApi {
   readonly readMergeRequest: (options: {
     readonly cwd: string;
     readonly mr: string;
+    /** Locate a foreign repository's checkout under the Projects root for a child Run. */
+    readonly checkout?: boolean;
   }) => Effect.Effect<MergeRequestRead>;
   /**
    * Whether the forge shows stage rolled back: the newest successful deployment of each of
@@ -1269,6 +1305,7 @@ export type ReviewedBranch = { readonly branch: string } | { readonly refused: s
 /** What opening a merge request from here needs, and what it would be filled in with. */
 export interface MrReady {
   readonly ok: boolean;
+  readonly cause?: ParkCause;
   /** The checkout's forge; absent on a host that only supports GitLab. */
   readonly provider?: "gitlab" | "github";
   /** The repository's path on its forge — `owner/repo` or `group/project` — for `--repo`. */
@@ -1331,6 +1368,7 @@ export interface DecisionSpec {
   readonly options: ReadonlyArray<string | Solution>;
   /** What keeps it short of standard, flagged wherever it is shown. */
   readonly shortfall?: string;
+  readonly shipping?: ShippingGo;
 }
 
 /** One answer an `ask` takes: a bare string is its id and title. */
@@ -1357,6 +1395,7 @@ export const ask = (question: {
   /** Its identity: the same name is the same question, however often the work replays. */
   readonly name: string;
   readonly prompt?: string;
+  readonly shipping?: ShippingGo;
   /**
    * The answers it takes, exactly one of them recommended; none is a question answered in
    * the operator's own words.
@@ -1364,6 +1403,10 @@ export const ask = (question: {
   readonly options?: ReadonlyArray<AskOption>;
 }): Effect.Effect<string, never, Run | Host | WorkflowEngine | WorkflowInstance> =>
   Effect.gen(function* () {
+    const shipping =
+      question.shipping === undefined
+        ? undefined
+        : yield* Schema.decodeEffect(ShippingGo)(question.shipping).pipe(Effect.orDie);
     const host = yield* Host;
     const runId = (yield* Run).id;
     const at = yield* CurrentStep;
@@ -1386,6 +1429,7 @@ export const ask = (question: {
       prompt: question.prompt ?? question.name,
       options: shortfall === null ? solutions : Arr.map(solutions, Struct.omit(["recommended"])),
       shortfall: shortfall ?? undefined,
+      shipping,
     });
     return yield* DurableDeferred.await(
       DurableDeferred.make(question.name, { success: Schema.String }),
@@ -1680,6 +1724,7 @@ export interface OutcomeContract {
 
 /** What a finished Run offers next, named by the public id of the workflow it starts. */
 export interface FollowUp {
+  readonly entry?: (facts: ActionFacts) => string;
   readonly connections?: ReadonlyArray<ConnectionId>;
   readonly id: string;
   readonly title: string;
@@ -1696,6 +1741,7 @@ export interface FollowUp {
  * user-authored workflow offers what its own results earn, exactly as a shipped one does.
  */
 export interface ActionFacts {
+  readonly recovery?: Recovery;
   readonly outcome: Outcome;
   readonly succeeded: boolean;
   readonly branch: string | null;
@@ -1798,6 +1844,7 @@ const DeclaredMetadata = Schema.Struct({
         ...OfferFields,
         when: Schema.Literals(["succeeded", "failed", "always"]),
         eligible: Schema.optionalKey(Callable),
+        entry: Schema.optionalKey(Callable),
       }),
     ),
   ),

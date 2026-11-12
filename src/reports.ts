@@ -1,12 +1,12 @@
 import * as Arr from "effect/Array";
-import { Effect, FileSystem, Layer, Option, Schedule, Schema, flow, Result } from "effect";
+import { Effect, FileSystem, Layer, Option, Queue, Schedule, Schema, flow, Result } from "effect";
 import type { PluginEnv } from "./env";
 import { Registry, owesReport, runDir, type CrashPoint, type RunView } from "./engine";
 import { Store } from "./store";
 import { RunReport } from "./board-model";
 import { Agents } from "./agents";
 import { readLaunches } from "./launches";
-import { asksRun, isSettled } from "./lifecycle";
+import { asks, asksRun, isSettled } from "./lifecycle";
 import { machineName, peersOf } from "./peers";
 import { Herdr, herdrFailureReason } from "./herdr";
 import { readTask, listTasks, withTaskLock } from "./task";
@@ -16,7 +16,8 @@ import { socketOf } from "./host";
 import { nowIso } from "./time";
 import { isJsonObject, isString } from "./schema";
 import type { Asker } from "./proposals";
-import { notifyRunLink } from "./run-link-delivery";
+import { notifyRunLink, owedRunLinks, resendRunLink } from "./run-link-delivery";
+import type { Peer } from "./peers-model";
 
 const encodeReport = flow(Schema.encodeResult(Schema.fromJsonString(RunReport)), Result.getOrThrow);
 
@@ -25,6 +26,9 @@ export const reportsLayer = (opts: {
   installation: string;
   stamp: string;
   crashAt?: CrashPoint;
+  linked: Queue.Dequeue<Peer>;
+  /** Whether the link to the peer of that installation is up now. */
+  live: (installation: string) => Effect.Effect<boolean>;
 }) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
@@ -105,10 +109,11 @@ export const reportsLayer = (opts: {
         Effect.gen(function* () {
           const who = view.requestedBy;
           const at = yield* nowIso;
-          const undelivered = (note: string): RunReport => ({
+          const undelivered = (note: string, unreached = false): RunReport => ({
             state: "undelivered",
             at,
             note,
+            unreached,
             closed: false,
           });
           if (who === undefined) return undelivered("No agent requested this Run.");
@@ -154,9 +159,9 @@ export const reportsLayer = (opts: {
             actor,
           ).pipe(Effect.timeoutOption("15 seconds"));
           if (Option.isNone(sent))
-            return undelivered("Delivery was not confirmed within 15 seconds.");
+            return undelivered("Delivery was not confirmed within 15 seconds.", true);
           const answer = sent.value;
-          if (!answer.ok) return undelivered(answer.error.message);
+          if (!answer.ok) return undelivered(answer.error.message, answer.unreached === true);
           if (!answer.value.delivered)
             return undelivered(answer.value.detail || "The requesting agent is gone.");
           if (opts.crashAt === "reported") yield* signalProcess(yield* currentPid, "SIGKILL");
@@ -206,5 +211,82 @@ export const reportsLayer = (opts: {
         );
       });
       yield* Effect.forkScoped(sweep.pipe(Effect.repeat(Schedule.spaced("1 second"))));
+
+      const retell = (view: RunView, prior: RunReport) =>
+        Effect.gen(function* () {
+          const { state, at, note, tries = [], closed, closure } = prior;
+          const report = { ...(yield* tell(view)), tries: [...tries, { state, at, note }], closed };
+          yield* write(view.runId, closure === undefined ? report : { ...report, closure });
+        });
+
+      // A peer's link is up before its host serves calls over it.
+      const answers = (peer: Peer) =>
+        asks({ ...env, machine: peer.name }, (client) => client.identity()).pipe(
+          Effect.timeoutOption("5 seconds"),
+          Effect.map((answered) => Option.isSome(answered) && answered.value.ok),
+        );
+
+      /** Sends again what `peer` is owed; true once nothing that may still reach it is. */
+      const resend = (peer: Peer) =>
+        Effect.gen(function* () {
+          const views = yield* Effect.forEach(
+            Arr.filter(yield* store.runs, owesReport),
+            (row) => registry.view(row.run),
+            { concurrency: 4 },
+          );
+          const owed = [];
+          for (const view of views) {
+            if (view?.requestedBy?.machine.installation !== peer.installation) continue;
+            const notices = yield* owedRunLinks(env, view, peer);
+            const report = view.report;
+            const untold =
+              isSettled(view) &&
+              (report === undefined ||
+                (report.state === "undelivered" && report.unreached === true));
+            if (notices.length > 0 || untold) owed.push({ view, notices });
+          }
+          if (owed.length === 0) {
+            yield* Effect.logInfo(`${peer.name} is linked: nothing is owed to it`);
+            return true;
+          }
+          if (!(yield* answers(peer))) return false;
+          let sent = 0;
+          for (const { view, notices } of owed) {
+            for (const notice of notices) yield* resendRunLink(env, view, peer, notice);
+            sent += notices.length;
+            const report = view.report;
+            if (
+              report?.state === "undelivered" &&
+              report.unreached === true &&
+              // A close still owed is the sweep's to write.
+              (view.closes !== "reported" || report.closed)
+            ) {
+              yield* retell(view, report);
+              sent += 1;
+            }
+          }
+          yield* Effect.logInfo(`${peer.name} is linked: ${sent} notices and reports sent again`);
+          return false;
+        }).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning(
+              `notices and reports not sent again to ${peer.name}: ${String(cause)}`,
+            ).pipe(Effect.as(false)),
+          ),
+        );
+
+      // Each linked peer is owed a resend until nothing is left, or its link drops again.
+      const due = new Map<string, Peer>();
+      yield* Effect.forkScoped(
+        Effect.gen(function* () {
+          const linked = yield* due.size === 0
+            ? Effect.asSome(Queue.take(opts.linked))
+            : Queue.take(opts.linked).pipe(Effect.timeoutOption("5 seconds"));
+          if (Option.isSome(linked)) due.set(linked.value.installation, linked.value);
+          for (const [installation, peer] of due)
+            if (!(yield* opts.live(installation)) || (yield* resend(peer)))
+              due.delete(installation);
+        }).pipe(Effect.forever),
+      );
     }),
   );

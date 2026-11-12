@@ -21,12 +21,13 @@ import {
 } from "effect";
 import type { BoardMessage, BoardSnapshot } from "../src/board-model";
 import { signRelease } from "../src/signing";
-import { flockStream, localRoute, type Route } from "../desktop/src/bun/machine";
+import { flockStream, localRoute, type Route, type ShellRoute } from "../desktop/src/bun/machine";
 import {
   addToHerdr,
   doctorOn,
   onboardThrough,
   platformOf,
+  ranWith,
   verifiedRunner,
 } from "../desktop/src/bun/onboarding";
 import { setupOffer } from "../desktop/src/bun/standing-setup";
@@ -340,6 +341,133 @@ test("a runner that does not verify is never put on the Machine, and onboarding 
       ]);
       expect(last.steps[0]!.detail).toContain("unsigned");
       expect(yield* fs.exists(`${home}/.cache/collie/runners`)).toBe(false);
+    }),
+  ));
+
+/** A runner whose bytes are not UTF-8, as a compiled one's are. */
+const BINARY = new Uint8Array([
+  ...new TextEncoder().encode(`${ONBOARDED}# `),
+  0xff,
+  0xfe,
+  0x80,
+  0xc3,
+  0x28,
+  0x0a,
+]);
+
+/**
+ * A paired Machine at `home`: its link carries stdin as text, as a bridge's shell request
+ * does, and says what it was given; `sh` is its SSH command.
+ */
+const paired = (
+  home: string,
+  sh: ShellRoute["sh"] = localSh(home),
+): ShellRoute & { readonly carried: Uint8Array[] } => {
+  const carried: Uint8Array[] = [];
+  return {
+    ...localRoute([], "vm-mk"),
+    sh,
+    carried,
+    execute: (script, stdin) =>
+      Effect.flatMap(localSh(home)(script), (command) => {
+        if (stdin !== undefined) carried.push(stdin);
+        return ranWith(command, stdin && new TextEncoder().encode(new TextDecoder().decode(stdin)));
+      }),
+  };
+};
+
+const servedRunner = (bytes: Uint8Array) =>
+  Effect.gen(function* () {
+    const key = pair();
+    const platform = platformOf(Str.trim(yield* Effect.promise(() => Bun.$`uname -sm`.text())))!;
+    const served = yield* releases({
+      [`/0.40.0/collie-${platform}`]: bytes,
+      [`/0.40.0/collie-${platform}.sig`]: signRelease(bytes, key.privateKey),
+    });
+    return { releases: served.base, key: key.publicKey };
+  });
+
+test("a paired Machine's runner rides its SSH command, not its link, and arrives byte for byte", () =>
+  run(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* scratch;
+      const home = `${dir}/home`;
+      yield* fs.makeDirectory(home);
+      const route = paired(home);
+      const onboarded = yield* onboardThrough(
+        route,
+        { version: "0.40.0", runners: `${dir}/runners`, ...(yield* servedRunner(BINARY)) },
+        () => Effect.void,
+      );
+      expect(onboarded.steps[0]).toMatchObject({ step: "runner", status: "done" });
+      expect(onboarded.ready).toBe(true);
+      expect(yield* fs.readFile(`${home}/.cache/collie/runners/collie-0.40.0`)).toEqual(BINARY);
+      expect(route.carried).toEqual([]);
+    }),
+  ));
+
+test("a runner cut short on its way is refused, and nothing of it is left on the Machine", () =>
+  run(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* scratch;
+      const home = `${dir}/home`;
+      yield* fs.makeDirectory(home);
+      const route = paired(home, (script) =>
+        Effect.succeed([
+          "/bin/sh",
+          "-c",
+          `head -c 64 | env HOME='${home}' /bin/sh -c "$0"`,
+          script,
+        ]),
+      );
+      const last = yield* onboardThrough(
+        route,
+        { version: "0.40.0", runners: `${dir}/runners`, ...(yield* servedRunner(BINARY)) },
+        () => Effect.void,
+      );
+      expect(last.steps).toEqual([
+        {
+          step: "runner",
+          title: "Collie 0.40.0's runner, signed",
+          status: "failed",
+          detail: "the runner changed on its way to vm-mk",
+        },
+      ]);
+      expect(yield* fs.readDirectory(`${home}/.cache/collie/runners`)).toEqual([]);
+      expect(route.carried).toEqual([]);
+    }),
+  ));
+
+test("an SSH connection that fails while the runner is on its way is said in its own words", () =>
+  run(
+    Effect.gen(function* () {
+      const dir = yield* scratch;
+      const home = `${dir}/home`;
+      yield* (yield* FileSystem.FileSystem).makeDirectory(home);
+      const route = paired(home, () =>
+        Effect.succeed([
+          "/bin/sh",
+          "-c",
+          "head -c 64 >/dev/null; echo 'Connection to vm-mk closed by remote host.' >&2; exit 255",
+        ]),
+      );
+      const last = yield* onboardThrough(
+        route,
+        { version: "0.40.0", runners: `${dir}/runners`, ...(yield* servedRunner(BINARY)) },
+        () => Effect.void,
+      );
+      expect(last.ready).toBe(false);
+      expect(last.steps).toEqual([
+        {
+          step: "runner",
+          title: "Collie 0.40.0's runner, signed",
+          status: "failed",
+          detail: "Connection to vm-mk closed by remote host.",
+        },
+      ]);
+      expect(route.carried).toEqual([]);
     }),
   ));
 

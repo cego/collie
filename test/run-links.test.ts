@@ -2,7 +2,10 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema, flow as Schemaflow, Result } from "effect";
-import { Flow } from "../src/board-model";
+import * as Str from "effect/String";
+import { Flow, type FlowRun } from "../src/board-model";
+import { readAudit } from "../src/audit";
+import { runDir } from "../src/engine";
 import { readEnv } from "../src/env";
 import { asksRun } from "../src/lifecycle";
 import { peersOf } from "../src/peers";
@@ -33,6 +36,35 @@ const flowOf = (side: Side, run: string) =>
           )(shown.envelope.data).flow,
       ),
     );
+
+const Machines = Schema.Struct({
+  machines: Schema.Array(
+    Schema.Struct({ name: Schema.String, failure: Schema.NullOr(Schema.String) }),
+  ),
+});
+
+const linksTo = (side: Side, requester: string, run: string) =>
+  flowOf(side, requester).pipe(
+    Effect.map((flow) => {
+      const links: Array<FlowRun> = [];
+      for (const lane of flow.lanes)
+        if (lane.run === requester)
+          for (const node of lane.nodes)
+            for (const link of node.links ?? []) if (link.link?.run === run) links.push(link);
+      return links;
+    }),
+  );
+
+/** How many of `run`'s reports `side`'s herdr was asked to show its agents. */
+const reportsTo = (side: Side, run: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.readFileString(side.herdrLog)),
+    Effect.orDie,
+    Effect.map(
+      (log) =>
+        Arr.filter(Str.split(log, "\n"), (line) => Str.includes(` of ${run} on `)(line)).length,
+    ),
+  );
 
 const requesterOn = (side: Side) =>
   Effect.gen(function* () {
@@ -329,40 +361,6 @@ test(
               { HERDR_PANE_ID: agent.paneId },
             );
             const { runId: d } = runIdOf(waiting.envelope.data);
-            const before = Option.getOrUndefined(
-              Option.flatMap(
-                Option.fromNullishOr(
-                  Option.getOrUndefined(
-                    Arr.findFirst((yield* flowOf(first, a)).lanes, (lane) => lane.run === a),
-                  ),
-                ),
-                (present___________) =>
-                  Option.flatMap(
-                    Option.fromNullishOr(
-                      Option.getOrUndefined(
-                        Arr.findFirst(present___________.nodes, (node) => node.id === "build"),
-                      ),
-                    ),
-                    (present____________) =>
-                      Option.map(
-                        Option.fromNullishOr(present____________.links),
-                        (present_____________) =>
-                          Option.getOrUndefined(
-                            Arr.findFirst(
-                              present_____________,
-                              (node) =>
-                                Option.getOrUndefined(
-                                  Option.map(
-                                    Option.fromNullishOr(node.link),
-                                    (present______________) => present______________.run,
-                                  ),
-                                ) === d,
-                            ),
-                          ),
-                      ),
-                  ),
-              ),
-            );
             yield* until(
               () => registeredAt(second.world.state),
               (rows) => Arr.some(rows, (one) => one.runId === d),
@@ -386,44 +384,158 @@ test(
               },
             });
             yield* first.cli(["board"]);
-            yield* first.cli(["--machine", "second", "board"]);
-            const saved = Option.getOrUndefined(
-              Option.flatMap(
-                Option.fromNullishOr(
-                  Option.getOrUndefined(
-                    Arr.findFirst((yield* flowOf(first, a)).lanes, (lane) => lane.run === a),
-                  ),
-                ),
-                (present_______________) =>
-                  Option.flatMap(
-                    Option.fromNullishOr(
-                      Option.getOrUndefined(
-                        Arr.findFirst(present_______________.nodes, (node) => node.id === "build"),
-                      ),
-                    ),
-                    (present________________) =>
-                      Option.map(
-                        Option.fromNullishOr(present________________.links),
-                        (present_________________) =>
-                          Option.getOrUndefined(
-                            Arr.findFirst(
-                              present_________________,
-                              (node) =>
-                                Option.getOrUndefined(
-                                  Option.map(
-                                    Option.fromNullishOr(node.link),
-                                    (present__________________) => present__________________.run,
-                                  ),
-                                ) === d,
-                            ),
-                          ),
-                      ),
-                  ),
-              ),
+            // The notice is sent again before the report.
+            yield* until(
+              () => reportsTo(first, d),
+              (count) => count > 0,
             );
-            expect(saved).toMatchObject({ state: "running", link: { asOf: before?.link?.asOf } });
+            expect(yield* linksTo(first, a, d)).toMatchObject([{ state: "done" }]);
+            const tried = yield* second.cli(["run", "show", d]);
+            expect(tried.envelope.data).toMatchObject({
+              run: {
+                linkNotices: [
+                  { phase: "admitted", state: "delivered" },
+                  { phase: "settled", state: "undelivered" },
+                  { phase: "settled", state: "delivered" },
+                ],
+                report: { state: "delivered", tries: [{ state: "undelivered" }] },
+              },
+            });
+            const asked = yield* readAudit(runDir(first.world.state, a));
+            const askedFor = (request: string) =>
+              Option.getOrUndefined(Arr.findFirst(asked, (one) => one.request === request))?.asked;
+            const settledNotice = yield* Schema.decodeUnknownEffect(RunLinkNotice)(
+              askedFor(`link-${identity.installation}-${d}-settled`),
+            ).pipe(Effect.orDie);
+            const report = yield* Schema.decodeUnknownEffect(
+              Schema.Struct({ text: Schema.String }),
+            )(askedFor(`report-${d}`)).pipe(Effect.orDie);
+            const dAgent = Option.getOrUndefined(
+              Arr.findFirst(yield* registeredAt(second.world.state), (one) => one.runId === d),
+            )!;
+            const fromD = {
+              origin: "agent" as const,
+              from: { run: d, agent: dAgent.agent, machine: settledNotice.machine },
+            };
+            const reached = { ...readEnv(second.env), machine: peer.name, pairs: false };
+            for (let attempt = 0; attempt < 2; attempt++) {
+              expect(
+                yield* asksRun(
+                  reached,
+                  a,
+                  (client) =>
+                    client.linkNotice({
+                      notice: settledNotice,
+                      request: `link-${identity.installation}-${d}-settled`,
+                    }),
+                  fromD,
+                ),
+              ).toMatchObject({ ok: true, value: true });
+              expect(
+                yield* asksRun(
+                  reached,
+                  a,
+                  (client) =>
+                    client.steer({
+                      runId: a,
+                      agent: who.agent,
+                      text: report.text,
+                      request: `report-${d}`,
+                      mode: "boundary",
+                    }),
+                  fromD,
+                ),
+              ).toMatchObject({ ok: true, value: { delivered: true } });
+            }
+            expect(yield* reportsTo(first, d)).toBe(1);
+            expect(yield* linksTo(first, a, d)).toMatchObject([{ state: "done" }]);
           }),
         ["stepped.workflow.ts", "completed-agent.workflow.ts", "failing-agent.workflow.ts"],
+      ),
+    ),
+  180_000,
+);
+
+test(
+  "a notice and a report are not sent again to a Machine unpaired while it was away",
+  () =>
+    runEffect(
+      twoMachines(
+        "collie-link-unpaired-",
+        (first, second) =>
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const { agent } = yield* requesterOn(first);
+            const outputs = `${second.world.home}/outputs.json`;
+            yield* fs.writeFileString(outputs, encode([null]));
+            yield* second.cli(["board"], { FAKE_HERDR_OUTPUTS: outputs });
+            yield* first.lists([second]);
+            const started = yield* first.cli(
+              [
+                "--machine",
+                "second",
+                "run",
+                "start",
+                "completed-agent",
+                "--input",
+                `workspace=${second.world.project}`,
+                "--input",
+                "goal=work while the requester is unpaired",
+              ],
+              { HERDR_PANE_ID: agent.paneId },
+            );
+            const { runId: d } = runIdOf(started.envelope.data);
+            yield* until(
+              () => registeredAt(second.world.state),
+              (rows) => Arr.some(rows, (one) => one.runId === d),
+            );
+            yield* stopHost(first.world.state);
+            yield* fs.writeFileString(
+              `${second.world.state}/agents/${d}/build.json`,
+              encode({ verdict: "done" }),
+            );
+            const host = yield* connect(second.world.state);
+            yield* until(
+              () => host.run({ runId: d }),
+              (view) => view?.status.status === "complete" && view.report !== undefined,
+            );
+            const [requester] = yield* peersOf(second.world.state);
+            expect((yield* second.cli(["machine", "forget", requester!.name])).envelope.ok).toBe(
+              true,
+            );
+            const away = (yield* second.cli(["run", "show", d])).envelope.data;
+            expect(away).toMatchObject({
+              run: {
+                linkNotices: [
+                  { phase: "admitted", state: "delivered" },
+                  { phase: "settled", state: "undelivered" },
+                ],
+                report: { state: "undelivered" },
+              },
+            });
+            yield* first.cli(["board"]);
+            // Its dial is refused, which is as far as the link gets.
+            yield* until(
+              () =>
+                first
+                  .cli(["machine", "list"])
+                  .pipe(
+                    Effect.map((read) =>
+                      Arr.findFirst(
+                        Schemaflow(
+                          Schema.decodeUnknownResult(Machines),
+                          Result.getOrThrow,
+                        )(read.envelope.data).machines,
+                        (one) => one.name === "second" && one.failure !== null,
+                      ),
+                    ),
+                  ),
+              Option.isSome,
+            );
+            expect((yield* second.cli(["run", "show", d])).envelope.data).toEqual(away);
+            expect(yield* reportsTo(first, d)).toBe(0);
+          }),
+        ["stepped.workflow.ts", "completed-agent.workflow.ts"],
       ),
     ),
   180_000,

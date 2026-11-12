@@ -2,10 +2,15 @@
 
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
+import { runEffect } from "./support/effect";
+import { Effect, FileSystem, Schema } from "effect";
+import type * as Types from "effect/Types";
 import { HOLD, STOP, type RunView } from "../src/engine";
 import type { Metrics } from "../src/board-model";
-import { reportOf } from "../src/report";
-import type { OutcomeRecords } from "../src/outcomes";
+import { reportLines, reportOf } from "../src/report";
+import { resumesIn, type OutcomeRecords } from "../src/outcomes";
+import { once, readAudit } from "../src/audit";
+import { nowIso } from "../src/time";
 import type { Metric } from "../src/metrics";
 
 const view = (over: Partial<RunView> & { runId: string }): RunView => ({
@@ -357,4 +362,264 @@ test("a check named only by its executable is counted, wherever the executable w
     ]),
   );
   expect(report.measures.verifications.executableOnly).toEqual({ count: 1, runs: ["a"] });
+});
+
+const halt = (at: string, cause?: Metric["cause"]): Metric => {
+  const line: Types.Mutable<Metric> = { at, kind: "halt", subject: "", value: 0, note: "parked" };
+  if (cause !== undefined) line.cause = cause;
+  return line;
+};
+
+test("parks are counted per cause, with their time to the next step and the human resumes they took", () => {
+  const report = reportOf(
+    Arr.map(["a", "b", "c"], (runId) => view({ runId })),
+    new Map(),
+    null,
+    new Map([
+      [
+        "a",
+        {
+          records: records({
+            moved: ["2026-09-30T09:00:00.000Z", "2026-09-30T10:10:00.000Z"],
+            resumes: [{ at: "2026-09-30T10:05:00.000Z", origin: "desktop" }],
+          }),
+          metrics: [halt("2026-09-30T10:00:00.000Z", "ci-job-absent")],
+        },
+      ],
+      [
+        "b",
+        {
+          records: records({
+            moved: ["2026-09-30T11:30:00.000Z", "2026-09-30T13:00:00.000Z"],
+            resumes: [
+              { at: "2026-09-30T11:20:00.000Z", origin: "chat" },
+              { at: "2026-09-30T12:40:00.000Z", origin: "cli-tty" },
+            ],
+          }),
+          metrics: [
+            halt("2026-09-30T11:00:00.000Z", "ci-job-absent"),
+            halt("2026-09-30T12:00:00.000Z", "output-absent"),
+          ],
+        },
+      ],
+      [
+        "c",
+        {
+          records: records({ moved: [] }),
+          metrics: [
+            halt("2026-09-30T10:00:00.000Z", "ci-job-absent"),
+            halt("2026-09-30T10:00:00.000Z"),
+          ],
+        },
+      ],
+    ]),
+  );
+  // c's ci-job-absent park has not moved on, so it is counted and never timed.
+  expect(report.measures.parks.byCause).toEqual([
+    {
+      cause: "ci-job-absent",
+      count: 3,
+      runs: ["a", "b", "c"],
+      toNextStep: { median: 20 * 60_000, max: 30 * 60_000 },
+      humanResumes: 1,
+    },
+    {
+      cause: "output-absent",
+      count: 1,
+      runs: ["b"],
+      toNextStep: { median: 60 * 60_000, max: 60 * 60_000 },
+      humanResumes: 1,
+    },
+    { cause: "unknown", count: 1, runs: ["c"], toNextStep: null, humanResumes: 0 },
+  ]);
+  expect(reportLines(report, null)).toContain(
+    "  ci-job-absent  3 parks; to next step median 20m, max 30m; 1 human resume: a, b, c",
+  );
+});
+
+test("a human resume after the Run moved on from its park is not counted against that park", () => {
+  const report = reportOf(
+    [view({ runId: "a" })],
+    new Map(),
+    null,
+    new Map([
+      [
+        "a",
+        {
+          records: records({
+            moved: ["2026-09-30T11:00:00.000Z"],
+            resumes: [{ at: "2026-09-30T12:00:00.000Z", origin: "desktop" }],
+          }),
+          metrics: [halt("2026-09-30T10:00:00.000Z", "ci-job-absent")],
+        },
+      ],
+    ]),
+  );
+  expect(report.measures.parks.byCause).toMatchObject([
+    { cause: "ci-job-absent", humanResumes: 0 },
+  ]);
+});
+
+test("the Step progress a human resume makes while it runs still counts that resume against the park", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-resume-" });
+      const parked = yield* nowIso;
+      yield* Effect.sleep("5 millis");
+      let progress = "";
+      yield* once(
+        dir,
+        { operation: "resume", request: "resume-1", origin: "desktop", result: Schema.Boolean },
+        Effect.gen(function* () {
+          yield* Effect.sleep("5 millis");
+          progress = yield* nowIso;
+          yield* Effect.sleep("5 millis");
+          return true;
+        }),
+      );
+      const report = reportOf(
+        [view({ runId: "a" })],
+        new Map(),
+        null,
+        new Map([
+          [
+            "a",
+            {
+              records: records({ moved: [progress], resumes: resumesIn(yield* readAudit(dir)) }),
+              metrics: [halt(parked, "ci-job-absent")],
+            },
+          ],
+        ]),
+      );
+      expect(report.measures.parks.byCause).toMatchObject([
+        { cause: "ci-job-absent", humanResumes: 1 },
+      ]);
+    }),
+  ));
+
+const reminded = (outcome: NonNullable<Metric["outcome"]>, waitedMs: number): Metric => ({
+  at: "2026-09-30T10:00:00.000Z",
+  kind: "recovery",
+  subject: "a-build",
+  value: waitedMs,
+  note: "",
+  cause: "output-absent",
+  action: "reminded",
+  outcome,
+});
+
+test("Output reminders are counted with the recoveries they made and the median time from the turn's end to the Output", () => {
+  const report = reportOf(
+    Arr.map(["a", "b", "c", "d"], (runId) => view({ runId })),
+    new Map(),
+    null,
+    new Map([
+      ["a", { records: null, metrics: [reminded("output-written", 40_000)] }],
+      [
+        "b",
+        {
+          records: null,
+          metrics: [reminded("still-absent", 30_000), reminded("output-written", 80_000)],
+        },
+      ],
+      [
+        "c",
+        {
+          records: null,
+          metrics: [
+            reminded("still-absent", 20_000),
+            reminded("still-absent", 50_000),
+            halt("2026-09-30T10:01:00.000Z", "output-absent"),
+          ],
+        },
+      ],
+      ["d", { records: null, metrics: [halt("2026-09-30T10:00:00.000Z", "idle-budget")] }],
+    ]),
+  );
+  expect(report.measures.recoveries.byCause).toEqual([
+    {
+      cause: "output-absent",
+      action: "reminded",
+      count: 5,
+      runs: ["a", "b", "c"],
+      recovered: 2,
+      toRecover: 60_000,
+    },
+  ]);
+  expect(reportLines(report, null)).toContain(
+    "  output-absent reminded  5 times; 2 recovered; turn end to Output median 1m: a, b, c",
+  );
+});
+
+test("a reminder outcome update counts the same reminder once", () => {
+  const pending = { ...reminded("still-absent", 0), recoveryId: "review.remind-1" };
+  const recovered = { ...pending, outcome: "output-written" as const, value: 40_000 };
+  const report = (metrics: Metric[]) =>
+    reportOf([view({ runId: "a" })], new Map(), null, new Map([["a", { records: null, metrics }]]));
+  expect(report([pending]).measures.recoveries.byCause).toMatchObject([
+    { count: 1, recovered: 0, toRecover: null },
+  ]);
+  expect(report([pending, recovered, recovered]).measures.recoveries.byCause).toMatchObject([
+    { count: 1, recovered: 1, toRecover: 40_000 },
+  ]);
+});
+
+test("automatic resumes count false recoveries and time the next Step from the park", () => {
+  const resumed = (runId: string): Metric[] => {
+    const claim: Metric = {
+      at: "2026-09-30T10:01:00.000Z",
+      kind: "recovery",
+      subject: runId,
+      cause: "ci-job-absent",
+      build: "test",
+      action: "resumed",
+      outcome: "claimed",
+      recoveryId: `recover:${runId}:p:1`,
+      park: "p",
+      since: "2026-09-30T10:00:00.000Z",
+      value: 0,
+      note: "job present",
+    };
+    const done: Metric = {
+      ...claim,
+      at: "2026-09-30T10:02:00.000Z",
+      outcome: "resumed",
+      value: 120_000,
+    };
+    return [{ ...halt("2026-09-30T10:00:00.000Z", "ci-job-absent"), park: "p" }, claim, done, done];
+  };
+  const report = reportOf(
+    [view({ runId: "a" }), view({ runId: "b" }), view({ runId: "c" })],
+    new Map(),
+    null,
+    new Map([
+      ["a", { records: records({ moved: ["2026-09-30T10:01:30.000Z"] }), metrics: resumed("a") }],
+      [
+        "b",
+        {
+          records: records({ moved: ["2026-09-30T10:01:10.000Z"] }),
+          metrics: [
+            ...resumed("b"),
+            { ...halt("2026-09-30T10:01:20.000Z", "ci-job-absent"), park: "p2" },
+          ],
+        },
+      ],
+      ["c", { records: records({ moved: ["2026-09-30T10:04:30.000Z"] }), metrics: resumed("c") }],
+    ]),
+  );
+  expect(report.measures.recoveries.byCause).toEqual([
+    {
+      cause: "ci-job-absent",
+      action: "resumed",
+      count: 3,
+      runs: ["a", "b", "c"],
+      recovered: 2,
+      falseRecoveries: 1,
+      toRecover: 180_000,
+    },
+  ]);
+  expect(reportLines(report, null)).toContain(
+    "  ci-job-absent resumed  3 times; 2 recovered; 1 false recovery; park to next step median 3m: a, b, c",
+  );
 });

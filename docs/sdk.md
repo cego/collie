@@ -168,6 +168,16 @@ the file that asked.
 What the host lends is `Run`, `Host`, `Agents`, `Children`, the workflow engine, the file
 system, paths and the process spawner. Everything else is yours.
 
+`Host.reviewScope(run, source, outcome, risks)` captures the requirements, Intent, target head,
+and checkout revision before a review. `Host.recordReview(run, scope, base, review)` records
+the completed review only while that scope still holds. Journal the scope before launching
+the reviewers, and journal the association after collection, in separate Activities per pass.
+Replaying a review then retains its original scope and cannot supersede a newer judgement.
+`Host.recovery(run, parent, source)`
+takes the pushed branch by a guarded fast-forward and reads durable implementation and
+review facts. The module chooses its entry from those facts; the host doesn't select a
+workflow by name. Missing associations never authorise skipping review.
+
 ### Two projects, two implementations
 
 A shared contract with more than one implementation is an ordinary service with more than
@@ -345,12 +355,21 @@ const verdict =
   ([`docs/cli.md`](cli.md#answering-holding-and-steering-one)), and while a `collie verify`
   it asked for waits because its Machine is [Short of memory](using.md#short-of-memory). A
   launch that waits for memory spends none of it either: the budget starts once the agent
-  is launched. Past the budget the Run parks saying how many minutes it sat idle, and Collie
-  keeps collecting: an Output written later clears the park and the step goes on, with no
-  resume. An agent that has gone by the end of another idle budget is started again. Gone is
-  an agent herdr no longer lists, or one it still lists but refuses as not active, as it
-  does when the agent's process died with its Machine; that one's pane is closed first, so
+  is launched. Past the budget the Run parks as `idle-budget`, saying how many minutes it
+  sat idle, and Collie keeps collecting. An Output written later clears the park and the step
+  goes on, with no resume. An agent that has gone by the end of another idle budget is
+  started again. Gone is an agent herdr no longer lists, or one it still lists but refuses
+  as not active, as it does when the agent's process died with its Machine; that one's pane is closed first, so
   the new agent can take its name. A stop still ends the wait.
+- **A turn that ends without the Output gets a reminder at once.** Where herdr reports the
+  agent `working` and then `idle` or `done` while its Output is still absent, Collie sends it
+  a reminder naming the Output file and saying that a chat message is not the Output. Each
+  agent launch gets at most two. If the turn after the second also ends without the Output,
+  the Run parks as `output-absent`, saying when both reminders went, and Collie keeps
+  collecting. An agent herdr reports `blocked` is not reminded, and neither is one whose Run
+  has an open Decision, a Hold or a Stop; once those clear, an agent still idle without its
+  Output is. The Output is never taken from the agent's chat. The idle budget stays the
+  backstop for an agent whose turn's end herdr cannot report.
 - **`cwd` is where the host placed the Run** unless you name another checkout.
 - **`role`** defaults to the operation's name. The role is injected as a persona, and where
   `personas/<role>.md` exists in the project, on this machine or in the installation, that
@@ -1013,6 +1032,16 @@ the first.
 - **One answer, whoever sends it.** Two answers racing make one piece of work; the second is
   refused with what the run already has, and retrying one under the same request id is the
   same answer rather than another.
+- **Declare a shipping Go with `shipping`.** Use `{ action: "merge", head }` or
+  `{ action: "stage", head }` for a merge request, and `{ action: "deploy", head }` or
+  `{ action: "deploy", tag }` for production. The head or tag must be nonempty; an unknown
+  action or missing revision is refused before the question is recorded. The declaration
+  survives a restart with the question. Names and option titles decide nothing.
+  The host places it in Ready to ship only while its action's gates hold: Merge and
+  Stage from an MR require Ready to release at that head on fresh forge answers; Deploy
+  requires the host's stage proof for that exact head or tag. A moved head, stale answer
+  or failed gate keeps it in Needs you, naming the failure. Answer it through the normal
+  answer path; the declaration grants no authority and never answers the question.
 - **The question survives a restart**, and so does its answer. What is waiting is in
   `run show`, and `run answer <run> <value> --decision <name>` settles it.
 
@@ -1548,12 +1577,31 @@ and waits on it; a pass then answers `{ proved, retried: true }`, a Flake. Name 
 the merge request with `host.note({ runId, cwd, body })`, which puts a note on the merge
 request the Run recorded.
 
+A merge request's head that an earlier push with `ci.skip` carried has no pipeline to read a
+job from. `host.startPipeline({ runId, cwd })` asks the forge adapter for one on `cwd`'s
+`HEAD`, the head of the merge request the Run recorded. Where that head already has a
+pipeline that was not skipped, it starts nothing and answers `{ _tag: "Has", url }`.
+Otherwise GitLab starts the merge request's pipeline, and the source branch's where it
+refuses that with 400, answering `{ _tag: "Started", url }`. Both refused with 400 is
+`{ _tag: "NoneByRules", message }`, in GitLab's words: the project's CI gives that head
+none. Any other refusal is `{ _tag: "Failed", reason }`. GitHub starts nothing and asks
+nothing, since its Actions run on every push: `{ _tag: "Unneeded", why }`. The shared Merge
+request step calls it only where the remote branch's head before the mr agent ran is the
+checkout's `HEAD` after it, so the agent's push sent nothing.
+
 ```ts
 for (const spec of (yield * host.approved(runId)).filter((one) => one.ci !== undefined)) {
   const read = yield * host.ciJob({ runId, cwd, name: spec.name, wait: true, settle: true });
-  if ("unproved" in read) yield * host.parked(runId, read.unproved);
+  if ("unproved" in read) yield * host.parked(runId, read.unproved, "ci-job-absent");
 }
 ```
+
+`host.parked`'s third argument is the park's **Park cause**, one of `ParkCause`'s closed
+list ([ADR-draft-a-run-recovers-where-it-parks](adr/draft-a-run-recovers-where-it-parks.md)).
+A park that names none is recorded as `unknown`; it is never refused. A failure that parks its
+Step for someone to correct
+([ADR-draft-a-fixable-failure-parks-its-step](adr/draft-a-fixable-failure-parks-its-step.md))
+names `step-failed`.
 
 A speed-up is proved by a **Measurement**, which compares two trees rather than passing one:
 `host.measure({ runId, base, cwd, plan, pass, reason })`. The host makes a base tree at `base` with
@@ -1699,6 +1747,10 @@ export default defineWorkflow({
   checkout. A
   follow-up declares no `arguments`: it takes whatever inputs its workflow has that
   `inputs` does not fill, and a front door asks for those.
+  An optional `entry(facts)` names its entry in the offer's title. `facts.recovery` holds
+  implementation and review facts where the module declares that entry and hints a work
+  source. A filled work source remains the destination of a text follow-up's new words;
+  changing those words doesn't inherit the original source's review.
 
 Both are what a finished Run offers to do next, and both front doors make the same offer:
 `collie run actions <run>` lists them and `collie run action <run> <id> --input k=v` does
@@ -1857,5 +1909,8 @@ the host sends the requester the status, summary or failure reason and
 `collie run show <id>` for the full Output. The Delivery uses the agent's sender line and
 a request id derived from the started Run. A restart reuses that Delivery. Delivery uses
 `boundary`, supported by all harnesses. A gone agent, an unpaired Machine or a Machine
-that does not answer within fifteen seconds leaves an undelivered report with its reason;
-there is no retry queue. `run show` and the drawer show the requester and report.
+that does not answer within fifteen seconds leaves an undelivered report with its reason.
+A report that did not reach its Machine is sent again, with the same request id and text,
+each time that Machine's link comes back, so the agent is told once; a gone agent or an
+unpaired Machine is final. The report's `tries` keep the earlier tries. `run show` and the
+drawer show the requester and report.

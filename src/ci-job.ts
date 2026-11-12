@@ -11,6 +11,7 @@ import { shell, type Runner } from "./mr";
 import { appendLog } from "./oversight";
 import { conflictsWithTarget } from "./review-wait";
 import { epochMs, nowIso } from "./time";
+import { rememberCiTarget } from "./park-recheck";
 import {
   appendVerification,
   encodeVerifying,
@@ -71,6 +72,7 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
   // The tree a pass is bound to, read again before it is recorded.
   const tree = yield* fingerprint(cwd);
   const head = tree.head_sha;
+  yield* rememberCiTarget(asked.runDir, { head, job, mr: asked.mr, cwd }).pipe(Effect.orDie);
   const unproved = (
     why: string,
     state: JobState | null = null,

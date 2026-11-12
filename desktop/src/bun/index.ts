@@ -80,6 +80,7 @@ import { claudeCode, claudeModels } from "./claude";
 import { claudeDriver } from "./claude-driver";
 import { loopbackTools } from "./chat-endpoint";
 import { piDriver } from "./pi-driver";
+import { readUserMcpServers } from "./session";
 import { CHILD_CWD, childEnv, localShell, takeLoginEnv, which } from "./login-env";
 import { type ChatMachine, chatDoor } from "./flock-tools";
 import { carryIntoFlock, heldSettings, type Offers } from "./settings";
@@ -893,7 +894,7 @@ const main = Effect.gen(function* () {
       loopbackTools(context).pipe(
         Effect.map((endpoint) => ({
           claude: claudeDriver(claudeCode, context),
-          pi: piDriver(context, endpoint),
+          pi: piDriver(context, endpoint, readUserMcpServers),
         })),
       ),
     dir: own,

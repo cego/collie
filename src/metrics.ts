@@ -18,6 +18,21 @@ import { Effect, FileSystem, Path, Schema } from "effect";
 import { appendJournal, readJournal } from "./journal";
 import type { Metrics } from "./board-model";
 import { epochMs } from "./time";
+import { ParkCause } from "./park-cause";
+
+export const RecoveryAction = Schema.Literals(["reminded", "rechecked", "resumed"]);
+export type RecoveryAction = typeof RecoveryAction.Type;
+export const RecoveryOutcome = Schema.Literals([
+  "output-written",
+  "still-absent",
+  "cleared",
+  "uncleared",
+  "error",
+  "claimed",
+  "resumed",
+  "skipped",
+]);
+export type RecoveryOutcome = typeof RecoveryOutcome.Type;
 
 export const MetricSchema = Schema.Struct({
   at: Schema.String,
@@ -29,6 +44,7 @@ export const MetricSchema = Schema.Struct({
     "halt",
     "evidence",
     "checkpoint",
+    "recovery",
   ]),
   /** What it is about: an agent, a step, a verification name, a ticket. */
   subject: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed(""))),
@@ -36,6 +52,16 @@ export const MetricSchema = Schema.Struct({
   value: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(0))),
   /** The word that matters: a result, a status, a reason. */
   note: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed(""))),
+  /** A halt's or a recovery's Park cause; absent from a halt recorded before causes were. */
+  cause: Schema.optionalKey(ParkCause),
+  /** The build of the host that recorded a halt or a recovery. */
+  build: Schema.optionalKey(Schema.String),
+  action: Schema.optionalKey(RecoveryAction),
+  outcome: Schema.optionalKey(RecoveryOutcome),
+  recoveryId: Schema.optionalKey(Schema.String),
+  park: Schema.optionalKey(Schema.String),
+  since: Schema.optionalKey(Schema.String),
+  entries: Schema.optionalKey(Schema.Int),
 });
 export type Metric = Schema.Schema.Type<typeof MetricSchema>;
 const MetricJson = Schema.fromJsonString(MetricSchema);
@@ -76,6 +102,31 @@ export const noteVerification = (
     note: record.result,
   });
 
+/** A reminder's latest outcome; elapsed time starts at the first turn ending without Output. */
+export const noteReminder = (
+  runDir: string,
+  line: {
+    readonly at: string;
+    readonly agent: string;
+    readonly recoveryId: string;
+    readonly outcome: RecoveryOutcome;
+    readonly waitedMs: number;
+    readonly build: string;
+  },
+) =>
+  appendMetric(runDir, {
+    at: line.at,
+    kind: "recovery",
+    subject: line.agent,
+    value: line.waitedMs,
+    note: "",
+    cause: "output-absent",
+    action: "reminded",
+    outcome: line.outcome,
+    recoveryId: line.recoveryId,
+    build: line.build,
+  });
+
 /** One context sample the harness reported at a work boundary. */
 export const noteContext = (runDir: string, at: string, agent: string, tokens: number) =>
   appendMetric(runDir, { at, kind: "context", subject: agent, value: tokens, note: "" });
@@ -86,6 +137,13 @@ export const readMetrics = Effect.fn("Metrics.read")(function* (runDir: string) 
     Effect.orElseSucceed(() => none),
   );
 });
+
+export const recoveriesIn = (lines: ReadonlyArray<Metric>) => {
+  const latest = new Map<string | number, Metric>();
+  for (const [index, line] of lines.entries())
+    if (line.kind === "recovery") latest.set(line.recoveryId ?? index, line);
+  return [...latest.values()];
+};
 
 /** Enough of a verification for the detector; the real one is in `verify.ts`. */
 export interface FailureLike {
@@ -190,6 +248,7 @@ export function metricsOf(lines: ReadonlyArray<Metric>, createdAt: string): Metr
         obstacles.push(line.note);
         break;
       case "evidence":
+      case "recovery":
         break;
     }
   }

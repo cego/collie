@@ -21,8 +21,17 @@ branch and Outputs.
 Run.** The Step is recorded failed with the reason and what to correct, the Run parks, and
 `run resume` (or `retry-noted`) enters that Step again on the same worktree, branch and
 agents. A workflow parks this way already when a merge request cannot be opened or an
-outcome is unproved. Each resume is one more bounded attempt, and only a human or an agent
+outcome is unproved, and when the Merge request step's agent left delivery undone: the
+branch not pushed, no merge request URL, or a blocking finding. A resume asks that agent
+again under a new operation, since its first Output would replay. A finding that does not
+block delivery never stops the step. It is recorded and noted on the merge request. Each resume is one more bounded attempt, and only a human or an agent
 can trigger it, so this adds no automatic retry.
+
+In implement, these four stops park: an unreadable spec, a stopped builder, a ticket's
+unresolved blocking findings, and a halted final rally, including a disputed blocker.
+A resume reads the spec again or asks the stopped builder under a new operation and reads
+its new Output. A stopped rally gets one more fix-and-review round with the same builder
+and reviewers. If that round does not converge, it parks again with the new reason.
 
 **D2. An Output still unusable after its one repair parks.** It no longer ends the Run
 `output-unusable`. On resume, the file is read again. If it decodes now, the work goes on. If
@@ -35,6 +44,9 @@ repairs are spent, a broken harness parks at Calibrate. A resume gives the tuner
 repair turn, and the plan it writes is calibrated even if it is unchanged: no verdict was
 taken, so measuring it again cannot fish for a better one. A Cycle's or the final
 Measurement that the host refuses parks its Step, and a resume measures again.
+Only a judged Measurement is reused for unchanged trees and plan; an unjudged attempt
+stays recorded and may be measured again. This amends the reuse rule in
+[ADR-draft-a-performance-gain-is-proved-by-the-hosts-measurement](draft-a-performance-gain-is-proved-by-the-hosts-measurement.md) D2.
 
 **D4. A verdict stays terminal.** A work's own verdict ends the Run as it does now: proof
 unavailable against itself, no gain, an outcome no reviewer can change, or an input that

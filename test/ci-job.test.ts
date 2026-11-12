@@ -7,6 +7,7 @@ import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem, Schedule } from "effect";
 import { ciJob } from "../src/ci-job";
+import { recheckPark, rememberCiTarget } from "../src/park-recheck";
 import type { MrForge } from "../src/board-model";
 import type { Runner } from "../src/mr";
 import type { FetchLike } from "forges";
@@ -102,6 +103,57 @@ const read = (
   asked: Parameters<typeof ciJob>[0] & { readonly run: Runner },
   forge: { readonly fetch: FetchLike },
 ) => ciJob(asked).pipe(Effect.provide(forgeHttpTest(asked.run, forge.fetch)));
+
+test("a CI park rechecks jobs at its latest recorded head rather than an earlier gate", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, at, root, forge } = yield* waiting("passed");
+      const dir = `${root}/runs/r1`;
+      yield* rememberCiTarget(dir, { head: "older", job: "old-job", mr: MR, cwd: asked.cwd });
+      yield* rememberCiTarget(dir, { head: at, job: "nuxi-typecheck", mr: MR, cwd: asked.cwd });
+      const result = yield* recheckPark(
+        {
+          runId: "r1",
+          cwd: asked.cwd,
+          branch: "main",
+          mr: MR,
+          park: { cause: "ci-job-absent", kind: "rechecks" },
+        },
+        root,
+        { sessionList: () => Effect.die("CI rechecks must not ask herdr") },
+      ).pipe(Effect.provide(forgeHttpTest(asked.run, forge.fetch)));
+      expect(result).toMatchObject({ cleared: true, error: false });
+      expect(result.note).toContain("nuxi-typecheck");
+      expect(result.note).not.toContain("old-job");
+    }),
+  ));
+
+test("a CI park with no pipeline stays uncleared until the named job exists", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, at, root, forge } = yield* waiting("pending", MR, undefined, {
+        jobs: undefined,
+      });
+      yield* rememberCiTarget(`${root}/runs/r1`, {
+        head: at,
+        job: "nuxi-typecheck",
+        mr: MR,
+        cwd: asked.cwd,
+      });
+      const result = yield* recheckPark(
+        {
+          runId: "r1",
+          cwd: asked.cwd,
+          branch: "main",
+          mr: MR,
+          park: { cause: "ci-job-absent", kind: "rechecks" },
+        },
+        root,
+        { sessionList: () => Effect.die("CI rechecks must not ask herdr") },
+      ).pipe(Effect.provide(forgeHttpTest(asked.run, forge.fetch)));
+      expect(result).toMatchObject({ cleared: false, error: false });
+    }),
+  ));
 
 /** Its runner, committing in the checkout on every call, as a commit made while the job is read. */
 const committing =

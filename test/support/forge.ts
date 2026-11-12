@@ -26,7 +26,9 @@ import {
   Result,
 } from "effect";
 import { ChildProcessSpawner } from "effect/process";
-import type { MrForge } from "../../src/board-model";
+import type { MrForge, MrState } from "../../src/board-model";
+import type { ForgeFacts } from "../../src/board";
+import { writeMrStates } from "../../src/merges";
 import { forgeHttpTest, type ForgeHttp } from "../../src/forge/http";
 import { runEffect } from "./effect";
 import { glabExpiry, MONTHS } from "../../src/forge/gitlab";
@@ -188,6 +190,7 @@ export const ForgeModel = Schema.Struct({
     Schema.Union([
       Schema.Struct({
         status: Schema.Finite,
+        message: Schema.optionalKey(Schema.String),
         headers: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
       }),
       Schema.Literals(["network", "hold"]),
@@ -207,6 +210,7 @@ export const ForgeModel = Schema.Struct({
       Schema.Struct({
         name: Schema.String,
         tier: Schema.String,
+        project: Schema.optionalKey(Schema.String),
         deployed: Schema.optionalKey(Schema.String),
         /** A newer deployment there that failed, which is not what is live. */
         failed: Schema.optionalKey(Schema.String),
@@ -252,6 +256,30 @@ export const ForgeModel = Schema.Struct({
       }),
     ),
   ),
+  /** GitLab's pipelines on each sha beside the ones `mrs` describe, and those started on it. */
+  pipelinesOn: Schema.optionalKey(
+    Schema.Record(
+      Schema.String,
+      Schema.Array(
+        Schema.Struct({
+          id: Schema.Finite,
+          status: Schema.String,
+          /** GitLab's `merge_request_event` or `api`, where it was started. */
+          source: Schema.optionalKey(Schema.String),
+          ref: Schema.optionalKey(Schema.String),
+        }),
+      ),
+    ),
+  ),
+  /** The status GitLab refuses to start a merge request's pipeline, or a branch's, with. */
+  refusesPipeline: Schema.optionalKey(
+    Schema.Struct({
+      mr: Schema.optionalKey(Schema.Finite),
+      branch: Schema.optionalKey(Schema.Finite),
+    }),
+  ),
+  /** The status GitLab refuses a note on a merge request with. */
+  refusesNote: Schema.optionalKey(Schema.Finite),
   /** The shas each sha descends from. */
   ancestry: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String))),
   /** Repositories gh cannot read, by `owner/repo`. */
@@ -312,6 +340,16 @@ export const ForgeModel = Schema.Struct({
       }),
     ),
   ),
+  tags: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        project: Schema.String,
+        run: Schema.String,
+        sha: Schema.String,
+        merged: Schema.Array(Schema.String),
+      }),
+    ),
+  ),
   /** What the forge stamps a reply or a merge with. */
   now: Schema.optionalKey(Schema.String),
 });
@@ -335,6 +373,10 @@ interface Answer {
   readonly noted?: { readonly key: string; readonly body: string };
   readonly approved?: string;
   readonly retried?: { readonly mr: FakeMr; readonly at: number | ReadonlyArray<number> };
+  readonly pipelineStarted?: {
+    readonly sha: string;
+    readonly pipeline: NonNullable<ForgeModel["pipelinesOn"]>[string][number];
+  };
   readonly oauth?: { readonly token: string; readonly expiry: string };
   readonly replied?: { readonly mr: FakeMr; readonly thread: string | null; readonly body: string };
   readonly merged?: {
@@ -912,7 +954,11 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
             ),
           );
     if (model.deploysDown === true) return no();
-    const environments = model.environments ?? [];
+    const project = `${flag(args, "--hostname")}/${decodeURIComponent(/^projects\/([^/]+)/.exec(route)?.[1] ?? "")}`;
+    const environments = Arr.filter(
+      model.environments ?? [],
+      (one) => one.project === undefined || one.project === project,
+    );
     if (/\/environments(\?|$)/.test(route))
       return json(
         pageOf(
@@ -925,7 +971,7 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
         pageOf(
           route,
           Arr.map(
-            deploymentsAsked(model, route),
+            deploymentsAsked({ ...model, environments }, route),
             ({ sha, status, environment, job, pipeline }) => ({
               sha,
               status,
@@ -996,7 +1042,23 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
       const mr = Option.getOrUndefined(
         Arr.findFirst(model.mrs, (one) => one.base?.at === sha && one.base?.jobs !== undefined),
       );
-      return json(mr === undefined ? [] : [{ id: pipelineIdOf(mr) + 1, sha }]);
+      return json([
+        ...(mr === undefined ? [] : [{ id: pipelineIdOf(mr) + 1, sha, status: "success" }]),
+        ...Arr.map(model.pipelinesOn?.[sha] ?? [], ({ id, status }) => ({
+          id,
+          sha,
+          status,
+          web_url: `https://${flag(args, "--hostname")}/${decodeURIComponent(/^projects\/([^/]+)/.exec(route)?.[1] ?? "")}/-/pipelines/${id}`,
+        })),
+      ]);
+    }
+    const branchPipeline = /^projects\/([^/]+)\/pipeline\?ref=([^&]+)$/.exec(route);
+    if (branchPipeline && args.includes("POST")) {
+      const ref = decodeURIComponent(branchPipeline[2]!);
+      const mr = Option.getOrUndefined(Arr.findFirst(model.mrs, (one) => one.sourceBranch === ref));
+      return mr === undefined
+        ? refused("400 Reference not found")
+        : pipelineStart(model, mr, model.refusesPipeline?.branch, { source: "api", ref });
     }
     const byRef = /\/pipelines\?ref=([^&]+)/.exec(route);
     const tagged = byRef === null ? [] : runsFor(model, decodeURIComponent(byRef[1]!));
@@ -1074,6 +1136,40 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
   return no();
 }
 
+/** A pipeline started on `mr`'s head, or GitLab's refusal with `refusing`'s status. */
+function pipelineStart(
+  model: ForgeModel,
+  mr: FakeMr,
+  refusing: number | undefined,
+  how: { readonly source: string; readonly ref: string },
+): Answer {
+  if (refusing !== undefined)
+    return refused(
+      `${refusing} ${refusing === 400 ? "No stages / jobs for this pipeline." : "Internal Server Error"}`,
+    );
+  const sha = (how.source === "merge_request_event" ? mr.pipelineAt : undefined) ?? mr.head ?? "";
+  const id =
+    1 +
+    Math.max(
+      0,
+      ...Arr.flatMap(
+        Rec.values(model.pipelinesOn ?? {}),
+        Arr.map((one) => one.id),
+      ),
+    );
+  const pipeline = { id, status: "created", ...how };
+  return {
+    ...json({
+      id,
+      sha,
+      ref: how.ref,
+      status: "created",
+      web_url: `https://${mr.project}/-/pipelines/${id}`,
+    }),
+    pipelineStarted: { sha, pipeline },
+  };
+}
+
 /** `glab api` on one merge request: its approvals, its discussions, a reply and the merge. */
 function glabOnMr(
   model: ForgeModel,
@@ -1082,6 +1178,8 @@ function glabOnMr(
   args: ReadonlyArray<string>,
 ): Answer {
   const method = flag(args, "-X") ?? "GET";
+  if (rest === "notes" && method === "POST" && model.refusesNote !== undefined)
+    return refused(`${model.refusesNote} Internal Server Error`);
   if (rest === "notes" && method === "POST")
     return {
       ...json({ id: 1, body: field(args, "body") ?? "" }),
@@ -1131,6 +1229,11 @@ function glabOnMr(
       replied: { mr, thread: thread ?? null, body: field(args, "body") ?? "" },
     };
   }
+  if (rest === "pipelines" && method === "POST")
+    return pipelineStart(model, mr, model.refusesPipeline?.mr, {
+      source: "merge_request_event",
+      ref: `refs/merge-requests/${mr.iid}/${mr.pipelineAt === undefined ? "head" : "merge"}`,
+    });
   if (rest === "merge" && method === "PUT")
     return model.refusesMerge === true
       ? refused(NOT_MERGEABLE.gitlab)
@@ -1865,6 +1968,11 @@ export function answer(
       ),
     };
   }
+  if (said.pipelineStarted !== undefined) {
+    const { sha, pipeline } = said.pipelineStarted;
+    const on = after.pipelinesOn ?? {};
+    after = { ...after, pipelinesOn: { ...on, [sha]: [...(on[sha] ?? []), pipeline] } };
+  }
   if (said.replied !== undefined) {
     const { mr, thread, body } = said.replied;
     const key = keyOf(forge, mr);
@@ -1998,7 +2106,16 @@ export function httpFace(
         else init.signal?.addEventListener("abort", abort);
       });
     if (fault !== undefined)
-      return answered(fault.status, `{"message":"${fault.status}"}`, fault.headers);
+      return answered(
+        fault.status,
+        flow(
+          Schema.encodeResult(Json),
+          Result.getOrThrow,
+        )({
+          message: fault.message ?? String(fault.status),
+        }),
+        fault.headers,
+      );
     const url = new URL(input);
     const host = forge === "github" ? FORGE_HOST.github : url.host;
     if (!model.loggedIn.includes(host) || model.revoked === true || token !== tokenOf(forge, model))
@@ -2281,4 +2398,22 @@ export const serveForges = (
       (server) => Effect.promise(() => server.stop(true)),
     ),
     (server) => `http://127.0.0.1:${server.port}`,
+  );
+
+/** What a merge watch that asked at `read` stored: each state, with the facts given or none. */
+export const storedAnswers = (
+  stateDir: string,
+  states: ReadonlyMap<string, MrState>,
+  facts: ReadonlyMap<string, ForgeFacts> = new Map(),
+  read = "2026-09-17T10:00:00Z",
+) =>
+  writeMrStates(
+    stateDir,
+    states,
+    new Map(
+      Arr.map([...states.keys()], (id) => [
+        id,
+        { checks: { state: "unknown" as const }, head: null, ...facts.get(id), read },
+      ]),
+    ),
   );

@@ -563,25 +563,34 @@ beside every module's own inputs as one of the names the host settles. It names 
 1. `--input branch=<name>`, which wins over everything below. A follow-up is given its
    parent's branch this way.
 2. The branch the reviewed work is already on, for a run fixing a review.
-3. The `<name>` of a `branch:<base>...<name>` target **you gave** (`--input target=` takes a
+3. The source branch of an open merge request of this checkout's project that the work
+   **you or an agent gave** names, cut from its remote tip, so the run's commits land on
+   it and its `mr` step updates it. The work names one when its whole text is one
+   reference (`!42`, `#30`, `owner/repo#30` or a merge or pull request URL) or when it holds
+   exactly one merge or pull request URL, read whole, so a longer URL that only holds one's
+   path names none; a bare `!42` inside prose is not read. A merged
+   or closed one, one of another project, or two URLs are context, and the order goes on.
+   One of this project the forge will not describe, with no source branch, or from a fork
+   refuses the run. Work Collie inferred never counts.
+4. The `<name>` of a `branch:<base>...<name>` target **you gave** (`--input target=` takes a
    bare ref too, and turns it into one) — so the checkout and the review target agree. A
    target Collie inferred does not count: it names the branch you are standing on, and
    building that would hand the run your own checkout.
 
-Those three are branches that already exist, or that you named, and are used exactly as
+Those four are branches that already exist, or that you named, and are used exactly as
 they came. Everything else is new work, and gets a new branch called
 `<your GitLab login>/<the task>`:
 
-4. `--input task=<slug>`, which is also what `plan` and `architecture` forward when you
+5. `--input task=<slug>`, which is also what `plan` and `architecture` forward when you
    choose **Implement now**, and what a fan-out gives every repository run.
-5. For a run given another Run's own plan directory (`<state>/runs/<id>/plan`), the branch
+6. For a run given another Run's own plan directory (`<state>/runs/<id>/plan`), the branch
    that Run's Task was placed on, used as it is and cut from its remote tip, so the run
    joins that Task. Not once its merge request has merged or closed: the run's own name
    then names a fresh branch.
-6. The plan directory's own name, for a run given a plan directory that is no Run's own.
-7. A slug of the work itself — the description, or the issue id. Never a Run's own plan
+7. The plan directory's own name, for a run given a plan directory that is no Run's own.
+8. A slug of the work itself — the description, or the issue id. Never a Run's own plan
    directory, whose path names nothing.
-8. Otherwise a slug of the run's own name.
+9. Otherwise a slug of the run's own name.
 
 The login is the checkout's forge's (ADR-0050 D5). On GitLab it is `GITLAB_USER_LOGIN`
 where the environment sets it, and otherwise whoever `glab` is logged in as for this
@@ -636,13 +645,15 @@ Examples:
 collie run start review --input target=https://gitlab.example.com/acme/app/-/merge_requests/2 --input plan= --input proves=
 collie run start review --input target=https://github.com/acme/app/pull/30 --input plan= --input proves=
 collie run start review --input target=worktree --input plan= --input proves=
-collie run start implement --input plan=ENG-123 --input then=
+collie run start implement --input plan=ENG-123 --input recovery= --input then=
 collie run start plan --input goal="one registry" --input then= --input workspace=projects-root
 ```
 
 `plan` takes `goal` and `then`. `then=implement` builds the plan as soon as its tickets are
 written, with nothing asked of anyone; empty, its end menu is asked
-([`plan`](workflows.md#plan)). `implement` takes `plan` and `then`: `then=release` releases
+([`plan`](workflows.md#plan)). `implement` takes `plan`, `recovery`, and `then`. Leave
+`recovery=` empty for new work; an explicit follow-up supplies the finished Run it recovers.
+`then=release` releases
 its merge request on a human's go, `finish` ends at the merge request, and empty asks
 ([`implement`](workflows.md#implement)).
 
@@ -772,7 +783,9 @@ times, text and read times (null until read). Chat and CLI can arm a hold with
 failed resumable Step also offers `retry-noted`, a note followed by resume.
 Their `link.asOf` is null for live local state, or the last admission or settlement
 notice from a paired Machine. `run.linkNotices` records those deliveries on the started
-Run; human output names undelivered notices. A missed notice is not retried or polled.
+Run, one entry per try; human output names undelivered notices. A missed notice is sent
+again, unchanged, once the requesting Machine's link comes back, until it is delivered
+or the link drops again.
 
 Each node's optional `primary` names its first action and `actions` lists the rest,
 without repeating it. A lane's `actions` are its own Run controls. `agent` names the
@@ -852,9 +865,9 @@ collie board --draw
 `--draw` draws the board itself in the terminal it runs in: what the host's `collie-board`
 core terminal runs, and a start made from it is placed as one from the Home. Without it, the first snapshot of the board the host serves
 ([ADR-0038](adr/0038-the-host-builds-and-serves-the-board.md)): every Task on this Herd's
-board, in the order the Home draws them: **Needs you** first, then **Waiting on you** (work
-that ended and has not landed, what is `ready` to release first), then **Working** (`active`
-and `quiet`), then **Finished** (landed), and inside each whatever changed last first. `state: blocked` is what puts a Task in Needs you,
+board, in the order the Home draws them: **Needs you**, **Ready to ship** (only the shipping
+go remains), **Waiting on you** (ended work still owed), **Working** (`active` and `quiet`),
+and **Finished** (landed), and inside each whatever changed last first. `state: blocked` puts a Task in Needs you unless its declared shipping Go still holds,
 and it means one of two things: a `decision` to answer, or an agent waiting for you in its
 own pane — a harness dialog herdr will not answer, or a run that parked because its agent's
 pane would not take a prompt. The `sentence` says which, and for the second kind it says which pane. It is the same model the pane renders, so an agent
@@ -865,31 +878,32 @@ Herd-wide, and never narrowed by which workspace you typed it in: one board per 
 ([ADR-0009](adr/0009-the-collie-tab-is-the-herds.md)). A Run belonging to no Task is a
 Task of its own; a Repo run of a fan-out is its parent's `children` rather than a Task beside it.
 
-| Field                     | What it says                                                                                                                                                    |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                      | The Task, or the Run's own id where it belongs to no Task.                                                                                                      |
-| `name`, `project`         | The two halves of the task workspace's label. No herdr ids.                                                                                                     |
-| `herd`                    | The Herd the Task's workspace is in: an `id` in `herds` while that session runs. Absent for a Task recorded before it was kept.                                 |
-| `state`                   | `blocked`, `active`, `quiet`, `failed`, `stopped`, `abandoned` (a Run nothing drives and no agent works on) or `done`.                                          |
-| `steps[]`                 | The pipeline across the Task's Runs, each `done`, `active`, `blocked`, `failed` or `todo`. A step that loops is one entry.                                      |
-| `sentence`                | What is happening, in one plain sentence — no step names, counters or glyph codes. It names the round, the wave and the answer it resumed with.                 |
-| `age`, `at`               | How long it has been going, and when it last changed.                                                                                                           |
-| `drift`, `held`           | The one line each carries, or `null`.                                                                                                                           |
-| `heldBy`                  | Who set the hold that stands — the front door it came through — and the reason given with it, or `null`.                                                        |
-| `decision`                | The question or proposal waiting on you, or `null`. One of the two ways into Needs you.                                                                         |
-| `questions[]`             | Every question the Task's Runs have open, in the order the card asks them; `decision` is the first unless a proposal waits. Absent from an older host.          |
-| `agents[]`                | The live agents on it, its Repo runs' included.                                                                                                                 |
-| `children[]`              | Its plan's repositories, in wave order: `repo`, its `run` (`null` until it starts), its `state` (`done`, `active`, `blocked`, `failed` or `todo`) and its `mr`. |
-| `mr`, `mrState`, `branch` | What it is building, where it can be read, and what the forge last said about the merge request; a single-repository fan-out's is its Repo run's.               |
-| `disposition`, `landed`   | What became of the work, the latest on any of its Runs, recorded by a person or by the merge watch, and whether it needs nothing more, which is Finished.       |
-| `ended`                   | When the leading Run ended, or `null` while it has not.                                                                                                         |
-| `planReady`, `offer`      | A finished plan nobody has implemented, and the offer its card's first action invokes.                                                                          |
-| `checks`                  | What checked an open merge request: `passed` or `failed` (with `name`) at revision `at`, `running`, or `unchecked`; else `null`.                                |
-| `ready`, `readiness`      | Ready to release: the forge would merge it now. `readiness` names each fact missing, as `run show`'s `data.ready` does.                                         |
-| `check`                   | The check Collie is running for the leading Run, as `collie run checks` gives `running` (with its `log` and `lastLines`), or `null`.                            |
-| `reopened`                | A finished Run whose agent took a steer after it ended: the `delivery`, the `agent`, the first line it was `told` and its `status` now; else `null`.            |
-| `run`, `runs[]`           | The Run a card acts on, and every Run of the Task.                                                                                                              |
-| `flow`                    | The card's **Flow** strip: `glyphs`, the leading Run's then the Release row's, `release`, how many are the Release row's, and `current`, or `null`.             |
+| Field                     | What it says                                                                                                                                                                                                              |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                      | The Task, or the Run's own id where it belongs to no Task.                                                                                                                                                                |
+| `name`, `project`         | The two halves of the task workspace's label. No herdr ids.                                                                                                                                                               |
+| `herd`                    | The Herd the Task's workspace is in: an `id` in `herds` while that session runs. Absent for a Task recorded before it was kept.                                                                                           |
+| `state`                   | `blocked`, `active`, `quiet`, `failed`, `stopped`, `abandoned` (a Run nothing drives and no agent works on) or `done`.                                                                                                    |
+| `steps[]`                 | The pipeline across the Task's Runs, each `done`, `active`, `blocked`, `failed` or `todo`. A step that loops is one entry.                                                                                                |
+| `sentence`                | What is happening, in one plain sentence — no step names, counters or glyph codes. It names the round, the wave and the answer it resumed with.                                                                           |
+| `age`, `at`               | How long it has been going, and when it last changed.                                                                                                                                                                     |
+| `drift`, `held`           | The one line each carries, or `null`.                                                                                                                                                                                     |
+| `heldBy`                  | Who set the hold that stands — the front door it came through — and the reason given with it, or `null`.                                                                                                                  |
+| `decision`                | The question or proposal waiting on you, or `null`. One of the two ways into Needs you.                                                                                                                                   |
+| `questions[]`             | Every question the Task's Runs have open, in the order the card asks them; `decision` is the first unless a proposal waits. Absent from an older host.                                                                    |
+| `agents[]`                | The live agents on it, its Repo runs' included.                                                                                                                                                                           |
+| `children[]`              | Its plan's repositories, in wave order: `repo`, its `run` (`null` until it starts), its `state` (`done`, `active`, `blocked`, `failed` or `todo`) and its `mr`.                                                           |
+| `mr`, `mrState`, `branch` | What it is building, where it can be read, and what the forge last said about the merge request; a single-repository fan-out's is its Repo run's.                                                                         |
+| `disposition`, `landed`   | The newest Disposition recorded on any of its Runs, and whether everything the Task owes is settled and none of its Runs is going, which is Finished. Each of `mrs[]` says what `settled` it, or `null` while it is owed. |
+| `ended`                   | When the leading Run ended, or `null` while it has not.                                                                                                                                                                   |
+| `planReady`, `offer`      | A finished plan nobody has implemented, and the offer its card's first action invokes.                                                                                                                                    |
+| `checks`                  | What checked an open merge request: `passed` or `failed` (with `name`) at revision `at`, `running`, or `unchecked`; else `null`.                                                                                          |
+| `ready`, `readiness`      | Ready to release: the forge would merge it now on current-head evidence read within two merge-watch rounds. `readiness` names each fact missing, as `run show`'s `data.ready` does.                                       |
+| `shipping`, `shippingMr`  | The host's next shipping action (`merge`, `stage`, `deploy`) and its merge request, or `null`. A ready Merge invokes Release; a declared Go uses the normal answer path. Both fields are additive.                        |
+| `check`                   | The check Collie is running for the leading Run, as `collie run checks` gives `running` (with its `log` and `lastLines`), or `null`.                                                                                      |
+| `reopened`                | A finished Run whose agent took a steer after it ended: the `delivery`, the `agent`, the first line it was `told` and its `status` now; else `null`.                                                                      |
+| `run`, `runs[]`           | The Run a card acts on, and every Run of the Task.                                                                                                                                                                        |
+| `flow`                    | The card's **Flow** strip: `glyphs`, the leading Run's then the Release row's, `release`, how many are the Release row's, and `current`, or `null`.                                                                       |
 
 A fan-out finds its plan from its work source even where the kind was never recorded with
 its input, as for an implement Run started from a plan's end menu: a plan directory is the
@@ -993,6 +1007,23 @@ the same request asked while it runs gets that one result.
 Delivery reconciliation remains explicit: `not-sent` permits one resend, while `sent` waits
 for Output. An unresolved delivery stays uncertain.
 
+A park whose cause rechecks can resume automatically. The host checks for the named CI job
+at the parked head, an answering forge or herdr, or a clean Collie checkout. Rechecks start
+after one minute and double up to one hour. Host startup, a peer reconnecting, or a matching
+forge or pipeline update resets that wait to one minute. The resumed Step still runs its own gate.
+
+Automatic resumes use Actor `host` and request ids `recover:<run>:<park>:<n>`. A durable claim
+lets a restarted host finish the same request. They leave Decisions, Holds, Stops, and work
+on a superseded question alone, including controls on child Runs. At most two run at once
+on a Machine, and none starts while it is Short of memory. After three automatic resumes
+for one cause, another park for that cause needs you and lists the tries. A recheck park
+stays quiet until then; recovery itself sends no notification.
+
+`collie settings set recovery.resume false` turns automatic resume off across the Flock;
+rechecks are still recorded. Set it to `true` to turn it on again, its default. Three failed
+recheck rounds in a row raise one News item, `recovery-failing:<machine>`, which clears
+after a successful round. A failed round resumes nothing.
+
 A finished execution keeps its recorded result; `resume` does not reopen its steps. Use
 the Run's follow-up action to continue unfinished work on the same Task and branch.
 
@@ -1012,7 +1043,7 @@ inherits that one's as it stands. `run intent` reads and amends it; `run intent
 verification` names one of the run's checks through the host (below).
 
 ```sh
-collie --json run start implement --input plan=./plans/steering \
+collie --json run start implement --input plan=./plans/steering --input recovery= \
   --goal "land steering behind the existing envelope" \
   --constraint "rule:protected_paths:src/**,test/**" --severity block \
   --constraint "no new dependencies"
@@ -1321,8 +1352,10 @@ URL, an [MR id](../CONTEXT.md), `cego/collie!43` or `collie!43`. Where it is one
 Task's merge requests, the disposition is recorded on the Run that owns it, under its MR id,
 whichever of the Task's Runs you named. A merge request that is not one of the Task's is
 refused, and the refusal lists the Task's. Anything else, a commit or a Run, is recorded as
-given on the Run you named. The board and chat's `collie_do` `disposition` take the same
-path.
+given on the Run you named. A `superseded` whose ref names, as one of its words, the Run it
+would be recorded on is refused with `invalid_input`, and nothing is recorded: a Run cannot
+supersede itself. A free-text ref, or one naming another Run, is recorded as given. The
+board and chat's `collie_do` `disposition` take the same path.
 
 Without `--as` the command reads. With it, `--as` is `merged`, `abandoned`, or
 `superseded`, and there is deliberately no value meaning the run succeeded after all.
@@ -1332,6 +1365,10 @@ person says so and the record says who and when.
 
 A correction is a new record rather than an edit, so what was believed before is still
 readable. The most recent one is what `run show` reports.
+
+A recorded `merged` settles its merge request only until the merge watch reads it open
+after the record: the forge's later answer outranks it and the merge request is owed
+again, while the record itself stays.
 
 This is integrated here and not yet on the board: the Home's rows and Live region do not
 read it, so a Run whose work shipped still reads as a plain failure there.
@@ -1404,7 +1441,7 @@ and as attention `drift_unresolved`, and a cross-run check that was owed and nev
 ## Outcomes
 
 ```sh
-collie run start implement --input plan=<source> --input outcome=bug
+collie run start implement --input plan=<source> --input recovery= --input outcome=bug
 ```
 
 What kind of result a run has to prove, and so what evidence closes it:
@@ -1610,17 +1647,30 @@ Then the measures a change to Collie is judged by, under `measures` in `--json`.
 counted from what the Runs in the window recorded, and each names the Run ids it counts
 (`runs`), so an issue can cite them. Chat reads the same report through `collie_report`.
 
-| Field           | What it counts                                                                                                                                                                                                                                               |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `rounds`        | Runs with a review rally (a review allowed more than one round): `runs[]` with the round each `reached` and its `cap`, the `median` round (`null` for none), and `atCap`, the Runs that reached their cap.                                                   |
-| `dispositions`  | `merged`, `superseded` and `abandoned`, each a `count`, its `runs` and its `share` of the three (`null` where none was recorded).                                                                                                                            |
-| `steering`      | `runs[]`: each Run's `steer`, `followup`, `deliver` and `correction` counts and `byOrigin`. `byOrigin`: who asked — `human` (the board, Desktop, a terminal), `chat`, `agent` (an agent or a non-interactive CLI) and `host` (Collie's own corrections).     |
-| `verifications` | `total`, `runs[]` with each Run's `total` and how many an `agent` and `collie` collected, `byCollector`, `repeated` (same Run, check, start tree, result and collector as one before it) and `executableOnly` (named only by its executable, such as `bun`). |
-| `parks`         | `byReason`: each park's `reason`, with the Run, pane, path and command it named taken out so like counts with like, and `collectExpiries`: an agent that had written nothing when its collect budget ran out.                                                |
-| `peakContext[]` | Each Run's largest context sample at a work boundary, in `tokens`, and the `agent` it was on. A sample, not tokens consumed; `null` is not recorded, and is never estimated.                                                                                 |
+| Field           | What it counts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rounds`        | Runs with a review rally (a review allowed more than one round): `runs[]` with the round each `reached` and its `cap`, the `median` round (`null` for none), and `atCap`, the Runs that reached their cap.                                                                                                                                                                                                                                                                                                                  |
+| `dispositions`  | `merged`, `superseded` and `abandoned`, each a `count`, its `runs` and its `share` of the three (`null` where none was recorded).                                                                                                                                                                                                                                                                                                                                                                                           |
+| `steering`      | `runs[]`: each Run's `steer`, `followup`, `deliver` and `correction` counts and `byOrigin`. `byOrigin`: who asked — `human` (the board, Desktop, a terminal), `chat`, `agent` (an agent or a non-interactive CLI) and `host` (Collie's own corrections).                                                                                                                                                                                                                                                                    |
+| `verifications` | `total`, `runs[]` with each Run's `total` and how many an `agent` and `collie` collected, `byCollector`, `repeated` (same Run, check, start tree, result and collector as one before it) and `executableOnly` (named only by its executable, such as `bun`).                                                                                                                                                                                                                                                                |
+| `parks`         | `byCause`: each **Park cause**'s `count` of parks, its `runs`, `toNextStep` (the `median` and `max` milliseconds from a park to the Run's next Step, `null` while none has moved on) and `humanResumes` (resumes a person asked for, from the board, Desktop or a terminal, while the Run was parked for it). `byReason`: each park's `reason`, with the Run, pane, path and command it named taken out so like counts with like, and `collectExpiries`: an agent that had written nothing when its collect budget ran out. |
+| `recoveries`    | `byCause`: each `cause` and `action` (`reminded`, `rechecked`, or `resumed`), its `count` and `runs`, how many `recovered`, and `toRecover`, the median milliseconds to recovery (`null` where none has). Resumes add `falseRecoveries`: an automatic resume followed by another park for the same cause. Reminders time from the first turn ending without Output to decoded Output; successful resumes time from the park to the next Step.                                                                               |
+| `peakContext[]` | Each Run's largest context sample at a work boundary, in `tokens`, and the `agent` it was on. A sample, not tokens consumed; `null` is not recorded, and is never estimated.                                                                                                                                                                                                                                                                                                                                                |
 
 Every field before `measures` is unchanged. A park is recorded as a `halt` line in the Run's
-metrics each time it parks, or parks for a different reason, and a context sample as a
+metrics each time it parks, or parks for a different reason or cause, with its `cause` and the
+`build` of the host that parked it; a halt from before causes were recorded counts as `unknown`.
+Each Output reminder records a `recovery` line when sent, with its `cause`, `action`,
+`recoveryId`, `outcome` (`still-absent`) and the host's `build`. Once the Output decodes,
+another line records `output-written` under the same `recoveryId`. The report counts each
+reminder once, using its latest outcome, including an Output corrected by the existing repair.
+Rechecks record their result, build, and backoff. An automatic resume records a claim and its
+outcome under one `recoveryId`; the report counts a completed resume once. A false recovery
+counts as a resume, but contributes no successful recovery time. `run show` and the card
+retain the latest recovery actions after the park clears; the drawer lists the latest 20.
+Plain `run show`, chat's Run details, and Desktop's card and Run record show the park cause,
+kind, and recovery actions too. Desktop cards show the latest two actions; the record shows the latest 20.
+A context sample is recorded as a
 `context` line wherever Collie samples a reused agent's context at a work boundary. A Run
 from before those were recorded counts none of either. The text caps each list at 20 lines and each list of Run ids
 at 10.
@@ -1798,7 +1848,7 @@ its own `.collie/verify.json` at its own base, or remembered checks. No start is
 checks.
 
 ```sh
-collie run start implement --input plan=… \
+collie run start implement --input plan=… --input recovery= \
   --verify '{"name":"tests","executable":"bun","argv":["test"],"cwd":"worktree"}'
 ```
 
@@ -2130,8 +2180,8 @@ the effect. Choose one per intended action — any unique string — and reuse i
 retry of that action:
 
 ```sh
-collie --json run start implement --input plan="$PWD/plan" --request-id start-plan-1 \
-  || collie --json run start implement --input plan="$PWD/plan" --request-id start-plan-1
+collie --json run start implement --input plan="$PWD/plan" --input recovery= --request-id start-plan-1 \
+  || collie --json run start implement --input plan="$PWD/plan" --input recovery= --request-id start-plan-1
 ```
 
 A receipt is reserved before the action starts. If execution is interrupted before its

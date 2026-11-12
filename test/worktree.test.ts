@@ -6,7 +6,7 @@ import * as Rec from "effect/Record";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Clock, DateTime, Effect, FileSystem, Layer, Option, Schema, flow, Result } from "effect";
-import { forgeHttpOnPath, forgeOnPath, runOnPath } from "./support/forge";
+import { forgeHttpOnPath, forgeOnPath, runOnPath, type FakeMr } from "./support/forge";
 import { Rig, TEST_LOGIN as LOGIN } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import {
@@ -20,17 +20,24 @@ import {
   roams,
   worktreeFor,
   type BranchAsk,
+  type BranchSource,
 } from "../src/worktree";
 import type { AgentEntry } from "../src/registry";
 import type { RunFacts } from "../src/runs";
-import { runFacts } from "./support/records";
+import { madeRun, runFacts } from "./support/records";
 import {
   measurementTreesSweeper,
   renovateClonesSweeper,
   settlingOf,
   sweep,
+  taskWorkspacesSweeper,
   worktreesSweeper,
 } from "../src/cleanup";
+import { buildBoard } from "../src/board";
+import { readEnv } from "../src/env";
+import { recordDisposition } from "../src/disposition";
+import type { TaskRecord } from "../src/task";
+import { epochMs } from "../src/time";
 import { withLock } from "../src/lock";
 import { NOTHING_SETTLING, onBranch, type Settling } from "../src/worktree";
 import { encodeCheckRecord, runningChecksDir } from "../src/check-processes";
@@ -1475,6 +1482,331 @@ test("a review of a pull request is fixed on its head branch, read through gh", 
       ).toBe(
         "cego/collie#30 is in github.com/cego/collie, and this is a checkout of github.com/acme/app",
       );
+    }),
+  ));
+
+const MR_42 = "https://gitlab.example.com/acme/app/-/merge_requests/42";
+
+const gitlabMrs = (mr: Partial<FakeMr> = {}, ...others: FakeMr[]) =>
+  forgeOnPath(bin, "gitlab", {
+    installed: true,
+    loggedIn: ["gitlab.example.com"],
+    login: LOGIN,
+    mrs: [
+      {
+        project: "gitlab.example.com/acme/app",
+        iid: "42",
+        state: "open",
+        sourceBranch: "fix-the-parser",
+        ...mr,
+      },
+      ...others,
+    ],
+  });
+
+test("work that names an open merge request of this project is built on its branch", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs();
+
+      expect(
+        yield* plan({ plan: `The pipeline on ${MR_42} fails; fix it.`, plan_kind: "text" }),
+      ).toEqual({
+        branch: "fix-the-parser",
+        task: "fix-the-parser",
+        base: "origin/fix-the-parser",
+        refused: null,
+        source: "from the merge request",
+      });
+    }),
+  ));
+
+test("work that is only a reference to a merge request of this checkout is built on its branch", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs();
+
+      expect(yield* plan({ plan: " !42 ", plan_kind: "text" })).toEqual({
+        branch: "fix-the-parser",
+        task: "fix-the-parser",
+        base: "origin/fix-the-parser",
+        refused: null,
+        source: "from the merge request",
+      });
+    }),
+  ));
+
+const githubPull = (pull: Partial<FakeMr> = {}) =>
+  Effect.gen(function* () {
+    yield* fakeGitAnswering({
+      ...gitAnswers("somewhere-else", ["fix-the-parser"]),
+      "remote get-url origin": "git@github.com:acme/app.git",
+    });
+    yield* forgeOnPath(bin, "github", {
+      installed: true,
+      loggedIn: ["github.com"],
+      login: LOGIN,
+      mrs: [
+        {
+          project: "github.com/acme/app",
+          iid: "30",
+          state: "open",
+          sourceBranch: "fix-the-parser",
+          ...pull,
+        },
+      ],
+    });
+  });
+
+test("work that names a pull request is built on its head branch, read through gh", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* githubPull();
+
+      expect(
+        yield* plan({ plan: "Fix (https://github.com/acme/app/pull/30).", plan_kind: "text" }),
+      ).toMatchObject({
+        branch: "fix-the-parser",
+        base: "origin/fix-the-parser",
+        refused: null,
+        source: "from the merge request",
+      });
+    }),
+  ));
+
+test("a fork's pull request named as the work is refused, not given a fresh branch", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* githubPull({ fork: true });
+
+      expect(
+        yield* plan({ plan: "https://github.com/acme/app/pull/30", plan_kind: "text" }),
+      ).toMatchObject({
+        branch: "",
+        refused: "acme/app#30 comes from a fork, so its branch is not in this checkout",
+      });
+    }),
+  ));
+
+const fresh = (source: BranchSource) => ({
+  branch: expect.stringMatching(new RegExp(`^${LOGIN}/`)),
+  base: "origin/master",
+  refused: null,
+  source,
+});
+
+test("a merged merge request the work names is context, so the work gets a fresh branch", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs({ state: "merged" });
+
+      expect(
+        yield* plan({ plan: `Do for the lexer what ${MR_42} did.`, plan_kind: "text" }),
+      ).toMatchObject(fresh("from the work"));
+    }),
+  ));
+
+test("an open merge request of another project the work names gets it a fresh branch", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs({ project: "gitlab.example.com/acme/lib" });
+
+      expect(
+        yield* plan({
+          plan: "Adopt https://gitlab.example.com/acme/lib/-/merge_requests/42 here.",
+          plan_kind: "text",
+        }),
+      ).toMatchObject(fresh("from the work"));
+    }),
+  ));
+
+test("work naming two open merge requests is about neither's branch", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser", "fix-the-lexer"]);
+      yield* gitlabMrs(
+        {},
+        {
+          project: "gitlab.example.com/acme/app",
+          iid: "43",
+          state: "open",
+          sourceBranch: "fix-the-lexer",
+        },
+      );
+
+      expect(
+        yield* plan({
+          plan: `Merge ${MR_42} into https://gitlab.example.com/acme/app/-/merge_requests/43`,
+          plan_kind: "text",
+        }),
+      ).toMatchObject(fresh("from the work"));
+    }),
+  ));
+
+test("work that opens with one merge request's link and names another is about neither", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser", "fix-the-lexer"]);
+      yield* gitlabMrs(
+        {},
+        {
+          project: "gitlab.example.com/acme/app",
+          iid: "43",
+          state: "open",
+          sourceBranch: "fix-the-lexer",
+        },
+      );
+
+      for (const link of [`${MR_42}/diffs`, `${MR_42}?tab=pipelines`, `${MR_42}#note_1`]) {
+        expect(
+          yield* plan({
+            plan: `${link} compared with https://gitlab.example.com/acme/app/-/merge_requests/43`,
+            plan_kind: "text",
+          }),
+        ).toMatchObject(fresh("from the work"));
+      }
+    }),
+  ));
+
+test("merge request URLs with no space between them are still two URLs", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser", "fix-the-lexer"]);
+      yield* gitlabMrs(
+        {},
+        {
+          project: "gitlab.example.com/acme/app",
+          iid: "43",
+          state: "open",
+          sourceBranch: "fix-the-lexer",
+        },
+      );
+      const MR_43 = "https://gitlab.example.com/acme/app/-/merge_requests/43";
+
+      for (const work of [
+        `Compare <${MR_42}/diffs>,<${MR_43}>`,
+        `${MR_42},${MR_43}`,
+        `${MR_42}?tab=pipelines,${MR_43}`,
+        `See [${MR_42}](${MR_42})`,
+      ]) {
+        expect(yield* plan({ plan: work, plan_kind: "text" })).toMatchObject(
+          fresh("from the work"),
+        );
+      }
+    }),
+  ));
+
+test("a URL that only ends like a merge request's names none", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs();
+      for (const work of [`${MR_42}x`, `Fix ${MR_42}-old.`]) {
+        expect(yield* plan({ plan: work, plan_kind: "text" })).toMatchObject(
+          fresh("from the work"),
+        );
+      }
+    }),
+  ));
+
+test("a URL that only starts or ends like a pull request's names none", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* githubPull();
+      for (const work of [
+        "https://github.com/acme/app/pull/30x",
+        "Fix https://notgithub.com/acme/app/pull/30 now",
+      ]) {
+        expect(yield* plan({ plan: work, plan_kind: "text" })).toMatchObject(
+          fresh("from the work"),
+        );
+      }
+    }),
+  ));
+
+test("a longer URL that holds a merge request's path names none", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs();
+      expect(yield* plan({ plan: `${MR_42}.json`, plan_kind: "text" })).toMatchObject(
+        fresh("from the work"),
+      );
+    }),
+  ));
+
+test("a longer URL that holds a pull request's path names none", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* githubPull();
+      for (const work of [
+        "https://github.com/acme/app/pull/30.json",
+        "https://docs.example.com/github.com/acme/app/pull/30",
+        "Read https://example.org/github.com/acme/app/pull/30 first",
+        "https://docs.example.com/(github.com/acme/app/pull/30)",
+        "Fix https://docs.example.com/r?to=https://github.com/acme/app/pull/30",
+      ]) {
+        expect(yield* plan({ plan: work, plan_kind: "text" })).toMatchObject(
+          fresh("from the work"),
+        );
+      }
+    }),
+  ));
+
+test("a merge request URL set off by brackets or punctuation is still read", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs();
+      for (const work of [`Fix <${MR_42}>.`, `Fix [the parser](${MR_42}/diffs)!`, `"${MR_42}"`]) {
+        expect(yield* plan({ plan: work, plan_kind: "text" })).toMatchObject({
+          branch: "fix-the-parser",
+          source: "from the merge request",
+        });
+      }
+    }),
+  ));
+
+test("work giving one merge request's URL twice holds two URLs, so it gets a fresh branch", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs();
+
+      expect(
+        yield* plan({ plan: `Compare ${MR_42} with ${MR_42}`, plan_kind: "text" }),
+      ).toMatchObject(fresh("from the work"));
+    }),
+  ));
+
+test("work Collie inferred never moves a Run onto the branch of a merge request it names", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs();
+
+      expect(
+        yield* plan({ plan: MR_42, plan_kind: "text" }, undefined, {
+          sources: { plan: "branch somewhere-else", plan_kind: "branch somewhere-else" },
+        }),
+      ).toMatchObject(fresh("from the run name"));
+    }),
+  ));
+
+test("--input branch= beats work that names an open merge request", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* fakeGit("somewhere-else", ["fix-the-parser"]);
+      yield* gitlabMrs();
+
+      expect(yield* plan({ plan: MR_42, plan_kind: "text" }, "mine")).toMatchObject({
+        branch: "mine",
+        source: "explicit",
+      });
     }),
   ));
 
@@ -3183,11 +3515,12 @@ test("a merge the merge watch recorded on GitHub settles a branch still on the r
       yield* fs.makeDirectory(`${rig.stateDir}/board`, { recursive: true });
       yield* fs.writeFileString(
         `${rig.stateDir}/board/mr-states.json`,
-        '{"github.com/o/r#5":{"state":"merged","checks":{"state":"passed"},"head":"abc"}}',
+        '{"github.com/o/r#5":{"state":"merged","checks":{"state":"passed"},"head":"abc","read":"2026-09-14T09:00:00Z"}}',
       );
       settling = yield* settlingOf({
         stateDir: rig.stateDir,
         runs: recorded,
+        views: [],
         tasks: [],
         sessions: [new Herdr(rig.pluginEnv())],
         protect: [],
@@ -3221,11 +3554,12 @@ test("a legacy bare mr: target is settled as the merge request of its checkout's
       yield* fs.makeDirectory(`${rig.stateDir}/board`, { recursive: true });
       yield* fs.writeFileString(
         `${rig.stateDir}/board/mr-states.json`,
-        '{"gitlab.example.com/group/app!42":{"state":"merged"},"gitlab.example.com/group/web!42":{"state":"open"}}',
+        '{"gitlab.example.com/group/app!42":{"state":"merged","read":"2026-09-14T09:00:00Z"},"gitlab.example.com/group/web!42":{"state":"open","read":"2026-09-14T09:00:00Z"}}',
       );
       settling = yield* settlingOf({
         stateDir: rig.stateDir,
         runs: recorded,
+        views: [],
         tasks: [],
         sessions: [new Herdr(rig.pluginEnv())],
         protect: [],
@@ -3290,6 +3624,193 @@ test("the plugin root is never removed, even where a Run recorded it", () =>
 
       expect(yield* prune()).toEqual([]);
       expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
+    }),
+  ));
+
+const OWED_MR = "https://gitlab.cego.dk/mk/support/-/merge_requests/279";
+const SHARED_TASK: TaskRecord = {
+  id: "task-1",
+  workspace: "w7",
+  label: "support | nuxt ci",
+  cwd: "/project",
+  root_pane: "w7-p1",
+  created_at: "2026-09-14T07:00:00.000Z",
+};
+const AFTER_ENDING = epochMs("2026-09-14T11:00:00Z");
+
+/**
+ * A failed Run and its follow-up in one Task, on one checkout of `wt` and one merge request
+ * the forge reads as `state`, the first saying the second superseded it; `abandoned` records
+ * that on the follow-up too. Settles what Cleanup reads from the board built over them.
+ */
+const sharedCheckout = Effect.fn("worktreeTest.sharedCheckout")(function* (
+  state: "open" | "merged",
+  abandoned = false,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const at = yield* collieWorktree("wt", { state: "failed" });
+  yield* settledGit({ "ls-remote --heads origin": "deadbeef refs/heads/wt" });
+  const shared = {
+    task: SHARED_TASK.id,
+    mr: OWED_MR,
+    branch: "wt",
+    worktree: recorded[0]!.worktree,
+    project: rig.projectDir,
+    cwd: at,
+  };
+  const first = yield* madeRun(rig.stateDir, {
+    ...shared,
+    id: "run-first",
+    state: "failed",
+    created: "2026-09-14T08:00:00Z",
+    finished: "2026-09-14T08:30:00Z",
+  });
+  const second = yield* madeRun(rig.stateDir, {
+    ...shared,
+    id: "run-second",
+    state: "succeeded",
+    created: "2026-09-14T08:40:00Z",
+    finished: "2026-09-14T09:30:00Z",
+  });
+  yield* recordDisposition(first.dir, {
+    at: "2026-09-14T09:00:00Z",
+    by: "cli:recovery",
+    kind: "superseded",
+    ref: `${second.id}; ${OWED_MR}`,
+    note: null,
+  });
+  if (abandoned)
+    yield* recordDisposition(second.dir, {
+      at: "2026-09-14T09:40:00Z",
+      by: "mk",
+      kind: "abandoned",
+      ref: "",
+      note: null,
+    });
+  recorded = [first, second];
+  yield* fs.makeDirectory(`${rig.stateDir}/board`, { recursive: true });
+  yield* fs.writeFileString(
+    `${rig.stateDir}/board/mr-states.json`,
+    `{"gitlab.cego.dk/mk/support!279":{"state":"${state}","read":"2026-09-14T09:00:00Z"}}`,
+  );
+  const views = yield* buildBoard({
+    env: readEnv({ HERDR_PLUGIN_STATE_DIR: rig.stateDir, COLLIE_CWD: rig.projectDir }),
+    runs: recorded,
+    tasks: [SHARED_TASK],
+    registered: [],
+    proposals: [],
+    now: AFTER_ENDING,
+    head: () => Effect.succeed(null),
+  });
+  settling = yield* settlingOf({
+    stateDir: rig.stateDir,
+    runs: recorded,
+    views,
+    tasks: [],
+    sessions: [new Herdr(rig.pluginEnv())],
+    protect: [],
+  });
+  yield* rig.addWorkspace("w7", SHARED_TASK.label, at);
+  yield* rig.addPane("w7-p1", "w7-t1", at, null, "w7");
+  const workspaces = taskWorkspacesSweeper({
+    stateDir: rig.stateDir,
+    sessions: [{ herd: null, herdr: new Herdr(rig.pluginEnv()) }],
+    tasks: [SHARED_TASK],
+    views,
+    runs: recorded,
+    seen: new Map([[SHARED_TASK.id, (yield* Clock.currentTimeMillis) - 2 * 60 * 60_000]]),
+  });
+  return { at, workspaces };
+});
+
+test("a follow-up's open merge request keeps the checkout and workspace its superseded predecessor shared", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const { workspaces } = yield* sharedCheckout("open");
+
+      const pruned = yield* prune();
+      expect(pruned).toHaveLength(1);
+      expect(pruned[0]).toStartWith("kept wt · ");
+      expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
+      expect((yield* rig.cmds()).includes("branch -d")).toBe(false);
+      const judged = yield* workspaces.judge;
+      expect(judged.remove).toEqual([]);
+      expect(judged.keep).toEqual([{ kind: "workspace", target: "w7", reason: "waiting on you" }]);
+    }),
+  ));
+
+test("a shared checkout whose merge request the forge read merged goes, saying it merged", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* sharedCheckout("merged");
+
+      expect(yield* prune()).toEqual(["♻ removed wt · merged in mk/support!279"]);
+    }),
+  ));
+
+for (const taskless of [false, true])
+  for (const answer of ["closed", "unknown", "board-failed"])
+    test(`owed ${taskless ? "virtual" : "recorded"} Task keeps its checkout with ${answer} evidence and a deleted remote branch`, () =>
+      runOnPath(
+        Effect.gen(function* () {
+          const { at } = yield* sharedCheckout("open");
+          yield* settledGit({ "ls-remote --heads origin": "" });
+          recorded = [{ ...recorded[1]!, task: taskless ? null : SHARED_TASK.id }];
+          if (answer === "unknown")
+            yield* recordDisposition(recorded[0]!.dir, {
+              at: "2026-09-14T09:40:00Z",
+              by: "mk",
+              kind: "superseded",
+              ref: "a later attempt",
+              note: null,
+            });
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.writeFileString(
+            `${rig.stateDir}/board/mr-states.json`,
+            answer === "closed"
+              ? '{"gitlab.cego.dk/mk/support!279":{"state":"closed","read":"2026-09-14T10:00:00Z"}}'
+              : "{}",
+          );
+          const views =
+            answer === "board-failed"
+              ? null
+              : yield* buildBoard({
+                  env: readEnv({
+                    HERDR_PLUGIN_STATE_DIR: rig.stateDir,
+                    COLLIE_CWD: rig.projectDir,
+                  }),
+                  runs: recorded,
+                  tasks: [SHARED_TASK],
+                  registered: [],
+                  proposals: [],
+                  now: AFTER_ENDING,
+                  head: () => Effect.succeed(null),
+                });
+          settling = yield* settlingOf({
+            stateDir: rig.stateDir,
+            runs: recorded,
+            views,
+            tasks: [],
+            sessions: [],
+            protect: [],
+          });
+          const lines = yield* prune();
+          expect(lines).toHaveLength(1);
+          expect(lines[0]).toStartWith("kept wt · ");
+          expect((yield* rig.cmds()).includes(`worktree remove ${at}`)).toBe(false);
+        }),
+      ));
+
+test("a Task abandoned on its leading Run gives up its checkout and, after its hour, its workspace", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const { workspaces } = yield* sharedCheckout("open", true);
+
+      expect(yield* prune()).toEqual(["♻ removed wt · abandoned, as recorded"]);
+      const judged = yield* workspaces.judge;
+      expect(judged.remove).toEqual([
+        { kind: "workspace", target: "w7", bytes: 0, reason: "Finished 120 min ago" },
+      ]);
     }),
   ));
 

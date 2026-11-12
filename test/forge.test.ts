@@ -330,8 +330,10 @@ for (const name of ["gitlab", "github"] as const) {
     test("is ready only with its CLI installed and logged in to the host", () =>
       runEffect(
         Effect.gen(function* () {
-          const ask = (over: Partial<ForgeModel>) =>
-            forge.ready(PROJECT[name], "/w", fakeForge(name, model(name, over)).run);
+          const ask = (over: Partial<ForgeModel>) => {
+            const fake = fakeForge(name, model(name, over));
+            return forge.ready(PROJECT[name], "/w", fake.run).pipe(Effect.provide(fake.layer));
+          };
           expect(yield* ask({})).toEqual({ ok: true, reason: "" });
           expect(yield* ask({ installed: false })).toEqual({
             ok: false,
@@ -340,7 +342,39 @@ for (const name of ["gitlab", "github"] as const) {
           expect(yield* ask({ loggedIn: [] })).toEqual({
             ok: false,
             reason: `${CLI[name]} is not logged in to ${host}`,
+            cause: "login-missing",
           });
+        }),
+      ));
+
+    test("needs login repair when the forge refuses the token its CLI holds", () =>
+      runEffect(
+        Effect.gen(function* () {
+          for (const over of [
+            { revoked: true },
+            { httpFault: { status: 403, message: "Bad credentials" } },
+          ]) {
+            const fake = fakeForge(name, model(name, over));
+            expect(
+              yield* forge.ready(PROJECT[name], "/w", fake.run).pipe(Effect.provide(fake.layer)),
+            ).toEqual({
+              ok: false,
+              reason: `${CLI[name]} is not logged in to ${host}`,
+              cause: "login-missing",
+            });
+          }
+        }),
+      ));
+
+    test("stays recoverable when the forge cannot be reached or fails to answer", () =>
+      runEffect(
+        Effect.gen(function* () {
+          for (const httpFault of ["network", { status: 503 }, { status: 403 }] as const) {
+            const fake = fakeForge(name, model(name, { httpFault }));
+            expect(
+              yield* forge.ready(PROJECT[name], "/w", fake.run).pipe(Effect.provide(fake.layer)),
+            ).toMatchObject({ ok: false, cause: "forge-unavailable" });
+          }
         }),
       ));
 
@@ -3366,4 +3400,154 @@ test("a failed GitHub job's log command prints its workflow run's failed jobs", 
       );
     }).pipe(Effect.provide(fake.layer)),
   );
+});
+
+test("GitHub's adapter starts no pipeline on a pull request's head and asks nothing, since Actions run on every push", () => {
+  const fake = fakeForge("github", model("github"));
+  return runEffect(
+    Effect.gen(function* () {
+      expect(yield* FORGES.github.startPipeline(ref("github"), HEAD, "/w", fake.run)).toMatchObject(
+        { _tag: "Unneeded" },
+      );
+      expect(fake.requests).toEqual([]);
+      expect(fake.calls).toEqual([]);
+    }).pipe(Effect.provide(fake.layer)),
+  );
+});
+
+describe("GitLab's start of a merge request head's pipeline", () => {
+  const started = (over: Partial<ForgeModel>) => {
+    const fake = fakeForge(
+      "gitlab",
+      model("gitlab", { mrs: [mr("gitlab", { sourceBranch: "feature" })], ...over }),
+    );
+    return FORGES.gitlab.startPipeline(ref("gitlab"), HEAD, "/w", fake.run).pipe(
+      Effect.map((answer) => ({
+        answer,
+        posted: Arr.map(
+          Arr.filter(fake.requests, (one) => one.method === "POST"),
+          (one) => `${new URL(one.url).pathname}${new URL(one.url).search}`,
+        ),
+        on: fake.model().pipelinesOn?.[HEAD] ?? [],
+      })),
+      Effect.provide(fake.layer),
+    );
+  };
+  const SKIPPED = { pipelinesOn: { [HEAD]: [{ id: 5, status: "skipped" }] } };
+  const MR_ROUTE = "/api/v4/projects/group%2Fapp/merge_requests/30/pipelines";
+  const BRANCH_ROUTE = "/api/v4/projects/group%2Fapp/pipeline?ref=feature";
+
+  test("a head whose only pipeline was skipped gets the merge request's pipeline", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { answer, posted, on } = yield* started(SKIPPED);
+        expect(posted).toEqual([MR_ROUTE]);
+        expect(on).toHaveLength(2);
+        expect(answer).toEqual({
+          _tag: "Started",
+          url: `https://${PROJECT.gitlab}/-/pipelines/${on[1]!.id}`,
+        });
+      }),
+    ));
+
+  test("a merge request pipeline refused with 400 falls back to the source branch's", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { answer, posted, on } = yield* started({ ...SKIPPED, refusesPipeline: { mr: 400 } });
+        expect(posted).toEqual([MR_ROUTE, BRANCH_ROUTE]);
+        expect(on[1]).toMatchObject({ source: "api", ref: "feature" });
+        expect(answer).toMatchObject({ _tag: "Started" });
+      }),
+    ));
+
+  test("both refused with 400 is the project's CI giving the head none, in GitLab's words", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { answer, posted } = yield* started({
+          refusesPipeline: { mr: 400, branch: 400 },
+        });
+        expect(posted).toEqual([MR_ROUTE, BRANCH_ROUTE]);
+        expect(answer).toMatchObject({ _tag: "NoneByRules" });
+        expect(answer._tag === "NoneByRules" && answer.message).toContain(
+          "No stages / jobs for this pipeline.",
+        );
+      }),
+    ));
+
+  test("a refusal that is not a 400 is a failure, and the branch's is not tried", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { answer, posted } = yield* started({ ...SKIPPED, refusesPipeline: { mr: 500 } });
+        expect(posted).toEqual([MR_ROUTE]);
+        expect(answer).toMatchObject({ _tag: "Failed" });
+        expect(answer._tag === "Failed" && answer.reason).toContain("500");
+      }),
+    ));
+
+  test("a pipeline GitLab built on another revision than the head is a failure naming both, on either route", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const MOVED = "9999999999999999999999999999999999999999";
+        for (const refusing of [{}, { refusesPipeline: { mr: 400 } }]) {
+          const { answer } = yield* started({
+            ...SKIPPED,
+            ...refusing,
+            mrs: [mr("gitlab", { head: MOVED, sourceBranch: "feature" })],
+          });
+          expect(answer).toMatchObject({ _tag: "Failed" });
+          expect(answer._tag === "Failed" && answer.reason).toContain(
+            pipe(MOVED, Str.slice(0, 12)),
+          );
+          expect(answer._tag === "Failed" && answer.reason).toContain(pipe(HEAD, Str.slice(0, 12)));
+        }
+      }),
+    ));
+
+  test("a pipeline on a later commit whose parent is the head is a failure, on either route", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const CHILD = "8888888888888888888888888888888888888888";
+        for (const refusing of [{}, { refusesPipeline: { mr: 400 } }]) {
+          const { answer } = yield* started({
+            ...SKIPPED,
+            ...refusing,
+            mrs: [mr("gitlab", { head: CHILD, sourceBranch: "feature" })],
+            ancestry: { [CHILD]: [HEAD] },
+          });
+          expect(answer).toMatchObject({ _tag: "Failed" });
+        }
+      }),
+    ));
+
+  test("a merged-results pipeline starts for the head only where GitLab shows its merge commit's parent is it", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const MERGE = "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432";
+        const TARGET = "0000000000000000000000000000000000000001";
+        const at = (parents: ReadonlyArray<string>) =>
+          started({
+            ...SKIPPED,
+            mrs: [mr("gitlab", { pipelineAt: MERGE, sourceBranch: "feature" })],
+            ancestry: { [MERGE]: parents },
+          });
+        expect((yield* at([TARGET, HEAD])).answer).toMatchObject({ _tag: "Started" });
+        expect((yield* at([TARGET, "an-older-head"])).answer).toMatchObject({ _tag: "Failed" });
+      }),
+    ));
+
+  test("a head with a pipeline that was not skipped gets none", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { answer, posted } = yield* started({
+          pipelinesOn: {
+            [HEAD]: [
+              { id: 5, status: "skipped" },
+              { id: 6, status: "running" },
+            ],
+          },
+        });
+        expect(posted).toEqual([]);
+        expect(answer).toEqual({ _tag: "Has", url: `https://${PROJECT.gitlab}/-/pipelines/6` });
+      }),
+    ));
 });

@@ -171,6 +171,8 @@ export const MergeRequestReadSchema = Schema.Union([
     state: Schema.String,
     source: Schema.String,
     target: Schema.String,
+    merged: Schema.optionalKey(Schema.String),
+    checkout: Schema.optionalKey(Schema.String),
     wave: Schema.optionalKey(PlanWaveSchema),
   }),
   Schema.TaggedStruct("Unreadable", { why: Schema.String }),
@@ -190,6 +192,7 @@ export const readMergeRequest = Effect.fn("Releasing.readMergeRequest")(function
     state: panel.state,
     source: panel.sourceBranch,
     target: panel.targetBranch,
+    merged: panel.mergedSha,
   } satisfies MergeRequestRead;
 });
 

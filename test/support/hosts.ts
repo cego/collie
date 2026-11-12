@@ -18,7 +18,7 @@ import * as Struct from "effect/Struct";
 import * as Option from "effect/Option";
 import { pipe } from "effect/Function";
 import * as Str from "effect/String";
-import { afterAll, afterEach, beforeAll, beforeEach } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, setDefaultTimeout } from "bun:test";
 import { Clock, Effect, Path, Schedule } from "effect";
 // Bun's preload mutates the environment inherited by tests; Config is read-only.
 /* oxlint-disable effecttsgo/process-env */
@@ -36,6 +36,9 @@ const { dirname, join, relative } = Effect.runSync(Path.Path.pipe(Effect.provide
 import { GIT_QUIET } from "./git-quiet";
 import { alive, kill, MARKER, marked, rootBase } from "./sweep";
 import { testBunfig } from "./packages";
+
+// Bun reads no default timeout from bunfig, and this overrides `--timeout`.
+setDefaultTimeout(30_000);
 
 const base = rootBase();
 let root = "";
