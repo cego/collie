@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4"
       - run: bun install --frozen-lockfile
@@ -37,7 +37,7 @@ jobs:
         shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4"
       - run: bun install --frozen-lockfile
@@ -71,7 +71,7 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4"
       - run: bun install --frozen-lockfile
@@ -91,7 +91,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4"
       # Desktop's Effect is the root's, so the board's Schemas exist once.
@@ -111,7 +111,7 @@ jobs:
           submodules: true
       # The terminal's wide-glyph test exercises a real system CJK fallback.
       - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev mesa-vulkan-drivers libclang-dev fontconfig fonts-noto-cjk
-      - uses: mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.16.0
       # Installs the toolchain desktop-rune/rust-toolchain.toml pins.
@@ -122,7 +122,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
         working-directory: desktop-rune
       # protocol/tests/core.rs starts Desktop's main process under Bun.
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4"
       - run: bun install --frozen-lockfile
