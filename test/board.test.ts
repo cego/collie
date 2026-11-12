@@ -2222,6 +2222,63 @@ test("a line handing the work to a Run of another Task lands its own Task, and t
     }),
   ));
 
+test("a superseded ref naming its successor as <machine>:<run> hands the work on only where the machine is this host", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const here = { ...env, machine: "vm-mk.cegohost.dk" };
+      const next = yield* madeRun(dir, { id: "r-next", task: "task-next", state: "running" });
+      const refs = [
+        ["task-full", "vm-mk.cegohost.dk:r-next"],
+        ["task-short", "vm-mk:r-next"],
+        ["task-other", "mk-laptop:r-next"],
+        ["task-unknown", "vm-mk:r-none"],
+        ["task-url", "https://vm-mk/r-next"],
+      ] as const;
+      const runs = [next];
+      for (const [task, ref] of refs) {
+        const run = yield* madeRun(dir, {
+          id: `r-${task}`,
+          task,
+          state: "failed",
+          branch: `mk/${task}`,
+          created: "2026-09-14T08:00:00Z",
+          finished: "2026-09-14T08:30:00Z",
+        });
+        yield* recordDisposition(run.dir, {
+          at: "2026-09-14T09:00:00Z",
+          by: "chat",
+          kind: "superseded",
+          ref,
+          note: null,
+        });
+        runs.push(run);
+      }
+
+      const views = yield* board(here, runs, {
+        tasks: Arr.map(["task-next", ...Arr.map(refs, ([task]) => task)], (id) => ({
+          ...TASK,
+          id,
+        })),
+      });
+      expect(
+        Arr.map(refs, ([task]) => [
+          task,
+          Arr.findFirst(views, (view) => view.id === task).pipe(
+            Option.map((view) => view.landed),
+            Option.getOrUndefined,
+          ),
+        ]),
+      ).toEqual([
+        ["task-full", true],
+        ["task-short", true],
+        ["task-other", false],
+        ["task-unknown", false],
+        ["task-url", false],
+      ]);
+    }),
+  ));
+
 test("a superseded merge request is settled while its forge reads it closed, and owed again once reopened", () =>
   runEffect(
     Effect.gen(function* () {

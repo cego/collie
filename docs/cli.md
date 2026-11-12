@@ -1377,7 +1377,11 @@ refused, and the refusal lists the Task's. Anything else, a commit or a Run, is 
 given on the Run you named. A `superseded` whose ref names, as one of its words, the Run it
 would be recorded on is refused with `invalid_input`, and nothing is recorded: a Run cannot
 supersede itself. A free-text ref, or one naming another Run, is recorded as given. The
-board and chat's `collie_do` `disposition` take the same path.
+board and chat's `collie_do` `disposition` take the same path. A ref may name a Run as
+`<machine>:<run>`: by this Machine's hostname, or that name's first label, it is that Run
+here; by another Machine's name it is never one of this host's Runs, whatever its id, so it
+hands nothing on. The Flock chat writes a word naming the Machine the disposition goes to as
+the bare Run id, since herdr's name for a Machine need not be its hostname.
 
 Without `--as` the command reads. With it, `--as` is `merged`, `abandoned`, or
 `superseded`, and there is deliberately no value meaning the run succeeded after all.

@@ -18,7 +18,7 @@ import { openReports, readDrift } from "./drift";
 import { describeAction } from "./lines";
 import type { PickItem } from "./inputs";
 import { LEADING_GLYPH, type AgentInfo } from "./herdr";
-import { latest, readDispositions, refWords } from "./disposition";
+import { latest, readDispositions, refRuns } from "./disposition";
 import { readSeen, seenSince } from "./seen";
 import { runTitle } from "./naming";
 import { changeKey, planIssuesIn, planReposOf } from "./plan";
@@ -1028,6 +1028,7 @@ const ledgerOf = Effect.fn("Board.ledgerOf")(function* (
   run: RunFacts,
   card: string,
   cardOf: ReadonlyMap<string, string>,
+  machine: string,
 ) {
   const lines = yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => []));
   return yield* Effect.forEach(lines, (line) =>
@@ -1037,7 +1038,7 @@ const ledgerOf = Effect.fn("Board.ledgerOf")(function* (
         run: run.id,
         line,
         mr,
-        elsewhere: Arr.some(refWords(line.ref), (word) => {
+        elsewhere: Arr.some(refRuns(line.ref, machine), (word) => {
           const named = cardOf.get(word);
           return named !== undefined && named !== card;
         }),
@@ -1341,7 +1342,10 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         for (const run of everyRun) owed ??= yield* branchOwed(run);
         const ledgers = new Map(
           yield* Effect.forEach(everyRun, (run) =>
-            Effect.map(ledgerOf(run, id, cardOf), (lines) => [run.id, lines] as const),
+            Effect.map(
+              ledgerOf(run, id, cardOf, opts.env.machine ?? machineName()),
+              (lines) => [run.id, lines] as const,
+            ),
           ),
         );
         const recorded = Arr.flatten([...ledgers.values()]);

@@ -245,7 +245,7 @@ import {
   type Attached,
 } from "./attachments";
 import { boardMessages, shareBoard } from "./board-stream";
-import { recordDisposition, refWords } from "./disposition";
+import { recordDisposition, refRuns } from "./disposition";
 import { markSeenSince, readSeen, recordSeen } from "./seen";
 import { readReplies } from "./replies";
 import {
@@ -3645,7 +3645,9 @@ const frontDoorHandlers = (
           known(runId).pipe(
             Effect.flatMap(disposedOn(ref)),
             Effect.filterOrFail(
-              (kept) => kind !== "superseded" || !Arr.contains(refWords(kept.ref), kept.run),
+              (kept) =>
+                kind !== "superseded" ||
+                !Arr.contains(refRuns(kept.ref, env.machine ?? machineName()), kept.run),
               (kept) =>
                 new HostRefused({
                   reason: `${REFUSED_INPUT}: a superseded line cannot name ${kept.run}, the Run it is recorded on`,
