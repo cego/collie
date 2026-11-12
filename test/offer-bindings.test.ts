@@ -15,7 +15,10 @@ import { proves, save, type World } from "./support/world";
 const MR = "https://gitlab.example.com/group/app/-/merge_requests/7";
 
 const drawn = Schema.decodeUnknownEffect(
-  Schema.Struct({ properties: Schema.Record(Schema.String, Schema.Unknown) }),
+  Schema.Struct({
+    properties: Schema.Record(Schema.String, Schema.Unknown),
+    required: Schema.optionalKey(Schema.Array(Schema.String)),
+  }),
 );
 const startedWith = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
@@ -24,6 +27,7 @@ const projectOf = Effect.fn("OfferBindingsTest.project")(function* (world: World
   yield* save(`${project}/.collie/workflows`, [
     "hands-over.workflow.ts",
     "ship-target.workflow.ts",
+    "merges-by-action.workflow.ts",
   ]);
   return project;
 });
@@ -31,10 +35,11 @@ const projectOf = Effect.fn("OfferBindingsTest.project")(function* (world: World
 const finished = Effect.fn("OfferBindingsTest.finished")(function* (
   client: HostClient,
   project: string,
+  id = "hands-over",
 ) {
   const started = yield* client.start({
     project,
-    id: "hands-over",
+    id,
     request: "req-1",
     input: { mr: MR },
   });
@@ -75,6 +80,38 @@ test(
           expect(done?.status.status).toBe("complete");
           const value = done?.status.status === "complete" ? done.status.value : null;
           expect(yield* startedWith(value)).toEqual({ mr: MR, notify: false, ship: "merge" });
+          yield* stopHost(world.state);
+        }),
+      [],
+    ),
+  300_000,
+);
+
+test(
+  "an action draws neither the arguments it binds nor its target's internal inputs, and starts with what it binds",
+  () =>
+    proves(
+      "collie-offer-action-bindings-",
+      (world) =>
+        Effect.gen(function* () {
+          const project = yield* projectOf(world);
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const runId = yield* finished(client, project, "merges-by-action").pipe(Effect.orDie);
+
+          const [merge] = yield* client.offers({ runId }).pipe(Effect.orDie);
+          const drawnAs = yield* drawn(merge?.arguments);
+          expect(Rec.keys(drawnAs.properties)).toEqual(["notify"]);
+          expect(drawnAs.required ?? []).toEqual([]);
+
+          const started = yield* client
+            .invoke({ runId, offer: "merge", input: {}, request: "act-1" })
+            .pipe(Effect.orDie);
+          const done = yield* until(
+            () => client.run({ runId: started.runId }).pipe(Effect.orDie),
+            (view) => view?.status.status === "complete",
+          );
+          const value = done?.status.status === "complete" ? done.status.value : null;
+          expect(yield* startedWith(value)).toEqual({ mr: MR, ship: "merge" });
           yield* stopHost(world.state);
         }),
       [],

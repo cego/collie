@@ -234,7 +234,7 @@ import {
 import { latest, readDispositions } from "./disposition";
 import { openFindingsIn } from "./output";
 import { changeKey, changeOfKey, isSingleRepo, planIssuesIn, planReposOf } from "./plan";
-import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
+import { SELF, argumentsWithout, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
 import { isOutcome, REQUESTABLE } from "./outcome";
 import { Foreground } from "./foreground";
 import {
@@ -8745,6 +8745,20 @@ const makeRegistry: (
       Effect.orElseSucceed(() => offer),
     );
 
+  /** An action draws neither what its offer gives nor what its target only lets its orchestration set. */
+  const unbound = (offer: Offer, project: string) =>
+    resolve({ project, id: offer.workflow }).pipe(
+      Effect.map((target) => Rec.keys(Rec.filter(target.hints, (hint) => hint === "internal"))),
+      Effect.orElseSucceed((): ReadonlyArray<string> => []),
+      Effect.map((internal) => ({
+        ...offer,
+        arguments: argumentsWithout(
+          offer.arguments,
+          new Set([...Rec.keys(offer.given ?? {}), ...internal]),
+        ),
+      })),
+    );
+
   const offeredBy = Effect.fn("Engine.Registry.offeredBy")(function* (runId: string) {
     const row = yield* store.run(runId);
     if (row === null) {
@@ -9338,7 +9352,7 @@ const makeRegistry: (
             (offer) =>
               offer.kind === "follow-up"
                 ? unfilled(offer, row.project, inputsFor(offer, { runDir: where, facts, input }))
-                : Effect.succeed(offer),
+                : unbound(offer, row.project),
           ),
         ),
       ),

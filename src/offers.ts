@@ -14,7 +14,7 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
 import type { ActionFacts, OfferGiven, Ships } from "./sdk";
-import type { Schema, Types } from "effect";
+import { Schema, type Types } from "effect";
 import type { ConnectionId } from "./connection-model";
 
 /** A workflow an offer starts that is the one declaring it, whatever that is called. */
@@ -103,6 +103,25 @@ export function offersFrom(
     () => -1,
   );
   return Arr.map(offers, (one, at) => (at === first ? { ...one, primary: true } : one));
+}
+
+const asJsonRecord = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Json));
+const isNames = Schema.is(Schema.Array(Schema.String));
+
+/** Drawn arguments without `names`, which are not the caller's to give; null once none are left. */
+export function argumentsWithout(
+  drawn: Schema.Json | null,
+  names: ReadonlySet<string>,
+): Schema.Json | null {
+  const document = Option.getOrUndefined(asJsonRecord(drawn));
+  const drawnProperties = Option.getOrUndefined(asJsonRecord(document?.properties));
+  if (document === undefined || drawnProperties === undefined) return drawn;
+  const properties = Rec.filter(drawnProperties, (_, name) => !names.has(name));
+  if (Rec.isEmptyRecord(properties)) return null;
+  const { required } = document;
+  return isNames(required)
+    ? { ...document, properties, required: Arr.filter(required, (name) => !names.has(name)) }
+    : { ...document, properties };
 }
 
 /**
