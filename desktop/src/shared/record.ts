@@ -6,6 +6,12 @@ import * as Option from "effect/Option";
 import { mrWords, readMrRef, type RecordPart, type RunDetail } from "../../../src/board-model";
 import { mrTab } from "./links";
 import type { Target } from "./board-clicks";
+import { parkLine } from "../../../src/park-cause";
+
+export const recoveryOf = (facts: Pick<RunDetail, "park" | "recovery">, limit = 20) => ({
+  park: facts.park == null ? null : parkLine(facts.park),
+  history: (facts.recovery ?? []).slice(-limit),
+});
 
 export interface TabFacts {
   readonly flow?: boolean;

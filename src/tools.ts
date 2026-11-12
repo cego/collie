@@ -22,6 +22,7 @@
 
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
+import { branchMovement } from "./recovery";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
@@ -88,7 +89,8 @@ import { machineHerd } from "./steering";
 import { loadDefinitions, layers } from "./definitions";
 import { chatHarnessOf, chatPath, heardVoice, pushable, readChat, whyUnavailable } from "./chat";
 import { doctor } from "./doctor";
-import { standingDirectionOn } from "./config";
+import { savedReaches, standingDirectionOn } from "./config";
+import { reachOf, type Reach } from "./reach";
 import { standingDirectionContext } from "./standing-direction";
 import { defaultsPath, describeDefaults, EMPTY_DEFAULTS, readDefaults } from "./intent";
 import { scopeKey } from "./registry";
@@ -476,7 +478,19 @@ const runAnswer = Effect.fn("Tools.runAnswer")(function* (
           encodeFlow(shown.flow),
           "```",
         ];
-  return Arr.join([...running, facts, ...done, ...offered, ...ready, ...flow], "\n");
+  const movement = yield* branchMovement(run);
+  return Arr.join(
+    [
+      ...running,
+      facts,
+      ...(movement === null ? [] : [movement]),
+      ...done,
+      ...offered,
+      ...ready,
+      ...flow,
+    ],
+    "\n",
+  );
 });
 
 /** What `collie_herd` answers with: the board, so chat and board can never disagree about a card. */
@@ -609,6 +623,23 @@ const holdsFor = Effect.fn("Tools.holdsFor")(function* (
   return Arr.map(runs, (view) => ({ kind: "hold" as const, run: view.runId, reason }));
 });
 
+const reachLine = (
+  workflow: string,
+  reach: Reach | null,
+  reached: ReadonlyArray<{ workflow: string; project: string; value: string }>,
+) => {
+  if (reach === null) return [];
+  const choices = Arr.join(
+    Arr.map(reach.choices, (choice) => `"${choice.value}" ${choice.title}`),
+    " · ",
+  );
+  const last = Arr.map(
+    Arr.filter(reached, (one) => one.workflow === workflow),
+    (one) => `last launched with "${one.value}" in ${one.project}`,
+  );
+  return [`  ${reach.name}, how far it goes: ${Arr.join([choices, ...last], "; ")}`];
+};
+
 /** What `collie_workspaces` answers with: where a Run could go, and what could start. */
 const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) {
   const herdr = new Herdr(env);
@@ -631,6 +662,7 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) 
     ? Arr.filter(asked.success, (task) => isOpen(task, open))
     : [];
   const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
+  const reached = yield* savedReaches(env.userDir);
   return Arr.join(
     [
       ...(lines.length > 0 ? lines : ["- (no workspaces)"]),
@@ -651,13 +683,15 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) 
         : `Projects root: ${root.path} — a checkout under it is named by its directory name`,
       "",
       "workflows, with the Inputs each takes (? is optional) and what it is for:",
-      ...Arr.map(
+      ...Arr.flatMap(
         [...saved].sort((a, b) => pipe_(a.id, Str.localeCompare(b.id))),
-        (one) =>
+        (one) => [
           `- ${one.id} (${Arr.join(
             Arr.map(one.inputs, (input) => `${input.name}${input.required ? "" : "?"}`),
             ", ",
           )})${one.description === "" ? "" : ` — ${one.description}`}`,
+          ...reachLine(one.id, reachOf(one.inputs), reached),
+        ],
       ),
       ...(saved.length === 0 ? ["- none"] : []),
       "",
@@ -665,6 +699,8 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) 
       "repository's directory name under the Projects root (one with no workspace open on it gets",
       "one), or projects-root — and every Input, an optional",
       'one left empty as "". Nothing is inferred; a start missing any is refused with each listed.',
+      "How far it goes is the human's to say: pass what they said, else what the last launch of",
+      'that workflow in that project chose, else "". A start for them saves it for the next.',
     ],
     "\n",
   );
@@ -733,7 +769,7 @@ const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run:
         : Arr.map(
             deliveries,
             (delivery) =>
-              `- ${delivery.id}: ${delivery.state}${delivery.note ? ` (${delivery.note})` : ""}, for ${delivery.cause.kind}`,
+              `- ${delivery.id}: ${delivery.state}${delivery.note ? ` (${delivery.note})` : ""}, for ${delivery.cause.kind}${delivery.workflowNotice === undefined ? "" : `. ${delivery.workflowNotice}`}`,
           )),
       ...unread,
     ],

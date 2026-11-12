@@ -16,6 +16,7 @@ import {
   type Solution,
 } from "./board-model";
 import type { PluginEnv } from "./env";
+import type { Park } from "./park-cause";
 import { resultText, runView, runViews } from "./lifecycle";
 import { HOLD, STOP, evidenceDir, runDir, type RunView } from "./engine";
 import { isSetAside, isUnanswered } from "./store";
@@ -24,12 +25,14 @@ import type { WorktreeRecord } from "./run";
 import type { Landing } from "./landing";
 import { awaitingLine, type Awaiting } from "./awaiting";
 import type { AskedFact, Execution, UsageWait } from "./flow";
+import type { ShippingGo } from "./shipping";
 
 /** Where a Run is, in the words every board and listing uses. */
 export type RunState = "running" | "waiting" | "succeeded" | "failed" | "stopped";
 
 /** A question a Run is waiting on a human for. */
 export interface Asked {
+  readonly shipping?: ShippingGo;
   readonly name: string;
   readonly prompt: string;
   readonly options: ReadonlyArray<Solution>;
@@ -81,6 +84,9 @@ export interface RunFacts {
   readonly change?: string | null;
   /** Why it parked its own work, in its own words, or null while it has not. */
   readonly parked: string | null;
+  readonly recovery?: ReadonlyArray<string>;
+  /** That park's cause, where its host named one. */
+  readonly park?: Park | null;
   /** What it waits for that ends without anyone repairing anything, or null. */
   readonly awaiting: Awaiting | null;
   /** The Subscription its work waits on to reset, where it waits on one. */
@@ -162,6 +168,7 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
       const hold = holdPath(one, view.controls.includes(HOLD));
       if (hold !== undefined) asked.hold = hold;
       if (one.shortfall != null) asked.shortfall = one.shortfall;
+      if (one.shipping != null) asked.shipping = one.shipping;
       if (one.steer != null) asked.steer = one.steer;
       return asked;
     },
@@ -176,6 +183,8 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
   repo: view.options.repo ?? null,
   change: view.options.change ?? null,
   parked: view.parked,
+  recovery: view.recovery ?? [],
+  park: view.park ?? null,
   awaiting: view.awaiting,
   usage: view.usage ?? null,
   undriven: view.diagnostic !== null,

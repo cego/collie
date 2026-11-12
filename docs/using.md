@@ -294,7 +294,15 @@ Run ended, `bodil remote down <name>` takes the instance down once you are done 
 4. Where anything was inferred, one row says where the run starts and each Input as
    `name = value (inferred from …)` or `(given)`: Enter starts it, Esc starts nothing. A
    start with nothing inferred starts at once. The run records which Inputs were inferred,
-   and `collie run show` lists each with where it came from.
+   and `collie run show` lists each with where it came from. A workflow with a
+   [Reach](../CONTEXT.md) — how far it goes before it asks, `plan`'s and `implement`'s
+   `then` — offers one such row per choice instead, even with nothing inferred: `plan`
+   **Ask when the plan is written** or **Build it**, `implement` **Ask at the merge
+   request**, **End at the merge request** or **Release it**. The row you start from is
+   remembered for that workflow in that project, or for the Projects root where the start is
+   rooted there, across the Flock, and offered first next
+   time; with nothing remembered the first row asks, as before. Telling chat to start one
+   does the same: it passes how far you said, else the remembered choice.
 5. The run's card appears on the [Control Plane](#the-control-plane).
 6. The run's own tabs hold agents and nothing else: one tab per agent it starts, labelled
    with the agent's role — `implementer`, `reviewer` — in the order they started, each
@@ -302,8 +310,10 @@ Run ended, `bodil remote down <name>` takes the instance down once you are done 
    nothing. The label carries no state: the run's card on the board says what it is doing,
    and herdr's own agent-status column says what each agent is.
 7. `plan`, `architecture`, `review` and `implement` end in a question — **What next?** —
-   answered from the run's card's answer menu, with `collie run answer`, or in chat. Launching asks nothing about it: a
-   question is asked when the run reaches it, so you decide with the work in front of you.
+   answered from the run's card's answer menu, with `collie run answer`, or in chat, unless
+   the start said how far it goes: **Build it** and **End at the merge request** or
+   **Release it** answer it at launch. Otherwise a question is asked when the run reaches
+   it, so you decide with the work in front of you.
    `collie run resume <id>` asks the host to pick a run that is still going back up.
 
 The same operations are available without opening UI, which is how an agent drives Collie:
@@ -606,6 +616,14 @@ Each card carries a strip of its Task's [**Flow**](../CONTEXT.md): the Steps its
 Run has taken and expects, then its merge request's way to production, with each wait drawn
 on the Step it holds up. `collie run show --json` and chat's `collie_run` carry the whole of it.
 
+When a finished Run's pushed branch advances, its card shows the commit count, new head,
+and the head it finished on. A failed record is marked stale; the Run still says failed.
+A succeeded Run can show the same movement. Missing branches, unavailable history, and
+force-pushed or divergent history are named without counting them as forward progress.
+Chat, the CLI, Desktop, and the terminal board read the same facts. The recovery offer
+names where its [implement follow-up enters](workflows.md#implement); taking it reads the
+branch and review evidence again. Sending a message to the old agent starts no follow-up.
+
 It is a board, not an engine: it draws the Runs the host holds, the register of live agents
 and the steering journals, so closing it loses nothing — the host starts it again. The run
 itself is executed by the host, which has no pane at all.
@@ -631,11 +649,19 @@ matches a checkout runs there; one that matches none is cloned, as before.
 It is an application ([ADR-0005](adr/0005-collie-tab-is-an-application.md)), and it is a
 **board of Tasks, not a table of Runs**
 ([ADR-0013](adr/0013-the-board-is-cards-of-tasks.md)): one card per
-[Task](../CONTEXT.md), whatever Runs that Task took. A header sentence, then four sections
-that answer four questions in order — what needs you, what is waiting on you, what is
-working, what finished. A decision beats liveness, liveness beats history, and history is
+[Task](../CONTEXT.md), whatever Runs that Task took. A header sentence, then five sections:
+**Needs you**, **Ready to ship**, **Waiting on you**, **Working**, and **Finished**. A decision beats liveness, liveness beats history, and history is
 split by whether the work **landed**. The order is the board model's own, and the text
 board and chat's `collie_herd` list the sections the same way.
+
+**Ready to ship** holds work whose next shipping action has every gate satisfied at its
+current head, on forge answers read within two merge-watch rounds. The card names
+**Merge**, **Stage** or **Deploy**. Merge invokes the existing Release offer, whose Run
+still asks its own Go. A declared Go uses the existing answer buttons. The host checks
+Merge and Stage from an MR against Ready to release, and Deploy against its recorded
+stage proof for that head or tag. A stale answer, moved head or failed gate takes it out;
+a Go that no longer holds appears in Needs you and says why. A Stage Run asks no Go.
+Entering Ready to ship raises no notification. Cards here show the most recent change first.
 
 **Needs you** is one card per Task that has stopped for you: an open decision you answer
 on the card, or an agent waiting for you in its own pane — a harness dialog herdr will not
@@ -658,7 +684,24 @@ teammate's approval, review threads resolved, its turn in a Helle claim's queue,
 carrying a deploy: it stays under Working and says what it waits for and on whom
 (`Waiting for CI and a teammate's approval on group/app!345.`), with no notification and
 nothing in News. Once such a wait outlasts its patience — 2 hours where nobody acts, 2 days
-where a person does — it parks, and the card goes to Needs you. While Collie runs
+where a person does — it parks, and the card goes to Needs you. A parked card carries one
+more line naming its [**Park cause**](../CONTEXT.md) and what that cause lets Collie do —
+`Parked: ci-job-absent · Collie rechecks`, or `· needs you` — and the drawer's **parked**
+section adds why a person is needed; `collie run show` gives the same as `park` with its
+`cause` and `kind`. Recheck parks stay quiet while Collie checks their facts and resumes
+those whose cause clears. After three automatic tries for the same cause, another park
+needs you and lists the tries. Before a park tells you it needs you, the host first starts
+one **Heal**, a Run of the [`heal`](workflows.md#heal) workflow whose agent may only message
+the parked Run's own agents and resume it. While it runs the line reads
+`Parked: output-absent · being healed by run-1a2b3c4d` and nobody is notified; you hear once,
+`run-healed` when it got the Run moving, or `needs-you` with its diagnosis, what it tried and
+why a person is needed when it could not. A Run with a Decision, Hold or Stop, a cause only a
+person can act on such as a missing login, and a Heal's own park go to you at once.
+`collie settings set recovery.heal false` sends every such park to you at once. A card keeps its latest two recovery actions, and the drawer's
+**recovery** section keeps the latest 20, including after the Run moves on. A park that needs
+you is notified once per cause. You can turn automatic resume off with
+`collie settings set recovery.resume false`; rechecks continue. See
+[Stop and resume](cli.md#stop-and-resume) for the rechecks and their limits. While Collie runs
 one of the Run's checks itself, the sentence is about that check rather than the last step:
 which check, which pass and why, how long it has run against the median of its last five
 runs in this repository, and how many other checks this host is running —
@@ -674,7 +717,7 @@ following it live (`collie run checks <run> --follow`) until the check ends. A f
 ([ADR-0041](adr/0041-a-finished-run-still-takes-steering.md)): while herdr says that agent
 is working, its card is in Working with `Working on what you told builder: “merge and tag
 it”.`; while it is blocked, the card is in Needs you naming its pane; once it is idle, the
-card stands on its own facts again — Ready to release, Waiting on you or Finished — and
+card stands on its own facts again — Ready to ship, Waiting on you or Finished — and
 chat is told once that it finished what it was told. Nothing records it: the delivery
 ledger says what was sent and when, herdr says what the agent is doing, the step glyphs
 still show the Workflow's steps as they ended, and `run show` still says `succeeded`. A
@@ -682,12 +725,22 @@ Run can be Reopened only until its agents close, an hour after it finished by de
 ([Cleanup](#cleanup)). **Waiting on you** is work that ended without landing, and that nobody has
 asked you about: an implement that succeeded and whose merge request is open, a plan that
 is ready to implement, a Run that failed, was stopped or was abandoned with a branch or a
-merge request behind it and has neither been resumed nor disposed of. An implement whose
+merge request behind it and has neither been resumed nor disposed of. A Task stays here
+while it owes a merge request, whatever an earlier Run of it carries: a `superseded` line
+on a predecessor hands that Run's work to its successor, and a successor in the same Task
+still owes the same merge request, so the card names it and what it lacks rather than
+"Superseded by" its own Run. Finishing a Run (`then=finish`, the end menu's Finish, or
+acknowledging its report) does not settle what it owes. An implement whose
 merge request is open says what checked it, from Collie's own checks counted only at the
 revision its branch is at now in its checkout (where that cannot be read, the newest
 revision Collie checked): `cego/collie!65 is open, but lint failed at 1a2b3c4. Next: fix
-lint, or tell builder to.`, or `cego/collie!65 is open; nothing has checked it.` Where
-every check passed it is **Ready to release**, leads the section, and says so: `Ready to
+lint, or tell builder to.`, or `cego/collie!65 is open; nothing has checked it.` Once the
+forge's last answer is more than two merge-watch rounds old, the card adds when it was:
+`GitLab last answered 11 minutes ago.`, and where the last ask failed, `GitLab could not be
+read; it last answered 6 minutes ago.` A `merged` recorded by hand is outranked by the forge
+reading the merge request open after it, and the card is owed again. Where
+every gate holds on fresh evidence at its head, it is **Ready to release** and moves
+to **Ready to ship** with Merge. Its sentence says: `Ready to
 release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: merge it, or tell
 builder to.` The agent is named only while it is alive. A GitHub pull request reads as
 `owner/repo#30`, a GitLab merge request as `group/project!42`. A Run that ended with
@@ -697,13 +750,19 @@ action that ends its wait — Open MR (Open PR for a pull request), Resume, Mark
 the first offer its workflow declares, under the title it gave it (the shipped plan's is
 **Implement now**, refused with how to build it for a plan that spans repositories; a plan
 that declares none gets no button) — with Mark merged and Mark
-abandoned beside it in the menu. After what is ready to release, the newest ending is at the top; anything
+abandoned beside it in the menu. Within Waiting on you, the newest ending is at the top; anything
 older than a week folds into one counted line, `▸ 9 older than a week`, and the header
 counts the week's endings while the fold counts the rest. **Finished** is work that landed
-— a disposition was recorded, the Run succeeded at a workflow that produces nothing to
-land, such as a review, or it ended with nothing to file — as one line, `3 finished today,
+— everything it owes is settled: each merge request merged on its forge, recorded merged,
+abandoned, or superseded while closed or by a Run of another Task; a plan with a
+disposition; or nothing to file at all — as one line, `3 finished today,
 1 failed`, until you click it open; anything older than a day is behind `older…`, which
 reads it from this checkout's history rather than carding every Run Collie has ever kept.
+The day counts from when the Task's Runs last worked: opening a record, or recording what
+became of the work, is not work, so a month-old Task marked abandoned today goes straight
+behind `older…`.
+Only landed work goes behind `older…`: a Task that still owes a merge request stays on the
+board however old it is.
 An **Unseen** card — a Run that ended by itself with a report and nothing to land, which
 nobody has opened since — is drawn above that line, marked `● unseen`, and still counted in
 it, however old: it does not go behind `older…` until it is seen. Its sentence states how the Run ended and then quotes the report as the Run's own:
@@ -714,8 +773,8 @@ behind the line.
 A Task whose Runs opened or were given several merge requests — a fan-out across
 repositories, or a Follow-up Run that opened its own — lists each on its card, by wave, with
 its own state, checks and head. Each is judged Ready to release at its own head, and the
-Task is when any one of them is. It has landed only once each is merged, abandoned or
-superseded and none of its Runs is still going. Its sentence says where each stands:
+Task is when any one of them is. It has landed only once each is settled, judged by itself,
+and none of its Runs is still going. Its sentence says where each stands:
 `1 of 3 merged; app!12 ready to release; api!7 waits on app!12.` A merge request waits on
 another of the Task's when the forge says it targets that one's source branch. One closed
 without merging that nobody has disposed of keeps the Task waiting on you, by name:
@@ -723,8 +782,10 @@ without merging that nobody has disposed of keeps the Task waiting on you, by na
 
 Collie learns a merge by itself, whether or not a pane is open: the host asks the merge
 request's own forge, through that forge's adapter — GitLab with `glab`, GitHub with `gh` —
-about each of a Task's merge requests every 5 minutes, whatever section its card is in, so a
-merge while a Run is busy or parked is noticed too; one
+about each of a Task's merge requests every 5 minutes, whatever section its card is in and
+whatever its Runs' Dispositions say, so a merge while a Run is busy or parked is noticed
+too, and a closed one that is reopened is owed again; only one settled by `abandoned` is not
+asked about. A forge that cannot be read changes nothing the board says. One
 that merged gets its `merged` disposition recorded as that forge's word and its card moves
 to Finished. Each branch of a Task's Runs on which none recorded a merge request takes the
 one opened from it, even where another Change run's is already recorded, whoever opened it — you on the forge, or a builder you told to in its pane — and
@@ -913,7 +974,7 @@ Every action says what it did in one line at the foot of the board, which goes w
 anything else.
 
 A pane with no terminal, a dumb `TERM` or one too narrow to render in prints the
-one-screen text view instead, with one line saying why: the same three sections, with the
+one-screen text view instead, with one line saying why: the same five sections, with the
 same sentence on every line.
 
 ```sh
@@ -1073,7 +1134,7 @@ and the keys are shortcuts for what is already on screen. There is no footer of 
 | Key   | What it does                                                  |
 | ----- | ------------------------------------------------------------- |
 | `Tab` | Move the keyboard on: the board, the record over it, then `≡` |
-| `/`   | Search, and narrow all three sections as you type             |
+| `/`   | Search, and narrow all five sections as you type              |
 | `Esc` | Close the record; with none open, clear the search            |
 | `m`   | Read another page of a review or plan the record cut short    |
 | `r`   | Re-read what is on screen, and the merge request behind it    |
@@ -2649,9 +2710,8 @@ every Run are untouched, and Collie does not quietly open the other one instead.
 
 **Collie also speaks first.** When a run ends or blocks, asks you something, drifts from
 its Intent past what Collie may correct, starts repeating itself, or claims to be finished
-without being able to show it, Collie writes that down as news. A Run whose card becomes
-Ready to release is one item, keyed by the Run and the revision its checks passed at and
-saying the card's sentence; a Run ready when it ends is not also reported as ended. Turn it off with
+without being able to show it, Collie writes that down as news. Moving a card into
+Ready to ship adds no news item. Turn it off with
 `"proactive": false` in `config.json`.
 
 What it does **not** do is call a model to find that out. The host looks at each Herd's
@@ -2856,9 +2916,11 @@ directory that is not a checkout of it, will review and comment fine, but chaini
 **Fix findings** is refused the same way, with the menu back. Clone that project and start
 the fix round from there.
 
-A step pointed at a merge request needs its forge's CLI logged in to its host: `glab` and
-`glab auth status --hostname <host>` on GitLab, `gh` and `gh auth status --hostname
-github.com` on GitHub. In a directory that is not a checkout there is no branch and no
+A step pointed at a merge request needs its forge's CLI installed (`glab` on GitLab, `gh` on
+GitHub) and a login its host accepts: Collie asks the forge who the CLI's token belongs to.
+No token, a 401, or a 403 saying "Bad credentials" parks the Run as `login-missing`, for you to log in again; a forge that
+cannot be reached or fails to answer parks it as `forge-unavailable`, which clears by
+itself. In a directory that is not a checkout there is no branch and no
 working tree to review, so the target menu is one entry — **Type it…**.
 
 ## Releasing a merge request
@@ -3079,7 +3141,8 @@ holds or delays work: only an agent that may still be writing does.
 `notifications` turns a kind of toast off: `{"run-done": false}`, and a kind left out is on.
 The host raises one when a run finishes (`run-done`), fails (`run-failed`), asks you
 something or parks until you act (`needs-you`, as where an agent's Output could not be used
-after its repair), or records a merge request it opened
+after its repair), gets a parked run moving through a Heal before it needed you
+(`run-healed`), or records a merge request it opened
 (`mr-opened`); when a card is something you could go and try (`slice-ready`); and when
 Collie corrects a run's drift by itself (`correction-sent`) or gives up on it
 (`drift-unresolved`) — each once per run and thing, however often the work is replayed or
@@ -3694,12 +3757,20 @@ triage is told: a Collie fix counts as already fixed only where its commit is in
 release's tag, so a fix merged but not yet installed leaves the finding filed or commented
 on as a recurrence.
 
-It waits for its Improvements, then writes `summary.md` in its Run directory: each issue
-filed or commented, by category; each Improvement's Run and how it ended; and each finding
+It measures the questions its window's Runs asked, computed from the report rather than
+judged by the agent: how many were asked per merge request that landed in the window, and
+how many implement Runs reached a merge request without failing, of those that reached one
+or ended. A class of question — one workflow's question by its name, however many times a
+Run numbers it — answered the same at least nine times in ten over at least ten answers is
+a `defect` finding, `repeated-answer-<workflow>-<question>`: Collie asks what it already
+knows. Like any `defect`, it is filed only with `runs=machine`.
+
+It waits for its Improvements, then writes `summary.md` in its Run directory: those two
+question measures; each issue filed or commented, by category; each Improvement's Run and how it ended; and each finding
 left out, with why. An Improvement that fails is listed there, and the Run still succeeds.
 Beside it, `improvements.json` keeps each Improvement's name, issues and how it ended.
-When the forge cannot be read, the retrospective still runs and `summary.md` keeps its
-findings, evidence and proposed improvements, with the reason nothing was filed. No issue,
+When the forge cannot be read, the retrospective still runs and `summary.md` keeps the
+question measures, its findings, evidence and proposed improvements, with the reason nothing was filed. No issue,
 comment or Improvement is started on that path.
 
 An Improvement that failed to start, because its issues could not be read back, is started

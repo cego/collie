@@ -4,7 +4,18 @@
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { Clock, Effect, FileSystem, Path, Queue, Result, Schema, Stream, flow } from "effect";
+import {
+  Clock,
+  Effect,
+  FileSystem,
+  Path,
+  Queue,
+  Result,
+  Schema,
+  Stream,
+  Struct,
+  flow,
+} from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type {
   MrPanel,
@@ -256,10 +267,14 @@ export const recordFrames = (
         });
         const detail: RunDetail = Object.assign({}, base.detail, ...filled);
         if (!parted) {
+          const compatible =
+            key.parts === undefined && key.held === undefined
+              ? Struct.omit(detail, ["park", "recovery"])
+              : detail;
           const now = yield* Clock.currentTimeMillis;
-          return detail.flow === undefined
-            ? detail
-            : { ...detail, flow: timedFlow(detail.flow, now) };
+          return compatible.flow === undefined
+            ? compatible
+            : { ...compatible, flow: timedFlow(compatible.flow, now) };
         }
         return {
           ...detail,

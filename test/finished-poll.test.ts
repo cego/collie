@@ -7,7 +7,7 @@ import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
-import { Effect, FileSystem, Layer, Schema, type Scope } from "effect";
+import { Effect, FileSystem, Layer, Queue, Schema, type Scope } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { fastForward, runEffect as runLive } from "./support/effect";
@@ -30,6 +30,7 @@ import { writeTask } from "../src/task";
 import { socketOf } from "../src/host";
 import { reportsLayer } from "../src/reports";
 import { DEFAULT_AUTHORITY, IntentSchema } from "../src/intent";
+import type { Peer } from "../src/peers-model";
 
 const ROOT = new URL("../", import.meta.url).pathname;
 
@@ -382,7 +383,13 @@ const sweeping = Effect.gen(function* () {
   const registry = yield* Registry;
   yield* write(socketOf(dir()), "");
   yield* Layer.build(
-    reportsLayer({ env: env(), installation: "this-machine", stamp: "test" }).pipe(
+    reportsLayer({
+      env: env(),
+      installation: "this-machine",
+      stamp: "test",
+      linked: yield* Queue.unbounded<Peer>(),
+      live: () => Effect.succeed(false),
+    }).pipe(
       Layer.provide(
         Layer.succeed(Registry)({
           ...registry,

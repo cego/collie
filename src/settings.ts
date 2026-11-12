@@ -11,6 +11,7 @@ import { NOTIFICATION_KINDS } from "./notify";
 import { parseProfile } from "./profile";
 import { parseSubagents } from "./subagents";
 import { isString } from "./schema";
+import { isReachKey } from "./reach";
 
 /**
  * What the Control Plane's Runs view is a board of: `local` is this Session's own
@@ -240,6 +241,7 @@ const NOTIFICATION_WORDS = {
   "needs-you": ["A Run needs you", "a Run stops to ask you something"],
   "run-done": ["A Run finished", "a Run finishes well"],
   "run-failed": ["A Run failed", "a Run fails"],
+  "run-healed": ["A Run was healed", "a Heal gets a parked Run moving before it needs you"],
   "mr-opened": [
     "A merge request or pull request opened",
     "a Run opens a merge request or pull request",
@@ -370,6 +372,18 @@ export const SETTINGS: ReadonlyArray<Setting> = [
       "While available memory is under this percent of the Machine's total, or memory pressure is high, a new agent, Check pass or collie verify waits. 0 never holds, and turns the pressure rule off too.",
     unit: "percent",
   }),
+  of("recovery.resume", "boolean", "true", {
+    group: "Runs",
+    label: "Resume cleared parks",
+    description:
+      "Whether the host resumes a parked Run once its read-only recheck clears. Off still records rechecks.",
+  }),
+  of("recovery.heal", "boolean", "true", {
+    group: "Runs",
+    label: "Heal parks before they need you",
+    description:
+      "Whether a park that needs you first gets one Heal: a Run of the healer workflow that may only message the parked Run's agents and resume it. Off sends the park to you at once.",
+  }),
   of("release.share_for_approval", "boolean", "false", {
     group: "Runs",
     label: "Ask before sharing a merge request for approval",
@@ -479,8 +493,17 @@ export function autoCompactWindowOf(
       };
 }
 
+const reachSetting = (key: string): Setting =>
+  of(key, "text", "", {
+    group: "Runs",
+    label: "How far a launch goes",
+    description:
+      "What the last launch of this workflow in this project chose; the next offers it first.",
+  });
+
 export const settingOf = (key: string) =>
-  Option.getOrUndefined(Arr.findFirst(SETTINGS, (setting) => setting.key === key));
+  Option.getOrUndefined(Arr.findFirst(SETTINGS, (setting) => setting.key === key)) ??
+  (isReachKey(key) ? reachSetting(key) : undefined);
 
 /**
  * What was typed, as the value written; `null` unsets it. Trimmed, and empty is unset:

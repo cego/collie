@@ -506,6 +506,16 @@ refused because a finished Run asks nothing; `update_intent` and `clear_override
 they do on a running Run; `stop` closes its live agents' panes and leaves the status as it
 was; `hold`, `release` and `set_verification` are refused with what to do instead.
 
+The sender's answer and the agent's delivered message name the Run's terminal status.
+They say that no Step reads the turn's Output and name the available follow-up offer,
+or a new Run on its branch where no follow-up is available. The delivery receipt keeps
+this explanation alongside its delivery state, including `acknowledged`.
+A delivery does not recover the Workflow: a new Output leaves its status and Step history
+unchanged and starts no successor. Use the named follow-up to begin new workflow work;
+`run resume` cannot reopen a finished Workflow. Going and parked Runs get no finished notice.
+The human chose this scope in
+[ADR-draft-a-finished-delivery-names-the-way-back-to-work](adr/draft-a-finished-delivery-names-the-way-back-to-work.md).
+
 A `deliver` whose agent's pane is gone fails and names the route that carries the request
 on. Where its outcome needs more work, or its agent is gone, carrying on is one of the
 run's own offers ([CLI](cli.md#carry-on-from-a-finished-run)) — a child run of the

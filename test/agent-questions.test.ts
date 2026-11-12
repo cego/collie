@@ -10,7 +10,7 @@ import { pipe as pipe_ } from "effect/Function";
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema, flow, Result } from "effect";
-import { connect } from "../src/host";
+import { connect, ownerOf } from "../src/host";
 import { readEnv } from "../src/env";
 import { resetExecutors } from "../src/executors";
 import { isSettled } from "../src/lifecycle";
@@ -495,8 +495,10 @@ test(
       (world) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          const { client } = yield* hostedOver(world, [null]);
-          const { runId, dir } = yield* launchedRun(world, client);
+          const { client: previous } = yield* hostedOver(world, [null]);
+          const { runId, dir } = yield* launchedRun(world, previous);
+          yield* stopHost(world.state);
+          expect(yield* ownerOf(world.state)).toBeNull();
           const db = new Database(`${world.state}/host.db`);
           db.run(
             `INSERT INTO collie_decisions (run, decision, prompt, options, asked, asker)
@@ -504,6 +506,7 @@ test(
             [runId, "2026-01-01T00:00:00.000Z"],
           );
           db.close();
+          const client = yield* connect(world.state).pipe(Effect.orDie);
           yield* recordClaudeEvent(
             dir,
             asking("toolu_1", [

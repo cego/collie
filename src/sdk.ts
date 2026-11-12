@@ -35,7 +35,7 @@ import {
   SchemaRepresentation,
   flow,
 } from "effect";
-import type { CheckEvidence } from "./output";
+import type { CheckEvidence, SynthesisSchema } from "./output";
 import type { FailedTest, Snapshot, Verification } from "./verify";
 import type { Issue, IssueRef } from "./forge/issues";
 export type { Issue, IssueRef } from "./forge/issues";
@@ -44,6 +44,7 @@ export type { Report } from "./report";
 export type { Produces, StepKind, StepMeta } from "./steps";
 import type { VerifySpec } from "./verify-spec";
 import type { CiJob } from "./ci-job";
+import type { ParkCause } from "./park-cause";
 import type { PipelineStart } from "./forge/forge";
 import type { ChildProcessSpawner } from "effect/process";
 import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
@@ -67,6 +68,8 @@ import {
   type Outcome,
 } from "./outcome";
 import type { Source } from "./offers";
+import { ShippingGo } from "./shipping";
+export type { ShippingGo } from "./shipping";
 import {
   CurrentStep,
   runKey,
@@ -78,10 +81,13 @@ import {
 } from "./steps";
 import type { Asker } from "./proposals";
 import type { UsageReading } from "./usage-model";
+import { Recovery, ReviewScope } from "./recovery";
+export { Recovery, ReviewScope } from "./recovery";
 import type { Integration } from "./integrate";
 import type { BenchmarkPlan, Measurement } from "./measurement-model";
 import type { MergeOutcome, Takeover } from "./landing";
 import type { ReviewHead, ReviewStanding } from "./review-wait";
+import type { PrerequisiteStanding } from "./prerequisites";
 import type {
   FastForward,
   MergeRequestRead,
@@ -104,6 +110,7 @@ export { SOURCES, SOURCE_NAMES, isSource, type Source } from "./offers";
  * arguments that point a command at its project from anywhere.
  */
 export { targetKind } from "./mr";
+export { ParkCause } from "./park-cause";
 export { repoArgs } from "./forge/gitlab";
 export { mrForgeFacts } from "./forge/forge";
 /** How much of a Subscription is used, as the host reads it (ADR-0049). */
@@ -122,7 +129,11 @@ export {
   type Calibration,
   type Measurement,
 } from "./measurement-model";
+/** The harness commits a tree lacks, decided by content (`carryHarness`, the base tree). */
+export { harnessLacking } from "./harness-held";
 export { MergeOutcomeSchema, TakeoverSchema, type MergeOutcome, type Takeover } from "./landing";
+/** Whether the Changes a ticket needs merged have landed (`HostApi.awaitPrerequisites`). */
+export { PrerequisiteStandingSchema, type PrerequisiteStanding } from "./prerequisites";
 /** Where a merge request's review stands for a Release Run (`HostApi.awaitReview`). */
 export {
   AnswerSchema,
@@ -611,6 +622,8 @@ export interface Declarations {
    */
   readonly checkout?: "branch" | "roaming";
   readonly closes?: "reported";
+  /** The healer: what the host starts for a park its own recovery could not clear. */
+  readonly heals?: true;
   readonly followUps?: ReadonlyArray<FollowUp>;
   readonly actions?: ReadonlyArray<ActionProvider>;
 }
@@ -733,6 +746,23 @@ const SingleClaim = Schema.NullOr(Schema.Struct({ slug: Schema.String })).pipe(
 export const ClaimedSchema = Schema.Union([Holding, SingleClaim]);
 
 export interface HostApi {
+  readonly reviewScope: (
+    runId: string,
+    source: string,
+    outcome: string,
+    risks: string,
+  ) => Effect.Effect<ReviewScope | null>;
+  readonly recordReview: (
+    runId: string,
+    scope: ReviewScope | null,
+    base: string,
+    review: typeof SynthesisSchema.Type,
+  ) => Effect.Effect<void>;
+  readonly recovery: (
+    runId: string,
+    parent: string,
+    source: string,
+  ) => Effect.Effect<Recovery, WorkflowError>;
   readonly dir: string;
   /** The Collie release this host runs, as its tag names it. */
   readonly build: string;
@@ -815,9 +845,9 @@ export interface HostApi {
   readonly step: (runId: string, note: StepNote) => Effect.Effect<void>;
   /**
    * Why this Run has parked its own work and what picks it up again, shown beside its
-   * status; null says it no longer has.
+   * status; null says it no longer has. A park naming no cause is recorded as `unknown`.
    */
-  readonly parked: (runId: string, why: string | null) => Effect.Effect<void>;
+  readonly parked: (runId: string, why: string | null, cause?: ParkCause) => Effect.Effect<void>;
   /**
    * Records the question this run is waiting on, so the host can say what may answer it.
    * `asker` is the operation whose agent asked it, which the workflow is not woken for.
@@ -1088,6 +1118,28 @@ export interface HostApi {
     readonly whileConflicting?: boolean;
   }) => Effect.Effect<ReviewStanding, WorkflowError>;
   /**
+   * One read of whether the Changes the ticket at `ticket` names on its `**Needs merged:**`
+   * line have landed: merged, with the merge commit on origin's default branch as fetched in
+   * `cwd`. `Landed` where every one has, or none is named; `Waiting` with the card's line
+   * otherwise; `Never` where one never can, saying why. Take it inside an Activity.
+   */
+  readonly prerequisites: (options: {
+    readonly runId: string;
+    readonly cwd: string;
+    readonly ticket: string;
+  }) => Effect.Effect<PrerequisiteStanding, WorkflowError>;
+  /**
+   * Reads the ticket's Prerequisites every 5 minutes, spending no model tokens, until they
+   * are `Landed`, one is `Never`, or a Hold or Stop ends the wait (`Held`). Meanwhile the card
+   * reads "Waiting for <run>'s <change> to merge.", with a person's 2-day patience, cleared
+   * when it returns. Take it inside an Activity, and suspend the Run on `Held` there.
+   */
+  readonly awaitPrerequisites: (options: {
+    readonly runId: string;
+    readonly cwd: string;
+    readonly ticket: string;
+  }) => Effect.Effect<PrerequisiteStanding, WorkflowError>;
+  /**
    * Replies to the comment with id `comment` on the merge request this Run recorded, posting
    * `body` with a last line naming the Run and its Machine, in the comment's thread where it
    * has one. Never resolves a thread. A comment already answered, as after a restart that
@@ -1186,6 +1238,8 @@ export interface HostApi {
   readonly readMergeRequest: (options: {
     readonly cwd: string;
     readonly mr: string;
+    /** Locate a foreign repository's checkout under the Projects root for a child Run. */
+    readonly checkout?: boolean;
   }) => Effect.Effect<MergeRequestRead>;
   /**
    * Whether the forge shows stage rolled back: the newest successful deployment of each of
@@ -1280,6 +1334,7 @@ export type ReviewedBranch = { readonly branch: string } | { readonly refused: s
 /** What opening a merge request from here needs, and what it would be filled in with. */
 export interface MrReady {
   readonly ok: boolean;
+  readonly cause?: ParkCause;
   /** The checkout's forge; absent on a host that only supports GitLab. */
   readonly provider?: "gitlab" | "github";
   /** The repository's path on its forge — `owner/repo` or `group/project` — for `--repo`. */
@@ -1342,6 +1397,7 @@ export interface DecisionSpec {
   readonly options: ReadonlyArray<string | Solution>;
   /** What keeps it short of standard, flagged wherever it is shown. */
   readonly shortfall?: string;
+  readonly shipping?: ShippingGo;
 }
 
 /** One answer an `ask` takes: a bare string is its id and title. */
@@ -1368,6 +1424,7 @@ export const ask = (question: {
   /** Its identity: the same name is the same question, however often the work replays. */
   readonly name: string;
   readonly prompt?: string;
+  readonly shipping?: ShippingGo;
   /**
    * The answers it takes, exactly one of them recommended; none is a question answered in
    * the operator's own words.
@@ -1375,6 +1432,10 @@ export const ask = (question: {
   readonly options?: ReadonlyArray<AskOption>;
 }): Effect.Effect<string, never, Run | Host | WorkflowEngine | WorkflowInstance> =>
   Effect.gen(function* () {
+    const shipping =
+      question.shipping === undefined
+        ? undefined
+        : yield* Schema.decodeEffect(ShippingGo)(question.shipping).pipe(Effect.orDie);
     const host = yield* Host;
     const runId = (yield* Run).id;
     const at = yield* CurrentStep;
@@ -1397,6 +1458,7 @@ export const ask = (question: {
       prompt: question.prompt ?? question.name,
       options: shortfall === null ? solutions : Arr.map(solutions, Struct.omit(["recommended"])),
       shortfall: shortfall ?? undefined,
+      shipping,
     });
     return yield* DurableDeferred.await(
       DurableDeferred.make(question.name, { success: Schema.String }),
@@ -1673,6 +1735,7 @@ export interface WorkflowMetadata {
    */
   readonly checkout?: typeof DeclaredCheckout.Type;
   readonly closes?: "reported";
+  readonly heals?: true;
   readonly followUps?: ReadonlyArray<FollowUp>;
   readonly actions?: ReadonlyArray<ActionProvider>;
   readonly path?: ReadonlyArray<StepMeta>;
@@ -1691,6 +1754,7 @@ export interface OutcomeContract {
 
 /** What a finished Run offers next, named by the public id of the workflow it starts. */
 export interface FollowUp {
+  readonly entry?: (facts: ActionFacts) => string;
   readonly connections?: ReadonlyArray<ConnectionId>;
   readonly id: string;
   readonly title: string;
@@ -1707,6 +1771,7 @@ export interface FollowUp {
  * user-authored workflow offers what its own results earn, exactly as a shipped one does.
  */
 export interface ActionFacts {
+  readonly recovery?: Recovery;
   readonly outcome: Outcome;
   readonly succeeded: boolean;
   readonly branch: string | null;
@@ -1797,6 +1862,7 @@ const DeclaredMetadata = Schema.Struct({
   ),
   hints: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   closes: Schema.optionalKey(Schema.Literal("reported")),
+  heals: Schema.optionalKey(Schema.Literal(true)),
   outcome: Schema.optionalKey(
     Schema.Struct({
       fixed: Schema.optionalKey(Schema.String),
@@ -1809,6 +1875,7 @@ const DeclaredMetadata = Schema.Struct({
         ...OfferFields,
         when: Schema.Literals(["succeeded", "failed", "always"]),
         eligible: Schema.optionalKey(Callable),
+        entry: Schema.optionalKey(Callable),
       }),
     ),
   ),

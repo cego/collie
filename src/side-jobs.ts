@@ -1,6 +1,7 @@
 // What the host does on its own, whether or not anyone is looking: the merge watch, each
 // Herd's News, the cleanup sweep, and the board and chat terminals kept running.
 
+import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Clock, Effect, FileSystem, Schedule, Stream, type Duration } from "effect";
@@ -75,7 +76,10 @@ const sayWhatHappened = Effect.fn("SideJobs.sayWhatHappened")(function* (
     }).pipe(Effect.catchCause(() => Effect.succeed(null)));
     if (queued !== null) yield* remember(dir, event.key, yield* nowIso);
   }
-  yield* supersede(file, (item) => held.has(item.key));
+  yield* supersede(
+    file,
+    (item) => Str.startsWith("recovery-failing:")(item.key) || held.has(item.key),
+  );
 });
 
 /** The finished Runs whose work has a disposition, or that someone has seen. */

@@ -106,6 +106,7 @@ export const DeliverySchema = Schema.Struct({
   /** herdr's own code for a refusal it answered with. */
   code: Schema.optionalKey(Schema.String),
   note: Schema.optionalKey(Schema.String),
+  workflowNotice: Schema.optionalKey(Schema.String),
   /** Where its words are a human's, whose: a host that dies before acting on it still can. */
   human: Schema.optionalKey(HumanDoorSchema),
 });

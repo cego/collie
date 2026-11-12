@@ -591,6 +591,7 @@ export const workspace = Effect.fn("HostTest.workspace")(function* (prefix: stri
     "release.workflow.ts",
     "release.gitlab.md",
     "release.github.md",
+    "release-go.ts",
     "stage.workflow.ts",
     "stage.gitlab.md",
     "stage.github.md",
@@ -602,6 +603,8 @@ export const workspace = Effect.fn("HostTest.workspace")(function* (prefix: stri
     "reviewing.ts",
     "delivering.ts",
     "connections.ts",
+    "measuring.ts",
+    "measuring.md",
   ]) {
     yield* fs.copyFile(`${root}workflows/${name}`, `${world.user}/${name}`);
   }

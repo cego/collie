@@ -24,6 +24,7 @@ import { FORGES, forgeOf, forgeOfHost, type Forge } from "./forge/forge";
 import type { ForgeHttp } from "./forge/http";
 import type { MrReady, Posted } from "./sdk";
 import { waitingForIO } from "./foreground";
+import type { ParkCause } from "./park-cause";
 
 /** Variables a command gets on top of this process's environment. */
 export type RunnerEnv = Record<string, string | Redacted.Redacted<string>>;
@@ -203,7 +204,10 @@ export function shell(
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const command = ChildProcess.make(cmd, args, {
       cwd,
-      env,
+      // A status that refreshes the index holds `index.lock` while it writes, and a commit an
+      // agent makes in that moment is refused. Git's optional locks are for the one working
+      // in a checkout, never for a reader beside it.
+      env: cmd === "git" ? { GIT_OPTIONAL_LOCKS: "0", ...env } : env,
       stdout: "pipe",
       stderr: "pipe",
       // extendEnv, so git and glab inherit this process's environment and find their
@@ -398,13 +402,10 @@ export function prepareMergeRequest<R>(
   run: Runner<R>,
 ): Effect.Effect<MrReady, PlatformError, FileSystem.FileSystem | Path.Path | R | ForgeHttp> {
   return Effect.gen(function* () {
-    const unavailable = (reason: string): MrReady => ({
-      ok: false,
-      reason,
-      assignee: "",
-      template: "",
-      issues: [],
-    });
+    const unavailable = (reason: string, cause?: ParkCause): MrReady => {
+      const result = { ok: false, reason, assignee: "", template: "", issues: [] };
+      return cause === undefined ? result : { ...result, cause };
+    };
     const ref = opts.target === undefined ? null : parseMrTarget(opts.target);
     const here =
       ref?.project != null
@@ -415,7 +416,7 @@ export function prepareMergeRequest<R>(
       return unavailable(`${opts.target} is a GitLab target, but this checkout is on GitHub`);
     const { forge, project } = here;
     const ready = yield* forge.ready(project, opts.cwd, run);
-    if (!ready.ok) return unavailable(ready.reason);
+    if (!ready.ok) return unavailable(ready.reason, ready.cause);
     const assignee = yield* resolveAssignee(
       opts.cwd,
       opts.assignees?.[forge.name],
@@ -424,7 +425,7 @@ export function prepareMergeRequest<R>(
       project,
     );
     if (assignee === null && forge.name === "github")
-      return unavailable("gh did not report a GitHub login");
+      return unavailable("gh did not report a GitHub login", "forge-unavailable");
     const branch = Str.trim(
       (yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], opts.cwd)).stdout,
     );
@@ -433,7 +434,7 @@ export function prepareMergeRequest<R>(
       branch === "HEAD" || branch === ""
         ? { ok: true as const, open: null }
         : yield* forge.forBranch(project, branch, opts.cwd, run);
-    if (!found.ok) return unavailable(found.reason);
+    if (!found.ok) return unavailable(found.reason, "forge-unavailable");
     const work = {
       cwd: opts.cwd,
       inputs: { source: opts.source?.value ?? "", source_kind: opts.source?.kind ?? "" },

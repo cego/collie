@@ -9,6 +9,7 @@ import {
   type KeyFacts,
   keyAction,
   recordTiming,
+  recoveryOf,
   landingOf,
   logPlaceOf,
   logScrollTop,
@@ -36,6 +37,30 @@ const everything: TabFacts = {
   terminal: true,
   mr: "MR !12",
 };
+
+test("a Desktop card names its park and keeps the latest two recovery actions", () => {
+  expect(
+    recoveryOf(
+      {
+        park: { cause: "ci-job-absent", kind: "rechecks" },
+        recovery: ["first", "second", "third"],
+      },
+      2,
+    ),
+  ).toEqual({ park: "Parked: ci-job-absent · Collie rechecks", history: ["second", "third"] });
+});
+
+test("a Desktop record keeps recovery history after the park clears", () => {
+  expect(recoveryOf({ park: null, recovery: ["rechecked cleared", "resumed resumed"] })).toEqual({
+    park: null,
+    history: ["rechecked cleared", "resumed resumed"],
+  });
+  expect(recoveryOf({ park: { cause: "login-missing", kind: "needs-you" } })).toEqual({
+    park: "Parked: login-missing · needs you",
+    history: [],
+  });
+  expect(recoveryOf({})).toEqual({ park: null, history: [] });
+});
 
 const values = (facts: Partial<TabFacts>) =>
   Arr.map(recordTabs({ ...everything, ...facts }), ({ value }) => value);

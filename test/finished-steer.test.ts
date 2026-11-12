@@ -25,6 +25,7 @@ import { appendLine, readLedger } from "../src/steering";
 import { deliveredTo, recordsAt } from "./support/records";
 import { capabilitiesOf } from "../src/steering-caps";
 import { Herdr } from "../src/herdr";
+import { toolNamed } from "../src/tools";
 import { suiteEnv } from "./support/effect";
 import { root, stopHost, until } from "./support/host";
 import { hosted, hostedRun } from "./support/hosted";
@@ -128,6 +129,7 @@ test(
           const [done] = yield* carryOutAsked(env, [action], request);
           expect(done).toMatchObject({ state: "applied" });
           expect(done?.note).toContain("Queued durably");
+          expect(done?.note).not.toContain("has finished");
           const records = Arr.filter(
             yield* readAudit(runDir(world.state, runId)),
             (line) => line.operation === "deliver",
@@ -144,6 +146,7 @@ test(
               ),
           );
           expect(Arr.filter(deliveries ?? [], (one) => one.cause.kind === "steer")).toHaveLength(1);
+          expect(deliveries?.at(-1)?.workflowNotice).toBeUndefined();
           const calls = yield* Effect.forEach(
             Arr.filter(
               Str.split(yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie), "\n"),
@@ -157,6 +160,7 @@ test(
               (call) => call.cmd === "agent prompt" && call.argv[2] === agent.name,
             ).at(-1)?.argv[3] ?? "";
           expect(said).toContain("From the human, in Desktop");
+          expect(said).not.toContain("has finished");
           const kept = /Their message is in (\S+)\./.exec(said)?.[1];
           const words =
             kept === undefined ? said : yield* fs.readFileString(kept).pipe(Effect.orDie);
@@ -307,6 +311,105 @@ test(
   120_000,
 );
 
+for (const [status, terminal, offer] of [
+  ["failed", "failed", "recover"],
+  ["complete", "succeeded", "carry-on"],
+] as const) {
+  test(
+    `a ${terminal} Run's delivery explains non-consumption through every door and keeps execution history`,
+    () =>
+      steerable(
+        `collie-terminal-${terminal}-`,
+        (world) =>
+          Effect.gen(function* () {
+            const { env, client, runId, agent } = yield* finishedWithAgent(
+              world,
+              "terminal-delivery",
+              status,
+            );
+            const before = yield* client.run({ runId }).pipe(Effect.orDie);
+            const history = yield* client.shown({ runId }).pipe(Effect.orDie);
+            expect(history?.flow?.lanes[0]?.nodes.length).toBeGreaterThan(0);
+            const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
+            const [launch] = yield* client.launches({ run: runId }).pipe(Effect.orDie);
+            const fs = yield* FileSystem.FileSystem;
+            const check = (words: string) => {
+              expect(words).toContain(`${runId} has finished (${terminal})`);
+              expect(words).toContain("No Step reads this turn's Output");
+              expect(words).toContain(`follow-up offer "${offer}"`);
+              expect(words).not.toContain("resume");
+            };
+            const cli = yield* collie(world, [
+              "run",
+              "steer",
+              runId,
+              "--operation",
+              agent.name,
+              "look again",
+            ]);
+            expect(cli.envelope.ok).toBe(true);
+            check(
+              (yield* Schema.decodeUnknownEffect(Schema.Struct({ workflowNotice: Schema.String }))(
+                cli.envelope.data,
+              ).pipe(Effect.orDie)).workflowNotice,
+            );
+            const tool = yield* toolNamed("collie_do")!.call(env, {
+              actions: [deliver(runId, agent.name, `OUTPUT_PATH: ${launch!.output}`)],
+            });
+            check(tool);
+            const desktop = yield* act(
+              { machine: { profile: "local", name: "mk-pc" }, desktop: client },
+              "terminal-desktop",
+              { _tag: "Deliver", runId, agent: agent.name, text: "check the branch" },
+            ).pipe(Effect.orDie);
+            check(desktop);
+            const deliveries = yield* client.deliveries({ runId }).pipe(Effect.orDie);
+            const steered = Arr.filter(deliveries ?? [], (one) => one.cause.kind === "steer");
+            expect(steered).toHaveLength(3);
+            for (const one of steered) check(one.workflowNotice ?? "");
+            check(yield* toolNamed("collie_receipts")!.call(env, { run: runId }));
+            const calls = Arr.map(
+              Arr.filter(
+                Str.split(
+                  yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie),
+                  "\n",
+                ),
+                Boolean,
+              ),
+              (line) => flow(Schema.decodeResult(CallLine), Result.getOrThrow)(line),
+            );
+            const prompts = Arr.filter(
+              calls,
+              (one) => one.cmd === "agent prompt" && one.argv[2] === agent.name,
+            ).slice(-3);
+            expect(prompts).toHaveLength(3);
+            for (const prompt of prompts) {
+              const text = prompt.argv[3] ?? "";
+              const kept = /Their message is in (\S+)\./.exec(text)?.[1];
+              const words =
+                kept === undefined
+                  ? text
+                  : `${text}\n${yield* fs.readFileString(kept).pipe(Effect.orDie)}`;
+              expect(words).toContain(`${runId} has finished (${terminal})`);
+              expect(words).toContain("No Step reads this turn's Output");
+            }
+            expect(yield* fs.readFileString(launch!.output).pipe(Effect.orDie)).toBe(
+              encode({ verdict: "corrected" }),
+            );
+            const after = yield* client.run({ runId }).pipe(Effect.orDie);
+            expect(after?.status).toEqual(before?.status);
+            expect((yield* client.shown({ runId }).pipe(Effect.orDie))?.flow?.lanes).toEqual(
+              history?.flow?.lanes,
+            );
+            expect(yield* client.runs({ task: null }).pipe(Effect.orDie)).toHaveLength(runs.length);
+          }),
+        [{ verdict: status === "failed" ? "failed" : "built" }, { verdict: "corrected" }],
+        ["terminal-delivery.workflow.ts"],
+      ),
+    120_000,
+  );
+}
+
 test(
   "a steer is typed plain within 3 lines and 700 characters, or kept as a file the typed line names",
   () =>
@@ -383,7 +486,9 @@ test(
             said,
           });
           expect(chatted.kept).toBe(`The human said: "${said}"\n\nmerge it`);
-          expect(chatted.lines[1]).toMatch(/^From chat for the human, [^"]+\.$/);
+          expect(Str.split(chatted.lines[1] ?? "", ` ${runId} has finished`)[0]).toMatch(
+            /^From chat for the human, [^"]+\.$/,
+          );
         }
 
         const desktop = yield* steer("merge it", { origin: "desktop", requestId: "desktop-1" });
@@ -556,23 +661,67 @@ test(
   120_000,
 );
 
-test(
-  "a succeeded Run's agent is still told after its module was removed",
-  () =>
-    steerable("collie-finished-unregistered-", (world) =>
-      Effect.gen(function* () {
-        const { env, runId, agent } = yield* finishedWithAgent(world);
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.remove(`${world.user}/told.workflow.ts`).pipe(Effect.orDie);
-        // A host started again finds no module to register the Run's generation under.
-        yield* stopHost(world.state);
+for (const [status, terminal] of [
+  ["complete", "succeeded"],
+  ["failed", "failed"],
+] as const)
+  test(
+    `a ${terminal} Run's agent is still told after its module was removed`,
+    () =>
+      steerable(
+        `collie-finished-unregistered-${terminal}-`,
+        (world) =>
+          Effect.gen(function* () {
+            const { env, client, runId, agent } = yield* finishedWithAgent(
+              world,
+              "terminal-delivery",
+              status,
+            );
+            const before = yield* client.run({ runId }).pipe(Effect.orDie);
+            const fs = yield* FileSystem.FileSystem;
+            yield* fs.remove(`${world.user}/terminal-delivery.workflow.ts`).pipe(Effect.orDie);
+            // A host started again finds no module to register the Run's generation under.
+            yield* stopHost(world.state);
 
-        const [done] = yield* carryOutAsked(env, [deliver(runId, agent.name, "merge it")], chat());
-        expect(done).toMatchObject({ kind: "deliver", state: "applied" });
-      }),
-    ),
-  120_000,
-);
+            const [done] = yield* carryOutAsked(
+              env,
+              [deliver(runId, agent.name, "merge it")],
+              chat(),
+            );
+            expect(done).toMatchObject({ kind: "deliver", state: "applied" });
+            const check = (words: string) => {
+              expect(words).toContain(`${runId} has finished (${terminal})`);
+              expect(words).toContain("No Step reads this turn's Output");
+            };
+            check(done?.note ?? "");
+            check(yield* toolNamed("collie_receipts")!.call(env, { run: runId }));
+            const calls = yield* Effect.forEach(
+              Arr.filter(
+                Str.split(
+                  yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie),
+                  "\n",
+                ),
+                Boolean,
+              ),
+              (line) => Schema.decodeEffect(CallLine)(line).pipe(Effect.orDie),
+            );
+            const prompt =
+              Arr.filter(
+                calls,
+                (call) => call.cmd === "agent prompt" && call.argv[2] === agent.name,
+              ).at(-1)?.argv[3] ?? "";
+            const kept = /Their message is in (\S+)\./.exec(prompt)?.[1];
+            check(kept === undefined ? prompt : yield* fs.readFileString(kept).pipe(Effect.orDie));
+            const restarted = yield* connect(world.state).pipe(Effect.orDie);
+            const after = yield* restarted.run({ runId }).pipe(Effect.orDie);
+            expect(after?.status).toEqual(before?.status);
+            expect(after?.diagnostic).toContain("terminal-delivery.workflow.ts");
+          }),
+        [{ verdict: terminal === "failed" ? "failed" : "built" }],
+        ["terminal-delivery.workflow.ts"],
+      ),
+    120_000,
+  );
 
 test(
   "a steer that reached nobody on a running Run is failed, never applied",
@@ -781,8 +930,11 @@ test(
           );
           expect(done?.state).toBe("applied");
           expect(done?.note).toMatch(
-            /^Delivered to run-\S+-build-r1 \(observed: a turn started\)\.$/,
+            /^Delivered to run-\S+-build-r1 \(observed: a turn started\)\./,
           );
+          expect(done?.note).toContain(`${runId} has finished (succeeded)`);
+          expect(done?.note).toContain("Start a new Run on its branch");
+          expect(done?.note).not.toContain("resume");
           const [reviewer] = yield* carryOutAsked(
             env,
             [{ kind: "deliver", run: runId, to: "reviewer", text: "look again", mode: "boundary" }],
