@@ -1388,10 +1388,15 @@ name rather than its place.
 
 ## Reviewing and fixing, until it converges
 
-A review/fix rally is a loop you write, over three functions every workflow shares. There
+A review/fix rally is a loop you write, over functions every workflow shares. There
 is no repeat declaration, no scheduler and no second reading of when a loop is done: every
-rally converges, stands on a dispute and runs out of rounds where these three decide.
+rally converges, stands on a dispute and runs out of rounds where these decide.
 
+- **`remainingDisputes(disputed, review)`** — keep carried disputes unless the review
+  explicitly confirms them `fixed` or withdraws them under `dropped` with a reason.
+  Matching uses file and title. A finding still in the review's `findings` or `disputed`
+  stays unresolved, even if also listed as resolved. A clean verdict or omission clears
+  nothing. Assign the returned list before splitting and settling the round.
 - **`splitDisputed(findings, disputed)`** — what is still the implementer's. A finding the
   implementer already rejected with a reason stops driving the loop; a reviewer who answers
   that reason with a `rebuttal` puts it back.
