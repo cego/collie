@@ -319,7 +319,12 @@ inspector beside it once there is room. A Step's open questions are answered one
 "Question k of n", each its own `Answer`. A question the board also has is answered through the
 board's questionnaire, as `FlowDecision.vue` does: Hold the Run among its options, words for the
 agent instead, a status line, and the next question once the host takes the answer. Its Start asks the Run what it `offers` now and sends
-`Invoke` with the inputs typed, as the board's offers dialog does.
+`Invoke` with the inputs entered, as the board's offers dialog does. Both draw each argument with
+the control its schema takes (`board/src/board/offer_form.rs`, a copy of `offerFields` and
+`offerInput` in `src/board-model.ts`): a tick for a needed yes or no, a segmented choice for an
+optional one or an enum, a list one per line, and a number or JSON refused with why before
+anything is sent. An offer that says what it does (`confirm`) is asked about before it is taken,
+even with nothing to fill, and its button is named by the offer, never by the card's guess.
 
 The Diff tab reads each file's patch (`diff:<path>`) and parses it with rune-kit's
 `diff::parse`: only an open file's, four at a time, so a big file is read once it is opened; a

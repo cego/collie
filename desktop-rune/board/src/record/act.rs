@@ -139,18 +139,12 @@ impl App {
 }
 
 use super::{Form, Item};
+use crate::board::offer_form;
 use crate::flow::actions::{self, Effect};
 use collie_desktop_protocol::generated::{
     Invoke, InvokeInput, InvokeTag, OffersSuccessItem, OpenLinkPayload, WithdrawNote,
     WithdrawNoteTag,
 };
-
-/// Whether every field an offer needs has words.
-pub fn offer_ready(fields: &[(String, bool, rune::edit::TextEdit)]) -> bool {
-    fields
-        .iter()
-        .all(|(_, required, edit)| !required || !edit.text.trim().is_empty())
-}
 
 impl App {
     /// What pressing a Flow or lane action does: sends it, opens its form, or shows its part.
@@ -297,11 +291,9 @@ impl App {
                     app.record.notice = Some(failed("The Run no longer offers this.".into()));
                     return;
                 };
-                *fields = crate::board::offer_fields(named.arguments.as_ref())
-                    .into_iter()
-                    .map(|(name, required)| (name, required, rune::edit::TextEdit::default()))
-                    .collect();
-                let at_once = fields.is_empty() && named.unavailable.is_none();
+                *fields = offer_form::entries_for(named.arguments.as_ref());
+                let at_once =
+                    !offer_form::asks_before_taking(&named) && named.unavailable.is_none();
                 *offer = Some(named);
                 if at_once {
                     app.make_offer_in_record();
@@ -319,27 +311,25 @@ impl App {
             offer: Some(offer),
             fields,
             ..
-        }) = &record.form
+        }) = &mut record.form
         else {
             return;
         };
-        if offer.unavailable.is_some() || !offer_ready(fields) {
+        if offer.unavailable.is_some() {
             return;
         }
+        let Some(input) = offer_form::read_form(offer.arguments.as_ref(), fields) else {
+            return;
+        };
         let Some(Form::Offer {
             installation,
             run,
             offer: Some(offer),
-            fields,
             ..
         }) = record.form.take()
         else {
             return;
         };
-        let typed: Vec<(String, String)> = fields
-            .into_iter()
-            .map(|(name, _, edit)| (name, edit.text.clone()))
-            .collect();
         let sent = Sent {
             installation,
             action: ActPayloadAction::Invoke(Invoke {
@@ -349,7 +339,7 @@ impl App {
                 input: InvokeInput {},
             }),
             request: new_request(),
-            input: Some(crate::board::offer_input(offer.arguments.as_ref(), &typed)),
+            input: Some(input),
             after: After::Nothing,
         };
         self.act_again(sent);

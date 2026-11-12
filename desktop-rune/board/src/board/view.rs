@@ -11,7 +11,7 @@ use crate::record::tabs::recovery_of;
 use crate::shell::Page;
 use crate::{App, flow, icons};
 use collie_desktop_chat::glide::smooth;
-use collie_desktop_protocol::generated::{Decision, GlyphState, LostState, State, Task};
+use collie_desktop_protocol::generated::{Decision, GlyphState, LostState, State};
 use rune::{Color, El, Icon, Key, LiveRegion, col, el, icon, row, text};
 use rune_kit::{
     Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, Loader, Menu, MenuItem,
@@ -605,7 +605,7 @@ fn pill(k: &Kit, key: &str, said: &str, tone: Option<&StateColors>) -> El {
 }
 
 /// A card action as this board does it, or none where Desktop has no way to yet.
-fn label_of(task: &Task, action: &CardAction, primary: bool) -> Option<String> {
+fn label_of(action: &CardAction, primary: bool) -> Option<String> {
     Some(match action {
         CardAction::GoToTab => "Go to pane".into(),
         CardAction::CheckOutput => "Check output…".into(),
@@ -615,7 +615,6 @@ fn label_of(task: &Task, action: &CardAction, primary: bool) -> Option<String> {
             mr.url()?;
             cards::open_mr_label(mr, primary, named.as_deref())
         }
-        CardAction::Offer(_) if primary && cards::ships_by_merge(task) => "Merge".into(),
         CardAction::Offer(offer) => offer.title.clone(),
         CardAction::Offers => "What it offers…".into(),
         CardAction::Resume => (if primary { "Resume" } else { "Resume run" }).into(),
@@ -675,7 +674,7 @@ fn card(
     let menu_actions: Vec<(CardAction, String)> = cards::card_actions(task)
         .into_iter()
         .chain(cards::disposition_actions(task))
-        .filter_map(|a| label_of(task, &a, false).map(|l| (a, l)))
+        .filter_map(|a| label_of(&a, false).map(|l| (a, l)))
         .collect();
     let open = app.board.menu.as_deref() == Some(key.as_str());
     let trigger = IconButton::new(&icons::MORE)
@@ -1037,7 +1036,7 @@ fn card(
                 .shrink(),
         );
     if let Some((action, label)) =
-        cards::primary_action(task).and_then(|a| label_of(task, &a, true).map(|l| (a, l)))
+        cards::primary_action(task).and_then(|a| label_of(&a, true).map(|l| (a, l)))
     {
         let key = key.clone();
         let mut button = small_button(label, ButtonVariant::Neutral).disabled(!live);

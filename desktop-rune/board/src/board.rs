@@ -8,6 +8,7 @@ pub mod cards;
 pub mod clicks;
 mod dialogs;
 pub mod model;
+pub mod offer_form;
 pub mod questionnaire;
 pub(crate) mod view;
 
@@ -97,7 +98,7 @@ pub enum Dialog {
         chosen: Option<String>,
         offers: Option<Vec<OffersSuccessItem>>,
         picked: Option<OffersSuccessItem>,
-        fields: Vec<(String, bool, TextEdit)>,
+        fields: Vec<offer_form::OfferEntry>,
     },
     Questions {
         card: String,
@@ -260,50 +261,6 @@ pub fn offer_key(offer: &OffersSuccessItem) -> String {
         Some(run) => format!("{run}:{}", offer.id),
         None => offer.id.clone(),
     }
-}
-
-/// The fields an offer's arguments name, and whether each must be given.
-pub fn offer_fields(arguments: Option<&Value>) -> Vec<(String, bool)> {
-    let Some(arguments) = arguments else {
-        return Vec::new();
-    };
-    let required: Vec<&str> = arguments["required"]
-        .as_array()
-        .map(|r| r.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default();
-    arguments["properties"]
-        .as_object()
-        .map(|p| {
-            p.keys()
-                .map(|name| (name.clone(), required.contains(&name.as_str())))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// What an offer is given: each typed value read as JSON unless its field is text.
-pub fn offer_input(arguments: Option<&Value>, typed: &[(String, String)]) -> Value {
-    let mut input = serde_json::Map::new();
-    let Some(arguments) = arguments else {
-        return Value::Object(input);
-    };
-    for (name, required) in offer_fields(Some(arguments)) {
-        let text = typed
-            .iter()
-            .find(|(n, _)| *n == name)
-            .map_or("", |(_, t)| t.as_str());
-        if text.is_empty() && !required {
-            continue;
-        }
-        let textual = arguments["properties"][&name]["type"] == "string";
-        let value = if textual {
-            Value::String(text.into())
-        } else {
-            serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.into()))
-        };
-        input.insert(name, value);
-    }
-    Value::Object(input)
 }
 
 /// An empty field that takes focus when its dialog opens.
@@ -886,41 +843,23 @@ impl App {
         })
     }
 
-    /// Picked, and made at once where it takes nothing; asked about otherwise.
+    /// Picked, and made at once where it neither takes anything nor asks first; asked about
+    /// otherwise.
     pub fn pick_offer(&mut self, offer: OffersSuccessItem) {
-        let fields = offer_fields(offer.arguments.as_ref());
-        if let Some(Dialog::Offers {
-            picked,
-            fields: typed,
-            ..
-        }) = &mut self.board.dialog
-        {
+        let at_once = !offer_form::asks_before_taking(&offer);
+        if let Some(Dialog::Offers { picked, fields, .. }) = &mut self.board.dialog {
+            *fields = offer_form::entries_for(offer.arguments.as_ref());
             *picked = Some(offer);
-            *typed = fields
-                .iter()
-                .enumerate()
-                .map(|(at, (name, required))| {
-                    let edit = if at == 0 {
-                        focused_edit()
-                    } else {
-                        TextEdit::new("")
-                    };
-                    (name.clone(), *required, edit)
-                })
-                .collect();
         }
-        if fields.is_empty() {
+        if at_once {
             self.make_offer();
         }
     }
 
     pub fn make_offer(&mut self) {
         let Some(Dialog::Offers {
-            installation,
-            run,
             as_of,
             picked: Some(offer),
-            fields,
             ..
         }) = &self.board.dialog
         else {
@@ -929,15 +868,25 @@ impl App {
         if self.refusal(offer.unavailable.as_deref(), *as_of).is_some() {
             return;
         }
-        let typed: Vec<(String, String)> = fields
-            .iter()
-            .map(|(name, _, edit)| (name.clone(), edit.text.clone()))
-            .collect();
+        let Some(Dialog::Offers {
+            installation,
+            run,
+            as_of,
+            picked: Some(offer),
+            fields,
+            ..
+        }) = &mut self.board.dialog
+        else {
+            return;
+        };
+        let Some(input) = offer_form::read_form(offer.arguments.as_ref(), fields) else {
+            return;
+        };
         let action = json!({
             "_tag": "Invoke",
             "runId": offer.run.clone().unwrap_or_else(|| run.clone()),
             "offer": offer.id,
-            "input": offer_input(offer.arguments.as_ref(), &typed),
+            "input": input,
         });
         let (installation, as_of) = (installation.clone(), *as_of);
         self.board.dialog = None;

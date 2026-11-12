@@ -1,6 +1,7 @@
 //! The board as the human meets it: built from Flock items, drawn by Rune without a window,
 //! pressed, and its calls read off a fake core. Nothing here reaches a real host.
 
+use collie_desktop_board::board::offer_form::OfferEntry;
 use collie_desktop_board::board::{Dialog, model};
 use collie_desktop_board::calls::CallError;
 use collie_desktop_board::calls::testing::Harness;
@@ -608,8 +609,8 @@ fn offers_are_read_for_the_run_and_one_with_arguments_is_invoked_with_what_was_t
     press(&mut runtime, "offer-redo");
     assert!(node(&runtime, "field-goal").is_some());
     if let Some(Dialog::Offers { fields, .. }) = &mut runtime.state.board.dialog {
-        for (name, _, edit) in fields.iter_mut() {
-            *edit = TextEdit::new(if name == "goal" {
+        for entry in fields.iter_mut() {
+            entry.edit = TextEdit::new(if entry.field.name == "goal" {
                 "fix the redirect"
             } else {
                 "3"
@@ -625,6 +626,114 @@ fn offers_are_read_for_the_run_and_one_with_arguments_is_invoked_with_what_was_t
             "input": {"goal": "fix the redirect", "rounds": 3}})
     );
     assert!(runtime.state.board.dialog.is_none());
+}
+
+/// Presses the element whose path holds each of `path`'s keys, ending in its last.
+fn press_in(runtime: &mut Runtime<App>, path: &str) {
+    let parts: Vec<&str> = path.split('/').collect();
+    let found = runtime
+        .elements()
+        .into_iter()
+        .map(|e| e.path)
+        .find(|p| {
+            p.ends_with(&format!("/{}", parts[parts.len() - 1]))
+                && parts.iter().all(|part| p.split('/').any(|s| s == *part))
+        })
+        .unwrap_or_else(|| panic!("no {path}"));
+    press(runtime, &found);
+}
+
+fn type_into(fields: &mut [OfferEntry], name: &str, text: &str) {
+    let entry = fields.iter_mut().find(|e| e.field.name == name).unwrap();
+    entry.edit = TextEdit::new(text);
+}
+
+fn offers_of(harness: &Harness<App>, offers: Value) -> Runtime<App> {
+    let mut app = app(
+        harness,
+        vec![snapshot(
+            &pc(),
+            vec![task("t1", "Shipped", "done", json!({}))],
+        )],
+    );
+    app.do_action(
+        "inst-pc:t1",
+        &collie_desktop_board::board::cards::CardAction::Offers,
+    );
+    harness.fake.answer("offers", Ok(offers));
+    let mut runtime = runtime(app);
+    settle(harness, &mut runtime);
+    runtime
+}
+
+#[test]
+fn an_offer_that_says_what_it_does_is_confirmed_before_it_is_invoked_even_with_nothing_to_fill() {
+    let harness = Harness::new();
+    let mut runtime = offers_of(
+        &harness,
+        json!([{"id": "merge", "title": "Merge", "workflow": "release", "arguments": null,
+            "kind": "follow-up", "ships": "merge", "primary": true, "unavailable": null,
+            "confirm": "Merges it and stops: nothing is tagged or deployed."}]),
+    );
+    press(&mut runtime, "offer-merge");
+    assert!(acts(&harness).is_empty(), "nothing is taken before its yes");
+    assert_eq!(
+        node(&runtime, "offer-confirm").expect("what it does")["name"],
+        "Merges it and stops: nothing is tagged or deployed."
+    );
+    assert_eq!(node(&runtime, "invoke").unwrap()["name"], "Merge");
+    press(&mut runtime, "invoke");
+    assert_eq!(
+        acts(&harness)[0]["action"],
+        json!({"_tag": "Invoke", "runId": "r-t1", "offer": "merge", "input": {}})
+    );
+}
+
+#[test]
+fn an_offers_form_draws_each_field_by_its_type_and_refuses_what_a_field_cannot_take_before_sending()
+{
+    let harness = Harness::new();
+    let mut runtime = offers_of(
+        &harness,
+        json!([{"id": "ship", "title": "Ship it", "workflow": "release", "kind": "follow-up",
+            "primary": true, "unavailable": null, "arguments": {"type": "object", "properties": {
+                "notify": {"type": "boolean", "description": "Tell the channel"},
+                "then": {"type": "string", "enum": ["", "finish"]},
+                "count": {"type": "integer"},
+                "reviewers": {"type": "array", "items": {"type": "string"}}}}}]),
+    );
+    press(&mut runtime, "offer-ship");
+    assert_eq!(
+        node(&runtime, "field-notify").unwrap()["role"],
+        "radio-group"
+    );
+    assert_eq!(
+        node(&runtime, "field-notify-help").unwrap()["name"],
+        "Tell the channel"
+    );
+    assert_eq!(node(&runtime, "field-then").unwrap()["role"], "radio-group");
+    if let Some(Dialog::Offers { fields, .. }) = &mut runtime.state.board.dialog {
+        type_into(fields, "count", "2.5");
+    }
+    redraw(&mut runtime);
+    press(&mut runtime, "invoke");
+    assert!(acts(&harness).is_empty(), "nothing malformed is sent");
+    assert_eq!(
+        node(&runtime, "field-count-error").expect("why")["name"],
+        "Count must be a whole number"
+    );
+    if let Some(Dialog::Offers { fields, .. }) = &mut runtime.state.board.dialog {
+        type_into(fields, "count", "2");
+        type_into(fields, "reviewers", "alice\n bob");
+    }
+    redraw(&mut runtime);
+    press_in(&mut runtime, "field-notify/segment2");
+    press_in(&mut runtime, "field-then/segment1");
+    press(&mut runtime, "invoke");
+    assert_eq!(
+        acts(&harness)[0]["action"]["input"],
+        json!({"notify": false, "then": "", "count": 2, "reviewers": ["alice", "bob"]})
+    );
 }
 
 #[test]
@@ -1442,9 +1551,9 @@ fn cards_take_the_columns_the_boards_width_fits_at_once_never_springing_into_the
 }
 
 #[test]
-fn work_ready_to_merge_is_its_own_section_and_its_merge_is_offered_by_the_run_that_owns_it() {
+fn work_ready_to_ship_is_its_own_section_and_its_offer_is_named_and_made_by_the_run_that_owns_it() {
     let harness = Harness::new();
-    let offer = json!({"id": "merge", "title": "Merge the MR", "run": "r-owner"});
+    let offer = json!({"id": "release", "title": "Release", "run": "r-owner"});
     let mut runtime = runtime(app(
         &harness,
         vec![snapshot(
@@ -1483,8 +1592,8 @@ fn work_ready_to_merge_is_its_own_section_and_its_merge_is_offered_by_the_run_th
         ]
     );
     assert_eq!(cards_in(&runtime, "ready-to-ship"), ["Green and approved"]);
-    let primary = node(&runtime, "card-t-ship-primary").expect("its merge");
-    assert_eq!(primary["name"], "Merge");
+    let primary = node(&runtime, "card-t-ship-primary").expect("its release");
+    assert_eq!(primary["name"], "Release");
     press(&mut runtime, "card-t-ship-primary");
     assert_eq!(
         harness.fake.asked_of("offers"),
