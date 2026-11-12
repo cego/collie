@@ -79,7 +79,13 @@ import { markFirst } from "./record-marks";
 import { doorThread, engineEnd, type EngineEnd, type Listed, type Opened } from "./door";
 import { SLOW_RPC_MS, firstValueTimed } from "./first-value";
 import { TurnScheduler } from "./turns";
-import { Foreground, PATIENCE, foregroundLayer, servedNow } from "./foreground";
+import {
+  Foreground,
+  PATIENCE,
+  foregroundFileSystem,
+  foregroundLayer,
+  servedNow,
+} from "./foreground";
 import { tracingLayer } from "./tracing";
 import * as Scheduler from "effect/Scheduler";
 import {
@@ -3913,6 +3919,7 @@ export const serve = (named: string): Effect.Effect<void, never, PlatformService
   }).pipe(
     Effect.orDie,
     Effect.provideService(Scheduler.Scheduler, new TurnScheduler(servedNow)),
+    Effect.updateService(FileSystem.FileSystem, foregroundFileSystem),
     Effect.provide(Layer.merge(tracingLayer(BUILD), foregroundLayer)),
   );
 

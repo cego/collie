@@ -70,6 +70,11 @@ derivations, the Cleanup sweep and Measurements. Background work yields in bound
 - A read awaiting a fresh board suspends only its own lease, so the build can advance. It
   restores that lease only while live, including after errors or cancellation. The board still
   covers the writes seen before the read; readiness and merge-request facts are not taken from an older board.
+- Physical file operations temporarily release only the requesting lease's background hold.
+  The lease keeps its scheduler priority and original deadline. Its hold returns after all overlapping
+  waits finish, only while the lease remains live. Errors and cancellation follow the same cleanup.
+  The physical FileSystem service and its file handles apply this uniformly; stream reads and sink
+  writes use those handles. Other requests' holds remain effective.
 - The host's scheduler ends a turn of the event loop once it has run fibers for 8 ms, so a request
   waiting behind background fibers is read at the next turn. A fiber serving a read queues its
   tasks ahead of every other fiber's, and the others yield while one waits, so a Run start steps

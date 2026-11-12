@@ -107,6 +107,13 @@ advance. The lease is restored only while live, including after errors or cancel
 The answer keeps the board's read-your-writes coverage and updated readiness and merge-request facts.
 Slice boundaries hold for at most 250 ms.
 
+Physical file operations release only the requesting lease's background hold while they wait.
+They retain its scheduler priority and original deadline. The hold returns after all overlapping
+waits finish, only while the lease remains live. Errors and cancellation use the same cleanup.
+`foregroundFileSystem` wraps the physical service before host components capture it; file handles
+also wrap reads and writes, including those used by the platform's stream and sink constructors.
+Other requests retain their holds. A late I/O completion cannot restore an expired stream lease.
+
 `bench/front-door-wait.ts` measures `verify` first values and `read` answers
 against the record-open fixture's host while its live Runs keep the board building.
 The harness disables OTLP and records every board-build duration through `COLLIE_RECORD_MARKS`,
@@ -2027,7 +2034,9 @@ its time.
   in `src/engine.ts`). A pass over many Runs (the model's fill, a board re-derive, the
   engine's sweep, `tendQuestions`, Cleanup) takes `Foreground`'s `boundary` before each Run
   (`src/foreground.ts`). Every front-door answer runs under `serve`, a stream until its
-  first value, termination or 250 ms. While one does, every boundary holds its pass, for at most 250 ms.
+  first value, termination or 250 ms. Every boundary holds its pass for at most 250 ms while a
+  request holds its lease. Physical file I/O temporarily releases that request's hold while
+  retaining its scheduler priority and original deadline. Only live leases restore their holds.
   The host runs on `TurnScheduler` (`src/turns.ts`), which ends a turn of the event
   loop once its fibers have run for 8 ms. A fiber under `serve` queues its tasks ahead of
   every other fiber's, and the others yield while one waits, so a Run start's work steps
