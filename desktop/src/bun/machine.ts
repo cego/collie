@@ -13,12 +13,12 @@ import {
   Duration,
   Effect,
   Exit,
-  Layer,
   Option,
   Predicate,
   Queue,
   Ref,
   Result,
+  Schedule,
   Schema,
   SchemaIssue,
   Scope,
@@ -108,7 +108,16 @@ export const spawned = <C extends Bun.Subprocess>(start: () => C) =>
       Effect.sync(() => {
         children.delete(child);
         child.kill();
-      }),
+      }).pipe(
+        Effect.andThen(Effect.promise(() => child.exited)),
+        Effect.timeoutOrElse({
+          duration: "1 second",
+          orElse: () =>
+            Effect.sync(() => child.kill("SIGKILL")).pipe(
+              Effect.andThen(Effect.promise(() => child.exited)),
+            ),
+        }),
+      ),
   );
 
 /** The front doors Desktop opens a Machine's channels as. */
@@ -219,6 +228,8 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
     ),
   );
   const ready = Promise.withResolvers<void>();
+  const broken = yield* Deferred.make<never, RouteFailure>();
+  const failed = (reason: string) => Deferred.fail(broken, unreachable(reason));
   const socket = yield* Socket.fromTransformStream(
     Effect.succeed({
       readable: afterReady(child.stdout, () => {
@@ -226,23 +237,60 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
         ready.resolve();
       }),
       writable: new WritableStream<Uint8Array>({
-        write: (chunk) => {
-          void child.stdin.write(chunk);
-          void child.stdin.flush();
-        },
+        write: (chunk) =>
+          Promise.resolve(child.stdin.write(chunk))
+            .then(() => child.stdin.flush())
+            .then(() => undefined),
         close: () => {
           void child.stdin.end();
         },
       }),
     }),
   );
-  const context = yield* Layer.build(
-    RpcClient.layerProtocolSocket().pipe(
-      Layer.provide(Layer.succeed(Socket.Socket, socket)),
-      Layer.provide(RpcSerialization.layerNdjson),
+  const observed: Socket.Socket = {
+    ...socket,
+    reader: socket.reader.pipe(
+      Effect.map((reader) => ({
+        ...reader,
+        pull: reader.pull.pipe(Effect.tapCause((cause) => failed(Cause.pretty(cause)))),
+      })),
     ),
+    writer: socket.writer.pipe(
+      Effect.map((writer) => ({
+        write: (chunk) =>
+          writer.write(chunk).pipe(Effect.tapCause((cause) => failed(Cause.pretty(cause)))),
+        writeAll: (chunks) =>
+          writer.writeAll(chunks).pipe(Effect.tapCause((cause) => failed(Cause.pretty(cause)))),
+      })),
+    ),
+  };
+  const protocol = yield* RpcClient.makeProtocolSocket({ retryPolicy: Schedule.recurs(0) }).pipe(
+    Effect.provideService(Socket.Socket, observed),
+    Effect.provide(RpcSerialization.layerNdjson),
   );
-  const door = yield* RpcClient.make(FrontDoorRpcs).pipe(Effect.provideContext(context));
+  const door = yield* RpcClient.make(FrontDoorRpcs).pipe(
+    Effect.provideService(RpcClient.Protocol, {
+      ...protocol,
+      run: (id, receive) =>
+        protocol.run(id, (message) =>
+          receive(message).pipe(
+            Effect.andThen(
+              message._tag === "ClientProtocolError" ? failed(message.error.message) : Effect.void,
+            ),
+          ),
+        ),
+      send: (id, request, transferables) =>
+        protocol
+          .send(id, request, transferables)
+          .pipe(
+            Effect.tapCause((cause) =>
+              Cause.hasInterruptsOnly(cause) ? Effect.void : failed(Cause.pretty(cause)),
+            ),
+          ),
+    }),
+  );
+  // Kill before RPC finalizers wait for the bridge's streams.
+  yield* Effect.addFinalizer(() => Effect.sync(() => child.kill()));
   const ended = Effect.promise(() => child.exited).pipe(
     Effect.flatMap((code) =>
       Effect.fail<RouteFailure>({
@@ -251,14 +299,23 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
       }),
     ),
   );
+  const closed = Effect.raceFirst(ended, Deferred.await(broken));
   yield* Effect.raceFirst(
     Effect.promise(() => ready.promise),
-    ended,
+    closed,
+  ).pipe(
+    Effect.timeoutOrElse({
+      duration: "20 seconds",
+      orElse: () =>
+        Effect.fail(
+          unreachable(`${CommandLine.display(command)} did not become ready within 20 seconds`),
+        ),
+    }),
   );
-  return door;
+  return Object.assign(door, { closed });
 });
 
-export type Door = Effect.Success<ReturnType<typeof openBridge>>;
+export type Door = RpcClient.FromGroup<typeof FrontDoorRpcs, RpcClientError.RpcClientError>;
 
 /**
  * A Machine's three channels: the board's and its actions on one, its records on another, the
@@ -293,6 +350,7 @@ export const openDoors = (
       desktop,
       record,
       chat,
+      closed: Effect.raceAllFirst([desktop.closed, record.closed, chat.closed]),
       board: desktop.board(),
       toasts: desktop.toasts(),
     })),
@@ -300,6 +358,7 @@ export const openDoors = (
 
 export interface BoardSource {
   readonly machine?: KnownMachine;
+  readonly closed?: Effect.Effect<never, RouteFailure>;
   readonly board: Stream.Stream<BoardMessage, { readonly message: string }>;
   readonly toasts?: Stream.Stream<Toasted, unknown>;
 }
@@ -1002,6 +1061,7 @@ export const flockStream = <D extends BoardSource>(
             return Stream.merge(Stream.merge(board, upgrade, { haltStrategy: "left" }), toasts, {
               haltStrategy: "left",
             }).pipe(
+              Stream.interruptWhen(door.closed ?? Effect.never),
               Stream.interruptWhen(
                 Queue.take(reopens[at]!).pipe(
                   Effect.andThen(
