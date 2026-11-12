@@ -1,6 +1,6 @@
 # The terminal board finishes a refresh before reading again
 
-**Status: proposed** (2026-11-12).
+**Status: accepted** (2026-11-12).
 
 ## What was true before
 
