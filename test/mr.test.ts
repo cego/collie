@@ -593,10 +593,9 @@ for (const name of ["gitlab", "github"] as const) {
           mrs: [{ project: PROJECT[name], iid: "30", state: "open", assignees: ["me"] }],
         });
         const target = mrTarget(PROJECT[name], "30");
-        const posted = yield* postNote(
-          { target, cwd: "/w", body: "LGTM", approve: true },
-          fake.run,
-        ).pipe(Effect.provide(fake.layer));
+        const posted = yield* postNote({ target, cwd: "/w", body: "LGTM" }, fake.run).pipe(
+          Effect.provide(fake.layer),
+        );
         expect(posted).toEqual({
           ok: false,
           message: `${target} is assigned to you, so its findings are yours to fix rather than to post`,
@@ -623,7 +622,7 @@ test("posting checks the login on the target's GitLab host", () =>
         "glab mr": { stdout: "" },
       });
       expect(
-        yield* postNote({ target, cwd: "/w", body: "LGTM", approve: true }, glab.run).pipe(
+        yield* postNote({ target, cwd: "/w", body: "LGTM" }, glab.run).pipe(
           Effect.provide(forgeHttpOver(glab.run)),
         ),
       ).toEqual({

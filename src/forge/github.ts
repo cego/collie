@@ -48,6 +48,9 @@ import {
   createIssue,
   commentIssue,
   postReview,
+  approveReview,
+  findReviewNote,
+  reviewChanges,
   viewerLogin,
   myMergeRequests,
 } from "./threads";
@@ -1301,6 +1304,10 @@ function clone<R>(
 
 export const github: Forge = {
   name: "github",
+  reviewChanges: (ref, previous, head, cwd) =>
+    ref.project === null
+      ? Effect.succeed({ ok: false, reason: `${mrWords(ref).label} names no GitHub project` })
+      : reviewChanges(LOGIN, ref.project, ref, previous, head, cwd),
   issues: (project, cwd, _run, numbers) => listIssues(LOGIN, project, cwd, numbers),
   fileIssue: (project, title, body, cwd) => createIssue(LOGIN, project, title, body, cwd),
   commentIssue: (project, number, body, cwd) => commentIssue(LOGIN, project, number, body, cwd),
@@ -1343,10 +1350,18 @@ export const github: Forge = {
   readReview,
   reply,
   merge,
-  post: (ref, body, approve, cwd) =>
+  approve: (ref, head, cwd) =>
     ref.project === null
       ? Effect.succeed({ ok: false, message: `${mrWords(ref).label} names no GitHub project` })
-      : postReview(LOGIN, ref.project, ref, body, approve, cwd),
+      : approveReview(LOGIN, ref.project, ref, head, cwd),
+  findNote: (ref, signature, cwd) =>
+    ref.project === null
+      ? Effect.succeed({ ok: false, reason: `${mrWords(ref).label} names no GitHub project` })
+      : findReviewNote(LOGIN, ref.project, ref, signature, cwd),
+  post: (ref, body, cwd) =>
+    ref.project === null
+      ? Effect.succeed({ ok: false, message: `${mrWords(ref).label} names no GitHub project` })
+      : postReview(LOGIN, ref.project, ref, body, cwd),
   mine: (project, cwd) =>
     project === null ? Effect.succeed([]) : myMergeRequests(LOGIN, project, cwd),
   open: (ref, cwd, run) => run("gh", ["pr", "view", ref.iid, "--repo", mrPath(ref), "--web"], cwd),

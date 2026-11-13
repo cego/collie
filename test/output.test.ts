@@ -8,6 +8,7 @@ import {
   parseReviewOutput,
   parseSynthesis,
   renderReview,
+  settleRound,
   settleFinalFix,
   splitDisputed,
   substantiated,
@@ -43,6 +44,64 @@ function record(over: Partial<Verification> & { name: string }): Verification {
   };
 }
 const PASSED = { verifications: [record({ name: "bun test" })], final: FINAL };
+
+test("carrying a maintained dispute counts the finding once", () => {
+  const dispute: Finding = { severity: "major", title: "keep the behavior" };
+  const split = splitDisputed([dispute], [dispute]);
+  expect(
+    settleRound({ live: split.live, disputed: [dispute, ...split.settled], at: 2 }),
+  ).toMatchObject({
+    go: "halt",
+    reason: "1 disputed blocking finding(s) stand unanswered — your call, not the loop's",
+    outstanding: [dispute],
+  });
+});
+
+test("a dispute survives a rename by id and counts once across ledger versions", () => {
+  const before: Finding = { id: "F1", file: "src/old.ts", title: "guard input", severity: "major" };
+  const renamed: Finding = { ...before, file: "src/new.ts", title: "guard renamed input" };
+  const split = splitDisputed([renamed], [before]);
+  expect(split.live).toEqual([]);
+  expect(split.settled).toEqual([renamed]);
+  expect(
+    settleRound({ live: split.live, disputed: [before, ...split.settled], at: 2 }),
+  ).toMatchObject({
+    reason: "1 disputed blocking finding(s) stand unanswered — your call, not the loop's",
+    outstanding: [before],
+  });
+  expect(splitDisputed([{ ...renamed, id: "F2" }], [renamed]).live).toHaveLength(1);
+  const legacy = { file: renamed.file, title: renamed.title, severity: "major" };
+  expect(splitDisputed([renamed], [legacy]).settled).toEqual([renamed]);
+});
+
+test("resolved ledger findings leave the rally clean and a dispute remains the human's call", () => {
+  const fixed: Finding = { id: "F1", status: "fixed", severity: "major", title: "guard the input" };
+  const obsolete: Finding = {
+    id: "F2",
+    status: "obsolete",
+    severity: "blocker",
+    title: "removed handler",
+  };
+  const dispute: Finding = {
+    id: "F3",
+    status: "disputed",
+    severity: "major",
+    title: "keep the behavior",
+  };
+  const split = splitDisputed([fixed, obsolete, dispute], []);
+  expect(split.live).toEqual([]);
+  expect(split.settled).toEqual([dispute]);
+  expect(settleRound({ live: [fixed, obsolete], disputed: [], at: 2 })).toEqual({
+    go: "clean",
+    remaining: [],
+  });
+  expect(settleRound({ live: [], disputed: [dispute], at: 2 })).toMatchObject({
+    go: "halt",
+    halt: "dispute_unresolved",
+  });
+  expect(isBlocking(fixed)).toBe(false);
+  expect(isBlocking(obsolete)).toBe(false);
+});
 
 const ok = (text: string) => {
   const r = parseReviewOutput(text, "review.json");

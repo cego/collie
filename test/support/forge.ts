@@ -105,6 +105,8 @@ export const FakeMr = Schema.Struct({
   author: Schema.optionalKey(Schema.String),
   assignees: Schema.optionalKey(Schema.Array(Schema.String)),
   head: Schema.optionalKey(Schema.String),
+  diff: Schema.optionalKey(Schema.String),
+  interdiff: Schema.optionalKey(Schema.String),
   /** The revision its pipeline ran on, where that is not its head. */
   pipelineAt: Schema.optionalKey(Schema.String),
   checksUrl: Schema.optionalKey(Schema.String),
@@ -293,7 +295,7 @@ export const ForgeModel = Schema.Struct({
   /** Merge requests approved, by the same key. */
   approved: Schema.optionalKey(Schema.Array(Schema.String)),
   /** The forge refuses an approval, as it does one by the author. */
-  refusesApproval: Schema.optionalKey(Schema.Boolean),
+  refusesApproval: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.String])),
   /** The forge refuses a merge, whatever it says of the merge request. */
   refusesMerge: Schema.optionalKey(Schema.Boolean),
   /** `main` where unsaid. */
@@ -372,6 +374,7 @@ interface Answer {
   readonly cloned?: string;
   readonly noted?: { readonly key: string; readonly body: string };
   readonly approved?: string;
+  readonly dismissed?: string;
   readonly retried?: { readonly mr: FakeMr; readonly at: number | ReadonlyArray<number> };
   readonly pipelineStarted?: {
     readonly sha: string;
@@ -1126,6 +1129,18 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
         ? no()
         : json({ status: said.status, ref: said.ref ?? "main", sha: said.sha ?? "" });
     }
+    const comparison = /repository\/compare\?from=([^&]+)&to=([^&]+)&straight=true$/.exec(route);
+    if (comparison) {
+      const mr = Option.getOrUndefined(
+        Arr.findFirst(model.mrs, (one) => one.head === comparison[2]),
+      );
+      return mr === undefined
+        ? no()
+        : json({
+            diffs: [{ new_path: "src/a.ts", diff: mr.interdiff ?? "" }],
+            compare_timeout: false,
+          });
+    }
     const base = /merge_base\?refs\[\]=([^&]+)&refs\[\]=(.+)$/.exec(route);
     if (base) {
       const [, merged = "", live = ""] = base;
@@ -1178,6 +1193,12 @@ function glabOnMr(
   args: ReadonlyArray<string>,
 ): Answer {
   const method = flag(args, "-X") ?? "GET";
+  if (pipe(rest, Str.startsWith("diffs?")) && method === "GET")
+    return json(
+      pageOf(rest, [{ old_path: "src/a.ts", new_path: "src/a.ts", diff: mr.diff ?? "" }]),
+    );
+  if (pipe(rest, Str.startsWith("notes?")) && method === "GET")
+    return json(pageOf(rest, mr.comments ?? []));
   if (rest === "notes" && method === "POST" && model.refusesNote !== undefined)
     return refused(`${model.refusesNote} Internal Server Error`);
   if (rest === "notes" && method === "POST")
@@ -1186,9 +1207,11 @@ function glabOnMr(
       noted: { key: keyOf("gitlab", mr), body: field(args, "body") ?? "" },
       replied: { mr, thread: null, body: field(args, "body") ?? "" },
     };
+  if (rest === "approve" && method === "POST" && field(args, "sha") !== mr.head)
+    return refused("409 SHA does not match HEAD");
   if (rest === "approve" && method === "POST")
     return model.refusesApproval
-      ? refused("403 Forbidden")
+      ? refused(model.refusesApproval === true ? "403 Forbidden" : `403 ${model.refusesApproval}`)
       : {
           ...json({ approved_by: [{ user: { username: model.login ?? "me", id: 1 } }] }),
           approved: keyOf("gitlab", mr),
@@ -1245,6 +1268,10 @@ function glabOnMr(
 function ghOnPull(pull: FakeMr, kind: string, rest: string, args: ReadonlyArray<string>): Answer {
   const url = `https://${pull.project}/pull/${pull.iid}`;
   const method = flag(args, "-X") ?? "GET";
+  if (kind === "pulls" && pipe(rest, Str.startsWith("files?")))
+    return json(
+      pageOf(rest, [{ filename: "src/a.ts", status: "modified", patch: pull.diff ?? "" }]),
+    );
   const comments = pull.comments ?? [];
   const body = field(args, "body") ?? "";
   if (kind === "issues" && rest === "comments" && method === "POST")
@@ -1564,9 +1591,16 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
     const pull = Option.getOrUndefined(
       Arr.findFirst(model.mrs, (one) => one.project === `github.com/${repo}` && one.iid === number),
     );
+    if (
+      pull !== undefined &&
+      kind === "pulls" &&
+      rest === "reviews/1/dismissals" &&
+      flag(args, "-X") === "PUT"
+    )
+      return { ...json({ id: 1, state: "DISMISSED" }), dismissed: keyOf("github", pull) };
     if (pull !== undefined && kind === "pulls" && rest === "reviews" && flag(args, "-X") === "POST")
       return model.refusesApproval
-        ? refused("403 Forbidden")
+        ? refused(model.refusesApproval === true ? "403 Forbidden" : `403 ${model.refusesApproval}`)
         : { ...json({ id: 1, state: "APPROVED" }), approved: keyOf("github", pull) };
     if (pull !== undefined && kind === "pulls" && rest === "merge" && model.refusesMerge === true)
       return refused(NOT_MERGEABLE.github);
@@ -1656,6 +1690,14 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
     return json({
       status,
       merge_base_commit: pull?.base === undefined ? null : { sha: pull.base.at },
+      files: [
+        {
+          filename: "src/a.ts",
+          patch:
+            Option.getOrUndefined(Arr.findFirst(model.mrs, (one) => one.head === live))
+              ?.interdiff ?? "",
+        },
+      ],
     });
   }
   const checkRuns =
@@ -1950,6 +1992,11 @@ export function answer(
     after = { ...after, cloned: [...(after.cloned ?? []), said.cloned] };
   if (said.approved !== undefined)
     after = { ...after, approved: [...(after.approved ?? []), said.approved] };
+  if (said.dismissed !== undefined)
+    after = {
+      ...after,
+      approved: Arr.filter(after.approved ?? [], (one) => one !== said.dismissed),
+    };
   if (said.retried !== undefined) {
     const { mr, at } = said.retried;
     after = {
@@ -2019,6 +2066,7 @@ export interface FakeRequest {
   readonly method: string;
   readonly url: string;
   readonly token: string;
+  readonly body: Schema.Json | null;
 }
 
 const API = { gitlab: "/api/v4/", github: "/" } as const;
@@ -2092,7 +2140,17 @@ export function httpFace(
       new Headers(init.headers).get("authorization") ?? "",
       Str.replace(/^Bearer /, ""),
     );
-    requests.push({ method, url: input, token });
+    requests.push({
+      method,
+      url: input,
+      token,
+      body:
+        init.body === undefined
+          ? null
+          : yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(init.body).pipe(
+              Effect.orDie,
+            ),
+    });
     const model = yield* state.read;
     const fault = model.httpFault;
     if (fault === "network") return yield* Effect.die(new TypeError("fetch failed"));

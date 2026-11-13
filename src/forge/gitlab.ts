@@ -49,6 +49,9 @@ import {
   createIssue,
   commentIssue,
   postReview,
+  approveReview,
+  findReviewNote,
+  reviewChanges,
   viewerLogin,
   myMergeRequests,
 } from "./threads";
@@ -1292,6 +1295,19 @@ function clone<R>(
 
 export const gitlab: Forge = {
   name: "gitlab",
+  reviewChanges: (ref, previous, head, cwd, run) =>
+    Effect.gen(function* () {
+      const project = ref.project ?? (yield* projectHere(cwd, run));
+      if (project === null) return { ok: false, reason: `${whereOf(ref)} names no GitLab project` };
+      return yield* reviewChanges(
+        glabLoginTo(hostOf(project) ?? "gitlab.com"),
+        project,
+        ref,
+        previous,
+        head,
+        cwd,
+      );
+    }),
   issues: (project, cwd, _run, numbers) =>
     listIssues(glabLoginTo(hostOf(project) ?? "gitlab.com"), project, cwd, numbers),
   fileIssue: (project, title, body, cwd) =>
@@ -1361,7 +1377,32 @@ export const gitlab: Forge = {
   readReview,
   reply,
   merge,
-  post: (ref, body, approve, cwd, run) =>
+  approve: (ref, head, cwd, run) =>
+    Effect.gen(function* () {
+      const project = ref.project ?? (yield* projectHere(cwd, run));
+      if (project === null)
+        return { ok: false, message: `${whereOf(ref)} names no GitLab project` };
+      return yield* approveReview(
+        glabLoginTo(hostOf(project) ?? "gitlab.com"),
+        project,
+        ref,
+        head,
+        cwd,
+      );
+    }),
+  findNote: (ref, signature, cwd, run) =>
+    Effect.gen(function* () {
+      const project = ref.project ?? (yield* projectHere(cwd, run));
+      if (project === null) return { ok: false, reason: `${whereOf(ref)} names no GitLab project` };
+      return yield* findReviewNote(
+        glabLoginTo(hostOf(project) ?? "gitlab.com"),
+        project,
+        ref,
+        signature,
+        cwd,
+      );
+    }),
+  post: (ref, body, cwd, run) =>
     Effect.gen(function* () {
       const project = ref.project ?? (yield* projectHere(cwd, run));
       if (project === null)
@@ -1371,7 +1412,6 @@ export const gitlab: Forge = {
         project,
         ref,
         body,
-        approve,
         cwd,
       );
     }),

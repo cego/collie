@@ -100,6 +100,43 @@ test(
 );
 
 test(
+  "an offer carries its Run id as the next Run's previous review",
+  () =>
+    proves(
+      "collie-actions-previous-",
+      (world) =>
+        Effect.gen(function* () {
+          const project = yield* projectOf(world);
+          const fs = yield* FileSystem.FileSystem;
+          const entry = `${project}/.collie/workflows/offered.workflow.ts`;
+          const source = yield* fs.readFileString(entry);
+          yield* fs.writeFileString(
+            entry,
+            pipe_(
+              source,
+              Str.replace("arguments: {", 'inputs: { previous: "run-id" }, arguments: {'),
+            ),
+          );
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const runId = yield* finished(client, project).pipe(Effect.orDie);
+          const next = yield* client
+            .invoke({
+              runId,
+              offer: "grade-it",
+              input: { note: "again", grade: "pass" },
+              request: "review-again",
+            })
+            .pipe(Effect.orDie);
+          const view = yield* client.run({ runId: next.runId }).pipe(Effect.orDie);
+          expect(view?.options.previous).toBe(runId);
+          yield* stopHost(world.state);
+        }),
+      [],
+    ),
+  300_000,
+);
+
+test(
   "the card's primary button asks for what its offer takes, as the offer menu does",
   () =>
     proves(

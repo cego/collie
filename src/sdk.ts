@@ -196,6 +196,7 @@ export {
   answerFor,
   blockingKeys,
   findingKey,
+  sameFinding,
   formatFindings,
   isBlocking,
   remainingDisputes,
@@ -1295,7 +1296,7 @@ export interface HostApi {
    * written out again by an agent — asking for a file to be repeated verbatim is how
    * verbatim stops being true. The refusal is the message: a target that is not a merge
    * request, no CLI or login for its forge, or one assigned to whoever is running this.
-   * With `approve`, the merge request is approved too, and the message says whether it was.
+   * Reads back the round's signature before posting, so a replay sends no second note.
    */
   readonly post: (options: {
     readonly runId: string;
@@ -1303,8 +1304,27 @@ export interface HostApi {
     readonly cwd: string;
     /** The file to send, as the Run wrote it. */
     readonly file: string;
-    /** Approve the merge request too: a review with nothing live left to fix. */
-    readonly approve?: boolean;
+    readonly head: string;
+    readonly round: number;
+  }) => Effect.Effect<Posted>;
+  /** Reads the target's head before review. Take it inside an Activity. */
+  readonly reviewedHead: (options: {
+    readonly target: string;
+    readonly cwd: string;
+  }) => Effect.Effect<string>;
+  readonly reviewChanges: (options: {
+    readonly target: string;
+    readonly cwd: string;
+    readonly previous: string;
+    readonly head: string;
+  }) => Effect.Effect<string, WorkflowError>;
+  /** Approves once per Run and round; an interrupted attempt returns an uncertain outcome. */
+  readonly approveReview: (options: {
+    readonly runId: string;
+    readonly round: number;
+    readonly target: string;
+    readonly cwd: string;
+    readonly head: string;
   }) => Effect.Effect<Posted>;
 }
 
@@ -1378,6 +1398,7 @@ export interface MrReady {
 export interface Posted {
   readonly ok: boolean;
   readonly message: string;
+  readonly signature?: string;
 }
 
 // oxlint-disable-next-line effecttsgo/lazy-effect -- Host serves the published HostApi.usage() method unchanged.

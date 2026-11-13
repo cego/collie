@@ -57,6 +57,10 @@ const listed = <
  * reason: a reviewer who has no line number has still said something worth reading.
  */
 export const FindingSchema = Schema.Struct({
+  id: Schema.optionalKey(Schema.String.pipe(said("id"))),
+  status: Schema.optionalKey(Schema.Literals(["open", "fixed", "disputed", "obsolete"])),
+  head: Schema.optionalKey(Schema.String),
+  note: Schema.optionalKey(Schema.String),
   file: Schema.optionalKey(Schema.String),
   line: Schema.optionalKey(Schema.Finite),
   // Free text, because a fork's own word is a judgement and not an error — and named
@@ -73,6 +77,10 @@ export const FindingSchema = Schema.Struct({
 });
 
 export interface Finding {
+  id?: string;
+  status?: "open" | "fixed" | "disputed" | "obsolete";
+  head?: string;
+  note?: string;
   file?: string;
   line?: number;
   severity: string;
@@ -361,7 +369,11 @@ export const findingsIn = (
  * a review and no findings came back clean.
  */
 export const openFindingsIn = (dir: string): Effect.Effect<number, never, FileSystem.FileSystem> =>
-  findingsIn(dir).pipe(Effect.map((found) => found.length));
+  findingsIn(dir).pipe(
+    Effect.map(
+      (found) => Arr.filter(found, (f) => f.status !== "fixed" && f.status !== "obsolete").length,
+    ),
+  );
 
 export type Parsed<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -419,6 +431,26 @@ export function parseFindings(raw: YamlValue | undefined, where: string): Parsed
       return { ok: false, error: `${where}[${index}]: severity is required` };
     }
     const finding: Finding = { severity: item.severity, title: item.title };
+    if (item.id !== undefined) {
+      if (!isString(item.id) || Str.trim(item.id) === "")
+        return { ok: false, error: `${where}[${index}].id is required and must not be blank` };
+      finding.id = item.id;
+    }
+    if (item.status !== undefined) {
+      if (
+        item.status !== "open" &&
+        item.status !== "fixed" &&
+        item.status !== "disputed" &&
+        item.status !== "obsolete"
+      )
+        return {
+          ok: false,
+          error: `${where}[${index}].status must be open, fixed, disputed or obsolete`,
+        };
+      finding.status = item.status;
+    }
+    if (isString(item.head)) finding.head = item.head;
+    if (isString(item.note)) finding.note = item.note;
     if (isString(item.file)) finding.file = item.file;
     if (isNumber(item.line)) finding.line = item.line;
     if (isString(item.detail)) finding.detail = item.detail;
@@ -435,6 +467,12 @@ export function parseFindings(raw: YamlValue | undefined, where: string): Parsed
  */
 export function findingKey(f: Pick<Finding, "file" | "title">): string {
   return `${f.file ?? ""}::${Str.toLowerCase(Str.trim(f.title))}`;
+}
+
+export function sameFinding(left: Finding, right: Finding): boolean {
+  return left.id !== undefined && right.id !== undefined
+    ? left.id === right.id
+    : findingKey(left) === findingKey(right);
 }
 
 /**
@@ -593,7 +631,9 @@ export function unsubstantiated(findings: ReadonlyArray<Finding>): string | null
 
 /** Minor is the one severity not worth blocking on; anything unrecognised fails closed. */
 export function isBlocking(finding: Finding): boolean {
-  return finding.severity !== "minor";
+  return (
+    finding.status !== "fixed" && finding.status !== "obsolete" && finding.severity !== "minor"
+  );
 }
 
 /** Why a converging loop stopped for the human; `attention` reports it as `reason`. */
@@ -661,13 +701,16 @@ export function settleRound(round: {
   /** The blocking set of an earlier round, and which round that was. */
   readonly seen?: { readonly at: number; readonly keys: ReadonlyArray<string> } | null;
 }): Rally {
-  const live = [...round.live];
+  const live = Arr.filter(round.live, (f) => f.status !== "fixed" && f.status !== "obsolete");
   const reopened = [...(round.reopened ?? [])];
   const blocking = [...Arr.filter(live, isBlocking), ...reopened];
   if (blocking.length === 0) {
     // A dispute the reviewers did not answer settles nothing serious, whether they
     // raised it again or left it out.
-    const standing = Arr.filter(round.disputed, isBlocking);
+    const standing = Arr.dedupeWith(
+      Arr.filter(round.disputed, isBlocking),
+      (left: Finding, right: Finding) => sameFinding(left, right),
+    );
     if (standing.length > 0) {
       return {
         go: "halt",
@@ -912,7 +955,8 @@ function reviewBullet(finding: Finding): string {
     () => "",
   );
   const detail = text ? `\n  ${pipe(text, Str.replace(/\s*\n\s*/g, " "))}` : "";
-  return `- ${at}${Str.trim(finding.title)}${detail}`;
+  const identity = finding.id ? `${finding.id}: ${finding.status ?? "open"} — ` : "";
+  return `- ${identity}${at}${Str.trim(finding.title)}${detail}`;
 }
 
 export interface Split {
@@ -956,10 +1000,12 @@ export function splitDisputed(
   findings: ReadonlyArray<Finding>,
   disputed: ReadonlyArray<Finding>,
 ): Split {
-  const known = new Set(Arr.map(disputed, findingKey));
   const split: Split = { live: [], settled: [], rebutted: [] };
   for (const finding of findings) {
-    if (!known.has(findingKey(finding))) {
+    if (finding.status === "fixed" || finding.status === "obsolete") continue;
+    if (finding.status === "disputed" && !finding.rebuttal) {
+      split.settled.push(finding);
+    } else if (!Arr.some(disputed, (one) => sameFinding(one, finding))) {
       split.live.push(finding);
     } else if (finding.rebuttal) {
       split.live.push(finding);
@@ -980,7 +1026,8 @@ export function formatFindings(findings: ReadonlyArray<Finding>): string {
       const rebuttal = f.rebuttal
         ? `\n  answers your dispute: ${pipe(f.rebuttal, Str.replace(/\n/g, "\n  "))}`
         : "";
-      return `- [${f.severity}] ${f.title}${at}${detail}${rebuttal}`;
+      const identity = f.id ? `${f.id}: ${f.status ?? "open"} — ` : "";
+      return `- ${identity}[${f.severity}] ${f.title}${at}${detail}${rebuttal}`;
     }),
     "\n",
   );

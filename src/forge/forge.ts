@@ -13,7 +13,7 @@ import type { Ran, Runner } from "../mr";
 import type { Posted } from "../sdk";
 import { github } from "./github";
 import { gitlab } from "./gitlab";
-import type { ForgeHttp } from "./http";
+import type { Answered, ForgeHttp } from "./http";
 import type { FiledIssue, IssueList } from "./issues";
 import type { ForgeComment, MergeAnswer, ReviewRead } from "./review";
 
@@ -160,6 +160,13 @@ export interface Commands {
 /** What Collie asks a forge. Every answer is a value: a forge that cannot be asked says why. */
 export interface Forge {
   readonly name: MrForge;
+  readonly reviewChanges: <R>(
+    ref: MrRef,
+    previous: string,
+    head: string,
+    cwd: string,
+    run: Runner<R>,
+  ) => Effect.Effect<Answered<string>, never, R | ForgeHttp>;
   /** The open issues, or with `numbers` those issues read one by one: a listing can lag a filing. */
   readonly issues: <R>(
     project: string,
@@ -334,14 +341,27 @@ export interface Forge {
   readonly noun: string;
   /** The repository's web address, from its `host/path`. */
   readonly webUrl: (project: string) => string;
-  /** One note on the merge request, and its approval where `approve` asks for it. */
+  /** One note on the merge request. */
   readonly post: <R>(
     ref: MrRef,
     body: string,
-    approve: boolean,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<Posted, never, R | ForgeHttp>;
+  /** Approves only the reviewed head, returning the forge's refusal unchanged in the message. */
+  readonly approve: <R>(
+    ref: MrRef,
+    head: string,
+    cwd: string,
+    run: Runner<R>,
+  ) => Effect.Effect<Posted, never, R | ForgeHttp>;
+  /** Finds a top-level note by its exact last-line signature. */
+  readonly findNote: <R>(
+    ref: MrRef,
+    signature: string,
+    cwd: string,
+    run: Runner<R>,
+  ) => Effect.Effect<Answered<boolean>, never, R | ForgeHttp>;
   /** The merge request's review: its state, approval, mergeability, pipeline and comments. */
   readonly readReview: <R>(
     ref: MrRef,

@@ -62,6 +62,7 @@ import { readLanding, takeOver, writeLanding } from "../../src/landing";
 import { shell } from "../../src/mr";
 import { forgeHttpLayer, type ForgeHttp } from "../../src/forge/http";
 import { readCheckpoints } from "../../src/cards";
+import { buildBoard } from "../../src/board";
 import {
   RecordedSolution,
   mrLabel,
@@ -2496,7 +2497,7 @@ scenario(
           input: { target },
           decision: "post-1",
         });
-        expect(optionsOf(rows, "post-1")).toContain("Post to merge request");
+        expect(optionsOf(rows, "post-1")).toContain("Post");
 
         yield* answeredThen({
           entry: shipped("review"),
@@ -2546,6 +2547,8 @@ const REVIEWED = {
   },
 } as const;
 
+const REVIEW_HEAD = "1234567890abcdef1234567890abcdef12345678";
+
 for (const name of ["gitlab", "github"] as const) {
   const noun = name === "gitlab" ? "merge request" : "pull request";
   const target = mrTarget(PROJECT[name], "30");
@@ -2557,7 +2560,9 @@ for (const name of ["gitlab", "github"] as const) {
         installed: true,
         loggedIn: [FORGE_HOST[name]],
         login: "tester",
-        mrs: [{ project: PROJECT[name], iid: "30", state: "open", author: "ann" }],
+        mrs: [
+          { project: PROJECT[name], iid: "30", state: "open", author: "ann", head: REVIEW_HEAD },
+        ],
       });
       return { bin, forge };
     });
@@ -2571,7 +2576,11 @@ for (const name of ["gitlab", "github"] as const) {
         input: { target },
         decision: "post-1",
       });
-      expect(optionsOf(rows, "post-1")).toContain(`Post to ${noun}`);
+      const choice = synthesis.findings.length === 0 ? "Post and approve 1234567" : "Post";
+      expect(optionsOf(rows, "post-1")).toContain(choice);
+      expect(optionsOf(rows, "post-1")).not.toContain(
+        synthesis.findings.length === 0 ? "Post" : "Post and approve 1234567",
+      );
       const review = yield* asked(runId, "review-1");
       expect(review).toContain(REVIEWED[name].diff);
       expect(review).toContain(REVIEWED[name].view);
@@ -2581,11 +2590,371 @@ for (const name of ["gitlab", "github"] as const) {
         runId,
         input: { target },
         decision: "post-1",
-        value: `Post to ${noun}`,
+        value: choice,
       });
       yield* bin.restore();
-      return { said: said(result), model: yield* forge.model() };
+      return {
+        said: said(result) || refusedWith(result),
+        model: yield* forge.model(),
+        requests: forge.requests(),
+      };
     });
+
+  scenario(
+    `review input on ${name}: a push while the initial reviewer reads invalidates its attribution`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge } = yield* reviewing();
+          const runId = `r-review-input-${name}`;
+          yield* rig.queueOutputs([null]);
+          const status = yield* driven(
+            { entry: shipped("review"), runId, input: { target } },
+            (run) =>
+              Effect.gen(function* () {
+                const fs = yield* FileSystem.FileSystem;
+                const output = `${dir}/agents/${runId}/review-1.json`;
+                yield* until(
+                  () => fs.exists(`${dir}/agents/${runId}/review-1.prompt.md`).pipe(Effect.orDie),
+                  (ready) => ready,
+                );
+                const before = yield* forge.model();
+                yield* forge.set({
+                  ...before,
+                  mrs: Arr.map(before.mrs, (one) => ({
+                    ...one,
+                    head: "abcdef1234567890abcdef1234567890abcdef12",
+                  })),
+                });
+                yield* fs.writeFileString(output, asJson(SYNTHESIS)).pipe(Effect.orDie);
+                yield* until(
+                  () => Effect.all([run.status, run.asked]),
+                  ([status, rows]) =>
+                    status.status === "failed" ||
+                    Arr.some(rows, (row) => row.decision === "post-1"),
+                );
+                return yield* run.status;
+              }),
+          );
+          expect(status.status).toBe("failed");
+          expect(outcomeText(status)).toContain("reviewed head changed");
+          expect(Rec.values((yield* forge.model()).notes ?? {})).toEqual([]);
+          yield* bin.restore();
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `review ledger on ${name}: resolving a renamed dispute by id permits an approval request`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          yield* reviewedBranch();
+          yield* exec(["git", "remote", "set-url", "upstream", `https://${PROJECT[name]}.git`], {
+            cwd: rig.projectDir,
+          });
+          const { bin, forge } = yield* reviewing();
+          const model = yield* forge.model();
+          yield* forge.set({
+            ...model,
+            mrs: Arr.map(model.mrs, (one) => ({ ...one, sourceBranch: "feature" })),
+          });
+          const finding = { id: "F1", severity: "major", file: "src/old.ts", title: "guard input" };
+          yield* rig.queueOutputs([
+            { ...SYNTHESIS, findings: [finding] },
+            {
+              verdict: "clean",
+              fixed: [],
+              disputed: [{ ...finding, reason: "the caller guards it" }],
+              checks: [],
+            },
+            { ...SYNTHESIS, findings: [{ ...finding, file: "src/new.ts", status: "fixed" }] },
+          ]);
+          const run = {
+            entry: shipped("review"),
+            runId: `r-dispute-id-${name}`,
+            input: { target },
+          };
+          const first = yield* parked({ ...run, decision: "post-1" });
+          expect(optionsOf(first, "post-1")).toContain("Fix findings");
+          const next = yield* answeredThen({
+            ...run,
+            decision: "post-1",
+            value: "Fix findings",
+            until: "post-2",
+          });
+          expect(optionsOf(next, "post-2")).toContain("Post and approve 1234567");
+          const result = yield* answered({
+            ...run,
+            decision: "post-2",
+            value: "Post and approve 1234567",
+          });
+          expect(said(result)).toContain("approved");
+          expect((yield* forge.model()).approved ?? []).toHaveLength(1);
+          yield* bin.restore();
+        }),
+      ),
+    120_000,
+  );
+
+  for (const resolution of ["fixed list", "retained finding"] as const)
+    scenario(
+      `review ledger on ${name}: new identities preserve earlier resolutions via ${resolution}`,
+      () =>
+        runEffect(
+          Effect.gen(function* () {
+            yield* reviewedBranch();
+            yield* exec(["git", "remote", "set-url", "upstream", `https://${PROJECT[name]}.git`], {
+              cwd: rig.projectDir,
+            });
+            const { bin, forge } = yield* reviewing();
+            const model = yield* forge.model();
+            yield* forge.set({
+              ...model,
+              mrs: Arr.map(model.mrs, (one) => ({ ...one, sourceBranch: "feature" })),
+            });
+            const runId = `r-ledger-ids-${name}`;
+            const earlier = { severity: "major", file: "src/old.ts", title: "guard input" };
+            yield* rig.queueOutputs([
+              { ...SYNTHESIS, findings: [earlier] },
+              { verdict: "clean", fixed: [earlier], disputed: [], checks: [] },
+              {
+                ...SYNTHESIS,
+                findings: [
+                  { severity: "minor", file: "src/new.ts", title: "close handle" },
+                  { id: `${runId}-F2`, severity: "minor", title: "check response" },
+                  ...(resolution === "retained finding"
+                    ? [{ ...earlier, id: `${runId}-F1`, status: "fixed" }]
+                    : []),
+                ],
+                fixed: resolution === "fixed list" ? [earlier] : [],
+              },
+            ]);
+            yield* driven({ entry: shipped("review"), runId, input: { target } }, (run) =>
+              Effect.gen(function* () {
+                yield* until(
+                  () => run.asked,
+                  (rows) => Arr.some(rows, (row) => row.decision === "post-1"),
+                );
+                yield* run.answer("post-1", "Fix findings");
+                const [status, rows] = yield* until(
+                  () => Effect.all([run.status, run.asked]),
+                  ([status, rows]) =>
+                    status.status === "failed" ||
+                    Arr.some(rows, (row) => row.decision === "post-2"),
+                );
+                expect(status.status).not.toBe("failed");
+                expect(optionsOf(rows, "post-2")).toContain("Post");
+                expect(yield* findingsIn(runDir(dir, runId))).toMatchObject([
+                  { id: `${runId}-F3`, title: "close handle", status: "open" },
+                  { id: `${runId}-F2`, title: "check response", status: "open" },
+                  { id: `${runId}-F1`, title: "guard input", status: "fixed" },
+                ]);
+              }),
+            );
+            yield* bin.restore();
+          }),
+        ),
+      120_000,
+    );
+
+  for (const mode of [
+    "partial",
+    "force push",
+    "unchanged",
+    "resolved",
+    "clean start",
+    "unposted",
+  ] as const)
+    scenario(
+      `review ledger on ${name}: ${mode === "partial" ? "Review again carries earlier findings and posts the interdiff's status changes" : mode}`,
+      () =>
+        runEffect(
+          Effect.gen(function* () {
+            const { bin, forge } = yield* reviewing();
+            const first = `r-ledger-${name}-first`;
+            const next = `r-ledger-${name}-next`;
+            const findings = [
+              {
+                id: "F1",
+                status: "open",
+                severity: "major",
+                file: "src/a.ts",
+                title: "guard the input",
+                detail: "An empty input crashes the request.",
+              },
+              {
+                id: "F2",
+                status: "open",
+                severity: "major",
+                file: "src/b.ts",
+                title: "close the handle",
+                detail: "The unchanged handle leaks after every request.",
+              },
+            ];
+            yield* rig.queueOutputs([
+              {
+                ...SYNTHESIS,
+                verdict: mode === "clean start" ? "clean" : "findings",
+                findings: mode === "clean start" ? [] : findings,
+              },
+              {
+                ...SYNTHESIS,
+                findings: Arr.map(findings, (one) => ({
+                  ...one,
+                  status:
+                    one.id === "F1"
+                      ? mode === "force push"
+                        ? "obsolete"
+                        : mode === "unchanged" || mode === "clean start" || mode === "unposted"
+                          ? "open"
+                          : "fixed"
+                      : mode === "resolved"
+                        ? "obsolete"
+                        : "open",
+                })),
+              },
+            ]);
+            const entry = shipped("review");
+            yield* parked({ entry, runId: first, input: { target }, decision: "post-1" });
+            yield* answered({
+              entry,
+              runId: first,
+              input: { target },
+              decision: "post-1",
+              value:
+                mode === "unposted"
+                  ? "Don't post"
+                  : mode === "clean start"
+                    ? "Post and approve 1234567"
+                    : "Post",
+            });
+            const ledger = yield* findingsIn(runDir(dir, first));
+            expect(ledger).toMatchObject(
+              mode === "clean start"
+                ? []
+                : [
+                    {
+                      id: "F1",
+                      status: "open",
+                      head: REVIEW_HEAD,
+                      note:
+                        mode === "unposted"
+                          ? ""
+                          : `Review by Collie for @tester · ${first} round 1 at ${REVIEW_HEAD}`,
+                    },
+                    {
+                      id: "F2",
+                      status: "open",
+                      head: REVIEW_HEAD,
+                      note:
+                        mode === "unposted"
+                          ? ""
+                          : `Review by Collie for @tester · ${first} round 1 at ${REVIEW_HEAD}`,
+                    },
+                  ],
+            );
+            const head = "abcdef1234567890abcdef1234567890abcdef12";
+            const model = yield* forge.model();
+            yield* forge.set({
+              ...model,
+              ancestry: { [head]: mode === "force push" ? [] : [REVIEW_HEAD] },
+              mrs: Arr.map(model.mrs, (one) => ({
+                ...one,
+                head,
+                interdiff: "@@ -1 +1 @@\n-crash()\n+guard()",
+                diff: "@@ -1 +1 @@\n-full_old()\n+full_new()",
+              })),
+            });
+            const declared = declaredByModule((yield* loadEntry(entry)).metadata);
+            const facts: ActionFacts = {
+              outcome: "review",
+              succeeded: true,
+              branch: null,
+              mrUrl: null,
+              planIssues: 0,
+              disposed: false,
+              openFindings: 2,
+              diffTarget: target,
+              claim: null,
+            };
+            const offer = Option.getOrThrow(
+              Arr.findFirst(
+                offersFrom(declared, facts, { self: idOf("review") }),
+                (one) => one.title === "Review again",
+              ),
+            );
+            const filled = inputsFor(offer, {
+              runId: first,
+              runDir: runDir(dir, first),
+              facts,
+              input: { target },
+            });
+            expect(filled.previous).toBe(first);
+            const previous = yield* Schema.decodeUnknownEffect(Schema.String)(filled.previous).pipe(
+              Effect.orDie,
+            );
+            const rows = yield* parked({
+              entry,
+              runId: next,
+              input: { target },
+              options: { previous },
+              decision: "post-1",
+            });
+            const prompt = yield* asked(next, "review-1");
+            if (mode === "clean start") expect(prompt).toContain("Earlier findings ledger:\n[]");
+            else {
+              expect(prompt).toContain('"id": "F1"');
+              expect(prompt).toContain('"id": "F2"');
+              expect(prompt).toContain('"status": "open"');
+            }
+            if (mode === "force push") {
+              expect(prompt).toContain("+full_new()");
+              expect(prompt).not.toContain("+guard()");
+            } else {
+              expect(prompt).toContain("+guard()");
+              expect(prompt).not.toContain("+full_new()");
+            }
+            expect(prompt).not.toContain(REVIEWED[name].diff);
+            const choice = mode === "resolved" ? "Post and approve abcdef1" : "Post";
+            expect(optionsOf(rows, "post-1")).toContain(choice);
+            expect(optionsOf(rows, "post-1")).not.toContain(
+              mode === "resolved" ? "Post" : "Post and approve abcdef1",
+            );
+            yield* answered({
+              entry,
+              runId: next,
+              input: { target },
+              decision: "post-1",
+              value: choice,
+            });
+            const notes = Rec.values((yield* forge.model()).notes ?? {}).flat();
+            expect(notes).toHaveLength(mode === "unchanged" || mode === "unposted" ? 1 : 2);
+            if (mode === "unposted") {
+              expect(notes[0]).toContain("An empty input crashes the request.");
+              expect(notes[0]).toContain("The unchanged handle leaks after every request.");
+              expect(notes[0]).toContain(`· ${next} round 1 at ${head}`);
+            } else if (mode === "clean start") {
+              expect(notes[1]).toContain("F1: open");
+              expect(notes[1]).toContain("An empty input crashes the request.");
+            } else if (mode !== "unchanged") {
+              expect(notes[1]).toContain(mode === "force push" ? "F1: obsolete" : "F1: fixed");
+              expect(notes[1]).toContain(mode === "resolved" ? "F2: obsolete" : "F2: still open");
+              expect(notes[1]).not.toContain("The unchanged handle leaks");
+              expect(notes[1]).not.toContain("close the handle");
+              if (mode === "force push") expect(notes[1]).not.toContain("F1: fixed");
+              if (mode === "resolved")
+                expect(notes[1]).toContain(`all findings fixed at \`${head}\``);
+            }
+            expect((yield* forge.model()).approved ?? []).toHaveLength(
+              mode === "resolved" || mode === "clean start" ? 1 : 0,
+            );
+            yield* bin.restore();
+          }),
+        ),
+      120_000,
+    );
 
   scenario(
     `a review of a ${name} ${noun} reads it with that forge's commands, and posting a clean one approves it`,
@@ -2593,10 +2962,28 @@ for (const name of ["gitlab", "github"] as const) {
       runEffect(
         Effect.gen(function* () {
           const clean = { ...SYNTHESIS, verdict: "clean", findings: [] };
-          const { said: message, model } = yield* posted(`r-review-${name}-clean`, clean);
-          expect(message).toContain("and approved it");
-          expect(Rec.values(model.notes ?? {})).toHaveLength(1);
-          expect(model.approved).toHaveLength(1);
+          const runId = `r-review-${name}-clean`;
+          const { said: message, model, requests } = yield* posted(runId, clean);
+          expect(message).toContain("approved");
+          const notes = Rec.values(model.notes ?? {}).flat();
+          expect(notes).toHaveLength(1);
+          expect(notes[0]).toStartWith(`Review at ${REVIEW_HEAD}\n`);
+          expect(Str.split(notes[0] ?? "", "\n").at(-1)).toBe(
+            `Review by Collie for @tester · ${runId} round 1 at ${REVIEW_HEAD}`,
+          );
+          expect(model.approved ?? []).toHaveLength(1);
+          expect(
+            Arr.map(
+              Arr.filter(
+                requests,
+                (one) => one.method === "POST" && !Str.endsWith("/graphql")(one.url),
+              ),
+              (one) => one.body,
+            ),
+          ).toEqual([
+            { body: notes[0] ?? "" },
+            name === "gitlab" ? { sha: REVIEW_HEAD } : { event: "APPROVE", commit_id: REVIEW_HEAD },
+          ]);
         }),
       ),
     120_000,
@@ -2616,6 +3003,140 @@ for (const name of ["gitlab", "github"] as const) {
       ),
     120_000,
   );
+
+  scenario(
+    `review posting on ${name}: replay after the note landed posts it once`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge } = yield* reviewing();
+          const runId = `r-post-restart-${name}`;
+          const options = { entry: shipped("review"), runId, input: { target } };
+          yield* rig.queueOutputs([SYNTHESIS]);
+          yield* parked({ ...options, decision: "post-1" });
+          const accepted = yield* Deferred.make<void>();
+          const stopping: HostOverride = Layer.effect(Host)(
+            Effect.gen(function* () {
+              const host = yield* Host;
+              return Host.of({
+                ...host,
+                post: (asked) =>
+                  host.post(asked).pipe(
+                    Effect.tap(() => Deferred.succeed(accepted, undefined)),
+                    Effect.andThen(Effect.never),
+                  ),
+              });
+            }),
+          );
+          yield* driven({ ...options, restarted: true, host: stopping }, (run) =>
+            Effect.gen(function* () {
+              yield* run.answer("post-1", "Post");
+              yield* Deferred.await(accepted);
+            }),
+          );
+          const status = yield* driven({ ...options, restarted: true }, (run) => ended(run.status));
+          expect(outcomeText(status)).toContain("posted the review");
+          const notes = Rec.values((yield* forge.model()).notes ?? {}).flat();
+          expect(notes).toHaveLength(1);
+          expect(Str.split(notes[0] ?? "", "\n").at(-1)).toBe(
+            `Review by Collie for @tester · ${runId} round 1 at ${REVIEW_HEAD}`,
+          );
+          expect(
+            Arr.filter(
+              forge.requests(),
+              (one) => one.method === "POST" && !Str.endsWith("/graphql")(one.url),
+            ),
+          ).toHaveLength(1);
+          yield* bin.restore();
+        }),
+      ),
+    120_000,
+  );
+
+  for (const refusal of ["stale head", "self approval"] as const)
+    scenario(
+      `review posting on ${name}: ${refusal} is shown on the card and never retried`,
+      () =>
+        runEffect(
+          Effect.gen(function* () {
+            const { bin, forge } = yield* reviewing();
+            const runId = `r-refused-${name}-${refusal === "stale head" ? "head" : "self"}`;
+            const options = { entry: shipped("review"), runId, input: { target } };
+            yield* rig.queueOutputs([{ ...SYNTHESIS, verdict: "clean", findings: [] }]);
+            yield* parked({ ...options, decision: "post-1" });
+            const reason =
+              refusal === "stale head"
+                ? "SHA does not match HEAD"
+                : "You cannot approve your own merge request";
+            const before = yield* forge.model();
+            yield* forge.set({
+              ...before,
+              mrs: Arr.map(before.mrs, (one) =>
+                refusal === "stale head"
+                  ? { ...one, head: "abcdef1234567890abcdef1234567890abcdef12" }
+                  : { ...one, author: "tester" },
+              ),
+              refusesApproval: refusal === "self approval" ? reason : false,
+            });
+            const status = yield* driven({ ...options, restarted: true }, (run) =>
+              Effect.gen(function* () {
+                yield* run.answer("post-1", "Post and approve 1234567");
+                return yield* ended(run.status);
+              }),
+            );
+            expect(status.status).toBe("failed");
+            expect(outcomeText(status)).toContain(reason);
+            const [card] = yield* buildBoard({
+              env: { ...hostOf().env, stateDir: dir },
+              runs: [
+                runFacts({
+                  id: runId,
+                  workflow: idOf("review"),
+                  dir: runDir(dir, runId),
+                  project: rig.projectDir,
+                  cwd: rig.projectDir,
+                  mr: target,
+                  state: status.status === "failed" ? "failed" : "succeeded",
+                  note: status.status === "failed" ? status.reason : null,
+                  summary: status.status === "complete" ? outcomeText(status) : null,
+                }),
+              ],
+              tasks: [],
+              registered: [],
+              proposals: [],
+              only: runId,
+              offers: () => Effect.succeed([]),
+            });
+            expect(card?.sentence).toContain(reason);
+            const after = yield* forge.model();
+            expect(after.approved ?? []).toEqual([]);
+            expect(Rec.values(after.notes ?? {}).flat()).toHaveLength(1);
+            const approvals = () =>
+              Arr.filter(
+                forge.requests(),
+                (one) =>
+                  Str.endsWith(name === "gitlab" ? "/approve" : "/reviews")(one.url) &&
+                  one.method === "POST",
+              );
+            const expected: Schema.Json[] =
+              name === "github" && refusal === "stale head"
+                ? []
+                : [
+                    name === "gitlab"
+                      ? { sha: REVIEW_HEAD }
+                      : { event: "APPROVE", commit_id: REVIEW_HEAD },
+                  ];
+            expect(Arr.map(approvals(), (one) => one.body)).toEqual(expected);
+            const restarted = yield* driven({ ...options, restarted: true }, (run) =>
+              ended(run.status),
+            );
+            expect(outcomeText(restarted)).toContain(reason);
+            expect(approvals()).toHaveLength(expected.length);
+            yield* bin.restore();
+          }),
+        ),
+      120_000,
+    );
 }
 
 scenario(
@@ -2874,9 +3395,9 @@ scenario(
           decision: "post-1",
         });
 
-        expect(optionsOf(rows, "post-1")).toEqual(["Post to merge request", "Don't post"]);
+        expect(optionsOf(rows, "post-1")).toEqual(["Post", "Don't post"]);
         expect(recommendedOf(rows, "post-1")).toEqual({
-          recommended: "Post to merge request",
+          recommended: "Post",
           shortfall: null,
         });
         expect(
@@ -3096,7 +3617,9 @@ scenario("implement offers Stage as a follow-up on a succeeded Run with its merg
         "stage",
       ]);
       const stage = Option.getOrUndefined(Arr.findFirst(offered, (offer) => offer.id === "stage"))!;
-      expect(inputsFor(stage, { runDir: "/r", facts, input: {} })).toEqual({ mr: OPENED.mr_url });
+      expect(inputsFor(stage, { runId: "r", runDir: "/r", facts, input: {} })).toEqual({
+        mr: OPENED.mr_url,
+      });
       for (const over of [{ succeeded: false }, { mrUrl: null }, { disposed: true }])
         expect(
           Arr.map(offersFrom(declared, { ...facts, ...over }), (offer) => offer.id),
@@ -3167,7 +3690,9 @@ scenario("what a finished Run of each shipped module offers is the module's own 
         ["stage", "Stage", "stage"],
         ["follow-up", "Keep going on this — Build", idOf("implement")],
       ]);
-      expect(inputsFor(offered[0]!, { runDir: "/r", facts: delivered, input: {} })).toEqual({
+      expect(
+        inputsFor(offered[0]!, { runId: "r", runDir: "/r", facts: delivered, input: {} }),
+      ).toEqual({
         mr: mrUrl,
       });
       expect(offersFrom(implement, { ...delivered, disposed: true })).toEqual([]);
@@ -3210,10 +3735,10 @@ scenario("what a finished Run of each shipped module offers is the module's own 
       expect(offersFrom(renovate, facts({ succeeded: true }))).toEqual([]);
       const repository = "https://gitlab.example.com/team/project";
       expect(
-        inputsFor(recovery[0]!, { runDir: "/r", facts: failed, input: { repository } }),
+        inputsFor(recovery[0]!, { runId: "r", runDir: "/r", facts: failed, input: { repository } }),
       ).toEqual({ repository });
       expect(
-        inputsFor(again[0]!, { runDir: "/r", facts: unclaimed, input: { repository } }),
+        inputsFor(again[0]!, { runId: "r", runDir: "/r", facts: unclaimed, input: { repository } }),
       ).toEqual({ repository });
     }),
   ),
@@ -13179,6 +13704,7 @@ scenario(
             ),
             (offer) =>
               inputsFor(offer, {
+                runId: "r",
                 runDir: "/r",
                 facts: facts(diffTarget, succeeded),
                 input: { mr: diffTarget },
@@ -14629,7 +15155,9 @@ for (const name of ["gitlab", "github"] as const) {
           expect(Arr.map(offered, (offer) => [offer.id, offer.title, offer.workflow])).toEqual([
             ["release-again", "Release again", idOf("release")],
           ]);
-          expect(inputsFor(offered[0]!, { runDir: "/r", facts, input: { mr: target } })).toEqual({
+          expect(
+            inputsFor(offered[0]!, { runId: "r", runDir: "/r", facts, input: { mr: target } }),
+          ).toEqual({
             mr: target,
           });
 
