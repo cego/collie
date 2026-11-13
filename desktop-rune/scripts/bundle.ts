@@ -28,6 +28,9 @@ const ROOT = new URL("../../", import.meta.url).pathname;
 const IDENTIFIER = "dk.cego.collie.desktop";
 const CHANNEL = "stable";
 const BASE_URL = "https://github.com/cego/collie/releases/latest/download";
+// USTAR cannot hold directory-service UIDs; archives belong to no build account.
+const TAR_OWNER =
+  process.platform === "darwin" ? ["--uid=0", "--gid=0"] : ["--owner=0", "--group=0"];
 
 export const bundleNameOf = (os: Os) => (os === "macos" ? "collie-desktop.app" : "collie-desktop");
 
@@ -296,7 +299,7 @@ export const assemble = Effect.fn("bundle.assemble")(function* (options: Assembl
   const prefix = prefixOf(os, arch);
   const file = `${prefix}-collie-desktop${os === "macos" ? ".app" : ""}.tar.zst`;
   const tar = path.join(artifacts, `${prefix}.tar`);
-  yield* run("tar", ["--format=ustar", "-cf", tar, "-C", build, name]);
+  yield* run("tar", ["--format=ustar", ...TAR_OWNER, "-cf", tar, "-C", build, name]);
   yield* fs.writeFile(path.join(artifacts, file), Bun.zstdCompressSync(yield* fs.readFile(tar)));
   yield* fs.remove(tar);
   yield* fs.writeFileString(
@@ -368,6 +371,7 @@ export const packageInstaller = (out: string, os: Os, arch: string) =>
       yield* fs.chmod(`${build}/installer`, 0o755);
       yield* run("tar", [
         "--format=ustar",
+        ...TAR_OWNER,
         "-czf",
         `${out}/artifacts/${os}-${arch}-collie-desktop-Setup.tar.gz`,
         "-C",
