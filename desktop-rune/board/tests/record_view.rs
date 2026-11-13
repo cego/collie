@@ -761,6 +761,29 @@ fn a_links_export_uses_the_file_presentation_and_never_acknowledges_the_hosted_o
 }
 
 #[test]
+fn a_provider_only_export_requires_an_explicit_receipt_after_display() {
+    use collie_desktop_board::record::artefacts::frame_drawn;
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    let bytes = b"# Provider export\n";
+    let mut item = artefact("export", "notes.md", "text/markdown", bytes, 1);
+    item["provider"] = json!({"name":"claude", "namespace":"org-1", "resource":"abc", "version":"3",
+        "provenance":"caller-reported", "observedAt":"2026-11-01T00:00:00Z"});
+    item["export"] = json!({"source":"/srv/notes.md", "availability":"available"});
+    collection(&mut runtime, &harness, vec![item]);
+    selected_bytes(&mut runtime, &harness, "export", bytes);
+    assert!(
+        within(&runtime.accessibility_json())
+            .iter()
+            .any(|node| node["name"] == "Provider export")
+    );
+    frame_drawn(&runtime);
+    assert!(harness.fake.asked_of("artefactSeen").is_empty());
+    tap(&mut runtime, "artefact-seen", 700.0);
+    assert_eq!(harness.fake.asked_of("artefactSeen")[0]["revision"], 1);
+}
+
+#[test]
 fn a_link_url_is_registered_from_its_own_named_field() {
     let harness = Harness::<App>::new();
     let mut runtime = opened(&harness);

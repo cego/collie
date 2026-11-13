@@ -440,7 +440,7 @@ impl App {
                             changes.post(move |_: &mut App| { posted.store(false, Ordering::Release); });
                         });
                         let player = crate::video::Player::open(&path, notify);
-                        if item.url.is_some() {
+                        if item.url.is_some() || item.provider.is_some() {
                             return Preview::Video(player);
                         }
                         let once = Arc::new(AtomicBool::new(false));
@@ -674,6 +674,7 @@ pub fn frame_drawn(runtime: &rune::Runtime<App>) {
     // An export's preview is not an inspection of the hosted page it stands beside.
     if selected(record).is_none_or(|item| {
         item.url.is_some()
+            || item.provider.is_some()
             || item
                 .seen
                 .as_ref()
