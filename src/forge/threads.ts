@@ -181,16 +181,14 @@ export const approvedAt = (
       pull,
     );
     if (!current.ok) return current;
-    const reviews = yield* requestAs(
-      Schema.Array(
-        Schema.Struct({
-          user: Schema.NullOr(Schema.Struct({ login: Schema.String })),
-          state: Schema.String,
-        }),
-      ),
+    const reviews = yield* pagesAs(
+      Schema.Struct({
+        user: Schema.NullOr(Schema.Struct({ login: Schema.String })),
+        state: Schema.String,
+      }),
       login,
       cwd,
-      `${pull}/reviews?per_page=100`,
+      `${pull}/reviews`,
     );
     if (!reviews.ok) return reviews;
     const latest = Arr.last(

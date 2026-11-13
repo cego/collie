@@ -303,6 +303,36 @@ for (const name of ["gitlab", "github"] as const) {
         );
       });
 
+    if (name === "github")
+      test("a dismissal on a later review page cancels the login's approval", () => {
+        const fake = fakeForge(name, model(name));
+        const layer = forgeHttpTest(fake.run, (url, init) => {
+          if (!Str.includes("/reviews?")(url)) return fake.fetch(url, init);
+          const page = new URL(url).searchParams.get("page");
+          return Promise.resolve(
+            Response.json(
+              page === "2"
+                ? [{ user: { login: "me" }, state: "DISMISSED" }]
+                : [
+                    { user: { login: "me" }, state: "APPROVED" },
+                    ...Array.from({ length: 99 }, () => ({
+                      user: { login: "other" },
+                      state: "COMMENTED",
+                    })),
+                  ],
+            ),
+          );
+        });
+        return runEffect(
+          Effect.gen(function* () {
+            expect(yield* forge.approvedAt(ref(name), "me", HEAD, "/w", fake.run)).toEqual({
+              ok: true,
+              value: false,
+            });
+          }).pipe(Effect.provide(layer)),
+        );
+      });
+
     test("lists only issues over HTTP from a cold login", () => {
       const fake = fakeForge(
         name,
