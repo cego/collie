@@ -1388,8 +1388,15 @@ would be recorded on is refused with `invalid_input`, and nothing is recorded: a
 supersede itself. A free-text ref, or one naming another Run, is recorded as given. The
 board and chat's `collie_do` `disposition` take the same path. A ref may name a Run as
 `<machine>:<run>`: by this Machine's hostname, or that name's first label, it is that Run
-here; by another Machine's name it is never one of this host's Runs, whatever its id, so it
-hands nothing on. The Flock chat writes a word naming the Machine the disposition goes to as
+here. A Run of another Task here takes the work over only where it carries the same merge
+request, or, with neither having one, the same branch of the same project. A `superseded`
+naming another Machine's Run is checked before it is recorded: that Machine must be paired,
+answer as its paired installation, and have that Run carrying this Task's merge request, or,
+where either has none, the same branch of the same repository. The line is then kept on the
+Task's Run that owns that merge request, whichever of its Runs you named, with the successor's
+installation, Run, Task and the work it carries, and settles that obligation alone. A
+successor that is unpaired, unreachable, missing or carrying other work is refused with its
+reason, and nothing is recorded. The Flock chat writes a word naming the Machine the disposition goes to as
 the bare Run id, since herdr's name for a Machine need not be its hostname.
 
 Without `--as` the command reads. With it, `--as` is `merged`, `abandoned`, or

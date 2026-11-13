@@ -60,7 +60,7 @@ import type {
 import { laneWaitOf, stripOf } from "./flow";
 import { Foreground } from "./foreground";
 import { flowInputsFor, taskFlowFor } from "./flow-read";
-import { machineName } from "./peers";
+import { machineName, peersOf } from "./peers";
 import { deliveriesOf, SENT_STATES, toldIn } from "./steering";
 import { readCards } from "./cards";
 import { branchMovement } from "./recovery";
@@ -1039,21 +1039,50 @@ const ledgerOf = Effect.fn("Board.ledgerOf")(function* (
   card: string,
   cardOf: ReadonlyMap<string, string>,
   machine: string,
+  paired: ReadonlySet<string>,
+  runs: ReadonlyMap<string, RunFacts>,
 ) {
   const lines = yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => []));
-  return yield* Effect.forEach(lines, (line) =>
-    Effect.map(
-      line.ref === "" ? Effect.succeed(null) : mrIdIn(line.ref, run.cwd, shell),
-      (mr): Recorded => ({
+  const carried = yield* mrIdOf(run);
+  return yield* Effect.forEach(
+    lines,
+    Effect.fnUntraced(function* (line) {
+      const mr =
+        line.successor?.work.mr !== undefined
+          ? line.successor.work.mr
+          : line.ref === ""
+            ? null
+            : yield* mrIdIn(line.ref, run.cwd, shell);
+      const local = yield* Effect.forEach(
+        refRuns(line.ref, machine),
+        Effect.fnUntraced(function* (word) {
+          const target = runs.get(word);
+          if (target === undefined || cardOf.get(word) === card) return false;
+          const other = yield* mrIdOf(target);
+          return carried !== null && other !== null
+            ? carried === other
+            : other === null &&
+                run.branch !== null &&
+                run.branch === target.branch &&
+                run.project === target.project;
+        }),
+      );
+      return {
         run: run.id,
         line,
         mr,
-        elsewhere: Arr.some(refRuns(line.ref, machine), (word) => {
-          const named = cardOf.get(word);
-          return named !== undefined && named !== card;
-        }),
-      }),
-    ),
+        elsewhere:
+          (line.kind === "superseded" &&
+            line.successor !== undefined &&
+            paired.has(line.successor.machine.installation) &&
+            (line.successor.work.mr !== null
+              ? line.successor.work.mr === carried
+              : carried === null &&
+                run.branch !== null &&
+                line.successor.work.branch === run.branch)) ||
+          Arr.some(local, Boolean),
+      };
+    }),
   );
 });
 
@@ -1208,6 +1237,12 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   const registered = opts.registered ?? (yield* everyRegistered);
   const proposals = opts.proposals ?? (yield* everyProposal);
   const mrStates = opts.mrStates ?? (yield* readMrStates(stateDir));
+  const paired = new Set(
+    Arr.map(
+      yield* peersOf(stateDir).pipe(Effect.orElseSucceed(() => [])),
+      (peer) => peer.installation,
+    ),
+  );
   const forge = opts.forge ?? (yield* readForge(stateDir));
   const since = yield* seenSince(stateDir);
   const live = new Map(Arr.map(opts.alive ?? [], (agent) => [agent.name, agent]));
@@ -1229,6 +1264,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
 
   // A Repo run is its fan-out's card's child rather than a card of its own.
   const present = new Map(Arr.map(all, (run) => [run.id, run.task]));
+  const runsById = new Map(Arr.map(all, (run) => [run.id, run]));
   const repoRunsOf = new Map<string, RunFacts[]>();
   for (const run of all)
     if (run.repo !== null && run.parent !== null && present.get(run.parent) === run.task)
@@ -1293,6 +1329,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
                   id === null ? [] : [[mrStates.get(id) ?? null, forge.get(id) ?? null]],
                 ),
                 since,
+                [...paired],
                 quietMs,
                 [...missingCheckouts],
               ]);
@@ -1353,7 +1390,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         const ledgers = new Map(
           yield* Effect.forEach(everyRun, (run) =>
             Effect.map(
-              ledgerOf(run, id, cardOf, opts.env.machine ?? machineName()),
+              ledgerOf(run, id, cardOf, opts.env.machine ?? machineName(), paired, runsById),
               (lines) => [run.id, lines] as const,
             ),
           ),

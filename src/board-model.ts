@@ -1333,6 +1333,12 @@ export const Started = Schema.Struct({
   redacted: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+export const CarriedWork = Schema.Struct({
+  mr: Schema.NullOr(Schema.String),
+  repository: Schema.NullOr(Schema.String),
+  branch: Schema.NullOr(Schema.String),
+});
+
 /**
  * What became of a Run's work: `merged` by some other route, `abandoned` on purpose, or
  * `superseded` by the Run that carried it instead. Never a value that edits its status.
@@ -1344,6 +1350,14 @@ export const Disposition = Schema.Struct({
   /** What backs it up: a merge request, a commit, or the Run that took the work over. */
   ref: Schema.String,
   note: Schema.NullOr(Schema.String),
+  successor: Schema.optionalKey(
+    Schema.Struct({
+      machine: MachineRef,
+      run: Schema.String,
+      task: Schema.NullOr(Schema.String),
+      work: CarriedWork,
+    }),
+  ),
 });
 export type Disposition = typeof Disposition.Type;
 

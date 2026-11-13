@@ -206,7 +206,7 @@ import { Herdr, isSettled, serverSocket, type AgentInfo } from "./herdr";
 import { taskOffers, type Offer } from "./offers";
 import { buildBoard, type KeptCards, LANDED_STATES, ownedMrs, taskFlowOf } from "./board";
 import { mrOf, readForge, readMrStates, watchedMr, type MrPanels } from "./merges";
-import { mrIdIn, shell } from "./mr";
+import { mrIdIn, projectHere, shell } from "./mr";
 import { ForgeHttp, forgeHttpLayer } from "./forge/http";
 import { fetchRef, followDetail } from "./run-detail";
 import { buildMachineOwn, buildRunDetail, type PlanCache } from "./views";
@@ -217,6 +217,8 @@ import {
   Flow,
   Controlled,
   Disposition,
+  CarriedWork,
+  mrIdProject,
   RunReply,
   Seen,
   FrontDoorRpcs,
@@ -253,7 +255,7 @@ import {
   type Attached,
 } from "./attachments";
 import { boardMessages, shareBoard } from "./board-stream";
-import { recordDisposition, refRuns } from "./disposition";
+import { recordDisposition, refRuns, qualifiedRuns } from "./disposition";
 import { markSeenSince, readSeen, recordSeen } from "./seen";
 import { readReplies } from "./replies";
 import {
@@ -498,6 +500,12 @@ export const HostRpcs = RpcGroup.make(
   // The read model both front doors show. A run whose module is missing is still here,
   // with the file to repair named, rather than an error where its history was.
   Rpc.make("run", { payload: { runId: Schema.String }, success: Schema.NullOr(RunView) }),
+  Rpc.make("runWork", {
+    payload: { runId: Schema.String },
+    success: Schema.NullOr(
+      Schema.Struct({ run: Schema.String, task: Schema.NullOr(Schema.String), work: CarriedWork }),
+    ),
+  }),
   Rpc.make("runMetrics", {
     payload: { runId: Schema.String },
     success: RunMetrics,
@@ -968,6 +976,22 @@ const handlers = (
           ),
         status: ({ runId }) => registry.status(runId),
         run: ({ runId }) => registry.view(runId),
+        runWork: ({ runId }) =>
+          Effect.gen(function* () {
+            const view = yield* registry.view(runId);
+            if (view === null) return null;
+            const ref = mrOf(factsOfView(dir, view));
+            const mr = ref === null ? null : yield* mrIdIn(ref, view.cwd, shell);
+            return {
+              run: runId,
+              task: view.task,
+              work: {
+                mr,
+                branch: view.branch,
+                repository: mr === null ? yield* projectHere(view.cwd, shell) : mrIdProject(mr),
+              },
+            };
+          }).pipe(Effect.provideContext(bun)),
         runMetrics: ({ runId }) => record(runId, readMetrics(evidenceDir(dir, runId))),
         runCards: ({ runId }) => record(runId, readCards(runDir(dir, runId))),
         runDrift: ({ runId }) => record(runId, readDrift(runDir(dir, runId))),
@@ -2152,6 +2176,82 @@ const frontDoorHandlers = (
             )}`,
           });
         }, Effect.provideContext(bun));
+      const successorOn = Effect.fn("Host.successorOn")(function* (view: RunView, ref: string) {
+        const here = env.machine ?? machineName();
+        const short = (name: string) => Str.split(name, ".")[0];
+        const refs = Arr.filter(
+          qualifiedRuns(ref),
+          (one) => one.machine !== here && one.machine !== short(here),
+        );
+        if (refs.length === 0) return undefined;
+        if (refs.length !== 1)
+          return yield* new HostRefused({ reason: "a handoff must name one successor" });
+        const named = refs[0]!;
+        const matches = Arr.filter(
+          yield* peersOf(dir),
+          (peer) => peer.name === named.machine || short(peer.name) === named.machine,
+        );
+        if (matches.length !== 1)
+          return yield* new HostRefused({
+            reason: `successor ${ref} has no unambiguous paired Machine`,
+          });
+        const peer = matches[0]!;
+        return yield* Effect.scoped(
+          Effect.gen(function* () {
+            const remote = yield* connectPeer(dir, peer.name, { as: "host", client: here, stamp });
+            const identity = yield* remote.identity();
+            if (
+              identity.installation !== peer.installation ||
+              identity.installation === installation
+            )
+              return yield* new HostRefused({
+                reason: `successor ${ref} did not answer as its paired Machine`,
+              });
+            const target = yield* remote.runWork({ runId: named.run });
+            if (target === null)
+              return yield* new HostRefused({ reason: `successor ${ref} does not exist` });
+            const owning = Arr.findFirst(
+              yield* mrsOfTask(view),
+              (one) => one.id === target.work.mr,
+            );
+            const carrier = Option.isSome(owning) ? yield* known(owning.value.owner) : view;
+            const ownMr = mrOf(factsOfView(dir, carrier));
+            const own = ownMr === null ? null : yield* mrIdIn(ownMr, carrier.cwd, shell);
+            const repository =
+              own === null ? yield* projectHere(carrier.cwd, shell) : mrIdProject(own);
+            const sameMr = own !== null && own === target.work.mr;
+            const sameBranch =
+              (own === null || target.work.mr === null) &&
+              carrier.branch !== null &&
+              carrier.branch === target.work.branch &&
+              repository !== null &&
+              repository === target.work.repository;
+            if (!sameMr && !sameBranch)
+              return yield* new HostRefused({
+                reason: `successor ${ref} does not carry this Run's work`,
+              });
+            return {
+              carrier: carrier.runId,
+              successor: {
+                machine: { installation: peer.installation, name: peer.name },
+                run: target.run,
+                task: target.task,
+                work: { mr: own, repository, branch: carrier.branch },
+              },
+            };
+          }),
+        ).pipe(
+          Effect.timeout(ASK_TIMEOUT),
+          Effect.mapError((cause) =>
+            Schema.is(HostRefused)(cause)
+              ? cause
+              : new HostRefused({
+                  reason: `successor ${ref} could not be verified: ${reason(cause)}`,
+                }),
+          ),
+          Effect.provideContext(bun),
+        );
+      });
       const auditedControl =
         (
           runId: string,
@@ -3708,14 +3808,20 @@ const frontDoorHandlers = (
                   result: Disposition,
                 },
                 Effect.gen(function* () {
-                  const line = {
+                  const handoff =
+                    kind === "superseded"
+                      ? yield* successorOn(yield* known(kept.run), kept.ref)
+                      : undefined;
+                  const plain: Disposition = {
                     at: yield* nowIso,
                     by: actorName({ ...whoOf(client), requestId: request }),
                     kind,
                     ref: kept.ref,
                     note,
                   };
-                  yield* recordDisposition(trail(kept.run), line);
+                  const line: Disposition =
+                    handoff === undefined ? plain : { ...plain, successor: handoff.successor };
+                  yield* recordDisposition(trail(handoff?.carrier ?? kept.run), line);
                   return line;
                 }),
               ),
