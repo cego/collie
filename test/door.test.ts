@@ -10,10 +10,13 @@ import { Deferred, Effect, Fiber, FileSystem, Layer, Option, Stream } from "effe
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
-import { IdentityRpc, type OfferView, type RunDetail } from "../src/board-model";
+import { IdentityRpc, recordIn, type OfferView, type RunDetail } from "../src/board-model";
 import { door, relatedOf, type FromDoor, type ToDoor } from "../src/door";
 import { readEnv } from "../src/env";
+import type { AgentInfo } from "../src/herdr";
 import { frontDoor } from "../src/host";
+import { recordLaunch } from "../src/launches";
+import { registerAgent } from "../src/registry";
 import type { RunFacts } from "../src/runs";
 import { encodeStepLine, STEPS_FILE, type StepLine } from "../src/steps";
 import { runEffect } from "./support/effect";
@@ -170,6 +173,86 @@ test("the door reads a record before any client asks, and tells the engine nothi
           Option.map((one) => "runs" in one && one.runs),
         ),
       ).toEqual(Option.some(1));
+    }).pipe(Effect.scoped),
+  ));
+
+test("a delayed board listing preserves the door's newer agent reading", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-door-agents-" });
+      const run = yield* madeRun(dir, { id: "r1", cwd: dir });
+      const socket = `${dir}/host.sock`;
+      const { tell } = yield* silentEngine(dir, socket, [run], [[run.id, []]]);
+      yield* recordLaunch({
+        runId: run.id,
+        agent: "r1-build",
+        operation: "build",
+        output: `${dir}/output.json`,
+        reused: false,
+        role: "implementer",
+        workflow: "implement",
+        harness: "claude",
+      }).pipe(Effect.provide(recordsAt(dir)));
+      const agent: AgentInfo = {
+        name: "r1-build",
+        paneId: "p1",
+        workspaceId: null,
+        status: "idle",
+        title: null,
+        terminalId: null,
+        agentSession: null,
+      };
+      yield* registerAgent(
+        { session: null, workspaceId: null, cwd: dir },
+        {
+          role: "implementer",
+          agent: agent.name,
+          paneId: agent.paneId,
+          workspaceId: null,
+          runId: run.id,
+          workflow: run.workflow,
+          at: "2026-10-30T09:00:00Z",
+        },
+      ).pipe(Effect.provide(recordsAt(dir)));
+      const client = yield* frontDoor(socket);
+      const actions = client
+        .runDetail({ runId: run.id, tail: false, pages: 1, refreshMr: false })
+        .pipe(
+          Stream.map(recordIn),
+          Stream.runHead,
+          Effect.map((head) => {
+            const flow = Option.getOrNull(head)?.flow;
+            return flow == null
+              ? undefined
+              : Arr.flatMap(flow.lanes, (lane) =>
+                  Arr.flatMap(lane.nodes, (node) =>
+                    node.agent === agent.name ? (node.actions ?? []) : [],
+                  ),
+                );
+          }),
+        );
+      const agents = (alive: ReadonlyArray<AgentInfo>) =>
+        tell({ _tag: "Listed", runs: [], gone: [], order: null, alive, offers: [] });
+      const board = () =>
+        tell({
+          _tag: "Listed",
+          runs: [{ fact: run, seq: 0 }],
+          gone: [],
+          order: [run.id],
+          offers: [[run.id, []]],
+        });
+
+      agents([agent]);
+      expect(yield* actions).toContain("tell");
+      board();
+      expect(yield* actions).toContain("tell");
+
+      agents([]);
+      board();
+      const gone = yield* actions;
+      expect(gone).toBeDefined();
+      expect(gone).not.toContain("tell");
     }).pipe(Effect.scoped),
   ));
 

@@ -99,6 +99,44 @@ start, since renaming a file the process still writes to would not move its writ
 
 ### Tracing the host
 
+Every front-door answer is served before background passes, through the shared RPC handler
+wrapper. A stream's lease ends on its first value, termination or after 250 ms, whichever
+comes first. Its producer then loses foreground priority and continues with the same values
+and errors. Idle notifications and ongoing Measurements stay background.
+
+A read awaiting a fresh board temporarily suspends only its own lease, so the build can
+advance. The lease is restored only while live, including after errors or cancellation.
+The answer keeps the board's read-your-writes coverage and updated readiness and merge-request facts.
+Slice boundaries hold for at most 250 ms.
+
+Physical file operations and commands release only the requesting lease's background hold while they wait.
+They retain its scheduler priority and original deadline. The hold returns after all overlapping
+waits finish, only while the lease remains live. Errors and cancellation use the same cleanup.
+`foregroundFileSystem` wraps the physical service before host components capture it; file handles
+also wrap reads and writes, including those used by the platform's stream and sink constructors.
+Other requests retain their holds. A late I/O completion cannot restore an expired stream lease.
+The shared command runner applies the same wait through process completion and scoped cleanup.
+
+`collie_run` reads its context through the existing model's related-Run query, avoiding polls of
+unrelated live executions. An active check still reads all Runs to report other checks and usual durations.
+A Flow-only read derives the same card and completion markers as the full record, without building
+the unused detail or listing its attachments and evidence. Full records still include those fields.
+
+Step steering persists only changes to its pause and note state. Entering an unarmed Step or
+re-reading the same prompt's notes does not rewrite that state and invalidate the board.
+Pause transitions and note receipts still persist; the live Steps keep writing their normal timeline.
+Model-backed Run listings use the supplied file reader for intent and displayed controls as well.
+Direct Run reads and live control decisions keep their fresh filesystem reads.
+
+Kept cards and check markers use their source-input revisions. Stamping a changed age or
+record still advances the public revision, but does not invalidate the card that produced it.
+File, row and observed Run-fact changes still invalidate the affected cards.
+
+`bench/front-door-wait.ts` measures `verify` first values and `read` answers
+against the record-open fixture's host while its live Runs keep the board building.
+The harness disables OTLP and records every board-build duration through `COLLIE_RECORD_MARKS`,
+including builds below the warning threshold. Missing marks invalidate a sample.
+
 A host makes no spans unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set, since making them was most
 of what an idle host allocated. When it is set, the host sends its spans and logs as OTLP/JSON
 to that base URL, under the service `collie-host`. It sends only spans that took at least
@@ -1012,6 +1050,9 @@ naming the session (`default` when unset). All of it goes through `src/herdr.ts`
   Starting one again and ending one take the Run's `relaunch/<run>.lock`: an end waits out
   a start already under way and ends the terminal it started, read from the operation's
   launch record, and a start after an end finds no record and starts nothing.
+  Recovery follows the started generation's recorded terminal and session, including
+  later operations that reused it. Older generations keep their own launch records;
+  a missing session never borrows one from an earlier generation with the same name.
 - **A Task** is its record and the `task` label: placement opens no workspace, and a
   Task's `workspace` is null. Cleanup's pass over Task workspaces writes the record's
   `closed_at` an hour after the Task is Finished, which ends a start's join by branch;
@@ -1025,6 +1066,15 @@ reached there; one set back to herdr lists only herdr's, and its agents on core 
 to it. The host's Herds on a Machine set to core are its core Herd as well as each herdr
 session still running, so its board and News keep the core Herd's Runs while Herdr 1 stays
 open.
+
+Agent names reserve space for both their leading letter and generation suffix, including
+long numbered ticket names. Older launches may have truncated that suffix. Replay,
+revival, role reuse and steering retain those persisted names. A matching saved core
+start can also bind its name before the launch record exists. If another spelling is
+already listed without enough identity to reconcile it, the launch waits with an explicit
+reason instead of starting another worker.
+A rollback after new names have been recorded must retain this persisted-name binding;
+an older binary that only recomputes the truncated name cannot safely revive that work.
 
 ## The forge boundary
 
@@ -2009,9 +2059,11 @@ its time.
   none. The Run views are kept the same way once their execution has finished (`KeptViews`
   in `src/engine.ts`). A pass over many Runs (the model's fill, a board re-derive, the
   engine's sweep, `tendQuestions`, Cleanup) takes `Foreground`'s `boundary` before each Run
-  (`src/foreground.ts`). A record's first frame and parts, an offer, an answer, a control and
-  an act run under `serve`, and while one does, every boundary holds its pass, for at most
-  250 ms. The host runs on `TurnScheduler` (`src/turns.ts`), which ends a turn of the event
+  (`src/foreground.ts`). Every front-door answer runs under `serve`, a stream until its
+  first value, termination or 250 ms. Every boundary holds its pass for at most 250 ms while a
+  request holds its lease. Physical file I/O temporarily releases that request's hold while
+  retaining its scheduler priority and original deadline. Only live leases restore their holds.
+  The host runs on `TurnScheduler` (`src/turns.ts`), which ends a turn of the event
   loop once its fibers have run for 8 ms. A fiber under `serve` queues its tasks ahead of
   every other fiber's, and the others yield while one waits, so a Run start's work steps
   aside for a read at its next yield. Cleanup's sweepers judge and remove through the

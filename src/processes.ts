@@ -179,15 +179,8 @@ export const groupOf = Effect.fn("Processes.groupOf")(function* (pid: number) {
   return group === "" ? null : Number(group);
 });
 
-/**
- * Which of `names` its environment binds, and to what; null where that cannot be read,
- * which proves nothing. Without `/proc` it is never read: `ps -E` runs the environment into
- * the arguments.
- */
-export const bindingsOf = Effect.fn("Processes.bindingsOf")(function* (
-  pid: number,
-  names: ReadonlyArray<string>,
-) {
+// The scan is traced once, avoiding a captured stack for every process it reads.
+const readBindings = Effect.fnUntraced(function* (pid: number, names: ReadonlyArray<string>) {
   const fs = yield* FileSystem.FileSystem;
   const environ = yield* fs
     .readFileString(`${PROC}/${pid}/environ`)
@@ -204,8 +197,15 @@ export const bindingsOf = Effect.fn("Processes.bindingsOf")(function* (
 });
 
 /**
+ * Which of `names` its environment binds, and to what; null where that cannot be read,
+ * which proves nothing. Without `/proc` it is never read: `ps -E` runs the environment into
+ * the arguments.
+ */
+export const bindingsOf = Effect.fn("Processes.bindingsOf")(readBindings);
+
+/**
  * Every running process whose environment binds one of `names`, with what it binds and its
- * start, read first so a pid taken over while it is read never passes for the bound one.
+ * start, read before the bindings used as proof so a reused pid never passes for the bound one.
  */
 export const boundProcesses = Effect.fn("Processes.boundProcesses")(function* (
   names: ReadonlyArray<string>,
@@ -218,9 +218,11 @@ export const boundProcesses = Effect.fn("Processes.boundProcesses")(function* (
       Effect.gen(function* () {
         const pid = Number(name);
         if (!Number.isInteger(pid)) return null;
+        const candidate = yield* readBindings(pid, names);
+        if (candidate === null || Rec.keys(candidate).length === 0) return null;
         const started = yield* procStarted(pid);
         if (started === null) return null;
-        const bound = yield* bindingsOf(pid, names);
+        const bound = yield* readBindings(pid, names);
         return bound !== null && Rec.keys(bound).length > 0 ? { pid, started, bound } : null;
       }),
     // One at a time, a busy machine's thousands of processes take seconds to read.

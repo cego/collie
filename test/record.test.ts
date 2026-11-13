@@ -4,13 +4,14 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
-import { Deferred, Effect, Fiber, FileSystem, Latch, PubSub, Queue, Stream } from "effect";
+import { Clock, Deferred, Effect, Fiber, FileSystem, Latch, PubSub, Queue, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { buildBoard } from "../src/board";
 import type { RecordUnchanged, RunDetail } from "../src/board-model";
 import { readEnv } from "../src/env";
 import { Foreground, makeForeground } from "../src/foreground";
-import { recordFrames, type RecordSources } from "../src/record";
+import { recordBase, recordFlow, recordFrames, type RecordSources } from "../src/record";
+import { timedFlow } from "../src/flow-timing";
 import { makeRunModel } from "../src/run-model";
 import type { RunFacts } from "../src/runs";
 import { writeTask } from "../src/task";
@@ -100,6 +101,38 @@ const sourcesOf = (
 });
 
 const KEY = { tail: true, pages: 1, refreshMr: false, parts: true } as const;
+
+test("a Flow-only read preserves the record's Flow without waiting for its attachments", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { dir, runs } = yield* stateOf(1);
+      const run = runs[0]!;
+      const clock = yield* TestClock.make();
+      yield* Effect.gen(function* () {
+        const before = yield* makeRunModel(dir, "installation");
+        const full = yield* recordBase(sourcesOf(dir, before, runs), run.id, 1);
+        expect(full?.detail.flow).toBeDefined();
+        const attachments = yield* Deferred.make<void>();
+        const model = yield* makeRunModel(dir, "installation").pipe(
+          Effect.provideService(FileSystem.FileSystem, {
+            ...fs,
+            readDirectory: (path, options) =>
+              path === `${run.dir}/attachments`
+                ? Deferred.succeed(attachments, undefined).pipe(Effect.andThen(Effect.never))
+                : fs.readDirectory(path, options),
+          }),
+        );
+        const flow = yield* Effect.raceFirst(
+          recordFlow(sourcesOf(dir, model, runs), run.id),
+          Deferred.await(attachments).pipe(
+            Effect.andThen(Effect.fail("Flow waited for attachments")),
+          ),
+        );
+        expect(flow).toEqual(timedFlow(full!.detail.flow!, yield* Clock.currentTimeMillis));
+      }).pipe(Effect.provideService(Clock.Clock, clock));
+    }),
+  ));
 
 test("a bare tick reads none of a record's files and sends nothing; a change sends one frame", () =>
   runEffect(
