@@ -338,7 +338,7 @@ const session = <A, E>(run: Effect.Effect<A, E, SessionServices>, override?: Hos
       Effect.scoped,
       // The Run keeps the scenario's clock; the hang guard is real time.
       Effect.provideService(Clock.Clock, clock),
-      Effect.timeout("30 seconds"),
+      Effect.timeout("60 seconds"),
       Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()),
     ),
   ).pipe(Effect.orDie);

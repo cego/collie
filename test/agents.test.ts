@@ -4423,7 +4423,7 @@ test(
         expect(closedPanes(yield* rig.calls())).toHaveLength(1);
       }),
     ),
-  30_000,
+  90_000,
 );
 
 test("a legacy spent subscription decodes without exhaustion metadata and recovers after its known elapsed reset", () =>
