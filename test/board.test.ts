@@ -1939,25 +1939,25 @@ test("Ready to ship takes the offer that declares it releases before one that on
       const [both] = yield* read([merge, offer("deliver", "Release", "release")]);
       expect(primaryAction(both!)).toEqual({
         kind: "offer",
-        offer: { id: "deliver", title: "Release" },
+        offer: { id: "deliver", title: "Release", run: second.id },
       });
       expect(Arr.join(boardLines([both!]), "\n")).toContain(`Release: ${both!.sentence}`);
       expect(herdLines([both!], 0)).toContain(`Release: ${both!.sentence}`);
       const [alone] = yield* read([merge]);
       expect(primaryAction(alone!)).toEqual({
         kind: "offer",
-        offer: { id: "merge", title: "Merge" },
+        offer: { id: "merge", title: "Merge", run: second.id },
       });
       const ship = offer("ship", "Ship it", "release", "action");
       const [byAction] = yield* read([merge, ship]);
       expect(primaryAction(byAction!)).toEqual({
         kind: "offer",
-        offer: { id: "ship", title: "Ship it" },
+        offer: { id: "ship", title: "Ship it", run: second.id },
       });
       const [actionAlone] = yield* read([ship]);
       expect(primaryAction(actionAlone!)).toEqual({
         kind: "offer",
-        offer: { id: "ship", title: "Ship it" },
+        offer: { id: "ship", title: "Ship it", run: second.id },
       });
     }),
   ));
