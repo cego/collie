@@ -145,6 +145,12 @@ The host reads the facts again when you take the offer. A clean checkout behind 
 pushed branch fast-forwards; divergent history or unpublished work refuses that checkout
 change. Changed requirements, head, outcome, or target require review again. Checks still
 prove the current revision, and delivery updates the branch's existing merge request.
+Repeated recoveries retain verification records from the full chain of established
+recoveries, including the original bug reproduction. Each record keeps its Run and
+revision; a passing check still has to match the current tree.
+When an intermediate recovery has no build or ticket Output, the follow-up uses the
+nearest ancestor's original build claims along that chain. A recovery that already
+recorded missing claims can read its ancestry on replay without changing that record.
 The parent keeps its terminal status and finishing revision
 ([ADR-draft-a-finished-delivery-names-the-way-back-to-work](adr/draft-a-finished-delivery-names-the-way-back-to-work.md)).
 
@@ -660,23 +666,41 @@ with why: nothing is reset or discarded.
 application, by renovate's own rule, and for an application names the stage deploy jobs of
 its merge request pipelines and of its tag pipelines. An application whose pipelines of
 neither kind deploy to stage fails here, before any wait, saying it has no stage deploy
-Collie can prove. A merge request the forge says conflicts with its target branch is never
-proved while it does, since the forge runs no pipeline for it: before its checkout moves or a
-check runs, and whenever a check left to CI finds its job missing for that reason, the Run
-parks as Needs you with "`<mr>` cannot be released: it conflicts with its target branch, and
-its branch must take the target.", spends no fix round on it, keeps reading the review, and
-proves the head it then has once the forge no longer says so. Collie then proves the head with the Run's checks, and
-waits, at no token cost, reading the review every five minutes until the merge request is
+Collie can prove. Before proving a head, Release routes a confirmed target conflict to its
+existing fixer. The fixer merges the actual target into the source branch, preserves both
+branches' work, and plain-pushes the repair. It never assumes the target is the default
+branch. Collie first checks source-branch ownership and refuses a detached checkout,
+another branch, uncommitted changes, or a head that cannot be safely adopted. Nothing is
+reset or force-pushed. An unchanged remote head or four unsuccessful conflict repairs
+parks the Run with the reason. Resume reads the forge again without repeating completed
+repairs. A bounded fresh read lets the forge catch up after a push. Hold and Stop still
+prevent further repair work. Only the repaired remote head is proved with the Run's checks.
+See [the conflict-repair decision](adr/draft-release-repairs-actionable-forge-blockers.md).
+Collie then waits, at no token cost, reading the review every five minutes until the merge request is
 approved, has no unanswered external comment, is green and mergeable at the proved head.
 Changes requested keep it from being ready. While what it waits for comes by itself — CI
 still running, a teammate's approval, review threads to be resolved — the Run is working,
 not needing you: the card stays under Working and says "Waiting for CI and a teammate's
 approval on `<mr>`.", with no notification and nothing in News, until the wait outlasts 2
-hours (2 days for a person), when it parks. A red pipeline, changes requested or a merge the
-forge refuses (a conflict, a rebase, a draft) parks it as Needs you, naming what holds it
-back; it keeps reading the review, and goes on by itself once that is repaired. A head that moves is fast-forwarded to and proved before anything
+hours (2 days for a person), when it parks. Terminal failed CI at the proved head goes to
+the same agent's fixer, even when local Checks pass or none are configured. The finding
+names the failed head, check or pipeline, and its forge URL when available. Proof fixes
+and CI repairs share four rounds across proof and review reentry until readiness. A green
+local Check or a success claim cannot clear remote failure or restart that allowance.
+No remote progress parks early; continued failure after four repairs parks with the head
+and pipeline. Resume reads current forge state without repeating completed repair work.
+Collie proves the pushed head, including Checks left to CI, before a fresh release go.
+Changes requested or a merge the forge refuses for another reason (a rebase, a draft)
+still parks it as Needs you while it keeps reading. Approval alone, running or unknown CI,
+and no pipeline retain their normal behavior. Confirmed target conflicts take priority
+over proof and CI repair; fresh comments keep their existing handling.
+A head that moves is fast-forwarded to and proved before anything
 can be asked about it. A merge request someone else merges, or closes, ends the Run with
 nothing tagged.
+
+A CI failure discovered after a go invalidates that go. The existing claim cleanup and,
+where needed, pre-merge stage rollback run before repair. Hold and Stop prevent further
+fix or release work. Recovery after merge is unchanged.
 
 **Review comments** are answered as they come. An **external** comment is a person's,
 by anyone but the forge login Collie works as: a bot's comment, a system note and your
@@ -763,7 +787,9 @@ the Run says why on its log and waits for a fresh go. Where it holds, Collie mer
 merge, never auto-merge. A head that moved before the merge gives the claim back and goes
 back to waiting. A merge the forge refuses is read once more at that head: where it is no
 longer ready, as when another merge left it in conflict with its target branch, the claim is
-given back, the Run says why on its log and goes back to waiting. Only a refusal while the
+given back, the Run says why on its log and goes back to waiting. A confirmed target
+conflict returns to repair and proof, then asks a fresh go naming the repaired head.
+The earlier go authorizes neither merging nor tagging that head. Only a refusal while the
 forge still says it is ready fails the Run. The agent then tags by the repository's own conventions, and Collie reads
 the tag back on origin, carrying the merged commit, with its pipeline finished and
 succeeded by the forge's word: the pipeline the agent named, or the newest the forge shows

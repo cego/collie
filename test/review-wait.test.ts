@@ -41,6 +41,75 @@ const comment = (id: string, over: Partial<ReviewComment> = {}): ReviewComment =
 
 const at = { proved: HEAD, seen: [] };
 
+test("failed CI is an opt-in repair even without approval, with its forge identity", () => {
+  const failed = read({
+    approved: false,
+    pipeline: { state: "failed", name: "build", url: "https://forge.example/jobs/7" },
+  });
+  expect(standingOf(failed, { ...at, returnFailedCi: true })).toEqual({
+    _tag: "FailedCi",
+    head: HEAD,
+    name: "build",
+    url: "https://forge.example/jobs/7",
+  });
+  expect(standingOf(failed, at)._tag).toBe("Waiting");
+  expect(
+    standingOf(read({ pipeline: { state: "failed", name: "unit" } }), {
+      ...at,
+      returnFailedCi: true,
+    }),
+  ).toEqual({
+    _tag: "FailedCi",
+    head: HEAD,
+    name: "unit",
+  });
+});
+
+test("failed CI preserves terminal, conflict, moved-head and fresh-comment precedence", () => {
+  const options = { ...at, returnConflicts: true, returnFailedCi: true };
+  const failed = { pipeline: { state: "failed" as const, name: "build" } };
+  for (const state of ["merged", "closed"] as const)
+    expect(standingOf(read({ ...failed, state }), options)._tag).toBe(
+      state === "merged" ? "Merged" : "Closed",
+    );
+  expect(
+    standingOf(
+      read({ ...failed, head: MOVED, mergeable: { state: "blocked", said: "conflict" } }),
+      options,
+    ),
+  ).toEqual({ _tag: "Conflicting", head: MOVED });
+  expect(standingOf(read({ ...failed, head: MOVED }), options)).toEqual({
+    _tag: "Moved",
+    head: MOVED,
+  });
+  expect(standingOf(read({ ...failed, comments: [comment("1")] }), options)._tag).toBe(
+    "Unanswered",
+  );
+  expect(
+    standingOf(read({ ...failed, comments: [comment("1")] }), { ...options, seen: ["1"] })._tag,
+  ).toBe("FailedCi");
+  expect(standingOf({ ok: false, reason: "offline" }, options)._tag).toBe("Unreadable");
+});
+
+test("approval, running or unknown CI, no pipeline and generic blocks never request CI repair", () => {
+  for (const pipeline of [
+    { state: "running" },
+    { state: "unknown" },
+    { state: "none" },
+    { state: "passed" },
+  ] as const) {
+    expect(
+      standingOf(read({ approved: false, pipeline }), { ...at, returnFailedCi: true })._tag,
+    ).toBe("Waiting");
+  }
+  expect(
+    standingOf(read({ mergeable: { state: "blocked", said: "draft status" } }), {
+      ...at,
+      returnFailedCi: true,
+    })._tag,
+  ).toBe("Waiting");
+});
+
 test("a repair caller receives a confirmed target conflict before a moved head or comments", () => {
   const conflicted = read({
     head: MOVED,
