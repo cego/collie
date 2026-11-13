@@ -7,14 +7,18 @@
 
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import * as SqlClient from "effect/sql/SqlClient";
-import { Deferred, Effect, Fiber, FileSystem, Layer, Order, Stream } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Layer, Order, Schema, Stream } from "effect";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import { RunModel, runModelLayer } from "../src/run-model";
 import { Store, storeLayer } from "../src/store";
+import { RunReport } from "../src/board-model";
 import { runEffect } from "./support/effect";
+
+const ReportJson = Schema.fromJsonString(RunReport);
 
 /** One store on one file. Opening it again is what a restart does. */
 const opens = (file: string) =>
@@ -52,6 +56,107 @@ const onStore = <A, E>(prefix: string, body: Effect.Effect<A, E, Store | SqlClie
       return yield* body.pipe(Effect.provide(opens(`${dir}/host.db`)));
     }).pipe(Effect.scoped),
   );
+
+test("only reports still owed are selected, including an unfinished Task closure", () =>
+  onStore(
+    "collie-store-reports-",
+    Effect.gen(function* () {
+      const store = yield* Store;
+      const sql = yield* SqlClient.SqlClient;
+      const placing = '{"from":"/work","taskLabel":null,"closes":"reported"}';
+      for (const run of ["unreported", "closing", "closed", "ordinary"])
+        yield* store.admit({
+          ...admission(run, run, {}),
+          placing: run === "ordinary" ? undefined : placing,
+        });
+      const report = {
+        state: "undelivered" as const,
+        at: "2026-11-11T00:00:00Z",
+        note: "gone",
+        closed: false,
+      };
+      yield* store.reported("closing", report);
+      yield* store.reported("closed", { ...report, closed: true });
+      expect(Arr.map(yield* store.reportsPending, (row) => row.run).sort()).toEqual([
+        "closing",
+        "unreported",
+      ]);
+      yield* store.reported("closing", { ...report, closed: true });
+      expect(Arr.map(yield* store.reportsPending, (row) => row.run)).toEqual(["unreported"]);
+      expect(yield* Schema.decodeEffect(ReportJson)((yield* store.run("closed"))!.report!)).toEqual(
+        { ...report, closed: true },
+      );
+      const plan = yield* sql<{
+        detail: string;
+      }>`EXPLAIN QUERY PLAN SELECT run FROM collie_runs WHERE report_pending = 1 ORDER BY admitted, run`;
+      expect(Arr.some(plan, (row) => Str.includes("collie_runs_reports")(row.detail))).toBe(true);
+    }),
+  ));
+
+test("reports are imported once on upgrade and remain authoritative after restart", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-report-import-" });
+      const file = `${dir}/host.db`;
+      yield* Effect.gen(function* () {
+        const store = yield* Store;
+        const sql = yield* SqlClient.SqlClient;
+        for (const run of ["closed", "missing", "torn"])
+          yield* store.admit({
+            ...admission(run, run, {}),
+            placing: '{"from":"/work","taskLabel":null,"closes":"reported"}',
+          });
+        yield* sql`DROP INDEX collie_runs_reports`;
+        yield* sql`ALTER TABLE collie_runs DROP COLUMN report_pending`;
+        yield* sql`ALTER TABLE collie_runs DROP COLUMN report`;
+        yield* sql`DELETE FROM collie_migrations WHERE migration_id = 19`;
+      }).pipe(Effect.provide(opens(file)));
+      const original = {
+        state: "delivered" as const,
+        at: "2026-11-11T00:00:00Z",
+        note: "before upgrade",
+        closed: true,
+      };
+      for (const run of ["closed", "torn"])
+        yield* fs.makeDirectory(`${dir}/runs/${run}`, { recursive: true });
+      yield* fs.writeFileString(
+        `${dir}/runs/closed/report.json`,
+        yield* Schema.encodeEffect(ReportJson)(original),
+      );
+      yield* fs.writeFileString(`${dir}/runs/torn/report.json`, '{"state":');
+      const layer = storeLayer(dir).pipe(
+        Layer.provideMerge(
+          SqliteClient.layer({ filename: file }).pipe(Layer.provideMerge(Reactivity.layer)),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const store = yield* Store;
+        expect(
+          yield* Schema.decodeEffect(ReportJson)((yield* store.run("closed"))!.report!),
+        ).toEqual(original);
+        expect(Arr.map(yield* store.reportsPending, (row) => row.run).sort()).toEqual([
+          "missing",
+          "torn",
+        ]);
+        yield* store.reported("closed", { ...original, note: "after upgrade" });
+      }).pipe(Effect.provide(layer));
+      yield* fs.writeFileString(
+        `${dir}/runs/closed/report.json`,
+        yield* Schema.encodeEffect(ReportJson)({ ...original, closed: false }),
+      );
+      yield* Effect.gen(function* () {
+        const store = yield* Store;
+        expect(
+          (yield* Schema.decodeEffect(ReportJson)((yield* store.run("closed"))!.report!)).note,
+        ).toBe("after upgrade");
+        expect(Arr.map(yield* store.reportsPending, (row) => row.run).sort()).toEqual([
+          "missing",
+          "torn",
+        ]);
+      }).pipe(Effect.provide(layer));
+    }).pipe(Effect.scoped),
+  ));
 
 test("a request claims one run, and claiming it again is that same run", () =>
   onStore(
