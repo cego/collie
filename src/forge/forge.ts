@@ -348,13 +348,13 @@ export interface Forge {
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<Posted, never, R | ForgeHttp>;
-  /** Approves only the reviewed head, returning the forge's refusal unchanged in the message. */
+  /** Only a transient failure before submission is retryable. */
   readonly approve: <R>(
     ref: MrRef,
     head: string,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<Posted, never, R | ForgeHttp>;
+  ) => Effect.Effect<Posted & { readonly retryable?: boolean }, never, R | ForgeHttp>;
   /** Whether `head` descends from `previous`; a `previous` the forge no longer has does not. */
   readonly descends: <R>(
     ref: MrRef,

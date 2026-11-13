@@ -3958,6 +3958,15 @@ export const hostLayer = (options: {
       const bun = yield* Effect.context<PlatformServices | Records>();
       const under = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
         Effect.provideContext(effect, services);
+      const parkReview = (reason: string) =>
+        Effect.gen(function* () {
+          const run = yield* Effect.serviceOption(Run);
+          const instance = yield* Effect.serviceOption(WorkflowEngine.WorkflowInstance);
+          if (Option.isSome(run) && Option.isSome(instance)) {
+            yield* host.parked(run.value.id, reason, "forge-unavailable");
+            return yield* Workflow.suspend(instance.value);
+          }
+        });
       const reviewForge = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
         Effect.gen(function* () {
           const run = yield* Effect.serviceOption(Run);
@@ -3974,12 +3983,7 @@ export const hostLayer = (options: {
                       .pipe(
                         Effect.tap((answer) =>
                           !answer.ok && answer.transient
-                            ? host
-                                .parked(run.value.id, answer.reason, "forge-unavailable")
-                                .pipe(
-                                  Effect.andThen(Workflow.suspend(instance.value)),
-                                  parking.withPermits(1),
-                                )
+                            ? parkReview(answer.reason).pipe(parking.withPermits(1))
                             : Effect.void,
                         ),
                       ),
@@ -5878,7 +5882,9 @@ export const hostLayer = (options: {
               const ref = parseMrTarget(asked.target);
               if (ref === null)
                 return { ok: false, message: `${asked.target} is not a merge request` };
-              return yield* forgeOf(ref).approve(ref, asked.head, asked.cwd, runShell);
+              const approved = yield* forgeOf(ref).approve(ref, asked.head, asked.cwd, runShell);
+              if (approved.retryable) yield* parkReview(approved.message);
+              return approved;
             }),
           ),
       });

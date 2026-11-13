@@ -362,6 +362,7 @@ export const approveReview = (
         return {
           ok: false,
           message: `did not approve ${where} at ${head}: ${before.ok ? "SHA does not match HEAD" : before.reason}`,
+          retryable: !before.ok && before.transient === true,
         };
     }
     const approved = yield* login.forge === "gitlab"

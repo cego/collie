@@ -245,6 +245,111 @@ for (const id of ["review", "second-look"])
 
 const follows = `${fixtures}/follows-mr.workflow.ts`;
 
+for (const following of [true, false])
+  for (const status of [503, 429])
+    test(
+      `${following ? "followed" : "manual"} GitHub approval parks before submission on ${status} and recovers once`,
+      () =>
+        host.runEffect(
+          Effect.gen(function* () {
+            yield* repository;
+            const head = yield* pushed("ready to approve", "refs/pull/7/head");
+            const target = "https://github.com/acme/app/pull/7";
+            const forge = yield* host.github({
+              installed: true,
+              loggedIn: ["github.com"],
+              login: "mk",
+              mrs: [
+                { project: "github.com/acme/app", iid: "7", state: "open", author: "ann", head },
+              ],
+            });
+            let unavailable = false;
+            let posted = false;
+            const api = yield* serveForges({
+              forge: "github",
+              face: (url, init) => {
+                if (
+                  unavailable &&
+                  posted &&
+                  Str.endsWith("/pulls/7")(url) &&
+                  init?.method === "GET"
+                )
+                  return Promise.resolve(Response.json({ message: "unavailable" }, { status }));
+                return forge.face(url, init).then((response) => {
+                  if (Str.endsWith("/comments")(url) && init?.method === "POST") posted = true;
+                  return response;
+                });
+              },
+            });
+            yield* host.settingOn(following);
+            yield* rig.queueOutputs([review([])]);
+            yield* host.session(
+              { ...forge, api },
+              Effect.gen(function* () {
+                const { runId } = yield* host.started(yield* entryOf("review"), "cli-1", {
+                  target,
+                });
+                const decision = following ? "approve-1" : "post-1";
+                yield* until(
+                  () => asked(runId),
+                  (rows) => Arr.some(rows, (row) => row.decision === decision),
+                );
+                unavailable = true;
+                yield* (yield* Registry).answer({
+                  runId,
+                  decision,
+                  value: following ? "Approve" : `Post and approve ${Str.slice(0, 7)(head)}`,
+                  request: "approve",
+                });
+                const parked = yield* until(
+                  () => host.status(runId),
+                  (view) => view?.status.status === "failed" || view?.park != null,
+                );
+                expect(parked?.status.status).toBe("suspended");
+                expect(parked?.park).toMatchObject({
+                  cause: "forge-unavailable",
+                  kind: "rechecks",
+                });
+                expect((yield* forge.model()).approved ?? []).toHaveLength(0);
+                expect(
+                  Arr.filter(
+                    forge.requests(),
+                    (one) => one.method === "POST" && Str.endsWith("/reviews")(one.url),
+                  ),
+                ).toHaveLength(0);
+                unavailable = false;
+                yield* host.recovering;
+                yield* until(
+                  () => forge.model(),
+                  (now) => (now.approved ?? []).length === 1,
+                );
+                yield* until(
+                  () =>
+                    Effect.all({ view: host.status(runId), watch: host.watchOf(runId, target) }),
+                  ({ view, watch }) =>
+                    following ? watch?.name === "follow-1" : view?.status.status === "complete",
+                );
+                expect((yield* host.status(runId))?.park).toBeNull();
+                expect(
+                  Arr.filter(
+                    forge.requests(),
+                    (one) => one.method === "POST" && Str.endsWith("/reviews")(one.url),
+                  ),
+                ).toHaveLength(1);
+                expect(yield* host.agentStarts).toHaveLength(1);
+                expect(
+                  Arr.filter(
+                    forge.requests(),
+                    (one) => one.method === "POST" && Str.endsWith("/comments")(one.url),
+                  ),
+                ).toHaveLength(1);
+              }),
+            );
+          }),
+        ),
+      180_000,
+    );
+
 for (const { following, after, refused } of [
   { following: true, after: 503, refused: false },
   { following: false, after: 429, refused: true },
