@@ -1519,3 +1519,259 @@ fn a_parked_card_names_its_cause_and_its_latest_two_recovery_actions() {
         .collect();
     assert_eq!(lines, ["second", "third"]);
 }
+
+const PR400: &str = "https://github.com/cego/collie/pull/400";
+
+/// The Working card the human's screenshot shows, holding PR collie#400.
+fn pr400(id: &str, more: Value) -> Value {
+    let mut card = task(
+        id,
+        "Fix Desktop retaining a broken VM chat channel",
+        "active",
+        json!({
+            "project": "/home/mk/collie", "branch": "desktop-replaces-a-dead-chat-channel",
+            "sentence": "Running startup-final-tests, 16 s.", "age": "22h",
+            "agents": [{"name": "build", "status": "working", "now": null, "run": format!("r-{id}")}],
+            "mr": PR400, "mrState": "open",
+            "flow": {"glyphs": [{"title": "build", "state": "running"}], "release": 0.0,
+                "current": null},
+        }),
+    );
+    for (key, value) in more.as_object().into_iter().flatten() {
+        card[key] = value.clone();
+    }
+    card
+}
+
+fn overlap(a: [f32; 4], b: [f32; 4]) -> bool {
+    a[0] + 0.5 < b[0] + b[2]
+        && b[0] + 0.5 < a[0] + a[2]
+        && a[1] + 0.5 < b[1] + b[3]
+        && b[1] + 0.5 < a[1] + a[3]
+}
+
+fn inside(a: [f32; 4], b: [f32; 4]) -> bool {
+    a[0] >= b[0] - 0.5
+        && a[1] >= b[1] - 0.5
+        && a[0] + a[2] <= b[0] + b[2] + 0.5
+        && a[1] + a[3] <= b[1] + b[3] + 0.5
+}
+
+/// Draws until the board's columns and springs have come to rest.
+fn settle_layout(runtime: &mut Runtime<App>) {
+    runtime.invalidate();
+    for _ in 0..6 {
+        runtime.frame(1.0);
+    }
+}
+
+/// Lays the board out at `size` and `scale`, then checks the merge requests drawn on `card`:
+/// their text and each control sit apart, inside the card and clear of its other rows.
+/// Returns the card's width.
+fn mr_rows_fit(runtime: &mut Runtime<App>, card: &str, size: (f32, f32), scale: f32) -> f32 {
+    runtime.set_viewport(size, scale);
+    settle_layout(runtime);
+    let elements = runtime.elements();
+    let at = format!("{size:?} at {scale}x");
+    let card_el = elements
+        .iter()
+        .find(|e| e.key.as_deref() == Some(card))
+        .unwrap_or_else(|| panic!("no {card} at {at}"));
+    let within_card = |e: &&rune::ElementInfo| e.path.starts_with(&format!("{}/", card_el.path));
+    let mrs = elements
+        .iter()
+        .filter(within_card)
+        .find(|e| e.key.as_deref() == Some("mrs"))
+        .unwrap_or_else(|| panic!("{card} draws no merge requests at {at}"));
+    let buttons: Vec<_> = elements
+        .iter()
+        .filter(|e| e.path.starts_with(&format!("{}/", mrs.path)) && e.role == "button")
+        .collect();
+    let in_button = |e: &rune::ElementInfo| {
+        buttons
+            .iter()
+            .any(|b| e.path.starts_with(&format!("{}/", b.path)))
+    };
+    let parts: Vec<(String, [f32; 4])> = elements
+        .iter()
+        .filter(|e| e.path.starts_with(&format!("{}/", mrs.path)))
+        .filter(|e| e.role == "button" || (e.text.is_some() && !in_button(e)))
+        .map(|e| {
+            (
+                e.label.clone().or(e.text.clone()).unwrap_or_default(),
+                e.rect,
+            )
+        })
+        .collect();
+    assert!(parts.len() >= 2, "{card} at {at}: {parts:?}");
+    for button in &buttons {
+        assert!(button.focusable, "{:?} takes no focus ({at})", button.label);
+    }
+    for (name, rect) in &parts {
+        assert!(rect[2] >= 1.0, "{name} is drawn {rect:?} at {at}");
+        assert!(
+            inside(*rect, card_el.rect),
+            "{name} at {rect:?} leaves the card at {:?} ({at})",
+            card_el.rect
+        );
+    }
+    for (i, (a, ra)) in parts.iter().enumerate() {
+        for (b, rb) in &parts[i + 1..] {
+            assert!(
+                !overlap(*ra, *rb),
+                "{a} at {ra:?} overlaps {b} at {rb:?} ({at})"
+            );
+        }
+    }
+    for other in ["sentence", "footer"]
+        .into_iter()
+        .map(String::from)
+        .chain([format!("{card}-flow")])
+    {
+        if let Some(e) = elements
+            .iter()
+            .filter(within_card)
+            .find(|e| e.key.as_deref() == Some(other.as_str()))
+        {
+            assert!(
+                !overlap(mrs.rect, e.rect),
+                "the merge requests at {:?} overlap {other} at {:?} ({at})",
+                mrs.rect,
+                e.rect
+            );
+        }
+    }
+    card_el.rect[2]
+}
+
+/// Presses the button of `card`'s merge requests whose accessible name is `name`.
+fn press_mr_button(runtime: &mut Runtime<App>, name: &str) {
+    let path = runtime
+        .elements()
+        .into_iter()
+        .find(|e| {
+            e.role == "button" && e.label.as_deref() == Some(name) && e.path.contains("/mrs/")
+        })
+        .map(|e| e.path)
+        .unwrap_or_else(|| panic!("no {name} button"));
+    press(runtime, &path);
+}
+
+const SIZES: [(f32, f32); 6] = [
+    (1280.0, 900.0),
+    (1000.0, 900.0),
+    (1600.0, 900.0),
+    (700.0, 900.0),
+    (420.0, 900.0),
+    (1280.0, 900.0),
+];
+
+#[test]
+fn card_mr_reference_open_and_machine_links_fit_a_narrow_card_at_every_width_and_scale() {
+    let harness = Harness::new();
+    let laptop = machine("inst-laptop", "p-laptop", "mk-laptop");
+    let mut app = app(
+        &harness,
+        vec![
+            snapshot(&laptop, vec![pr400("pr400", json!({}))]),
+            snapshot(&vm(), vec![pr400("pr400vm", json!({"age": "21h"}))]),
+        ],
+    );
+    app.nav.chat.set_open(false);
+    let mut runtime = runtime(app);
+    let mut narrowest = f32::MAX;
+    for scale in [1.0, 1.5, 2.0] {
+        for size in SIZES {
+            narrowest = narrowest.min(mr_rows_fit(&mut runtime, "card-pr400", size, scale));
+        }
+    }
+    assert!(
+        narrowest < 320.0,
+        "no card was as narrow as the screenshot's: {narrowest}"
+    );
+
+    runtime.set_viewport((1000.0, 900.0), 1.0);
+    settle_layout(&mut runtime);
+    press_mr_button(&mut runtime, "Open pull request");
+    assert!(
+        harness
+            .fake
+            .asked_of("openLink")
+            .iter()
+            .any(|asked| asked["url"] == PR400),
+        "{:?}",
+        harness.fake.asked_of("openLink")
+    );
+    press_mr_button(&mut runtime, "on vm-mk");
+    assert_eq!(
+        runtime.state.open_run,
+        Some(("inst-vm".into(), "r-pr400vm".into()))
+    );
+}
+
+#[test]
+fn card_mr_rows_keep_long_machine_and_project_names_inside_the_card() {
+    let harness = Harness::new();
+    let long = "https://github.com/cego/collie-desktop-native-board-renderer/pull/400";
+    let here = machine(
+        "inst-laptop",
+        "p-laptop",
+        "mk-laptop-workstation-copenhagen-office",
+    );
+    let there = machine("inst-vm", "p-vm", "vm-mk-build-runner-eu-north-1-large");
+    let mut app = app(
+        &harness,
+        vec![
+            snapshot(&here, vec![pr400("pr400", json!({"mr": long}))]),
+            snapshot(&there, vec![pr400("pr400vm", json!({"mr": long}))]),
+        ],
+    );
+    app.nav.chat.set_open(false);
+    let mut runtime = runtime(app);
+    for scale in [1.0, 2.0] {
+        for size in SIZES {
+            mr_rows_fit(&mut runtime, "card-pr400", size, scale);
+        }
+    }
+    let names: Vec<String> = runtime
+        .elements()
+        .into_iter()
+        .filter(|e| e.role == "button" && e.path.contains("/mrs/"))
+        .filter_map(|e| e.label)
+        .collect();
+    assert!(
+        names.contains(&"on vm-mk-build-runner-eu-north-1-large".to_string()),
+        "a cut name is still read whole: {names:?}"
+    );
+}
+
+#[test]
+fn card_mr_rows_of_one_machines_several_merge_requests_fit_a_narrow_card() {
+    let harness = Harness::new();
+    let mr = |iid: &str, repo: &str| {
+        json!({"id": format!("github.com/cego/{repo}#{iid}"),
+            "mr": format!("https://github.com/cego/{repo}/pull/{iid}"),
+            "label": format!("cego/{repo}#{iid}"), "short": format!("{repo}#{iid}"),
+            "url": format!("https://github.com/cego/{repo}/pull/{iid}"), "run": "r-pr400",
+            "state": "open", "checks": null, "head": "0123456789abcdef", "ready": true,
+            "disposition": null, "waitsOn": []})
+    };
+    let laptop = machine("inst-laptop", "p-laptop", "mk-laptop");
+    let mut app = app(
+        &harness,
+        vec![snapshot(
+            &laptop,
+            vec![pr400(
+                "pr400",
+                json!({"mrs": [mr("400", "collie"), mr("401", "collie-desktop-native-board")]}),
+            )],
+        )],
+    );
+    app.nav.chat.set_open(false);
+    let mut runtime = runtime(app);
+    for scale in [1.0, 2.0] {
+        for size in SIZES {
+            mr_rows_fit(&mut runtime, "card-pr400", size, scale);
+        }
+    }
+}
