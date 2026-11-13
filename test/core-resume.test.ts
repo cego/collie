@@ -9,7 +9,7 @@ import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import * as Struct from "effect/Struct";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Deferred, Effect, Fiber, FileSystem, Layer, Result, Schema, flow } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Layer, Result, Schema, flow, pipe } from "effect";
 import type * as MessageStorage from "effect/cluster/MessageStorage";
 import type { SqlClient } from "effect/sql";
 import type { PlatformServices } from "../src/platform";
@@ -20,6 +20,8 @@ import { TestClock } from "effect/testing";
 import { Agents, agentsLayer, type AgentHost, type RunNow } from "../src/agents";
 import { endAgent } from "../src/agent-end";
 import type { Backend } from "../src/herdr";
+import { readControl } from "../src/compaction";
+import { processAbsent } from "../src/processes";
 import { launchDir, readLaunches, recordLaunch, startedDir, stemOf } from "../src/launches";
 import {
   PARK_CAUSE,
@@ -32,7 +34,8 @@ import {
 } from "../src/engine";
 import type { Store } from "../src/store";
 import { agentName } from "../src/naming";
-import { deliveredTo } from "./support/records";
+import { deliveredTo, recordsAt } from "./support/records";
+import { appendLine } from "../src/steering";
 import { COMPACT_AT_TOKENS } from "../src/settings";
 import { COMPACTION_PORTS, codexPort } from "../src/compactors";
 import { isString } from "../src/schema";
@@ -261,6 +264,185 @@ const sendsSince = (calls: ReadonlyArray<Call>, from: number, cmd = "terminal.se
   );
 
 const after = (argv: ReadonlyArray<string>, flag: string) => argv[argv.indexOf(flag) + 1];
+
+test(
+  "a dead owned server on core resumes its conversation once despite competing recovery, and later stop reaches its replacement",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* rig.startCore();
+        yield* rig.queueOutputs([null, null, null, null, null, null]);
+        let agents: typeof Agents.Service | undefined;
+        let recovering: string | null = null;
+        const competitions: Array<Fiber.Fiber<void>> = [];
+        class CompetingRecovery extends FakeHerdr {
+          override paneClose(pane: string, backend?: Backend) {
+            return super.paneClose(pane, backend).pipe(
+              Effect.tap(() => {
+                if (agents === undefined || recovering === null) return Effect.void;
+                return Effect.forkChild(agents.resumeLost(recovering, runningNow)).pipe(
+                  Effect.tap((fiber) => Effect.sync(() => competitions.push(fiber))),
+                  Effect.asVoid,
+                );
+              }),
+            );
+          }
+        }
+        const result = yield* hosted(
+          Effect.gen(function* () {
+            agents = yield* Agents;
+            const runId = yield* started("codex", "dead-owned-core");
+            const agent = agentName(runId, "codex", null, 1);
+            const session = yield* recordedSession(runId, "codex");
+            const old = (yield* readLaunches(runId))[0]!;
+            const control = (yield* readControl(dir(), agent))!;
+            const before = coreCalls(yield* rig.calls()).length;
+            recovering = runId;
+            process.kill(control.pid!, "SIGKILL");
+            yield* until(() => processAbsent(control.pid!), Boolean);
+            const again = yield* until(
+              () => Effect.flatMap(rig.calls(), (calls) => launchesSince(calls, before)),
+              (launches) => launches.length > 0,
+            );
+            yield* Fiber.joinAll(competitions);
+            yield* until(
+              () => deliveredTo(dir(), runId),
+              (receipts) => Arr.filter(receipts, (one) => one.cause.kind === "step").length === 2,
+            );
+            const now = (yield* readLaunches(runId))[0]!;
+            expect(now.terminalId).not.toBe(old.terminalId);
+            expect(again).toHaveLength(1);
+            expect(again[0]!.argv.slice(0, 3)).toEqual(["codex", "resume", session.value]);
+            expect(again[0]!.cwd).toBe(rig.projectDir);
+            yield* fs.writeFileString(now.output, '{"verdict":"recovered"}');
+            expect((yield* finished(runId))?.status.status).toBe("complete");
+            recovering = null;
+            const replacement = (yield* readControl(dir(), agent))!;
+            const halt = yield* agents.halt(runId);
+            expect(halt).toEqual({ stopped: [agent], left: [] });
+            expect(yield* processAbsent(replacement.pid!)).toBe(true);
+            expect(yield* launchesSince(yield* rig.calls(), before)).toHaveLength(1);
+            return now;
+          }),
+          { ...hostOf(), herdr: new CompetingRecovery(env()) },
+        );
+        expect(result.agentSession).toEqual({ kind: "codex", value: THREAD });
+      }),
+    ),
+  120_000,
+);
+
+test.each([
+  ["unknown", ""],
+  ["reserved", ""],
+  ["submitted", ""],
+  ["unknown", '{"verdict":'],
+  ["reserved", '{"verdict":'],
+  ["submitted", '{"verdict":'],
+] as const)(
+  "core recovery preserves a later-round %s repair receipt with Output %p",
+  (state, output) =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const core = yield* rig.startCore();
+        yield* rig.queueOutputs([null]);
+        yield* hosted(
+          Effect.gen(function* () {
+            const runId = yield* started("pi", "round-two-repair");
+            const agent = agentName(runId, "pi", null, 1);
+            yield* idleAfterItsStep(agent);
+            const receipt = Option.getOrThrow(
+              Arr.findFirst(yield* deliveredTo(dir(), runId), (one) => one.cause.kind === "step"),
+            );
+            const note = state === "submitted" ? "unobserved" : "repair outcome was lost";
+            yield* appendLine({
+              ...receipt,
+              id: "repair-round-two",
+              request_id: "repair-round-two",
+              cause: { kind: "repair", ref: `${receipt.cause.ref}.2` },
+              causal_key: `${runId}:repair:${receipt.cause.ref}.2:0`,
+              state,
+              note,
+            }).pipe(Effect.provide(recordsAt(dir())));
+            const before = coreCalls(yield* rig.calls()).length;
+            yield* fs.writeFileString(`${dir()}/agents/${runId}/pi.json`, output);
+            yield* core.lose;
+            yield* (yield* Agents).resumeLost(runId, runningNow);
+            expect(yield* launchesSince(yield* rig.calls(), before)).toHaveLength(0);
+            expect(
+              Arr.filter(
+                sendsSince(yield* rig.calls(), before),
+                (send) =>
+                  pipe(send.text, Str.includes("Your task for this step")) ||
+                  pipe(send.text, Str.includes("Carry on with your step")),
+              ),
+            ).toHaveLength(0);
+            expect(yield* fs.readFileString(`${dir()}/agents/${runId}/agents.log`)).toContain(
+              "--reconcile repair-round-two --as sent|not-sent",
+            );
+            expect(
+              Arr.filter(yield* deliveredTo(dir(), runId), (one) => one.id === "repair-round-two"),
+            ).toMatchObject([
+              state === "reserved"
+                ? { state: expect.stringMatching(/^(reserved|unknown)$/) }
+                : { state, note },
+            ]);
+          }),
+        );
+      }),
+    ),
+);
+
+test("core recovery of a reused agent checks the receipts of its latest Step", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const core = yield* rig.startCore();
+      yield* rig.queueOutputs([{ verdict: "first" }, null]);
+      yield* hosted(
+        Effect.gen(function* () {
+          const registry = yield* Registry;
+          const { runId } = yield* registry.start({
+            generation: yield* registry.load(`${fixtures}/reuses.workflow.ts`),
+            request: "reused-repair",
+            project: rig.projectDir,
+            input: {},
+            text: { work: "it" },
+            task: null,
+          });
+          const agent = agentName(runId, "build", null, 1);
+          const second = yield* until(
+            () => deliveredTo(dir(), runId).pipe(Effect.orElseSucceed(() => [])),
+            (receipts) => Arr.some(receipts, (one) => one.cause.ref === "second-step"),
+          ).pipe(
+            Effect.map((receipts) =>
+              Option.getOrThrow(Arr.findFirst(receipts, (one) => one.cause.ref === "second-step")),
+            ),
+          );
+          yield* idleAfterItsStep(agent);
+          yield* appendLine({
+            ...second,
+            id: "second-step-repair",
+            request_id: "second-step-repair",
+            cause: { kind: "repair", ref: "second-step.2" },
+            causal_key: `${runId}:repair:second-step.2:0`,
+            state: "unknown",
+            note: "repair outcome was lost",
+          }).pipe(Effect.provide(recordsAt(dir())));
+          const before = coreCalls(yield* rig.calls()).length;
+          yield* core.lose;
+          yield* (yield* Agents).resumeLost(runId, runningNow);
+          expect(yield* launchesSince(yield* rig.calls(), before)).toHaveLength(0);
+          expect(
+            yield* FileSystem.FileSystem.pipe(
+              Effect.flatMap((fs) => fs.readFileString(`${dir()}/agents/${runId}/agents.log`)),
+            ),
+          ).toContain("--reconcile second-step-repair --as sent|not-sent");
+        }),
+      );
+    }),
+  ));
 
 test(
   "a core holder loss mid-Run starts each agent of the Run again in its own session, tells the one whose work is out to carry on, and the Run completes",
@@ -690,6 +872,67 @@ test("quota incident publication waits for an admitted core recovery", () =>
           ),
         ),
         Effect.provideService(FileSystem.FileSystem, observedFs),
+        Effect.scoped,
+      );
+    }),
+  ));
+
+test("one Run's core recovery does not hold up another Run's revive", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const listing = yield* Deferred.make<void>();
+      const proceed = yield* Deferred.make<void>();
+      class HeldList extends FakeHerdr {
+        override agentList() {
+          return Deferred.succeed(listing, undefined).pipe(
+            Effect.andThen(Deferred.await(proceed)),
+            Effect.andThen(super.agentList()),
+          );
+        }
+      }
+      const other = agentName("run-b", "work", null, 1);
+      for (const [runId, agent] of [
+        ["run-a", agentName("run-a", "work", null, 1)],
+        ["run-b", other],
+      ] as const) {
+        yield* fs.makeDirectory(startedDir(dir(), runId), { recursive: true });
+        yield* fs.writeFileString(`${startedDir(dir(), runId)}/${agent}.json`, "{}");
+      }
+      yield* Effect.gen(function* () {
+        const agents = yield* Agents;
+        const recovery = yield* Effect.forkChild(agents.resumeLost("run-a", runningNow));
+        yield* Deferred.await(listing);
+        const revived = yield* TestClock.withLive(
+          agents
+            .revive({
+              runId: "run-b",
+              operation: "work",
+              role: "implementer",
+              agent: null,
+              workflow: "w",
+              task: null,
+              cwd: rig.projectDir,
+              prompt: "",
+              output: `${launchDir(dir(), "run-b")}/work.json`,
+              skill: null,
+              harness: null,
+              model: null,
+              effort: null,
+              permissions: null,
+            })
+            .pipe(Effect.timeoutOption("10 seconds")),
+        );
+        expect(revived).toEqual(Option.some(false));
+        yield* Deferred.succeed(proceed, undefined);
+        yield* Fiber.join(recovery);
+      }).pipe(
+        Effect.ensuring(Deferred.succeed(proceed, undefined)),
+        Effect.provide(
+          agentsLayer({ ...hostOf(), herdr: new HeldList(env()) }).pipe(
+            Layer.provideMerge(foundationLayer({ dir: dir(), userDir: rig.userDir })),
+          ),
+        ),
         Effect.scoped,
       );
     }),

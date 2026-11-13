@@ -84,6 +84,7 @@ import {
   withControlLock,
   type CompactionDeps,
   type CompactionPorts,
+  type ControlRecord,
 } from "./compaction";
 import {
   COMPACTION_PORTS,
@@ -229,7 +230,14 @@ import { isString, type JsonObject } from "./schema";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
 import { Collecting, collectingLayer, type CollectingApi } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
-import { causalKey, deliveriesAbout, deliveriesOf, SENT_STATES, toldLine } from "./steering";
+import {
+  causalKey,
+  deliveriesAbout,
+  deliveriesOf,
+  isUnobserved,
+  SENT_STATES,
+  toldLine,
+} from "./steering";
 import type { Records } from "./records";
 import { readTask, withTaskLock, writeTask } from "./task";
 import { malformedIn, mentionedSkills, renderTemplate, skillMention, skillsIn } from "./template";
@@ -421,6 +429,8 @@ export interface AgentsApi {
   readonly pollMs: number;
   /** How long an agent may sit idle without writing its Output. */
   readonly collectMs: number;
+  /** Continuous managed endpoint failure, bounded independently of the idle budget. */
+  readonly unhealthy: (launched: Launched) => Effect.Effect<string>;
   /**
    * The agent these preferences come to over the operator's configuration, lowest first,
    * moved on to one with room where its Subscription is spent.
@@ -468,6 +478,7 @@ export interface AgentsApi {
     ask: AgentAsk,
     unless?: string | null,
     onlyDeadServer?: boolean,
+    usable?: (text: string) => boolean,
   ) => Effect.Effect<boolean, AgentUncertain | AgentParked>;
   /**
    * Hands a message, through the one sender, to the live agent in this role of a Run this
@@ -965,23 +976,35 @@ export const agentWork = <
           left.length === 0 ? Effect.void : host.parked(runId, Arr.join(left, "; ")),
         ),
       );
+    const usable = (text: string) => decodeOutput(work.output, text, plain).ok;
     // Uninterruptible, so a stop racing a restart waits for it and finds its agent to stop.
     const reviving = (from: AgentAsk, unless?: string | null, onlyDeadServer = false) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
           if (yield* host.stopRequested(runId)) return;
           if (
-            (yield* agents.revive(from, unless, onlyDeadServer)) &&
+            (yield* agents.revive(
+              from,
+              unless,
+              onlyDeadServer,
+              unless == null ? undefined : usable,
+            )) &&
             (yield* host.stopRequested(runId))
           )
             yield* haltLate;
         }),
       );
     // A stale working status must not hide a dead server for the entire idle budget.
-    const recovering = (from: AgentAsk, unless?: string | null) =>
-      reviving(from, unless, true).pipe(
-        Effect.repeat(Schedule.spaced(Duration.millis(agents.pollMs))),
-        Effect.andThen(Effect.never),
+    const recovering = (on: Launched, from: AgentAsk, unless?: string | null) =>
+      Effect.raceFirst(
+        reviving(from, unless, true).pipe(
+          Effect.repeat(Schedule.spaced(Duration.millis(agents.pollMs))),
+          Effect.andThen(Effect.never),
+        ),
+        agents.unhealthy(on).pipe(
+          Effect.flatMap((why) => host.parked(runId, why, "output-absent")),
+          Effect.andThen(Effect.never),
+        ),
       );
     // Each budget spent idle, one that has gone is started again, as a resume once did.
     const untilWritten = (on: Launched, from: AgentAsk, canRevive = true) =>
@@ -1028,7 +1051,7 @@ export const agentWork = <
                 yield* reviving(from);
                 return yield* Effect.raceFirst(
                   Effect.raceFirst(Effect.raceFirst(output, ended), agents.ranOut(on)),
-                  recovering(from),
+                  recovering(on, from),
                 );
               })
             : output,
@@ -1287,13 +1310,7 @@ export const agentWork = <
       Effect.gen(function* () {
         for (;;) {
           const text = yield* watching(
-            agents.collect(
-              current,
-              unusable,
-              questions,
-              undefined,
-              (text) => decodeOutput(work.output, text, plain).ok,
-            ),
+            agents.collect(current, unusable, questions, undefined, usable),
           );
           if (text !== null || (yield* agents.stopped(current, since)) === null) return text;
           yield* reviving(currentAsk, unusable);
@@ -1342,7 +1359,7 @@ export const agentWork = <
                           recollecting(unusable, since),
                           parksOnStop(current, since),
                         ),
-                        recovering(currentAsk, unusable),
+                        recovering(current, currentAsk, unusable),
                       ),
                     ),
                   ),
@@ -3398,6 +3415,46 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       }),
     ).pipe(Effect.orElseSucceed(() => undefined));
 
+  const unhealthy = (launched: Launched) =>
+    under(
+      Effect.gen(function* () {
+        let failedAt: number | null = null;
+        let managed: ControlRecord | null = null;
+        const budgetMs = host.readyMs ?? READY_TIMEOUT_MS;
+        return yield* Effect.gen(function* () {
+          const record = yield* readControl(host.env.stateDir, launched.agent).pipe(
+            Effect.orElseSucceed(() => null),
+          );
+          const ready = record === null ? undefined : ports[record.harness]?.ready;
+          const since = yield* Clock.currentTimeMillis;
+          if (record?.endpoint != null && ready !== undefined) {
+            if (managed?.endpoint !== record.endpoint) failedAt = null;
+            managed = record;
+            const up = yield* ready(record).pipe(
+              Effect.orElseSucceed(() => false),
+              Effect.timeoutOption(2_000),
+            );
+            if (Option.isSome(up) && up.value) {
+              failedAt = null;
+              return null;
+            }
+          } else if (managed === null) return null;
+          failedAt ??= since;
+          if ((yield* Clock.currentTimeMillis) - failedAt < budgetMs) return null;
+          return `${launched.agent}: ${managed.harness} server health at ${managed.endpoint} remained unavailable or unproved for ${Math.round(budgetMs / 1000)}s. Collie keeps collecting usable Output; replacement requires proven death and a Quiet predecessor.`;
+        }).pipe(
+          Effect.repeat({
+            until: (why) => why !== null,
+            schedule: Schedule.spaced(host.pollMs ?? DEFAULT_POLL_MS),
+          }),
+          Effect.filterOrElse(
+            (why): why is string => why !== null,
+            () => Effect.never,
+          ),
+        );
+      }),
+    );
+
   const collect = (
     launched: Launched,
     unless?: string | null,
@@ -3655,6 +3712,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           .pipe(Effect.orElseSucceed(() => "")),
         authority: yield* run.authority,
       };
+      yield* uncertainStep(
+        { ...ask, operation: latest.operation, sequence: latest.sequence },
+        agent,
+      );
       const session: StartSession | null =
         had !== null
           ? { id: had, resumed: true }
@@ -3788,7 +3849,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                     Effect.catch((cause) =>
                       log(
                         runId,
-                        `${agent}: could not be started again on core (${reason(cause)})`,
+                        `${agent}: could not be started again on core (${isParked(cause) ? cause.reason : reason(cause)})`,
                       ).pipe(Effect.as([])),
                     ),
                   )),
@@ -3801,10 +3862,40 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         .pipe(withRecoveryGate(runId)),
     );
 
+  const uncertainStep = (ask: AgentAsk, agent: string) =>
+    Effect.gen(function* () {
+      const stem = stemOf(ask);
+      const held = Arr.findFirst(
+        yield* deliveriesOf(ask.runId),
+        (one) =>
+          one.agent === agent &&
+          (one.cause.kind === "step" || one.cause.kind === "repair") &&
+          (one.cause.ref === stem ||
+            (one.cause.kind === "repair" &&
+              pipe(one.cause.ref, Str.startsWith(`${stem}.`)) &&
+              /^[1-9]\d*$/.test(pipe(one.cause.ref, Str.slice(stem.length + 1))))) &&
+          (one.state === "unknown" || one.state === "reserved" || isUnobserved(one)),
+      );
+      if (Option.isSome(held))
+        return yield* new AgentParked({
+          operation: ask.operation,
+          reason: `${agent}: delivery ${held.value.id} remains ${held.value.state}; server loss does not say whether it was received. Settle it with \`collie run deliveries ${ask.runId} --reconcile ${held.value.id} --as sent|not-sent\`, then \`collie run resume ${ask.runId}\`.`,
+        });
+    });
+
   const retireLost = (ask: AgentAsk, agent: string, listed: ReadonlyArray<AgentInfo>) =>
     Effect.gen(function* () {
       const lost = yield* lostServer(compactionDeps(host, ask.runId), agent);
       if (lost === null) return false;
+      yield* uncertainStep(ask, agent);
+      const owned = yield* readControl(host.env.stateDir, agent).pipe(
+        Effect.orElseSucceed(() => null),
+      );
+      if (owned?.runLog !== `${dirFor(ask.runId)}/agents.log` || owned.cwd !== ask.cwd)
+        return yield* unsettled(
+          ask,
+          `${lost}; its control identity does not match this Run and checkout`,
+        );
       const launched = Arr.findLast(
         yield* launchesOf(ask.runId),
         (one) => one.agent === agent && (one.sequence ?? 1) === (ask.sequence ?? 1),
@@ -3825,7 +3916,12 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       return true;
     });
 
-  const revive = (ask: AgentAsk, unless?: string | null, onlyDeadServer = false) =>
+  const revive = (
+    ask: AgentAsk,
+    unless?: string | null,
+    onlyDeadServer = false,
+    usable?: (text: string) => boolean,
+  ) =>
     under(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -3834,8 +3930,17 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         const agent = yield* nameFor(ask);
         const lost = yield* lostServer(compactionDeps(host, ask.runId), agent);
         if (onlyDeadServer && lost === null) return false;
-        const written = yield* fs.readFileString(ask.output).pipe(Effect.orElseSucceed(() => ""));
-        if (Str.trim(written) !== "" && written !== unless) return false;
+        const completed = waitForOutput(ask.output, unless ?? null, {
+          pollMs: host.pollMs ?? DEFAULT_POLL_MS,
+          budgetMs: 0,
+          counts: Effect.succeed(false),
+          usable: usable ?? (() => true),
+          settled: Effect.suspend(() => host.herdr.agentStatus(agent)).pipe(
+            Effect.orElseSucceed(() => null),
+            Effect.map((status) => status !== "working" && status !== "blocked"),
+          ),
+        });
+        if ((yield* completed) !== null) return false;
         // The host starts an agent on core again, in the session it had.
         if (
           lost === null &&
@@ -3847,8 +3952,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         if (lost !== null) {
           if (!(yield* retireLost(ask, agent, listing.value))) return false;
           // A surviving tool can finish the Output while its old server is being retired.
-          const after = yield* fs.readFileString(ask.output).pipe(Effect.orElseSucceed(() => ""));
-          if (Str.trim(after) !== "" && after !== unless) return false;
+          if ((yield* completed) !== null) return false;
           yield* launch(ask);
           return true;
         }
@@ -4310,6 +4414,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       ),
     pollMs: host.pollMs ?? DEFAULT_POLL_MS,
     collectMs: host.collectMs ?? DEFAULT_COLLECT_MS,
+    unhealthy,
     choose: (layers, { runId, operation }, spent = []) =>
       under(
         Effect.gen(function* () {

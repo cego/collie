@@ -1,6 +1,7 @@
 //! The board as the human meets it: built from Flock items, drawn by Rune without a window,
 //! pressed, and its calls read off a fake core. Nothing here reaches a real host.
 
+use collie_desktop_board::board::offer_form::OfferEntry;
 use collie_desktop_board::board::{Dialog, model};
 use collie_desktop_board::calls::CallError;
 use collie_desktop_board::calls::testing::Harness;
@@ -608,8 +609,8 @@ fn offers_are_read_for_the_run_and_one_with_arguments_is_invoked_with_what_was_t
     press(&mut runtime, "offer-redo");
     assert!(node(&runtime, "field-goal").is_some());
     if let Some(Dialog::Offers { fields, .. }) = &mut runtime.state.board.dialog {
-        for (name, _, edit) in fields.iter_mut() {
-            *edit = TextEdit::new(if name == "goal" {
+        for entry in fields.iter_mut() {
+            entry.edit = TextEdit::new(if entry.field.name == "goal" {
                 "fix the redirect"
             } else {
                 "3"
@@ -625,6 +626,188 @@ fn offers_are_read_for_the_run_and_one_with_arguments_is_invoked_with_what_was_t
             "input": {"goal": "fix the redirect", "rounds": 3}})
     );
     assert!(runtime.state.board.dialog.is_none());
+}
+
+/// Presses the element whose path holds each of `path`'s keys, ending in its last.
+fn press_in(runtime: &mut Runtime<App>, path: &str) {
+    let parts: Vec<&str> = path.split('/').collect();
+    let found = runtime
+        .elements()
+        .into_iter()
+        .map(|e| e.path)
+        .find(|p| {
+            p.ends_with(&format!("/{}", parts[parts.len() - 1]))
+                && parts.iter().all(|part| p.split('/').any(|s| s == *part))
+        })
+        .unwrap_or_else(|| panic!("no {path}"));
+    press(runtime, &found);
+}
+
+fn type_into(fields: &mut [OfferEntry], name: &str, text: &str) {
+    let entry = fields.iter_mut().find(|e| e.field.name == name).unwrap();
+    entry.edit = TextEdit::new(text);
+}
+
+fn offers_of(harness: &Harness<App>, offers: Value) -> Runtime<App> {
+    let mut app = app(
+        harness,
+        vec![snapshot(
+            &pc(),
+            vec![task("t1", "Shipped", "done", json!({}))],
+        )],
+    );
+    app.do_action(
+        "inst-pc:t1",
+        &collie_desktop_board::board::cards::CardAction::Offers,
+    );
+    harness.fake.answer("offers", Ok(offers));
+    let mut runtime = runtime(app);
+    settle(harness, &mut runtime);
+    runtime
+}
+
+#[test]
+fn a_confirmed_offer_waits_for_its_named_button_before_invoking() {
+    let harness = Harness::new();
+    let mut state = app(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![task("t1", "Shipped", "done", json!({}))],
+        )],
+    );
+    state.do_action(
+        "inst-pc:t1",
+        &collie_desktop_board::board::cards::CardAction::Offers,
+    );
+    harness.fake.answer(
+        "offers",
+        Ok(json!([{
+            "id": "merge", "title": "Merge", "workflow": "release", "arguments": null,
+            "kind": "follow-up", "ships": "merge", "primary": true, "unavailable": null,
+            "confirm": "Merges it and stops: nothing is tagged or deployed."
+        }])),
+    );
+    let mut runtime = runtime(state);
+    settle(&harness, &mut runtime);
+    press(&mut runtime, "offer-merge");
+    assert!(acts(&harness).is_empty(), "nothing is taken before its yes");
+    assert_eq!(
+        node(&runtime, "offer-confirm").expect("what it does")["name"],
+        "Merges it and stops: nothing is tagged or deployed."
+    );
+    assert_eq!(node(&runtime, "invoke").unwrap()["name"], "Merge");
+    press(&mut runtime, "invoke");
+    assert_eq!(
+        acts(&harness)[0]["action"],
+        json!({"_tag": "Invoke", "runId": "r-t1", "offer": "merge", "input": {}})
+    );
+}
+
+#[test]
+fn an_offers_form_draws_each_field_by_its_type_and_refuses_what_a_field_cannot_take_before_sending()
+{
+    let harness = Harness::new();
+    let mut runtime = offers_of(
+        &harness,
+        json!([{"id": "ship", "title": "Ship it", "workflow": "release", "kind": "follow-up",
+            "primary": true, "unavailable": null, "arguments": {"type": "object", "properties": {
+                "notify": {"type": "boolean", "description": "Tell the channel"},
+                "then": {"type": "string", "enum": ["", "finish"]},
+                "count": {"type": "integer"},
+                "reviewers": {"type": "array", "items": {"type": "string"}}}}}]),
+    );
+    press(&mut runtime, "offer-ship");
+    assert_eq!(
+        node(&runtime, "field-notify").unwrap()["role"],
+        "radio-group"
+    );
+    assert_eq!(
+        node(&runtime, "field-notify-help").unwrap()["name"],
+        "Tell the channel"
+    );
+    assert_eq!(node(&runtime, "field-then").unwrap()["role"], "radio-group");
+    if let Some(Dialog::Offers { fields, .. }) = &mut runtime.state.board.dialog {
+        type_into(fields, "count", "2.5");
+    }
+    redraw(&mut runtime);
+    press(&mut runtime, "invoke");
+    assert!(acts(&harness).is_empty(), "nothing malformed is sent");
+    assert_eq!(
+        node(&runtime, "field-count-error").expect("why")["name"],
+        "Count must be a whole number"
+    );
+    if let Some(Dialog::Offers { fields, .. }) = &mut runtime.state.board.dialog {
+        type_into(fields, "count", "2");
+        type_into(fields, "reviewers", "alice\n bob");
+    }
+    redraw(&mut runtime);
+    press_in(&mut runtime, "field-notify/segment2");
+    press_in(&mut runtime, "field-then/segment1");
+    press(&mut runtime, "invoke");
+    assert_eq!(
+        acts(&harness)[0]["action"]["input"],
+        json!({"notify": false, "then": "", "count": 2, "reviewers": ["alice", "bob"]})
+    );
+}
+
+#[test]
+fn a_finished_cards_menu_disables_refused_offers_and_invokes_each_owning_run() {
+    for (title, owner, id) in [
+        ("Stage app!12", "r-app", "stage"),
+        ("Release api!7", "r-api", "release"),
+    ] {
+        let harness = Harness::new();
+        let mut runtime = runtime(app(
+            &harness,
+            vec![snapshot(
+                &pc(),
+                vec![task(
+                    "fan",
+                    "Deliver changes",
+                    "done",
+                    json!({"offers": [
+                        {"id": "release", "title": "Release app!12", "run": "r-app",
+                            "unavailable": "a Release is still going"},
+                        {"id": "stage", "title": "Stage app!12", "run": "r-app"},
+                        {"id": "release", "title": "Release api!7", "run": "r-api"}
+                    ]}),
+                )],
+            )],
+        ));
+        press(&mut runtime, "card-fan-menu");
+        let tree = runtime.accessibility_json();
+        let refused = within(&tree)
+            .into_iter()
+            .find(|n| {
+                n["role"] == "menu-item" && n["name"] == "Release app!12 — a Release is still going"
+            })
+            .expect("the refused offer stays visible with its reason");
+        assert!(has_state(refused, "disabled"));
+        choose(&mut runtime, "Release app!12 — a Release is still going");
+        assert!(harness.fake.asked_of("offers").is_empty());
+        assert!(acts(&harness).is_empty());
+
+        choose(&mut runtime, title);
+        assert_eq!(
+            harness.fake.asked_of("offers"),
+            [json!({"installation": "inst-pc", "runId": owner})]
+        );
+        harness.fake.answer(
+            "offers",
+            Ok(json!([
+                {"id": id, "title": title, "workflow": id, "arguments": null,
+                    "kind": "follow-up", "primary": false, "unavailable": null}
+            ])),
+        );
+        settle(&harness, &mut runtime);
+        assert_eq!(
+            acts(&harness)[0]["action"],
+            json!({
+                "_tag": "Invoke", "runId": owner, "offer": id, "input": {}
+            })
+        );
+    }
 }
 
 #[test]
@@ -1442,9 +1625,9 @@ fn cards_take_the_columns_the_boards_width_fits_at_once_never_springing_into_the
 }
 
 #[test]
-fn work_ready_to_merge_is_its_own_section_and_its_merge_is_offered_by_the_run_that_owns_it() {
+fn ready_to_ship_preserves_the_release_title_and_owning_run() {
     let harness = Harness::new();
-    let offer = json!({"id": "merge", "title": "Merge the MR", "run": "r-owner"});
+    let offer = json!({"id": "release", "title": "Release after review", "run": "r-owner"});
     let mut runtime = runtime(app(
         &harness,
         vec![snapshot(
@@ -1483,8 +1666,8 @@ fn work_ready_to_merge_is_its_own_section_and_its_merge_is_offered_by_the_run_th
         ]
     );
     assert_eq!(cards_in(&runtime, "ready-to-ship"), ["Green and approved"]);
-    let primary = node(&runtime, "card-t-ship-primary").expect("its merge");
-    assert_eq!(primary["name"], "Merge");
+    let primary = node(&runtime, "card-t-ship-primary").expect("its Release offer");
+    assert_eq!(primary["name"], "Release after review");
     press(&mut runtime, "card-t-ship-primary");
     assert_eq!(
         harness.fake.asked_of("offers"),
@@ -1518,4 +1701,260 @@ fn a_parked_card_names_its_cause_and_its_latest_two_recovery_actions() {
         .filter_map(|n| n["name"].as_str())
         .collect();
     assert_eq!(lines, ["second", "third"]);
+}
+
+const PR400: &str = "https://github.com/cego/collie/pull/400";
+
+/// The Working card the human's screenshot shows, holding PR collie#400.
+fn pr400(id: &str, more: Value) -> Value {
+    let mut card = task(
+        id,
+        "Fix Desktop retaining a broken VM chat channel",
+        "active",
+        json!({
+            "project": "/home/mk/collie", "branch": "desktop-replaces-a-dead-chat-channel",
+            "sentence": "Running startup-final-tests, 16 s.", "age": "22h",
+            "agents": [{"name": "build", "status": "working", "now": null, "run": format!("r-{id}")}],
+            "mr": PR400, "mrState": "open",
+            "flow": {"glyphs": [{"title": "build", "state": "running"}], "release": 0.0,
+                "current": null},
+        }),
+    );
+    for (key, value) in more.as_object().into_iter().flatten() {
+        card[key] = value.clone();
+    }
+    card
+}
+
+fn overlap(a: [f32; 4], b: [f32; 4]) -> bool {
+    a[0] + 0.5 < b[0] + b[2]
+        && b[0] + 0.5 < a[0] + a[2]
+        && a[1] + 0.5 < b[1] + b[3]
+        && b[1] + 0.5 < a[1] + a[3]
+}
+
+fn inside(a: [f32; 4], b: [f32; 4]) -> bool {
+    a[0] >= b[0] - 0.5
+        && a[1] >= b[1] - 0.5
+        && a[0] + a[2] <= b[0] + b[2] + 0.5
+        && a[1] + a[3] <= b[1] + b[3] + 0.5
+}
+
+/// Draws until the board's columns and springs have come to rest.
+fn settle_layout(runtime: &mut Runtime<App>) {
+    runtime.invalidate();
+    for _ in 0..6 {
+        runtime.frame(1.0);
+    }
+}
+
+/// Lays the board out at `size` and `scale`, then checks the merge requests drawn on `card`:
+/// their text and each control sit apart, inside the card and clear of its other rows.
+/// Returns the card's width.
+fn mr_rows_fit(runtime: &mut Runtime<App>, card: &str, size: (f32, f32), scale: f32) -> f32 {
+    runtime.set_viewport(size, scale);
+    settle_layout(runtime);
+    let elements = runtime.elements();
+    let at = format!("{size:?} at {scale}x");
+    let card_el = elements
+        .iter()
+        .find(|e| e.key.as_deref() == Some(card))
+        .unwrap_or_else(|| panic!("no {card} at {at}"));
+    let within_card = |e: &&rune::ElementInfo| e.path.starts_with(&format!("{}/", card_el.path));
+    let mrs = elements
+        .iter()
+        .filter(within_card)
+        .find(|e| e.key.as_deref() == Some("mrs"))
+        .unwrap_or_else(|| panic!("{card} draws no merge requests at {at}"));
+    let buttons: Vec<_> = elements
+        .iter()
+        .filter(|e| e.path.starts_with(&format!("{}/", mrs.path)) && e.role == "button")
+        .collect();
+    let in_button = |e: &rune::ElementInfo| {
+        buttons
+            .iter()
+            .any(|b| e.path.starts_with(&format!("{}/", b.path)))
+    };
+    let parts: Vec<(String, [f32; 4])> = elements
+        .iter()
+        .filter(|e| e.path.starts_with(&format!("{}/", mrs.path)))
+        .filter(|e| e.role == "button" || (e.text.is_some() && !in_button(e)))
+        .map(|e| {
+            (
+                e.label.clone().or(e.text.clone()).unwrap_or_default(),
+                e.rect,
+            )
+        })
+        .collect();
+    assert!(parts.len() >= 2, "{card} at {at}: {parts:?}");
+    for button in &buttons {
+        assert!(button.focusable, "{:?} takes no focus ({at})", button.label);
+    }
+    for (name, rect) in &parts {
+        assert!(rect[2] >= 1.0, "{name} is drawn {rect:?} at {at}");
+        assert!(
+            inside(*rect, card_el.rect),
+            "{name} at {rect:?} leaves the card at {:?} ({at})",
+            card_el.rect
+        );
+    }
+    for (i, (a, ra)) in parts.iter().enumerate() {
+        for (b, rb) in &parts[i + 1..] {
+            assert!(
+                !overlap(*ra, *rb),
+                "{a} at {ra:?} overlaps {b} at {rb:?} ({at})"
+            );
+        }
+    }
+    for other in ["sentence", "footer"]
+        .into_iter()
+        .map(String::from)
+        .chain([format!("{card}-flow")])
+    {
+        if let Some(e) = elements
+            .iter()
+            .filter(within_card)
+            .find(|e| e.key.as_deref() == Some(other.as_str()))
+        {
+            assert!(
+                !overlap(mrs.rect, e.rect),
+                "the merge requests at {:?} overlap {other} at {:?} ({at})",
+                mrs.rect,
+                e.rect
+            );
+        }
+    }
+    card_el.rect[2]
+}
+
+/// Presses the button of `card`'s merge requests whose accessible name is `name`.
+fn press_mr_button(runtime: &mut Runtime<App>, name: &str) {
+    let path = runtime
+        .elements()
+        .into_iter()
+        .find(|e| {
+            e.role == "button" && e.label.as_deref() == Some(name) && e.path.contains("/mrs/")
+        })
+        .map(|e| e.path)
+        .unwrap_or_else(|| panic!("no {name} button"));
+    press(runtime, &path);
+}
+
+const SIZES: [(f32, f32); 6] = [
+    (1280.0, 900.0),
+    (1000.0, 900.0),
+    (1600.0, 900.0),
+    (700.0, 900.0),
+    (420.0, 900.0),
+    (1280.0, 900.0),
+];
+
+#[test]
+fn card_mr_reference_open_and_machine_links_fit_a_narrow_card_at_every_width_and_scale() {
+    let harness = Harness::new();
+    let laptop = machine("inst-laptop", "p-laptop", "mk-laptop");
+    let mut app = app(
+        &harness,
+        vec![
+            snapshot(&laptop, vec![pr400("pr400", json!({}))]),
+            snapshot(&vm(), vec![pr400("pr400vm", json!({"age": "21h"}))]),
+        ],
+    );
+    app.nav.chat.set_open(false);
+    let mut runtime = runtime(app);
+    let mut narrowest = f32::MAX;
+    for scale in [1.0, 1.5, 2.0] {
+        for size in SIZES {
+            narrowest = narrowest.min(mr_rows_fit(&mut runtime, "card-pr400", size, scale));
+        }
+    }
+    assert!(
+        narrowest < 320.0,
+        "no card was as narrow as the screenshot's: {narrowest}"
+    );
+
+    runtime.set_viewport((1000.0, 900.0), 1.0);
+    settle_layout(&mut runtime);
+    press_mr_button(&mut runtime, "Open pull request");
+    assert!(
+        harness
+            .fake
+            .asked_of("openLink")
+            .iter()
+            .any(|asked| asked["url"] == PR400),
+        "{:?}",
+        harness.fake.asked_of("openLink")
+    );
+    press_mr_button(&mut runtime, "on vm-mk");
+    assert_eq!(
+        runtime.state.open_run,
+        Some(("inst-vm".into(), "r-pr400vm".into()))
+    );
+}
+
+#[test]
+fn card_mr_rows_keep_long_machine_and_project_names_inside_the_card() {
+    let harness = Harness::new();
+    let long = "https://github.com/cego/collie-desktop-native-board-renderer/pull/400";
+    let here = machine(
+        "inst-laptop",
+        "p-laptop",
+        "mk-laptop-workstation-copenhagen-office",
+    );
+    let there = machine("inst-vm", "p-vm", "vm-mk-build-runner-eu-north-1-large");
+    let mut app = app(
+        &harness,
+        vec![
+            snapshot(&here, vec![pr400("pr400", json!({"mr": long}))]),
+            snapshot(&there, vec![pr400("pr400vm", json!({"mr": long}))]),
+        ],
+    );
+    app.nav.chat.set_open(false);
+    let mut runtime = runtime(app);
+    for scale in [1.0, 2.0] {
+        for size in SIZES {
+            mr_rows_fit(&mut runtime, "card-pr400", size, scale);
+        }
+    }
+    let names: Vec<String> = runtime
+        .elements()
+        .into_iter()
+        .filter(|e| e.role == "button" && e.path.contains("/mrs/"))
+        .filter_map(|e| e.label)
+        .collect();
+    assert!(
+        names.contains(&"on vm-mk-build-runner-eu-north-1-large".to_string()),
+        "a cut name is still read whole: {names:?}"
+    );
+}
+
+#[test]
+fn card_mr_rows_of_one_machines_several_merge_requests_fit_a_narrow_card() {
+    let harness = Harness::new();
+    let mr = |iid: &str, repo: &str| {
+        json!({"id": format!("github.com/cego/{repo}#{iid}"),
+            "mr": format!("https://github.com/cego/{repo}/pull/{iid}"),
+            "label": format!("cego/{repo}#{iid}"), "short": format!("{repo}#{iid}"),
+            "url": format!("https://github.com/cego/{repo}/pull/{iid}"), "run": "r-pr400",
+            "state": "open", "checks": null, "head": "0123456789abcdef", "ready": true,
+            "disposition": null, "waitsOn": []})
+    };
+    let laptop = machine("inst-laptop", "p-laptop", "mk-laptop");
+    let mut app = app(
+        &harness,
+        vec![snapshot(
+            &laptop,
+            vec![pr400(
+                "pr400",
+                json!({"mrs": [mr("400", "collie"), mr("401", "collie-desktop-native-board")]}),
+            )],
+        )],
+    );
+    app.nav.chat.set_open(false);
+    let mut runtime = runtime(app);
+    for scale in [1.0, 2.0] {
+        for size in SIZES {
+            mr_rows_fit(&mut runtime, "card-pr400", size, scale);
+        }
+    }
 }

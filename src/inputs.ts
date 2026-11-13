@@ -191,6 +191,7 @@ export function inferInput(
       case "optional":
       // A launch's own choice, which no start infers.
       case "reach":
+      case "internal":
         return { ...base, value: "", source: "default" };
       case "repository":
         return {

@@ -1587,7 +1587,7 @@ test("a GitLab pipeline that failed, is running or passed is what the card's che
       const green = (yield* cardAfter(MR, piped("passed"), HEAD)).card;
       expect(green.ready).toBe(true);
       expect(green.sentence).toBe(
-        "Ready to release: mk/collie!65 is open and its checks passed at 1a2b3c4. Next: merge it.",
+        "Ready to release: mk/collie!65 is open and its checks passed at 1a2b3c4. Next: Release.",
       );
     }),
   ));
@@ -1610,7 +1610,7 @@ test("a GitHub check rollup that is red, pending or green is what the card's che
       const green = (yield* cardAfter(PR, github("open", [tests]), HEAD)).card;
       expect(green.ready).toBe(true);
       expect(green.sentence).toBe(
-        "Ready to release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: merge it.",
+        "Ready to release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: Release.",
       );
     }),
   ));

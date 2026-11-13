@@ -2613,11 +2613,10 @@ const frontDoorHandlers = (
                 id,
                 title,
                 description,
-                inputs: Arr.map(inputs, ({ name, required, schema }) => ({
-                  name,
-                  required,
-                  schema,
-                })),
+                inputs: Arr.map(
+                  Arr.filter(inputs, (one) => one.strategy !== "internal"),
+                  ({ name, required, schema }) => ({ name, required, schema }),
+                ),
               })),
             ),
             Effect.provideContext(bun),

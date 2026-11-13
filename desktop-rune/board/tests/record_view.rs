@@ -880,6 +880,58 @@ fn with_diff() -> Value {
 }
 
 #[test]
+fn facts_list_each_offer_with_its_owner_and_refusal_even_while_details_are_loading() {
+    for run in ["r1", "r-app", "r-api"] {
+        let harness = Harness::<App>::new();
+        let mut runtime = opened(&harness);
+        runtime.update(|app, _| {
+            let task = app
+                .machines
+                .iter_mut()
+                .filter(|machine| machine.machine.installation == "inst-build")
+                .flat_map(|machine| &mut machine.cards)
+                .find(|task| task.run == "r1")
+                .unwrap();
+            task.children = serde_json::from_value(json!([
+                {"repo": "app", "run": "r-app", "state": "done", "mr": null},
+                {"repo": "api", "run": "r-api", "state": "done", "mr": null}
+            ]))
+            .unwrap();
+            task.offers = serde_json::from_value(json!([
+                {"id": "release", "title": "Release app!12", "run": "r-app"},
+                {"id": "stage", "title": "Stage api!7", "run": "r-api",
+                    "unavailable": "a Stage is still going"}
+            ]))
+            .unwrap();
+            app.open_record("inst-build".into(), run.into(), "Build box".into(), None);
+        });
+        runtime.frame(100.0);
+        tap(&mut runtime, "tab-facts", 200.0);
+        for reading in [true, false] {
+            if !reading {
+                harness
+                    .fake
+                    .push("runDetail", Ok(detail(json!({"id": run}))));
+                settle(&mut runtime, &harness, 1000.0);
+            }
+            let offers = named(&runtime, "facts-offers");
+            let names: Vec<&str> = within(&offers)
+                .into_iter()
+                .filter_map(|node| node["name"].as_str())
+                .collect();
+            for expected in [
+                "Release app!12",
+                "r-app",
+                "Stage api!7",
+                "r-api — a Stage is still going",
+            ] {
+                assert!(names.contains(&expected), "missing {expected} in {names:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn a_card_opens_its_runs_record_on_its_first_tab_never_its_terminal_streaming_until_back() {
     let harness = Harness::<App>::new();
     let mut runtime = opened(&harness);
@@ -1456,6 +1508,50 @@ fn a_steps_start_asks_the_run_what_it_offers_and_starts_it_with_what_was_typed()
     assert_eq!(
         harness.fake.asked_of("act")[0]["action"],
         json!({"_tag": "Invoke", "runId": "r1", "offer": "build", "input": {"goal": "Ship it"}})
+    );
+}
+
+#[test]
+fn a_steps_start_that_says_what_it_does_is_asked_first_and_a_needed_yes_or_no_is_sent_as_ticked() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    runtime.update(|app, _| {
+        app.open_record("inst-build".into(), "r1".into(), "Build box".into(), None)
+    });
+    let flow = flow_with(
+        json!({"id": "offer:merge", "title": "Merge", "state": "expected", "primary": "start"}),
+        json!([]),
+    );
+    harness
+        .fake
+        .push("runDetail", Ok(detail(json!({"flow": flow}))));
+    settle(&mut runtime, &harness, 100.0);
+    tap(&mut runtime, "next-action", 200.0);
+    harness.fake.answer(
+        "offers",
+        Ok(json!([
+            {"id": "merge", "title": "Merge", "workflow": "release", "kind": "follow-up",
+                "primary": true, "unavailable": null, "ships": "merge",
+                "confirm": "Merges it and stops: nothing is tagged or deployed.",
+                "arguments": {"type": "object", "required": ["squash"],
+                    "properties": {"squash": {"type": "boolean"}}}}
+        ])),
+    );
+    settle(&mut runtime, &harness, 300.0);
+    assert!(
+        harness.fake.asked_of("act").is_empty(),
+        "nothing is started before its yes"
+    );
+    assert_eq!(
+        named(&runtime, "offer-confirm")["name"],
+        "Merges it and stops: nothing is tagged or deployed."
+    );
+    assert_eq!(named(&runtime, "offer-field-squash")["role"], "check-box");
+    assert_eq!(named(&runtime, "offer-start")["name"], "Merge");
+    tap(&mut runtime, "offer-start", 400.0);
+    assert_eq!(
+        harness.fake.asked_of("act")[0]["action"],
+        json!({"_tag": "Invoke", "runId": "r1", "offer": "merge", "input": {"squash": false}})
     );
 }
 

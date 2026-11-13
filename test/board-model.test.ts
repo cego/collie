@@ -857,6 +857,22 @@ test("an offer's text arguments are read as it declares them, null included, and
   expect(givenOfferInput(drawn, { count: "2", extra: "7" })).toEqual({ count: 2, extra: "7" });
 });
 
+test("an offer's list arguments use JSON outside the form, preserving invalid text for refusal", () => {
+  const drawn = {
+    properties: { reviewers: { type: "array", items: { type: "string" } } },
+  };
+  expect(givenOfferInput(drawn, { reviewers: '["alice","bob"]' })).toEqual({
+    reviewers: ["alice", "bob"],
+  });
+  expect(givenOfferInput(drawn, { reviewers: "[]" })).toEqual({ reviewers: [] });
+  expect(givenOfferInput(drawn, { reviewers: "alice\nbob" })).toEqual({
+    reviewers: "alice\nbob",
+  });
+  expect(givenOfferInput(drawn, { reviewers: '["alice"' })).toEqual({
+    reviewers: '["alice"',
+  });
+});
+
 test("a Question decodes with every questionnaire key kept, and without any of them", () => {
   const decode = Schemaflow(Schema.decodeUnknownResult(Question), Result.getOrThrow);
   const asked = {

@@ -366,7 +366,8 @@ const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: J
   const wrong = Arr.filter(actions, (action) => !asked.includes(action.kind));
   if (wrong.length > 0)
     return `collie_do does not carry out ${Arr.join([...new Set(Arr.map(wrong, (a) => a.kind))], ", ")}: that is collie_propose's, which carries it out in the same call.`;
-  const requestId = yield* (yield* SecureRandom.SecureRandom).uuidV4();
+  const requestId =
+    decoded.success.request_id ?? (yield* (yield* SecureRandom.SecureRandom).uuidV4());
   const door: Door = yield* toolDoor(env);
   const said: string[] =
     selected.on === null

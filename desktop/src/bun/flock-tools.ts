@@ -11,7 +11,18 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Num from "effect/Number";
 import { pipe } from "effect/Function";
-import { Cause, Clock, Effect, Exit, FileSystem, Option, Result, Schema, Struct } from "effect";
+import {
+  Cause,
+  Clock,
+  Effect,
+  Exit,
+  FileSystem,
+  Option,
+  Predicate,
+  Result,
+  Schema,
+  Struct,
+} from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Tool from "effect/ai/Tool";
 import * as Toolkit from "effect/ai/Toolkit";
@@ -236,7 +247,8 @@ const InSyncTool = Tool.make("collie_in_sync", {
     "Whether each Machine is In sync with Desktop (its Collie version, settings, the " +
     "credentials Desktop gives, onboarding) and why one is not. With `sync` naming a " +
     "Machine, does what connecting would: reopens it to upgrade where it runs an older " +
-    "Collie, else syncs its settings and gives what it lacks, and says how that went.",
+    "Collie, else syncs its settings and gives what it lacks, then renews its channels " +
+    "even at the same version, and says how that went.",
   parameters: Schema.Struct({ sync: Schema.optionalKey(Schema.String) }),
   success: Schema.String,
   failureMode: "return",
@@ -292,6 +304,22 @@ export const FLOCK_TOOLS = Arr.map(Rec.values(FlockTools.tools), describeTool);
 
 const ANSWER_WITHIN = "10 seconds";
 
+const unanswered = (name: string, cause: Cause.Cause<unknown>) => {
+  const defect = Cause.findDefect(cause);
+  if (
+    Result.isSuccess(defect) &&
+    pipe(String(defect.success), Str.startsWith("Unknown request tag:"))
+  )
+    return `${name}'s host has no requested operation; upgrade Collie on ${name}`;
+  if (Cause.hasInterruptsOnly(cause))
+    return `${name}'s chat connection was renewed; retry the read once it reconnects`;
+  const error = Cause.findErrorOption(cause);
+  const detail = Str.split(Cause.pretty(cause), "\n")[0];
+  return Option.isSome(error) && Predicate.isTagged(error.value, "RpcClientError")
+    ? `${name}'s chat connection failed: ${detail}. Reconnecting; retry the read once connected`
+    : `${name} did not answer: ${detail}`;
+};
+
 /** A host's answer within `ANSWER_WITHIN`, or why it gave none. */
 const answered = <A, E>(
   machine: ChatMachine,
@@ -305,16 +333,7 @@ const answered = <A, E>(
         onSome: (answer) => Result.succeed(answer),
       }),
     ),
-    // A host without the operation answers with a defect, not a failure.
-    Effect.catchCause((cause) =>
-      Cause.hasInterruptsOnly(cause)
-        ? Effect.interrupt
-        : Effect.succeed(
-            Result.fail(
-              `${machine.name} did not answer; its Collie may be older than Desktop's; upgrade Collie on ${machine.name}`,
-            ),
-          ),
-    ),
+    Effect.catchCause((cause) => Effect.succeed(Result.fail(unanswered(machine.name, cause)))),
   );
 
 /** The Machine's live board and channel, or why it has none. */
@@ -335,6 +354,11 @@ export const reach = (machine: ChatMachine) =>
       onFailure: (reason) => Effect.fail(new HostRefused({ reason })),
     }),
   );
+
+export const readable = (machine: ChatMachine) =>
+  machine.door === undefined
+    ? reach(machine).pipe(Effect.map(({ name, door }) => ({ name, door })))
+    : Effect.succeed({ name: machine.name, door: machine.door });
 
 /** Each Machine, and the live board Desktop follows for it or why it has none. */
 const boards = (flock: FlockChat) =>
@@ -589,7 +613,7 @@ const onRun = Effect.fn("FlockTools.onRun")(function* (
 
 /** A Machine's own answer to one of its reads, headed with its name. */
 const readOn = (machine: ChatMachine, tool: (typeof FLOCK_READS)[number], input: JsonObject) =>
-  reach(machine).pipe(
+  readable(machine).pipe(
     Effect.matchEffect({
       onFailure: ({ reason }) => Effect.succeed(reason),
       onSuccess: ({ door }) =>
@@ -647,13 +671,7 @@ const schedules = Effect.fn("FlockTools.schedules")(function* (flock: FlockChat)
         ),
         Effect.timeout(ANSWER_WITHIN),
         Effect.catch((error) => Effect.succeed(`Schedules could not be read: ${reasonOf(error)}`)),
-        Effect.catchCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.interrupt
-            : Effect.succeed(
-                `Schedules could not be read; upgrade Collie on ${machine.name}, whose host may have no Schedules operation.`,
-              ),
-        ),
+        Effect.catchCause((cause) => Effect.succeed(unanswered(machine.name, cause))),
         Effect.map((text) => `## ${machine.name}\n\n${text}`),
       ),
     { concurrency: "unbounded" },
@@ -682,13 +700,7 @@ const models = Effect.fn("FlockTools.models")(function* (
         Effect.map((catalogues) => modelsLines(catalogues, asked.harness)),
         Effect.timeout(ANSWER_WITHIN),
         Effect.catch((error) => Effect.succeed(`Its models could not be read: ${reasonOf(error)}`)),
-        Effect.catchCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.interrupt
-            : Effect.succeed(
-                `Its models could not be read; upgrade Collie on ${machine.name}, whose host may have no models operation.`,
-              ),
-        ),
+        Effect.catchCause((cause) => Effect.succeed(unanswered(machine.name, cause))),
         Effect.map((text) => `## ${machine.name}\n\n${text}`),
       ),
     { concurrency: "unbounded" },
@@ -718,13 +730,7 @@ const connections = Effect.fn("FlockTools.connections")(function* (
         Effect.catch((error) =>
           Effect.succeed(`Its Connections could not be read: ${reasonOf(error)}`),
         ),
-        Effect.catchCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.interrupt
-            : Effect.succeed(
-                `Its Connections could not be read; upgrade Collie on ${machine.name}, whose host may have no connections operation.`,
-              ),
-        ),
+        Effect.catchCause((cause) => Effect.succeed(unanswered(machine.name, cause))),
         Effect.map((text) => `## ${machine.name}\n\n${text}`),
       ),
     { concurrency: "unbounded" },
@@ -1058,7 +1064,8 @@ const carryOut = Effect.fn("FlockTools.do")(function* (flock: FlockChat, input: 
   if (actions.length === 0) return "collie_do needs an action. Ask which one they meant.";
   const known = yield* boards(flock);
   const said: string[] = [];
-  const request = yield* newRequest;
+  const request = decoded.success.request_id ?? (yield* newRequest);
+  let unconfirmed = false;
   for (const [index, action] of actions.entries()) {
     const kind = textAt(action, "kind");
     const settles = kind === "confirm" || kind === "decline";
@@ -1102,10 +1109,11 @@ const carryOut = Effect.fn("FlockTools.do")(function* (flock: FlockChat, input: 
         ),
     ).pipe(Effect.catch((error) => Effect.succeed(endedAs(error))));
     said.push(`${kind}: ${done.state}${done.note ? ` — ${done.note}` : ""}`);
+    if (done.state === "not confirmed") unconfirmed = true;
     // What follows a failure was asked for on the assumption that it did not happen.
     if (done.state === "failed" || done.state === "not confirmed") break;
   }
-  return Arr.join(said, "\n");
+  return `${unconfirmed ? `Request: ${request}\n` : ""}${Arr.join(said, "\n")}`;
 });
 
 /** The kinds of action that carry files to the work they start or steer. */
@@ -1252,19 +1260,17 @@ const propose = Effect.fn("FlockTools.propose")(
     const carrying = yield* Effect.forEach(placed, ({ action }) =>
       withFiles(flock, reached, action),
     );
-    yield* declareVoice(flock, reached);
-    const done = yield* reached.door.propose({
-      herd: null,
-      interpretation,
-      actions: carrying,
-      request,
-    });
+    const done = yield* sentOn(flock, machine, request, "propose", "", input, (reached) =>
+      reached.door.propose({ herd: null, interpretation, actions: carrying, request }),
+    ).pipe(Effect.result);
+    if (Result.isFailure(done))
+      return `Request: ${request}\ncollie_propose: ${endedAs(done.failure).state} — ${reasonOf(done.failure)}`;
     const schedules = Arr.flatMap(placed, ({ action }) =>
       pipe(textAt(action, "kind"), Str.startsWith("schedule_"))
         ? [`${machine.name}:${textAt(action, "name")}`]
         : [],
     );
-    return `Request: ${request}\n${schedules.length === 0 ? "" : `Schedules: ${Arr.join(schedules, ", ")}\n`}${done.human}`;
+    return `Request: ${request}\n${schedules.length === 0 ? "" : `Schedules: ${Arr.join(schedules, ", ")}\n`}${done.success.human}`;
   },
   Effect.catch((error) =>
     Effect.succeed(`collie_propose could not carry it out: ${reasonOf(error)}`),

@@ -649,6 +649,26 @@ test("chat and the text board list the sections in the board's one order", () =>
   );
 });
 
+test("chat's board read names the card's Offers, their owners and refusals", () => {
+  const view = task({
+    run: "r-fan",
+    state: "done",
+    landed: false,
+    offers: [
+      { id: "release", title: "Release api!7", run: "r-api" },
+      {
+        id: "stage",
+        title: "Stage api!7",
+        run: "r-api",
+        unavailable: "a Stage is still going: r-stage",
+      },
+    ],
+  });
+  const said = herdLines([view], 0);
+  expect(said).toContain("Release api!7 (release on run r-api)");
+  expect(said).toContain("Stage api!7 (stage on run r-api): a Stage is still going: r-stage");
+});
+
 test("collie_run and collie_herd say what a running check's card says", () =>
   runEffect(
     Effect.gen(function* () {

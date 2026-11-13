@@ -9,6 +9,7 @@ import { pipe as pipe_ } from "effect/Function";
 import * as Rec from "effect/Record";
 import { newerRelease, releasesOf, RELEASES } from "./releases";
 import manifest from "../herdr-plugin.toml";
+import * as Result from "effect/Result";
 import { withNotice } from "./redact";
 import {
   Cause,
@@ -29,7 +30,7 @@ import { EXCLUSIVE_STRATEGIES, strategyMeaning } from "./strategies";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { insideCheckout } from "./agent-start";
 import { placeableUnder, placedByUrl, routed, routerDeps } from "./route";
-import { offerFields, offerInput, StepResult, type RunDetail } from "./board-model";
+import { offerChoices, offerFields, offerInput, StepResult, type RunDetail } from "./board-model";
 import { gitlabHostOf, loadDefaults, savedReach, setSetting } from "./config";
 import { reachOf, savedFirst } from "./reach";
 import { parseSetting, settingText } from "./settings";
@@ -648,18 +649,64 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
   return 0;
 });
 
-/** Each field an offer takes, asked for in turn; null on cancel. */
+/**
+ * Each field an offer takes, asked for in turn and asked again with why where it cannot be
+ * taken; null on cancel.
+ */
 const offerArguments = Effect.fn("Flows.offerArguments")(function* (
   prompts: FlowPrompts,
   drawn: Schema.Json | null,
 ) {
   const typed: Record<string, string> = {};
-  for (const { name, required } of offerFields(drawn)) {
-    const answer = yield* prompts.ask(required ? `${name}?` : `${name}? (optional)`);
-    if (answer === null) return null;
-    typed[name] = answer;
+  let asking = Arr.map(offerFields(drawn), (field) => ({
+    field,
+    question: field.required ? `${field.name}?` : `${field.name}? (optional)`,
+  }));
+  while (true) {
+    for (const { field, question } of asking) {
+      if (field.control.kind === "enum") {
+        const choices = offerChoices(field);
+        const chosen = yield* prompts.menu(
+          Arr.map(choices, (one) => ({ id: one.key, title: one.label })),
+          { header: question, footer: "↑↓ move · Enter choose · Esc cancel" },
+        );
+        if (chosen === null) return null;
+        const entry = Option.getOrUndefined(
+          Arr.findFirst(choices, (one) => one.key === chosen.id),
+        )?.entry;
+        if (entry === undefined) delete typed[field.name];
+        else typed[field.name] = entry;
+      } else {
+        const answer = yield* prompts.ask(question);
+        if (answer === null) return null;
+        if (answer === "" && !field.required) delete typed[field.name];
+        else typed[field.name] = answer;
+      }
+    }
+    const read = offerInput(drawn, typed);
+    if (read._tag === "Valid") return read.input;
+    asking = Arr.filterMap(offerFields(drawn), (field) =>
+      read.errors[field.name] === undefined
+        ? Result.failVoid
+        : Result.succeed({ field, question: `${read.errors[field.name]}. ${field.name}?` }),
+    );
   }
-  return offerInput(drawn, typed);
+});
+
+/** Yes where the offer says nothing before it is taken, or the human confirms what it does. */
+const confirmed = Effect.fn("Flows.confirmed")(function* (
+  prompts: FlowPrompts,
+  offer: { readonly title: string; readonly confirm?: string },
+) {
+  if (offer.confirm === undefined) return true;
+  const chosen = yield* prompts.menu(
+    [
+      { id: "take", title: offer.title, subtitle: offer.confirm },
+      { id: "cancel", title: "Cancel", subtitle: "take nothing" },
+    ],
+    { header: offer.confirm, footer: "↑↓ move · Enter choose · Esc cancel" },
+  );
+  return chosen?.id === "take";
 });
 
 /**
@@ -703,7 +750,7 @@ export const makeOffer = Effect.fn("Flows.makeOffer")(function* (
   if (offer === undefined) return `${runId} no longer offers ${chosen}`;
   if (offer.unavailable !== null) return `${offer.title}: ${offer.unavailable}`;
   const input = yield* offerArguments(prompts, offer.arguments);
-  if (input === null) return null;
+  if (input === null || !(yield* confirmed(prompts, offer))) return null;
   const done = yield* invokeOffer(env, {
     door: "board",
     runId,

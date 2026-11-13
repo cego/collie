@@ -71,9 +71,11 @@ export function App(props: AppProps) {
   const [drafts, setDrafts] = createSignal<Readonly<Record<string, string>>>({});
   const [typingTo, setTypingTo] = createSignal<string | null>(null);
   /** What the open menu offers and where it was asked for: a card's, or the header's. */
-  const [menuOn, setMenuOn] = createSignal<{ items: ReadonlyArray<MenuItem>; at: Where } | null>(
-    null,
-  );
+  const [menuOn, setMenuOn] = createSignal<{
+    items: ReadonlyArray<MenuItem>;
+    at: Where;
+    cursor?: number;
+  } | null>(null);
   /** How many pages of this checkout's earlier finished runs someone has asked for. */
   const [olderPages, setOlderPages] = createSignal(0);
   /** The setting being typed into, and what has been typed at it. */
@@ -430,16 +432,25 @@ export function App(props: AppProps) {
         });
       return;
     }
-    // A menu is a question about what to do next: the keys beside its items are the
-    // only ones it takes, and Esc is how it is left.
     const menu = menuOn();
     if (menu !== null) {
       if (key.name === "escape") return setMenuOn(null);
+      if ((key.name === "up" || key.name === "down") && menu.items.length > 0) {
+        const step = key.name === "down" ? 1 : -1;
+        const cursor = menu.cursor ?? (step === 1 ? -1 : 0);
+        return setMenuOn({
+          ...menu,
+          cursor: (cursor + step + menu.items.length) % menu.items.length,
+        });
+      }
       const pressed = key.name === "return" ? "enter" : key.sequence;
-      const item = Option.getOrUndefined(
-        Arr.findFirst(menu.items, (one) => one.key !== "" && one.key === pressed),
-      );
-      return item === undefined ? undefined : act(item.command);
+      const item =
+        key.name === "return" && menu.cursor !== undefined
+          ? menu.items[menu.cursor]
+          : Option.getOrUndefined(
+              Arr.findFirst(menu.items, (one) => one.key !== "" && one.key === pressed),
+            );
+      return item === undefined || item.disabled === true ? undefined : act(item.command);
     }
     if (steering()) return typeIntoSteer(key);
     // Before the board's own keys: while a card is being typed into, `q` is a letter of
@@ -632,6 +643,7 @@ export function App(props: AppProps) {
       <Show when={menuOn()}>
         <CardMenu
           items={menuOn()!.items}
+          cursor={menuOn()!.cursor ?? null}
           at={menuOn()!.at}
           pane={dimensions()}
           onAct={act}

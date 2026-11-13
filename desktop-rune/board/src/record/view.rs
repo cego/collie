@@ -7,6 +7,7 @@ use super::review::{Anchor, Draft, add_draft, edit_draft, plan_anchor, remove_dr
 use super::tabs::{self, KeyAction, KeyFacts, Landing, SummarySection, Tab, Target};
 use super::when::{now, when_of};
 use super::{Form, Item, Record};
+use crate::board::cards::{self, CardAction};
 use crate::flow::actions::{ActionView, Tone, lane_actions, next_move, step_actions};
 use crate::flow::inspector::{self, Part};
 use crate::{App, flow, icons};
@@ -442,7 +443,7 @@ pub fn view(app: &App, k: &Kit) -> Option<El> {
         "artefacts" => scrolled("artefacts-scroll", super::artefacts::view(record, k)),
         "log" => log_tab(record, k),
         "terminal" => terminal_tab(app, record, k),
-        "facts" => scrolled("facts-scroll", facts_tab(record, k)),
+        "facts" => scrolled("facts-scroll", facts_tab(app, record, k)),
         mr => scrolled("mr-scroll", mr_tab(record, mr, k)),
     };
     let mut panel = col()
@@ -1392,13 +1393,9 @@ fn form_view(app: &App, record: &Record, k: &Kit) -> Option<El> {
     ))
 }
 
-/// The questions of a Step one at a time, "Question k of n" with Back and Next when there are
-/// several, each answered by an option or in words and sent on its own.
-/// A Step's Start: what it starts, why it cannot now, and the inputs it takes, as the board's
-/// offers dialog asks them.
 fn offer_form(
     offer: Option<&collie_desktop_protocol::generated::OffersSuccessItem>,
-    fields: &[(String, bool, rune::edit::TextEdit)],
+    fields: &[crate::board::offer_form::OfferEntry],
     cancel: El,
     k: &Kit,
 ) -> El {
@@ -1408,7 +1405,6 @@ fn offer_form(
             .child(quiet("Asking the Run what it offers…", k).key("offer-reading"))
             .child(row().child(cancel));
     };
-    let ready = offer.unavailable.is_none() && super::act::offer_ready(fields);
     col()
         .key("offer")
         .gap(12.0)
@@ -1434,51 +1430,41 @@ fn offer_form(
                 .wrap()
                 .w_full()
         }))
-        .children(
-            fields
-                .iter()
-                .enumerate()
-                .map(|(i, (name, required, edit))| {
-                    col()
-                        .gap(4.0)
-                        .w_full()
-                        .child(
-                            text(if *required {
-                                name.clone()
-                            } else {
-                                format!("{name} (optional)")
-                            })
-                            .font(k.ty.text_xsmall_medium)
-                            .color(k.c.text_muted),
-                        )
-                        .child(
-                            TextInput::new(edit)
-                                .width(None)
-                                .label(name.clone())
-                                .on_edit(move |app: &mut App| {
-                                    match app.record.open.as_mut().and_then(|r| r.form.as_mut()) {
-                                        Some(Form::Offer { fields, .. }) => &mut fields[i].2,
-                                        _ => unreachable!("an offer form is open"),
-                                    }
-                                })
-                                .build(k)
-                                .key(format!("offer-field-{name}")),
-                        )
-                }),
-        )
+        .children(offer.confirm.clone().map(|confirm| {
+            text(confirm)
+                .key("offer-confirm")
+                .font(k.ty.ui)
+                .color(k.c.text_base)
+                .wrap()
+                .w_full()
+        }))
+        .children(crate::board::offer_form::controls(
+            fields,
+            offer_entries,
+            App::make_offer_in_record,
+            "offer-field-",
+            k,
+        ))
         .child(
             row()
                 .gap(8.0)
                 .child(
-                    Button::new("Start")
+                    Button::new(offer.title.clone())
                         .variant(ButtonVariant::Submit)
-                        .disabled(!ready)
+                        .disabled(offer.unavailable.is_some())
                         .on_press(|app: &mut App| app.make_offer_in_record())
                         .build(k)
                         .key("offer-start"),
                 )
                 .child(cancel),
         )
+}
+
+fn offer_entries(app: &mut App) -> &mut Vec<crate::board::offer_form::OfferEntry> {
+    match app.record.open.as_mut().and_then(|r| r.form.as_mut()) {
+        Some(Form::Offer { fields, .. }) => fields,
+        _ => unreachable!("an offer form is open"),
+    }
 }
 
 fn edit_of(app: &mut App) -> &mut rune::edit::TextEdit {
@@ -3429,12 +3415,33 @@ fn pill(key: &str, said: &str, label: &str, tone: rune_kit::StateColors, k: &Kit
         )
 }
 
-fn facts_tab(record: &Record, k: &Kit) -> El {
+fn facts_tab(app: &App, record: &Record, k: &Kit) -> El {
+    let offered: Vec<_> = app
+        .task_of_record()
+        .into_iter()
+        .flat_map(|task| {
+            cards::card_actions(task)
+                .into_iter()
+                .filter_map(move |action| {
+                    let CardAction::Offer(offer) = action else {
+                        return None;
+                    };
+                    let owner = offer.run.unwrap_or_else(|| task.run.clone());
+                    let said = match offer.unavailable {
+                        Some(why) => format!("{owner} — {why}"),
+                        None => owner,
+                    };
+                    Some(fact(&offer.title, said, k))
+                })
+        })
+        .collect();
+    let offers = (!offered.is_empty()).then(|| section("facts-offers", "Offers", k, offered));
     let Some(detail) = record.detail() else {
         return col()
             .gap(4.0)
             .child(fact("Run", record.run.clone(), k))
-            .child(fact("Machine", record.machine.clone(), k));
+            .child(fact("Machine", record.machine.clone(), k))
+            .children(offers);
     };
     let mut rows = vec![
         fact("Run", detail.id.clone(), k),
@@ -3510,7 +3517,11 @@ fn facts_tab(record: &Record, k: &Kit) -> El {
     });
     ruled(
         col().key("facts").max_w(READING_W).w_full(),
-        [facts(rows)].into_iter().chain(agents).chain(steering),
+        [facts(rows)]
+            .into_iter()
+            .chain(agents)
+            .chain(steering)
+            .chain(offers),
         k,
     )
 }
