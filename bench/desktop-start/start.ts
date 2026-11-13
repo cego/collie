@@ -67,15 +67,13 @@ export const measureStart = (start: {
   readonly argv: ReadonlyArray<string>;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly desktopState: string;
-  /** Where the app keeps its settings and Record timing log, if not Desktop's own place. */
-  readonly own?: string;
   readonly idle: Duration.Input;
   /** How long its tree has to end on SIGTERM before it is killed. */
   readonly grace?: Duration.Input;
 }) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const own = start.own ?? `${start.desktopState}/collie-desktop`;
+    const own = `${start.desktopState}/collie-desktop`;
     const log = `${own}/record-timing.log`;
     yield* fs.makeDirectory(own, { recursive: true });
     yield* fs.remove(log, { force: true });

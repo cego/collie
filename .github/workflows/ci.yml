@@ -53,7 +53,7 @@ jobs:
 
   # The required check. Never skipped, which a required check would read as passing.
   test:
-    needs: [static, suite, desktop, desktop-rune, desktop-native]
+    needs: [static, suite, desktop, desktop-native]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -62,7 +62,6 @@ jobs:
           test "${{ needs.static.result }}" = success
           test "${{ needs.suite.result }}" = success
           test "${{ needs.desktop.result }}" = success
-          test "${{ needs.desktop-rune.result }}" = success
           test "${{ needs.desktop-native.result }}" = success
 
   # The runner built and smoked on a Mac, and the installers' signature check run with the
@@ -87,21 +86,9 @@ jobs:
   desktop-native:
     uses: ./.github/workflows/rune-bundle.yml
 
-  desktop:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: "1.4"
-      # Desktop's Effect is the root's, so the board's Schemas exist once.
-      - run: bun install --frozen-lockfile
-      - run: bun run typecheck
-        working-directory: desktop
-
   # The native view tests draw on lavapipe, Mesa's software Vulkan. libghostty-vt builds from the
   # vendor/ghostty submodule with the Zig it pins, and bindgen needs libclang.
-  desktop-rune:
+  desktop:
     runs-on: ubuntu-latest
     env:
       VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
@@ -114,18 +101,21 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.17.1
-      # Installs the toolchain desktop-rune/rust-toolchain.toml pins.
-      - run: rustup toolchain install
-        working-directory: desktop-rune
-      - run: cargo fmt --all --check
-        working-directory: desktop-rune
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-        working-directory: desktop-rune
-      # protocol/tests/core.rs starts Desktop's main process under Bun.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4"
+      # Desktop's Effect is the root's, so the board's Schemas exist once.
       - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+        working-directory: desktop
+      # Installs the toolchain desktop/rust-toolchain.toml pins.
+      - run: rustup toolchain install
+        working-directory: desktop
+      - run: cargo fmt --all --check
+        working-directory: desktop
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+        working-directory: desktop
+      # protocol/tests/core.rs starts Desktop's main process under Bun.
       - run: cargo test --workspace
-        working-directory: desktop-rune
+        working-directory: desktop
       - run: bun test test/rune-contract.test.ts test/rune-types.test.ts test/rune-shell.test.ts

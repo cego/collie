@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
-import { assemble, packageInstaller } from "../desktop-rune/scripts/bundle";
+import { assemble, packageInstaller } from "../desktop/scripts/bundle";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 

@@ -1669,7 +1669,7 @@ Collie's native desktop is built from the release tag by `desktop-native`, which
 `.github/workflows/rune-bundle.yml` on Linux and macOS. The Rune shell and compiled
 TypeScript core share the existing stable identity, `dk.cego.collie.desktop`, and the
 existing installer and update artifact names. The installed product is named **Collie**.
-`desktop-rune/scripts/bundle.ts` supplies the official brand icons, USTAR update archives,
+`desktop/scripts/bundle.ts` supplies the official brand icons, USTAR update archives,
 and metadata the old app's updater accepts, so its next update replaces the webview app in
 place. Credentials, saved Machines, conversations and settings keep their existing paths.
 See [the cutover decision](adr/0067-collie-replaces-the-webview-desktop-in-place.md).
@@ -1730,20 +1730,11 @@ Typechecking runs tsrs, a Rust port of TypeScript 7.1, with `--fast`: it reports
 diagnostics are off in `tsconfig.json`, so typechecking needs no Effect plugin; lint
 reports them.
 
-`lint:vue` prepares Nuxt's declarations and projects Vue scripts and template expressions
-through Vue's compiler before running the same rules. Diagnostics map back to the Vue
-source. Static attribute and slot names are excluded because their generated JavaScript
-bindings are not expressions written by the author. Both lint commands run in CI through
-`lint` and `check:static`.
-
 An exception names the missing equivalent or compatibility boundary where it applies.
 Examples include callback string replacements, synchronous process-exit cleanup,
 Ed25519 signing, erased errors from authored workflows, and the public `HostApi.usage()`
 method. Numeric schemas require finite values; measurement ratios and interval bounds
-retain infinity where the statistical model requires it. Electrobun's Cottontail config
-loader cannot parse Effect's modules, so its signing-config helper remains native.
-Pinned Hutch also starts build hooks in Cottontail. Their small native launchers run the
-Effect implementations under Bun, preserving environment, output, and exit status.
+retain infinity where the statistical model requires it.
 
 Workflow and cluster modules remain architectural dependencies under ADR-0014, so their unstable-API rule is
 disabled. Vendored lint sources and author workflow fixtures keep their separate
@@ -1757,9 +1748,9 @@ Root tests import Desktop modules and libraries, so the root `bun install` insta
 Desktop's dependencies too, frozen to `desktop/bun.lock`. After changing Desktop's
 dependencies, run `bun install` in `desktop/` first: the root install refuses a stale
 Desktop lockfile. CI relies on that one install before its root gate.
-The core's TypeScript is checked by `cd desktop && bun run typecheck`. The Rune
-workspace has its own format, clippy, tests and bundle jobs; the required CI gate includes
-both native platform bundles. The removed Nuxt app needs no Vue compiler or lint plugin.
+CI's `desktop` job checks the core's TypeScript (`cd desktop && bun run typecheck`) and
+the Rune workspace's format, clippy and tests; the required CI gate also includes both
+native platform bundles.
 
 A test leaves nothing behind. `test/support/hosts.ts`, a preload, gives each test file a
 temporary root of its own, `TMPDIR` inside it, and removes it when the file ends. Every
@@ -2028,7 +2019,7 @@ its time.
   says as `invalid_state`; each act's result carries the Run's revision after it, which the
   caller's next frame is at least. A request without `parts` is sent whole records, their
   minutes said, on every change and tick, as an older Desktop expects.
-  The native view keeps records subscribed after they close (`desktop-rune/board/src/record.rs`
+  The native view keeps records subscribed after they close (`desktop/board/src/record.rs`
   owns their lifetime): the open one, the last 8 opened and a
   card pointed at for 150 ms, at most 16 MB of frames as Desktop weighs them, the least
   recently opened going first and never the open one. A kept record opened again has its
@@ -2137,11 +2128,10 @@ its time.
 The native app's Settings has **Record timing** (off by default), which appends view and
 core marks to `record-timing.log` in the existing desktop state directory, one JSON line
 each. `bench/record-open/summarize.ts` summarises those logs; `desktop/README.md` describes
-the workflow. `bench/desktop-start/` retains the isolated host fixture for startup measurements.
-
-The Nuxt/CDP benchmark driver was retired with the webview app. Its reusable fixture,
-statistics, comparison and log analysis remain in `bench/record-open/`. Historical browser
-measurements are not measurements of the native renderer.
+the workflow. `bench/desktop-start/run.ts --rune` measures a native bundle's start against
+the same isolated host fixture. `bench/record-open/` holds the fixture, statistics,
+comparison and log analysis; browser measurements taken before the native app are not
+measurements of it.
 
 ### Test-suite measurements, 26 October 2026
 

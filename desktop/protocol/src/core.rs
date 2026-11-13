@@ -5,7 +5,7 @@ use std::io::BufReader;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
-const DESKTOP: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../desktop");
+const DESKTOP: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
 
 /// Keep the physical channel root used by existing stable installations.
 pub fn channel_root(
@@ -89,7 +89,7 @@ impl Core {
                     Command::new(std::env::var("COLLIE_RUNE_BUN").unwrap_or("bun".into()));
                 bun.args([
                     "--tsconfig-override",
-                    "../desktop-rune/core/tsconfig.json",
+                    "core/tsconfig.json",
                     "src/bun/index.ts",
                 ])
                 .current_dir(DESKTOP);
