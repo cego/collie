@@ -311,6 +311,8 @@ import type { PluginEnv } from "./env";
 import { connectionOnMachine } from "./connections";
 import { isDirectMessage, slackApi, slackText } from "./slack";
 import { slackUserToken } from "./slack-credentials";
+import { reconcileReviewSlack, targetFromSlack } from "./review-slack";
+import { slackMessageRef } from "./slack";
 import { ConnectionId, type ConnectionReading } from "./connection-model";
 import { StartedSchema, type RunAuthority, type Started } from "./automode";
 import { WorktreeRecordSchema, type WorktreeRecord } from "./run";
@@ -956,6 +958,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   /** What the host lends a workflow. Hold and stop are read fresh on every replay. */
   export interface HostApi {
+    readonly reviewFix: (runId: string, target: string) => Effect.Effect<{ readonly owned: boolean; readonly head: string; readonly reviewed: string; readonly lineage: ReadonlyArray<string>; readonly following: boolean }>;
     readonly reviewScope: (runId: string, source: string, outcome: string, risks: string) => Effect.Effect<ReviewScope | null>;
     readonly recordReview: (runId: string, scope: ReviewScope | null, base: string, review: SynthesisReport) => Effect.Effect<void>;
     readonly recovery: (runId: string, parent: string, source: string) => Effect.Effect<Recovery, WorkflowError>;
@@ -1037,6 +1040,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly head: string;
       readonly round: number;
     }) => Effect.Effect<Posted>;
+    readonly slackTarget: (link: string, target?: string) => Effect.Effect<string, WorkflowError>;
+    readonly reviewSlack: (options: { readonly runId: string; readonly target: string; readonly cwd: string; readonly permalink?: string; readonly wanted: ReadonlyArray<string> }) => Effect.Effect<string>;
     /** Reads the target's head before review. Take it inside an Activity. */
     readonly reviewedHead: (options: {
       readonly target: string;
@@ -1950,6 +1955,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly operation: string;
     readonly role: string;
     readonly text: string;
+    readonly lineage?: ReadonlyArray<string>;
   }): Effect.Effect<
     string | null,
     WorkflowError,
@@ -4720,6 +4726,72 @@ export const hostLayer = (options: {
           });
         });
       const host = Host.of({
+        reviewFix: (runId, target) =>
+          under(
+            Effect.gen(function* () {
+              const row = yield* store.run(runId);
+              const ref = readMrRef(target);
+              const missing = {
+                owned: false,
+                head: "",
+                reviewed: "",
+                lineage: Arr.empty<string>(),
+                following: false,
+              };
+              if (row === null || ref === null) return missing;
+              const cwd = placedOf(row, {}).cwd;
+              const forge = forgeOf(ref);
+              const panel = yield* forge.details(ref, cwd, runShell);
+              if (panel._tag !== "Details" || !["open", "opened", "draft"].includes(panel.state))
+                return missing;
+              const me = yield* forge.login(cwd, runShell, ref.project);
+              const runs = yield* store.runs;
+              const { herdr } = yield* placing;
+              const workspaces = new Set(
+                Arr.map(
+                  yield* herdr.workspaceList().pipe(Effect.orElseSucceed(() => [])),
+                  (one) => one.workspaceId,
+                ),
+              );
+              const tasks = new Map(
+                Arr.map(
+                  yield* listTasks.pipe(Effect.orElseSucceed(() => [])),
+                  (one) => [one.id, one] as const,
+                ),
+              );
+              const taskIds = new Set(row.task === null ? [] : [row.task]);
+              let ownsBranch = false;
+              for (const candidate of runs) {
+                const task = candidate.task === null ? undefined : tasks.get(candidate.task);
+                if (
+                  candidate.project !== row.project ||
+                  task === undefined ||
+                  !isOpen(task, workspaces)
+                )
+                  continue;
+                const at = placedOf(candidate, {});
+                if (at.branch === panel.sourceBranch && at.branch !== null) {
+                  ownsBranch = true;
+                  taskIds.add(task.id);
+                }
+              }
+              return {
+                owned: me !== null && (panel.author === me || ownsBranch),
+                head: panel.head ?? "",
+                reviewed: yield* fs
+                  .readFileString(`${runDir(dir, runId)}/review-head`)
+                  .pipe(Effect.orElseSucceed(() => "")),
+                lineage: Arr.map(
+                  Arr.filter(runs, (one) => one.task !== null && taskIds.has(one.task)),
+                  (one) => one.run,
+                ),
+                following: Arr.some(
+                  yield* store.watches([mrId(target)!]),
+                  (one) => one.run === runId,
+                ),
+              };
+            }).pipe(Effect.provideContext(bun)),
+          ),
         dir,
         build: manifest.version,
         report: () =>
@@ -5920,6 +5992,58 @@ export const hostLayer = (options: {
                 message: `there is no ${asked.file} to post`,
               })),
             ),
+          ),
+        slackTarget: (link, target) =>
+          under(
+            Effect.gen(function* () {
+              const { env } = yield* placing;
+              const slack = options.slack ?? slackApi;
+              const api = slack(yield* slackUserToken(env, slack));
+              return yield* targetFromSlack(link, api, target);
+            }),
+          ).pipe(Effect.mapError((reason) => new WorkflowError({ reason }))),
+        reviewSlack: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const ref = readMrRef(asked.target);
+              if (ref?.project == null) return "no Slack message found";
+              const forge = forgeOf(ref);
+              const details = yield* forge.details(ref, asked.cwd, runShell);
+              if (details._tag !== "Details") return `Slack reactions deferred: ${details.reason}`;
+              if (!["open", "opened", "draft"].includes(details.state))
+                return `no Slack reactions: merge request is ${details.state}`;
+              const { env } = yield* placing;
+              const slack = options.slack ?? slackApi;
+              const file = `${runDir(dir, asked.runId)}/review-slack.json`;
+              const project = ref.project;
+              const created = under(
+                Effect.gen(function* () {
+                  const branches = yield* forge.fromBranch(
+                    project,
+                    details.sourceBranch,
+                    asked.cwd,
+                    runShell,
+                  );
+                  if (!branches.ok) return yield* Effect.fail(branches.reason);
+                  const created = Option.getOrUndefined(
+                    Arr.findFirst(branches.mrs, (one) => one.iid === ref.iid),
+                  )?.created;
+                  if (!created || epochMs(created) <= 0)
+                    return yield* Effect.fail(
+                      "the forge did not report when this merge request was created",
+                    );
+                  return created;
+                }),
+              );
+              return yield* reconcileReviewSlack({
+                file,
+                url: details.url,
+                created,
+                permalink: asked.permalink,
+                wanted: asked.wanted,
+                api: slackUserToken(env, slack).pipe(Effect.map(slack)),
+              });
+            }),
           ),
         reviewedHead: (asked) =>
           reviewForge(
@@ -7478,6 +7602,13 @@ const makeRegistry: (
     const field = fieldWith(generation.hints, "diff-target");
     const value = field === undefined ? undefined : settled.input[field];
     if (field === undefined || !isText(value) || Str.trim(value) === "") return settled;
+    const permalink = slackMessageRef(value) !== null ? value : settled.input.slack;
+    if (isText(permalink) && permalink !== "") {
+      const target = yield* Context.get(hostServices, Host)
+        .slackTarget(permalink, permalink === value ? undefined : value)
+        .pipe(Effect.mapError((error) => new HostRefused({ reason: error.reason })));
+      return { ...settled, input: { ...settled.input, [field]: target, slack: permalink } };
+    }
     const set = yield* classifyGivenSet(value, { cwd }).pipe(Effect.provideContext(bun));
     if (set !== null && "unresolved" in set)
       return yield* refusedInput(
@@ -9489,6 +9620,8 @@ const makeRegistry: (
       claim: yield* claimOf(runId),
     };
     const work = fieldWith(generation.hints, "work-source");
+    if (facts.diffTarget !== null && readMrRef(facts.diffTarget) !== null && facts.openFindings > 0)
+      facts.review = yield* Context.get(hostServices, Host).reviewFix(runId, facts.diffTarget);
     const workSource =
       work === undefined ? undefined : Rec.get(input, work).pipe(Option.getOrUndefined);
     if (isText(workSource) && Arr.some(generation.offers, (offer) => offer.entry !== undefined))
@@ -9762,14 +9895,16 @@ const makeRegistry: (
     const followed =
       following === null
         ? null
-        : yield* claimingOf(following.request).withPermits(1)(Effect.gen(function* () {
-            const previous = yield* store.requested(following.request);
-            if (previous !== null && (yield* hasEnded(previous.run))) {
-              yield* store.releaseClaim(previous);
-              return null;
-            }
-            return previous;
-          }));
+        : yield* claimingOf(following.request).withPermits(1)(
+            Effect.gen(function* () {
+              const previous = yield* store.requested(following.request);
+              if (previous !== null && (yield* workflowEnded(previous.run))) {
+                yield* store.releaseClaim(previous);
+                return null;
+              }
+              return previous;
+            }),
+          );
     if (following !== null && followed !== null)
       return {
         runId: followed.run,

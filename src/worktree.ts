@@ -2307,7 +2307,10 @@ export const pinnedCheckout = Effect.fn("worktree.pinnedCheckout")(function* (op
       run("git", ["remote", "get-url", candidate], listing.repo),
       run("git", ["config", "--get", `remote.${candidate}.url`], listing.repo),
     ]);
-    if (opts.project !== null && urls.some((url) => url.code === 0 && projectFromRemote(url.stdout) === opts.project)) {
+    if (
+      opts.project !== null &&
+      Arr.some(urls, (url) => url.code === 0 && projectFromRemote(url.stdout) === opts.project)
+    ) {
       remote = candidate;
       break;
     }

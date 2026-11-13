@@ -1163,7 +1163,10 @@ function makeStore(
           Effect.orDie,
         ),
       releaseClaim: (row) =>
-        mutation([row.run], sql`UPDATE collie_runs SET request = ${`${row.request}:finished:${row.run}`} WHERE run = ${row.run} AND request = ${row.request}`).pipe(Effect.asVoid, Effect.orDie),
+        mutation(
+          [row.run],
+          sql`UPDATE collie_runs SET request = ${`${row.request}:finished:${row.run}`} WHERE run = ${row.run} AND request = ${row.request}`,
+        ).pipe(Effect.asVoid, Effect.orDie),
       requestedEnding: (suffix: string) =>
         byRequestEnding(suffix).pipe(
           Effect.map((rows) => rows[0] ?? null),

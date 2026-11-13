@@ -1462,6 +1462,7 @@ export const handOffWork = (given: {
   readonly operation: string;
   readonly role: string;
   readonly text: string;
+  readonly lineage?: ReadonlyArray<string>;
 }): Effect.Effect<
   string | null,
   WorkflowError,
@@ -1474,7 +1475,7 @@ export const handOffWork = (given: {
     const options = {
       ...given,
       runId,
-      lineage: (yield* host.place(runId)).lineage,
+      lineage: given.lineage ?? (yield* host.place(runId)).lineage,
     };
     return yield* Activity.make({
       name: `${options.operation}.handoff`,

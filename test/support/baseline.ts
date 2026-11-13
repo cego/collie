@@ -3651,10 +3651,7 @@ scenario("what a finished Run of each shipped module offers is the module's own 
           }),
           (offer) => [offer.id, offer.workflow, offer.primary],
         ),
-      ).toEqual([
-        ["fix-open", "implement", true],
-        ["run-again", idOf("review"), false],
-      ]);
+      ).toEqual([["run-again", idOf("review"), true]]);
       expect(
         Arr.map(
           offersFrom(review, facts({ diffTarget: "branch:main...HEAD" })),

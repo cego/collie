@@ -19,6 +19,11 @@ import { sectionOf } from "../src/board-model";
 import { readMetrics } from "../src/metrics";
 import { newsPath, read as readNews } from "../src/news";
 import { machineHerd } from "../src/steering";
+import { fakeSlack, signedInToSlack } from "./support/slack";
+import { slackApi } from "../src/slack";
+import { findingsIn } from "../src/output";
+import { writeTask } from "../src/task";
+import { registerAgent, scopeFor } from "../src/registry";
 
 const PROJECT = "gitlab.cego.dk/mk/collie";
 const TARGET = `https://${PROJECT}/-/merge_requests/7`;
@@ -27,12 +32,14 @@ const MR_REF = "refs/merge-requests/7/head";
 
 let rig: Rig;
 let host: ReturnType<typeof watching>;
+let slack: ReturnType<typeof fakeSlack>;
 
 beforeEach(() =>
   runLive(
     Effect.gen(function* () {
       rig = yield* Rig.make();
-      host = watching(rig);
+      slack = fakeSlack();
+      host = watching(rig, (token) => slackApi(token, slack.client));
       yield* FileSystem.FileSystem.pipe(
         Effect.flatMap((fs) => fs.makeDirectory(rig.projectDir, { recursive: true })),
       );
@@ -605,7 +612,7 @@ for (const id of ["review", "second-look"])
 
 for (const id of ["review", "second-look"])
   test(
-    `${id}: !481 without Slack — one signed note, one round on the new head, and approval the only answer`,
+    `${id}: !481 with Slack — one signed note, one round on the new head, and approval the only answer`,
     () =>
       host.runEffect(
         Effect.gen(function* () {
@@ -613,6 +620,8 @@ for (const id of ["review", "second-look"])
           const first = yield* pushed("fix the input");
           const forge = yield* host.gitlab(model(first));
           yield* host.settingOn(true);
+          yield* signedInToSlack(host.env(), "U456");
+          slack.messages([{ channel: "C456", ts: "1794474000.000001", text: TARGET }]);
           yield* rig.queueOutputs([
             review([F1, F2]),
             review([
@@ -684,6 +693,14 @@ for (const id of ["review", "second-look"])
               );
               expect(approvals).toHaveLength(1);
               expect(approvals[0]?.body).toEqual({ sha: second });
+              yield* until(
+                () => Effect.sync(() => slack.reactions()),
+                (reactions) => reactions.includes("white_check_mark"),
+              );
+              expect(slack.reactions()).toEqual(["eyes", "memo", "white_check_mark"]);
+              expect(
+                Arr.filter(slack.calls, (call) => call.method === "reactions.add"),
+              ).toHaveLength(3);
 
               yield* forge.set(
                 model(second, {
@@ -716,56 +733,538 @@ for (const id of ["review", "second-look"])
 
 const follows = `${fixtures}/follows-mr.workflow.ts`;
 
-test("pinning an upstream merge request fetches its project instead of the fork's origin", () =>
-  host.runEffect(Effect.gen(function* () {
-    yield* repository;
-    const head = yield* pushed("upstream change");
-    yield* git(["remote", "rename", "origin", "upstream"]);
-    yield* git(["remote", "set-url", "upstream", `https://${PROJECT}.git`]);
-    yield* git(["config", `url.${rig.root}/origin.git.insteadOf`, `https://${PROJECT}.git`]);
-    yield* git(["init", "-q", "--bare", `${rig.root}/fork.git`], rig.root);
-    yield* git(["remote", "add", "origin", `${rig.root}/fork.git`]);
-    const forge = yield* host.gitlab(model(head));
-    yield* host.session(forge, Effect.gen(function* () {
-      const started = yield* host.started(follows, "upstream", { target: TARGET });
-      const pinned = yield* (yield* Host).pinHead({ runId: started.runId, target: TARGET, head });
-      expect(pinned).toHaveProperty("cwd");
-      if (!("cwd" in pinned)) throw new Error(JSON.stringify(pinned));
-      expect(Str.trim((yield* git(["rev-parse", "HEAD"], pinned.cwd)).stdout)).toBe(head);
-    }));
-  })), 180_000);
+test(
+  "an expired Slack token leaves findings posted and names the missing reactions",
+  () =>
+    host.runEffect(
+      Effect.gen(function* () {
+        const { forge, entry } = yield* begun("review", [review([F1])]);
+        yield* signedInToSlack(host.env(), "U456");
+        slack.refuse("token_expired");
+        yield* host.session(
+          forge,
+          Effect.gen(function* () {
+            const { runId } = yield* host.started(entry, "slack-expired", { target: TARGET });
+            yield* until(
+              () => host.watchOf(runId, TARGET),
+              (one) => one?.name === "follow-1",
+            );
+            expect(yield* notesOf(forge)).toHaveLength(1);
+            const log = yield* (yield* FileSystem.FileSystem).readFileString(
+              `${host.dir()}/runs/${runId}/log.txt`,
+            );
+            expect(log).toContain(":eyes:");
+            expect(log).toContain(":memo:");
+            expect(log).toContain("sign in again");
+            expect((yield* host.status(runId))?.status.status).toBe("suspended");
+          }),
+        );
+      }),
+    ),
+  180_000,
+);
 
-test("an unreadable login refuses follow-through admission instead of bypassing its claim", () =>
-  host.runEffect(Effect.gen(function* () {
-    const forge = yield* host.gitlab(model("head"));
-    forge.after((url, _init, response) => Promise.resolve(
-      Str.endsWith("/user")(url) ? new Response("unavailable", { status: 503 }) : response,
-    ));
-    yield* configured(true);
-    yield* host.session(forge, Effect.gen(function* () {
-      const started = yield* Effect.exit(host.started(follows, "login-outage", { target: TARGET }));
-      expect(Exit.isFailure(started)).toBe(true);
-      expect(yield* runsHere).toEqual([]);
-    }));
-  })), 180_000);
+test(
+  "a restart after Slack accepted a reaction resumes without adding it twice",
+  () =>
+    host.runEffect(
+      Effect.gen(function* () {
+        const { forge, entry } = yield* begun("review", [review([F1])]);
+        yield* signedInToSlack(host.env(), "U456");
+        slack.messages([{ channel: "C456", ts: "1794474000.000001", text: TARGET }]);
+        slack.after((method) => (method === "reactions.add" ? Effect.never : Effect.void));
+        const runId = yield* host.session(
+          forge,
+          Effect.gen(function* () {
+            const started = yield* host.started(entry, "reaction-restart", { target: TARGET });
+            yield* until(
+              () => Effect.sync(() => slack.reactions()),
+              (one) => one.includes("eyes"),
+            );
+            return started.runId;
+          }),
+        );
+        slack.after(() => Effect.void);
+        yield* host.session(
+          forge,
+          Effect.gen(function* () {
+            yield* until(
+              () => host.watchOf(runId, TARGET),
+              (one) => one?.name === "follow-1",
+            );
+            expect(slack.reactions()).toEqual(["eyes", "memo"]);
+            expect(Arr.filter(slack.calls, (one) => one.method === "reactions.add")).toHaveLength(
+              2,
+            );
+            expect(yield* notesOf(forge)).toHaveLength(1);
+            expect(yield* host.agentStarts).toHaveLength(1);
+          }),
+        );
+      }),
+    ),
+  180_000,
+);
 
-test("a new start after follow-through finishes reviews a reopened merge request", () =>
-  host.runEffect(Effect.gen(function* () {
-    const forge = yield* host.gitlab(model("head"));
-    yield* configured(true);
-    yield* host.session(forge, Effect.gen(function* () {
-      const first = yield* host.started(follows, "first", { target: TARGET });
-      yield* until(() => asked(first.runId), (rows) => rows.length > 0);
-      yield* (yield* Registry).answer({runId: first.runId, decision: "approve-1", value: "Not now", request: "done"});
-      yield* until(() => host.status(first.runId), (row) => row?.status.status === "complete");
-      const next = yield* host.started(follows, "reopened", { target: TARGET });
-      expect(next.runId).not.toBe(first.runId);
-      const again = yield* host.started(follows, "duplicate", { target: TARGET, proves: "different" });
-      expect(again.runId).toBe(next.runId);
-      const pending = yield* until(() => asked(next.runId), (rows) => rows.length > 0);
-      expect(pending[0]?.decision).toBe("approve-1");
-    }));
-  })), 180_000);
+for (const status of [503, 429])
+  test(
+    `a GitLab approval write returning ${status} parks and reconciles its accepted approval`,
+    () =>
+      host.runEffect(
+        Effect.gen(function* () {
+          const { forge, entry } = yield* begun("review", [review([])]);
+          let unavailable = true;
+          forge.after((url, init, response) =>
+            Promise.resolve(
+              unavailable && init?.method === "POST" && Str.endsWith("/approve")(url)
+                ? new Response("unavailable", { status })
+                : response,
+            ),
+          );
+          yield* host.session(
+            forge,
+            Effect.gen(function* () {
+              const { runId } = yield* host.started(entry, `approve-write-${status}`, {
+                target: TARGET,
+              });
+              yield* until(
+                () => asked(runId),
+                (rows) => Arr.some(rows, (one) => one.decision === "approve-1"),
+              );
+              yield* (yield* Registry).answer({
+                runId,
+                decision: "approve-1",
+                value: "Approve",
+                request: "approve",
+              });
+              const parked = yield* until(
+                () => host.status(runId),
+                (view) => view?.park != null || view?.status.status === "failed",
+              );
+              expect(parked?.status.status).toBe("suspended");
+              expect(parked?.park).toMatchObject({ kind: "rechecks", cause: "forge-unavailable" });
+              unavailable = false;
+              yield* host.recovering;
+              yield* until(
+                () => host.status(runId),
+                (view) => view?.park === null,
+              );
+              yield* until(
+                () => host.watchOf(runId, TARGET),
+                (one) => one?.name === "follow-1",
+              );
+              expect((yield* forge.model()).approved).toEqual([KEY]);
+              expect(
+                Arr.filter(
+                  forge.requests(),
+                  (one) => one.method === "POST" && Str.endsWith("/approve")(one.url),
+                ),
+              ).toHaveLength(1);
+            }),
+          );
+        }),
+      ),
+    180_000,
+  );
+
+test(
+  "Improve hands a Task's findings to its live implementer without launching another agent",
+  () =>
+    host.runEffect(
+      Effect.gen(function* () {
+        yield* repository;
+        yield* git(["checkout", "-q", "-b", "feature"]);
+        const head = yield* pushed("Task work");
+        const forge = yield* host.gitlab(model(head));
+        yield* rig.addAgent("impl-live", "9-1");
+        yield* rig.queueOutputs([review([F1])]);
+        yield* host.session(
+          forge,
+          Effect.gen(function* () {
+            yield* writeTask({
+              id: "task-human",
+              workspace: null,
+              label: "The human's work",
+              cwd: rig.projectDir,
+              created_at: "2026-11-12T09:00:00Z",
+            });
+            const registry = yield* Registry;
+            const building = yield* registry.start({
+              generation: yield* registry.load(`${fixtures}/placed.workflow.ts`),
+              request: "building",
+              project: rig.projectDir,
+              input: { work: "keep feature", ending: "succeed" },
+              task: "task-human",
+              options: { branch: "feature" },
+            });
+            yield* registerAgent(scopeFor(host.env(), rig.projectDir), {
+              role: "implementer",
+              agent: "impl-live",
+              paneId: "9-1",
+              workspaceId: null,
+              runId: building.runId,
+              workflow: "placed",
+              at: "2026-11-12T09:00:00Z",
+              incarnation: { terminalId: "term-impl-live", agentSession: null },
+            });
+            yield* configured(true);
+            yield* registry.load(`${ROOT}workflows/review-improve.workflow.ts`);
+            const parent = yield* registry.start({
+              generation: yield* registry.load(yield* entryOf("review")),
+              request: "review-task",
+              project: rig.projectDir,
+              input: { target: TARGET },
+              task: "task-human",
+            });
+            yield* until(
+              () => host.watchOf(parent.runId, TARGET),
+              (row) => row?.name === "follow-1",
+            );
+            const offered = yield* registry.offers(parent.runId);
+            expect(
+              Option.getOrUndefined(Arr.findFirst(offered, (one) => one.id === "improve"))
+                ?.unavailable,
+            ).toBeNull();
+            const improved = yield* registry.invoke({
+              runId: parent.runId,
+              offer: "improve",
+              input: {},
+              request: "improve-task",
+            });
+            const waiting = yield* until(
+              () => host.watchOf(improved.runId, TARGET),
+              (row) => row?.name === "improved-head",
+            );
+            expect(waiting?.name).toBe("improved-head");
+            const duplicate = yield* registry
+              .invoke({
+                runId: parent.runId,
+                offer: "improve",
+                input: {},
+                request: "improve-task-again",
+              })
+              .pipe(
+                Effect.mapError((error) => ("reason" in error ? error.reason : String(error))),
+                Effect.flip,
+              );
+            expect(duplicate).toContain(improved.runId);
+            expect(yield* host.agentStarts).toHaveLength(1);
+            const handed = Arr.filter(
+              yield* rig.calls(),
+              (one) =>
+                one.argv?.[0] === "agent" &&
+                one.argv?.[1] === "prompt" &&
+                one.argv?.[2] === "impl-live",
+            );
+            expect(handed).toHaveLength(1);
+            expect(handed[0]?.argv?.[3]).toContain(`${improved.runId}/findings.json`);
+          }),
+        );
+      }),
+    ),
+  180_000,
+);
+
+test(
+  "Improve fixes an owned MR in its reviewed checkout and independently reviews the pushed head",
+  () =>
+    host.runEffect(
+      Effect.gen(function* () {
+        yield* repository;
+        yield* git(["checkout", "-q", "-b", "feature"]);
+        const first = yield* pushed("needs a guard");
+        yield* git(["push", "-q", "origin", "feature"]);
+        yield* git(["config", "--unset-all", `url.${rig.root}/origin.git.insteadOf`]);
+        yield* git(["remote", "set-url", "origin", `https://${PROJECT}.git`]);
+        yield* git(["remote", "set-url", "--push", "origin", `${rig.root}/origin.git`]);
+        const forge = yield* host.gitlab(model(first, { mrs: [mr(first, { author: "mk" })] }));
+        yield* rig.queueOutputs([review([F1]), null, review([{ ...F1, status: "fixed" }])]);
+        yield* host.session(
+          forge,
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            yield* registry.load(`${ROOT}workflows/review-improve.workflow.ts`);
+            const parent = yield* host.started(yield* entryOf("review"), "review-owned", {
+              target: TARGET,
+            });
+            yield* until(
+              () => asked(parent.runId),
+              (rows) => rows.length > 0,
+            );
+            const improved = yield* registry.invoke({
+              runId: parent.runId,
+              offer: "improve",
+              input: {},
+              request: "improve-one",
+            });
+            const duplicate = yield* registry
+              .invoke({ runId: parent.runId, offer: "improve", input: {}, request: "improve-two" })
+              .pipe(
+                Effect.mapError((error) => ("reason" in error ? error.reason : String(error))),
+                Effect.flip,
+              );
+            expect(duplicate).toContain(improved.runId);
+            const fs = yield* FileSystem.FileSystem;
+            const promptFile = `${host.dir()}/agents/${improved.runId}/fix.prompt.md`;
+            const ready = yield* until(
+              () =>
+                Effect.all({ exists: fs.exists(promptFile), view: host.status(improved.runId) }),
+              (one) =>
+                one.exists ||
+                one.view?.status.status === "failed" ||
+                one.view?.status.status === "complete",
+            );
+            expect(ready.exists).toBe(true);
+            expect(
+              yield* fs.readFileString(`${host.dir()}/runs/${improved.runId}/findings.json`),
+            ).toContain("guard the input");
+            const checkout = yield* (yield* Host).place(improved.runId);
+            yield* git(["commit", "-q", "--allow-empty", "-m", "guard the input"], checkout.cwd);
+            yield* git(
+              ["push", "-q", "origin", `HEAD:refs/heads/feature`, `HEAD:${MR_REF}`],
+              checkout.cwd,
+            );
+            const second = Str.trim((yield* git(["rev-parse", "HEAD"], checkout.cwd)).stdout);
+            yield* forge.set(
+              model(second, {
+                mrs: [mr(second, { author: "mk" })],
+                ancestry: { [second]: [first] },
+              }),
+            );
+            yield* fs.writeFileString(
+              `${host.dir()}/agents/${improved.runId}/fix.json`,
+              yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+                verdict: "clean",
+                fixed: [F1],
+                disputed: [],
+                checks: [],
+              }),
+            );
+            const done = yield* until(
+              () => host.status(improved.runId),
+              (view) => view?.status.status === "complete" || view?.status.status === "failed",
+            );
+            expect(done?.status.status).toBe("complete");
+            expect(yield* findingsIn(`${host.dir()}/runs/${improved.runId}`)).toMatchObject([
+              { id: "F1", status: "fixed", head: second },
+            ]);
+            expect(yield* host.agentStarts).toHaveLength(3);
+            const launched = Arr.map(
+              Arr.filter(yield* rig.calls(), (one) => one.cmd === "agent start"),
+              (one) => one.argv?.[2],
+            );
+            expect(new Set(launched).size).toBe(3);
+          }),
+        );
+      }),
+    ),
+  180_000,
+);
+
+test(
+  "Slack permalink admission validates the linked MR and joins its follow claim",
+  () =>
+    host.runEffect(
+      Effect.gen(function* () {
+        const forge = yield* host.gitlab(model("head"));
+        yield* configured(true);
+        yield* signedInToSlack(host.env(), "U456");
+        const link = "https://example.slack.com/archives/C456/p1794474000000001";
+        slack.messages([
+          { channel: "C456", ts: "1794474000.000001", text: "an unrelated message" },
+        ]);
+        yield* host.session(
+          forge,
+          Effect.gen(function* () {
+            const refused = yield* host
+              .started(`${fixtures}/slack-follows-mr.workflow.ts`, "bad-link", {
+                target: TARGET,
+                slack: link,
+              })
+              .pipe(
+                Effect.mapError((error) => ("reason" in error ? error.reason : String(error))),
+                Effect.flip,
+              );
+            expect(refused).toContain("must link exactly one merge request");
+            expect(yield* runsHere).toEqual([]);
+            slack.messages([{ channel: "C456", ts: "1794474000.000001", text: TARGET }]);
+            const first = yield* host.started(
+              `${fixtures}/slack-follows-mr.workflow.ts`,
+              "slack-link",
+              { target: link },
+            );
+            const again = yield* host.started(
+              `${fixtures}/slack-follows-mr.workflow.ts`,
+              "mr-link",
+              { target: TARGET },
+            );
+            expect(first.runId).toBe(again.runId);
+          }),
+        );
+      }),
+    ),
+  180_000,
+);
+
+test(
+  "ambiguous Slack correlation and a broken token leave the review usable and reactions retryable",
+  () =>
+    host.runEffect(
+      Effect.gen(function* () {
+        const forge = yield* host.gitlab(model("head"));
+        yield* signedInToSlack(host.env(), "U456");
+        yield* host.session(
+          forge,
+          Effect.gen(function* () {
+            const service = yield* Host;
+            for (const count of [0, 2]) {
+              slack.messages(
+                Array.from({ length: count }, (_, index) => ({
+                  channel: "C456",
+                  ts: `1794474000.00000${index}`,
+                  text: TARGET,
+                })),
+              );
+              const started = yield* host.started(follows, `candidates-${count}`, {
+                target: TARGET,
+              });
+              const result = yield* service.reviewSlack({
+                runId: started.runId,
+                target: TARGET,
+                cwd: rig.projectDir,
+                wanted: ["eyes"],
+              });
+              expect(result).toBe(count === 0 ? "no Slack message found" : "2 messages mention it");
+            }
+            expect(slack.reactions()).toEqual([]);
+            slack.messages([{ channel: "C456", ts: "1794474000.000001", text: TARGET }]);
+            const started = yield* host.started(follows, "expired", { target: TARGET });
+            slack.refuse("token_expired");
+            const attempt = {
+              runId: started.runId,
+              target: TARGET,
+              cwd: rig.projectDir,
+              wanted: ["eyes", "memo"],
+            };
+            const broken = yield* service.reviewSlack(attempt);
+            expect(broken).toContain(":eyes:");
+            expect(broken).toContain("sign in again");
+            slack.refuse(null);
+            yield* service.reviewSlack(attempt);
+            yield* service.reviewSlack(attempt);
+            expect(slack.reactions()).toEqual(["eyes", "memo"]);
+            expect(Arr.filter(slack.calls, (one) => one.method === "reactions.add")).toHaveLength(
+              2,
+            );
+          }),
+        );
+      }),
+    ),
+  180_000,
+);
+
+test(
+  "pinning an upstream merge request fetches its project instead of the fork's origin",
+  () =>
+    host.runEffect(
+      Effect.gen(function* () {
+        yield* repository;
+        const head = yield* pushed("upstream change");
+        yield* git(["remote", "rename", "origin", "upstream"]);
+        yield* git(["remote", "set-url", "upstream", `https://${PROJECT}.git`]);
+        yield* git(["config", `url.${rig.root}/origin.git.insteadOf`, `https://${PROJECT}.git`]);
+        yield* git(["init", "-q", "--bare", `${rig.root}/fork.git`], rig.root);
+        yield* git(["remote", "add", "origin", `${rig.root}/fork.git`]);
+        const forge = yield* host.gitlab(model(head));
+        yield* host.session(
+          forge,
+          Effect.gen(function* () {
+            const started = yield* host.started(follows, "upstream", { target: TARGET });
+            const pinned = yield* (yield* Host).pinHead({
+              runId: started.runId,
+              target: TARGET,
+              head,
+            });
+            expect(pinned).toHaveProperty("cwd");
+            if (!("cwd" in pinned))
+              throw new Error("pinning the upstream merge request was refused");
+            expect(Str.trim((yield* git(["rev-parse", "HEAD"], pinned.cwd)).stdout)).toBe(head);
+          }),
+        );
+      }),
+    ),
+  180_000,
+);
+
+test(
+  "an unreadable login refuses follow-through admission instead of bypassing its claim",
+  () =>
+    host.runEffect(
+      Effect.gen(function* () {
+        const forge = yield* host.gitlab(model("head"));
+        forge.after((url, _init, response) =>
+          Promise.resolve(
+            Str.endsWith("/user")(url) ? new Response("unavailable", { status: 503 }) : response,
+          ),
+        );
+        yield* configured(true);
+        yield* host.session(
+          forge,
+          Effect.gen(function* () {
+            const started = yield* Effect.exit(
+              host.started(follows, "login-outage", { target: TARGET }),
+            );
+            expect(Exit.isFailure(started)).toBe(true);
+            expect(yield* runsHere).toEqual([]);
+          }),
+        );
+      }),
+    ),
+  180_000,
+);
+
+test(
+  "a new start after follow-through finishes reviews a reopened merge request",
+  () =>
+    host.runEffect(
+      Effect.gen(function* () {
+        const forge = yield* host.gitlab(model("head"));
+        yield* configured(true);
+        yield* host.session(
+          forge,
+          Effect.gen(function* () {
+            const first = yield* host.started(follows, "first", { target: TARGET });
+            yield* until(
+              () => asked(first.runId),
+              (rows) => rows.length > 0,
+            );
+            yield* (yield* Registry).answer({
+              runId: first.runId,
+              decision: "approve-1",
+              value: "Not now",
+              request: "done",
+            });
+            yield* until(
+              () => host.status(first.runId),
+              (row) => row?.status.status === "complete",
+            );
+            const next = yield* host.started(follows, "reopened", { target: TARGET });
+            expect(next.runId).not.toBe(first.runId);
+            const again = yield* host.started(follows, "duplicate", {
+              target: TARGET,
+              proves: "different",
+            });
+            expect(again.runId).toBe(next.runId);
+            const pending = yield* until(
+              () => asked(next.runId),
+              (rows) => rows.length > 0,
+            );
+            expect(pending[0]?.decision).toBe("approve-1");
+          }),
+        );
+      }),
+    ),
+  180_000,
+);
 
 for (const following of [true, false])
   for (const status of [503, 429])

@@ -1,8 +1,9 @@
 import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 import { Effect, FileSystem } from "effect";
 import type { PluginEnv } from "./env";
 import type { ConnectionReading } from "./connection-model";
-import { slackApi } from "./slack";
+import { slackApi, missingSlackScopes } from "./slack";
 import { isString } from "./schema";
 
 const collieConfig = (env: Pick<PluginEnv, "home" | "raw">) =>
@@ -48,7 +49,7 @@ const signedInAs = (env: Pick<PluginEnv, "home" | "raw">, api: typeof slackApi) 
       return yield* broken(`token belongs to ${owner.user_id}, not ${user}`);
     if (owner.team_id !== team)
       return yield* broken(`token is for team ${owner.team_id}, not ${team}`);
-    return { token, owner };
+    return { token, owner, scopes: field("SLACK_USER_SCOPES") };
   }).pipe(
     Effect.mapError((reason): ConnectionReading =>
       isString(reason) ? { state: "broken", detail: reason, fix: SLACK_FIX } : reason,
@@ -60,11 +61,15 @@ export const probeSlack = (
   api = slackApi,
 ): Effect.Effect<ConnectionReading, never, FileSystem.FileSystem> =>
   signedInAs(env, api).pipe(
-    Effect.map(({ owner }): ConnectionReading => ({
-      state: "ok",
-      account: owner.team,
-      detail: `Posts as ${owner.user} in ${owner.team}`,
-    })),
+    Effect.map(({ owner, scopes }): ConnectionReading =>
+      missingSlackScopes(scopes).length > 0
+        ? {
+            state: "broken",
+            detail: `Slack needs ${Arr.join(missingSlackScopes(scopes), ", ")}`,
+            fix: "Sign in again to Slack in Desktop Settings › Connections",
+          }
+        : { state: "ok", account: owner.team, detail: `Posts as ${owner.user} in ${owner.team}` },
+    ),
     Effect.catch(Effect.succeed),
   );
 

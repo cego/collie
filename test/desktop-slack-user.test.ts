@@ -24,7 +24,7 @@ import { fakeSlack } from "./support/slack";
 import { runEffect } from "./support/effect";
 
 const SIGNED_IN = (n: number) =>
-  `SLACK_USER_TOKEN=xoxe.xoxp-1-access-${n}\nSLACK_USER_ID=U456\nSLACK_TEAM_ID=T123\n`;
+  `SLACK_USER_TOKEN=xoxe.xoxp-1-access-${n}\nSLACK_USER_ID=U456\nSLACK_TEAM_ID=T123\nSLACK_USER_SCOPES=chat:write,channels:read,groups:read,reactions:write,reactions:read,channels:history,groups:history,search:read\n`;
 
 /** Desktop with two Machines, a fake Slack and a browser that answers as `browser` says. */
 const desktop = Effect.gen(function* () {
@@ -120,20 +120,38 @@ const desktop = Effect.gen(function* () {
   };
 });
 
-test("the authorize URL asks for the three user scopes only, with an S256 challenge", () => {
+test("the authorize URL asks for posting, reading and reaction user scopes, with an S256 challenge", () => {
   expect(pkceChallenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")).toBe(
     "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
   );
   const url = new URL(slackAuthorizeUrl("123.456", "a-state", "a-challenge"));
   expect(url.origin + url.pathname).toBe("https://slack.com/oauth/v2/authorize");
   expect(url.searchParams.get("client_id")).toBe("123.456");
-  expect(url.searchParams.get("user_scope")).toBe("chat:write,channels:read,groups:read");
+  expect(url.searchParams.get("user_scope")).toBe(
+    "chat:write,channels:read,groups:read,reactions:write,reactions:read,channels:history,groups:history,search:read",
+  );
   expect(url.searchParams.has("scope")).toBe(false);
   expect(url.searchParams.get("redirect_uri")).toBe("http://localhost:47328/slack/callback");
   expect(url.searchParams.get("state")).toBe("a-state");
   expect(url.searchParams.get("code_challenge")).toBe("a-challenge");
   expect(url.searchParams.get("code_challenge_method")).toBe("S256");
 });
+
+test("Desktop asks for re-sign-in when a stored Slack grant lacks follow-through scopes", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const it = yield* desktop;
+      yield* it.session.signIn;
+      const raw = yield* it.keyring.lookup("slack-user-grant");
+      const grant = yield* Schema.decodeEffect(Schema.fromJsonString(SlackUserGrant))(raw!);
+      const legacy = yield* Schema.encodeEffect(Schema.fromJsonString(SlackUserGrant))({
+        ...grant,
+        scopes: "chat:write,channels:read,groups:read",
+      });
+      yield* it.keyring.store("slack-user-grant", "Old sign-in", legacy);
+      expect((yield* it.session.state).trouble).toContain("sign in again");
+    }),
+  ));
 
 test("a sign-in keeps nothing and gives nothing unless Slack's answer is the human's own user token", () =>
   runEffect(

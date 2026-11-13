@@ -17,7 +17,12 @@ import {
 import type * as HttpClient from "effect/http/HttpClient";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Base64Url from "effect/encoding/Base64Url";
-import { slackApi, slackOAuth, type SlackOAuthAnswer } from "../../../src/slack";
+import {
+  slackApi,
+  slackOAuth,
+  missingSlackScopes,
+  type SlackOAuthAnswer,
+} from "../../../src/slack";
 import { redact } from "../../../src/redact";
 import {
   SLACK_CLIENT_ID,
@@ -47,7 +52,7 @@ const GrantJson = Schema.fromJsonString(SlackUserGrant);
 
 /** The `slack-user.env` lines `probeSlackUser` checks. */
 export const slackUserLines = (grant: SlackUserGrant) =>
-  `SLACK_USER_TOKEN=${grant.accessToken}\nSLACK_USER_ID=${grant.userId}\nSLACK_TEAM_ID=${grant.teamId}\n`;
+  `SLACK_USER_TOKEN=${grant.accessToken}\nSLACK_USER_ID=${grant.userId}\nSLACK_TEAM_ID=${grant.teamId}\nSLACK_USER_SCOPES=${grant.scopes}\n`;
 
 export const decodeGrant = (text: string) => Option.getOrNull(Schema.decodeOption(GrantJson)(text));
 
@@ -266,7 +271,11 @@ export const slackUserSession = Effect.fnUntraced(function* (options: {
   /** What the card says; no token. */
   const state = Effect.map(kept, (grant) => ({
     signedIn: grant === null ? null : { user: grant.userName, team: grant.teamName },
-    trouble,
+    trouble:
+      trouble ??
+      (grant !== null && missingSlackScopes(grant.scopes).length > 0
+        ? `Slack needs ${Arr.join(missingSlackScopes(grant.scopes), ", ")}: sign in again`
+        : null),
   }));
 
   return {

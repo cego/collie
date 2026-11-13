@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
@@ -585,6 +586,26 @@ test("a command's answer is its stdout, and a human is told both streams", () =>
   ));
 
 for (const name of ["gitlab", "github"] as const) {
+  test(`a signed ${name} review posts once at its current open head`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fake = fakeForge(name, {
+          installed: true,
+          loggedIn: [FORGE_HOST[name]],
+          login: "me",
+          mrs: [{ project: PROJECT[name], iid: "30", state: "open", head: "reviewed-head" }],
+        });
+        const options = {
+          target: mrTarget(PROJECT[name], "30"),
+          cwd: "/w",
+          body: "Findings",
+          review: { runId: "run-review", head: "reviewed-head", round: 1 },
+        };
+        expect((yield* postNote(options, fake.run).pipe(Effect.provide(fake.layer))).ok).toBe(true);
+        expect((yield* postNote(options, fake.run).pipe(Effect.provide(fake.layer))).ok).toBe(true);
+        expect(Rec.values(fake.model().notes ?? {}).flat()).toHaveLength(1);
+      }),
+    ));
   test(`a signed ${name} review is refused when its head moved or the merge request ended`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -598,10 +619,15 @@ for (const name of ["gitlab", "github"] as const) {
             login: "me",
             mrs: [{ project: PROJECT[name], iid: "30", ...current }],
           });
-          const posted = yield* postNote({
-            target: mrTarget(PROJECT[name], "30"), cwd: "/w", body: "Findings",
-            review: { runId: "run-review", head: "reviewed-head", round: 1 },
-          }, fake.run).pipe(Effect.provide(fake.layer));
+          const posted = yield* postNote(
+            {
+              target: mrTarget(PROJECT[name], "30"),
+              cwd: "/w",
+              body: "Findings",
+              review: { runId: "run-review", head: "reviewed-head", round: 1 },
+            },
+            fake.run,
+          ).pipe(Effect.provide(fake.layer));
           expect(posted.ok).toBe(false);
           expect(posted.message).toContain("no review posted");
           expect(fake.model().notes ?? {}).toEqual({});

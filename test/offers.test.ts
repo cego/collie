@@ -5,9 +5,12 @@
 // workflow keeps what its Runs offer, and a workflow nobody shipped gets the same.
 
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { SELF, inputsFor, offersFrom, taskOffers, type Declared } from "../src/offers";
 import type { ActionFacts } from "../src/sdk";
+import reviewWorkflow from "../workflows/review.workflow";
+import { declaredByModule } from "../src/engine";
 
 const facts = (over: Partial<ActionFacts> = {}): ActionFacts => ({
   outcome: "feature",
@@ -31,6 +34,34 @@ const offer = (over: Partial<Declared> = {}): Declared => ({
   inputs: {},
   eligible: () => true,
   ...over,
+});
+
+test("Improve is available only for owned merge requests with open findings at their current head", () => {
+  const declared = declaredByModule(reviewWorkflow);
+  const reading = (over: Partial<ActionFacts>) =>
+    Option.getOrUndefined(
+      Arr.findFirst(
+        offersFrom(
+          declared,
+          facts({
+            openFindings: 1,
+            diffTarget: "mr:gitlab.cego.dk/mk/collie!7",
+            review: { head: "H1", reviewed: "H1", owned: true },
+            ...over,
+          }),
+          { keepUnavailable: true },
+        ),
+        (one) => one.id === "improve",
+      ),
+    );
+  expect(reading({})?.unavailable).toBeNull();
+  expect(reading({ review: { head: "H1", reviewed: "H1", owned: false } })?.unavailable).toBe(
+    "Collie never pushes to someone else's branch",
+  );
+  expect(reading({ openFindings: 0 })?.unavailable).toBe("no finding is open at the current head");
+  expect(reading({ review: { head: "H2", reviewed: "H1", owned: true } })?.unavailable).toBe(
+    "no finding is open at the current head",
+  );
 });
 
 test("an offer whose facts are met is offered, with the first eligible one as the primary", () => {

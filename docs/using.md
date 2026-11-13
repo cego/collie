@@ -1770,17 +1770,18 @@ Collie cannot change or remove that line, and it never reads "Sent with Collie".
 To sign in, open **Connections → Slack** and choose **Sign in to Slack**. Desktop ships the
 shared **Collie** app's public client ID, so there is nothing to paste, and it never asks for
 or keeps a client secret. Your browser opens Slack, which asks you to allow Collie to post as
-you and to see the channels you are in (`chat:write`, `channels:read` and `groups:read`, and
-no bot scopes). Slack sends you back to `http://localhost:47328/slack/callback`, where
+you, read messages, search, and react as you. It requests `chat:write`, `channels:read`,
+`groups:read`, `reactions:write`, `reactions:read`, `channels:history`, `groups:history`, and
+`search:read`, with no bot scopes. Slack sends you back to `http://localhost:47328/slack/callback`, where
 Desktop listens for five minutes, for that one sign-in. A cancelled sign-in, an answer for
 another sign-in, a grant without `chat:write`, a bot token, or a token Slack says is someone
 else's keeps nothing. Desktop then keeps the grant with its other credentials and gives
 every Machine its `slack-user.env`; an unreachable Machine gets it when it connects. The
-card reads **Posts as** you **in** your workspace. A sign-in kept from before stays signed in,
-renewing against the app it was made with.
+card reads **Posts as** you **in** your workspace. A grant missing these scopes asks you to
+**sign in again** in Connections. Renewing an older grant cannot add permissions.
 
 Each Machine reads it from `$XDG_CONFIG_HOME/collie/slack-user.env` (`~/.config/collie/slack-user.env` by default), readable by its owner alone.
-The file has three lines: `SLACK_USER_TOKEN` (`xoxp-…`, or `xoxe.xoxp-…` when it rotates), `SLACK_USER_ID` and `SLACK_TEAM_ID`.
+The file holds `SLACK_USER_TOKEN` (`xoxp-…`, or `xoxe.xoxp-…` when it rotates), `SLACK_USER_ID`, `SLACK_TEAM_ID`, and `SLACK_USER_SCOPES`.
 Before it counts, the host asks Slack's `auth.test` who the token belongs to. Each Machine reads one of these:
 
 - **absent**: there is no file. A Machine without it is still healthy in `collie doctor`.
@@ -2996,6 +2997,9 @@ maintained disputes. It is off unless you turn it on. There is one such Run per 
 forge login: starting it again, from the CLI, chat or the board, answers that Run and says
 it already follows the merge request.
 
+A new start after that Run finishes starts a new review, including for a reopened merge request.
+If the forge cannot establish your login, admission refuses rather than starting an unclaimed duplicate.
+
 With the setting on, each merge-watch round also lists your GitLab review requests.
 Each starts a Follow-through, except for merge requests you authored. Starting the same
 merge request by hand returns that Run.
@@ -3005,6 +3009,20 @@ If none matches, News names the repository to clone there; the next round tries 
 Exactly one saved workflow in that checkout must declare that it follows this setting.
 If several do, News names them, and you can start the one you want by hand.
 GitHub review requests do not start Runs automatically.
+
+You can hand in a Slack message permalink as the review target, or give `--input slack=<permalink>` beside an MR target.
+The message must link exactly that merge request. Both routes join the same Follow-through as its MR URL.
+Otherwise Collie searches your Slack for one top-level message linking the MR, from its creation onwards.
+Zero or multiple matches add no reactions; the record says why.
+The correlated message gets your `:eyes:` when review starts, `:memo:` when findings are posted,
+and `:white_check_mark:` once the forge confirms your approval. Replay adds only missing reactions.
+A broken Slack sign-in leaves the review running, names the missing reactions, and retries next round.
+
+**Improve** fixes open findings at the current head on an MR you authored or a branch of one of your Tasks.
+It hands them to the Task's live implementer, or runs the Fix rally in the reviewed checkout and pushes there.
+The Follow-through reviews the new head independently. Without one, Improve runs an independent review after the push.
+Only one Improve runs at a time; another invocation names the one still going.
+On another person's branch it is unavailable: **Collie never pushes to someone else's branch**.
 
 Each round reviews the merge request's head in a detached checkout Collie keeps for the
 Run and resets to that head each round. A stopped Run keeps its checkout so an interrupted

@@ -1151,7 +1151,8 @@ host gives such a workflow what a round needs without an agent:
 watch's cursor wants them), `host.approvedAt({ target, cwd, head })` (whether your login's
 approval stands at that head), and `host.pinHead({ runId, target, head })`, a detached
 checkout of the merge request's own ref at `head` that is the Run's, or `moved` when the
-ref is somewhere else. The shipped `review` is the example: each round reads, pins, reviews,
+ref is somewhere else. Pinning selects the remote naming the MR's project, including `upstream` beside a fork's `origin`.
+The shipped `review` is the example: each round reads, pins, reviews,
 posts, then watches, or asks for approval while it watches.
 
 The merge watch also lists GitLab review requests while `review.follow_through` is on.
@@ -1159,6 +1160,18 @@ It starts the sole saved workflow declaring `follows` for that setting in the ma
 Projects-root checkout. Multiple matching workflows or no matching checkout produce News
 instead of a start; later rounds retry. The login's own merge requests are excluded.
 Automatic and manual starts share the same merge-request-and-login claim.
+
+`host.reviewSlack({ runId, target, cwd, permalink, wanted })` reconciles the human's reactions inside an Activity.
+It keeps the correlation and wanted reactions in the Run's record, then reads Slack before adding anything.
+Its returned fact names ambiguous messages, missing reactions, or the sign-in repair; Slack failures do not fail the review.
+`host.slackTarget(link, target?)` validates a handed-in permalink before admission.
+An optional `slack` input preserves that message when the target itself is the permalink.
+
+The review's **Improve** action starts `review-improve`, sharing the Fix rally from `review` and the earlier Run's ledger.
+`ActionFacts.review` carries the current head, reviewed head, and ownership from `host.reviewFix(runId, target)`.
+Ownership means the forge login authored the MR or an open Task worked on its source branch in this repository.
+The host's existing Offer admission refuses another Improve while the first is going, including while a live implementer handles its delivery.
+Its watch leaves independent re-review to an existing Follow-through; otherwise the rally reviews the pushed head with a fresh reviewer.
 
 ## A workflow made of other workflows
 

@@ -765,6 +765,16 @@ const SingleClaim = Schema.NullOr(Schema.Struct({ slug: Schema.String })).pipe(
 export const ClaimedSchema = Schema.Union([Holding, SingleClaim]);
 
 export interface HostApi {
+  readonly reviewFix: (
+    runId: string,
+    target: string,
+  ) => Effect.Effect<{
+    readonly owned: boolean;
+    readonly head: string;
+    readonly reviewed: string;
+    readonly lineage: ReadonlyArray<string>;
+    readonly following: boolean;
+  }>;
   readonly reviewScope: (
     runId: string,
     source: string,
@@ -1372,6 +1382,14 @@ export interface HostApi {
     readonly head: string;
     readonly round: number;
   }) => Effect.Effect<Posted>;
+  readonly slackTarget: (link: string, target?: string) => Effect.Effect<string, WorkflowError>;
+  readonly reviewSlack: (options: {
+    readonly runId: string;
+    readonly target: string;
+    readonly cwd: string;
+    readonly permalink?: string;
+    readonly wanted: ReadonlyArray<string>;
+  }) => Effect.Effect<string>;
   /** Reads the target's head before review. Take it inside an Activity. */
   readonly reviewedHead: (options: {
     readonly target: string;
@@ -2002,6 +2020,7 @@ export type Ships = "merge" | "release";
  * user-authored workflow offers what its own results earn, exactly as a shipped one does.
  */
 export interface ActionFacts {
+  readonly review?: { readonly head: string; readonly reviewed: string; readonly owned: boolean };
   readonly recovery?: Recovery;
   readonly outcome: Outcome;
   readonly succeeded: boolean;

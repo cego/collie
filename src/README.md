@@ -142,6 +142,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `mr-watch.ts`          | Judges each watched merge request on the merge watch's round and wakes its Run                                              |
 | `follow-through.ts`    | The claim a followed merge request's start is made under: one Run per merge request and login                               |
 | `review-requests.ts`   | GitLab review requests as starts, placed in their checkout and claimed with manual starts                                   |
+| `review-slack.ts`      | A review's durable Slack message correlation and desired reactions; validates handed-in permalinks                          |
 | `forge/forge.ts`       | The forge interface, and which adapter a merge request is on (ADR-0050)                                                     |
 | `forge/issues.ts`      | Shared issue values and the created issue URL decoded from an adapter's answer                                              |
 | `forge/review.ts`      | A merge request's review read and merge answer, and the one rule for external and answered comments                         |
@@ -171,7 +172,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `connection-model.ts`  | Connection reading Schemas and the text the CLI and chat print (pure)                                                       |
 | `connection-probes.ts` | Linear MCP and Helle probes; reexports the forge adapters' probes                                                           |
 | `connection-login.ts`  | Reads a reusable login through its forge adapter for host-to-Desktop hand-over, without recording the token                 |
-| `slack.ts`             | Slack Web API adapter: identity, member channels, posts, permalinks and user sign-in tokens                                 |
+| `slack.ts`             | Slack Web API adapter: identity, channels, messages, search, reactions, posts, permalinks, and user sign-in scopes          |
 | `slack-credentials.ts` | Checks each Machine's Slack user token, says when only an older bot token is left, and supplies the reading                 |
 | `connections.ts`       | The Connection registry: each probe isolated and bounded, shared by the host, doctor and workflow reads                     |
 | `schedule-model.ts`    | A Schedule as every door reads it, and when an occurrence starts and which comes next (pure)                                |

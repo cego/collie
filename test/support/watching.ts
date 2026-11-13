@@ -34,6 +34,7 @@ import { requestedOver } from "../../src/review-requests";
 import { recoverParks } from "../../src/park-recovery";
 import { Woke } from "../../src/mr-watch-model";
 import type { MrPanels } from "../../src/merges";
+import type { slackApi } from "../../src/slack";
 
 const asJson = flow(
   Schema.encodeUnknownResult(Schema.fromJsonString(Schema.Any)),
@@ -42,7 +43,7 @@ const asJson = flow(
 
 export const ROOT = new URL("../../", import.meta.url).pathname;
 
-export const watching = (rig: Rig) => {
+export const watching = (rig: Rig, slack?: typeof slackApi) => {
   const env = () => rig.pluginEnv({ HERDR_PLUGIN_ROOT: ROOT });
   const dir = () => env().stateDir;
   const toasts: string[] = [];
@@ -102,6 +103,7 @@ export const watching = (rig: Rig) => {
           Layer.provideMerge(
             foundationLayer({
               dir: dir(),
+              slack,
               userDir: rig.userDir,
               placing: { herdr: new FakeHerdr(env()), env: env() },
               toast: (title) => Effect.sync(() => toasts.push(title)),
