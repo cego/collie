@@ -1521,8 +1521,10 @@ the same workflow carrying every input its offer fills from what the source was 
 with, unchanged: a follow-up given other work binds nothing. The collector then takes only
 the records that bound card lists, and only while the card is unaltered, the follow-up's
 checkout is on its branch and its head is in that checkout's history. A `--expect fail`
-among them needs a later passing record of the same command, on a changed tree at a descendant commit within that card's history.
-Both records must show stable trees. Baseline passes before the failure do not establish a fix.
+among them needs a later passing record of the same command on a changed tree.
+Both snapshots must be stable, and both commits must be in that card's history.
+The failure must precede the card's head. The pass may share the failure's commit or follow it.
+Baseline passes before the failure do not establish a fix.
 Failures on trees that also passed, or replays after that command's first verified fix, are excluded even after intervening commits.
 A follow-up of a follow-up, and a recovery of either, keeps
 what the cards before it proved, each card checked the same way against the follow-up's checkout.

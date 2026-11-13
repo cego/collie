@@ -74,9 +74,10 @@ test(
           yield* git("add", "test.txt");
           yield* git("commit", "-qm", "the regression assertion");
           const red = yield* verify("regression", ["--expect", "fail", "--", ...regression]);
-          yield* commit("fix.txt", "the fix");
+          yield* fs.writeFileString(`${world.project}/fix.txt`, "the fix\n").pipe(Effect.orDie);
           yield* fs.writeFileString(fixed, "").pipe(Effect.orDie);
           const green = yield* verify("regression", ["--", ...regression]);
+          yield* commit("fix.txt", "the fix");
           yield* commit("notes.md", "notes after the fix");
           yield* fs.remove(fixed).pipe(Effect.orDie);
           const replayed = yield* verify("regression", ["--expect", "fail", "--", ...regression]);

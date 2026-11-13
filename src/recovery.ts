@@ -419,9 +419,7 @@ export const sourceEvidence = Effect.fn("Recovery.sourceEvidence")(function* (op
         pending.push(one);
     } else {
       const reds = yield* Effect.filter(pending, (red) =>
-        sameAsked(red, one) &&
-        red.start.head_sha !== one.start.head_sha &&
-        !sameTree(red.start, one.start)
+        sameAsked(red, one) && !sameTree(red.start, one.start)
           ? contains(red.start.head_sha, one.start.head_sha)
           : Effect.succeed(false),
       );
