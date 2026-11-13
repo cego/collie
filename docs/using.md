@@ -3022,6 +3022,7 @@ and `:white_check_mark:` once the forge confirms your approval. Replay adds only
 A broken Slack sign-in leaves the review running, names the missing reactions, and retries next round.
 
 **Improve** fixes open findings at the current head on an MR you authored or a branch of one of your Tasks.
+It runs a first fix even when only minor findings remain; subsequent rounds stop when nothing blocking remains.
 It hands them to the Task's live implementer, or runs the Fix rally in the reviewed checkout and pushes there.
 The Follow-through reviews the new head independently. Without one, Improve runs an independent review after the push.
 Only one Improve runs at a time; another invocation names the one still going.

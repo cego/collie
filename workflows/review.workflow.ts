@@ -781,7 +781,8 @@ export default defineWorkflow({
         const POST = approve ? `Post and approve ${Str.slice(0, 7)(head)}` : "Post";
         let chosen: string = FIX;
         if (fixing) {
-          if (round.go !== "fix" || rallied >= ROUNDS) {
+          const firstImprovement = improving && fixes === 0 && round.go === "clean";
+          if ((round.go !== "fix" && !firstImprovement) || rallied >= ROUNDS) {
             fixing = false;
             settled =
               round.go === "halt"

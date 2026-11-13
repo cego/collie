@@ -866,9 +866,9 @@ for (const status of [503, 429])
     180_000,
   );
 
-test(
-  "Improve hands a Task's findings to its live implementer without launching another agent",
-  () =>
+test.each(["major", "minor"] as const)(
+  "Improve hands a Task's %s findings to its live implementer without launching another agent",
+  (severity) =>
     host.runEffect(
       Effect.gen(function* () {
         yield* repository;
@@ -876,7 +876,7 @@ test(
         const head = yield* pushed("Task work");
         const forge = yield* host.gitlab(model(head));
         yield* rig.addAgent("impl-live", "9-1");
-        yield* rig.queueOutputs([review([F1])]);
+        yield* rig.queueOutputs([review([{ ...F1, severity }])]);
         yield* host.session(
           forge,
           Effect.gen(function* () {
@@ -917,7 +917,7 @@ test(
             });
             yield* until(
               () => host.watchOf(parent.runId, TARGET),
-              (row) => row?.name === "follow-1",
+              (row) => row?.name === "follow-1" || row?.name === "approve-1",
             );
             const offered = yield* registry.offers(parent.runId);
             expect(
@@ -931,10 +931,17 @@ test(
               request: "improve-task",
             });
             const waiting = yield* until(
-              () => host.watchOf(improved.runId, TARGET),
-              (row) => row?.name === "improved-head",
+              () =>
+                Effect.all({
+                  watch: host.watchOf(improved.runId, TARGET),
+                  view: host.status(improved.runId),
+                }),
+              (one) =>
+                one.watch?.name === "improved-head" ||
+                one.view?.status.status === "complete" ||
+                one.view?.status.status === "failed",
             );
-            expect(waiting?.name).toBe("improved-head");
+            expect(waiting.watch?.name).toBe("improved-head");
             const duplicate = yield* registry
               .invoke({
                 runId: parent.runId,
@@ -964,9 +971,9 @@ test(
   180_000,
 );
 
-test(
-  "Improve fixes an owned MR in its reviewed checkout and independently reviews the pushed head",
-  () =>
+test.each(["major", "minor"] as const)(
+  "Improve fixes an owned MR's %s findings in its reviewed checkout and independently reviews the pushed head",
+  (severity) =>
     host.runEffect(
       Effect.gen(function* () {
         yield* repository;
@@ -977,7 +984,11 @@ test(
         yield* git(["remote", "set-url", "origin", `https://${PROJECT}.git`]);
         yield* git(["remote", "set-url", "--push", "origin", `${rig.root}/origin.git`]);
         const forge = yield* host.gitlab(model(first, { mrs: [mr(first, { author: "mk" })] }));
-        yield* rig.queueOutputs([review([F1]), null, review([{ ...F1, status: "fixed" }])]);
+        yield* rig.queueOutputs([
+          review([{ ...F1, severity }]),
+          null,
+          review([{ ...F1, severity, status: "fixed" }]),
+        ]);
         yield* host.session(
           forge,
           Effect.gen(function* () {
