@@ -6,8 +6,8 @@ core in `desktop/src/bun/index.ts`, compiled into the release as `collie-core`.
 The old Nuxt view and Electrobun UI runtime have been removed. The shell speaks `DesktopRpcs`,
 subscribes to `flock`, and draws each Machine and
 its cards. Pressing a card opens its Run's record on the Terminal tab, and its Flow strip on the
-Flow tab at the Run's active Step; on Terminal, and only there, Rune draws the pane's
-terminal from the `terminal` stream, through libghostty-vt, and sends what the human does back
+Flow tab at the Run's active Step. The Terminal tab and a working Step's Terminal part draw the pane
+from the `terminal` stream through libghostty-vt, and send what the human does back
 on `terminalSend`. The record's other tabs (Flow, Summary, Plan, Review, Diff, Evidence, Log,
 Facts, the merge request) read `runDetail` and `runFile`, and its Diff tab shows the Run's diff
 in rune-kit's Diff, where selected lines become review comments. The board's Chat button opens
@@ -142,6 +142,10 @@ on lavapipe. Its first frame took 387 ms. The live board was one Snapshot of 21 
   in the Run's `handoffs/rune-card-title-issue.md`.
 
 ### Go to pane's terminal
+
+Selecting a Flow Step gives its detail and work the remaining record height. The map and
+details scroll independently; on a narrow record the details sit above the work. Resizing
+the window or Flock chat refits the terminal without reconnecting its pane.
 
 The terminal keeps today's transport: the `terminal` stream brings frames, and `terminalSend`
 carries input, resizes, scrolls and mouse presses. Leaving the Terminal tab interrupts the
