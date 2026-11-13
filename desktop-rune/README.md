@@ -115,7 +115,7 @@ faithfully:
 
 ### Build times and size
 
-vm-mk: 24 cores, rustc 1.99.1, dependencies already fetched, a target directory of its own.
+vm-mk: 24 cores, rustc 1.100.0, dependencies already fetched, a target directory of its own.
 
 | Build                                        | Time    |
 | -------------------------------------------- | ------- |
