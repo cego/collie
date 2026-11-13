@@ -46,3 +46,40 @@ test("a Run's steps are remembered at a storm's pace beside ten Runs of 220 step
       expect(took).toBeLessThan(2_500);
     }).pipe(Effect.scoped),
   ));
+
+test("durations use the first entry for a key and skip incomplete or invalid pairs", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-durations-" });
+      const enter = (key: string, at: string): StepLine => ({
+        kind: "enter",
+        key,
+        at,
+        step: { id: key, title: "", description: "", kind: "check", role: null, produces: null },
+        place: null,
+      });
+      const leave = (key: string, at: string): StepLine => ({ kind: "leave", key, at });
+      const lines = [
+        leave("replayed", at(4)),
+        enter("replayed", at(1)),
+        enter("replayed", at(2)),
+        leave("missing", at(3)),
+        enter("incomplete", at(1)),
+        enter("negative", at(5)),
+        leave("negative", at(4)),
+        enter("invalid", "not a date"),
+        leave("invalid", at(4)),
+        enter("zero", at(4)),
+        leave("zero", at(4)),
+      ];
+      for (const run of ["one", "two", "three"])
+        yield* rememberStepDurations(dir, run, "pairs", lines);
+      expect(yield* usualStepTimes(dir, "pairs")).toEqual(
+        new Map([
+          ["replayed", 180_000],
+          ["zero", 0],
+        ]),
+      );
+    }).pipe(Effect.scoped),
+  ));

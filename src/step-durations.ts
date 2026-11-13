@@ -1,5 +1,4 @@
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import * as Order from "effect/Order";
 import { Effect, FileSystem, Schema, Semaphore } from "effect";
@@ -32,18 +31,20 @@ const read = (dir: string) =>
     if (samples !== null) decoded = { text: text.value, samples };
     return samples;
   });
-const samples = (run: string, workflow: string, lines: ReadonlyArray<StepLine>): Sample[] =>
-  Arr.flatMap(lines, (line) => {
+const samples = (run: string, workflow: string, lines: ReadonlyArray<StepLine>): Sample[] => {
+  const entries = new Map<string, Extract<StepLine, { kind: "enter" }>>();
+  for (const line of lines)
+    if (line.kind === "enter" && !entries.has(line.key)) entries.set(line.key, line);
+  return Arr.flatMap(lines, (line) => {
     if (line.kind !== "leave") return [];
-    const entered = Option.getOrUndefined(
-      Arr.findFirst(lines, (one) => one.kind === "enter" && one.key === line.key),
-    );
-    if (entered?.kind !== "enter") return [];
+    const entered = entries.get(line.key);
+    if (entered === undefined) return [];
     const ms = epochMs(line.at) - epochMs(entered.at);
     return Number.isFinite(ms) && ms >= 0
       ? [{ workflow, step: entered.step.id, run, key: line.key, at: line.at, ms }]
       : [];
   });
+};
 const latest = (all: ReadonlyArray<Sample>) => {
   const kept: Sample[] = [];
   const runs = new Set<string>();
