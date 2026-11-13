@@ -4068,6 +4068,21 @@ Claude Code report such a stop; Codex and OpenCode do not yet. Where nothing has
 agent is left where it is, and the Run waits for it, parking after its collection time with
 when each Subscription resets.
 
+That wait rechecks the fallback chain. A Subscription that ran out becomes eligible again
+when its recorded limits reset, or when a reading no more than five minutes old for the same
+account, taken after it ran out, shows those
+limits in a later window with room. The old agent is stopped before its replacement starts
+on the same work. Missing or unreadable readings, and a healthier reading of the same
+window, do not erase the earlier exhaustion. Runs recorded before this recovery metadata
+was added can still recover at their recorded reset time; no observation time is invented
+when they replay.
+
+While that wait is active, a dead server or a lost core terminal does not restart the
+exhausted agent. Recovery still starts agents on other Subscriptions. If a tool writes valid
+Output while its agent is being stopped for a fallback, Collie keeps that Output after the
+old agent is proved quiet and starts no replacement. That decision is recorded, so replay
+does not start the work again.
+
 Usage is data: it never refuses, holds or delays work.
 
 ## Troubleshooting
