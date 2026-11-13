@@ -908,6 +908,55 @@ test(
   60_000,
 );
 
+for (const answer of ["Keep F1 (no approval)", "Drop it (approve abc123)"])
+  test(
+    `chat answers the keep/drop Decision with ${answer}`,
+    () =>
+      hosted(
+        "collie-parity-dispute-",
+        ({ world, env }) =>
+          Effect.gen(function* () {
+            const { envelope } = yield* collie(world, [
+              "run",
+              "start",
+              "follows-mr",
+              "--input",
+              "target=worktree",
+              "--input",
+              "proves=dispute",
+            ]);
+            expect(envelope).toMatchObject({ ok: true });
+            const { runId } = yield* Schema.decodeUnknownEffect(
+              Schema.Struct({ runId: Schema.String }),
+            )(envelope.data).pipe(Effect.orDie);
+            const client = yield* connect(world.state).pipe(Effect.orDie);
+            const pending = yield* until(
+              () => client.run({ runId }).pipe(Effect.orDie),
+              (view) => (view?.waiting.length ?? 0) > 0,
+            );
+            expect(pending?.waiting[0]?.name).toBe("dispute-1");
+            const said = yield* toolNamed("collie_do")!.call(env, {
+              actions: [
+                {
+                  kind: "answer",
+                  run: runId,
+                  choiceId: "dispute-1",
+                  answer,
+                },
+              ],
+            });
+            expect(said).toContain("answer: applied");
+            const done = yield* until(
+              () => client.run({ runId }).pipe(Effect.orDie),
+              (view) => view?.status.status === "complete",
+            );
+            expect(done?.status.status === "complete" && done.status.value).toBe(answer);
+          }),
+        [...MODULES, "follows-mr.workflow.ts"],
+      ),
+    60_000,
+  );
+
 test(
   "chat starts a followed merge request as the Run the CLI started, and answers its approval",
   () =>

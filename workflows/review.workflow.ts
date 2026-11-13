@@ -49,9 +49,11 @@ import {
   type Finding,
   type SynthesisReport,
   type Woke,
+  type Answered,
 } from "collie";
 import { Effect, FileSystem, Schema } from "effect";
 import { connection } from "./connections.ts";
+import { reassess, repliesTo, formatReplies } from "./reassessment.ts";
 import * as Activity from "effect/workflow/Activity";
 import {
   DEFAULT_BASE,
@@ -245,7 +247,15 @@ export default defineWorkflow({
       const fact = (name: string, line: string) =>
         Activity.make({ name, execute: host.record(run.id, line) });
       // Null where the head moved under it and `carry` keeps the findings for the next round.
-      const roundAt = (round: number, changes: string, carry: boolean) =>
+      const roundAt = (
+        round: number,
+        changes: string,
+        carry: boolean,
+        assessment?: {
+          readonly findings: ReadonlyArray<Finding>;
+          readonly replies: NonNullable<MrRead["replies"]>;
+        },
+      ) =>
         Effect.gen(function* () {
           const previous =
             round === 1
@@ -254,20 +264,29 @@ export default defineWorkflow({
                   .readFileString(`${place.dir}/${REVIEW_FILE}`)
                   .pipe(Effect.orElseSucceed(() => ""));
           return yield* reviewRound(
-            reviewPass({
-              target: asked.target,
-              plan: asked.plan ?? "",
-              proves: asked.proves ?? "",
-              previous,
-              ledger: ledger ?? [],
-              head,
-              changes,
-              answered: "",
-              risks: place.options.risks ?? "",
-              at: round,
-              of: round,
-              disputed: [],
-            }).pipe(
+            (assessment === undefined
+              ? reviewPass({
+                  target: asked.target,
+                  plan: asked.plan ?? "",
+                  proves: asked.proves ?? "",
+                  previous,
+                  ledger: ledger ?? [],
+                  head,
+                  changes,
+                  answered: "",
+                  risks: place.options.risks ?? "",
+                  at: round,
+                  of: round,
+                  disputed: [],
+                })
+              : reassess({
+                  target: asked.target,
+                  head,
+                  at: round,
+                  ledger: ledger ?? [],
+                  ...assessment,
+                })
+            ).pipe(
               Effect.catchIf(
                 (failure) => carry && Str.startsWith(HEAD_MOVED)(failure.reason),
                 () =>
@@ -332,50 +351,39 @@ export default defineWorkflow({
             name: `follow-read-${round}`,
             success: MrRead,
             error: WorkflowError,
-            execute: host.mrReading({ target: asked.target, cwd: place.cwd }),
+            execute: host.mrReading({ target: asked.target, cwd: place.cwd, replies: round > 1 }),
           });
         let reading = yield* readAt(1);
         let reviewedAt = earlierHead;
         let forcePush = false;
         let last: SynthesisReport | null = null;
+        let commentsOnly = false;
+        let changedComments: ReadonlyArray<string> = [];
+        const droppedByHuman = new Set<string>();
         for (let round = 1; ; round += 1) {
           if (reading.state !== "open") return { done: `${label} is ${reading.state}` };
           head = reading.head;
+          if (head !== reviewedAt) droppedByHuman.clear();
+          const replies = reading.replies ?? [];
+          const affected = Arr.filter(
+            ledger ?? [],
+            (one) =>
+              !droppedByHuman.has(one.id ?? one.title) &&
+              Arr.some(repliesTo(one, replies, run.id), (reply) =>
+                changedComments.includes(reply.id),
+              ),
+          );
+          const attached = Arr.filter(replies, (reply) =>
+            Arr.some(commentsOnly ? affected : (ledger ?? []), (one) =>
+              repliesTo(one, replies, run.id).includes(reply),
+            ),
+          );
           const changes = (at: number) =>
             forcePush || reviewedAt === "" ? Effect.succeed("") : changesAt(at, reviewedAt);
           if (round > 1 && !(yield* following(round))) {
             yield* fact(`follow-off-${round}`, `${FOLLOW} is off: back to asking what next`);
             const review = yield* roundAt(round, yield* changes(round), false);
             return { menu: review ?? last, at: round };
-          }
-          const pinned = yield* Activity.make({
-            name: `follow-pin-${round}`,
-            success: PinnedHead,
-            error: WorkflowError,
-            execute: host.pinHead({ runId: run.id, target: asked.target, head }),
-          });
-          if ("refused" in pinned)
-            return yield* new WorkflowError({
-              reason: `no checkout of ${label} at ${head}: ${pinned.refused}`,
-            });
-          const reviewed =
-            "moved" in pinned ? null : yield* roundAt(round, yield* changes(round), true);
-          yield* Activity.make({
-            name: `follow-close-${round}`,
-            execute: Agents.pipe(
-              Effect.flatMap((agents) => agents.halt(run.id)),
-              Effect.asVoid,
-            ),
-          });
-          if (reviewed === null)
-            yield* fact(
-              `follow-moved-${round}`,
-              `the head of ${label} moved while reviewing ${head}; nothing posted, the findings carry to the next round`,
-            );
-          else {
-            last = yield* postedAt(reviewed, round);
-            ledger = last.findings;
-            reviewedAt = head;
           }
           const watching = {
             name: `follow-${round}`,
@@ -384,46 +392,159 @@ export default defineWorkflow({
             cursor: { head, seen: reading.comments, pipeline: reading.pipeline },
             author: `@${reading.author}`,
           };
+          const maintained: ReadonlyArray<Finding> = commentsOnly
+            ? Arr.filter(affected, (one) => one.status === "disputed" && Boolean(one.rebuttal))
+            : [];
           let woke: Woke;
-          if (reviewed === null || !cleanAt(reviewed)) woke = yield* watch(watching);
-          else if (
-            yield* Activity.make({
-              name: `follow-approved-${round}`,
-              success: Schema.Boolean,
-              error: WorkflowError,
-              execute: host.approvedAt({ target: asked.target, cwd: place.cwd, head }),
-            })
-          )
-            woke = yield* watch({ ...watching, approved: head });
-          else {
-            const said = yield* askWhileWatching(
-              {
-                prompt: `Approve ${label} at ${head}?`,
-                options: [{ id: APPROVE, recommended: true }, NOT_NOW],
-              },
-              { ...watching, name: `approve-${round}` },
-            );
-            if (said._tag !== "Answered") woke = said;
+          if (maintained.length > 0 && last !== null) {
+            let settled: SynthesisReport = last;
+            let interrupted: Woke | null = null;
+            let kept = false;
+            for (const [index, finding] of maintained.entries()) {
+              const identity = finding.id ?? finding.title;
+              const keep = `Keep ${identity} (no approval)`;
+              const drop = `Drop it (approve ${head})`;
+              const decision: Woke | Answered = yield* askWhileWatching(
+                {
+                  prompt: `${keep} / ${drop}?`,
+                  options: [{ id: keep, recommended: true }, drop],
+                },
+                {
+                  ...watching,
+                  name: `dispute-${round}-${index + 1}`,
+                  cursor: { ...watching.cursor, headOnly: true },
+                },
+              );
+              if (decision._tag !== "Answered") {
+                interrupted = decision;
+                break;
+              }
+              kept ||= decision.answer === keep;
+              if (decision.answer === drop) {
+                droppedByHuman.add(identity);
+                ledger = Arr.map(ledger ?? [], (one): Finding =>
+                  (one.id ?? one.title) === identity
+                    ? {
+                        ...one,
+                        status: "obsolete",
+                        head,
+                        reason: `Dropped by the human at ${head}`,
+                      }
+                    : one,
+                );
+                settled = {
+                  ...settled,
+                  findings: ledger,
+                  verdict: Arr.some(
+                    ledger,
+                    (one) => one.status === "open" || one.status === "disputed",
+                  )
+                    ? "findings"
+                    : "clean",
+                };
+                yield* leaveReview(place.dir, settled);
+              }
+              yield* fact(`dispute-said-${round}-${index + 1}`, `${identity}: ${decision.answer}`);
+            }
+            last = settled;
+            if (interrupted !== null) woke = interrupted;
             else {
-              const approved =
-                said.answer === APPROVE
-                  ? yield* Activity.make({
-                      name: `follow-approve-${round}`,
-                      success: Posted,
-                      execute: host.approveReview({ target: asked.target, cwd: place.cwd, head }),
-                    })
-                  : null;
-              if (approved !== null) {
-                yield* fact(`approve-said-${round}`, approved.message);
+              const canApprove: boolean = !kept && cleanAt(settled);
+              if (canApprove) {
+                const approved = yield* Activity.make({
+                  name: `dispute-approve-${round}`,
+                  success: Posted,
+                  execute: host.approveReview({ target: asked.target, cwd: place.cwd, head }),
+                });
+                yield* fact(`dispute-approved-${round}`, approved.message);
                 if (!approved.ok) return yield* new WorkflowError({ reason: approved.message });
               }
-              woke = yield* watch(
-                approved?.ok === true ? { ...watching, approved: head } : watching,
+              const resumed = { ...watching, cursor: { ...watching.cursor, headOnly: kept } };
+              woke = yield* watch(canApprove ? { ...resumed, approved: head } : resumed);
+            }
+          } else {
+            const pinned = yield* Activity.make({
+              name: `follow-pin-${round}`,
+              success: PinnedHead,
+              error: WorkflowError,
+              execute: host.pinHead({ runId: run.id, target: asked.target, head }),
+            });
+            if ("refused" in pinned)
+              return yield* new WorkflowError({
+                reason: `no checkout of ${label} at ${head}: ${pinned.refused}`,
+              });
+            const reviewed: SynthesisReport | null =
+              "moved" in pinned
+                ? null
+                : commentsOnly && affected.length === 0
+                  ? last
+                  : yield* roundAt(
+                      round,
+                      commentsOnly
+                        ? ""
+                        : `${yield* changes(round)}${attached.length === 0 ? "" : `\n\n${formatReplies(attached)}`}`,
+                      true,
+                      commentsOnly ? { findings: affected, replies: attached } : undefined,
+                    );
+            yield* Activity.make({
+              name: `follow-close-${round}`,
+              execute: Agents.pipe(
+                Effect.flatMap((agents) => agents.halt(run.id)),
+                Effect.asVoid,
+              ),
+            });
+            if (reviewed === null)
+              yield* fact(
+                `follow-moved-${round}`,
+                `the head of ${label} moved while reviewing ${head}; nothing posted, the findings carry to the next round`,
               );
+            else {
+              last = yield* postedAt(reviewed, round);
+              ledger = last.findings;
+              reviewedAt = head;
+            }
+            if (reviewed === null || !cleanAt(reviewed)) woke = yield* watch(watching);
+            else if (
+              yield* Activity.make({
+                name: `follow-approved-${round}`,
+                success: Schema.Boolean,
+                error: WorkflowError,
+                execute: host.approvedAt({ target: asked.target, cwd: place.cwd, head }),
+              })
+            )
+              woke = yield* watch({ ...watching, approved: head });
+            else {
+              const said = yield* askWhileWatching(
+                {
+                  prompt: `Approve ${label} at ${head}?`,
+                  options: [{ id: APPROVE, recommended: true }, NOT_NOW],
+                },
+                { ...watching, name: `approve-${round}` },
+              );
+              if (said._tag !== "Answered") woke = said;
+              else {
+                const approved =
+                  said.answer === APPROVE
+                    ? yield* Activity.make({
+                        name: `follow-approve-${round}`,
+                        success: Posted,
+                        execute: host.approveReview({ target: asked.target, cwd: place.cwd, head }),
+                      })
+                    : null;
+                if (approved !== null) {
+                  yield* fact(`approve-said-${round}`, approved.message);
+                  if (!approved.ok) return yield* new WorkflowError({ reason: approved.message });
+                }
+                woke = yield* watch(
+                  approved?.ok === true ? { ...watching, approved: head } : watching,
+                );
+              }
             }
           }
           if (woke._tag === "Ended") return { done: `${label} was ${woke.state}` };
           forcePush = woke.change.forcePush === true;
+          commentsOnly = !woke.change.newHead && woke.change.pipeline === null;
+          changedComments = woke.change.comments;
           reading = yield* readAt(round + 1);
         }
       });
@@ -792,7 +913,11 @@ const reviewNote = (
     Arr.join(
       [
         ...(added.length === 0 ? [] : [formatFindings(added)]),
-        ...Arr.map(changed, (one) => `- ${one.id}: ${one.status}`),
+        ...Arr.map(
+          changed,
+          (one) =>
+            `- ${one.id}: ${one.status}${one.rebuttal || one.reason ? ` — ${one.rebuttal || one.reason}` : ""}`,
+        ),
         ...Arr.map(stillOpen, (one) => `- ${one.id}: still open`),
         ...(Arr.every(review.findings, (one) => one.status === "fixed" || one.status === "obsolete")
           ? [`all findings fixed at \`${head}\``]

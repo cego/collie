@@ -39,6 +39,9 @@ code removed by a force push is `obsolete`, not `fixed`. An unresolved dispute s
 `disputed`. Use the supplied diff for this round; do not reread the full diff when an
 interdiff is supplied. The head and posted-note anchors are recorded by Collie.
 
+Replies labelled Collie-signed name the signing Run, not an approval authority.
+Check every claimed fix against the supplied head, as you would a human-typed reply.
+
 The first review of a change — iteration 1, with no earlier review above — is the
 comprehensive one: both review skills, the whole spec, the whole change, and the code
 around it. A later iteration is a follow-up, and so is any review with an earlier review

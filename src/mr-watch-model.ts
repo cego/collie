@@ -14,6 +14,7 @@ export const WatchCursor = Schema.Struct({
   seen: Schema.Array(Schema.String),
   /** The head's checks as the card reads them: `passed`, `failed`, `running`, `unknown` or `none`. */
   pipeline: Schema.String,
+  headOnly: Schema.optionalKey(Schema.Boolean),
 });
 export type WatchCursor = typeof WatchCursor.Type;
 
@@ -62,8 +63,8 @@ export type Verdict =
 const TERMINAL = new Set(["passed", "failed"]);
 
 const SIGNATURES = [
-  /^Review by Collie for @\S+ · \S+ round \d+ at [0-9a-f]+$/,
-  /^Posted by Collie's Run \S+ on /,
+  /^Review by Collie for @\S+ · (\S+) round \d+ at [0-9a-f]+$/,
+  /^Posted by Collie's Run (\S+) on /,
 ];
 
 /** A verdict, and what the watch keeps for the next judgement. */
@@ -72,11 +73,18 @@ export interface Judgement {
   readonly observed: Observed;
 }
 
-/** Whether a comment's last line is one Collie signs its notes and replies with. */
-export const signedByCollie = (body: string) => {
+export const collieRunOf = (body: string): string | null => {
   const last = Arr.last(Arr.filter(Str.split(Str.trimEnd(body), "\n"), (line) => line !== ""));
-  return last._tag === "Some" && Arr.some(SIGNATURES, (one) => one.test(Str.trim(last.value)));
+  if (last._tag === "None") return null;
+  for (const signature of SIGNATURES) {
+    const run = signature.exec(Str.trim(last.value))?.[1];
+    if (run !== undefined) return run;
+  }
+  return null;
 };
+
+/** Whether a comment's last line is one Collie signs its notes and replies with. */
+export const signedByCollie = (body: string) => collieRunOf(body) !== null;
 
 /**
  * The verdict on `reading` against `cursor`.
@@ -88,6 +96,7 @@ export function judge(options: {
   readonly reading: MrReading;
   readonly now: number;
   readonly descends?: boolean;
+  readonly run?: string;
 }): Judgement {
   const { cursor, reading, now } = options;
   const before = options.observed?.head === reading.head ? options.observed : null;
@@ -100,12 +109,22 @@ export function judge(options: {
   if (reading.state !== "open")
     return { verdict: { _tag: "Ended", state: reading.state }, observed };
   const newHead = reading.head !== "" && reading.head !== cursor.head;
-  const comments = pipe(
-    reading.comments,
-    Arr.filter((one) => !cursor.seen.includes(one.id) && !signedByCollie(one.body)),
-    Arr.map((one) => one.id),
-  );
-  const ended = TERMINAL.has(reading.pipeline) && (newHead || reading.pipeline !== cursor.pipeline);
+  const comments = cursor.headOnly
+    ? []
+    : pipe(
+        reading.comments,
+        Arr.filter(
+          (one) =>
+            !cursor.seen.includes(one.id) &&
+            (!signedByCollie(one.body) ||
+              (options.run !== undefined && collieRunOf(one.body) !== options.run)),
+        ),
+        Arr.map((one) => one.id),
+      );
+  const ended =
+    !cursor.headOnly &&
+    TERMINAL.has(reading.pipeline) &&
+    (newHead || reading.pipeline !== cursor.pipeline);
   if (!newHead && comments.length === 0 && !ended)
     return { verdict: { _tag: "NoChange" }, observed };
   const until = Math.max(

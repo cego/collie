@@ -16,6 +16,7 @@ import {
   MrOutputSchema,
   PlanOutputSchema,
   ReviewOutputSchema,
+  ReassessmentSchema,
   SynthesisSchema,
   afterMergeAnswers,
   parseFixOutput,
@@ -32,6 +33,23 @@ type Readable = Schema.Codec<unknown, unknown, never, never>;
 const accepts = (schema: Readable, text: string): boolean =>
   Schema.decodeExit(schema)(flow(Schema.decodeResult(YamlValueJsonSchema), Result.getOrThrow)(text))
     ._tag === "Success";
+
+test("a reassessment accepts only one status per supplied id and no other output", () => {
+  const decode = Schema.decodeUnknownResult(ReassessmentSchema(["F1", "F2"]));
+  const first = { id: "F1", status: "open", reason: "The guard is missing." };
+  const second = { id: "F2", status: "fixed", reason: "The handle now closes." };
+  expect(decode({ findings: [first, second] })._tag).toBe("Success");
+  for (const output of [
+    { findings: [first, { ...second, id: "F3" }] },
+    { findings: [first, first] },
+    { findings: [first] },
+    { findings: [first, { ...second, status: "dropped" }] },
+    { findings: [first, { ...second, reason: " " }] },
+    { findings: [first, second], verdict: "clean" },
+    { findings: [{ ...first, severity: "minor" }, second] },
+  ])
+    expect(decode(output)._tag).toBe("Failure");
+});
 
 /** Both readings of one document agree on whether it is one. */
 const agree = <T>(

@@ -193,6 +193,7 @@ export {
   MrOutputSchema,
   PlanOutputSchema,
   ReviewOutputSchema,
+  ReassessmentSchema,
   SynthesisSchema,
 } from "./output";
 
@@ -1157,6 +1158,7 @@ export interface HostApi {
   readonly mrReading: (options: {
     readonly target: string;
     readonly cwd: string;
+    readonly replies?: boolean;
   }) => Effect.Effect<MrRead, WorkflowError>;
   /** Whether this login's approval of `target` stands while its head is `head`. */
   readonly approvedAt: (options: {
@@ -1422,6 +1424,17 @@ export const MrRead = Schema.Struct({
   pipeline: Schema.String,
   /** The ids of the comments on it now. */
   comments: Schema.Array(Schema.String),
+  replies: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        id: Schema.String,
+        author: Schema.String,
+        thread: Schema.NullOr(Schema.String),
+        body: Schema.String,
+        run: Schema.NullOr(Schema.String),
+      }),
+    ),
+  ),
 });
 export type MrRead = typeof MrRead.Type;
 

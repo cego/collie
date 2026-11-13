@@ -156,6 +156,34 @@ export const ReviewOutputSchema = Schema.Struct({
   ...JUDGEMENTS,
 }).pipe(listed());
 
+export const ReassessmentSchema = (ids: ReadonlyArray<string>) => {
+  const status = Schema.StructWithRest(
+    Schema.Struct({
+      id: Schema.String,
+      status: Schema.Literals(["open", "fixed", "disputed", "obsolete"]),
+      reason: Schema.String.pipe(said("reason")),
+    }),
+    [
+      Schema.Record(
+        Schema.String.check(Schema.isPattern(/^(?!(?:id|status|reason)$)/u)),
+        Schema.Never,
+      ),
+    ],
+  );
+  const output = Schema.StructWithRest(Schema.Struct({ findings: Schema.Array(status) }), [
+    Schema.Record(Schema.String.check(Schema.isPattern(/^(?!findings$)/u)), Schema.Never),
+  ]);
+  return output.pipe(
+    Schema.refine<typeof output, typeof output.Type>(
+      (value): value is typeof output.Type =>
+        value.findings.length === ids.length &&
+        new Set(Arr.map(value.findings, (one) => one.id)).size === ids.length &&
+        Arr.every(value.findings, (one) => ids.includes(one.id)),
+      { message: "return exactly one status for each supplied finding id" },
+    ),
+  );
+};
+
 export const FixedSchema = Schema.Struct({
   file: Schema.optionalKey(Schema.String),
   title: Schema.String.pipe(said("title")),

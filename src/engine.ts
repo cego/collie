@@ -174,7 +174,7 @@ import {
 } from "./review-wait";
 import { nothingToLandFile } from "./standing";
 import { AwaitingJson, AwaitingSchema, THE_AUTHOR, overdueLine } from "./awaiting";
-import { Woke } from "./mr-watch-model";
+import { Woke, collieRunOf } from "./mr-watch-model";
 import { readingOf } from "./mr-watch";
 import {
   autoMergingHere,
@@ -909,6 +909,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly author: string;
     readonly pipeline: string;
     readonly comments: ReadonlyArray<string>;
+    readonly replies?: ReadonlyArray<{
+      readonly id: string;
+      readonly author: string;
+      readonly thread: string | null;
+      readonly body: string;
+      readonly run: string | null;
+    }>;
   }
   export const MrRead: Schema.Codec<MrRead, unknown, never, never>;
   export type PinnedHead =
@@ -1216,6 +1223,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly mrReading: (options: {
       readonly target: string;
       readonly cwd: string;
+      readonly replies?: boolean;
     }) => Effect.Effect<MrRead, WorkflowError>;
     /** Whether this login's approval of \`target\` stands while its head is \`head\`. Take it inside an Activity. */
     readonly approvedAt: (options: {
@@ -1636,6 +1644,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly head: string;
     readonly seen: ReadonlyArray<string>;
     readonly pipeline: string;
+    readonly headOnly?: boolean;
   }
   /** What changed on a watched merge request; \`forcePush\` says a new head does not descend from \`previous\`. */
   export interface WatchChange {
@@ -2315,6 +2324,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export const CriterionSchema: Schema.Codec<Criterion, unknown, never, never>;
   export const CheckSchema: Schema.Codec<Check, unknown, never, never>;
   export const ReviewOutputSchema: Schema.Codec<ReviewReport, unknown, never, never>;
+  export function ReassessmentSchema(ids: ReadonlyArray<string>): Schema.Codec<{
+    readonly findings: ReadonlyArray<{
+      readonly id: string;
+      readonly status: "open" | "fixed" | "disputed" | "obsolete";
+      readonly reason: string;
+    }>;
+  }, unknown, never, never>;
   export const SynthesisSchema: Schema.Codec<SynthesisReport, unknown, never, never>;
   export const FixOutputSchema: Schema.Codec<FixReport, unknown, never, never>;
   export const MrOutputSchema: Schema.Codec<
@@ -5529,13 +5545,31 @@ export const hostLayer = (options: {
                 reason: `could not read ${mrLabel(asked.target)}: ${panel.reason}`,
               });
             const read = readingOf(panel);
-            return {
-              state: read.state,
-              head: read.head,
+            const discussion = asked.replies
+              ? yield* reviewForge(forgeOf(ref).readReview(ref, asked.cwd, runShell))
+              : null;
+            if (discussion !== null && !discussion.ok)
+              return yield* new WorkflowError({ reason: discussion.reason });
+            const replies = discussion?.ok
+              ? Arr.map(
+                  Arr.filter(discussion.comments, (one) => one.kind !== "system"),
+                  (one) => ({
+                    id: one.id,
+                    author: one.author,
+                    thread: one.thread,
+                    body: one.body,
+                    run: collieRunOf(one.body),
+                  }),
+                )
+              : undefined;
+            const reading = {
+              state: discussion?.ok ? discussion.state : read.state,
+              head: discussion?.ok ? discussion.head : read.head,
               author: panel.author,
               pipeline: read.pipeline,
-              comments: Arr.map(read.comments, (one) => one.id),
+              comments: Arr.map(replies ?? read.comments, (one) => one.id),
             };
+            return replies === undefined ? reading : { ...reading, replies };
           }),
         approvedAt: (asked) =>
           Effect.gen(function* () {

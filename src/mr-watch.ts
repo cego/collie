@@ -51,6 +51,7 @@ export const settleWatches = Effect.fn("MrWatch.settle")(function* (opts: {
     if (read?._tag !== "Details") continue;
     const { verdict, observed } = judge({
       cursor: row.cursor,
+      run: row.run,
       observed: row.observed,
       reading: readingOf(read),
       now: opts.now,

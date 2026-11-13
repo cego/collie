@@ -10,10 +10,16 @@ export default defineWorkflow({
   hints: { target: "diff-target" },
   follows: "review.follow_through",
   outcome: { fixed: "review" },
-  run: () =>
-    ask({
-      name: "approve-1",
-      prompt: "Approve it?",
-      options: [{ id: "Approve", recommended: true }, "Not now"],
-    }),
+  run: ({ input }) =>
+    input.proves === "dispute"
+      ? ask({
+          name: "dispute-1",
+          prompt: "Keep F1 (no approval) / Drop it (approve abc123)?",
+          options: [{ id: "Keep F1 (no approval)", recommended: true }, "Drop it (approve abc123)"],
+        })
+      : ask({
+          name: "approve-1",
+          prompt: "Approve it?",
+          options: [{ id: "Approve", recommended: true }, "Not now"],
+        }),
 });

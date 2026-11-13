@@ -4,6 +4,7 @@ import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, Exit, FileSystem, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import { Rig } from "./support/recorder";
 import { runEffect as runLive } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
@@ -131,6 +132,280 @@ const notesOf = <E>(forge: { readonly model: () => Effect.Effect<ForgeModel, E> 
   Effect.map(forge.model(), (got) => Rec.values(got.notes ?? {}).flat()).pipe(Effect.orDie);
 
 const asked = (runId: string) => Store.pipe(Effect.flatMap((store) => store.asked(runId)));
+
+test(
+  "!482: a signed fixed claim without a push reassesses only its finding",
+  () =>
+    host.runEffect(
+      Effect.gen(function* () {
+        yield* repository;
+        const head = yield* pushed("review this");
+        const forge = yield* host.gitlab(model(head));
+        yield* host.settingOn(true);
+        yield* rig.queueOutputs([
+          review([F1, F2]),
+          { findings: [{ id: "F1", status: "open", reason: "The guard is still missing." }] },
+        ]);
+        yield* host.session(
+          forge,
+          Effect.gen(function* () {
+            const { runId } = yield* host.started(yield* entryOf("review"), "reply-482", {
+              target: TARGET,
+            });
+            yield* host.mergeWatched;
+            yield* until(
+              () => host.watchOf(runId, TARGET),
+              (row) => row !== null,
+            );
+            const now = yield* forge.model();
+            yield* forge.set({
+              ...now,
+              mrs: [
+                mr(head, {
+                  comments: [
+                    {
+                      id: 482,
+                      author: "ann",
+                      at: "2026-11-11T10:00:00Z",
+                      body: `F1: Fixed in \`${head}\`.\n\nPosted by Collie's Run run-author on vm-author.`,
+                    },
+                  ],
+                }),
+              ],
+            });
+            yield* TestClock.adjust("6 minutes");
+            const reassessed = yield* until(
+              () => host.watchOf(runId, TARGET),
+              (row) => row?.name === "follow-2",
+            ).pipe(Effect.timeoutOption("3 minutes"));
+            expect(Option.isSome(reassessed)).toBe(true);
+            const fs = yield* FileSystem.FileSystem;
+            const files = yield* fs.readDirectory(`${host.dir()}/agents/${runId}`);
+            const prompts = yield* Effect.forEach(
+              Arr.filter(files, (file) => Str.endsWith(".prompt.md")(file)),
+              (file) => fs.readFileString(`${host.dir()}/agents/${runId}/${file}`),
+            );
+            const prompt = Arr.findFirst(prompts, Str.includes("Reassess these findings")).pipe(
+              Option.getOrElse(() => ""),
+            );
+            expect(prompt).toContain("Collie-signed by run-author · @ann · 482");
+            expect(prompt).toContain("- F1: open");
+            expect(prompt).not.toContain("- F2: ");
+            expect(yield* host.agentStarts).toHaveLength(2);
+            expect(
+              Arr.filter(forge.requests(), (one) => Str.endsWith("/approve")(one.url)),
+            ).toHaveLength(0);
+            expect(yield* notesOf(forge)).toHaveLength(1);
+          }),
+        );
+      }),
+    ),
+  180_000,
+);
+
+for (const id of ["review", "second-look"])
+  for (const choice of ["Keep", "Drop"])
+    test(
+      `${id}: a maintained dispute gets one rebuttal and ${choice} is the human's decision`,
+      () =>
+        host.runEffect(
+          Effect.gen(function* () {
+            const { first, forge, entry } = yield* begun(id, [
+              review([F1]),
+              {
+                findings: [
+                  {
+                    id: "F1",
+                    status: "disputed",
+                    reason: "An empty input still reaches the handler.",
+                  },
+                ],
+              },
+              review([{ ...F1, status: "fixed" }]),
+            ]);
+            yield* host.session(
+              forge,
+              Effect.gen(function* () {
+                const { runId } = yield* host.started(entry, "dispute", { target: TARGET });
+                yield* host.mergeWatched;
+                yield* until(
+                  () => host.watchOf(runId, TARGET),
+                  (row) => row !== null,
+                );
+                const dispute = {
+                  id: 482,
+                  author: "ann",
+                  at: "2026-11-11T10:00:00Z",
+                  body: "F1: I dispute this; the caller validates it.",
+                };
+                let now = yield* forge.model();
+                yield* forge.set({ ...now, mrs: [mr(first, { comments: [dispute] })] });
+                yield* TestClock.adjust("6 minutes");
+                yield* until(
+                  () => host.watchOf(runId, TARGET),
+                  (row) => row?.name === "follow-2",
+                );
+                const notes = yield* notesOf(forge);
+                expect(notes).toHaveLength(2);
+                expect(notes[1]).toContain("An empty input still reaches the handler.");
+                now = yield* forge.model();
+                yield* forge.set({
+                  ...now,
+                  mrs: [
+                    mr(first, {
+                      comments: [
+                        dispute,
+                        {
+                          ...dispute,
+                          id: 483,
+                          body: "F1: I still dispute it.\n\nPosted by Collie's Run run-author on vm-author.",
+                        },
+                      ],
+                    }),
+                  ],
+                });
+                yield* TestClock.adjust("6 minutes");
+                const pending = yield* until(
+                  () => asked(runId),
+                  (rows) => Arr.some(rows, (one) => Str.startsWith("dispute-")(one.decision)),
+                ).pipe(Effect.timeoutOption("6 minutes"));
+                expect(Option.isSome(pending)).toBe(true);
+                const decision = Arr.findFirst(Option.getOrThrow(pending), (one) =>
+                  Str.startsWith("dispute-")(one.decision),
+                ).pipe(Option.getOrThrow);
+                expect(decision.prompt).toContain(`approve ${first}`);
+                expect(yield* host.agentStarts).toHaveLength(2);
+                expect(yield* notesOf(forge)).toHaveLength(2);
+                const registry = yield* Registry;
+                yield* registry.answer({
+                  runId,
+                  decision: decision.decision,
+                  value: choice === "Drop" ? `Drop it (approve ${first})` : "Keep F1 (no approval)",
+                  request: "settle-dispute",
+                });
+                yield* until(
+                  () => host.watchOf(runId, TARGET),
+                  (row) => row?.name === "follow-3",
+                );
+                const approvals = Arr.filter(forge.requests(), (one) =>
+                  Str.endsWith("/approve")(one.url),
+                );
+                expect(approvals).toHaveLength(choice === "Drop" ? 1 : 0);
+                if (choice === "Drop") {
+                  expect(approvals[0]?.body).toEqual({ sha: first });
+                  const fs = yield* FileSystem.FileSystem;
+                  const recorded = yield* fs.readFileString(
+                    `${host.dir()}/runs/${runId}/findings.json`,
+                  );
+                  expect(recorded).toContain("Dropped by the human");
+                } else {
+                  now = yield* forge.model();
+                  yield* forge.set({
+                    ...now,
+                    mrs: [
+                      mr(first, {
+                        comments: [{ ...dispute, id: 484, body: "F1: please reconsider again" }],
+                      }),
+                    ],
+                  });
+                  yield* Effect.sleep("6 minutes");
+                  expect(yield* host.agentStarts).toHaveLength(2);
+                  const next = yield* pushedOn(forge, first);
+                  yield* until(
+                    () => host.watchOf(runId, TARGET),
+                    (row) => row?.observed?.head === next,
+                  );
+                  yield* TestClock.adjust("6 minutes");
+                  yield* until(
+                    () => asked(runId),
+                    (rows) =>
+                      Arr.some(rows, (one) => one.prompt === `Approve mk/collie!7 at ${next}?`),
+                  );
+                  expect(yield* host.agentStarts).toHaveLength(3);
+                }
+              }),
+            );
+          }),
+        ),
+      240_000,
+    );
+
+for (const id of ["review", "second-look"])
+  test(
+    `${id}: a reply arriving with a new head runs one full round with both reply labels`,
+    () =>
+      host.runEffect(
+        Effect.gen(function* () {
+          const { first, forge, entry } = yield* begun(id, [review([F1, F2]), review([F1, F2])]);
+          yield* host.session(
+            forge,
+            Effect.gen(function* () {
+              const { runId } = yield* host.started(entry, "reply-and-head", { target: TARGET });
+              yield* host.mergeWatched;
+              yield* until(
+                () => host.watchOf(runId, TARGET),
+                (row) => row !== null,
+              );
+              const next = yield* pushed("and another change");
+              const now = yield* forge.model();
+              yield* forge.set({
+                ...now,
+                ancestry: { [next]: [first] },
+                mrs: [
+                  mr(next, {
+                    comments: [
+                      {
+                        id: 482,
+                        author: "ann",
+                        at: "2026-11-11T10:00:00Z",
+                        body: `F1: Fixed in \`${next}\`.\n\nPosted by Collie's Run run-author on vm-author.`,
+                      },
+                      {
+                        id: 483,
+                        author: "ann",
+                        at: "2026-11-11T10:01:00Z",
+                        body: "F2: I checked the handle manually.",
+                      },
+                    ],
+                  }),
+                ],
+              });
+              yield* until(
+                () => host.watchOf(runId, TARGET),
+                (row) => row?.observed?.head === next,
+              );
+              yield* TestClock.adjust("6 minutes");
+              yield* until(
+                () => host.watchOf(runId, TARGET),
+                (row) => row?.name === "follow-2",
+              );
+              expect(yield* host.agentStarts).toHaveLength(2);
+              const fs = yield* FileSystem.FileSystem;
+              const files = yield* fs.readDirectory(`${host.dir()}/agents/${runId}`);
+              const file = Arr.findFirst(
+                files,
+                (name) => Str.startsWith("review-2-")(name) && Str.endsWith(".prompt.md")(name),
+              ).pipe(Option.getOrThrow);
+              const prompt = yield* fs.readFileString(`${host.dir()}/agents/${runId}/${file}`);
+              expect(prompt).toContain("Collie-signed by run-author · @ann · 482");
+              expect(prompt).toContain("human-typed · @ann · 483");
+              expect(prompt).toContain("I checked the handle manually.");
+              expect(prompt).toContain(next);
+              expect(
+                Arr.filter(
+                  files,
+                  (name) => Str.startsWith("reassess-")(name) && Str.endsWith(".prompt.md")(name),
+                ),
+              ).toHaveLength(0);
+              expect(
+                Arr.filter(forge.requests(), (one) => Str.endsWith("/approve")(one.url)),
+              ).toHaveLength(0);
+            }),
+          );
+        }),
+      ),
+    180_000,
+  );
 
 for (const id of ["review", "second-look"])
   test(

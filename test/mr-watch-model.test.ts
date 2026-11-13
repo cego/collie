@@ -1,6 +1,12 @@
 import { expect, test } from "bun:test";
 import { epochMs } from "../src/time";
-import { judge, type MrReading, type Observed, type WatchCursor } from "../src/mr-watch-model";
+import {
+  collieRunOf,
+  judge,
+  type MrReading,
+  type Observed,
+  type WatchCursor,
+} from "../src/mr-watch-model";
 
 const H1 = "1111111111111111111111111111111111111111";
 const H2 = "2222222222222222222222222222222222222222";
@@ -58,6 +64,42 @@ test("a note by anyone else on the same head is a change, at once", () => {
       forcePush: false,
     },
   });
+});
+
+test("a note signed by another Run's Collie is a change to this Run, and names its Run", () => {
+  const replied = reading({
+    comments: [
+      { id: "10", body: "Please rename it." },
+      { id: "11", body: "F1: noted.\n\nPosted by Collie's Run run-1 on vm-mk." },
+      { id: "12", body: "F1: Fixed in `1111111`.\n\nPosted by Collie's Run run-9 on vm-ann." },
+    ],
+  });
+  const verdict = judge({
+    cursor,
+    observed: stood(H1, T0),
+    reading: replied,
+    now: T0,
+    run: "run-1",
+  }).verdict;
+  expect(verdict._tag === "Changed" && verdict.change.comments).toEqual(["12"]);
+  expect(Array.from(replied.comments, (one) => collieRunOf(one.body))).toEqual([
+    null,
+    "run-1",
+    "run-9",
+  ]);
+});
+
+test("a head-only cursor sees neither comments nor a pipeline ending, only a new head", () => {
+  const waiting = { ...cursor, pipeline: "running", headOnly: true };
+  const replied = reading({ comments: [{ id: "13", body: "F1: please reconsider." }] });
+  expect(
+    judge({ cursor: waiting, observed: stood(H1, T0), reading: replied, now: T0 }).verdict,
+  ).toEqual({ _tag: "NoChange" });
+  const pushed = reading({ head: H2 });
+  expect(
+    judge({ cursor: waiting, observed: stood(H2, T0), reading: pushed, now: T0 + 5 * MIN }).verdict
+      ._tag,
+  ).toBe("Changed");
 });
 
 test("a new head younger than 5 minutes is not yet, and a change once it has stood 5 minutes", () => {

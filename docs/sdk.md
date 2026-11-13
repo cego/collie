@@ -1922,6 +1922,18 @@ id only. Only findings with a posted-note anchor count as previously published.
 An unchanged, previously posted ledger posts nothing. `fixed` and `obsolete` findings stay in the
 record without blocking a fix or approval; unresolved disputes still require a decision.
 
+`ReassessmentSchema(ids)` accepts exactly one `id`, `status`, and nonempty `reason` for
+each supplied finding, under `findings`. Missing, duplicate, and unknown ids are refused,
+as are extra fields. It cannot add findings or change their severity.
+The shipped review uses this contract for comment-only rounds. It labels each reply
+human-typed or Collie-signed and names the signing Run; a signature never authorizes approval.
+
+`host.mrReading({ target, cwd, replies: true })` includes the discussion's reply bodies,
+authors, thread ids, and signing Runs. Ordinary cursor reads omit them. These reads run
+inside the round's Activity, so waiting still makes only the merge watch's existing reads.
+A watch cursor's `headOnly: true` ignores comments and pipeline changes while a maintained
+dispute awaits a decision or a new head. Merged and closed still end the wait.
+
 `CriterionSchema` is how a builder answers one of its ticket's acceptance criteria:
 `criterion`, copied from the ticket, and `met`, the test or file that shows it, or
 `not met: <reason>`, or `after merge: <reason>` where only CI, a merge or a deploy can show
