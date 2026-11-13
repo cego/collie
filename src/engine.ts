@@ -678,6 +678,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly _tag: "HarnessBroken"; readonly why: ReadonlyArray<string> }
     | { readonly _tag: "ProofUnavailable"; readonly lost: ReadonlyArray<{ readonly metric: string; readonly why: string }> };
   export function calibrationOf(measured: Pick<Measurement, "plan" | "result">): Calibration;
+  /**
+   * The harness \`commits\` that \`at\` lacks, in order: those after the longest prefix whose touched
+   * files \`at\` holds exactly as that prefix left them, whatever their SHAs.
+   */
+  export function harnessLacking(cwd: string, at: string, commits: ReadonlyArray<string>): Effect.Effect<ReadonlyArray<string>, never, ChildProcessSpawner.ChildProcessSpawner>;
 
   /** What a merge at a head came to: \`MergedOutside\` is a merge this Run did not make. */
   export type MergeOutcome =
@@ -721,14 +726,16 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** Where a merge request's review stands, judged against the head the Run's Checks were proved on. */
   export type ReviewStanding =
     | { readonly _tag: "Ready"; readonly head: string; readonly approvers: ReadonlyArray<string> }
-    | { readonly _tag: "Unanswered"; readonly head: string; readonly comments: ReadonlyArray<OpenComment> }
+    | { readonly _tag: "Unanswered"; readonly head: string; readonly comments: ReadonlyArray<OpenComment>; readonly approvers?: ReadonlyArray<string> }
     | { readonly _tag: "Moved"; readonly head: string }
+    | { readonly _tag: "Conflicting"; readonly head: string }
     | { readonly _tag: "Merged"; readonly sha: string; readonly by: string; readonly at: string }
     | { readonly _tag: "Closed" }
     | { readonly _tag: "Held" }
-    | { readonly _tag: "Waiting"; readonly why: ReadonlyArray<string> }
+    | { readonly _tag: "Waiting"; readonly why: ReadonlyArray<string>; readonly approvers?: ReadonlyArray<string> }
     | { readonly _tag: "Unreadable"; readonly reason: string };
   export const ReviewStandingSchema: Schema.Codec<ReviewStanding, unknown, never, never>;
+  export const CONFLICTS: string;
   /** Whether a standing is still waiting on a teammate's approval, among whatever else. */
   export function waitsOnApproval(standing: ReviewStanding): boolean;
 
@@ -962,7 +969,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     /** Every question this run has been asked, oldest first, with its answer once it has one. */
     readonly asked: (
       runId: string,
-    ) => Effect.Effect<ReadonlyArray<{ readonly name: string; readonly answer: string | null }>>;
+    ) => Effect.Effect<ReadonlyArray<{
+      readonly name: string;
+      readonly answer: string | null;
+      /** Who answered it, where the Run's audit says: a front door, and for chat the human's words that turn. */
+      readonly by?: { readonly origin: string; readonly said?: string };
+    }>>;
     /** Answers an open question with \`value\` as Collie, waking nothing that waits on it. */
     readonly close: (runId: string, decision: string, value: string) => Effect.Effect<void>;
     /** What has been verified for this run, and the tree in front of it now. */
@@ -1145,6 +1157,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
        * Stop ends it.
        */
       readonly whileConflicting?: boolean;
+      /** Return a confirmed target conflict at its current head for repair. */
+      readonly returnConflicts?: boolean;
     }) => Effect.Effect<ReviewStanding, WorkflowError>;
     /**
      * One read of whether the Changes the ticket at \`ticket\` names on its **Needs merged:** line
@@ -1184,6 +1198,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly runId: string;
       readonly cwd: string;
       readonly head: string;
+      /** Where supplied, require this source branch before moving the checkout. */
+      readonly branch?: string;
     }) => Effect.Effect<FastForward>;
     /** Reads \`tag\` back from origin and the forge against what it must prove. Take it inside an Activity. */
     readonly readTag: (options: {
@@ -1281,6 +1297,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly status: "pending" | "suspended" | "complete" | "failed";
       /** The issues its input says \`Closes #n\` for. */
       readonly closes: ReadonlyArray<number>;
+      readonly mr: string | null;
+      /** Its merge request's disposition was recorded as merged. */
+      readonly merged: boolean;
+      /** The questions it asked that were not set aside, with what answered each. */
+      readonly questions: ReadonlyArray<{ readonly name: string; readonly answer: string | null }>;
     }>;
     readonly workflows: ReadonlyArray<WorkflowTally>;
     readonly failed: ReadonlyArray<{ runId: string; workflow: string; reason: string }>;
@@ -2031,6 +2052,16 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** Whether a blocking finding says where and why, so it can be acted on. */
   export function substantiated(finding: Finding): boolean;
   export function unsubstantiated(findings: ReadonlyArray<Finding>): string | null;
+  /** Disputes the review has neither confirmed fixed nor withdrawn with a reason. */
+  export function remainingDisputes(
+    disputed: ReadonlyArray<Finding>,
+    review: {
+      readonly findings: ReadonlyArray<Finding>;
+      readonly disputed: ReadonlyArray<Finding>;
+      readonly dropped: ReadonlyArray<Finding>;
+      readonly fixed: ReadonlyArray<Fixed>;
+    },
+  ): Finding[];
   /** A finding the implementer already rejected stops driving the loop. */
   export function splitDisputed(
     findings: ReadonlyArray<Finding>,
@@ -4367,6 +4398,7 @@ export const hostLayer = (options: {
         readonly cwd: string;
         readonly proved: string;
         readonly seen: ReadonlyArray<string>;
+        readonly returnConflicts?: boolean;
       }) =>
         Effect.gen(function* () {
           const mr = yield* mergeRequestOf(fs, dir, asked.runId);
@@ -5268,6 +5300,7 @@ export const hostLayer = (options: {
               for (;;) {
                 const { mr, read, standing } = yield* reviewRead(asked);
                 const wait = reviewWaitOf(mr, read);
+                if (standing._tag === "Conflicting") return standing;
                 if (asked.whileConflicting === true) {
                   const conflicting =
                     read.ok && read.state === "open" && conflictsWithTarget(read.mergeable);
@@ -5381,6 +5414,7 @@ export const hostLayer = (options: {
               runDir: runDir(dir, asked.runId),
               cwd: asked.cwd,
               head: asked.head,
+              branch: asked.branch,
               run: runShell,
             }),
           ).pipe(Effect.orDie),
@@ -6813,6 +6847,8 @@ export interface RegistryApi {
     readonly input: Readonly<Record<string, Schema.Json>>;
     readonly request: string;
     readonly attachments?: ReadonlyArray<string> | undefined;
+    /** The human who took the offer, recorded as who started the Run it starts. */
+    readonly started?: Started | undefined;
   }) => Effect.Effect<Admitted, HostRefused | RequestConflict, HostServices>;
   /** The generation a run is on and the execution it was admitted as. */
   readonly routed: (
@@ -9633,6 +9669,7 @@ const makeRegistry: (
       readonly input: Readonly<Record<string, Schema.Json>>;
       readonly request: string;
       readonly attachments?: ReadonlyArray<string> | undefined;
+      readonly started?: Started | undefined;
     }) {
       const { row, generation, facts, where, refused, input } = yield* offeredBy(
         options.runId,
@@ -9686,6 +9723,7 @@ const makeRegistry: (
         parent: row.run,
         verify: inherited,
         attachments: options.attachments,
+        started: options.started,
         // A follow-up carries on the parent's work, so it is on the parent's branch.
         options: carried,
       });

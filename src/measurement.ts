@@ -35,6 +35,7 @@ import {
   type Measurement,
   type Sample,
 } from "./measurement-model";
+import { harnessLacking } from "./harness-held";
 import { machineMemory } from "./memory";
 import { waitForMemory } from "./memory-wait";
 import { shell } from "./mr";
@@ -579,11 +580,12 @@ const taking = Effect.fn("Measurement.taking")(function* (
           yield* baseTree(opts.stateDir, ask.runId, opts.repository, own.head_sha, opts.applied),
           path.relative(opts.repository, ask.cwd),
         );
-  const lacking: Array<string> = [];
-  for (const one of opts.harness)
-    if ((yield* git(["merge-base", "--is-ancestor", one, opts.commit], opts.repository)).code !== 0)
-      lacking.push(one);
+  const lacking = yield* harnessLacking(opts.repository, opts.commit, opts.harness);
   const baseRoot = yield* baseTree(opts.stateDir, ask.runId, opts.repository, opts.commit, lacking);
+  if ((yield* harnessLacking(baseRoot, "HEAD", opts.harness)).length > 0)
+    return yield* new MeasureRefused({
+      why: `the harness commits do not apply on ${opts.commit}: its harness files then differ from theirs`,
+    });
   const base = {
     commit: opts.commit,
     ...(yield* treeAt(path.join(baseRoot, path.relative(opts.repository, ask.cwd)))),

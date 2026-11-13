@@ -289,12 +289,15 @@ test(
               finding: FINDING,
             }),
           ]);
+          const healed = `run-healed:heal:${parked?.park?.id}`;
           const told = yield* until(
             () => notified(world, runId),
-            (lines) => lines.length > 0,
+            // Completion may be announced before recovery. Wait for the event this
+            // assertion is about while retaining every earlier notification below.
+            (lines) => lines.includes(healed),
           );
           expect(Arr.filter(told, (line) => Str.startsWith("needs-you")(line))).toEqual([]);
-          expect(told).toContain(`run-healed:heal:${parked?.park?.id}`);
+          expect(told).toContain(healed);
         }),
       ["silent-review.workflow.ts", "mender.workflow.ts"],
     ),

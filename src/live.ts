@@ -164,7 +164,7 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
   const now = yield* Clock.currentTimeMillis;
   const key = yield* herdOrNull(opts.socketPath);
   const lines = key === null ? [] : yield* opts.ledgers.proposals(key);
-  const overridden = yield* opts.ledgers.overridden;
+  const overridden = opts.runs.length === 0 ? new Set<string>() : yield* opts.ledgers.overridden;
 
   // One read of each Run's own journals, kept for whichever of the two wants it.
   const cardsOf = new Map<string, Card[]>();

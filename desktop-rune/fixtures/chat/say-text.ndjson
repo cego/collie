@@ -1,0 +1,91 @@
+{"said":{"about":null,"text":"Use no tools. In about 150 words, explain what a sheepdog does, with one markdown table of three breeds and one short TypeScript code block."}}
+{"event":{"runId":"0957b074-2398-47ba-b4fa-8cf8b3a1c38b:1","threadId":"0957b074-2398-47ba-b4fa-8cf8b3a1c38b","type":"RUN_STARTED"}}
+{"event":{"messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","role":"assistant","type":"TEXT_MESSAGE_START"}}
+{"event":{"delta":"A sheepdog g","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"athers, moves and","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" gu","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"ards liv","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"estock for a shepherd","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":".","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" Herding bre","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"eds work","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" on inst","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"inct sh","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"aped by training. They circle","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" w","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"ide beh","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"ind a flock (","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"the","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" \"outrun\"), appro","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"ach cal","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"mly (","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"the \"lift\"), and","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" dr","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"ive the sheep toward the","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" handler (","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"the \"fetch\").","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" Whistles or sp","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"oken commands ste","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"er them left","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":", right, sl","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"ower","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" or to","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" a stop. Some","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" keep the fl","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"ock mo","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"ving with an","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" intense stare called","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" \"eye,\"","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" while others use","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" barking or n","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"ipping at","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" the heels. Guardian","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" breeds her","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"d less","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" and prot","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"ect more","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":":","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" they live with the s","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"heep and dr","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"ive off pred","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"ators.\n\n| Breed |","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" Orig","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"in | Working","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" style |\n|---|---|","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"---|\n| Border Coll","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"ie | Scotland/","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"England | Strong \"eye","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":",\" f","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"ast g","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"athering |\n| Australian","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" K","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"elpie | Australia |","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" T","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"ireless;","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" runs across","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" sheep's","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" backs |\n| Old English","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" Sheepdog | England","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" | Dri","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"ving liv","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"estock to market |\n\n```typ","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"escript\ntype Command","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" = \"come","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"-b","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"ye\" | \"away","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"\"","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" | \"walk-up","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"\" | \"lie-down\";","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"\n\nfunction her","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"d(dog: string","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":", cmd: Command):","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":" string {\n  return `${d","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"og} ob","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"eys: ${cmd","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"}`;\n}","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"\n\nconsole.log(herd(\"","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"Coll","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"ie\", \"come-bye\"","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"));\n```","messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"messageId":"msg_011CgsWWPJuhAahAQVa4Uavs:0","type":"TEXT_MESSAGE_END"}}
+{"event":{"runId":"0957b074-2398-47ba-b4fa-8cf8b3a1c38b:1","threadId":"0957b074-2398-47ba-b4fa-8cf8b3a1c38b","type":"RUN_FINISHED"}}

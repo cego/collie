@@ -129,6 +129,8 @@ export {
   type Calibration,
   type Measurement,
 } from "./measurement-model";
+/** The harness commits a tree lacks, decided by content (`carryHarness`, the base tree). */
+export { harnessLacking } from "./harness-held";
 export { MergeOutcomeSchema, TakeoverSchema, type MergeOutcome, type Takeover } from "./landing";
 /** Whether the Changes a ticket needs merged have landed (`HostApi.awaitPrerequisites`). */
 export { PrerequisiteStandingSchema, type PrerequisiteStanding } from "./prerequisites";
@@ -136,6 +138,7 @@ export { PrerequisiteStandingSchema, type PrerequisiteStanding } from "./prerequ
 export {
   AnswerSchema,
   ReviewHeadSchema,
+  CONFLICTS,
   ReviewStandingSchema,
   SettledAnswersSchema,
   settleAnswers,
@@ -195,6 +198,7 @@ export {
   findingKey,
   formatFindings,
   isBlocking,
+  remainingDisputes,
   renderReview,
   settleFinalFix,
   settleRound,
@@ -1114,6 +1118,8 @@ export interface HostApi {
      * at `proved` once it no longer does, or it is merged or closed, or a Hold or Stop ends it.
      */
     readonly whileConflicting?: boolean;
+    /** Return a confirmed target conflict as `Conflicting` at its current head for repair. */
+    readonly returnConflicts?: boolean;
   }) => Effect.Effect<ReviewStanding, WorkflowError>;
   /**
    * One read of whether the Changes the ticket at `ticket` names on its `**Needs merged:**`
@@ -1172,6 +1178,8 @@ export interface HostApi {
     readonly runId: string;
     readonly cwd: string;
     readonly head: string;
+    /** Where supplied, refuse a detached checkout or a different source branch before moving it. */
+    readonly branch?: string;
   }) => Effect.Effect<FastForward>;
   /**
    * Reads `tag` back from origin and the forge, rather than from an Output, against what it

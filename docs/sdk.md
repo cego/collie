@@ -140,6 +140,12 @@ Arbitrary edits to a module have no seamless-resume guarantee. Adding an Activit
 one that has already completed changes what replay matches; a run in flight is best
 finished before that kind of edit, and a new one started after it.
 
+A completed Activity's saved result must still decode under its current `success` schema.
+When adding a field, keep it optional for saved results that predate it and handle its
+absence explicitly. Missing historical measurements are unknown, not zero. Keep the
+Activity's name and result: changing its name to bypass a decoding failure repeats its
+effects. Cover such changes by replaying a saved result in the earlier shape.
+
 ## Services
 
 A service of your own is an ordinary `Context.Service`, and your definition's `layer`
@@ -810,8 +816,9 @@ The shipped `renovate` workflow still requires GitLab for its merge and release 
 `host.report(since)` reads this Machine's Runs admitted at or after an ISO moment. It
 returns the same report as `collie --json run report --since`: workflow tallies, metrics,
 failed and completed results, stopped Runs, and a `runs` list. Each list entry has
-`runId`, `workflow`, `parent`, `project`, `created`, `status`, and `closes`: the issue
-numbers its input names in a `Closes #n`. An invalid date fails with
+`runId`, `workflow`, `parent`, `project`, `created`, `status`, `closes`: the issue
+numbers its input names in a `Closes #n`, `mr`, `merged`, and `questions`, as
+[`run report`](cli.md#report) lists them. An invalid date fails with
 `WorkflowError`. Read it inside an Activity when its answer decides subsequent work.
 
 `host.skill(name)` answers the installed `SKILL.md` that `{{skill:name}}` would name to an
@@ -893,7 +900,8 @@ recorded once, judged against `proved`, the head its Checks were proved on, and 
 `at` when), `Closed`, `Moved` (the head is no longer `proved`), `Unanswered` (external
 comments nobody answered, other than those named in `seen`), `Ready` (approved, green and
 mergeable at `proved`, with its `approvers`), `Waiting` with `why` it is not, or
-`Unreadable` with the forge's `reason`. A repository with no pipeline has none to wait for.
+`Unreadable` with the forge's `reason`. `Unanswered` and `Waiting` name the `approvers` the
+forge has too, absent from a standing journaled before they did. A repository with no pipeline has none to wait for.
 `host.awaitReview` takes the same options and reads every five minutes, at no token cost,
 until the standing is anything but `Waiting` or `Unreadable`, or a Hold or Stop ends it as
 `Held`. Meanwhile what it waits for that comes by itself — CI, a teammate's approval, review
@@ -906,9 +914,13 @@ repair, as the release's re-reading of a go does. With `whileConflicting: true` 
 only while the forge says the merge request conflicts with its target branch, parked as Needs
 you with the line that says its branch must take the target, and returns the standing at
 `proved` as soon as the forge no longer says so, the merge request is merged or closed, or a
-Hold or Stop ends it (`Held`). A head pushed while it still conflicts keeps it waiting. The
-release takes it before it proves a head and when a check left to CI finds the conflict. Take either inside an Activity, and suspend on `Held`
-there, so a resume waits again.
+Hold or Stop ends it (`Held`). A head pushed while it still conflicts keeps it waiting.
+With `returnConflicts: true`, a confirmed target conflict instead returns `Conflicting`
+with its current `head`, before `Moved` or `Unanswered`, including when combined with
+`whileConflicting`. Unknown mergeability and other forge blocks retain their ordinary
+waiting behavior. Release uses this option to repair a conflict before proving the pushed
+head and asking a fresh go. Take either inside an Activity, and suspend on `Held` there,
+so a resume waits again.
 
 `host.prerequisites({ runId, cwd, ticket })` reads the ticket file at `ticket` again, and
 asks once whether every Change its `**Needs merged:**` line names has landed. It answers a
@@ -956,7 +968,8 @@ the next round: a `fixed` answer counts only where the head carries its commit.
 `head`, writing the move to the Run's log. It answers `At` with the `head` and where it
 moved `from`, or `Refused` with `why`: a checkout with uncommitted changes, a head origin
 lacks, or one that does not fast-forward, as after a force push. Nothing is reset or
-discarded.
+discarded. With optional `branch`, it refuses a detached checkout or a different source
+branch before moving anything, even when already at `head`.
 
 `host.readTag({ runId, cwd, tag, merged, pipeline, proves, stage, production })` reads a
 tag back from origin and the forge rather than from an Output, against what it must prove.
@@ -1386,10 +1399,15 @@ name rather than its place.
 
 ## Reviewing and fixing, until it converges
 
-A review/fix rally is a loop you write, over three functions every workflow shares. There
+A review/fix rally is a loop you write, over functions every workflow shares. There
 is no repeat declaration, no scheduler and no second reading of when a loop is done: every
-rally converges, stands on a dispute and runs out of rounds where these three decide.
+rally converges, stands on a dispute and runs out of rounds where these decide.
 
+- **`remainingDisputes(disputed, review)`** — keep carried disputes unless the review
+  explicitly confirms them `fixed` or withdraws them under `dropped` with a reason.
+  Matching uses file and title. A finding still in the review's `findings` or `disputed`
+  stays unresolved, even if also listed as resolved. A clean verdict or omission clears
+  nothing. Assign the returned list before splitting and settling the round.
 - **`splitDisputed(findings, disputed)`** — what is still the implementer's. A finding the
   implementer already rejected with a reason stops driving the loop; a reviewer who answers
   that reason with a `rebuttal` puts it back.
@@ -1749,7 +1767,10 @@ export default defineWorkflow({
   and in a recorded Run), and a module with inputs hints exactly one
   field with one of them ([one launch Input](authoring.md#writing-one)). They are exclusive: one field each, so renaming `plan` to `spec` changes
   nothing about how it is inferred, what it names a branch after, which label its Run is
-  listed under, or which previous review it is given.
+  listed under, or which previous review it is given. `reach` marks the field that says how
+  far the Run goes before it asks, its [Reach](../CONTEXT.md): a closed set whose values each
+  carry a `title`, as `Schema.Union([Schema.Literal("").annotate({ title: "Ask at the end" }),
+  …])`, which the board's start row offers one row each and remembers.
 - **`outcome`** is `fixed` or `selectable`, never both. `selectable` offers only the kinds
   a human may ask an implement Run for — `review` and `plan` are what a workflow proves.
 - **`checkout`** is what the workflow needs of the repository. `branch` builds on a
@@ -1840,7 +1861,8 @@ formatting still counts, so an answer to earlier wording does not answer an amen
 `implement` hands what is unmet back to the builder before any reviewer is launched, and
 asks about any still unmet after two hand-backs (`<ticket>.criteria-unmet-<n>`), so no
 reviewer starts on it. A hand-back that leaves the tree's content unchanged and
-reports a blocking finding is asked about sooner (`<ticket>.criteria-stalled-<n>`). To
+reports a blocking finding is handed back once without asking, which the Run's log records
+as Collie's, and asked about sooner the next time (`<ticket>.criteria-stalled-<n>`). To
 either, `Hand back` reads the ticket again and, if any criterion is still unmet, hands it
 back with two tries fresh; `Stop` stops the work. A text work
 source's criteria are its own checkboxes; a Linear issue's are read from `plan/SPEC.md`, the

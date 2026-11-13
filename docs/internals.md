@@ -57,7 +57,9 @@ process gone, a crash, and a restart onto the same build. A newer client that
 asked a host to stop kills it five seconds after its grace. A host that does not say who it
 is within five seconds is replaced too when `host.build`, which it writes as it starts,
 names an older build of the same installation; otherwise the client reports it as
-`HostUnavailable` with its pid.
+`HostUnavailable` with its pid. That host is asked for the same handover before it is
+signalled: one too slow to answer still hears its signal and hands its checks over, and one
+that never hears it is killed and hands over nothing.
 
 Desktop starts a host the way any client does: it runs `collie bridge --as desktop` (or
 `--as chat`), and the bridge starts `collie host --dir <state>` where none answers. Desktop
@@ -1162,7 +1164,13 @@ what the review read says, never on an agent's Output
   later comment by Collie's login in its thread, any comment by Collie's login linking it,
   or a resolved thread). **Approved** means the forge's rules are met without Collie's
   own approval: GitLab counts each approval rule again without Collie's login (the
-  approvals read is one rule where the tier has no approval state); GitHub's `APPROVED`
+  approvals read is one rule where the tier has no approval state). Where GitLab returns
+  approval rules, the reported approvers are the distinct usernames recorded on those
+  same rules, excluding Collie's login. This binds a release go to the approvals used for
+  readiness without mixing snapshots from two endpoints. Approvals outside all rules are
+  not included; with no rules or no approval-state endpoint, the approvals endpoint still
+  supplies the names. See GitLab's [approval details](https://docs.gitlab.com/api/merge_request_approvals/#retrieve-approval-details-for-a-merge-request).
+  GitHub's `APPROVED`
   stands where Collie's login has no approving review, else only where others reach the
   base branch's required count, from its protection and rulesets. A count that cannot be
   read, or code owners' review, is not approved, and the read says why.
@@ -1602,44 +1610,30 @@ number the default branch already has twice is reported and left as it is.
 `test/docs-links.test.ts` fails on a plain-text `ADR-NNNN` or `ADR-draft-<slug>` in the
 docs, `src`, `workflows`, `test` or `desktop` that names no ADR file.
 
-Collie Desktop is built by the same release, from the same tag, by the workflow's
-`desktop` job: `bun run build` in `desktop/` builds the stable channel at
-`herdr-plugin.toml`'s version, with the updater's base URL set to the GitHub Releases
-`latest/download` URL. Electrobun names the archives an installed Desktop updates from by
-`app.name`, so that stays `collie-desktop`, as do the keyring service and the state
-directory that hold Desktop's credentials and chat. The name people see is written into
-the Linux launcher entry and the macOS bundle's `CFBundleName` by
-`desktop/scripts/name-desktop-entry.ts`, Electrobun's postBuild and postWrap hook, before
-the bundle is packed; it fails the build if neither is found. Electrobun signs the app itself, after it writes the release
-metadata into the bundle and before it archives it, with the identity in
-`ELECTROBUN_DEVELOPER_ID`: the release's Developer ID where that secret is set, and `-`,
-ad hoc, where it is not. `desktop/scripts/mac-signing.ts` turns `codesign` on with an
-identity, and `notarize` only with a real one and a complete Apple ID or API key set. The
-`desktop-macos` job builds the DMG, the `.app.tar.zst` update archive and the update
-manifest, and `tools/verify-mac-app.sh` fails it unless `codesign --verify --deep --strict`
-passes on both the DMG's app and the app the update archive unpacks to; CI runs the same
-build and gate on every push. Electrobun keeps its prepared-update record at
-`<appDataFolder>/self-extraction/.electrobun-prepared-update.json` on every platform, and
-Desktop asks Electrobun for that folder, so the record is found on macOS as on Linux. Electrobun's self-extractor cannot read a GNU long-name tar entry,
-so `tools/check-payload.ts` fails the job when any path in the installer's payload is over
-100 characters. The release job signs Desktop's installer, its update manifest, its update
-archive, any delta patch, `install-desktop.sh` and Collie's installer `setup.sh`, each as
-`<asset>.sig` and `<asset>.p256.sig`; `install-desktop.sh` checks the installer's
-`.p256.sig`, and `setup.sh` the runner's, with `openssl dgst`. It also signs the archive as the
-tar it is applied as, `<name>.tar.sig` beside `<name>.tar.zst` (`appliedSignatureOf` in
-`src/signing.ts`). Desktop verifies that tar before it installs an update, whether
-Electrobun built it from the archive or from a delta patch
-(`desktop/src/bun/updates.ts`). It verifies a runner it onboards a Machine with the same
-way, before it is put on the Machine and each time the copy Desktop keeps is used again,
-and puts it there only by its SHA-256 (`desktop/src/bun/onboarding.ts`). A Desktop from a
-checkout, whose channel is not `stable`, may be given another key in
-`COLLIE_DESKTOP_RELEASE_KEY`, as its tests are; a release ignores it. Any Desktop may be
-given another release URL in `COLLIE_DESKTOP_RELEASES`, since what it downloads from there
-is still verified against the key. `COLLIE_DESKTOP_GITLAB` names the GitLab Desktop
-checks a token with and gives it for while no GitLab host is set in Desktop, as its tests
-do; `https://gitlab.cego.dk` unless set.
-`COLLIE_HELLE_URL` replaces `https://helle.cego.dk` (`HELLE_URL` in `src/helle-url.ts`) for
-both the runner and Desktop. It is for tests that answer as a fake Helle, not a setting.
+Collie's native desktop is built from the release tag by `desktop-native`, which calls
+`.github/workflows/rune-bundle.yml` on Linux and macOS. The Rune shell and compiled
+TypeScript core share the existing stable identity, `dk.cego.collie.desktop`, and the
+existing installer and update artifact names. The installed product is named **Collie**.
+`desktop-rune/scripts/bundle.ts` supplies the official brand icons, USTAR update archives,
+and metadata the old app's updater accepts, so its next update replaces the webview app in
+place. Credentials, saved Machines, conversations and settings keep their existing paths.
+See [the cutover decision](adr/0067-collie-replaces-the-webview-desktop-in-place.md).
+
+On macOS the bundle is signed with `ELECTROBUN_DEVELOPER_ID` (ad hoc without one) and
+notarised when the Apple credentials are complete. `desktop/scripts/mac-signing.ts` owns
+that policy. `tools/verify-mac-app.sh` checks both the built app and the update archive's
+app with `codesign --verify --deep --strict`. The legacy environment variable names are
+retained for the release's existing secrets.
+
+`tools/sign.ts` signs the installers, update manifests, compressed archives and the
+decompressed update tar. The one-line installer verifies its signed download; both the
+legacy updater and the native updater verify the tar against `release.pub` before it can
+replace the installed bundle. Native launches hold an installation lock while verifying
+and swapping a staged update. A refused update leaves the existing app runnable.
+Machine onboarding verifies its runner before upload and reuse (`desktop/src/bun/onboarding.ts`).
+`COLLIE_DESKTOP_RELEASES` can name another release URL, but downloads still require the
+release signature. `COLLIE_DESKTOP_GITLAB` and `COLLIE_HELLE_URL` supply test endpoints;
+the defaults remain `https://gitlab.cego.dk` and `https://helle.cego.dk`.
 
 `bun run build` compiles beside the binary and renames over it, because replacing a running
 runner's own file kills the process executing it. In a git checkout `install.sh` builds from
@@ -1708,17 +1702,9 @@ Root tests import Desktop modules and libraries, so the root `bun install` insta
 Desktop's dependencies too, frozen to `desktop/bun.lock`. After changing Desktop's
 dependencies, run `bun install` in `desktop/` first: the root install refuses a stale
 Desktop lockfile. CI relies on that one install before its root gate.
-Desktop's full typecheck, including its Vue views, runs separately with
-`cd desktop && bun run typecheck`; CI runs that as a job of its own.
-Desktop's `.ts` code is checked by tsrs, as the CLI's is, and its `.vue` views by golar
-through `nuxi typecheck --checker=golar`. Golar bundles its own TypeScript 7 and reads
-`view/golar.config.ts`. Not `@vue/content-mapper`, TypeScript 7.1's route for `.vue`
-files: it reads `@nuxt/ui`'s compiled `.vue` files instead of their declarations, and
-misses wrong props on Nuxt UI components. `typescript` is an alias for
-`@typescript/typescript6` because `tools/lint-vue.ts` loads TypeScript's JS API, which
-TypeScript 7.0 does not have. That tool also imports `@vue/language-core` and
-`@vue/compiler-dom`, so Desktop declares both at the versions `@golar/vue` uses: with two
-copies of `@vue/compiler-dom` installed, their template AST types do not match.
+The core's TypeScript is checked by `cd desktop && bun run typecheck`. The Rune
+workspace has its own format, clippy, tests and bundle jobs; the required CI gate includes
+both native platform bundles. The removed Nuxt app needs no Vue compiler or lint plugin.
 
 A test leaves nothing behind. `test/support/hosts.ts`, a preload, gives each test file a
 temporary root of its own, `TMPDIR` inside it, and removes it when the file ends. Every
@@ -1956,7 +1942,11 @@ its time.
   host writes before and after the write; the state directory's watch, before the
   board's debounce; another process's SQLite commit, seen within 250 ms through
   `PRAGMA data_version`; and a branch moving in a checkout whose head a card reads, through
-  a watch on that checkout's git directories. A read overtaken by invalidation retries. A missing file is kept as its error's data, not as
+  a watch on that checkout's git directories. When all checkout watches are registered,
+  the model invalidates its earlier head reads and publishes a change, covering commits
+  made before registration. It retains one change for a board that subscribes after the
+  first build, so that refresh cannot be lost. A read overtaken by invalidation retries.
+  A missing file is kept as its error's data, not as
   the error, since every live `Error` slows each collection of the heap. If the recursive watch
   fails, the model reads from disk, and every read takes a new revision, so nothing derived
   before is reused. Engine status and clock-derived
@@ -1983,8 +1973,8 @@ its time.
   says as `invalid_state`; each act's result carries the Run's revision after it, which the
   caller's next frame is at least. A request without `parts` is sent whole records, their
   minutes said, on every change and tick, as an older Desktop expects.
-  Desktop's view keeps records subscribed after they close (`desktop/src/shared/kept-records.ts`
-  says which, `desktop/view/app/kept.ts` holds them): the open one, the last 8 opened and a
+  The native view keeps records subscribed after they close (`desktop-rune/board/src/record.rs`
+  owns their lifetime): the open one, the last 8 opened and a
   card pointed at for 150 ms, at most 16 MB of frames as Desktop weighs them, the least
   recently opened going first and never the open one. A kept record opened again has its
   frame as it mounts. Desktop's main process holds a record's host subscription for as long
@@ -2087,121 +2077,14 @@ its time.
 
 ### Measuring a record open
 
-`bench/record-open/` times a click on a board card to its record's Flow painted, usable and
-correct, in Desktop's own view. It is a benchmark, not a test: the suite never runs it.
+The native app's Settings has **Record timing** (off by default), which appends view and
+core marks to `record-timing.log` in the existing desktop state directory, one JSON line
+each. `bench/record-open/summarize.ts` summarises those logs; `desktop/README.md` describes
+the workflow. `bench/desktop-start/` retains the isolated host fixture for startup measurements.
 
-```sh
-bun install && (cd desktop && bun install)
-bun bench/record-open/run.ts --cells local --samples 20 --warmup 2 --bar 200
-```
-
-On today's record path every open takes seconds, so 20 opens settle each cell's verdict; at
-the default 200 a run held the Machine for over 14 h. The 200-open matrix, the command without
-`--samples` and `--warmup`, is run on the delivered tree by ticket 07.
-
-What one run does:
-
-- **Refuses** to start where its state directory or socket would be the user's own.
-- **Waits** while another process holds the Machine Measurement lock and says so, then holds
-  it. Inside a Measurement it leaves the lock to the host that took it.
-- **Builds** the tree's own view through a Nuxt layer in `bench/record-open/view` that
-  swaps Electrobun's transport for a WebSocket. It also turns on Vue's production devtools
-  hooks, on every tree alike, so the harness can read what FlowMap rendered.
-- **Prepares** a host on a state directory of its own under `$TMPDIR/cro-<hash>`, on the
-  fake herdr: 520 Runs of `bench-steps`, most taking 6 Steps. 5 of them take 220 Steps and 3
-  are live, taking a Step every 2 s while the samples run. 40 are moved 40 days back, each
-  with a plan ticket nobody built: landed work older than a day leaves Desktop's board.
-- **Starts Desktop.** Desktop's own main process, `desktop/src/bun/index.ts`, starts with
-  `electrobun/bun` mapped to `bench/record-open/electrobun-bun.ts`. That stand-in serves
-  the view and its frames on loopback.
-- **Launches Chrome:** the Chrome for Testing that Puppeteer or Playwright installed, as
-  `--headless=new` with a 1600×1000 window and its own profile, killed when the run ends.
-  It runs without the sandbox, which Ubuntu's AppArmor refuses. `--chrome <binary>` names
-  another; `--cdp <endpoint>` uses a Chrome already running, which must share this Machine's
-  loopback. The shared Chrome at `127.0.0.1:9222` on vm-mk is an SSH tunnel to another
-  computer, so it cannot load the view.
-
-Each sample:
-
-1. Sends a real `Input.dispatchMouseEvent` click on the card's name.
-2. `probe.js`, injected before the page loads, takes the click's `timeStamp`. It waits for
-   the frame where the record's Flow has a place for every node of that Run and draws each
-   one in view, then two more frames, until the Flow's buttons are enabled. The sample's
-   time runs to that point. A large Flow draws its other Steps over the frames after.
-3. Once every node is drawn, reads the painted Flow: each row, node and action by
-   accessible name, and each node's attempts and wait from FlowMap's props.
-4. Compares it with the host's Flow, read over the front door after the paint. A mismatch
-   fails the sample. A live Run is read once more, half a second later, before it fails.
-
-A Flow of another Run shown after the click also fails the sample. While a cell runs, the
-harness times an `identity` RPC every 50 ms; its p99 is a proxy for the host's event-loop lag.
-
-| Cell           | What each sample opens                                             |
-| -------------- | ------------------------------------------------------------------ |
-| `first`        | a settled Run's card not opened before                             |
-| `repeat`       | a card just opened and closed                                      |
-| `rapid`        | 10 cards at 10 a second; the last is timed                         |
-| `large`        | a Run of 220 Steps                                                 |
-| `old`          | a Run settled 40 days ago                                          |
-| `live`         | a live Run                                                         |
-| `checks`       | a settled card while 4 Checks run on a live Run                    |
-| `desktop-cold` | a settled card in a new tab, after Desktop's main process restarts |
-| `host-cold`    | a settled card after the host restarts and the board paints again  |
-| `storm`        | a settled card while a Run starts every 200 ms                     |
-
-In `desktop-cold` the click comes 3 s after the board paints: in a tab's first seconds,
-Chrome gives a card's button the click's pointer events but not the click.
-
-`first-host` times the record's own build: each sample opens a settled Run not opened before
-over the host's front door, with `parts` on, from request sent to first frame received. It
-starts no view, Chrome or Desktop, so it runs only with the other host-only cells, and it
-fails a sample whose first frame has no Flow. A tree whose host ignores `parts` sends the whole
-record first, so it runs on the base tree too.
-
-`checks-host` and `storm-host` time the same opens with `checks`' and `storm`'s load beside
-them. Each host-only cell opens 205 Runs not opened before, and the fixture's 472 recent
-settled Runs hold two cells' worth, so the three take two runs.
-
-`--cells` takes `local` or a comma-separated list. `--samples` sets the timed opens per cell
-(200), and `--warmup` the opens before them (5), which are kept but not counted. `--runs`
-sets the fixture's size (520), which must leave settled Runs beside the 40 old ones. An open
-that has not painted in 60 s fails, recorded at 60 s.
-
-The run writes `samples.jsonl`, every sample with its marks and differences, and
-`summary.json` to `.scratch/record-open/<time>/`, or to `--out`. Per cell, the summary gives:
-
-- p50, p95, max and n by nearest rank, and `failed`, the samples whose Flow was wrong;
-- `lag_p99_ms`, `lag_max_ms` and `lag_probes`: a trivial RPC every 50 ms, from after the
-  warm-up (and, for the host-only cells, after the host's Run model has filled) until the window
-  holds at least 2000 probes. The cell's opens go on, untimed, until it does. GC pauses are
-  not excluded. The RPC is `identity`, which the host's door thread answers, the thread that
-  reads records;
-- `engine_lag_p99_ms`, `engine_lag_max_ms` and `engine_lag_probes`: the same, over the same
-  window, with `registrations`, which the engine's thread answers;
-- for `host-cold`, `started_to_painted`: p50, p95 and max from the host's start to its
-  record painted;
-- `stages`: where Desktop's `record:*` marks exist, `mount` (click to mounted),
-  `bridge_and_host` (mounted to first value) and `render` (first value to usable). A tree
-  without the marks reports `absent`;
-- `stages.split`: `bridge_and_host` cut where the host emitted the record's first frame
-  (`host_emit`, from mounted), where the bridge passed it on (`bridge`), where Desktop's Bun
-  process decoded it (`desktop_read`), and on to the view's first value (`to_view`). The
-  harness sets `COLLIE_RECORD_MARKS`, and the host, the bridge and Desktop append those marks
-  to it in whole epoch milliseconds (`src/record-marks.ts`). A tree without them has no
-  `split`.
-
-It also records the tree, the fixture, the opens and warm-up per cell, the run's wall time in
-`wall_s`, and the Chrome: its version, its flags, and that it is
-headless and software-rendered. These are Chrome numbers on a build with Vue's devtools hooks
-on, not native Desktop numbers, nor headed or GPU ones.
-
-The last stdout line is one JSON object of numbers, such as `first_local_p95`, for
-`collie measure`. With `--bar 200` the run exits 1 when any cell's p95 or max is 200 ms or
-more, or any sample failed.
-
-Native Desktop has no CDP. Its Settings has **Record timing** (off by default), which appends
-the same marks to `record-timing.log` in Desktop's state directory, one JSON line each.
-`bench/record-open/summarize.ts` summarises such logs; `desktop/README.md` says how to make them.
+The Nuxt/CDP benchmark driver was retired with the webview app. Its reusable fixture,
+statistics, comparison and log analysis remain in `bench/record-open/`. Historical browser
+measurements are not measurements of the native renderer.
 
 ### Test-suite measurements, 26 October 2026
 

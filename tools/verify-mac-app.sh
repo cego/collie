@@ -1,6 +1,7 @@
 #!/bin/sh
 # Every app bundle a macOS Desktop build in DIR made passes `codesign --verify --deep --strict`:
-# the one the DMG carries, and the one each update archive unpacks to, which is what runs.
+# the one it built (Electrobun's DMG carries it), and the one each update archive unpacks to,
+# which is what runs. The Rune spike's bundle script lays DIR out the same way.
 set -eu
 
 DIR=$1
@@ -20,5 +21,5 @@ for app in "$DIR"/build/*/*.app "$work"/*/*.app; do
   codesign --verify --deep --strict --verbose=2 "$app"
   found=$((found + 1))
 done
-[ "$found" -gt 1 ] || { echo "found $found app bundle(s) in $DIR; wanted the DMG's and an update archive's" >&2; exit 1; }
+[ "$found" -gt 1 ] || { echo "found $found app bundle(s) in $DIR; wanted the built one and an update archive's" >&2; exit 1; }
 echo "verified $found app bundles in $DIR"

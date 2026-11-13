@@ -64,6 +64,8 @@ export interface Bridge<E, R> {
   act: (command: Command, prompts: InputPrompts) => Effect.Effect<string | null, E, R>;
   /** Where a change to a Run shows up, which is what the watch is put on. */
   stateDir: string;
+  /** Host snapshots can arrive after the file write that caused them. */
+  changes?: Stream.Stream<unknown>;
   /** The brand mark's file, drawn as a bitmap where the terminal can. */
   logo?: string;
   /** Which of the Herd's work the board opens on, decided once at startup. */
@@ -261,7 +263,10 @@ export function driveBridge<E, R>(
       // Each focus already requests its initial read; the recovery tick starts after
       // its interval instead of adding a second immediate request for that same focus.
       Stream.tick(`${POLL_MS} millis`).pipe(Stream.drop(1)),
-    ).pipe(Stream.share({ capacity: 1, strategy: "sliding", idleTimeToLive: Duration.infinity }));
+    ).pipe(
+      Stream.merge(bridge.changes ?? Stream.empty),
+      Stream.share({ capacity: 1, strategy: "sliding", idleTimeToLive: Duration.infinity }),
+    );
 
     /**
      * One writer of `state`, and the load in flight is interrupted the moment a newer

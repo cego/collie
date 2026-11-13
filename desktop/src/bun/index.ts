@@ -33,13 +33,11 @@ import * as RpcServer from "effect/rpc/RpcServer";
 import Electrobun, {
   BrowserView,
   BrowserWindow,
-  type RPCSchema,
   Utils,
   Updater,
-} from "electrobun/bun";
+} from "../../../desktop-rune/core/platform";
 import {
   type Channel,
-  type FrameSchema,
   heldUntilListened,
   serverProtocol,
   type ToMain,
@@ -72,6 +70,7 @@ import { appWindowFor } from "./browser";
 import { applicationMenu } from "./menu";
 import { clipboardPaths } from "../shared/attachments";
 import { readAttachment, stageAttachment, stagePath } from "./attachments";
+import { placeStaged } from "./carried";
 import { actionsLog, reasonOf } from "./sent";
 import { type Place, setUp, setupInventory, setupOffer, thisComputer } from "./standing-setup";
 import { type FlockConversation, openFlockChat, refusal, untilStarted } from "./chat";
@@ -189,14 +188,13 @@ import {
 import { applyAtLaunch, restartToUpdate, updatesOf } from "./updates";
 // The version Desktop keeps every Machine on: the Collie it was built from.
 import manifest from "../../../herdr-plugin.toml";
-
-type Frames = RPCSchema<FrameSchema>;
+import { timingLine } from "../shared/record";
 
 /** A window on the view, and the channel its RPC rides. */
 const windowOn = (url: string, title: string, frame: BrowserWindow["frame"]) => {
   // The view loads while Desktop starts, so it asks before anything serves it.
   const inbox = heldUntilListened<ToMain>();
-  const rpc = BrowserView.defineRPC<{ bun: Frames; webview: Frames }>({
+  const rpc = BrowserView.defineRPC({
     maxRequestTime: 10_000,
     handlers: {
       requests: {},
@@ -230,7 +228,7 @@ const OPENER = process.platform === "darwin" ? "open" : "xdg-open";
 /** Opens a web page in the human's own browser. */
 const openUrl = (url: string) =>
   Effect.sync(() => {
-    if (which(OPENER) === null) return void Utils.openExternal(url);
+    if (which(OPENER) === null) return Utils.openExternal(url);
     Bun.spawn([OPENER, url], {
       env: childEnv(),
       cwd: CHILD_CWD,
@@ -256,8 +254,12 @@ const openSlack = Effect.gen(function* () {
 /** How long herdr's question waits on the human before it takes herdr's own default. */
 const QUESTION_LIMIT = "10 minutes";
 
-/** Where Desktop keeps what is its own on this computer, the Flock chat's session among it. */
-const StateDir = Config.String("XDG_STATE_HOME").pipe(
+/**
+ * Where Desktop keeps what is its own on this computer, the Flock chat's session among it.
+ * COLLIE_DESKTOP_STATE_HOME moves only Desktop's own; what it starts keeps XDG_STATE_HOME.
+ */
+const StateDir = Config.String("COLLIE_DESKTOP_STATE_HOME").pipe(
+  Config.orElse(() => Config.String("XDG_STATE_HOME")),
   Config.orElse(() => Config.String("HOME").pipe(Config.map((home) => `${home}/.local/state`))),
 );
 
@@ -340,6 +342,16 @@ const main = Effect.gen(function* () {
       offersOf(now, SubscriptionRef.getUnsafe(flockSettings), readPiConfig(own), lists),
   );
   const settings = desktop.now;
+  const timed = (mark: { readonly name: string; readonly at: number; readonly card: string }) => {
+    const line = timingLine(settings(), mark);
+    return line === null
+      ? Effect.void
+      : Effect.flatMap(FileSystem.FileSystem, (fs) =>
+          fs.writeFileString(`${own}/record-timing.log`, line, { flag: "a" }),
+        ).pipe(Effect.ignore);
+  };
+  // oxlint-disable-next-line no-restricted-globals -- When this process started, as the view's marks count time.
+  yield* timed({ name: "launch", at: performance.timeOrigin, card: "" });
   // The GitLab host an earlier Desktop kept as its own becomes the Flock's.
   const ownGitlabHost = settings().gitlabHost;
   const seeded =
@@ -824,6 +836,8 @@ const main = Effect.gen(function* () {
         ),
       );
 
+  /** What this session placed on each Machine for a pane: path there, and when, by sha256. */
+  const placed = new Map<string, Map<string, { readonly path: string; readonly at: number }>>();
   /** Files named by path, each copied in or refused in words. */
   const stagedFrom = (paths: ReadonlyArray<string>) =>
     Effect.forEach(paths, (path) =>
@@ -1503,6 +1517,24 @@ const main = Effect.gen(function* () {
           ? (Utils.clipboardReadText() ?? "")
           : "",
       ).pipe(Effect.flatMap((text) => stagedFrom(clipboardPaths(text)))),
+    placeFiles: ({ installation, ids }) =>
+      doorTo(doors, installation).pipe(
+        Effect.flatMap((held) =>
+          placeStaged(
+            placed,
+            {
+              name: held.machine.name,
+              files: shown.machines.get(installation)?.files ?? false,
+              door: held.desktop,
+            },
+            own,
+            ids,
+          ).pipe(
+            Effect.mapError((cause) => new ActionFailed({ reason: reasonOf(cause) })),
+            Effect.provide(BunServices.layer),
+          ),
+        ),
+      ),
     attachmentFile: ({ id, offset }) =>
       readAttachment(own, id, offset).pipe(
         Effect.mapError(
@@ -1570,14 +1602,7 @@ const main = Effect.gen(function* () {
       Stream.unwrap(withChat((opened) => Effect.succeed(opened.choices), Stream.empty)),
     drawn: () => SubscriptionRef.changes(drawn).pipe(Stream.filter((now) => now !== null)),
     setSettings: saveSettings,
-    recordMark: (mark) =>
-      settings().recordTiming === true
-        ? Effect.flatMap(FileSystem.FileSystem, (fs) =>
-            fs.writeFileString(`${own}/record-timing.log`, `${JSON.stringify(mark)}\n`, {
-              flag: "a",
-            }),
-          ).pipe(Effect.ignore)
-        : Effect.void,
+    recordMark: timed,
     setupOffer: () => SubscriptionRef.changes(offer.offered),
     declineSetup: ({ forGood }) => offer.decline(forGood),
     setupInventory: () => offer.taken.pipe(Effect.andThen(setupInventory(setupPlaces()))),

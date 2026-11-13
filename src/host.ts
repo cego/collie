@@ -245,7 +245,7 @@ import {
   type Attached,
 } from "./attachments";
 import { boardMessages, shareBoard } from "./board-stream";
-import { recordDisposition, refWords } from "./disposition";
+import { recordDisposition, refRuns } from "./disposition";
 import { markSeenSince, readSeen, recordSeen } from "./seen";
 import { readReplies } from "./replies";
 import {
@@ -2857,7 +2857,14 @@ const frontDoorHandlers = (
               () => runId,
               { operation: "invoke", request, ...whoOf(client), asked, result: Started },
               registry
-                .invoke({ runId, offer, input, request, attachments })
+                .invoke({
+                  runId,
+                  offer,
+                  input,
+                  request,
+                  attachments,
+                  started: startedOf(whoOf(client).origin, whoOf(client).said, input, undefined),
+                })
                 .pipe(Effect.map(saying(removed))),
             ),
           );
@@ -3645,7 +3652,9 @@ const frontDoorHandlers = (
           known(runId).pipe(
             Effect.flatMap(disposedOn(ref)),
             Effect.filterOrFail(
-              (kept) => kind !== "superseded" || !Arr.contains(refWords(kept.ref), kept.run),
+              (kept) =>
+                kind !== "superseded" ||
+                !Arr.contains(refRuns(kept.ref, env.machine ?? machineName()), kept.run),
               (kept) =>
                 new HostRefused({
                   reason: `${REFUSED_INPUT}: a superseded line cannot name ${kept.run}, the Run it is recorded on`,
@@ -4578,8 +4587,12 @@ export const restartHost = Effect.fn("Host.restart")(function* (
       build: Option.match(answered, { onNone: () => null, onSome: (who) => who.build }),
     };
     const build = options?.build ?? BUILD;
-    if (before.build !== null && newer(build, before.build))
-      yield* replaceOwner(dir, owner.pid, build);
+    // One that did not answer is judged by the build it recorded, as a client's start judges it.
+    const older =
+      before.build === null
+        ? (yield* olderSilentOwner(dir, build)) === owner.pid
+        : newer(build, before.build);
+    if (older) yield* replaceOwner(dir, owner.pid, build);
     else yield* stopOwner(dir, owner.pid);
   }
   const who = yield* ensureRunning(dir, options?.hostEnv ?? {}, options?.build ?? BUILD);
@@ -4918,7 +4931,8 @@ const ensureRunning = Effect.fn("Host.ensureRunning")(function* (
   const first = yield* ask(dir).pipe(Effect.result);
   if (first._tag === "Success") return first.success;
   const silent = yield* olderSilentOwner(dir, build);
-  if (silent !== null) yield* stopOwner(dir, silent);
+  // Too slow to answer is not gone: it still hears its signal, and hands its checks over.
+  if (silent !== null) yield* replaceOwner(dir, silent, build);
   const started = Effect.scoped(
     Effect.gen(function* () {
       const host = yield* spawnHost(dir, hostEnv);
