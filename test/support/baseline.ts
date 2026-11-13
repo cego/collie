@@ -20931,6 +20931,31 @@ for (const fixed of [true, false])
   );
 
 scenario(
+  "a tune-up keeps its harness sample deadline through calibration and repair",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        const runId = "r-tune-deadline";
+        yield* rig.queueOutputs([
+          TUNE_DISCOVERED,
+          { ...tunePlan(commit, [STEADY_PRIMARY], UNBUILDABLE(3)), limit: 7200 },
+          repaired(
+            { ...tunePlan(commit, [STEADY_PRIMARY]), limit: 10800 },
+            "bound the complete gate",
+          ),
+          EXHAUSTED,
+        ]);
+        expect((yield* tunedUp(runId, { samples: 4 }))._tag).toBe("Success");
+        const measured = yield* calibrations(runId);
+        expect(Arr.map(measured, (one) => one.result._tag)).toEqual(["Failed", "Judged"]);
+        expect(Arr.map(measured, (one) => one.plan.limit)).toEqual([7200, 10800]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "a tune-up whose harness is broken is repaired by the tuner, calibrates and goes on to its Cycles",
   () =>
     runEffect(
@@ -20954,6 +20979,7 @@ scenario(
           "Failed",
           "Judged",
         ]);
+        expect(Arr.map(yield* calibrations(runId), (one) => one.plan.limit)).toEqual([600, 600]);
       }),
     ),
   120_000,
