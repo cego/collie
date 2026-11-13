@@ -13,7 +13,7 @@ import { appendLog } from "./oversight";
 import { conflictsWithTarget } from "./review-wait";
 import { epochMs, nowIso } from "./time";
 import { rememberCiTarget } from "./park-recheck";
-import { branchChange, ownTests } from "./own-tests";
+import { branchChange, ownTests, type BranchChange } from "./own-tests";
 import {
   appendVerification,
   encodeVerifying,
@@ -146,12 +146,13 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
         if (status.code !== 0 || Str.trim(status.stdout) !== "")
           return unproved(`passed, but ${cwd} has changes it never saw`);
         const attempts = Arr.dedupe([...read.retryOf, ...(retried === null ? [] : [retried])]);
+        let change: BranchChange | undefined;
         for (const attempt of attempts) {
           const failed = yield* forge.failedAttempt(ref, attempt, cwd, asked.run);
           const own =
             failed.tests.length === 0 || read.target === null
               ? []
-              : ownTests(failed.tests, yield* branchChange(cwd, read.target));
+              : ownTests(failed.tests, (change ??= yield* branchChange(cwd, read.target)));
           if (own.length > 0)
             return unproved(
               `failed in this branch's own ${own.length === 1 ? "test" : "tests"} ${Arr.join(
