@@ -1746,72 +1746,90 @@ const acknowledgedStep = (path: Path.Path, runId = "r1") =>
     ),
   );
 
-test.each(["failed", "hung", "transient", "dead hung"] as const)(
-  "managed server health has its own readiness bound with late Output (%s)",
-  (failure) =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const managed = yield* managedCodex;
-        let unhealthy = false;
-        let healthyProbes = 0;
-        const ports: CompactionPorts = {
-          codex: {
-            ...managed.ports.codex!,
-            ready: () =>
-              Effect.suspend(() => {
-                if (!unhealthy) {
-                  healthyProbes += 1;
-                  return Effect.succeed(true);
-                }
-                return failure === "hung" || failure === "dead hung"
-                  ? Effect.never
-                  : Effect.fail(
-                      new HerdrError({
-                        message: "health probe failed",
-                        detail: "endpoint unreachable",
-                      }),
-                    );
-              }),
-          },
-        };
-        yield* rig.queueOutputs([null]);
-        const herdr = new StaleWorkingTerminal(rig.pluginEnv());
-        const result = yield* session(
-          Effect.gen(function* () {
-            const fiber = yield* Effect.forkChild(started("r1"));
-            yield* until(acknowledgedStep(yield* Path.Path));
-            const seen = healthyProbes;
-            yield* until(Effect.sync(() => healthyProbes > seen));
-            herdr.stale = true;
-            unhealthy = true;
-            if (failure === "dead hung") {
-              managed.children[0]!.kill();
-              yield* Effect.promise(() => managed.children[0]!.exited);
-            }
-            yield* spend(failure === "transient" ? 500 : 4_000);
-            if (failure === "transient") {
-              unhealthy = false;
-              yield* spend(4_000);
-              expect(yield* read(controlPath(dir, PARKED, "r1"))).toBe("");
-            } else {
-              expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain("server health");
-            }
-            expect(managed.children[0]!.signalCode === null).toBe(failure !== "dead hung");
-            expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
-            expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
-            yield* fs.writeFileString(
-              outputPath("r1"),
-              '{"verdict":"clean","note":"late health Output"}',
-            );
-            return yield* Fiber.join(fiber);
-          }),
-          { herdr, harness: "codex", model: "default", ports, readyMs: 1_000 },
-        );
-        expect(result._tag === "Success" && result.success.note).toBe("late health Output");
-        expect(yield* read(controlPath(dir, PARKED, "r1"))).toBe("");
-      }).pipe(Effect.scoped),
-    ),
+test.each([
+  "failed",
+  "hung",
+  "transient",
+  "dead hung",
+  "missing controls",
+  "invalid controls",
+  "unreadable controls",
+  "transient controls",
+] as const)("managed server health has its own readiness bound with late Output (%s)", (failure) =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const managed = yield* managedCodex;
+      let unhealthy = false;
+      let healthyProbes = 0;
+      const ports: CompactionPorts = {
+        codex: {
+          ...managed.ports.codex!,
+          ready: () =>
+            Effect.suspend(() => {
+              if (!unhealthy) {
+                healthyProbes += 1;
+                return Effect.succeed(true);
+              }
+              return failure === "hung" || failure === "dead hung"
+                ? Effect.never
+                : Effect.fail(
+                    new HerdrError({
+                      message: "health probe failed",
+                      detail: "endpoint unreachable",
+                    }),
+                  );
+            }),
+        },
+      };
+      yield* rig.queueOutputs([null]);
+      const herdr = new StaleWorkingTerminal(rig.pluginEnv());
+      const result = yield* session(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(started("r1"));
+          yield* until(acknowledgedStep(yield* Path.Path));
+          const seen = healthyProbes;
+          yield* until(Effect.sync(() => healthyProbes > seen));
+          herdr.stale = true;
+          unhealthy = true;
+          const controls = `${yield* controlDir(hostOf().env.stateDir, agentFor("r1"))}/control.json`;
+          const saved = yield* fs.readFileString(controls);
+          if (failure === "missing controls" || failure === "transient controls")
+            yield* fs.remove(controls);
+          if (failure === "invalid controls") yield* fs.writeFileString(controls, "{");
+          if (failure === "unreadable controls") {
+            yield* fs.remove(controls);
+            yield* fs.makeDirectory(controls);
+          }
+          if (failure === "dead hung") {
+            managed.children[0]!.kill();
+            yield* Effect.promise(() => managed.children[0]!.exited);
+          }
+          const transient = failure === "transient" || failure === "transient controls";
+          yield* spend(transient ? 500 : 4_000);
+          if (transient) {
+            if (failure === "transient controls") yield* fs.writeFileString(controls, saved);
+            unhealthy = false;
+            yield* spend(4_000);
+            expect(yield* read(controlPath(dir, PARKED, "r1"))).toBe("");
+          } else {
+            expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain("server health");
+          }
+          expect(managed.children[0]!.signalCode === null).toBe(failure !== "dead hung");
+          expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
+          expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
+          yield* fs.writeFileString(
+            outputPath("r1"),
+            '{"verdict":"clean","note":"late health Output"}',
+          );
+          return yield* Fiber.join(fiber);
+        }),
+        { herdr, harness: "codex", model: "default", ports, readyMs: 1_000 },
+      );
+      expect(result._tag === "Success" && result.success.note).toBe("late health Output");
+      expect(yield* read(controlPath(dir, PARKED, "r1"))).toBe("");
+    }).pipe(Effect.scoped),
+  ),
 );
 
 test.each([false, true])(

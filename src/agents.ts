@@ -84,6 +84,7 @@ import {
   withControlLock,
   type CompactionDeps,
   type CompactionPorts,
+  type ControlRecord,
 } from "./compaction";
 import {
   COMPACTION_PORTS,
@@ -3418,31 +3419,29 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     under(
       Effect.gen(function* () {
         let failedAt: number | null = null;
-        let endpoint: string | null = null;
+        let managed: ControlRecord | null = null;
         const budgetMs = host.readyMs ?? READY_TIMEOUT_MS;
         return yield* Effect.gen(function* () {
           const record = yield* readControl(host.env.stateDir, launched.agent).pipe(
             Effect.orElseSucceed(() => null),
           );
           const ready = record === null ? undefined : ports[record.harness]?.ready;
-          if (record?.endpoint == null || ready === undefined) {
-            failedAt = null;
-            return null;
-          }
           const since = yield* Clock.currentTimeMillis;
-          if (endpoint !== record.endpoint) failedAt = null;
-          endpoint = record.endpoint;
-          const up = yield* ready(record).pipe(
-            Effect.orElseSucceed(() => false),
-            Effect.timeoutOption(2_000),
-          );
-          if (Option.isSome(up) && up.value) {
-            failedAt = null;
-            return null;
-          }
+          if (record?.endpoint != null && ready !== undefined) {
+            if (managed?.endpoint !== record.endpoint) failedAt = null;
+            managed = record;
+            const up = yield* ready(record).pipe(
+              Effect.orElseSucceed(() => false),
+              Effect.timeoutOption(2_000),
+            );
+            if (Option.isSome(up) && up.value) {
+              failedAt = null;
+              return null;
+            }
+          } else if (managed === null) return null;
           failedAt ??= since;
           if ((yield* Clock.currentTimeMillis) - failedAt < budgetMs) return null;
-          return `${launched.agent}: ${record.harness} server health at ${endpoint} remained unavailable or unproved for ${Math.round(budgetMs / 1000)}s. Collie keeps collecting usable Output; replacement requires proven death and a Quiet predecessor.`;
+          return `${launched.agent}: ${managed.harness} server health at ${managed.endpoint} remained unavailable or unproved for ${Math.round(budgetMs / 1000)}s. Collie keeps collecting usable Output; replacement requires proven death and a Quiet predecessor.`;
         }).pipe(
           Effect.repeat({
             until: (why) => why !== null,
