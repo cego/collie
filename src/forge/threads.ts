@@ -350,6 +350,14 @@ export const approveReview = (
   Effect.gen(function* () {
     const where = mrWords(ref).label;
     if (head === "") return { ok: false, message: `did not approve ${where}: no reviewed head` };
+    const http = yield* ForgeHttp;
+    const me = yield* http.ask(login, cwd, (provider, signal) => provider.users.me({ signal }));
+    if (!me.ok)
+      return { ok: false, message: me.reason, retryable: me.transient === true };
+    const existing = yield* approvedAt(login, project, ref, me.value.login, head, cwd);
+    if (!existing.ok)
+      return { ok: false, message: existing.reason, retryable: existing.transient === true };
+    if (existing.value) return { ok: true, message: `approved ${where} at ${head}` };
     const repo = threadRepo(login, project);
     const path = `${repo.owner}/${repo.name}`;
     const pull = `repos/${path}/pulls/${ref.iid}`;
@@ -396,7 +404,7 @@ export const approveReview = (
     }
     return approved.ok
       ? { ok: true, message: `approved ${where} at ${head}` }
-      : { ok: false, message: `did not approve ${where} at ${head}: ${approved.reason}` };
+      : { ok: false, message: `did not approve ${where} at ${head}: ${approved.reason}`, retryable: approved.transient === true };
   });
 
 export const findReviewNote = (

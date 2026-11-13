@@ -116,6 +116,26 @@ for (const name of ["gitlab", "github"] as const) {
       );
     });
 
+    test("an uncertain approval write is recoverable without approving twice", () => {
+      const fake = fakeForge(name, model(name));
+      let refused = true;
+      const layer = forgeHttpTest(fake.run, async (url, init) => {
+        const response = await fake.fetch(url, init);
+        if (init?.method === "POST" && refused) {
+          refused = false;
+          return new Response("temporarily unavailable", { status: 503 });
+        }
+        return response;
+      });
+      return runEffect(Effect.gen(function* () {
+        const first = yield* forge.approve(ref(name), HEAD, "/w", fake.run);
+        expect(first).toMatchObject({ ok: false, retryable: true });
+        expect((yield* forge.approve(ref(name), HEAD, "/w", fake.run)).ok).toBe(true);
+        expect(fake.model().approved ?? []).toHaveLength(1);
+        expect(Arr.filter(fake.requests, (one) => one.method === "POST")).toHaveLength(1);
+      }).pipe(Effect.provide(layer)));
+    });
+
     test("refuses an approval after the reviewed head has changed", () => {
       const fake = fakeForge(name, model(name, { mrs: [mr(name, { head: MERGED })] }));
       return runEffect(

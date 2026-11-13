@@ -373,7 +373,7 @@ export interface Forge {
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<Posted, never, R | ForgeHttp>;
-  /** Only a transient failure before submission is retryable. */
+  /** A retry reconciles an uncertain write against the forge before approving again. */
   readonly approve: <R>(
     ref: MrRef,
     head: string,
