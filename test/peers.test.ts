@@ -386,7 +386,7 @@ test(
             expect(
               yield* readDispositions(runDir(first.world.state, helper)).pipe(Effect.orDie),
             ).toEqual([]);
-            expect(yield* landed()).toBe(true);
+            yield* until(landed, (shown) => shown === true);
           }),
         ["targeted.workflow.ts", "hello.workflow.ts", "stops-on-mr.workflow.ts"],
       ),
