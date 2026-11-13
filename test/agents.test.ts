@@ -2053,9 +2053,13 @@ test.each(["before retirement", "during retirement"] as const)(
             managed.state.reachable = false;
             managed.children[0]!.kill();
             yield* Effect.promise(() => managed.children[0]!.exited);
-            yield* spend(20_000);
+            yield* until(
+              rig.calls().pipe(
+                Effect.orDie,
+                Effect.map((calls) => sent(calls, "Your task for this step") === 2),
+              ),
+            );
             expect(everyLaunch(yield* rig.calls())).toHaveLength(2);
-            expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
             yield* fs.writeFileString(
               outputPath("r1"),
               '{"verdict":"clean","note":"partial repair recovered"}',
