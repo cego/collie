@@ -4625,6 +4625,61 @@ test("a fan-out lists Release and Stage per Change, with no Offer on its leading
     }),
   ));
 
+test.each([1, 2])(
+  "a fan-out's Release stays actionable in its Repo owner's Flow lane (%s repositories)",
+  (count) =>
+    runEffect(
+      Effect.gen(function* () {
+        const { dir, env } = yield* scratch();
+        const runs = yield* fannedOut(
+          dir,
+          count === 1
+            ? [["api", 7]]
+            : [
+                ["api", 7],
+                ["web", 8],
+              ],
+        );
+        for (const run of Arr.filter(runs, (run) => run.mr !== null))
+          yield* appendVerification(run.evidence, checked("test", M_HEAD));
+        const { flow } = yield* boardAndFlows(env, runs, {
+          mrStates: new Map([
+            [idOf("api", 7), "open"],
+            [idOf("web", 8), "open"],
+          ]),
+          forge: new Map(
+            Arr.map(["api", "web"], (repo, at) => [
+              idOf(repo, at + 7),
+              {
+                checks: { state: "passed" as const },
+                head: M_HEAD,
+                mergeable: { state: "mergeable" as const, said: "approved" },
+                read: "2026-09-14T10:04:00Z",
+              },
+            ]),
+          ),
+          head: () => Effect.succeed(M_HEAD),
+          offers: (run) => Effect.succeed(run === "r-api" ? deliveryOffers : []),
+        });
+        const full = flow("task-1");
+        const offers = Arr.flatMap(full.lanes, (lane) =>
+          Arr.map(
+            Arr.filter(lane.nodes, (node) => node.kind === "offer"),
+            (node) => ({
+              run: lane.run,
+              id: node.id,
+              primary: node.primary,
+            }),
+          ),
+        );
+        expect(offers).toEqual([{ run: "r-api", id: "offer:release", primary: "start" }]);
+        expect(
+          Arr.flatMap(full.lanes[0]!.nodes, (node) => Arr.map(node.runs, (run) => run.link?.run)),
+        ).toContain("r-api");
+      }),
+    ),
+);
+
 test("an attended implement answered Finish keeps named Offers as CI becomes green on the same board", () =>
   runEffect(
     Effect.gen(function* () {

@@ -232,9 +232,13 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
 ) {
   const inputs = given ?? (yield* flowInputsFor(env, task.all));
   const { installation } = inputs;
-  const rows = [...task.rows].sort((one, other) =>
-    pipe_(one.created, Str.localeCompare(other.created)),
+  const rows = [...task.rows];
+  const offerOwner = Option.getOrUndefined(
+    Arr.findFirst(task.all, (run) => run.id === task.offer?.run),
   );
+  if (offerOwner !== undefined && !Arr.some(rows, (run) => run.id === offerOwner.id))
+    rows.push(offerOwner);
+  rows.sort((one, other) => pipe_(one.created, Str.localeCompare(other.created)));
   const byId = new Map(Arr.map(rows, (run) => [run.id, run]));
   const inTask = new Set(Arr.map(rows, (run) => run.id));
   const machine = machineOf(env);
