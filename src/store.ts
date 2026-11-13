@@ -349,6 +349,7 @@ export interface StoreApi {
   readonly run: (run: string) => Effect.Effect<RunRow | null>;
   /** The run a request id was already admitted as, or null. */
   readonly requested: (request: string) => Effect.Effect<RunRow | null>;
+  readonly releaseClaim: (row: RunRow) => Effect.Effect<void>;
   /** The run a request ending in `suffix` was admitted as, or null. */
   readonly requestedEnding: (suffix: string) => Effect.Effect<RunRow | null>;
   readonly runs: Effect.Effect<ReadonlyArray<RunRow>>;
@@ -1161,6 +1162,8 @@ function makeStore(
           Effect.map((rows) => rows[0] ?? null),
           Effect.orDie,
         ),
+      releaseClaim: (row) =>
+        mutation([row.run], sql`UPDATE collie_runs SET request = ${`${row.request}:finished:${row.run}`} WHERE run = ${row.run} AND request = ${row.request}`).pipe(Effect.asVoid, Effect.orDie),
       requestedEnding: (suffix: string) =>
         byRequestEnding(suffix).pipe(
           Effect.map((rows) => rows[0] ?? null),

@@ -38,6 +38,7 @@ export const followRequest = Effect.fn("FollowThrough.request")(function* (opts:
   const mr = mrId(opts.target);
   if (ref === null || mr === null) return null;
   const login = yield* forgeOf(ref).login(opts.cwd, shell, ref.project);
-  if (login === null) return null;
+  if (login === null)
+    return yield* Effect.fail(`could not establish the forge login for ${mr}; follow-through was not started, try again when the forge is readable`);
   return { request: `${opts.workflow}${followClaim(mr, login)}`, mr };
 });

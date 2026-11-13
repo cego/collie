@@ -13,6 +13,7 @@ import { serveForges, type FakeMr, type ForgeModel } from "./support/forge";
 import { fixtures } from "./support/host";
 import { ROOT, until, watching } from "./support/watching";
 import { HOLD, Registry } from "../src/engine";
+import { Host } from "../src/sdk";
 import { Store } from "../src/store";
 import { sectionOf } from "../src/board-model";
 import { readMetrics } from "../src/metrics";
@@ -76,6 +77,7 @@ const repository = Effect.gen(function* () {
   yield* git(["init", "-q", "--bare", `${rig.root}/origin.git`], rig.root);
   yield* git(["init", "-q", "-b", "main"]);
   yield* git(["remote", "add", "origin", `${rig.root}/origin.git`]);
+  yield* git(["config", `url.${rig.root}/origin.git.insteadOf`, `https://${PROJECT}.git`]);
   yield* git(["commit", "-q", "--allow-empty", "-m", "start"]);
   yield* git(["push", "-q", "origin", "main"]);
 });
@@ -713,6 +715,57 @@ for (const id of ["review", "second-look"])
   );
 
 const follows = `${fixtures}/follows-mr.workflow.ts`;
+
+test("pinning an upstream merge request fetches its project instead of the fork's origin", () =>
+  host.runEffect(Effect.gen(function* () {
+    yield* repository;
+    const head = yield* pushed("upstream change");
+    yield* git(["remote", "rename", "origin", "upstream"]);
+    yield* git(["remote", "set-url", "upstream", `https://${PROJECT}.git`]);
+    yield* git(["config", `url.${rig.root}/origin.git.insteadOf`, `https://${PROJECT}.git`]);
+    yield* git(["init", "-q", "--bare", `${rig.root}/fork.git`], rig.root);
+    yield* git(["remote", "add", "origin", `${rig.root}/fork.git`]);
+    const forge = yield* host.gitlab(model(head));
+    yield* host.session(forge, Effect.gen(function* () {
+      const started = yield* host.started(follows, "upstream", { target: TARGET });
+      const pinned = yield* (yield* Host).pinHead({ runId: started.runId, target: TARGET, head });
+      expect(pinned).toHaveProperty("cwd");
+      if (!("cwd" in pinned)) throw new Error(JSON.stringify(pinned));
+      expect(Str.trim((yield* git(["rev-parse", "HEAD"], pinned.cwd)).stdout)).toBe(head);
+    }));
+  })), 180_000);
+
+test("an unreadable login refuses follow-through admission instead of bypassing its claim", () =>
+  host.runEffect(Effect.gen(function* () {
+    const forge = yield* host.gitlab(model("head"));
+    forge.after((url, _init, response) => Promise.resolve(
+      Str.endsWith("/user")(url) ? new Response("unavailable", { status: 503 }) : response,
+    ));
+    yield* configured(true);
+    yield* host.session(forge, Effect.gen(function* () {
+      const started = yield* Effect.exit(host.started(follows, "login-outage", { target: TARGET }));
+      expect(Exit.isFailure(started)).toBe(true);
+      expect(yield* runsHere).toEqual([]);
+    }));
+  })), 180_000);
+
+test("a new start after follow-through finishes reviews a reopened merge request", () =>
+  host.runEffect(Effect.gen(function* () {
+    const forge = yield* host.gitlab(model("head"));
+    yield* configured(true);
+    yield* host.session(forge, Effect.gen(function* () {
+      const first = yield* host.started(follows, "first", { target: TARGET });
+      yield* until(() => asked(first.runId), (rows) => rows.length > 0);
+      yield* (yield* Registry).answer({runId: first.runId, decision: "approve-1", value: "Not now", request: "done"});
+      yield* until(() => host.status(first.runId), (row) => row?.status.status === "complete");
+      const next = yield* host.started(follows, "reopened", { target: TARGET });
+      expect(next.runId).not.toBe(first.runId);
+      const again = yield* host.started(follows, "duplicate", { target: TARGET, proves: "different" });
+      expect(again.runId).toBe(next.runId);
+      const pending = yield* until(() => asked(next.runId), (rows) => rows.length > 0);
+      expect(pending[0]?.decision).toBe("approve-1");
+    }));
+  })), 180_000);
 
 for (const following of [true, false])
   for (const status of [503, 429])

@@ -2289,6 +2289,7 @@ export const pinnedCheckout = Effect.fn("worktree.pinnedCheckout")(function* (op
   readonly worktrees: string;
   readonly runId: string;
   readonly forge: "gitlab" | "github";
+  readonly project: string | null;
   readonly iid: string;
   readonly head: string;
   readonly run: Runner<ChildProcessSpawner.ChildProcessSpawner>;
@@ -2300,14 +2301,25 @@ export const pinnedCheckout = Effect.fn("worktree.pinnedCheckout")(function* (op
   if (!listing) return { refused: `${opts.repo} is not a git checkout` };
   const kept =
     opts.forge === "gitlab" ? `merge-requests/${opts.iid}/head` : `pull/${opts.iid}/head`;
-  const tracking = `refs/remotes/origin/${kept}`;
+  let remote = "origin";
+  for (const candidate of ["origin", "upstream"]) {
+    const urls = yield* Effect.all([
+      run("git", ["remote", "get-url", candidate], listing.repo),
+      run("git", ["config", "--get", `remote.${candidate}.url`], listing.repo),
+    ]);
+    if (opts.project !== null && urls.some((url) => url.code === 0 && projectFromRemote(url.stdout) === opts.project)) {
+      remote = candidate;
+      break;
+    }
+  }
+  const tracking = `refs/remotes/${remote}/${kept}`;
   const fetched = yield* run(
     "git",
-    ["fetch", "--quiet", "origin", `+refs/${kept}:${tracking}`],
+    ["fetch", "--quiet", remote, `+refs/${kept}:${tracking}`],
     listing.repo,
   );
   if (fetched.code !== 0)
-    return { refused: `could not fetch ${kept} from origin: ${whatItSaid(fetched)}` };
+    return { refused: `could not fetch ${kept} from ${remote}: ${whatItSaid(fetched)}` };
   const at = yield* run("git", ["rev-parse", tracking], listing.repo);
   const now = Str.trim(at.stdout);
   if (at.code !== 0 || now === "") return { refused: `could not read ${tracking}` };

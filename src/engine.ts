@@ -5626,6 +5626,7 @@ export const hostLayer = (options: {
               worktrees: yield* worktreesDirectory(env),
               runId: asked.runId,
               forge: forgeOf(ref).name,
+              project: ref.project,
               iid: ref.iid,
               head: asked.head,
               run: runShell,
@@ -9756,11 +9757,19 @@ const makeRegistry: (
     }).pipe(
       Effect.provideService(ForgeHttp, Context.get(hostServices, ForgeHttp)),
       Effect.provideContext(bun),
+      Effect.mapError((reason) => new HostRefused({ reason })),
     );
     const followed =
       following === null
         ? null
-        : yield* claimingOf(following.request).withPermits(1)(store.requested(following.request));
+        : yield* claimingOf(following.request).withPermits(1)(Effect.gen(function* () {
+            const previous = yield* store.requested(following.request);
+            if (previous !== null && (yield* hasEnded(previous.run))) {
+              yield* store.releaseClaim(previous);
+              return null;
+            }
+            return previous;
+          }));
     if (following !== null && followed !== null)
       return {
         runId: followed.run,
