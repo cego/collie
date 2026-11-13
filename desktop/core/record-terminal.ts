@@ -2,8 +2,8 @@
 // events `openTerminal` makes once the Run's pane is found, from herdr's controller for a herdr
 // pane or core's attach for a core terminal, while typing each `--type` once the pane is idle.
 //
-//   bun desktop-rune/core/record-terminal.ts --pane <herdr pane> --out <file> --type 'ls\r'
-//   bun desktop-rune/core/record-terminal.ts --core <core terminal> --out <file>
+//   bun desktop/core/record-terminal.ts --pane <herdr pane> --out <file> --type 'ls\r'
+//   bun desktop/core/record-terminal.ts --core <core terminal> --out <file>
 
 import { parseArgs } from "node:util";
 import { Effect, Stream } from "effect";

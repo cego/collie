@@ -53,7 +53,7 @@ test("every link between the repository's documents resolves, anchors included",
         (path: string) =>
           !Str.split(path, "/").includes("node_modules") &&
           !pipe(path, Str.startsWith("plans/")) &&
-          !pipe(path, Str.startsWith("desktop-rune/vendor/")),
+          !pipe(path, Str.startsWith("desktop/vendor/")),
       );
       expect(files).toContain("AGENTS.md");
 

@@ -22,7 +22,7 @@ as the Desktop core. Tickets 01–06 measured today's Desktop and spiked the mov
 - 06: the bundle, macOS signing and notarising, and signed updates applied at launch.
 
 Each ticket's findings are in the Run's report, `plan/INVESTIGATION.md` of
-run-d9db315d.implement, and in [`desktop-rune/README.md`](../../desktop-rune/README.md),
+run-d9db315d.implement, and in [`desktop/README.md`](../../desktop/README.md),
 "Spike notes".
 
 ## Decision
@@ -60,7 +60,7 @@ time, a Rust and Zig toolchain on every build Machine, and `collie verify` runni
 checks.
 
 **D4. mk owns the Rune pin, and Collie never forks Rune.** The pin is `rune`, `rune-kit`
-and `rune-mac` at rev `781e2b6d87cd5f32d6f4365956fad4baaf24ee50` (`desktop-rune/Cargo.toml`),
+and `rune-mac` at rev `781e2b6d87cd5f32d6f4365956fad4baaf24ee50` (`desktop/Cargo.toml`),
 the revision every spike and this gate assessed. It moves only by ticket.
 Upstream defects are worked around in Collie's own code. A defect that blocks a ticket and
 has no work-around stops that ticket until upstream fixes it.
@@ -77,7 +77,7 @@ light and a faintly violet near-black in dark, with cards a step lighter than th
 lie on. The accent is iris, kept for what the human acts on or has chosen (a primary button,
 focus, the mark, their own words), and no state borrows it: amber needs you, sky blue is
 working, orchid is ready and waiting, red failed, green done. Two tests hold it
-(`desktop-rune/theme/tests/contrast.rs`): every text and fill pair meets WCAG AA, and the
+(`desktop/theme/tests/contrast.rs`): every text and fill pair meets WCAG AA, and the
 brand and the states are each at least 25 degrees of hue from one another. The fields
 OpenCode's kit left grey or blank (a hovered surface, a disabled control, the scrim, the inks
 of menus, switches and checkboxes) take Collie's colours too. Go to pane's terminal
@@ -93,13 +93,13 @@ Zoom is still missing. The earlier spike installed beside stable Desktop as "Col
 
 The spec's go/no-go prerequisites, each with what settles it:
 
-| #   | Prerequisite                                              | State                          | Evidence                                                                                                                             |
-| --- | --------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| 1   | The team accepts Rust                                     | met                            | D3; the human's answer on run-d9db315d.implement                                                                                     |
-| 2   | A named owner for the Rune pin, and a fork policy         | met                            | D4; the human's answer on run-d9db315d.implement                                                                                     |
-| 3   | Spikes 03–06 pass, or each failure has a product decision | met in tests; live checks open | the Run's `plan/INVESTIGATION.md`, tickets 03–06; D2; D5; `handoffs/rune-board-headless.png`, `evidence/corpus-png-public`           |
-| 4   | No regression on startup, idle RSS and terminal echo      | open                           | no baseline taken yet (D1)                                                                                                           |
-| 5   | Packaging works end to end                                | open                           | `desktop-rune/scripts/bundle.ts` and `rune-bundle.yml` built and argument-tested on Linux; CI, Gatekeeper and a live update are D1's |
+| #   | Prerequisite                                              | State                          | Evidence                                                                                                                        |
+| --- | --------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | The team accepts Rust                                     | met                            | D3; the human's answer on run-d9db315d.implement                                                                                |
+| 2   | A named owner for the Rune pin, and a fork policy         | met                            | D4; the human's answer on run-d9db315d.implement                                                                                |
+| 3   | Spikes 03–06 pass, or each failure has a product decision | met in tests; live checks open | the Run's `plan/INVESTIGATION.md`, tickets 03–06; D2; D5; `handoffs/rune-board-headless.png`, `evidence/corpus-png-public`      |
+| 4   | No regression on startup, idle RSS and terminal echo      | open                           | no baseline taken yet (D1)                                                                                                      |
+| 5   | Packaging works end to end                                | open                           | `desktop/scripts/bundle.ts` and `rune-bundle.yml` built and argument-tested on Linux; CI, Gatekeeper and a live update are D1's |
 
 ## Figures
 

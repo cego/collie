@@ -19,7 +19,7 @@ const { values: flags } = parseArgs({
   options: {
     app: { type: "string" },
     install: { type: "boolean", default: false },
-    // The Rune spike's bundled shell (desktop-rune/README.md), which needs no install.
+    // The Rune spike's bundled shell (desktop/README.md), which needs no install.
     rune: { type: "string" },
     home: { type: "string", default: `${root}.scratch/desktop-start/home` },
   },
@@ -96,7 +96,7 @@ const line = await runEffect(
           COLLIE_DESKTOP_COLLIE: JSON.stringify([process.execPath, `${root}src/main.ts`]),
         },
         desktopState: `${world.desktop}/state`,
-        // The shell keeps its core's state apart, as desktop-rune/protocol/src/core.rs says.
+        // The shell keeps its core's state apart, as desktop/protocol/src/core.rs says.
         own:
           flags.rune === undefined
             ? undefined

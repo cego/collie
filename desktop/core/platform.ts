@@ -99,7 +99,7 @@ export const Utils = {
   }): Promise<string[]> => Promise.resolve([]),
 };
 
-/** A bundle's own version.json, as `desktop-rune/scripts/bundle.ts` writes it. */
+/** A bundle's own version.json, as `desktop/scripts/bundle.ts` writes it. */
 const Local = Schema.fromJsonString(
   Schema.Struct({ channel: Schema.String, hash: Schema.String, baseUrl: Schema.String }),
 );

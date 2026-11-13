@@ -1,6 +1,6 @@
-// Builds Collie for this computer, with the stable update archive, manifest and installer (desktop-rune/README.md):
+// Builds Collie for this computer, with the stable update archive, manifest and installer (desktop/README.md):
 //
-//   bun run desktop-rune/scripts/bundle.ts [out]   # out defaults to desktop-rune/dist
+//   bun run desktop/scripts/bundle.ts [out]   # out defaults to desktop/dist
 //
 // On macOS it signs with ELECTROBUN_DEVELOPER_ID (ad hoc without one) and notarises with the
 // release's Apple secrets, as Desktop's build does. The release signs the archive with
@@ -17,7 +17,7 @@ import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as HttpClient from "effect/http/HttpClient";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
-import { MAC_ENTITLEMENTS, macSigning } from "../../desktop/scripts/mac-signing";
+import { MAC_ENTITLEMENTS, macSigning } from "./mac-signing";
 import { appliedSignatureOf, RELEASE_PUBLIC_KEY, verifyRelease } from "../../src/signing";
 import manifest from "../../herdr-plugin.toml";
 
@@ -81,7 +81,7 @@ export const compileCore = (outfile: string) =>
       "build",
       "--compile",
       "--tsconfig-override",
-      `${ROOT}desktop-rune/core/tsconfig.json`,
+      `${ROOT}desktop/core/tsconfig.json`,
       `${ROOT}desktop/src/bun/index.ts`,
       "--outfile",
       outfile,
@@ -364,7 +364,7 @@ export const packageInstaller = (out: string, os: Os, arch: string) =>
         `${out}/artifacts/${os}-${arch}-collie-desktop.dmg`,
       ]);
     } else {
-      yield* fs.copyFile(`${ROOT}desktop-rune/scripts/install-linux.sh`, `${build}/installer`);
+      yield* fs.copyFile(`${ROOT}desktop/scripts/install-linux.sh`, `${build}/installer`);
       yield* fs.chmod(`${build}/installer`, 0o755);
       yield* run("tar", [
         "--format=ustar",
@@ -397,11 +397,11 @@ const macIcon = (work: string) =>
 const program = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const os: Os = process.platform === "darwin" ? "macos" : "linux";
-  const out = Bun.argv[2] ?? `${ROOT}desktop-rune/dist`;
+  const out = Bun.argv[2] ?? `${ROOT}desktop/dist`;
   const work = `${out}/work`;
   yield* fs.makeDirectory(work, { recursive: true });
   yield* run("cargo", ["build", "--release", "-p", "collie-desktop-board"], {
-    cwd: `${ROOT}desktop-rune`,
+    cwd: `${ROOT}desktop`,
   });
   yield* compileCore(`${work}/collie-core`);
   const env: Env = process.env;
@@ -409,7 +409,7 @@ const program = Effect.gen(function* () {
     out,
     os,
     arch: process.arch,
-    shell: `${ROOT}desktop-rune/target/release/collie-desktop-board`,
+    shell: `${ROOT}desktop/target/release/collie-desktop-board`,
     core: `${work}/collie-core`,
     icon: os === "macos" ? yield* macIcon(work) : `${ROOT}assets/brand/logos/collie-tile-256.png`,
     manager: yield* compatibilityManager(os, process.arch, work),

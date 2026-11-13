@@ -1664,7 +1664,7 @@ Collie's native desktop is built from the release tag by `desktop-native`, which
 `.github/workflows/rune-bundle.yml` on Linux and macOS. The Rune shell and compiled
 TypeScript core share the existing stable identity, `dk.cego.collie.desktop`, and the
 existing installer and update artifact names. The installed product is named **Collie**.
-`desktop-rune/scripts/bundle.ts` supplies the official brand icons, USTAR update archives,
+`desktop/scripts/bundle.ts` supplies the official brand icons, USTAR update archives,
 and metadata the old app's updater accepts, so its next update replaces the webview app in
 place. Credentials, saved Machines, conversations and settings keep their existing paths.
 See [the cutover decision](adr/0067-collie-replaces-the-webview-desktop-in-place.md).
@@ -1752,9 +1752,9 @@ Root tests import Desktop modules and libraries, so the root `bun install` insta
 Desktop's dependencies too, frozen to `desktop/bun.lock`. After changing Desktop's
 dependencies, run `bun install` in `desktop/` first: the root install refuses a stale
 Desktop lockfile. CI relies on that one install before its root gate.
-The core's TypeScript is checked by `cd desktop && bun run typecheck`. The Rune
-workspace has its own format, clippy, tests and bundle jobs; the required CI gate includes
-both native platform bundles. The removed Nuxt app needs no Vue compiler or lint plugin.
+CI's `desktop` job checks the core's TypeScript (`cd desktop && bun run typecheck`) and
+the Rune workspace's format, clippy and tests; the required CI gate also includes both
+native platform bundles. The removed Nuxt app needs no Vue compiler or lint plugin.
 
 A test leaves nothing behind. `test/support/hosts.ts`, a preload, gives each test file a
 temporary root of its own, `TMPDIR` inside it, and removes it when the file ends. Every
@@ -2023,7 +2023,7 @@ its time.
   says as `invalid_state`; each act's result carries the Run's revision after it, which the
   caller's next frame is at least. A request without `parts` is sent whole records, their
   minutes said, on every change and tick, as an older Desktop expects.
-  The native view keeps records subscribed after they close (`desktop-rune/board/src/record.rs`
+  The native view keeps records subscribed after they close (`desktop/board/src/record.rs`
   owns their lifetime): the open one, the last 8 opened and a
   card pointed at for 150 ms, at most 16 MB of frames as Desktop weighs them, the least
   recently opened going first and never the open one. A kept record opened again has its

@@ -1,4 +1,4 @@
-// The Rune spike's bundle (desktop-rune/scripts/bundle.ts): the main process compiled so the
+// The Rune spike's bundle (desktop/scripts/bundle.ts): the main process compiled so the
 // bundle needs no Bun, each OS's layout and update files, and how macOS signs it.
 
 import * as Arr from "effect/Array";
@@ -12,7 +12,7 @@ import {
   macSignings,
   notarizeArgs,
   type Os,
-} from "../desktop-rune/scripts/bundle";
+} from "../desktop/scripts/bundle";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 

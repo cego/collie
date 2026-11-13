@@ -1,4 +1,4 @@
-// Writes what the Rune spike's cargo tests read (desktop-rune/README.md):
+// Writes what the Rune spike's cargo tests read (desktop/README.md):
 //
 //   bun run tools/rune-fixtures.ts
 //
@@ -32,7 +32,7 @@ import { FLOCK } from "../test/support/rune-fixtures";
 import { mainFlow } from "../test/support/flow";
 import { publicKeyOf, signRelease } from "../src/signing";
 
-const FIXTURES = new URL("../desktop-rune/fixtures/", import.meta.url).pathname;
+const FIXTURES = new URL("../desktop/fixtures/", import.meta.url).pathname;
 
 type Unspoken = Exclude<RpcGroup.Rpcs<typeof DesktopRpcs>["_tag"], "flock" | "syncNow">;
 const Spoken = DesktopRpcs.omit(

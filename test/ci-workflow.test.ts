@@ -89,16 +89,31 @@ test("CI requires the same native desktop builds that the release publishes", ()
         expect(pipeline.jobs["desktop-native"]).toEqual({
           uses: "./.github/workflows/rune-bundle.yml",
         });
-      for (const name of ["desktop", "desktop-rune", "desktop-native"]) {
+      for (const name of ["desktop", "desktop-native"]) {
         expect(ci.jobs.test?.needs).toContain(name);
         expect(Arr.join(commands(ci.jobs.test), "\n")).toContain(
           `test "\${{ needs.${name}.result }}" = success`,
         );
       }
+      const desktop = ci.jobs.desktop;
+      const inDesktop =
+        desktop !== undefined && "steps" in desktop
+          ? Arr.flatMap(desktop.steps, (step) =>
+              step["working-directory"] === "desktop" && step.run !== undefined ? [step.run] : [],
+            )
+          : [];
+      expect(inDesktop).toEqual(
+        expect.arrayContaining([
+          "bun run typecheck",
+          "cargo fmt --all --check",
+          "cargo clippy --workspace --all-targets -- -D warnings",
+          "cargo test --workspace",
+        ]),
+      );
       expect(release.jobs.release?.needs).toContain("desktop-native");
       for (const platform of ["linux", "macos"])
-        expect(commands(native.jobs[platform])).toContain("bun run desktop-rune/scripts/bundle.ts");
-      expect(commands(native.jobs.macos)).toContain("sh tools/verify-mac-app.sh desktop-rune/dist");
+        expect(commands(native.jobs[platform])).toContain("bun run desktop/scripts/bundle.ts");
+      expect(commands(native.jobs.macos)).toContain("sh tools/verify-mac-app.sh desktop/dist");
     }),
   ));
 
