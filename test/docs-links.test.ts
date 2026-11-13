@@ -51,7 +51,9 @@ test("every link between the repository's documents resolves, anchors included",
       const files = Arr.filter(
         [...new Bun.Glob("**/*.md").scanSync({ cwd: ROOT })],
         (path: string) =>
-          !Str.split(path, "/").includes("node_modules") && !pipe(path, Str.startsWith("plans/")),
+          !Str.split(path, "/").includes("node_modules") &&
+          !pipe(path, Str.startsWith("plans/")) &&
+          !pipe(path, Str.startsWith("desktop-rune/vendor/")),
       );
       expect(files).toContain("AGENTS.md");
 

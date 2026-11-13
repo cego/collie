@@ -16,6 +16,7 @@ import {
   flockStream,
   openDoors,
   recordEvents,
+  spawned,
   syncNow,
   type RouteChange,
   type BoardSource,
@@ -45,6 +46,37 @@ const alive = (pid: number) => {
     return false;
   }
 };
+
+test("closing a scope reaps a child that ignores SIGTERM", () => {
+  let pid: number | undefined;
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const child = yield* spawned(() =>
+        Bun.spawn(
+          [
+            process.execPath,
+            "-e",
+            'process.on("SIGTERM", () => {}); process.stdin.resume(); process.stdout.write("ready");',
+          ],
+          { stdin: "pipe", stdout: "pipe", stderr: "ignore" },
+        ),
+      );
+      pid = child.pid;
+      const reader = child.stdout.getReader();
+      const ready = yield* Effect.promise(() => reader.read());
+      reader.releaseLock();
+      expect(new TextDecoder().decode(ready.value)).toBe("ready");
+    }).pipe(
+      Effect.scoped,
+      Effect.andThen(() => Effect.sync(() => expect(alive(pid!)).toBe(false))),
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (pid !== undefined && alive(pid)) process.kill(pid, "SIGKILL");
+        }),
+      ),
+    ),
+  );
+});
 
 for (const [channel, mode] of [
   ["chat", "exit"],

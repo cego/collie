@@ -1,0 +1,15 @@
+{"said":{"about":null,"text":"Use the Read tool once to read /etc/hostname, change nothing, then tell me the hostname in one sentence."}}
+{"event":{"runId":"0957b074-2398-47ba-b4fa-8cf8b3a1c38b:1","threadId":"0957b074-2398-47ba-b4fa-8cf8b3a1c38b","type":"RUN_STARTED"}}
+{"event":{"parentMessageId":"msg_011CgsWXGXPoceaGVZti7XzN","toolCallId":"toolu_01XS1ZjFcJi8H9zLxc25vfJV","toolCallName":"Read","type":"TOOL_CALL_START"}}
+{"event":{"delta":"","toolCallId":"toolu_01XS1ZjFcJi8H9zLxc25vfJV","type":"TOOL_CALL_ARGS"}}
+{"event":{"delta":"{\"file_path\": \"/etc/","toolCallId":"toolu_01XS1ZjFcJi8H9zLxc25vfJV","type":"TOOL_CALL_ARGS"}}
+{"event":{"delta":"hostname","toolCallId":"toolu_01XS1ZjFcJi8H9zLxc25vfJV","type":"TOOL_CALL_ARGS"}}
+{"event":{"delta":"\"}","toolCallId":"toolu_01XS1ZjFcJi8H9zLxc25vfJV","type":"TOOL_CALL_ARGS"}}
+{"event":{"toolCallId":"toolu_01XS1ZjFcJi8H9zLxc25vfJV","type":"TOOL_CALL_END"}}
+{"event":{"content":"1\tvm-mk.cegohost.dk\n2\t","messageId":"toolu_01XS1ZjFcJi8H9zLxc25vfJV:result","role":"tool","toolCallId":"toolu_01XS1ZjFcJi8H9zLxc25vfJV","type":"TOOL_CALL_RESULT"}}
+{"event":{"messageId":"msg_011CgsWXPUqvYC4w9JpueXSp:0","role":"assistant","type":"TEXT_MESSAGE_START"}}
+{"event":{"delta":"The hostname is `","messageId":"msg_011CgsWXPUqvYC4w9JpueXSp:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"vm-mk.ceg","messageId":"msg_011CgsWXPUqvYC4w9JpueXSp:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"delta":"ohost.dk`.","messageId":"msg_011CgsWXPUqvYC4w9JpueXSp:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"messageId":"msg_011CgsWXPUqvYC4w9JpueXSp:0","type":"TEXT_MESSAGE_END"}}
+{"event":{"runId":"0957b074-2398-47ba-b4fa-8cf8b3a1c38b:1","threadId":"0957b074-2398-47ba-b4fa-8cf8b3a1c38b","type":"RUN_FINISHED"}}

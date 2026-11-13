@@ -199,7 +199,7 @@ test(
               Effect.catchDefect((defect) =>
                 Effect.die(
                   new Error(
-                    `${String(defect)}\nthe board: ${encodeJson(
+                    `${String(defect)}\nwaiting for: ${String(wanted)}\nthe board: ${encodeJson(
                       Arr.map([...board.values()], ({ runs, state, sentence, agents, checks }) => ({
                         runs,
                         state,

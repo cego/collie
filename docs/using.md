@@ -404,6 +404,19 @@ that run's checkout, and every run of the task uses the new one from then on; a 
 that has gone as well leaves the run parked, saying so, until you restore it or start
 again.
 
+While a step awaits its Output, Collie also checks the process of its managed server.
+If that process has exited and its endpoint no longer answers, a terminal still marked
+working does not keep the Run waiting indefinitely. Collie proves the old worker quiet,
+closes its exact terminal and starts the same step again in the same Run and checkout.
+On core, a recorded conversation is resumed; otherwise the replacement starts a fresh
+conversation with the original step. An Output that arrives while the old worker stops
+is collected without starting a replacement. A live server, an uncertain identity or an
+unanswered health probe never authorises a second worker. Where the platform cannot
+establish that an exited server's child processes have stopped, the Run parks with that
+reason and keeps the terminal and control record for recovery. A process that exits while
+being inspected is ignored only when the operating system proves its PID is absent;
+an unreadable live process still prevents recovery.
+
 ### What a task workspace is called
 
 The name is worked out, not asked for: `<Project or theme> | <what this work is>`, for
@@ -1952,7 +1965,9 @@ compositor or an X11 session, it says the scale is not known and why, and Zoom a
 marks to `record-timing.log` in Desktop's state directory: `record:click`, `record:mounted`,
 `record:frame` and `record:usable`, one JSON line each with the card and the time. Desktop
 sets the same marks as User Timing marks either way ([Measuring a record
-open](internals.md#measuring-a-record-open)).
+open](internals.md#measuring-a-record-open)). It also logs Desktop's launch, its first usable
+board, a terminal key and its echo, a chat chunk and its draw, and each frame of a scroll
+(`desktop/README.md`, Measuring a record open natively).
 
 **Settings** also holds **Collie**: every setting the TUI's Settings offers — each default a
 Run reads, `proactive`, the extra `models.<harness>` and each `notifications.<kind>` — with
@@ -2189,6 +2204,8 @@ machine's shared SSH connection, so the host is started with the environment `co
 so nothing its model does is ever recorded as yours. For a herdr machine on a session other than `default`, the host is handed that
 session's socket. Desktop never starts, signals or connects to a host by any other route.
 `COLLIE_DESKTOP_COLLIE` replaces how `collie` is run here, as a JSON array.
+`COLLIE_DESKTOP_STATE_HOME` moves where Desktop keeps its own state from `$XDG_STATE_HOME`;
+what Desktop starts, `collie` and herdr among it, still gets your `XDG_STATE_HOME`.
 
 ### The Flock chat
 
@@ -2814,6 +2831,12 @@ review. Each rally is bounded to four rounds and stops on no progress or an unan
 blocking dispute. Later tickets start only after the rally settles. When the last review
 already covers the finished plan, it is reused; further work gets another review.
 
+A reviewer can resolve a carried dispute by explicitly withdrawing the same finding with
+a reason or confirming that it was corrected. Both the implement rally and a standalone
+review's fix loop apply that decision. A clean verdict or an omitted finding alone leaves
+the dispute unresolved. If the review still raises or disputes that finding, it remains
+open despite a conflicting withdrawal.
+
 The detail panel of a run that stopped opens with **Stopped**: one line saying why — the
 review loop out of iterations or making no progress, a blocking finding the implementer
 disputed, a last fix whose own account did not hold up, a stop someone asked for, or work
@@ -2961,6 +2984,11 @@ own comments, bots' and system notes start nothing: to tell the Run something, s
 (`collie run steer <run> "<words>"`, or from the card) rather than commenting. Collie
 never resolves a thread; that stays the reviewer's. A check that fails on a pushed head
 goes to a fix round, and four of them in a row park the Run for you to repair and resume.
+A confirmed conflict with the merge request's target also goes to the fixer. It merges
+the actual target branch into the source, preserves both branches' work, and plain-pushes
+the repair. Collie then proves the pushed head before asking a fresh release go. Four
+unsuccessful conflict repairs, or a repair that leaves the remote head unchanged, park
+the Run with the reason; repair it and resume to have Collie read the forge again.
 
 To have it ask before it shares the merge request with your team, turn on
 `release.share_for_approval` and name your Slack channel in `release.approval_channel`
@@ -3772,6 +3800,11 @@ Run numbers it — answered the same at least nine times in ten over at least te
 a `defect` finding, `repeated-answer-<workflow>-<question>`: Collie asks what it already
 knows. Like any `defect`, it is filed only with `runs=machine`.
 
+A Run resumed after an upgrade keeps the window it already recorded. If that window
+predates question measures, its summary says they were not recorded, and it generates
+no repeated-answer findings. It does not read a new window or repeat completed triage,
+issue filing or Improvement starts.
+
 It waits for its Improvements, then writes `summary.md` in its Run directory: those two
 question measures; each issue filed or commented, by category; each Improvement's Run and how it ended; and each finding
 left out, with why. An Improvement that fails is listed there, and the Run still succeeds.
@@ -4041,6 +4074,21 @@ on; Collie keeps collecting its Output, and the Run goes on when it is written. 
 Claude Code report such a stop; Codex and OpenCode do not yet. Where nothing has room, the
 agent is left where it is, and the Run waits for it, parking after its collection time with
 when each Subscription resets.
+
+That wait rechecks the fallback chain. A Subscription that ran out becomes eligible again
+when its recorded limits reset, or when a reading no more than five minutes old for the same
+account, taken after it ran out, shows those
+limits in a later window with room. The old agent is stopped before its replacement starts
+on the same work. Missing or unreadable readings, and a healthier reading of the same
+window, do not erase the earlier exhaustion. Runs recorded before this recovery metadata
+was added can still recover at their recorded reset time; no observation time is invented
+when they replay.
+
+While that wait is active, a dead server or a lost core terminal does not restart the
+exhausted agent. Recovery still starts agents on other Subscriptions. If a tool writes valid
+Output while its agent is being stopped for a fallback, Collie keeps that Output after the
+old agent is proved quiet and starts no replacement. That decision is recorded, so replay
+does not start the work again.
 
 Usage is data: it never refuses, holds or delays work.
 
