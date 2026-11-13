@@ -1,24 +1,27 @@
-// When a record's first frame passed the host, the bridge and Desktop's Bun process, for the
-// record-open benchmark to split its time (docs/internals.md, Measuring a record open). Off
-// unless `COLLIE_RECORD_MARKS` names a file.
+// Benchmark marks from the host, bridge and Desktop, off unless COLLIE_RECORD_MARKS names a file.
 
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import * as Str from "effect/String";
 import { Clock, Config, Effect, FileSystem, Option, Stream } from "effect";
 
-export type RecordMarkAt = "host:emit" | "bridge:relay" | "desktop:read" | "desktop:serve";
+export type RecordMarkAt =
+  | "host:emit"
+  | "bridge:relay"
+  | "desktop:read"
+  | "desktop:serve"
+  | "board:built";
 
-/** A line per mark appended to the file, or null when marking is off. */
+/** A line per mark, with a Run id or board-build milliseconds, or null when marking is off. */
 export const recordMarks = Effect.gen(function* () {
   const file = yield* Config.option(Config.String("COLLIE_RECORD_MARKS")).pipe(
     Effect.orElseSucceed(() => Option.none<string>()),
   );
   if (Option.isNone(file)) return null;
   const fs = yield* FileSystem.FileSystem;
-  return (at: RecordMarkAt, runId: string) =>
+  return (at: RecordMarkAt, value: string) =>
     Clock.currentTimeMillis.pipe(
       Effect.flatMap((ms) =>
-        fs.writeFileString(file.value, `${ms} ${at} ${runId}\n`, { flag: "a" }),
+        fs.writeFileString(file.value, `${ms} ${at} ${value}\n`, { flag: "a" }),
       ),
       Effect.ignore,
     );

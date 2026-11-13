@@ -131,6 +131,7 @@ type ToolAnswer = Effect.Effect<
 
 export interface RunAnswerReads {
   readonly runs: Effect.Effect<ReadonlyArray<RunFacts>>;
+  readonly related?: Effect.Effect<ReadonlyArray<RunFacts>>;
   readonly offers: (runId: string) => ToolAnswer;
   readonly progress: (runId: string) => Effect.Effect<RunProgress | null, never, PlatformServices>;
   readonly flow: (runId: string) => Effect.Effect<Flow | null, never, PlatformServices>;
@@ -217,7 +218,7 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
           input,
           "collie_run",
           (run) => said(runAnswer(env, run, reads)),
-          reads?.runs,
+          reads?.related ?? reads?.runs,
         ),
       ),
     collie_workspaces: () => answer(workspaceFacts(env)),
@@ -475,8 +476,12 @@ export const checkLines = Effect.fn("Tools.checkLines")(function* (
   run: RunFacts,
   runs: ReadonlyArray<RunFacts>,
   now: number,
+  all?: Effect.Effect<ReadonlyArray<RunFacts>>,
 ) {
-  const check = yield* runningCheck(run, runs, yield* markersOf(runs), now);
+  const own = yield* markersOf([run]);
+  const every = own.has(run.id) && all !== undefined ? yield* all : runs;
+  const markers = own.has(run.id) ? yield* markersOf(every) : own;
+  const check = yield* runningCheck(run, every, markers, now);
   const memory = yield* memoryWaitOf(run.dir);
   const waiting = memory === null ? [] : [waitLine(memory)];
   if (check === null) return waiting;
@@ -497,9 +502,9 @@ const runAnswer = Effect.fn("Tools.runAnswer")(function* (
   run: RunFacts,
   reads?: RunAnswerReads,
 ) {
-  const runs = yield* reads?.runs ?? listRuns(env);
+  const runs = yield* reads?.related ?? reads?.runs ?? listRuns(env);
   const facts = yield* runFacts(env, run, runs, reads?.launches(run.id));
-  const running = yield* checkLines(run, runs, yield* Clock.currentTimeMillis);
+  const running = yield* checkLines(run, runs, yield* Clock.currentTimeMillis, reads?.runs);
   const kept = Arr.filter(yield* donePasses(run), (one) => one.log !== null);
   const done =
     kept.length === 0

@@ -65,6 +65,8 @@ export const VerificationSchema = Schema.Struct({
   failed: Schema.optionalKey(Schema.Array(FailedTestSchema)),
   /** The one test a `rerun` ran. */
   test: Schema.optionalKey(FailedTestSchema),
+  /** Whether a `rerun`'s test is the branch's own since the default branch, so never a Flake. */
+  own: Schema.optionalKey(Schema.Boolean),
   /** The pipeline job a `ci` pass read, and the merge commit it ran on where not the head itself. */
   job: Schema.optionalKey(
     Schema.Struct({
