@@ -1998,7 +1998,17 @@ test.each(["before detection", "repair collection"] as const)(
             yield* until(acknowledgedStep(yield* Path.Path));
             herdr.stale = true;
             if (when === "repair collection") {
-              yield* spend(5_000);
+              yield* until(
+                deliveredTo(dir, "r1").pipe(
+                  Effect.orDie,
+                  Effect.map((found) =>
+                    Arr.some(
+                      found,
+                      (one) => one.cause.kind === "repair" && one.state === "acknowledged",
+                    ),
+                  ),
+                ),
+              );
               expect(prompts(yield* rig.calls())).toEqual(
                 expect.arrayContaining([expect.stringContaining("not usable")]),
               );
@@ -2012,7 +2022,9 @@ test.each(["before detection", "repair collection"] as const)(
                 outputPath("r1"),
                 '{"verdict":"clean","note":"finished before retirement"}',
               );
-            yield* spend(20_000);
+            if (when === "repair collection")
+              yield* until(prompted("Your task for this step", 2));
+            else yield* spend(20_000);
             expect(
               everyLaunch(yield* rig.calls()),
               yield* read(controlPath(dir, PARKED, "r1")),
