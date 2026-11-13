@@ -83,7 +83,7 @@ pub enum Form {
         chosen: String,
         /// None until the Run has said what it offers.
         offer: Option<collie_desktop_protocol::generated::OffersSuccessItem>,
-        fields: Vec<(String, bool, TextEdit)>,
+        fields: Vec<crate::board::offer_form::OfferEntry>,
     },
     /// A proposal waiting for a yes or a no.
     Proposal {

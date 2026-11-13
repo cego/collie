@@ -22,7 +22,7 @@ answer; it does not wait for the host's initial board build. Workspaces, explici
 Machine-qualified Run reads, and remote file reads remain available while that board
 loads. The board stays labelled as connecting, and writes and board actions still
 require its complete live snapshot. An opening bridge must become ready within two
-minutes, and the host must then identify itself within five seconds. Failed openings
+minutes, unless it is waiting on an SSO login, and the host must then identify itself within five seconds. Failed openings
 close their scopes before a fallback or retry; the first board must match that identity.
 
 | Crate or file                | What it owns                                                                                                                                                                                                                                 |
@@ -48,6 +48,20 @@ close their scopes before a fallback or retry; the first board must match that i
 | `fixtures/`                  | The test Flock and NDJSON transcripts of Effect's own client and server, written by `tools/rune-fixtures.ts`                                                                                                                                 |
 | `fixtures/terminal/`         | `terminal` streams recorded by `core/record-terminal.ts`                                                                                                                                                                                     |
 | `fixtures/chat/`             | `say` streams recorded by `chat/src/bin/record-say.rs`                                                                                                                                                                                       |
+
+## Machine connections
+
+The board, record and chat bridges share one connection lifetime. An exit, socket read/write
+failure or RPC transport failure on any of them retires all three, including when the board
+is still streaming. Their scopes close before reconnecting, with backoff capped at 60 seconds;
+removing a route or closing Desktop stops its reconnects. Sync now also renews a same-version
+connection. `test/desktop-channel-lifecycle.test.ts` exercises this with isolated stdio bridges.
+
+A transport failure does not establish a version mismatch. Chat names the transport failure
+and reserves upgrade advice for an unknown operation or an incompatible protocol. A submitted
+write cut off before its reply has an unknown outcome and is not replayed on the new connection.
+An explicit `collie_do` retry takes the returned batch id as `request_id`, with the same actions;
+each action keeps its original host request. Inspect the recorded result before retrying.
 
 ## Commands
 
@@ -127,7 +141,7 @@ faithfully:
 
 ### Build times and size
 
-vm-mk: 24 cores, rustc 1.99.1, dependencies already fetched, a target directory of its own.
+vm-mk: 24 cores, rustc 1.100.0, dependencies already fetched, a target directory of its own.
 
 | Build                                        | Time    |
 | -------------------------------------------- | ------- |
@@ -336,7 +350,9 @@ inspector beside it once there is room. A Step's open questions are answered one
 "Question k of n", each its own `Answer`. A question the board also has is answered through the
 board's questionnaire, as `FlowDecision.vue` does: Hold the Run among its options, words for the
 agent instead, a status line, and the next question once the host takes the answer. Its Start asks the Run what it `offers` now and sends
-`Invoke` with the inputs typed, as the board's offers dialog does.
+`Invoke` with validated inputs, as the board's offers dialog does. Both use
+`board/src/board/offer_form.rs` for typed controls, defaults, help, and field errors.
+An offer's confirmation waits for its named button even when it takes no inputs.
 
 The Diff tab reads each file's patch (`diff:<path>`) and parses it with rune-kit's
 `diff::parse`: only an open file's, four at a time, so a big file is read once it is opened; a

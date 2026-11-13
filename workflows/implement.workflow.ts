@@ -69,6 +69,7 @@ import {
   Effect,
   Fiber,
   FileSystem,
+  Path,
   Predicate,
   Schema,
   flow,
@@ -347,6 +348,23 @@ export default defineWorkflow({
       workflow: "release",
       when: "succeeded",
       inputs: { mr: "merge-request" },
+      given: { ship: "release" },
+      ships: "release",
+      confirm:
+        "Release waits until the merge request is approved, green and proved at its head, then asks for your go. On it, it merges, tags the release and deploys the tag to stage where it has one; production waits for a second go.",
+      eligible: (facts) => facts.mrUrl !== null,
+    },
+    {
+      id: "merge",
+      connections: ["gitlab"],
+      title: "Merge",
+      workflow: "release",
+      when: "succeeded",
+      inputs: { mr: "merge-request" },
+      given: { ship: "merge" },
+      ships: "merge",
+      confirm:
+        "Merge waits until the merge request is approved, green and proved at its head, then asks for your go. On it, it merges and stops: nothing is tagged or deployed.",
       eligible: (facts) => facts.mrUrl !== null,
     },
     {
@@ -633,18 +651,17 @@ export default defineWorkflow({
       if (recovery.entry !== "Build") {
         const parent = Str.split(recovers ?? "", "/").at(-1) ?? "";
         parentDir = (yield* host.place(parent)).dir;
-        build = yield* Activity.make({
-          name: "recovery-build-claims",
-          success: Schema.NullOr(Built),
-          execute: Effect.gen(function* () {
+        const claimsAt = (
+          from: string,
+          operations: ReadonlyArray<string> = ["build", ...Arr.map(tickets, (one) => one.file)],
+        ) =>
+          Effect.gen(function* () {
             const fs = yield* FileSystem.FileSystem;
-            const outputs = yield* Effect.forEach(
-              ["build", ...Arr.map(tickets, (one) => one.file)],
-              (operation) =>
-                fs.readFileString(agents.outputFor(parent, operation)).pipe(
-                  Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Built))),
-                  Effect.orElseSucceed(() => null),
-                ),
+            const outputs = yield* Effect.forEach(operations, (operation) =>
+              fs.readFileString(agents.outputFor(from, operation)).pipe(
+                Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Built))),
+                Effect.orElseSucceed(() => null),
+              ),
             );
             const found = Arr.filter(outputs, Predicate.isNotNull);
             const last = found.at(-1);
@@ -655,8 +672,43 @@ export default defineWorkflow({
                   tickets_done: Arr.flatMap(found, (one) => one.tickets_done ?? []),
                   criteria: Arr.flatMap(found, (one) => one.criteria ?? []),
                 };
-          }),
+          });
+        build = yield* Activity.make({
+          name: "recovery-build-claims",
+          success: Schema.NullOr(Built),
+          execute: claimsAt(parent),
         });
+        // A completed null Activity stays null on replay; ancestry gets its own reading.
+        if (build === null)
+          build = yield* Activity.make({
+            name: "recovery-build-claims-ancestry",
+            success: Schema.NullOr(Built),
+            execute: Effect.gen(function* () {
+              const fs = yield* FileSystem.FileSystem;
+              const path = yield* Path.Path;
+              const seen = new Set([runId]);
+              let from = parent;
+              while (from !== "" && !seen.has(from)) {
+                seen.add(from);
+                const files = yield* fs
+                  .readDirectory(path.dirname(agents.outputFor(from, "build")))
+                  .pipe(Effect.orElseSucceed(() => []));
+                const tickets = Arr.sort(
+                  Arr.filter(files, (name) => pipe_(name, Str.endsWith(".md.json"))),
+                  Str.Order,
+                );
+                const claims = yield* claimsAt(from, [
+                  "build",
+                  ...Arr.map(tickets, (name) => pipe_(name, Str.slice(0, -5))),
+                ]);
+                if (claims !== null) return claims;
+                from = yield* fs
+                  .readFileString(`${(yield* host.place(from)).dir}/recovery-parent`)
+                  .pipe(Effect.orElseSucceed(() => ""));
+              }
+              return null;
+            }),
+          });
         yield* forecast([
           ...(recovery.entry === "Review" ? [reviewRound] : []),
           gate,
