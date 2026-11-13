@@ -8,6 +8,18 @@ use ghostty_sys::{
 };
 
 #[test]
+fn copied_selection_joins_soft_wraps_but_keeps_hard_lines_and_trims_spaces() {
+    let mut vt = Vt::new(6, 4, &GHOSTTY);
+    vt.write(b"abcdefghi \r\nxy ");
+    let start = vt.screen_point(0, 0).unwrap();
+    let end = vt.screen_point(5, 2).unwrap();
+    vt.select(start, end, Unit::Cell);
+    assert_eq!(vt.selection_text().as_deref(), Some("abcdefghi\nxy"));
+    vt.clear_selection();
+    assert_eq!(vt.selection_text(), None);
+}
+
+#[test]
 fn a_wide_glyph_takes_two_columns_and_the_text_after_it_keeps_its_column() {
     let mut vt = Vt::new(20, 4, &GHOSTTY);
     vt.write("日本 ok".as_bytes());
