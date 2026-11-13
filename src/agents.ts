@@ -292,6 +292,8 @@ export const RanOut = Schema.TaggedStruct("RanOut", {
   transcript: Schema.NullOr(Schema.String),
   /** When its Subscription resets, where a reading says. */
   resetsAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /** When this incident was observed; absent in older saved results. */
+  observedAt: Schema.optionalKey(Schema.Finite),
   /** The exhausted windows that substantiated this incident, kept across replay. */
   exhaustion: Schema.optionalKey(
     Schema.Struct({
@@ -311,7 +313,7 @@ export type RanOut = typeof RanOut.Type;
 const isRanOut = Schema.is(RanOut);
 const RanOutJson = Schema.fromJsonString(RanOut);
 const encodeRanOut = flow(Schema.encodeResult(RanOutJson), Result.getOrThrow);
-type SpentChoice = Pick<RanOut, "why" | "resetsAt" | "exhaustion"> & {
+type SpentChoice = Pick<RanOut, "why" | "resetsAt" | "observedAt" | "exhaustion"> & {
   readonly on: AgentChoice;
 };
 
@@ -1747,13 +1749,49 @@ const sameUsage = (one: AgentChoice, other: AgentChoice) => {
   return said(one) === said(other) || (drawn !== null && drawn === subscriptionOf(other));
 };
 
-/** A previous exhaustion stops excluding a Subscription only when its limits recover. */
+/**
+ * Old incidents cannot prove their original account or window. Fresh current capacity
+ * can justify one retry; every new incident records observedAt, so another exhaustion
+ * cannot take this compatibility path even when its usage source cannot be read.
+ */
+const legacyRetryAvailable = (
+  spent: SpentChoice,
+  readings: ReadonlyArray<UsageReading>,
+  now: number,
+) => {
+  if (spent.observedAt !== undefined || spent.resetsAt == null) return false;
+  const previousReset = epochMs(spent.resetsAt);
+  if (!Number.isFinite(previousReset)) return false;
+  const matching = Arr.filter(
+    readings,
+    (reading) => reading.subscription === subscriptionOf(spent.on),
+  );
+  const reading = matching.length === 1 ? matching[0] : undefined;
+  if (reading === undefined || reading.problem !== null || !reading.account) return false;
+  const at = epochMs(reading.at);
+  if (!Number.isFinite(at) || at > now || now - at > USAGE_INTERVAL_MS) return false;
+  const windows = Arr.filter(reading.windows, (window) => appliesTo(window, spent.on.model));
+  return (
+    windows.length > 0 &&
+    Arr.every(
+      windows,
+      (window) => Number.isFinite(window.usedPercent) && window.usedPercent >= 0 && !isFull(window),
+    ) &&
+    Arr.some(windows, (window) => {
+      if (window.resetsAt === null) return false;
+      const nextReset = epochMs(window.resetsAt);
+      return Number.isFinite(nextReset) && nextReset > previousReset && nextReset > now;
+    })
+  );
+};
+
+/** Known incidents require reset evidence; old incomplete records can get one bounded retry. */
 const usageRecovered = (spent: SpentChoice, readings: ReadonlyArray<UsageReading>, now: number) => {
   const resetPassed = (at: string | null | undefined) =>
     at != null && Number.isFinite(epochMs(at)) && epochMs(at) <= now;
   const held = spent.exhaustion;
-  // Older Activities recorded just this reset. Do not invent observation times on replay.
-  if (held === undefined) return resetPassed(spent.resetsAt);
+  if (held === undefined)
+    return resetPassed(spent.resetsAt) || legacyRetryAvailable(spent, readings, now);
   if (held.windows.length === 0 || !Number.isFinite(held.at) || held.at > now) return false;
   return Arr.every(held.windows, (window) => {
     if (resetPassed(window.resetsAt)) return true;
@@ -3875,6 +3913,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               why,
               transcript: reported?.transcript ?? null,
               resetsAt,
+              observedAt: now,
             };
             if (exhaustion !== undefined) result.exhaustion = exhaustion;
             // Core recovery must see the wait even before this RanOut is journaled.
