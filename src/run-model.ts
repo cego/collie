@@ -444,21 +444,21 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   const readers = new Map<string, Set<string>>();
   /** The checkouts whose every watch is in place, so a head read in one stands until it moves. */
   const watching = new Set<string>();
-  const moves = yield* PubSub.unbounded<void>();
+  // The first build may read a head before the board subscribes to its changes.
+  const moves = yield* PubSub.unbounded<void>({ replay: 1 });
   /** How often each watched checkout has moved. */
   const checkouts = new Map<string, number>();
   /** The checkout moved: every head read in it is read again, and its Runs take the next number. */
-  const moved = (cwd: string) =>
-    Effect.gen(function* () {
-      checkouts.set(cwd, (checkouts.get(cwd) ?? 0) + 1);
-      for (const key of heads.keys()) if (Str.startsWith(`${cwd}\0`)(key)) heads.delete(key);
-      for (const run of readers.get(cwd) ?? []) {
-        const revision = touch(run);
-        const observed = facts.get(run);
-        if (observed !== undefined) facts.set(run, { ...observed, revision });
-      }
-      yield* PubSub.publish(moves, undefined);
-    });
+  const moved = (cwd: string) => {
+    checkouts.set(cwd, (checkouts.get(cwd) ?? 0) + 1);
+    for (const key of heads.keys()) if (Str.startsWith(`${cwd}\0`)(key)) heads.delete(key);
+    for (const run of readers.get(cwd) ?? []) {
+      const revision = touch(run);
+      const observed = facts.get(run);
+      if (observed !== undefined) facts.set(run, { ...observed, revision });
+    }
+    PubSub.publishUnsafe(moves, undefined);
+  };
   /** The checkout's git directories, watched for its HEAD and its branches moving. */
   const watchCheckout = (cwd: string) =>
     Effect.gen(function* () {
@@ -472,7 +472,11 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       const shared = Str.startsWith("/")(common) ? common : `${cwd}/${common}`;
       let ready = 0;
       const onReady = () => {
-        if (++ready === 3) watching.add(cwd);
+        if (++ready === 3) {
+          watching.add(cwd);
+          // A commit between the first head read and watch registration produced no event.
+          moved(cwd);
+        }
       };
       yield* Stream.mergeAll(
         [
@@ -481,7 +485,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
           fs.watch(`${shared}/refs`, { recursive: true, onReady }),
         ],
         { concurrency: "unbounded" },
-      ).pipe(Stream.runForEach(() => moved(cwd)));
+      ).pipe(Stream.runForEach(() => Effect.sync(() => moved(cwd))));
     }).pipe(
       Effect.ignore,
       Effect.ensuring(

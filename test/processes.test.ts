@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
-import { Clock, Effect, Fiber, FileSystem, Stream } from "effect";
+import { Clock, Effect, Fiber, FileSystem, PlatformError, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
@@ -10,6 +10,8 @@ import {
   commandOf,
   groupOf,
   processOf,
+  processAbsent,
+  sessionOf,
   startedOf,
 } from "../src/processes";
 import { runEffect } from "./support/effect";
@@ -25,6 +27,113 @@ test("a process's command and start time read alone are what reading it whole sa
 
 test("a process that is not running has no start time", () =>
   runEffect(Effect.map(startedOf(2 ** 22 + 1), (started) => expect(started).toBeNull())));
+
+test.each(["listing", "member", "ps"])(
+  "an unreadable process %s does not prove an empty session",
+  (at) =>
+    runEffect(
+      Effect.gen(function* () {
+        const refused = Effect.fail(
+          PlatformError.systemError({
+            _tag: "PermissionDenied",
+            module: "FileSystem",
+            method: "read",
+          }),
+        );
+        const fs = FileSystem.makeNoop({
+          exists: () => Effect.succeed(at !== "ps"),
+          readDirectory: () => (at === "listing" ? refused : Effect.succeed([String(process.pid)])),
+          readFileString: () => refused,
+        });
+        const found = yield* sessionOf(7).pipe(
+          Effect.provideService(FileSystem.FileSystem, fs),
+          Effect.provideService(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() => refused),
+          ),
+          Effect.result,
+        );
+        expect(found._tag).toBe("Failure");
+      }),
+    ),
+);
+
+test.skipIf(process.platform !== "linux").each([true, false])(
+  "an Unknown session cmdline error is ignored only for a proven absent process (exited: %p)",
+  (exited) =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const child = yield* spawner.spawn(
+          ChildProcess.make(
+            process.execPath,
+            ["-e", 'console.log("ready"); setInterval(() => {}, 1000);'],
+            { detached: false, stdout: "pipe", stderr: "ignore" },
+          ),
+        );
+        yield* Stream.runDrain(Stream.take(Stream.decodeText(child.stdout), 1));
+        const live = (yield* processOf(child.pid))!;
+        expect(live.session).not.toBeNull();
+        expect(live.session).not.toBe(child.pid);
+        expect(yield* processAbsent(child.pid)).toBe(false);
+        const cmdline = `/proc/${child.pid}/cmdline`;
+        const unknown = PlatformError.systemError({
+          _tag: "Unknown",
+          module: "FileSystem",
+          method: "readFile",
+          pathOrDescriptor: cmdline,
+          description: "cmdline read failed",
+        });
+        const absentAtRead: boolean[] = [];
+        const raced: FileSystem.FileSystem = {
+          ...fs,
+          readDirectory: (path, options) =>
+            fs
+              .readDirectory(path, options)
+              .pipe(
+                Effect.map((names) =>
+                  path === "/proc"
+                    ? Arr.filter(names, (name) => name === String(child.pid))
+                    : names,
+                ),
+              ),
+          readFileString: (path, encoding) =>
+            path === cmdline
+              ? Effect.gen(function* () {
+                  if (exited) {
+                    yield* child.kill();
+                    yield* child.exitCode.pipe(Effect.result);
+                  } else yield* fs.readFileString(path, encoding);
+                  absentAtRead.push(yield* processAbsent(child.pid));
+                  return yield* unknown;
+                })
+              : fs.readFileString(path, encoding),
+        };
+        const found = yield* sessionOf(live.session!).pipe(
+          Effect.provideService(FileSystem.FileSystem, raced),
+          Effect.result,
+        );
+        expect(absentAtRead).toEqual([exited]);
+        if (exited) {
+          expect(found._tag).toBe("Success");
+          expect(found._tag === "Success" && found.success).toEqual([]);
+        } else {
+          expect(found._tag).toBe("Failure");
+          expect(found._tag === "Failure" && found.failure).toBe(unknown);
+        }
+      }),
+    ),
+);
+
+test("only an absent pid proves exit; live and invalid process probes do not", () =>
+  runEffect(
+    Effect.gen(function* () {
+      expect(yield* processAbsent(process.pid)).toBe(false);
+      expect(yield* processAbsent(2 ** 22 + 1)).toBe(true);
+      expect(yield* processAbsent(Number.NaN)).toBe(false);
+    }),
+  ));
 
 test.skipIf(process.platform !== "linux")(
   "a process gone from /proc is not looked for with ps",

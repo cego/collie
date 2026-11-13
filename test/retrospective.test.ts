@@ -2,7 +2,12 @@
 
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { questionMeasures, repeatedAnswers, type AskingRun } from "../workflows/retrospective";
+import {
+  questionMeasures,
+  repeatedAnswers,
+  summaryOf,
+  type AskingRun,
+} from "../workflows/retrospective";
 
 const asking = (over: Partial<AskingRun> & { runId: string }): AskingRun => ({
   workflow: "implement",
@@ -14,6 +19,20 @@ const asking = (over: Partial<AskingRun> & { runId: string }): AskingRun => ({
 });
 
 const asked = (name: string, answer: string | null) => ({ name, answer });
+
+test("a retrospective saved without question measures reports them as unrecorded, not zero", () => {
+  const summary = summaryOf({
+    runId: "r-before-measures",
+    since: "2026-11-10T19:00:00.000Z",
+    questions: undefined,
+    acted: [],
+    improvements: [],
+    leftOut: [],
+  });
+  expect(summary).toContain("Question measures were not recorded for this retrospective window.");
+  expect(summary).not.toContain("0 questions asked");
+  expect(summary).not.toContain("0 of 0");
+});
 
 test("questions per landed merge request count every question over the distinct merge requests that merged", () => {
   const measures = questionMeasures([
