@@ -944,6 +944,22 @@ test("a check whose failed tests all passed their rerun on this tree is not a ga
   ).toEqual([]);
 });
 
+test("a test the branch owns that passed its rerun is a gap naming it, never a Flake, and is not asked about at the base", () => {
+  const [gate, quick, nested] = gateThenReruns(
+    [QUICK, NESTED],
+    [
+      [QUICK, "pass"],
+      [NESTED, "pass"],
+    ],
+  );
+  const got = collected({ verifications: [gate!, { ...quick!, own: true }, nested!] });
+  expect(evidenceGaps("unspecified", got)).toEqual([
+    "tests failed: the quick one (test/one.test.ts), which then passed alone but is this branch's own test",
+  ]);
+  expect(flakesOf(got)).toEqual([{ check: "tests", ...NESTED }]);
+  expect(baselinesOwed(got)).toEqual([]);
+});
+
 test("a check with a test still failing after its rerun is a gap naming that test", () => {
   const got = collected({
     verifications: gateThenReruns(

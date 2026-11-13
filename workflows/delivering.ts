@@ -859,7 +859,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
       const findings = Arr.map(read.failed, (one) => ({
         severity: "blocker",
         title: `${one.name}: its CI job ${one.job} failed`,
-        detail: `On ${pipe_(read.tree.head, Str.slice(0, 12))}, the merge request's head: ${one.url ?? "the forge gave no URL"}. Its log: ${one.log ?? "the forge gave no command for it"}`,
+        detail: `${one.unproved}. On ${pipe_(read.tree.head, Str.slice(0, 12))}, the merge request's head: ${one.url ?? "the forge gave no URL"}. Its log: ${one.log ?? "the forge gave no command for it"}`,
       }));
       const fixed = yield* ciFix(
         agentWork({

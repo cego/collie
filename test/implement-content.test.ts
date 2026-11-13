@@ -7,6 +7,7 @@ import { contentOf } from "../src/sdk";
 import { runEffect } from "./support/effect";
 import { root } from "./support/host";
 import implement from "../workflows/implement.md" with { type: "text" };
+import { REVIEW } from "../workflows/reviewing";
 import tuneUp from "../workflows/tune-up.md" with { type: "text" };
 import { renderTemplate } from "../src/template";
 
@@ -61,6 +62,12 @@ test("implement's mr step merges on a request of its own from the human, chat or
   );
   expect(mr).not.toContain("merging is theirs to ask for");
   expect(mr).not.toContain("unless the human tells you");
+});
+
+test("implement's reviewer rates a test the branch adds, never seen failing, `major`", () => {
+  expect(pipe(REVIEW.text, Str.replace(/\s+/g, " "))).toContain(
+    "A test this branch adds with no recorded failing run (`collie verify --expect fail`, or a failing record of it before the change that makes it pass) is `major`: never seen failing, it may be a Tautology. Where it is also the only proof of a criterion, the Tautology rule above makes it a `blocker`.",
+  );
 });
 
 test("no shipped content or prompt text Collie types spells out `collie verify --run`", () =>
