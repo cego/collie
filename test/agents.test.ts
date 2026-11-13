@@ -4202,7 +4202,231 @@ test("a spent subscription stays unavailable without proof that its exhausted wi
     }),
   ));
 
-test("a legacy spent subscription decodes without exhaustion metadata and only recovers after its known reset", () =>
+test("a legacy quota incident permits a retry only from fresh healthy capacity beyond its known future reset", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const reset = isoAt(now + 5 * 86_400_000);
+      const legacy: RanOut = {
+        _tag: "RanOut",
+        why: "weekly 100%, resets Wed 06:55",
+        transcript: null,
+      };
+      const on = { harness: "codex", model: "default", effort: null };
+      const spent = { ...legacy, resetsAt: reset, on };
+      const fresh: UsageReading = {
+        subscription: "chatgpt",
+        account: "current-account",
+        accountLabel: null,
+        plan: "pro",
+        windows: [
+          {
+            kind: "weekly",
+            label: "Weekly",
+            model: null,
+            usedPercent: 24,
+            resetsAt: isoAt(now + 6 * 86_400_000),
+            reached: false,
+          },
+        ],
+        at: isoAt(now),
+        source: "codex-app-server",
+        problem: null,
+      };
+      const blocked: ReadonlyArray<ReadonlyArray<UsageReading>> = [
+        [],
+        [{ ...fresh, at: isoAt(now - 10 * 60_000) }],
+        [{ ...fresh, at: isoAt(now + 60_000) }],
+        [{ ...fresh, at: "not a timestamp" }],
+        [{ ...fresh, problem: "The usage source could not be read" }],
+        [{ ...fresh, account: null }],
+        [fresh, fresh],
+        [{ ...fresh, subscription: "claude", source: "claude-usage" }],
+        [{ ...fresh, windows: [] }],
+        [{ ...fresh, windows: [{ ...fresh.windows[0]!, model: "another-model" }] }],
+        [{ ...fresh, windows: [{ ...fresh.windows[0]!, usedPercent: 100 }] }],
+        [{ ...fresh, windows: [{ ...fresh.windows[0]!, reached: true }] }],
+        [{ ...fresh, windows: [{ ...fresh.windows[0]!, resetsAt: reset }] }],
+        [{ ...fresh, windows: [{ ...fresh.windows[0]!, resetsAt: isoAt(now + 4 * 86_400_000) }] }],
+        [{ ...fresh, windows: [{ ...fresh.windows[0]!, resetsAt: null }] }],
+        [{ ...fresh, windows: [{ ...fresh.windows[0]!, resetsAt: "not a timestamp" }] }],
+        [
+          {
+            ...fresh,
+            windows: [
+              ...fresh.windows,
+              { ...fresh.windows[0]!, kind: "session", usedPercent: 100, reached: true },
+            ],
+          },
+        ],
+      ];
+      let readings: ReadonlyArray<UsageReading> = [];
+      yield* session(
+        Effect.gen(function* () {
+          const agents = yield* Agents;
+          for (const candidate of blocked) {
+            readings = candidate;
+            const chosen = yield* agents.choose([], { runId: "r1", operation: "review" }, [spent]);
+            expect(chosen.why).toStartWith("nothing has room");
+          }
+          readings = [fresh];
+          for (const unknownReset of [
+            legacy,
+            { ...legacy, resetsAt: null },
+            { ...legacy, resetsAt: "not a timestamp" },
+          ]) {
+            const chosen = yield* agents.choose([], { runId: "r1", operation: "review" }, [
+              { ...unknownReset, on },
+            ]);
+            expect(chosen.why).toStartWith("nothing has room");
+          }
+          for (const account of [null, "previous-account"]) {
+            const chosen = yield* agents.choose([], { runId: "r1", operation: "review" }, [
+              {
+                ...spent,
+                exhaustion: {
+                  at: now - 60_000,
+                  account,
+                  windows: [{ kind: "weekly", model: null, resetsAt: reset }],
+                },
+              },
+            ]);
+            expect(chosen.why).toStartWith("nothing has room");
+          }
+          const observed = yield* agents.choose([], { runId: "r1", operation: "review" }, [
+            { ...spent, observedAt: now - 60_000 },
+          ]);
+          expect(observed.why).toStartWith("nothing has room");
+          const chosen = yield* agents.choose([], { runId: "r1", operation: "review" }, [spent]);
+          expect(chosen.why).toBeUndefined();
+          expect(chosen.harness).toBe("codex");
+          expect(chosen.from).toBeUndefined();
+        }),
+        {
+          harness: "codex",
+          model: "default",
+          fallbacks: Effect.succeed([]),
+          readings: Effect.sync(() => readings),
+        },
+      );
+      expect(harnessesStarted(yield* rig.calls())).toEqual([]);
+    }),
+  ));
+
+test(
+  "a replayed legacy quota incident permits one successor and a new unreadable exhaustion blocks another across replay",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([null, null]);
+        const now = yield* Clock.currentTimeMillis;
+        const reset = isoAt(now + 5 * 86_400_000);
+        const legacy: RanOut = {
+          _tag: "RanOut",
+          why: "weekly 100%, resets Wed 06:55",
+          transcript: null,
+          resetsAt: reset,
+        };
+        const fresh: UsageReading = {
+          subscription: "chatgpt",
+          account: "current-account",
+          accountLabel: null,
+          plan: "pro",
+          windows: [
+            {
+              kind: "weekly",
+              label: "Weekly",
+              model: null,
+              usedPercent: 24,
+              resetsAt: isoAt(now + 6 * 86_400_000),
+              reached: false,
+            },
+          ],
+          at: isoAt(now),
+          source: "codex-app-server",
+          problem: null,
+        };
+        const onCodex = {
+          harness: "codex",
+          model: "default",
+          fallbacks: Effect.succeed([]),
+          collectMs: 3_600_000,
+        };
+        yield* session(
+          Effect.gen(function* () {
+            yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+            yield* until(prompted("Your task for this step"));
+            const agents = yield* Agents;
+            const launched = yield* launchOf("r1");
+            // An old host left this durable incident beside its unfinished collection.
+            yield* agents.usageWaiting(launched, legacy);
+            expect(yield* agents.usageIncident(launched)).toEqual(legacy);
+            expect(harnessesStarted(yield* rig.calls())).toEqual(["codex"]);
+          }),
+          {
+            ...onCodex,
+            readings: Effect.succeed([
+              { ...fresh, windows: [{ ...fresh.windows[0]!, resetsAt: reset }] },
+            ]),
+          },
+        );
+
+        const successor = agentName("r1", "review", null, 2);
+        const unreadable: UsageReading = {
+          ...fresh,
+          problem: "The agent's usage source could not be read",
+          // A failed read retained a full window older than the Machine's current window.
+          windows: [{ ...fresh.windows[0]!, usedPercent: 100, reached: true, resetsAt: reset }],
+        };
+        let usageReads = 0;
+        const recovering = {
+          ...onCodex,
+          collectMs: 2_000,
+          readings: Clock.currentTimeMillis.pipe(
+            Effect.map((at) => {
+              usageReads++;
+              return [{ ...fresh, at: isoAt(at) }];
+            }),
+          ),
+          ownReading: (agent: string) => Effect.succeed(agent === successor ? unreadable : null),
+        };
+        for (let replay = 0; replay < 2; replay++) {
+          yield* session(
+            Effect.gen(function* () {
+              const before = usageReads;
+              yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+              const parked = yield* until(parkedSays(`${successor} ran out`)).pipe(
+                Effect.timeoutOption("2 minutes"),
+              );
+              expect({
+                parked: Option.isSome(parked),
+                launches: harnessesStarted(yield* rig.calls()),
+                log: yield* read(`${dir}/agents/r1/agents.log`),
+              }).toMatchObject({ parked: true, launches: ["codex", "codex"] });
+              // Exercise more than one quota poll in each host lifetime.
+              yield* spend(130_000);
+              expect(usageReads).toBeGreaterThanOrEqual(before + 2);
+              expect(harnessesStarted(yield* rig.calls())).toEqual(["codex", "codex"]);
+              expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
+              const launched = Option.getOrThrow(
+                Arr.findFirst(yield* launchesAt(dir, "r1"), (one) => one.agent === successor),
+              );
+              const incident = yield* (yield* Agents).usageIncident(launched);
+              expect(incident?.resetsAt).toBe(reset);
+              expect(incident?.exhaustion).toBeUndefined();
+              expect(incident?.observedAt).toBeGreaterThanOrEqual(now);
+              expect(yield* parkedSays(`${successor} ran out`)).toBe(true);
+            }),
+            recovering,
+          );
+        }
+        expect(closedPanes(yield* rig.calls())).toHaveLength(1);
+      }),
+    ),
+  30_000,
+);
+
+test("a legacy spent subscription decodes without exhaustion metadata and recovers after its known elapsed reset", () =>
   runEffect(
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
