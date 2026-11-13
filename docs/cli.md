@@ -1807,6 +1807,10 @@ the check and its pid; `collie cleanup --apply` tries to end it again and report
 left. Once the command is spawned, it prints `"<name>" started, pid <pid>`: a wait after
 that line is the command's own. Each of these lines is also written to the Run's log.
 
+A check whose exit status, output or record cannot be written, as on a full disk, gives no
+verdict: `collie verify` is refused with `invalid_state`, naming the check and what could
+not be written, and nothing is recorded for it.
+
 `--expect fail` is how a bug is proved to exist. A regression test that exits non-zero on
 the tree before the fix is the evidence, so that record is a `pass`; the same command
 succeeding is the reproduction failing, not the bug being fixed. Stability comes first

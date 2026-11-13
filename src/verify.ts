@@ -61,6 +61,15 @@ export class VerifyRefused extends Data.TaggedError("VerifyRefused")<{
   state?: true;
 }> {}
 
+/** Neither pass nor fail: what a check ended with could not be kept. */
+export const noVerdict =
+  (name: string, what: "exit status" | "output" | "record", how: "read" | "written") =>
+  (error: Error) =>
+    new VerifyRefused({
+      why: `"${name}" gave no verdict: its ${what} could not be ${how}: ${error.message}`,
+      state: true,
+    });
+
 type Services = FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner;
 
 const git = (args: string[], cwd: string) => shell("git", args, cwd);
@@ -542,7 +551,7 @@ export interface Collected {
 /** A check `startCheck` started, finished by `finishCheck` once `exit` is known. */
 export interface StartedCheck {
   readonly id: string;
-  readonly exit: Effect.Effect<number>;
+  readonly exit: Effect.Effect<number, VerifyRefused>;
 }
 
 /**
@@ -638,14 +647,15 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
     exit: handle
       .collected(
         Effect.all(
-          [drain(handle.stdout, echo?.stdout), drain(handle.stderr, echo?.stderr), handle.exit],
+          [
+            drain(handle.stdout, echo?.stdout).pipe(Effect.orDie),
+            drain(handle.stderr, echo?.stderr).pipe(Effect.orDie),
+            handle.exit.pipe(Effect.mapError(noVerdict(what.name, "exit status", "read"))),
+          ],
           { concurrency: "unbounded" },
         ),
       )
-      .pipe(
-        Effect.map(([, , exit]) => exit),
-        Effect.orDie,
-      ),
+      .pipe(Effect.map(([, , exit]) => exit)),
   };
 });
 
@@ -653,12 +663,14 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
  * The Verification of a check that exited with `exit`, from its record and output alone, so
  * any host on its state directory can finish it; appended to its Run's evidence.
  */
-export const finishCheck = (id: string, exit: number) =>
-  Effect.flatMap(readCheck(id), (read) => settleCheck(read, exit));
+export const finishCheck = (id: string, name: string, exit: number) =>
+  Effect.flatMap(readCheck(id, name), (read) => settleCheck(read, exit));
 
 /** What a check is finished from, read while its record and output are still there. */
-const readCheck = Effect.fn("Verify.readCheck")(function* (id: string) {
-  const found = yield* (yield* CheckProcesses).finished(id);
+const readCheck = Effect.fn("Verify.readCheck")(function* (id: string, name: string) {
+  const found = yield* (yield* CheckProcesses)
+    .finished(id)
+    .pipe(Effect.mapError(noVerdict(name, "output", "read")));
   if (found === null) return yield* Effect.die(`check ${id} has no record to finish it from`);
   return {
     ...found,
@@ -669,7 +681,7 @@ const readCheck = Effect.fn("Verify.readCheck")(function* (id: string) {
 const settleCheck = Effect.fn("Verify.settleCheck")(function* (
   { check, command, tail: { stdout, stderr } }: Effect.Success<ReturnType<typeof readCheck>>,
   exit: number,
-): Effect.fn.Return<Verification, never, Services> {
+): Effect.fn.Return<Verification, VerifyRefused, Services> {
   const { spec } = command;
   const fs = yield* FileSystem.FileSystem;
   const end = yield* fingerprint(command.cwd);
@@ -715,7 +727,9 @@ const settleCheck = Effect.fn("Verify.settleCheck")(function* (
     spec.step === null
       ? loggedRecord
       : { ...loggedRecord, step: spec.step.step, place: spec.step.place };
-  yield* appendVerification(spec.evidence, kept).pipe(Effect.orDie);
+  yield* appendVerification(spec.evidence, kept).pipe(
+    Effect.mapError(noVerdict(check.name, "record", "written")),
+  );
   return kept;
 });
 
@@ -733,7 +747,7 @@ export const collect = (
   startCheck(runDir, what, echo).pipe(
     Effect.flatMap((started) =>
       Effect.flatMap(started.exit, (exit) =>
-        Effect.map(readCheck(started.id), (read) => [read, exit] as const),
+        Effect.map(readCheck(started.id, what.name), (read) => [read, exit] as const),
       ),
     ),
     // Its Scope ends what is left of it before the tree is looked at again.

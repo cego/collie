@@ -152,8 +152,11 @@ export interface CheckProcessesApi {
     PlatformError | CheckRefused,
     Scope.Scope | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
   >;
-  /** A check still recorded with what its Verification needs; null where it is not. */
-  readonly finished: (id: string) => Effect.Effect<FinishedCheck | null>;
+  /**
+   * A check still recorded with what its Verification needs; null where it is not. Fails
+   * where it is recorded and its stored output cannot be read.
+   */
+  readonly finished: (id: string) => Effect.Effect<FinishedCheck | null, PlatformError>;
   /**
    * As `run`, for a process the caller spawns itself, with `markers` in its environment, and
    * ends in the caller's Scope. Null where this host has begun to end, and nothing spawned.
@@ -225,17 +228,19 @@ const removeRecord = (fs: FileSystem.FileSystem, stateDir: string, id: string) =
   );
 };
 
+/** `text` at `path` whole or not at all, and no `.new` left where it could not be. */
+const writeWhole = (fs: FileSystem.FileSystem, path: string, text: string) =>
+  fs.writeFileString(`${path}.new`, text).pipe(
+    Effect.andThen(fs.rename(`${path}.new`, path)),
+    Effect.tapError(() => fs.remove(`${path}.new`, { force: true }).pipe(Effect.ignore)),
+  );
+
 const writeFinishing = (
   fs: FileSystem.FileSystem,
   stateDir: string,
   id: string,
   finishing: Finishing,
-) =>
-  fs
-    .writeFileString(`${finishingPath(stateDir, id)}.new`, encodeFinishing(finishing))
-    .pipe(
-      Effect.andThen(fs.rename(`${finishingPath(stateDir, id)}.new`, finishingPath(stateDir, id))),
-    );
+) => writeWhole(fs, finishingPath(stateDir, id), encodeFinishing(finishing));
 
 const readFinishing = (fs: FileSystem.FileSystem, stateDir: string, id: string) =>
   fs
@@ -883,12 +888,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
           yield* Effect.addFinalizer(() => endOwn(entry));
           if (entry.ended) yield* signalAll([id], killing ? "SIGKILL" : "SIGTERM");
           yield* fs.makeDirectory(runningChecksDir(dir), { recursive: true }).pipe(Effect.ignore);
-          yield* fs
-            .writeFileString(`${recordPath(dir, id)}.new`, encodeCheckRecord(record))
-            .pipe(
-              Effect.andThen(fs.rename(`${recordPath(dir, id)}.new`, recordPath(dir, id))),
-              Effect.ignore,
-            );
+          yield* writeWhole(fs, recordPath(dir, id), encodeCheckRecord(record)).pipe(Effect.ignore);
           return { handle, entry };
         }),
       );
@@ -1000,7 +1000,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   /** From what this host kept of a check it runs, or else from the files its host stored. */
   const finished: CheckProcessesApi["finished"] = (id) =>
     Effect.gen(function* () {
-      const finishing = yield* readFinishing(fs, dir, id);
+      const finishing = yield* readFinishing(fs, dir, id).pipe(Effect.orElseSucceed(() => null));
       if (finishing === null) return null;
       const own = kept.get(id);
       if (own !== undefined) return { ...finishing, output: textOf(own) };
@@ -1010,7 +1010,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
         fs.readFile(outputs.stderr),
       ]);
       return { ...finishing, output: textOf({ stdout, stderr }) };
-    }).pipe(Effect.orElseSucceed(() => null));
+    });
 
   const adopt: CheckProcessesApi["adopt"] = (check, spawn, say = () => Effect.void) =>
     begin(check, spawn, say).pipe(
@@ -1078,13 +1078,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
         const exited = yield* fs.exists(outputsOf(dir, record.id).exit);
         if (!proved && !exited) continue;
         const taken: CheckRecord = { ...record, host };
-        yield* fs
-          .writeFileString(`${recordPath(dir, record.id)}.new`, encodeCheckRecord(taken))
-          .pipe(
-            Effect.andThen(
-              fs.rename(`${recordPath(dir, record.id)}.new`, recordPath(dir, record.id)),
-            ),
-          );
+        yield* writeWhole(fs, recordPath(dir, record.id), encodeCheckRecord(taken));
         const entry: Collecting = {
           check: checkOfRecord(record),
           record: taken,
