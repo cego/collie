@@ -1234,7 +1234,9 @@ with no Discover or Harness Output fails the Run, naming the files it looked for
    of its own, each with the `why` it rests on: a `threshold` or `tolerance`, an `absolute`
    slack in its own units for a value near zero, or `exact` for a deterministic count such
    as a correctness check's mismatches (see [`collie measure`](cli.md#measure)). It may ask
-   for more `samples` than the Run's. The Run's `samples`, `threshold` and `tolerance`
+   for more `samples` than the Run's. A positive `limit` bounds all commands in one sample
+   and each tree's prepare, in seconds; it defaults to 600. The Run's `wall_time` still
+   governs when a new Cycle may start. The Run's `samples`, `threshold` and `tolerance`
    complete it. The plan is recorded before anything is measured by it, and a later change
    is a new plan with its reason.
 3. **Calibrate.** The host measures the base, the merge base with the harness commits on
