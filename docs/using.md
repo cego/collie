@@ -1627,7 +1627,9 @@ none of is no Machine's to lack: the summary says "Desktop has no GitLab token t
 instead. **Sync now** on a Machine behind on its version, settings, definitions or credentials does what
 connecting would: behind on its version, it reopens the Machine's connection, which asks the
 upgrade again and then syncs and gives on the new one; otherwise it syncs its settings and
-its definitions and gives it what it lacks. Desktop keeps the Flock's definitions in
+its definitions, gives it what it lacks, and renews all three channels even at the same version.
+This also recovers a broken chat or record connection while the board is readable.
+Desktop keeps the Flock's definitions in
 `flock-definitions.json` beside its settings, each with its edit's time and the Machine it
 came from, syncs each Machine's whenever it connects, and passes an edit taken from one
 Machine on to every other connected one. A toast says what it did, red where a part of it failed. The Flock
@@ -2035,14 +2037,19 @@ rather than scrolling sideways. The record's back button
 returns to the board, which was never taken down: it comes back scrolled where you left it,
 its sections open or closed as they were, and the card still selected.
 
-A record outlives its Machine's connection. When that connection is renewed — it dropped,
+A record outlives its Machine's connection. Desktop renews all three channels when any bridge
+exits or its socket or RPC transport fails, even while the board is readable, with reconnect
+backoff capped at 60 seconds. When that connection is renewed — it dropped,
 **Sync now** reopened it, or Desktop upgraded the Machine — the record keeps what it showed,
 says above it what the board says of that Machine ("vm-mk is out of reach; showing what it
 last said", with the reason, or "vm-mk is reconnecting"), and carries on by itself once the
 Machine is back. A record opened before its Machine connects fills in once it does. An
-action, the offers, the workflows, a Run's file or Go to pane cut off by a renewed
-connection says "vm-mk's connection was renewed before this finished", and **Try again**
-sends the action under the same request, so it is done once.
+action cut off before its reply reports an unknown outcome: it may already have been applied.
+It is not automatically replayed on the next connection. **Try again** sends the action under
+the same request, so it is done once. In Flock chat, an unconfirmed `collie_do` returns
+`Request: <batch id>`; inspect the result and reuse that id as `request_id` with the same actions
+for an explicit retry. Read failures name the connection problem; upgrade advice requires
+an incompatible protocol or an unknown operation response.
 
 Nothing in the window needs a restart. The board, a record, Settings, the credentials
 warning, update news and the chat's turn indicator each keep what they last showed when the
