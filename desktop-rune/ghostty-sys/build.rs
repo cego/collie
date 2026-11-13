@@ -110,6 +110,8 @@ fn main() {
         .allowlist_type("Ghostty.*")
         .allowlist_var("GHOSTTY_.*")
         .prepend_enum_name(false)
+        // Evaluates the style flag macros, whose casts bindgen cannot parse alone.
+        .clang_macro_fallback()
         .derive_default(true)
         .layout_tests(false)
         .generate()
