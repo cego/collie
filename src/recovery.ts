@@ -358,8 +358,8 @@ export const consumedCard = Effect.fn("Recovery.consumedCard")(function* (
 /**
  * The verifications the consumed card listed, unchanged, where that card is unaltered and
  * the follow-up's checkout still carries its work on its branch. A failure is left out
- * where it ran on the card's own head, or where the same command had already passed at or
- * before its commit: either ran after the fix, so it cannot show the failure before it.
+ * where it ran on the card's own head, or where the same command passed on the very tree it
+ * failed on: neither shows the work failing before its fix.
  */
 export const sourceEvidence = Effect.fn("Recovery.sourceEvidence")(function* (options: {
   readonly cwd: string;
@@ -390,33 +390,23 @@ export const sourceEvidence = Effect.fn("Recovery.sourceEvidence")(function* (op
   const recorded = yield* readVerifications(options.sourceEvidence).pipe(
     Effect.orElseSucceed(() => []),
   );
-  const fixedBefore = (red: Verification, at: number) =>
-    Effect.map(
-      Effect.findFirst(
-        Arr.filter(
-          Arr.take(recorded, at),
-          (one) => one.expect === "pass" && one.result === "pass" && sameAsked(one, red),
-        ),
-        (green) => contains(green.start.head_sha, red.start.head_sha),
-      ),
-      (found) => found._tag === "Some",
+  const passedOn = (red: Verification) =>
+    Arr.some(
+      recorded,
+      (one) =>
+        one.expect === "pass" &&
+        one.result === "pass" &&
+        sameAsked(one, red) &&
+        one.start.head_sha === red.start.head_sha &&
+        one.start.fingerprint === red.start.fingerprint,
     );
-  return Arr.map(
-    yield* Effect.filter(
-      Arr.map(recorded, (one, at) => [one, at] as const),
-      ([one, at]) =>
-        listed.get(one.id) !== one.name
+  return yield* Effect.filter(recorded, (one) =>
+    listed.get(one.id) !== one.name
+      ? Effect.succeed(false)
+      : one.expect !== "fail"
+        ? Effect.succeed(true)
+        : one.start.head_sha === head || passedOn(one)
           ? Effect.succeed(false)
-          : one.expect !== "fail"
-            ? Effect.succeed(true)
-            : one.start.head_sha === head
-              ? Effect.succeed(false)
-              : Effect.zipWith(
-                  contains(one.start.head_sha, head),
-                  fixedBefore(one, at),
-                  (before, fixed) => before && !fixed,
-                ),
-    ),
-    ([one]) => one,
+          : contains(one.start.head_sha, head),
   );
 });

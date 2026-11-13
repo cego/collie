@@ -3972,6 +3972,46 @@ export const hostLayer = (options: {
           }),
         ).pipe(notifying.withPermits(1), Effect.ignore);
       const lineageOf = lineageIn(store);
+      /** A Run and the Runs it recovers, oldest first. */
+      const recoveryLineage = Effect.fnUntraced(function* (runId: string) {
+        const lineage: string[] = [];
+        let from = runId;
+        while (from !== "" && !lineage.includes(from)) {
+          lineage.unshift(from);
+          from = yield* fs
+            .readFileString(`${runDir(dir, from)}/recovery-parent`)
+            .pipe(Effect.orElseSucceed(() => ""));
+        }
+        return lineage;
+      });
+      /** What the cards these Runs continued from proved, and what those had inherited in turn. */
+      const inheritedEvidence = (
+        runs: ReadonlyArray<string>,
+        cwd: string,
+        seen: ReadonlySet<string>,
+      ): Effect.Effect<ReadonlyArray<Verification>, never, Collecting> =>
+        Effect.map(
+          Effect.forEach(runs, (runId) =>
+            Effect.gen(function* () {
+              const row = yield* store.run(runId).pipe(Effect.orDie);
+              const consumed =
+                row === null
+                  ? undefined
+                  : Option.getOrUndefined(decodePlacing(row.placing ?? ""))?.continues;
+              if (consumed === undefined || seen.has(consumed.run)) return [];
+              const lineage = yield* recoveryLineage(consumed.run);
+              const before = yield* inheritedEvidence(lineage, cwd, new Set([...seen, ...lineage]));
+              const own = yield* sourceEvidence({
+                cwd,
+                consumed,
+                sourceDir: runDir(dir, consumed.run),
+                sourceEvidence: evidenceDir(dir, consumed.run),
+              });
+              return [...before, ...own];
+            }),
+          ),
+          Arr.flatten,
+        );
       const hostStarted = yield* nowIso;
       /** A pass this host collected that answers for this check now, said in the Run log. */
       const relyOn = (runId: string, run: CheckRun, spec: VerifySpec, recorded: CheckPass) =>
@@ -4915,35 +4955,19 @@ export const hostLayer = (options: {
         evidence: (runId, cwd) =>
           under(
             Effect.gen(function* () {
-              const row = yield* store.run(runId);
-              const own = yield* treeOf(row, runId, dir);
-              const lineage: string[] = [];
-              let from = runId;
-              while (from !== "" && !lineage.includes(from)) {
-                lineage.unshift(from);
-                from = yield* fs
-                  .readFileString(`${runDir(dir, from)}/recovery-parent`)
-                  .pipe(Effect.orElseSucceed(() => ""));
-              }
-              const consumed =
-                row === null || lineage.length > 1
-                  ? undefined
-                  : Option.getOrUndefined(decodePlacing(row.placing ?? ""))?.continues;
-              const inherited =
-                consumed === undefined
-                  ? []
-                  : yield* sourceEvidence({
-                      cwd,
-                      consumed,
-                      sourceDir: runDir(dir, consumed.run),
-                      sourceEvidence: evidenceDir(dir, consumed.run),
-                    });
+              const own = yield* treeOf(yield* store.run(runId), runId, dir);
+              const lineage = yield* recoveryLineage(runId);
+              const inherited = yield* inheritedEvidence(lineage, cwd, new Set(lineage));
               return yield* Effect.all({
                 verifications: Effect.forEach(lineage, (from) =>
                   readVerifications(evidenceDir(dir, from)).pipe(
                     Effect.orElseSucceed((): ReadonlyArray<Verification> => []),
                   ),
-                ).pipe(Effect.map((lines) => [...inherited, ...Arr.flatten(lines)])),
+                ).pipe(
+                  Effect.map((lines) =>
+                    Arr.dedupeWith([...inherited, ...Arr.flatten(lines)], (a, b) => a.id === b.id),
+                  ),
+                ),
                 final: fingerprint(cwd),
                 commands: Effect.forEach(yield* approvedOf(dir, runId), (spec) =>
                   commandOf({ ...own, cwd }, spec),

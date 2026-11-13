@@ -1521,9 +1521,11 @@ the same workflow carrying every input its offer fills from what the source was 
 with, unchanged: a follow-up given other work binds nothing. The collector then takes only
 the records that bound card lists, and only while the card is unaltered, the follow-up's
 checkout is on its branch and its head is in that checkout's history. A `--expect fail`
-among them counts only where it was recorded on a commit before the card's head, and before
-the same command had passed on that commit or an earlier one: a failure recorded after the
-fix cannot show the failure before it. Rewritten history or another branch collects
+among them counts only where it was recorded on a commit before the card's head, and on a
+tree the same command never passed on: a failure on a tree that also passes does not show
+the work failing before its fix. A follow-up of a follow-up, and a recovery of either, keeps
+what the cards before it proved, each card checked the same way against the follow-up's checkout.
+Rewritten history or another branch collects
 nothing, and no record is renamed, so one named anything but `regression` still does not
 prove a `bug`.
 
