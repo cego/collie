@@ -187,19 +187,24 @@ const afterReady = (from: ReadableStream<Uint8Array>, onReady: () => void) => {
   let seen = Buffer.alloc(0);
   let ready = false;
   return from.pipeThrough(
-    new TransformStream<Uint8Array, Uint8Array>({
-      transform: (chunk, out) => {
-        if (ready) return out.enqueue(chunk);
-        // Searched as bytes, so a character split across chunks reaches the host whole.
-        seen = Buffer.concat([seen, chunk]);
-        const at = seen.indexOf(marker);
-        if (at === -1) return;
-        ready = true;
-        onReady();
-        const rest = seen.subarray(at + marker.length);
-        if (rest.length > 0) out.enqueue(rest);
+    new TransformStream<Uint8Array, Uint8Array>(
+      {
+        transform: (chunk, out) => {
+          if (ready) return out.enqueue(chunk);
+          // Searched as bytes, so a character split across chunks reaches the host whole.
+          seen = Buffer.concat([seen, chunk]);
+          const at = seen.indexOf(marker);
+          if (at === -1) return;
+          ready = true;
+          onReady();
+          const rest = seen.subarray(at + marker.length);
+          if (rest.length > 0) out.enqueue(rest);
+        },
       },
-    }),
+      undefined,
+      // Read without a reader, so the marker is found before the client that reads it starts.
+      { highWaterMark: Number.MAX_SAFE_INTEGER },
+    ),
   );
 };
 
@@ -243,14 +248,38 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
     ),
   );
   const ready = Promise.withResolvers<void>();
+  const readable = afterReady(child.stdout, () => {
+    isReady = true;
+    ready.resolve();
+  });
+  const ended = Effect.promise(() => child.exited).pipe(
+    Effect.flatMap((code) =>
+      Effect.fail<RouteFailure>({
+        state: code === NOT_FOUND ? "no-collie" : "unreachable",
+        reason: said() || `${CommandLine.display(command)} exited ${code}`,
+      }),
+    ),
+  );
+  const started = Effect.raceFirst(
+    Effect.promise(() => ready.promise),
+    ended,
+  );
+  // The client starts after this: its pings would time out a bridge silent while it starts.
+  yield* started.pipe(
+    Effect.timeoutOrElse({
+      duration: "2 minutes",
+      // An SSO login takes as long as its human does.
+      orElse: () =>
+        signingIn
+          ? started
+          : Effect.fail(unreachable("the bridge did not become ready within 2 minutes")),
+    }),
+  );
   const broken = yield* Deferred.make<never, RouteFailure>();
   const failed = (reason: string) => Deferred.fail(broken, unreachable(reason));
   const socket = yield* Socket.fromTransformStream(
     Effect.succeed({
-      readable: afterReady(child.stdout, () => {
-        isReady = true;
-        ready.resolve();
-      }),
+      readable,
       writable: new WritableStream<Uint8Array>({
         write: (chunk) =>
           Promise.resolve(child.stdin.write(chunk))
@@ -306,29 +335,7 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
   );
   // Kill before RPC finalizers wait for the bridge's streams.
   yield* Effect.addFinalizer(() => Effect.sync(() => child.kill()));
-  const ended = Effect.promise(() => child.exited).pipe(
-    Effect.flatMap((code) =>
-      Effect.fail<RouteFailure>({
-        state: code === NOT_FOUND ? "no-collie" : "unreachable",
-        reason: said() || `${CommandLine.display(command)} exited ${code}`,
-      }),
-    ),
-  );
   const closed = Effect.raceFirst(ended, Deferred.await(broken));
-  const started = Effect.raceFirst(
-    Effect.promise(() => ready.promise),
-    ended,
-  );
-  yield* started.pipe(
-    Effect.timeoutOrElse({
-      duration: "2 minutes",
-      // An SSO login takes as long as its human does.
-      orElse: () =>
-        signingIn
-          ? started
-          : Effect.fail(unreachable("the bridge did not become ready within 2 minutes")),
-    }),
-  );
   return Object.assign(door, { closed });
 }, openingScope);
 
