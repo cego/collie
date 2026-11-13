@@ -1,4 +1,4 @@
-// Electrobun's preBuild hook: the macOS app's icon set, made from the brand tile with sips.
+// The macOS app's icon set, made from the brand tile with sips, for `scripts/bundle.ts`.
 
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import * as BunServices from "@effect/platform-bun/BunServices";
@@ -6,7 +6,6 @@ import { Cause, Config, Console, Effect, FileSystem, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 const SOURCE = `${import.meta.dir}/../../../assets/brand/logos/collie-tile-512.png`;
-// What electrobun.config.ts names as `mac.icons`.
 const ICONSET = `${import.meta.dir}/../../mac.iconset`;
 const SIZES = [
   ["icon_16x16.png", 16],

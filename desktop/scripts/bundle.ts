@@ -133,7 +133,7 @@ ${pipe(
 </dict></plist>
 `;
 
-/** codesign's arguments for each part of the app, inside out, as Electrobun signs Desktop. */
+/** codesign's arguments for each part of the app, inside out. */
 export const macSignings = (
   env: Env,
   entitlements: string,
@@ -378,7 +378,7 @@ export const packageInstaller = (out: string, os: Os, arch: string) =>
     }
   });
 
-/** The macOS icon, from the brand tile as Desktop's build makes its icon set. */
+/** The macOS icon, from the brand tile. */
 const macIcon = (work: string) =>
   Effect.gen(function* () {
     yield* run(process.execPath, [`${ROOT}desktop/scripts/bun/mac-icons.ts`], {

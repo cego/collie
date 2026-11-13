@@ -25,9 +25,7 @@
     // Workflow modules an author would write, checked by the provisioned toolchain.
     "test/fixtures/workflows/**",
     // Vendored upstream lint rules keep their upstream source unchanged.
-    "tools/oxlint/anti-slop/**",
-    // A browser script the benchmark injects over CDP, as it is.
-    "bench/record-open/probe.js"
+    "tools/oxlint/anti-slop/**"
   ],
   "jsPlugins": [
     {
@@ -117,19 +115,14 @@
   },
   "overrides": [
     {
-      // The benchmark's drivers, and the Rune spike's stand-in for electrobun and its terminal
-      // recorder, speak to Chrome, processes and sockets on their own terms.
+      // The benchmark's drivers, and the core's stdio platform port and its terminal
+      // recorder, speak to processes and sockets on their own terms.
       "files": [
         "desktop/core/platform.ts",
         "desktop/core/record-terminal.ts",
         "bench/desktop-start/run.ts",
         "bench/desktop-start/start.ts",
-        "bench/record-open/cdp.ts",
-        "bench/record-open/desktop.ts",
-        "bench/record-open/electrobun-bun.ts",
         "bench/record-open/fixture.ts",
-        "bench/record-open/run.ts",
-        "bench/record-open/view/electrobun-view.ts",
         "bench/record-open/world.ts"
       ],
       "rules": {

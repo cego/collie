@@ -17,9 +17,7 @@ import { measureStart } from "./start";
 const { values: flags } = parseArgs({
   args: Bun.argv.slice(2),
   options: {
-    app: { type: "string" },
-    install: { type: "boolean", default: false },
-    // The Rune spike's bundled shell (desktop/README.md), which needs no install.
+    // A bundle's launcher (desktop/README.md), which needs no install.
     rune: { type: "string" },
     home: { type: "string", default: `${root}.scratch/desktop-start/home` },
   },
@@ -34,46 +32,14 @@ if (refused !== null) {
   process.exit(2);
 }
 
-/** The launcher `bun run --cwd desktop build` made for this platform. */
-const built = () =>
-  [
-    ...new Bun.Glob("desktop/build/*/*.app/Contents/MacOS/launcher").scanSync(root),
-    ...new Bun.Glob("desktop/build/*/*/bin/launcher").scanSync(root),
-  ].map((path) => `${root}${path}`)[0];
-const app = () => {
-  const found = flags.app ?? built();
-  if (found !== undefined) return found;
+const launcher = flags.rune;
+if (launcher === undefined) {
   console.error(
-    "no built Desktop under desktop/build; run `bun run --cwd desktop build`, or pass --app",
+    "pass --rune <bundle>/bin/launcher; `bun run desktop/scripts/bundle.ts` builds one",
   );
   process.exit(2);
-};
-
-// On Linux a build's launcher only installs Desktop under its data home, from where alone it
-// runs. Installing warms the page cache, so it is a step of its own and never part of a sample.
-const linux = process.platform === "linux";
+}
 const dataHome = `${flags.home}/.local/share`;
-const installed = `${dataHome}/dk.cego.collie.desktop/stable/app/bin/launcher`;
-if (linux && flags.install && flags.rune === undefined) {
-  const build = app();
-  console.error(`installing ${build} under ${flags.home}`);
-  const ran = Bun.spawnSync([build], {
-    env: { ...userEnv, HOME: flags.home, XDG_DATA_HOME: dataHome },
-    stdio: ["ignore", "ignore", "inherit"],
-  });
-  if (ran.exitCode !== 0 || !(await Bun.file(installed).exists())) {
-    console.error(`installing ${build} left no ${installed}`);
-    process.exit(2);
-  }
-  process.exit(0);
-}
-if (linux && flags.rune === undefined && !(await Bun.file(installed).exists())) {
-  console.error(
-    `no Desktop installed under ${flags.home}; run \`bun bench/desktop-start/run.ts --install\` first`,
-  );
-  process.exit(2);
-}
-const launcher = flags.rune ?? (linux ? installed : app());
 
 const line = await runEffect(
   measuring(
@@ -96,11 +62,6 @@ const line = await runEffect(
           COLLIE_DESKTOP_COLLIE: JSON.stringify([process.execPath, `${root}src/main.ts`]),
         },
         desktopState: `${world.desktop}/state`,
-        // The shell keeps its core's state apart, as desktop/protocol/src/core.rs says.
-        own:
-          flags.rune === undefined
-            ? undefined
-            : `${world.desktop}/state/collie-desktop-rune-spike/state/collie-desktop`,
         idle: "60 seconds",
       });
     }).pipe(Effect.scoped, Effect.orDie),

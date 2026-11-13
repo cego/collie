@@ -1965,7 +1965,7 @@ marks to `record-timing.log` in Desktop's state directory: `record:click`, `reco
 sets the same marks as User Timing marks either way ([Measuring a record
 open](internals.md#measuring-a-record-open)). It also logs Desktop's launch, its first usable
 board, a terminal key and its echo, a chat chunk and its draw, and each frame of a scroll
-(`desktop/README.md`, Measuring a record open natively).
+(`desktop/README.md`, Desktop's marks).
 
 **Settings** also holds **Collie**: every setting the TUI's Settings offers — each default a
 Run reads, `proactive`, the extra `models.<harness>` and each `notifications.<kind>` — with

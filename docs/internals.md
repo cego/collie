@@ -1725,20 +1725,11 @@ Typechecking runs tsrs, a Rust port of TypeScript 7.1, with `--fast`: it reports
 diagnostics are off in `tsconfig.json`, so typechecking needs no Effect plugin; lint
 reports them.
 
-`lint:vue` prepares Nuxt's declarations and projects Vue scripts and template expressions
-through Vue's compiler before running the same rules. Diagnostics map back to the Vue
-source. Static attribute and slot names are excluded because their generated JavaScript
-bindings are not expressions written by the author. Both lint commands run in CI through
-`lint` and `check:static`.
-
 An exception names the missing equivalent or compatibility boundary where it applies.
 Examples include callback string replacements, synchronous process-exit cleanup,
 Ed25519 signing, erased errors from authored workflows, and the public `HostApi.usage()`
 method. Numeric schemas require finite values; measurement ratios and interval bounds
-retain infinity where the statistical model requires it. Electrobun's Cottontail config
-loader cannot parse Effect's modules, so its signing-config helper remains native.
-Pinned Hutch also starts build hooks in Cottontail. Their small native launchers run the
-Effect implementations under Bun, preserving environment, output, and exit status.
+retain infinity where the statistical model requires it.
 
 Workflow and cluster modules remain architectural dependencies under ADR-0014, so their unstable-API rule is
 disabled. Vendored lint sources and author workflow fixtures keep their separate
@@ -1754,7 +1745,7 @@ dependencies, run `bun install` in `desktop/` first: the root install refuses a 
 Desktop lockfile. CI relies on that one install before its root gate.
 CI's `desktop` job checks the core's TypeScript (`cd desktop && bun run typecheck`) and
 the Rune workspace's format, clippy and tests; the required CI gate also includes both
-native platform bundles. The removed Nuxt app needs no Vue compiler or lint plugin.
+native platform bundles.
 
 A test leaves nothing behind. `test/support/hosts.ts`, a preload, gives each test file a
 temporary root of its own, `TMPDIR` inside it, and removes it when the file ends. Every
@@ -2132,11 +2123,10 @@ its time.
 The native app's Settings has **Record timing** (off by default), which appends view and
 core marks to `record-timing.log` in the existing desktop state directory, one JSON line
 each. `bench/record-open/summarize.ts` summarises those logs; `desktop/README.md` describes
-the workflow. `bench/desktop-start/` retains the isolated host fixture for startup measurements.
-
-The Nuxt/CDP benchmark driver was retired with the webview app. Its reusable fixture,
-statistics, comparison and log analysis remain in `bench/record-open/`. Historical browser
-measurements are not measurements of the native renderer.
+the workflow. `bench/desktop-start/run.ts --rune` measures a native bundle's start against
+the same isolated host fixture. `bench/record-open/` holds the fixture, statistics,
+comparison and log analysis; browser measurements taken before the native app are not
+measurements of it.
 
 ### Test-suite measurements, 26 October 2026
 
