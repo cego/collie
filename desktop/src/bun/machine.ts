@@ -38,6 +38,7 @@ import {
   type BoardSnapshot,
   PROTOCOL,
   FrontDoorRpcs,
+  IdentityRpc,
   HostRefused,
   leftSaid,
   type ProposalRefused,
@@ -202,6 +203,15 @@ const afterReady = (from: ReadableStream<Uint8Array>, onReady: () => void) => {
   );
 };
 
+const openingScope = <A, E, R>(effect: Effect.Effect<A, E, R | Scope.Scope>) =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.fork(yield* Effect.scope);
+    return yield* effect.pipe(
+      Scope.provide(scope),
+      Effect.onExit((exit) => (Exit.isFailure(exit) ? Scope.close(scope, exit) : Effect.void)),
+    );
+  });
+
 /**
  * Starts the bridge and speaks `FrontDoorRpcs` over its stdio until the scope closes, once
  * it says it is ready, saying what an SSO login it waits on first asks for. One that ends
@@ -273,7 +283,7 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
     Effect.provideService(Socket.Socket, observed),
     Effect.provide(RpcSerialization.layerNdjson),
   );
-  const door = yield* RpcClient.make(FrontDoorRpcs).pipe(
+  const door = yield* RpcClient.make(FrontDoorRpcs.add(IdentityRpc)).pipe(
     Effect.provideService(RpcClient.Protocol, {
       ...protocol,
       run: (id, receive) =>
@@ -311,20 +321,18 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
   );
   yield* started.pipe(
     Effect.timeoutOrElse({
-      duration: "20 seconds",
+      duration: "2 minutes",
       // An SSO login takes as long as its human does.
       orElse: () =>
         signingIn
           ? started
-          : Effect.fail(
-              unreachable(`${CommandLine.display(command)} did not become ready within 20 seconds`),
-            ),
+          : Effect.fail(unreachable("the bridge did not become ready within 2 minutes")),
     }),
   );
   return Object.assign(door, { closed });
-});
+}, openingScope);
 
-export type Door = RpcClient.FromGroup<typeof FrontDoorRpcs, RpcClientError.RpcClientError>;
+export type Door = Omit<Effect.Success<ReturnType<typeof openBridge>>, "identity" | "closed">;
 
 /**
  * A Machine's three channels: the board's and its actions on one, its records on another, the
@@ -354,18 +362,38 @@ export const openDoors = (
     ],
     { concurrency: "unbounded" },
   ).pipe(
-    Effect.map(([desktop, record, chat]): Doors => ({
-      machine,
-      desktop,
-      record,
-      chat,
-      closed: Effect.raceAllFirst([desktop.closed, record.closed, chat.closed]),
-      board: desktop.board(),
-      toasts: desktop.toasts(),
-    })),
+    Effect.flatMap(([desktop, record, chat]) =>
+      chat.identity().pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.interrupt
+            : Effect.fail(unreachable(Str.split(Cause.pretty(cause), "\n")[0]!)),
+        ),
+        Effect.timeoutOrElse({
+          duration: "5 seconds",
+          orElse: () =>
+            Effect.fail(unreachable("the host did not identify itself within 5 seconds")),
+        }),
+        Effect.map((identity): Doors => ({
+          machine,
+          identity,
+          desktop,
+          record,
+          chat,
+          closed: Effect.raceAllFirst([desktop.closed, record.closed, chat.closed]),
+          board: desktop.board(),
+          toasts: desktop.toasts(),
+        })),
+      ),
+    ),
+    openingScope,
   );
 
 export interface BoardSource {
+  readonly identity?: Pick<
+    typeof IdentityRpc.successSchema.Type,
+    "installation" | "protocol" | "build"
+  >;
   readonly machine?: KnownMachine;
   readonly closed?: Effect.Effect<never, RouteFailure>;
   readonly board: Stream.Stream<BoardMessage, { readonly message: string }>;
@@ -916,6 +944,7 @@ export const flockStream = <D extends BoardSource>(
   version: string,
   changes: Stream.Stream<RouteChange<D>> = Stream.empty,
   show: (notification: Notification) => void = () => {},
+  readDoors?: Map<string, D>,
 ): Stream.Stream<FlockItem> =>
   Stream.unwrap(
     Effect.gen(function* () {
@@ -995,6 +1024,22 @@ export const flockStream = <D extends BoardSource>(
             // A reopen asked while it was not live is this opening.
             yield* Queue.clear(reopens[at]!);
             const door = yield* route.open(waitingOnSso);
+            const identity = door.identity;
+            if (identity?.protocol !== undefined && identity.protocol > PROTOCOL + 1)
+              return yield* Effect.fail(tooNew(route, identity.build));
+            if (
+              readDoors !== undefined &&
+              identity?.installation !== undefined &&
+              identity.protocol !== undefined
+            ) {
+              const profile = route.machine.profile;
+              readDoors.set(profile, door);
+              yield* Effect.addFinalizer(() =>
+                Effect.sync(() => {
+                  if (readDoors.get(profile) === door) readDoors.delete(profile);
+                }),
+              );
+            }
             // The build of a release older than Desktop, once its board is shown.
             const due = yield* Deferred.make<{
               readonly installation: string;
@@ -1002,6 +1047,13 @@ export const flockStream = <D extends BoardSource>(
             }>();
             let shown = false;
             const board = machineBoard(door.machine ?? route.machine, door).pipe(
+              Stream.mapEffect((item) =>
+                identity?.installation !== undefined &&
+                item.message._tag === "Snapshot" &&
+                item.message.installation !== identity.installation
+                  ? Effect.fail("the board named a different installation than its host identity")
+                  : Effect.succeed(item),
+              ),
               Stream.tap(() => Effect.sync(() => void (shown = true))),
               Stream.catch((reason) =>
                 Stream.fromEffect(

@@ -831,6 +831,63 @@ for (const [board, why] of UNREAD)
       }).pipe(Effect.provide([platformLayer, TestClock.layer()])),
     ));
 
+test("startup read tools: workspaces use an open chat door while the first board is still connecting", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const board: ChatBoard = { _tag: "Connecting", since: 0 };
+      const vm: ChatMachine = { ...machine("vm-mk", [], asked), board };
+      const flock = { ...withUnread(asked, board), machines: () => [vm] };
+
+      const workspaces = yield* callFlockTool(flock, "collie_workspaces", {});
+      expect(workspaces).toContain("## vm-mk\n\ncollie_workspaces answered by vm-mk");
+      expect(vm.board).toEqual({ _tag: "Connecting", since: 0 });
+      expect(yield* callFlockTool(flock, "collie_herd", {})).toContain("still connecting");
+      expect(yield* callFlockTool(flock, "collie_hold", { run: "vm-mk:r-history" })).toContain(
+        "Nothing was done on vm-mk",
+      );
+      expect(asked).toEqual([
+        {
+          machine: "vm-mk",
+          op: "read",
+          payload: { tool: "collie_workspaces", input: {} },
+        },
+      ]);
+    }).pipe(Effect.provide(platformLayer)),
+  ));
+
+test("startup read tools: explicitly qualified receipts use the connecting Machine without enabling writes", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const board: ChatBoard = { _tag: "Connecting", since: 0 };
+      const vm: ChatMachine = { ...machine("vm-mk", [], asked), board };
+      const local = machine(
+        "mk-pc",
+        [task({ id: "t-local", run: "r-history", runs: ["r-history"] })],
+        asked,
+      );
+      const flock = { ...withUnread(asked, board), machines: () => [local, vm] };
+
+      const receipts = yield* callFlockTool(flock, "collie_receipts", {
+        run: "vm-mk:r-history",
+      });
+      expect(receipts).toContain("collie_receipts answered by vm-mk");
+      expect(receipts).not.toContain("answered by mk-pc");
+      expect(vm.board._tag).toBe("Connecting");
+      expect(yield* callFlockTool(flock, "collie_hold", { run: "vm-mk:r-history" })).toContain(
+        "Nothing was done on vm-mk",
+      );
+      expect(asked).toEqual([
+        {
+          machine: "vm-mk",
+          op: "read",
+          payload: { tool: "collie_receipts", input: { run: "r-history" } },
+        },
+      ]);
+    }).pipe(Effect.provide(platformLayer)),
+  ));
+
 test("a live Machine whose chat channel is not open yet is still a Machine, and says so", () =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -915,6 +972,32 @@ const callFile = (asked: Asked[], name: string, input: JsonObject, files = true)
     name,
     input,
   ).pipe(Effect.provide(platformLayer));
+
+test("startup read tools: files can be read through the open door while writes still await the first board", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const board: ChatBoard = { _tag: "Connecting", since: 0 };
+      const vm: ChatMachine = { ...machine("vm-mk", [], asked), board };
+      const flock = { ...withUnread(asked, board), machines: () => [vm] };
+
+      const read = yield* callFileTool(flock, "collie_read", {
+        file_path: "vm-mk:/var/log/app.log",
+        offset: 2,
+        limit: 2,
+      });
+      expect(read).toEqual([{ type: "text", text: "     2\ttwo\n     3\tthree" }]);
+      expect(vm.board._tag).toBe("Connecting");
+
+      const written = yield* callFileTool(flock, "collie_write", {
+        file_path: "vm-mk:/var/log/app.log",
+        content: "replaced",
+      });
+      expect(textOf(written)).toContain("still connecting");
+      expect(Arr.some(asked, ({ op }) => op === "readFile")).toBe(true);
+      expect(Arr.filter(asked, ({ op }) => op !== "readFile")).toEqual([]);
+    }).pipe(Effect.provide(platformLayer)),
+  ));
 
 test("collie_read reaches the named Machine's host with the bare path, and answers numbered lines", () =>
   Effect.runPromise(

@@ -511,7 +511,7 @@ test("a bridge waiting on an SSO login is not held to the readiness deadline, an
         (said) => Deferred.succeed(heard, said).pipe(Effect.asVoid),
       ).pipe(Effect.forkScoped);
       yield* Deferred.await(heard);
-      yield* TestClock.adjust("21 seconds");
+      yield* TestClock.adjust("121 seconds");
       yield* fs.writeFileString(go, "");
       yield* Fiber.join(signingIn);
 
@@ -521,7 +521,7 @@ test("a bridge waiting on an SSO login is not held to the readiness deadline, an
       );
       const failed = yield* Fiber.join(silent).pipe(
         Effect.raceFirst(
-          TestClock.adjust("21 seconds").pipe(
+          TestClock.adjust("121 seconds").pipe(
             Effect.andThen(TestClock.withLive(Effect.sleep("50 millis"))),
             Effect.forever,
           ),
@@ -529,7 +529,7 @@ test("a bridge waiting on an SSO login is not held to the readiness deadline, an
       );
       expect(failed).toEqual({
         state: "unreachable",
-        reason: "/bin/sh -c 'exec cat >/dev/null' did not become ready within 20 seconds",
+        reason: "the bridge did not become ready within 2 minutes",
       });
     }).pipe(Effect.provide(TestClock.layer())),
   ));

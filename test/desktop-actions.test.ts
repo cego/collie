@@ -1,6 +1,7 @@
 // A gesture's try as the record hears it: a refusal over a finished Step names that Step.
 
 import { expect, test } from "bun:test";
+import * as Arr from "effect/Array";
 import { Effect, Exit } from "effect";
 import {
   actionRunner,
@@ -9,7 +10,7 @@ import {
   offerKey,
   offeringOf,
 } from "../desktop/src/shared/actions";
-import { type OfferView, primaryAction } from "../src/board-model";
+import { type OfferView, primaryAction, cardActions } from "../src/board-model";
 import { ActionFailed } from "../desktop/src/shared/flock";
 import { runEffect } from "./support/effect";
 import { task, taskMr } from "./support/task";
@@ -88,7 +89,7 @@ test("Merge loads and selects the Release offer from the single merge request's 
     landed: false,
     shipping: "merge",
     mrs: [taskMr("app", 12, { run: "r-implementation", ready: true })],
-    offer: { ...release, run: "r-implementation" },
+    offer: { id: release.id, title: release.title, run: "r-implementation" },
   });
   const action = primaryAction(view);
   expect(action?.kind).toBe("offer");
@@ -110,4 +111,32 @@ test("Merge loads and selects the Release offer from the single merge request's 
   });
   expect(offeringOf("r-plan", release)).toEqual({ runId: "r-plan", offer: "release" });
   expect(offeringOf("r-plan", null)).toEqual({ runId: "r-plan", offer: null });
+});
+
+test("every named card Offer opens and invokes on its Change's Run", () => {
+  const view = task({
+    run: "r-fan",
+    state: "done",
+    landed: false,
+    shipping: "merge",
+    offer: { id: "release", title: "Release", run: "r-api" },
+    offers: [
+      { id: "release", title: "Release api!7", run: "r-api" },
+      { id: "stage", title: "Stage api!7", run: "r-api" },
+      { id: "release", title: "Release web!8", run: "r-web" },
+      { id: "stage", title: "Stage web!8", run: "r-web", unavailable: "not connected" },
+    ],
+  });
+  const actions = Arr.filter(cardActions(view), (action) => action.kind === "offer");
+  expect(Arr.map(actions, (action) => offeringOf(view.run, action.offer))).toEqual([
+    { runId: "r-api", offer: "release" },
+    { runId: "r-api", offer: "stage" },
+    { runId: "r-web", offer: "release" },
+    { runId: "r-web", offer: "stage" },
+  ]);
+  const primary = primaryAction(view);
+  expect(primary?.kind === "offer" ? offeringOf(view.run, primary.offer) : null).toEqual({
+    runId: "r-api",
+    offer: "release",
+  });
 });
