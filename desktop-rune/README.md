@@ -530,8 +530,9 @@ through its existing updater. A native install/uninstall helper from signed rele
 No webview, CEF or Electrobun UI runtime travels with it. Linux Setup and macOS DMG
 assets keep the names read by `install-desktop.sh`.
 
-The core checks and verifies updates, stages the tar, signature and requested identity,
-then asks the shell to restart. The shell stops its core, re-executes, verifies the
+The core checks and verifies updates and the shell says a ready one above every page. On
+Restart now the core stages the tar, signature and requested identity, then asks the
+shell to restart, and answers the restart as accepted. The shell stops its core, re-executes, verifies the
 archive again, checks metadata and runnable files, and atomically exchanges bundles.
 An installation lock serializes launches; one waiting through an update re-executes
 the installed shell too. A refused update leaves the current app in place and is not

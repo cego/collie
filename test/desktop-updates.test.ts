@@ -3,9 +3,21 @@
 // would install verifies against Collie's release key.
 
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
-import { Deferred, Effect, Fiber, FileSystem, Option, Schedule, Stream } from "effect";
+import {
+  Clock,
+  Deferred,
+  Duration,
+  Effect,
+  Fiber,
+  FileSystem,
+  Option,
+  Schedule,
+  Stream,
+} from "effect";
+import { TestClock } from "effect/testing";
 import { BunServices } from "@effect/platform-bun";
 import { signRelease } from "../src/signing";
 import {
@@ -37,6 +49,14 @@ interface Fake {
   readonly calls: string[];
 }
 
+/** What a check finds, which a test changes as releases are published or the network goes. */
+interface Feed {
+  version: string;
+  failing?: string;
+  /** A check that never answers. */
+  hangs?: boolean;
+}
+
 /** An updater that finds 0.33.0, whose tar is `bytes` once downloaded and signed `signature`. */
 const fakeUpdater = (
   dir: string,
@@ -54,25 +74,41 @@ const fakeUpdater = (
     readonly downloading?: Deferred.Deferred<void>;
     /** The update archive Electrobun prepared, as its platform names it. */
     readonly artifact?: string;
+    /** What each check finds, in place of `available` and `failing`. */
+    readonly feed?: Feed;
+    /** Why the signature could not be fetched. */
+    readonly signatureFails?: string;
   },
 ): Effect.Effect<Fake, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const calls: string[] = [];
-    const tar = `${dir}/abc.tar`;
-    let prepared = options.preparedAtStart === true;
-    if (prepared) yield* fs.writeFile(tar, options.bytes ?? TAR).pipe(Effect.orDie);
-    const ready: Prepared = {
-      version: "0.33.0",
-      hash: "abc",
-      tar,
-      artifact: options.artifact ?? "stable-linux-x64-collie-desktop.tar.zst",
+    const preparedOf = (version: string): Prepared => {
+      const hash = version === "0.33.0" ? "abc" : `h${version}`;
+      return {
+        version,
+        hash,
+        tar: `${dir}/${hash}.tar`,
+        artifact: options.artifact ?? "stable-linux-x64-collie-desktop.tar.zst",
+      };
     };
+    let prepared: Prepared | null = null;
+    if (options.preparedAtStart === true) {
+      prepared = preparedOf("0.33.0");
+      yield* fs.writeFile(prepared.tar, options.bytes ?? TAR).pipe(Effect.orDie);
+    }
+    const feed = options.feed;
     const port: UpdaterPort = {
       channel: Effect.succeed(options.channel ?? "stable"),
       hash: Effect.succeed("old"),
       check: Effect.suspend(() => {
         calls.push("check");
+        if (feed !== undefined) {
+          if (feed.hangs === true) return Effect.never;
+          return feed.failing === undefined
+            ? Effect.succeed({ available: true, version: feed.version })
+            : Effect.fail(feed.failing);
+        }
         return options.failing === undefined
           ? Effect.succeed({ available: options.available ?? true, version: "0.33.0" })
           : Effect.fail(options.failing);
@@ -80,19 +116,23 @@ const fakeUpdater = (
       download: Effect.gen(function* () {
         calls.push("download");
         if (options.downloading !== undefined) yield* Deferred.await(options.downloading);
-        yield* fs.writeFile(tar, options.bytes ?? TAR).pipe(Effect.orDie);
-        prepared = true;
+        const next = preparedOf(feed?.version ?? "0.33.0");
+        yield* fs.writeFile(next.tar, options.bytes ?? TAR).pipe(Effect.orDie);
+        prepared = next;
       }),
-      prepared: Effect.sync(() => (prepared ? ready : null)),
+      prepared: Effect.sync(() => prepared),
       discard: Effect.gen(function* () {
         calls.push("discard");
-        prepared = false;
-        yield* fs.remove(tar, { force: true }).pipe(Effect.orDie);
+        const tar = prepared?.tar;
+        prepared = null;
+        if (tar !== undefined) yield* fs.remove(tar, { force: true }).pipe(Effect.orDie);
       }),
       signatureOf: (name, version) =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
           calls.push(`signature ${name} from ${version}`);
-          return options.signature;
+          return options.signatureFails === undefined
+            ? Effect.succeed(options.signature)
+            : Effect.fail(options.signatureFails);
         }),
       apply: Effect.sync(() => void calls.push("apply")).pipe(
         Effect.andThen(
@@ -102,6 +142,37 @@ const fakeUpdater = (
     };
     return { port, calls };
   });
+
+/**
+ * Runs `effect` on a test clock that moves on by itself, whose wall time `sleep` puts ahead
+ * without firing a timer, as a laptop's clock jumps over a suspend.
+ */
+const suspendable = <A, E, R>(
+  effect: (sleep: (duration: Duration.Input) => void) => Effect.Effect<A, E, R>,
+) =>
+  Effect.gen(function* () {
+    const clock = yield* TestClock.make();
+    yield* clock.setTime(yield* Clock.currentTimeMillis);
+    let slept = 0;
+    const wall = () => clock.currentTimeMillisUnsafe() + slept;
+    const suspended: Clock.Clock = {
+      currentTimeMillisUnsafe: wall,
+      currentTimeMillis: Effect.sync(wall),
+      currentTimeNanosUnsafe: () => BigInt(wall()) * 1_000_000n,
+      currentTimeNanos: Effect.sync(() => BigInt(wall()) * 1_000_000n),
+      monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
+      monotonicTimeNanos: clock.monotonicTimeNanos,
+      sleep: (duration) => clock.sleep(duration),
+    };
+    yield* Effect.forkScoped(
+      Effect.forever(clock.adjust(10_000).pipe(Effect.andThen(Effect.sleep(1)))),
+    );
+    return yield* effect((duration) => {
+      slept += Duration.toMillis(Duration.fromInputUnsafe(duration));
+    }).pipe(Effect.provideService(Clock.Clock, suspended));
+  }).pipe(Effect.scoped);
+
+const checks = (calls: ReadonlyArray<string>) => Arr.filter(calls, (call) => call === "check");
 
 /** Runs `effect` with a scratch directory of its own for the updater's tar. */
 const run = <A, E>(effect: (dir: string) => Effect.Effect<A, E, FileSystem.FileSystem>) =>
@@ -460,6 +531,149 @@ test("a checkout's update news is told once and stays open, as a released Deskto
       expect(told._tag).toBe("None");
       const first = yield* Stream.runHead(updates.news);
       expect(Option.map(first, ({ _tag }) => _tag)).toEqual(Option.some("Never"));
+    }).pipe(Effect.scoped),
+  );
+});
+
+test("a check missed while the computer slept runs within a minute of waking", () => {
+  const key = pair();
+  return run((dir) =>
+    suspendable((sleep) =>
+      Effect.gen(function* () {
+        const { port, calls } = yield* fakeUpdater(dir, { signature: null, available: false });
+        yield* updatesOf(port, "0.32.0", key.publicKey);
+        yield* Effect.sleep("10 minutes");
+        expect(checks(calls)).toHaveLength(1);
+        sleep("8 hours");
+        yield* Effect.sleep("2 minutes");
+        expect(checks(calls)).toHaveLength(2);
+        yield* Effect.sleep("30 minutes");
+        expect(checks(calls)).toHaveLength(2);
+      }).pipe(Effect.scoped),
+    ),
+  );
+});
+
+test("a release missed while offline is found within five minutes of the network coming back", () => {
+  const key = pair();
+  const feed: Feed = { version: "0.33.0", failing: "getaddrinfo ENOTFOUND github.com" };
+  return run((dir) =>
+    Effect.gen(function* () {
+      const { port } = yield* fakeUpdater(dir, {
+        signature: signRelease(TAR, key.privateKey),
+        feed,
+      });
+      const updates = yield* updatesOf(port, "0.32.0", key.publicKey);
+      const said = yield* told(
+        updates,
+        Effect.gen(function* () {
+          yield* Effect.sleep("1 minute");
+          feed.failing = undefined;
+          yield* Effect.sleep("6 minutes");
+        }),
+      );
+      expect(said).toContainEqual({ _tag: "Failed", reason: "getaddrinfo ENOTFOUND github.com" });
+      expect(said.at(-1)).toEqual({ _tag: "Ready", version: "0.33.0" });
+    }).pipe(Effect.scoped, (effect) => fastForward(effect, 10_000)),
+  );
+});
+
+test("a check that never answers is given up after two minutes and the next one still runs", () => {
+  const key = pair();
+  const feed: Feed = { version: "0.33.0", hangs: true };
+  return run((dir) =>
+    Effect.gen(function* () {
+      const { port, calls } = yield* fakeUpdater(dir, {
+        signature: signRelease(TAR, key.privateKey),
+        feed,
+      });
+      const updates = yield* updatesOf(port, "0.32.0", key.publicKey);
+      const said = yield* told(
+        updates,
+        Effect.gen(function* () {
+          yield* Effect.sleep("3 minutes");
+          feed.hangs = false;
+          yield* Effect.sleep("5 minutes");
+        }),
+      );
+      expect(
+        Arr.some(said, (news) => news._tag === "Failed" && Str.includes("2 minutes")(news.reason)),
+      ).toBe(true);
+      expect(said.at(-1)).toEqual({ _tag: "Ready", version: "0.33.0" });
+      expect(checks(calls).length).toBeGreaterThanOrEqual(2);
+    }).pipe(Effect.scoped, (effect) => fastForward(effect, 10_000)),
+  );
+});
+
+test("a download that never finishes is given up after thirty minutes", () => {
+  const key = pair();
+  return run((dir) =>
+    Effect.gen(function* () {
+      const { port } = yield* fakeUpdater(dir, {
+        signature: signRelease(TAR, key.privateKey),
+        downloading: yield* Deferred.make<void>(),
+      });
+      const updates = yield* updatesOf(port, "0.32.0", key.publicKey);
+      const news = yield* updates.check;
+      expect(news._tag === "Failed" && news.reason).toContain("30 minutes");
+    }).pipe(Effect.scoped, (effect) => fastForward(effect, 60_000)),
+  );
+});
+
+test("a version refused for its signature is not downloaded again", () => {
+  const key = pair();
+  return run((dir) =>
+    Effect.gen(function* () {
+      const { port, calls } = yield* fakeUpdater(dir, {
+        bytes: new TextEncoder().encode("something else"),
+        signature: signRelease(TAR, key.privateKey),
+      });
+      const updates = yield* updatesOf(port, "0.32.0", key.publicKey);
+      const first = yield* updates.check;
+      const again = yield* updates.check;
+      expect(first).toMatchObject({ _tag: "Refused", version: "0.33.0" });
+      expect(again).toEqual(first);
+      expect(Arr.filter(calls, (call) => call === "download")).toHaveLength(1);
+    }).pipe(Effect.scoped),
+  );
+});
+
+test("a signature that cannot be fetched fails the check and keeps the download for the next", () => {
+  const key = pair();
+  return run((dir) =>
+    Effect.gen(function* () {
+      const offline = yield* fakeUpdater(dir, {
+        signature: signRelease(TAR, key.privateKey),
+        signatureFails: "the update download answered 503",
+      });
+      const updates = yield* updatesOf(offline.port, "0.32.0", key.publicKey);
+      expect(yield* updates.check).toEqual({
+        _tag: "Failed",
+        reason: "the update download answered 503",
+      });
+      expect(offline.calls).not.toContain("discard");
+      expect(yield* offline.port.prepared).not.toBeNull();
+    }).pipe(Effect.scoped),
+  );
+});
+
+test("a ready update stays ready while a newer one downloads, then the newer one is ready", () => {
+  const key = pair();
+  const feed: Feed = { version: "0.33.0" };
+  return run((dir) =>
+    Effect.gen(function* () {
+      const downloading = yield* Deferred.make<void>();
+      yield* Deferred.succeed(downloading, undefined);
+      const { port } = yield* fakeUpdater(dir, {
+        signature: signRelease(TAR, key.privateKey),
+        feed,
+      });
+      const updates = yield* updatesOf(port, "0.32.0", key.publicKey);
+      expect(yield* updates.check).toEqual({ _tag: "Ready", version: "0.33.0" });
+      feed.version = "0.34.0";
+      const said = yield* told(updates, updates.check);
+      expect(Arr.filter(said, (news) => news._tag !== "Ready")).toEqual([]);
+      expect(said.at(-1)).toEqual({ _tag: "Ready", version: "0.34.0" });
     }).pipe(Effect.scoped),
   );
 });

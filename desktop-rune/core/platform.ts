@@ -101,7 +101,12 @@ export const Utils = {
 
 /** A bundle's own version.json, as `desktop-rune/scripts/bundle.ts` writes it. */
 const Local = Schema.fromJsonString(
-  Schema.Struct({ channel: Schema.String, hash: Schema.String, baseUrl: Schema.String }),
+  Schema.Struct({
+    version: Schema.String,
+    channel: Schema.String,
+    hash: Schema.String,
+    baseUrl: Schema.String,
+  }),
 );
 const UpdateManifest = Schema.fromJsonString(
   Schema.Struct({
@@ -122,17 +127,22 @@ const UpdateManifest = Schema.fromJsonString(
 /** Run from a checkout, the core never updates itself. */
 const local = async () =>
   Bun.env.COLLIE_RUNE_VERSION === undefined
-    ? { channel: "dev", hash: "rune-spike", baseUrl: "" }
+    ? { version: "0.0.0", channel: "dev", hash: "rune-spike", baseUrl: "" }
     : Effect.runPromise(
         Schema.decodeEffect(Local)(await Bun.file(Bun.env.COLLIE_RUNE_VERSION).text()),
       );
 
 const PLATFORM = `${process.platform === "darwin" ? "macos" : "linux"}-${process.arch}`;
 
-const fetched = (url: string) =>
+/** A release asset, given up, and its request ended, after `within`. */
+const fetched = (url: string, within: `${number} minute${"" | "s"}` = "1 minute") =>
   Effect.runPromise(
     downloadRelease(url).pipe(
       Effect.flatMap((response) => response.arrayBuffer),
+      Effect.timeoutOrElse({
+        duration: within,
+        orElse: () => Effect.fail(`${url} had no answer in ${within}`),
+      }),
       Effect.provide(FetchHttpClient.layer),
     ),
   );
@@ -147,7 +157,7 @@ const latest = async () =>
   );
 
 let downloadFailed = "";
-let status: ReadonlyArray<{ message: string }> = [];
+let status: ReadonlyArray<{ message: string; restarting?: boolean }> = [];
 
 /**
  * Electrobun's Updater as Desktop's `electrobun-updater.ts` asks it. Checking, downloading and
@@ -160,7 +170,8 @@ export const Updater = {
   checkForUpdate: async () => {
     try {
       const [info, found] = await Promise.all([local(), latest()]);
-      return { error: "", updateAvailable: found.hash !== info.hash, version: found.version };
+      const newer = found.hash !== info.hash && Bun.semver.order(found.version, info.version) > 0;
+      return { error: "", updateAvailable: newer, version: found.version };
     } catch (error) {
       return { error: String(error), updateAvailable: false, version: "" };
     }
@@ -170,7 +181,7 @@ export const Updater = {
     try {
       const found = await latest();
       const archive = new Uint8Array(
-        await fetched(`${(await local()).baseUrl}/${found.artifact.file}`),
+        await fetched(`${(await local()).baseUrl}/${found.artifact.file}`, "30 minutes"),
       );
       const retained = `${userData}/self-extraction/${found.hash}.tar`;
       await Bun.write(retained, Bun.zstdDecompressSync(archive));
@@ -214,7 +225,9 @@ export const Updater = {
     await Bun.write(`${staged}.partial`, Bun.file(prepared.retained_tar_path));
     await rename(`${staged}.partial`, staged);
     process.stdout.write(`${JSON.stringify({ _tag: "Restart" })}\n`);
-    status = [{ message: `Collie ${prepared.version} is installed when Collie next opens` }];
+    status = [
+      { message: `Collie ${prepared.version} is installed as Collie restarts`, restarting: true },
+    ];
   },
   getStatusHistory: () => status,
 };

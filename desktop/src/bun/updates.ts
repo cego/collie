@@ -3,7 +3,16 @@
 // key, because its bundle hash is not authentication. A Desktop run from a checkout is on
 // a channel other than stable and never updates itself.
 
-import { Deferred, Effect, FileSystem, Schedule, Stream, SubscriptionRef } from "effect";
+import {
+  Clock,
+  Deferred,
+  Duration,
+  Effect,
+  FileSystem,
+  Schedule,
+  Stream,
+  SubscriptionRef,
+} from "effect";
 import { appliedSignatureOf, RELEASE_PUBLIC_KEY, verifyRelease } from "../../../src/signing";
 import type { UpdateNews } from "../shared/flock";
 
@@ -28,14 +37,22 @@ export interface UpdaterPort {
   readonly discard: Effect.Effect<void>;
   /**
    * The signature `name` is published under in `version`'s release, which is the one the
-   * update came from, or null where it has none.
+   * update came from, or null where it has none; fails where the release could not be asked.
    */
-  readonly signatureOf: (name: string, version: string) => Effect.Effect<string | null>;
+  readonly signatureOf: (name: string, version: string) => Effect.Effect<string | null, string>;
   /** Installs what is prepared, quitting Desktop and starting the new one; or says why not. */
   readonly apply: Effect.Effect<void, string>;
 }
 
+/** A span of whole minutes, said as it is written. */
+type Minutes = `${number} minute${"" | "s"}`;
+
 const CHECKOUT = "this Desktop runs from a checkout, which never updates itself";
+const GONE = "its download is gone";
+const CHECK_WITHIN: Minutes = "2 minutes";
+const DOWNLOAD_WITHIN: Minutes = "30 minutes";
+/** How soon a check that could not reach the releases is tried again. */
+const RETRY: Minutes = "5 minutes";
 
 /** Whether this Desktop updates itself: a release build does, and one from a checkout never. */
 const released = (port: UpdaterPort) => Effect.map(port.channel, (channel) => channel === "stable");
@@ -47,7 +64,7 @@ const refusalOf = (port: UpdaterPort, prepared: Prepared, key: string) =>
     const name = appliedSignatureOf(prepared.artifact);
     const signature = name === null ? null : yield* port.signatureOf(name, prepared.version);
     const bytes = yield* fs.readFile(prepared.tar).pipe(Effect.orElseSucceed(() => null));
-    if (bytes === null) return "its download is gone";
+    if (bytes === null) return GONE;
     const verified = verifyRelease(bytes, signature, key);
     return verified.ok ? null : verified.reason;
   });
@@ -63,6 +80,16 @@ const verified = (port: UpdaterPort, key: string) =>
     return { _tag: "Refused", version: prepared.version, reason: refused } satisfies UpdateNews;
   });
 
+const within = <A>(
+  effect: Effect.Effect<A, string>,
+  duration: Minutes,
+  what: string,
+): Effect.Effect<A, string> =>
+  Effect.timeoutOrElse(effect, {
+    duration,
+    orElse: () => Effect.fail(`${what} had no answer in ${duration}`),
+  });
+
 export interface Updates {
   /** What the latest check found, from the one running now. */
   readonly news: Stream.Stream<UpdateNews>;
@@ -71,14 +98,15 @@ export interface Updates {
 }
 
 /**
- * Checks for an update now and every `every` after, downloading one it finds in the
- * background. `version` is this Desktop's own.
+ * Checks for an update now and once `every` has passed on the wall clock, looked at each
+ * minute so a check missed while the computer slept runs soon after it wakes; downloads one
+ * it finds in the background. `version` is this Desktop's own.
  */
 export const updatesOf = (
   port: UpdaterPort,
   version: string,
   key: string = RELEASE_PUBLIC_KEY,
-  every: Schedule.Schedule<unknown> = Schedule.spaced("1 hour"),
+  every: Duration.Input = "1 hour",
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -92,24 +120,40 @@ export const updatesOf = (
     }
     const latest = yield* SubscriptionRef.make<UpdateNews>({ _tag: "Checking" });
     let running: Deferred.Deferred<UpdateNews> | undefined;
+    /** A version whose download did not verify, which this Desktop does not fetch again. */
+    let refused: Extract<UpdateNews, { _tag: "Refused" }> | undefined;
+    /** Whether the latest check failed before it reached a download. */
+    let unreached = false;
     const say = (news: UpdateNews) => SubscriptionRef.set(latest, news).pipe(Effect.as(news));
+    const settled = verified(port, key).pipe(
+      Effect.tap((news) =>
+        Effect.sync(() => {
+          if (news?._tag === "Refused" && news.reason !== GONE) refused = news;
+        }),
+      ),
+    );
     const once = Effect.gen(function* () {
-      // A ready update stays ready while Desktop looks for a newer one.
-      if ((yield* SubscriptionRef.get(latest))._tag !== "Ready") yield* say({ _tag: "Checking" });
-      const found = yield* port.check;
+      unreached = true;
+      const now = yield* SubscriptionRef.get(latest);
+      // A ready update stays ready while Desktop looks for, and fetches, a newer one.
+      if (now._tag !== "Ready") yield* say({ _tag: "Checking" });
+      const found = yield* within(port.check, CHECK_WITHIN, "the check");
+      unreached = false;
       if (!found.available) return yield* say({ _tag: "UpToDate", version });
-      const ready = yield* verified(port, key);
+      if (refused?.version === found.version) return yield* say(refused);
+      const ready = yield* settled;
       if (ready?.version !== found.version) {
-        yield* say({ _tag: "Downloading", version: found.version });
-        yield* port.download;
+        if (ready?._tag !== "Ready") yield* say({ _tag: "Downloading", version: found.version });
+        yield* within(port.download, DOWNLOAD_WITHIN, "the download");
       }
-      const news = yield* verified(port, key);
+      const news = yield* settled;
       return yield* say(news ?? { _tag: "UpToDate", version });
     }).pipe(
       // Tried again at the next check.
       Effect.catch((reason) =>
-        Effect.flatMap(verified(port, key), (news) =>
-          say(news?._tag === "Ready" ? news : { _tag: "Failed", reason }),
+        verified(port, key).pipe(
+          Effect.orElseSucceed(() => null),
+          Effect.flatMap((news) => say(news?._tag === "Ready" ? news : { _tag: "Failed", reason })),
         ),
       ),
       Effect.provideService(FileSystem.FileSystem, fs),
@@ -120,9 +164,9 @@ export const updatesOf = (
       const now = yield* SubscriptionRef.get(latest);
       const said = (now._tag === "Ready" || now._tag === "Refused") && now.version;
       if (prepared === null || running !== undefined || said === prepared.version) return;
-      const news = yield* verified(port, key);
+      const news = yield* settled;
       if (news !== null) yield* say(news);
-    }).pipe(Effect.provideService(FileSystem.FileSystem, fs));
+    }).pipe(Effect.ignore, Effect.provideService(FileSystem.FileSystem, fs));
     const check = Effect.suspend(() => {
       if (running !== undefined) return Deferred.await(running);
       const done = Deferred.makeUnsafe<UpdateNews>();
@@ -134,8 +178,14 @@ export const updatesOf = (
         Effect.andThen(Deferred.await(done)),
       );
     });
-    yield* check.pipe(Effect.repeat(every), Effect.forkIn(scope));
-    yield* staged.pipe(Effect.repeat(Schedule.spaced("1 minute")), Effect.forkIn(scope));
+    let due = 0;
+    const scheduled = Effect.gen(function* () {
+      if ((yield* Clock.currentTimeMillis) < due) return yield* staged;
+      const news = yield* check;
+      const next = news._tag === "Failed" && unreached ? RETRY : every;
+      due = (yield* Clock.currentTimeMillis) + Duration.toMillis(Duration.fromInputUnsafe(next));
+    });
+    yield* scheduled.pipe(Effect.repeat(Schedule.spaced("1 minute")), Effect.forkIn(scope));
     return { news: SubscriptionRef.changes(latest), check } satisfies Updates;
   });
 
