@@ -752,11 +752,7 @@ export const unlistedServers = Effect.fn("Compaction.unlistedServers")(function*
   return found;
 });
 
-/**
- * A listed terminal can outlive its managed server. Only a recorded process proven
- * absent together with an unavailable endpoint establishes that loss. A live process,
- * a reused pid, missing identity or an unanswered probe never authorises replacement.
- */
+/** A listed terminal does not prove its owned server is alive. */
 export const lostServer = Effect.fn("Compaction.lostServer")(function* (
   deps: Pick<CompactionDeps, "ports" | "stateDir">,
   agent: string,
@@ -764,10 +760,11 @@ export const lostServer = Effect.fn("Compaction.lostServer")(function* (
   const record = yield* readControl(deps.stateDir, agent).pipe(Effect.orElseSucceed(() => null));
   if (
     record === null ||
+    record.agent !== agent ||
     record.pid === null ||
-    record.started === null ||
-    record.command === null ||
-    record.endpoint === null
+    Str.trim(record.started ?? "") === "" ||
+    Str.trim(record.command ?? "") === "" ||
+    !record.endpoint
   )
     return null;
   const port = deps.ports[record.harness];

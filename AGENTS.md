@@ -219,6 +219,12 @@ Tests are unit tests only: they call the code through its own interface, with fa
 its edges. No Playwright and no test that drives a built app or a browser — a behaviour
 of the view is covered by testing the logic it renders.
 
+For native UI inspection, operate Rune headlessly with its built-in CLI: `--snap out.png`
+captures a screen, `--tree out.json` includes the accessibility tree, and `--script input.json`
+replays clicks and keyboard input. Use the fake-core scenes and isolated HOME/state described
+in [`desktop-rune/README.md`](desktop-rune/README.md); Lavapipe renders on a VM without a GPU.
+These tools inspect the native app without installing it or restarting the human's app.
+
 ## Invariants
 
 1. **Anything a human can do, an agent can do.** Every action on the board, in the CLI or

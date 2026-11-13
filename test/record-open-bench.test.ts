@@ -224,8 +224,7 @@ test("inside a Measurement, on a Machine without /proc, the host's lock is the b
           Effect.sync(() => (sampled = true)),
         ).pipe(Effect.provideService(FileSystem.FileSystem, noProc)),
       );
-      yield* Effect.sleep("1500 millis");
-      yield* Fiber.interrupt(sampling);
+      yield* Fiber.join(sampling).pipe(Effect.timeout("10 seconds"));
       expect(said).toEqual([]);
       expect(sampled).toBe(true);
       expect(yield* fs.exists(lock)).toBe(true);
