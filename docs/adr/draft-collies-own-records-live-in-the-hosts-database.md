@@ -36,6 +36,19 @@ Run, a launch by Run and operation, and by agent, with its place in the Run's la
 The rest of the record is kept as its JSON. Launch records joined after 0.120.0, whose host
 still read every Run's launch files on every pass of its question tending, about every 190 ms.
 
+**Observed in telemetry:** the report sweep also built views for Runs whose reports were
+already finished. Reports now live in `collie_runs.report`; a partial index selects only
+Runs still awaiting a report or Task closure. The first upgrade imports valid `report.json`
+files once, leaving missing or malformed reports owed. Later hosts read and write the row.
+Old files remain at their upgrade state for a downgrade; they receive no later report updates.
+The sweep retains its one-second cadence so failed closure attempts still retry without
+requiring another write.
+
+To roll back the report sweep change, select from `store.runs` again. Retain the database
+report reader and writer. A binary downgrade to a file-backed report reader cannot see
+reports written after the upgrade. Keep `host.db` and the imported files. Do not drop the
+report column as part of a rollback.
+
 **D2. The host is the only writer.** The registry, ledgers, proposals and launch records
 were already written only by the host. A Task created by `collie run start --here` from the CLI or the
 board is now created by the host as part of the start request. The file locks around these

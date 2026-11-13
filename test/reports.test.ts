@@ -8,7 +8,6 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem, Option, Schema, Stream, flow, Result } from "effect";
 import { writeConfigValue } from "../src/config";
 import { connect, frontDoor, socketOf, ownerOf } from "../src/host";
-import { runDir } from "../src/engine";
 import { readEnv } from "../src/env";
 import { Herdr } from "../src/herdr";
 import { peersOf } from "../src/peers";
@@ -435,23 +434,7 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
             held.resolve();
           }
           const readReport = () =>
-            fs.readFileString(`${runDir(first.world.state, runId)}/report.json`).pipe(
-              Effect.map((text) =>
-                flow(
-                  Schema.decodeResult(
-                    Schema.fromJsonString(
-                      Schema.Struct({
-                        state: Schema.String,
-                        closed: Schema.Boolean,
-                        note: Schema.String,
-                      }),
-                    ),
-                  ),
-                  Result.getOrThrow,
-                )(text),
-              ),
-              Effect.orElseSucceed(() => null),
-            );
+            firstHost.run({ runId }).pipe(Effect.map((view) => view?.report ?? null));
           const report = yield* until(
             readReport,
             (report) =>
@@ -520,15 +503,13 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           });
           if (mode === "gone") {
             const before = yield* linkedLines();
-            const recorded = yield* fs.readFileString(
-              `${runDir(first.world.state, runId)}/report.json`,
-            );
+            const recorded = yield* readReport();
             yield* stopHost(first.world.state);
             yield* first.cli(["board"], { ...boot, FAKE_HERDR_OUTPUTS: localOutputs });
             yield* until(linkedLines, (count) => count > before);
             expect(
-              yield* fs.readFileString(`${runDir(first.world.state, runId)}/report.json`),
-            ).toBe(recorded);
+              (yield* (yield* connect(first.world.state)).run({ runId }))?.report ?? null,
+            ).toEqual(recorded);
             expect(
               Arr.filter(Str.split(yield* fs.readFileString(second.herdrLog), "\n"), (line) =>
                 pipe_(line, Str.includes(` of ${runId} on `)),
