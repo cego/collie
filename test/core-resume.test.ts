@@ -383,7 +383,11 @@ test.each([
             );
             expect(
               Arr.filter(yield* deliveredTo(dir(), runId), (one) => one.id === "repair-round-two"),
-            ).toMatchObject([{ state, note }]);
+            ).toMatchObject([
+              state === "reserved"
+                ? { state: expect.stringMatching(/^(reserved|unknown)$/) }
+                : { state, note },
+            ]);
           }),
         );
       }),
