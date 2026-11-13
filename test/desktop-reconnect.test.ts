@@ -39,7 +39,7 @@ const runDetailOn = (doors: DoorMap<Pick<Doors, "record">>, installation: string
 const titles = (details: ReadonlyArray<{ readonly title: string } | null>) =>
   Arr.map(details, (detail) => detail?.title);
 
-test("an action cut off by its Machine's renewed connection fails naming the Machine, under its request", () =>
+test("an action cut off by its Machine's renewed connection reports an unknown outcome under its request", () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const closed = yield* Deferred.make<void>();
@@ -56,7 +56,8 @@ test("an action cut off by its Machine's renewed connection fails naming the Mac
       expect(yield* Fiber.join(acting)).toEqual(
         new ActionFailed({
           request: "hold-1",
-          reason: "vm-mk's connection was renewed before this finished",
+          reason:
+            "vm-mk did not confirm the hold of r-1: the connection was renewed before its reply. Its outcome is unknown; it may have been applied. Inspect its result before retrying with the same request (hold-1).",
         }),
       );
     }),

@@ -717,11 +717,7 @@ export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(functio
   }
 });
 
-/**
- * Every reservation, and every delivery waiting on its pane, for an incarnation that is no
- * longer the one addressed, settled `failed`. Nothing was sent for them and nothing ever
- * will be: the process they were reserved against is gone.
- */
+/** Losing an incarnation proves deferred work unsent, but says nothing about reservations. */
 const settlePending = Effect.fn("Dispatcher.settlePending")(function* (
   terminalId: string,
   why: string,
@@ -729,7 +725,12 @@ const settlePending = Effect.fn("Dispatcher.settlePending")(function* (
   const at = yield* nowIso;
   for (const delivery of newestById(yield* readLedger(terminalId)).values()) {
     if (delivery.state !== "reserved" && delivery.state !== "deferred") continue;
-    yield* appendLine({ ...delivery, at, state: "failed", note: why });
+    yield* appendLine({
+      ...delivery,
+      at,
+      state: delivery.state === "reserved" ? "unknown" : "failed",
+      note: why,
+    });
   }
 });
 

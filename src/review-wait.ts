@@ -35,6 +35,11 @@ export const ReviewStandingSchema = Schema.Union([
   }),
   Schema.TaggedStruct("Moved", { head: Schema.String }),
   Schema.TaggedStruct("Conflicting", { head: Schema.String }),
+  Schema.TaggedStruct("FailedCi", {
+    head: Schema.String,
+    name: Schema.String,
+    url: Schema.optionalKey(Schema.String),
+  }),
   Schema.TaggedStruct("Merged", { sha: Schema.String, by: Schema.String, at: Schema.String }),
   Schema.TaggedStruct("Closed", {}),
   Schema.TaggedStruct("Held", {}),
@@ -66,6 +71,7 @@ export function standingOf(
     readonly proved: string;
     readonly seen: ReadonlyArray<string>;
     readonly returnConflicts?: boolean;
+    readonly returnFailedCi?: boolean;
   },
 ): ReviewStanding {
   if (!read.ok) return { _tag: "Unreadable", reason: read.reason };
@@ -97,6 +103,13 @@ export function standingOf(
         line,
       })),
       approvers: read.approvers,
+    };
+  if (against.returnFailedCi === true && read.pipeline.state === "failed")
+    return {
+      _tag: "FailedCi",
+      head: read.head,
+      name: read.pipeline.name,
+      ...(read.pipeline.url !== undefined && { url: read.pipeline.url }),
     };
   const short = pipe(read.head, Str.slice(0, 8));
   const why = [

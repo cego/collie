@@ -735,6 +735,50 @@ fn a_steps_start_asks_the_run_what_it_offers_and_starts_it_with_what_was_typed()
     );
 }
 
+#[test]
+fn a_steps_start_that_says_what_it_does_is_asked_first_and_a_needed_yes_or_no_is_sent_as_ticked() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    runtime.update(|app, _| {
+        app.open_record("inst-build".into(), "r1".into(), "Build box".into(), None)
+    });
+    let flow = flow_with(
+        json!({"id": "offer:merge", "title": "Merge", "state": "expected", "primary": "start"}),
+        json!([]),
+    );
+    harness
+        .fake
+        .push("runDetail", Ok(detail(json!({"flow": flow}))));
+    settle(&mut runtime, &harness, 100.0);
+    tap(&mut runtime, "next-action", 200.0);
+    harness.fake.answer(
+        "offers",
+        Ok(json!([
+            {"id": "merge", "title": "Merge", "workflow": "release", "kind": "follow-up",
+                "primary": true, "unavailable": null, "ships": "merge",
+                "confirm": "Merges it and stops: nothing is tagged or deployed.",
+                "arguments": {"type": "object", "required": ["squash"],
+                    "properties": {"squash": {"type": "boolean"}}}}
+        ])),
+    );
+    settle(&mut runtime, &harness, 300.0);
+    assert!(
+        harness.fake.asked_of("act").is_empty(),
+        "nothing is started before its yes"
+    );
+    assert_eq!(
+        named(&runtime, "offer-confirm")["name"],
+        "Merges it and stops: nothing is tagged or deployed."
+    );
+    assert_eq!(named(&runtime, "offer-field-squash")["role"], "check-box");
+    assert_eq!(named(&runtime, "offer-start")["name"], "Merge");
+    tap(&mut runtime, "offer-start", 400.0);
+    assert_eq!(
+        harness.fake.asked_of("act")[0]["action"],
+        json!({"_tag": "Invoke", "runId": "r1", "offer": "merge", "input": {"squash": false}})
+    );
+}
+
 fn several_files(files: Value) -> Value {
     detail(json!({"diff": {"base": "abc", "live": true, "files": files}}))
 }

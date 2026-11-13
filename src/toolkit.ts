@@ -94,6 +94,7 @@ export const SETTLE_KINDS = ["confirm", "decline", "disposition", "seen"] as con
 
 const AskedInput = Schema.Struct({
   actions: Schema.Array(Schema.Union([ActionSchema, SettleSchema])),
+  request_id: Schema.optionalKey(Schema.String),
 });
 export const decodeAsked = decodeStrict(AskedInput);
 
@@ -113,6 +114,7 @@ const MEMBERS = new Map<
  * leave `run` out for the board's selection to stand in. Decoded again once it has.
  */
 const DoInput = Schema.Struct({
+  request_id: Schema.optionalKey(Schema.String),
   actions: Schema.Array(
     Schema.Union(
       Arr.map([...MEMBERS.values()], (member) =>
@@ -371,7 +373,8 @@ export const CollieTools = Toolkit.make(
       "`collie_herd` lists, or leave `run` out to act on the card the board has open, " +
       "which the answer then names. What is not here is what you would be asking for yourself — " +
       "amending an Intent, forking a definition, changing the defaults, upgrading, " +
-      "cleaning up — and that is `collie_propose`.",
+      "cleaning up — and that is `collie_propose`. Reuse request_id with the same actions " +
+      "when explicitly retrying an unconfirmed request; inspect unknown outcomes first.",
     parameters: DoInput,
   }),
   collieTool("collie_propose", {

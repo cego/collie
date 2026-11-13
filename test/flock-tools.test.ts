@@ -9,6 +9,7 @@ import { expect, test } from "bun:test";
 import { platformLayer } from "../src/platform";
 import { Effect, Fiber, FileSystem, Stream } from "effect";
 import { TestClock } from "effect/testing";
+import { RpcClientDefect, RpcClientError } from "effect/rpc/RpcClientError";
 import { ATTACHMENT_BYTES } from "../src/attachments";
 import type { HelleProject } from "../src/helle";
 import { epochMs } from "../src/time";
@@ -644,7 +645,7 @@ test("a Machine whose Schedules cannot be read is named, with no empty list clai
           machine("mk-pc", [], asked),
           {
             ...live,
-            door: { ...live.door, schedules: () => Effect.die("host has no schedules RPC") },
+            door: { ...live.door, schedules: () => Effect.die("Unknown request tag: schedules") },
           },
           unread("away", { _tag: "Lost", state: "unreachable", reason: "asleep" }),
         ],
@@ -1145,7 +1146,7 @@ test("where work can start is every Machine's own answer, a section each, and a 
     }),
   ));
 
-test("a Machine whose host cannot answer a read is told to upgrade, one that is slow that it timed out, and the rest still answer", () =>
+test("a broken chat transport is reported truthfully, a slow host times out, and the rest still answer", () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const asked: Asked[] = [];
@@ -1154,7 +1155,18 @@ test("a Machine whose host cannot answer a read is told to upgrade, one that is 
       const flock = {
         machines: () => [
           machine("mk-pc", [], asked),
-          { ...old, door: { ...old.door, read: () => Effect.die("no read") } },
+          {
+            ...old,
+            door: {
+              ...old.door,
+              read: () =>
+                Effect.fail(
+                  new RpcClientError({
+                    reason: new RpcClientDefect({ message: "Unknown socket error", cause: null }),
+                  }),
+                ),
+            },
+          },
           { ...slow, door: { ...slow.door, read: () => Effect.never } },
         ],
         conversation: "flock@mk-pc",
@@ -1177,9 +1189,9 @@ test("a Machine whose host cannot answer a read is told to upgrade, one that is 
       const reading = yield* callFlockTool(flock, "collie_workspaces", {}).pipe(Effect.forkChild);
       yield* TestClock.adjust("1 minute");
       const said = yield* Fiber.join(reading);
-      expect(said).toContain(
-        "## vm-mk\n\nvm-mk did not answer; its Collie may be older than Desktop's; upgrade Collie on vm-mk.",
-      );
+      expect(said).toContain("vm-mk's chat connection failed");
+      expect(said).toContain("Unknown socket error");
+      expect(said).not.toContain("upgrade Collie on vm-mk");
       expect(said).toContain("## vm-slow\n\nvm-slow did not answer within 10 s.");
       expect(said).not.toContain("upgrade Collie on vm-slow");
       expect(said).toContain("collie_workspaces answered by mk-pc");
@@ -1793,7 +1805,7 @@ test("a bare id no board lists yet is read on the one Machine whose host has it"
   ));
 
 for (const [why, answer, said] of [
-  ["fails", () => Effect.die("no progress"), "upgrade Collie on mk-pc"],
+  ["fails", () => Effect.die("no progress"), "no progress"],
   ["does not answer", () => Effect.never, "mk-pc did not answer within 10 s"],
 ] as const)
   test(`a Machine whose host ${why} when asked about a bare id is unread, and nothing is done`, () =>
@@ -1866,7 +1878,7 @@ test("an answer its Machine never confirms is said as not confirmed, and nothing
         }),
         1_000,
       );
-      expect(said).toBe(
+      expect(said).toContain(
         "answer: not confirmed — vm-mk did not confirm the answer to r-2 within 30 s, 3 times. It may still land; Try again sends the same request, which vm-mk takes at most once.",
       );
       const acts = Arr.filter(asked, ({ op }) => op === "act");
@@ -1879,6 +1891,68 @@ const keeping = () => {
   const lines: Attempted[] = [];
   return { lines, log: (line: Attempted) => Effect.sync(() => void lines.push(line)) };
 };
+
+for (const kind of ["start", "deliver"] as const)
+  test(`a disconnected ${kind} is unknown, is not replayed, and an explicit retry keeps its identity`, () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const asked: Asked[] = [];
+        const live = machine("vm-mk", [task({ id: "t-b", run: "r-2", runs: ["r-2"] })], asked);
+        const submitted: string[] = [];
+        const accepted = new Set<string>();
+        let outcomes = 0;
+        let disconnected = true;
+        const flock = flockOn(asked, [
+          {
+            ...live,
+            door: {
+              ...live.door,
+              act: ({ request }) =>
+                Effect.suspend(() => {
+                  submitted.push(request);
+                  if (!accepted.has(request)) {
+                    accepted.add(request);
+                    outcomes++;
+                  }
+                  if (disconnected) {
+                    disconnected = false;
+                    return Effect.fail(
+                      new RpcClientError({
+                        reason: new RpcClientDefect({
+                          message: "reply lost after submission",
+                          cause: null,
+                        }),
+                      }),
+                    );
+                  }
+                  return Effect.succeed([{ kind, state: "applied" as const, note: "received" }]);
+                }),
+            },
+          },
+        ]);
+        const actions =
+          kind === "start"
+            ? [
+                {
+                  kind,
+                  workflow: "general",
+                  workspace: "vm-mk:projects-root",
+                  inputs: { goal: "fixture" },
+                },
+              ]
+            : [{ kind, run: "vm-mk:r-2", agent: "build", text: "fixture" }];
+        const first = yield* callFlockTool(flock, "collie_do", { actions });
+        expect(first).toContain(`${kind}: not confirmed`);
+        expect(first).toContain("outcome is unknown");
+        expect(first).toMatch(/^Request: \S+\n/);
+        expect(submitted).toHaveLength(1);
+        const request_id = pipe_(Str.split(first, "\n")[0]!, Str.slice("Request: ".length));
+        const retry = yield* callFlockTool(flock, "collie_do", { actions, request_id });
+        expect(retry).toContain(`${kind}: applied`);
+        expect(submitted).toEqual([`${request_id}-0`, `${request_id}-0`]);
+        expect(outcomes).toBe(1);
+      }).pipe(Effect.provide(platformLayer)),
+    ));
 
 test("a host that never takes the chat's declaration ends the write as not confirmed, logged each try", () =>
   Effect.runPromise(
@@ -1894,7 +1968,7 @@ test("a host that never takes the chat's declaration ends the write as not confi
         callFlockTool(flock, "collie_do", { actions: [{ kind: "stop", run: "r-2" }] }),
         1_000,
       );
-      expect(stop).toStartWith("stop: not confirmed — vm-mk did not confirm the stop to r-2");
+      expect(stop).toContain("stop: not confirmed — vm-mk did not confirm the stop to r-2");
       const held = yield* fastForward(callFlockTool(flock, "collie_hold", { run: "r-2" }), 1_000);
       expect(held).toStartWith("hold: not confirmed — vm-mk did not confirm the hold to r-2");
       expect(Arr.map(lines, ({ kind, ended }) => `${kind} ${ended}`)).toEqual([
@@ -1905,6 +1979,47 @@ test("a host that never takes the chat's declaration ends the write as not confi
         "hold timed-out",
         "hold timed-out",
       ]);
+    }).pipe(Effect.provide(platformLayer)),
+  ));
+
+test("a disconnected proposal returns its retry id without submitting a second write", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const live = machine("vm-mk", [], asked);
+      const submitted: string[] = [];
+      const flock = flockOn(asked, [
+        {
+          ...live,
+          door: {
+            ...live.door,
+            propose: ({ request }) =>
+              Effect.sync(() => submitted.push(request)).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    new RpcClientError({
+                      reason: new RpcClientDefect({ message: "lost acknowledgement", cause: null }),
+                    }),
+                  ),
+                ),
+              ),
+          },
+        },
+      ]);
+      const said = yield* callFlockTool(flock, "collie_propose", {
+        interpretation: "fixture",
+        actions: [
+          {
+            kind: "start",
+            workflow: "general",
+            workspace: "vm-mk:projects-root",
+            inputs: { goal: "fixture" },
+          },
+        ],
+      });
+      expect(said).toContain("outcome is unknown");
+      expect(said).toMatch(/^Request: \S+\n/);
+      expect(submitted).toEqual([pipe_(Str.split(said, "\n")[0]!, Str.slice("Request: ".length))]);
     }).pipe(Effect.provide(platformLayer)),
   ));
 

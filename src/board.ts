@@ -1746,11 +1746,10 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         const offered = planReady
           ? offerOf(yield* offersOfRun(leader.id))
           : shippingMr !== null && go === undefined
-            ? offerOf(
+            ? shippingOffer(
                 Option.getOrUndefined(
                   Arr.findFirst(ownedOffers, (one) => one.run === shippingOwner.id),
                 )?.offers ?? [],
-                "release",
               )
             : null;
         const offer =
@@ -2058,6 +2057,20 @@ export function readyRuns(
   );
 }
 
+/** What ships a ready merge request: an offer that releases, else one that merges, else `release`. */
+const shippingOffer = (offers: ReadonlyArray<OfferView>): BoardOffer | null => {
+  const ready = Arr.filter(offers, (one) => one.unavailable === null);
+  const declared = Arr.findFirst(ready, (one) => one.ships === "release").pipe(
+    Option.orElse(() => Arr.findFirst(ready, (one) => one.ships === "merge")),
+  );
+  return Option.isSome(declared) ? boardOffer(declared.value) : offerOf(offers, "release");
+};
+
+const boardOffer = (offer: OfferView): BoardOffer =>
+  offer.run === undefined
+    ? { id: offer.id, title: offer.title }
+    : { id: offer.id, title: offer.title, run: offer.run };
+
 const offerOf = (offers: ReadonlyArray<OfferView>, id?: string): BoardOffer | null => {
   const first = Option.getOrUndefined(
     Arr.findFirst(
@@ -2067,9 +2080,7 @@ const offerOf = (offers: ReadonlyArray<OfferView>, id?: string): BoardOffer | nu
         (id === undefined ? one.primary : one.id === id && one.kind === "follow-up"),
     ),
   );
-  if (first === undefined) return null;
-  const offer = { id: first.id, title: first.title };
-  return first.run === undefined ? offer : { ...offer, run: first.run };
+  return first === undefined ? null : boardOffer(first);
 };
 
 export function waitingLabel(waiting: ReadonlyArray<TaskView>): string {

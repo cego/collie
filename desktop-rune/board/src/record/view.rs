@@ -1392,13 +1392,9 @@ fn form_view(app: &App, record: &Record, k: &Kit) -> Option<El> {
     ))
 }
 
-/// The questions of a Step one at a time, "Question k of n" with Back and Next when there are
-/// several, each answered by an option or in words and sent on its own.
-/// A Step's Start: what it starts, why it cannot now, and the inputs it takes, as the board's
-/// offers dialog asks them.
 fn offer_form(
     offer: Option<&collie_desktop_protocol::generated::OffersSuccessItem>,
-    fields: &[(String, bool, rune::edit::TextEdit)],
+    fields: &[crate::board::offer_form::OfferEntry],
     cancel: El,
     k: &Kit,
 ) -> El {
@@ -1408,7 +1404,6 @@ fn offer_form(
             .child(quiet("Asking the Run what it offers…", k).key("offer-reading"))
             .child(row().child(cancel));
     };
-    let ready = offer.unavailable.is_none() && super::act::offer_ready(fields);
     col()
         .key("offer")
         .gap(12.0)
@@ -1434,51 +1429,41 @@ fn offer_form(
                 .wrap()
                 .w_full()
         }))
-        .children(
-            fields
-                .iter()
-                .enumerate()
-                .map(|(i, (name, required, edit))| {
-                    col()
-                        .gap(4.0)
-                        .w_full()
-                        .child(
-                            text(if *required {
-                                name.clone()
-                            } else {
-                                format!("{name} (optional)")
-                            })
-                            .font(k.ty.text_xsmall_medium)
-                            .color(k.c.text_muted),
-                        )
-                        .child(
-                            TextInput::new(edit)
-                                .width(None)
-                                .label(name.clone())
-                                .on_edit(move |app: &mut App| {
-                                    match app.record.open.as_mut().and_then(|r| r.form.as_mut()) {
-                                        Some(Form::Offer { fields, .. }) => &mut fields[i].2,
-                                        _ => unreachable!("an offer form is open"),
-                                    }
-                                })
-                                .build(k)
-                                .key(format!("offer-field-{name}")),
-                        )
-                }),
-        )
+        .children(offer.confirm.clone().map(|confirm| {
+            text(confirm)
+                .key("offer-confirm")
+                .font(k.ty.ui)
+                .color(k.c.text_base)
+                .wrap()
+                .w_full()
+        }))
+        .children(crate::board::offer_form::controls(
+            fields,
+            offer_entries,
+            App::make_offer_in_record,
+            "offer-field-",
+            k,
+        ))
         .child(
             row()
                 .gap(8.0)
                 .child(
-                    Button::new("Start")
+                    Button::new(offer.title.clone())
                         .variant(ButtonVariant::Submit)
-                        .disabled(!ready)
+                        .disabled(offer.unavailable.is_some())
                         .on_press(|app: &mut App| app.make_offer_in_record())
                         .build(k)
                         .key("offer-start"),
                 )
                 .child(cancel),
         )
+}
+
+fn offer_entries(app: &mut App) -> &mut Vec<crate::board::offer_form::OfferEntry> {
+    match app.record.open.as_mut().and_then(|r| r.form.as_mut()) {
+        Some(Form::Offer { fields, .. }) => fields,
+        _ => unreachable!("an offer form is open"),
+    }
 }
 
 fn edit_of(app: &mut App) -> &mut rune::edit::TextEdit {

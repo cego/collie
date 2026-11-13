@@ -1141,8 +1141,16 @@ for (const { following, retry, name } of [
             release,
             `
             import { defineWorkflow } from "collie";
+            import { Schema } from "effect";
             import ships from "${fixtures}/ships.workflow.ts";
-            export default defineWorkflow({ ...ships, id: "release" });
+            export default defineWorkflow({
+              ...ships,
+              id: "release",
+              input: Schema.Struct({
+                ...ships.input.fields,
+                ship: Schema.optionalKey(Schema.Literals(["release", "merge"])),
+              }),
+            });
           `,
           );
           const bin = yield* Effect.acquireRelease(FakeBin.make(`${rig.root}/bin`), (bin) =>

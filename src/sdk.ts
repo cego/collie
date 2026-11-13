@@ -1120,6 +1120,8 @@ export interface HostApi {
     readonly whileConflicting?: boolean;
     /** Return a confirmed target conflict as `Conflicting` at its current head for repair. */
     readonly returnConflicts?: boolean;
+    /** Return terminal CI failure at the proved head as `FailedCi`, after fresh comments. */
+    readonly returnFailedCi?: boolean;
   }) => Effect.Effect<ReviewStanding, WorkflowError>;
   /**
    * One read of whether the Changes the ticket at `ticket` names on its `**Needs merged:**`
@@ -1770,7 +1772,15 @@ export interface FollowUp {
   readonly inputs?: Readonly<Record<string, Source>>;
   /** A further condition on the facts, where how it ended is not the whole of it. */
   readonly eligible?: (facts: ActionFacts) => boolean;
+  readonly given?: OfferGiven;
+  readonly ships?: Ships;
+  readonly confirm?: string;
 }
+
+/** Inputs an offer always starts its workflow with; never asked for, and never the caller's. */
+export type OfferGiven = Readonly<Record<string, Schema.Json>>;
+/** What taking an offer ships: `merge` only merges, `release` also tags and deploys. */
+export type Ships = "merge" | "release";
 
 /**
  * The facts an action decides eligibility from. Facts, not a workflow name: a renamed or
@@ -1808,6 +1818,10 @@ export interface ActionProvider {
   readonly eligible: (facts: ActionFacts) => boolean;
   /** What Collie fills in from the Run itself; the rest is the caller's to give. */
   readonly inputs?: Readonly<Record<string, Source>>;
+  readonly given?: OfferGiven;
+  readonly ships?: Ships;
+  /** What taking it does, which a front door shows and asks about before taking it. */
+  readonly confirm?: string;
 }
 
 /**
@@ -1849,6 +1863,9 @@ const OfferFields = {
   title: Schema.String,
   workflow: Schema.String,
   inputs: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  given: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
+  ships: Schema.optionalKey(Schema.Literals(["merge", "release"])),
+  confirm: Schema.optionalKey(Schema.NonEmptyString),
 };
 
 /** What metadata has to be before any of it can be read: a module is JavaScript by now. */
@@ -2009,6 +2026,9 @@ function offerProblems(
     if (!IDENTITY.test(offer.workflow)) {
       problems.push(`offer "${offer.id}" starts "${offer.workflow}", which is not a workflow id`);
     }
+    for (const name of Rec.keys(offer.given ?? {}))
+      if (name in (offer.inputs ?? {}))
+        problems.push(`offer "${offer.id}" both fills "${name}" from the Run and gives it`);
   }
   return problems;
 }
