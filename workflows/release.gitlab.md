@@ -69,6 +69,10 @@ the merge request's head:
 
 {{findings}}
 
+For failed CI, inspect the named head and the job log at its forge URL. Passing local
+checks do not clear that failure. Repair the source branch and plain-push it; Collie
+reads the resulting head and proves its checks and CI before another release go.
+
 For a confirmed target-branch conflict, read the merge request's actual target branch,
 fetch it and merge its current head into this checkout's source branch. Resolve the
 conflicts preserving both branches' intended changes and history; do not assume the

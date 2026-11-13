@@ -83,6 +83,7 @@ import {
   Host,
   Run,
   WorkflowError,
+  evidenceGapsOf,
   type ActionFacts,
   type ChildAsk,
   type Claimed,
@@ -338,7 +339,7 @@ const session = <A, E>(run: Effect.Effect<A, E, SessionServices>, override?: Hos
       Effect.scoped,
       // The Run keeps the scenario's clock; the hang guard is real time.
       Effect.provideService(Clock.Clock, clock),
-      Effect.timeout("30 seconds"),
+      Effect.timeout("60 seconds"),
       Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()),
     ),
   ).pipe(Effect.orDie);
@@ -3105,6 +3106,49 @@ scenario("implement offers Stage as a follow-up on a succeeded Run with its merg
   ),
 );
 
+scenario(
+  "implement offers Release and Merge apart: each says what it ships and starts release bound to it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const declared = yield* loadEntry(shipped("implement")).pipe(
+          Effect.map((described) => declaredByModule(described.metadata)),
+        );
+        const facts: ActionFacts = {
+          outcome: "feature",
+          succeeded: true,
+          branch: "feature",
+          mrUrl: OPENED.mr_url,
+          planIssues: 0,
+          disposed: false,
+          openFindings: 0,
+          diffTarget: null,
+          claim: null,
+        };
+        const offered = offersFrom(declared, facts, { self: idOf("implement") });
+        const of = (id: string) =>
+          Option.getOrUndefined(Arr.findFirst(offered, (offer) => offer.id === id))!;
+        expect(of("release").ships).toBe("release");
+        expect(of("merge").ships).toBe("merge");
+        expect(of("release").confirm).toContain("tags");
+        expect(of("merge").confirm).toContain("nothing is tagged or deployed");
+        expect(inputsFor(of("release"), { runDir: "/r", facts, input: {} })).toEqual({
+          mr: OPENED.mr_url,
+          ship: "release",
+        });
+        expect(inputsFor(of("merge"), { runDir: "/r", facts, input: {} })).toEqual({
+          mr: OPENED.mr_url,
+          ship: "merge",
+        });
+        const release = yield* loadEntry(shipped("release"));
+        expect(release.metadata?.hints).toMatchObject({
+          merge_only: "internal",
+          together: "internal",
+        });
+      }).pipe(Effect.orDie),
+    ),
+);
+
 scenario("what a finished Run of each shipped module offers is the module's own declaration", () =>
   runEffect(
     Effect.gen(function* () {
@@ -3164,11 +3208,13 @@ scenario("what a finished Run of each shipped module offers is the module's own 
       const offered = offersFrom(implement, delivered, { self: idOf("implement") });
       expect(Arr.map(offered, (o) => [o.id, o.title, o.workflow])).toEqual([
         ["release", "Release", "release"],
+        ["merge", "Merge", "release"],
         ["stage", "Stage", "stage"],
         ["follow-up", "Keep going on this — Build", idOf("implement")],
       ]);
       expect(inputsFor(offered[0]!, { runDir: "/r", facts: delivered, input: {} })).toEqual({
         mr: mrUrl,
+        ship: "release",
       });
       expect(offersFrom(implement, { ...delivered, disposed: true })).toEqual([]);
       expect(
@@ -3573,6 +3619,74 @@ const recoveredRun = (runId: string, input: Readonly<Record<string, Schema.Json>
     }),
   );
 
+scenario("repeated recovery retains the original bug reproduction without changing its proof", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* repository();
+      const fs = yield* FileSystem.FileSystem;
+      const original = "r-evidence-original";
+      const parent = "r-evidence-parent";
+      const current = "r-evidence-current";
+      const spec = {
+        name: "regression",
+        executable: "test",
+        argv: ["-f", "fixed"],
+        cwd: rig.projectDir,
+      };
+      const red = yield* collect(evidenceDir(dir, original), {
+        ...spec,
+        run: original,
+        by: "agent",
+        expect: "fail",
+      });
+      yield* collect(evidenceDir(dir, "r-unrelated"), {
+        ...spec,
+        run: "r-unrelated",
+        by: "agent",
+        expect: "fail",
+      });
+      yield* fs.writeFileString(`${rig.projectDir}/fixed`, "fixed\n");
+      const middle = yield* collect(evidenceDir(dir, parent), {
+        ...spec,
+        run: parent,
+        by: "agent",
+      });
+      const green = yield* collect(evidenceDir(dir, current), {
+        ...spec,
+        run: current,
+        by: "agent",
+      });
+      for (const [child, from] of [
+        [current, parent],
+        [parent, original],
+      ] as const) {
+        yield* fs.makeDirectory(runDir(dir, child), { recursive: true });
+        yield* fs.writeFileString(`${runDir(dir, child)}/recovery-parent`, from);
+      }
+      yield* fs.writeFileString(`${evidenceDir(dir, current)}/approved.json`, asApproved([spec]));
+      const evidence = session(
+        Effect.flatMap(Host, (host) => host.evidence(current, rig.projectDir)),
+      );
+      const collected = yield* evidence;
+      expect(collected.verifications).toEqual([red, middle, green]);
+      expect(
+        evidenceGapsOf({
+          kind: "bug",
+          evidence: collected,
+          approved: [spec],
+          outputs: { build: { reproduced: "regression" } },
+          reviewed: [],
+          roots: [],
+          tickets: [],
+        }),
+      ).toEqual([]);
+      yield* fs.makeDirectory(runDir(dir, original), { recursive: true });
+      yield* fs.writeFileString(`${runDir(dir, original)}/recovery-parent`, current);
+      expect((yield* evidence).verifications).toEqual([red, middle, green]);
+    }),
+  ),
+);
+
 for (const feature of [false, true])
   scenario(
     feature
@@ -3794,6 +3908,119 @@ const reviewedRecovery = (
     yield* (yield* FileSystem.FileSystem).writeFileString(existing.path, existing.text);
     return { bin, forge, plan, parent, finished, head, opened, consumed };
   });
+
+scenario(
+  "a repeated recovery consumes the original bug claim after a cached null without rewriting history",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, forge, parent, opened } = yield* reviewedRecovery("requirements");
+        const fs = yield* FileSystem.FileSystem;
+        const original = "r-original-builder";
+        const child = "r-repeated-recovery";
+        const proof = {
+          name: "regression",
+          executable: "test",
+          argv: ["-f", "fixed"],
+          cwd: rig.projectDir,
+        };
+        const red = yield* collect(evidenceDir(dir, original), {
+          ...proof,
+          by: "agent",
+          run: original,
+          expect: "fail",
+        });
+        yield* fs.writeFileString(`${rig.projectDir}/fixed`, "fixed\n");
+        yield* exec(["git", "add", "fixed"], { cwd: rig.projectDir });
+        yield* exec(["git", "commit", "-qm", "fix the reproduced bug"], { cwd: rig.projectDir });
+        yield* exec(["git", "push", "-qu", "origin", "HEAD"], { cwd: rig.projectDir });
+        const head = yield* revParse("HEAD", rig.projectDir);
+        const model = yield* forge.model();
+        const currentMr = forge.holding({
+          ...model,
+          mrs: Arr.map(model.mrs, (one) => ({ ...one, head })),
+        });
+        yield* collect(evidenceDir(dir, child), { ...proof, by: "agent", run: child });
+        const originalOutput = asJson({ ...BUILT, reproduced: "regression" });
+        yield* fs.makeDirectory(`${dir}/agents/${original}`, { recursive: true });
+        yield* fs.writeFileString(`${dir}/agents/${original}/01-work.md.json`, originalOutput);
+        yield* fs.writeFileString(`${runDir(dir, parent.runId)}/recovery-parent`, original);
+        yield* fs.makeDirectory(runDir(dir, original), { recursive: true });
+        yield* fs.writeFileString(`${runDir(dir, original)}/recovery-parent`, child);
+        yield* approve(child, ["unit"]);
+        const legacy = `${rig.root}/user/workflows/legacy-recovery.workflow.ts`;
+        yield* fs.writeFileString(
+          legacy,
+          `
+          import shipped from "${shipped("implement")}";
+          import { defineWorkflow } from "collie";
+          import { Effect, Schema } from "effect";
+          import * as Activity from "effect/workflow/Activity";
+          import * as Workflow from "effect/workflow/Workflow";
+          import { WorkflowInstance } from "effect/workflow/WorkflowEngine";
+          export default defineWorkflow({ ...shipped, run: () => Effect.gen(function* () {
+            yield* Activity.make({ name: "recovery-build-claims", success: Schema.Null, execute: Effect.succeed(null) });
+            return yield* Workflow.suspend(yield* WorkflowInstance);
+          }) });
+        `,
+        );
+        const options = {
+          entry: legacy,
+          runId: child,
+          input: {
+            plan: "Recover the existing bug fix and its original proof",
+            recovery: parent.runId,
+            ...FINISH,
+          },
+          options: { outcome: "bug" },
+        };
+        yield* stalled(options);
+        yield* fs.writeFileString(`${runDir(dir, child)}/recovery-parent`, parent.runId);
+        const cached = () =>
+          session(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient;
+              return yield* sql<{ payload: string; claim: string }>`SELECT payload,
+                json_type(payload, '$.value.exit.value') AS claim FROM cluster_replies
+            WHERE request_id IN (SELECT id FROM cluster_messages WHERE tag = 'activity'
+              AND json_extract(payload, '$.name') = 'recovery-build-claims')`;
+            }).pipe(Effect.orDie),
+          );
+        const before = yield* cached();
+        expect(before).toHaveLength(1);
+        expect(before[0]!.claim).toBe("null");
+        yield* rig.queueOutputs([null, null, CLEAN_SYNTHESIS, { ...opened, writes: [currentMr] }]);
+        const result = yield* driven(
+          { ...options, entry: shipped("implement"), restarted: true },
+          (run) =>
+            Effect.gen(function* () {
+              yield* run.resume;
+              const next = yield* until(
+                () => Effect.all({ launches: launchesAt(dir, child), status: run.status }),
+                (got) =>
+                  got.status.status !== "pending" ||
+                  Arr.some(got.launches, (one) => one.operation !== "review-1"),
+              );
+              expect(
+                Arr.sort(
+                  Arr.map(next.launches, (one) => one.operation),
+                  Str.Order,
+                ),
+              ).toEqual(["mr", "review-1"]);
+              return yield* ended(run.status);
+            }),
+        );
+        expect(outcomeText(result)).toBe(OPENED.mr_url);
+        expect(yield* cached()).toEqual(before);
+        expect(yield* fs.readFileString(`${dir}/agents/${original}/01-work.md.json`)).toBe(
+          originalOutput,
+        );
+        expect(yield* readVerifications(evidenceDir(dir, original))).toEqual([red]);
+        yield* bin.restore();
+      }),
+    ),
+  120_000,
+);
 
 for (const [changed, panel] of [
   ["pushed head", false],
@@ -12684,7 +12911,29 @@ const agentPush = (
     };
   });
 
-/** A release fixer's plain push after merging the named target into its current source checkout. */
+const ciRepair = (
+  forge: { readonly holding: (next: ForgeModel) => { path: string; text: string } },
+  model: ForgeModel,
+  reviewed: string,
+  state: "running" | "failed" = "running",
+  jobs?: FakeMr["jobs"],
+) => {
+  const repaired = forge.holding({
+    ...model,
+    mrs: Arr.map(model.mrs, (one) => ({
+      ...one,
+      head: "REPAIRED_HEAD",
+      checks: [{ name: "build", state }],
+      ...(jobs !== undefined && { jobs }),
+    })),
+  });
+  return {
+    writes: [repaired],
+    sh: `cd '${reviewed}' && git rev-parse HEAD >> ci-repair.txt && git add ci-repair.txt && git commit -qm repair-ci && git push -q origin HEAD:feature && sed -i "s/REPAIRED_HEAD/$(git rev-parse HEAD)/" '${repaired.path}'`,
+    output: { verdict: "clean", fixed: [{ title: "repaired CI" }] },
+  };
+};
+
 const conflictRepair = (
   forge: { readonly holding: (next: ForgeModel) => { path: string; text: string } },
   model: ForgeModel,
@@ -12698,6 +12947,7 @@ const conflictRepair = (
       ...one,
       head: "REPAIRED_HEAD",
       mergeable: stillConflicting ? "conflict" : "yes",
+      checks: [{ name: "build", state: "passed" }],
       jobs: [
         { name: "static", state: "passed" },
         { name: "test", state: "passed" },
@@ -13995,6 +14245,78 @@ for (const name of ["gitlab", "github"] as const) {
   );
 
   scenario(
+    `release on ${name}: ship merge asks a Merge go, merges at the proved head under the claim, and tags and deploys nothing`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, merged } = yield* releasable(name);
+          claimed.length = 0;
+          const runId = `r-merge-${name}`;
+          // An application with no stage deploy on its tags, which a set's child could not merge.
+          yield* rig.queueOutputs([
+            { ...APP_ASSESSED, stage_jobs: { merge_request: ["deploy-stage"], tag: [] } },
+          ]);
+          const status = yield* driven(
+            {
+              entry: shipped("release"),
+              runId,
+              input: { mr: target, ship: "merge" },
+              host: releaseHost(),
+            },
+            (run) =>
+              Effect.gen(function* () {
+                const go = yield* goAsked(run.asked, "go-1");
+                expect(go.prompt).toStartWith(`Merge ${mr} at ${pipe(head, Str.slice(0, 8))}`);
+                expect(go.prompt).toContain("nothing is tagged or deployed");
+                expect(optionsOf([go], "go-1")).toEqual(["Merge", "Finish"]);
+                expect(claimed).toEqual([]);
+                yield* run.answer("go-1", "Merge");
+                return yield* ended(run.status);
+              }),
+          );
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} merged at ${merged}`);
+          expect(Arr.map(model.merges ?? [], (one) => one.sha)).toEqual([head]);
+          expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+          expect(yield* wasAsked(runId, "tag")).toBe(false);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: ship merge is refused with a set's own inputs or several merge requests, before anything is read`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin } = yield* releasable(name);
+          claimed.length = 0;
+          const refusable: ReadonlyArray<Record<string, Schema.Json>> = [
+            { mr: target, ship: "merge", merge_only: true },
+            { mr: target, ship: "merge", together: [target] },
+            { mr: `${target} ${pipe(target, Str.replace(/30$/, "31"))}`, ship: "merge" },
+          ];
+          for (const [at, input] of refusable.entries()) {
+            const result = yield* ran({
+              entry: shipped("release"),
+              runId: `r-merge-refused-${name}-${at}`,
+              input,
+              host: releaseHost(),
+            });
+            expect(reasonOf(result)).toBe(
+              "Merge takes one merge request, and a release set's own inputs are the set's to give",
+            );
+          }
+          yield* bin.restore();
+          expect(yield* prompts()).toHaveLength(0);
+          expect(claimed).toEqual([]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
     `release on ${name}: Finish leaves the merge request open, with no claim and no merge`,
     () =>
       runEffect(
@@ -14104,32 +14426,182 @@ for (const name of ["gitlab", "github"] as const) {
   );
 
   scenario(
-    `release on ${name}: a red pipeline parks the Run as Needs you, and once green it is asked go 1`,
+    `release on ${name}: failed CI during Review wait reaches its fixer despite green local Checks`,
     () =>
       runEffect(
         Effect.gen(function* () {
-          const red = [{ name: "build", state: "failed" }] as const;
-          const { bin, head, changed } = yield* releasable(name, { checks: red });
+          const { bin, forge, head, reviewed, changed } = yield* releasable(name, {
+            checks: [{ name: "build", state: "running" }],
+          });
           const runId = `r-red-${name}`;
-          yield* rig.queueOutputs([PACKAGED]);
+          yield* checkedBy(runId, "unit");
+          yield* rig.queueOutputs([PACKAGED, ciRepair(forge, yield* forge.model(), reviewed)]);
           yield* driven(
             { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
             (run) =>
               Effect.gen(function* () {
-                expect(
-                  yield* until(
-                    () => parkedWhy(runId),
-                    (why) => why !== "",
-                  ),
-                ).toContain(
-                  `${mrLabel(mr)} cannot be released: the pipeline at ${pipe(head, Str.slice(0, 8))} failed (`,
+                yield* until(
+                  () => awaitingOn(runId),
+                  (on) => on !== "",
                 );
+                expect(yield* wasAsked(runId, "fix-1")).toBe(false);
+                yield* changed({
+                  checks: [{ name: "build", state: "failed" }],
+                  checksUrl: PIPELINE_OF[name],
+                });
+                const started = yield* until(
+                  () =>
+                    Effect.all({
+                      fixing: wasAsked(runId, "fix-1"),
+                      why: parkedWhy(runId),
+                      status: run.status,
+                    }),
+                  ({ fixing, why, status }) => fixing || why !== "" || status.status === "failed",
+                );
+                expect(started).toMatchObject({ fixing: true, why: "" });
+                yield* until(
+                  () => Effect.all({ model: forge.model(), on: awaitingOn(runId) }),
+                  ({ model, on }) => model.mrs[0]?.head !== head && on !== "",
+                );
+                expect(yield* run.asked).toEqual([]);
+                const repaired = (yield* forge.model()).mrs[0]!.head!;
+                expect(yield* revParse("HEAD", reviewed)).toBe(repaired);
                 yield* changed({ checks: [{ name: "build", state: "passed" }] });
-                yield* goAsked(run.asked, "go-1");
+                const go = yield* goAsked(run.asked, "go-1");
+                expect(go.prompt).toContain(pipe(repaired, Str.slice(0, 8)));
+                const proof = yield* readVerifications(evidenceDir(dir, runId));
+                expect(Arr.map(proof, (one) => one.end.head_sha)).toContain(repaired);
+                expect(Arr.every(proof, (one) => one.result === "pass")).toBe(true);
+                const finding = yield* asked(runId, "fix-1");
+                expect(finding).toContain(head);
+                expect(finding).toContain(name === "gitlab" ? "pipeline" : "build");
+                expect(finding).toContain(PIPELINE_OF[name]);
                 expect(yield* parkedWhy(runId)).toBe("");
                 expect(yield* awaitingOn(runId)).toBe("");
                 yield* run.answer("go-1", "Finish");
                 return yield* ended(run.status);
+              }),
+          );
+          yield* bin.restore();
+          expect((yield* forge.model()).merges ?? []).toEqual([]);
+          expect((yield* forge.model()).tags ?? []).toEqual([]);
+        }),
+      ),
+    120_000,
+  );
+
+  for (const advances of [false, true])
+    scenario(
+      `release on ${name}: failed CI ${advances ? "exhausts four advancing repairs across Review wait" : "parks when its fixer claims success without remote progress"} despite green local Checks`,
+      () =>
+        runEffect(
+          Effect.gen(function* () {
+            const { bin, forge, head, reviewed, changed } = yield* releasable(name, {
+              checks: [{ name: "build", state: "failed" }],
+              checksUrl: PIPELINE_OF[name],
+            });
+            const runId = `r-ci-bound-${name}`;
+            yield* checkedBy(runId, "unit");
+            const repair = advances
+              ? ciRepair(forge, yield* forge.model(), reviewed, "failed")
+              : { verdict: "clean", fixed: [{ title: "claimed CI repaired" }] };
+            yield* rig.queueOutputs([PACKAGED, ...Arr.replicate(repair, advances ? 4 : 1)]);
+            const stopped = yield* driven(
+              { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+              (run) =>
+                Effect.gen(function* () {
+                  const stopped = yield* until(
+                    () => Effect.all({ why: parkedWhy(runId), status: run.status }),
+                    ({ why, status }) => why !== "" || status.status === "failed",
+                  );
+                  expect(stopped.status.status).not.toBe("failed");
+                  expect(yield* wasAsked(runId, advances ? "fix-4" : "fix-1")).toBe(true);
+                  expect(yield* wasAsked(runId, advances ? "fix-5" : "fix-2")).toBe(false);
+                  expect(yield* run.asked).toEqual([]);
+                  expect(stopped.why).toContain(
+                    pipe((yield* forge.model()).mrs[0]!.head!, Str.slice(0, 8)),
+                  );
+                  expect(
+                    Arr.map(
+                      yield* readVerifications(evidenceDir(dir, runId)),
+                      (one) => one.end.head_sha,
+                    ),
+                  ).toHaveLength(advances ? 5 : 1);
+                  yield* until(
+                    () => run.status,
+                    (status) => status.status === "suspended",
+                  );
+                  const repaired = advances
+                    ? yield* pushedBySomebody((yield* forge.model()).mrs[0]!.head!)
+                    : head;
+                  yield* changed({ head: repaired, checks: [{ name: "build", state: "passed" }] });
+                  yield* run.resume;
+                  const go = yield* goAsked(run.asked, "go-1");
+                  expect(go.prompt).toContain(pipe(repaired, Str.slice(0, 8)));
+                  expect(yield* wasAsked(runId, advances ? "fix-5" : "fix-2")).toBe(false);
+                  yield* run.answer("go-1", "Finish");
+                  expect(outcomeText(yield* ended(run.status))).toBe(`${mr} was left open`);
+                  return stopped;
+                }),
+            );
+            yield* bin.restore();
+            const current = (yield* forge.model()).mrs[0]!.head!;
+            expect(stopped.why).toContain("failed");
+            expect(stopped.why).toContain(PIPELINE_OF[name]);
+            expect(stopped.why).toContain(
+              advances ? "4 CI repair rounds" : "remote head did not advance",
+            );
+            const proofs = yield* readVerifications(evidenceDir(dir, runId));
+            expect(proofs.length).toBe(advances ? 6 : 1);
+            expect(Arr.every(proofs, (one) => one.result === "pass")).toBe(true);
+            expect(Arr.dedupe(Arr.map(proofs, (one) => one.end.head_sha)).length).toBe(
+              advances ? 6 : 1,
+            );
+            if (advances) expect(current).not.toBe(head);
+            expect((yield* forge.model()).merges ?? []).toEqual([]);
+            expect((yield* forge.model()).tags ?? []).toEqual([]);
+          }),
+        ),
+      120_000,
+    );
+
+  scenario(
+    `release on ${name}: a moved head with failed CI is adopted and proved before its CI fixer`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, reviewed, changed } = yield* releasable(name, {
+            checks: [{ name: "build", state: "running" }],
+          });
+          const runId = `r-ci-moved-${name}`;
+          yield* checkedBy(runId, "unit");
+          yield* rig.queueOutputs([PACKAGED, ciRepair(forge, yield* forge.model(), reviewed)]);
+          yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                yield* until(
+                  () => awaitingOn(runId),
+                  (on) => on !== "",
+                );
+                const moved = yield* pushedBySomebody(head);
+                yield* changed({ head: moved, checks: [{ name: "build", state: "failed" }] });
+                yield* until(
+                  () => Effect.all({ model: forge.model(), on: awaitingOn(runId) }),
+                  ({ model, on }) =>
+                    model.mrs[0]?.head !== head && model.mrs[0]?.head !== moved && on !== "",
+                );
+                const proofs = yield* readVerifications(evidenceDir(dir, runId));
+                expect(Arr.map(proofs, (one) => one.end.head_sha)).toEqual([
+                  head,
+                  moved,
+                  (yield* forge.model()).mrs[0]!.head!,
+                ]);
+                expect(yield* asked(runId, "fix-1")).toContain(moved);
+                yield* changed(PIPELINE_PASSED);
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Finish");
+                expect(outcomeText(yield* ended(run.status))).toBe(`${mr} was left open`);
               }),
           );
           yield* bin.restore();
@@ -14139,42 +14611,295 @@ for (const name of ["gitlab", "github"] as const) {
   );
 
   scenario(
-    `release on ${name}: a force-pushed head parks the Run, naming why, with nothing reset`,
+    `release on ${name}: a head moved during failed CI handback is proved before its CI fixer`,
     () =>
       runEffect(
         Effect.gen(function* () {
-          const running = [{ name: "build", state: "running" }] as const;
-          const { bin, head, reviewed, changed } = yield* releasable(name, { checks: running });
-          const runId = `r-forced-${name}`;
-          yield* rig.queueOutputs([PACKAGED]);
-          const why = yield* driven(
-            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+          const { bin, forge, head, reviewed, changed } = yield* releasable(name, {
+            checks: [{ name: "build", state: "failed" }],
+          });
+          const moved = yield* pushedBySomebody(head);
+          const runId = `r-ci-handback-moved-${name}`;
+          yield* checkedBy(runId, "unit");
+          const handback = Layer.effect(Host)(
+            Effect.gen(function* () {
+              const host = yield* Host;
+              const services = yield* Effect.context<PlatformServices | ForgeHttp>();
+              let first = true;
+              return Host.of({
+                ...host,
+                awaitReview: (asked) =>
+                  host.awaitReview(asked).pipe(
+                    Effect.tap((standing) => {
+                      if (!first || standing._tag !== "FailedCi") return Effect.void;
+                      first = false;
+                      return changed({ head: moved }).pipe(
+                        Effect.orDie,
+                        Effect.provideContext(services),
+                      );
+                    }),
+                  ),
+              });
+            }),
+          ).pipe(Layer.provide(releaseHost()));
+          yield* rig.queueOutputs([PACKAGED, ciRepair(forge, yield* forge.model(), reviewed)]);
+          yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: handback },
             (run) =>
               Effect.gen(function* () {
                 yield* until(
-                  () => awaitingOn(runId),
-                  (why) => why !== "",
+                  () => Effect.all({ model: forge.model(), on: awaitingOn(runId) }),
+                  ({ model, on }) =>
+                    model.mrs[0]?.head !== head &&
+                    model.mrs[0]?.head !== moved &&
+                    model.mrs[0]?.head !== "REPAIRED_HEAD" &&
+                    on !== "",
                 );
-                const forced = yield* pushedBySomebody(`${head}~1`, true);
-                yield* changed({ head: forced, checks: [{ name: "build", state: "passed" }] });
-                yield* until(
-                  () => run.status,
-                  (got) => got.status === "suspended",
-                );
-                return yield* until(
-                  () => parkedWhy(runId),
-                  (why) => pipe(why, Str.includes("fast-forward")),
-                );
+                expect(
+                  Arr.map(
+                    yield* readVerifications(evidenceDir(dir, runId)),
+                    (one) => one.end.head_sha,
+                  ),
+                ).toEqual([head, moved, (yield* forge.model()).mrs[0]!.head!]);
+                expect(yield* asked(runId, "fix-1")).toContain(moved);
+                yield* changed(PIPELINE_PASSED);
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Finish");
+                expect(outcomeText(yield* ended(run.status))).toBe(`${mr} was left open`);
               }),
           );
           yield* bin.restore();
-          expect(why).toContain(`does not fast-forward ${pipe(head, Str.slice(0, 8))}`);
-          expect(why).toContain(`Repair it, then resume ${runId}.`);
-          expect(yield* revParse("HEAD", reviewed)).toBe(head);
         }),
       ),
     120_000,
   );
+
+  for (const ciCheck of [false, true])
+    scenario(
+      `release on ${name}: failed CI already present ${ciCheck ? "is repaired without approval and its CI-backed Check proves the new head" : "is repaired with no local Checks"}`,
+      () =>
+        runEffect(
+          Effect.gen(function* () {
+            const wall = yield* Clock.Clock;
+            const { bin, forge, head, reviewed, changed } = yield* releasable(name, {
+              checks: [{ name: "build", state: "failed" }],
+              ...(ciCheck && { ...UNAPPROVED[name], jobs: [{ name: "test", state: "passed" }] }),
+            });
+            const runId = `r-ci-entry-${name}`;
+            if (ciCheck) yield* ownCheck(runId);
+            yield* rig.queueOutputs([
+              PACKAGED,
+              ciRepair(
+                forge,
+                yield* forge.model(),
+                reviewed,
+                "running",
+                ciCheck ? [{ name: "test", state: "running" }] : undefined,
+              ),
+            ]);
+            yield* fastForward(
+              driven(
+                { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+                (run) =>
+                  Effect.gen(function* () {
+                    yield* until(
+                      () =>
+                        Effect.all({
+                          model: forge.model(),
+                          fixing: wasAsked(runId, "fix-1"),
+                          why: parkedWhy(runId),
+                        }),
+                      ({ model, fixing, why }) =>
+                        (fixing &&
+                          model.mrs[0]?.head !== head &&
+                          model.mrs[0]?.head !== "REPAIRED_HEAD") ||
+                        why !== "",
+                    );
+                    expect(yield* wasAsked(runId, "fix-1")).toBe(true);
+                    const repaired = (yield* forge.model()).mrs[0]!.head!;
+                    if (ciCheck)
+                      yield* until(
+                        () => runLog(runId),
+                        (log) => Str.includes(`waiting on job test for check on ${repaired}`)(log),
+                      );
+                    else
+                      yield* until(
+                        () => awaitingOn(runId),
+                        (on) => on !== "",
+                      );
+                    expect(repaired).not.toBe(head);
+                    expect(yield* run.asked).toEqual([]);
+                    if (ciCheck)
+                      expect(
+                        Arr.map(yield* ciRecords(runId), (one) => one.end.head_sha),
+                      ).not.toContain(repaired);
+                    yield* changed({
+                      checks: [{ name: "build", state: "passed" }],
+                      jobs: [{ name: "test", state: "passed" }],
+                      ...approvedBy(name, "alice"),
+                    });
+                    const go = yield* goAsked(run.asked, "go-1");
+                    expect(go.prompt).toContain(pipe(repaired, Str.slice(0, 8)));
+                    if (ciCheck)
+                      expect(Arr.map(yield* ciRecords(runId), (one) => one.end.head_sha)).toEqual([
+                        head,
+                        repaired,
+                      ]);
+                    yield* run.answer("go-1", "Finish");
+                    expect(outcomeText(yield* ended(run.status))).toBe(`${mr} was left open`);
+                  }).pipe(Effect.provideService(Clock.Clock, wall)),
+              ),
+            );
+            yield* bin.restore();
+            expect((yield* forge.model()).merges ?? []).toEqual([]);
+            expect((yield* forge.model()).tags ?? []).toEqual([]);
+          }),
+        ),
+      120_000,
+    );
+
+  scenario(
+    `release on ${name}: a failed CI-backed Check and Review wait share four repair rounds`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, reviewed } = yield* releasable(name, {
+            checks: [{ name: "build", state: "failed" }],
+            jobs: [{ name: "test", state: "failed", retried: "failed" }],
+            checksUrl: PIPELINE_OF[name],
+          });
+          const runId = `r-ci-proof-bound-${name}`;
+          yield* ownCheck(runId);
+          const repair = ciRepair(forge, yield* forge.model(), reviewed, "failed", [
+            { name: "test", state: "passed" },
+          ]);
+          yield* rig.queueOutputs([PACKAGED, ...Arr.replicate(repair, 5)]);
+          yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                const stopped = yield* until(
+                  () => Effect.all({ why: parkedWhy(runId), status: run.status }),
+                  ({ why, status }) => why !== "" || status.status === "failed",
+                );
+                expect(stopped.status.status).not.toBe("failed");
+                expect(stopped.why).toContain("4 CI repair rounds");
+                expect(yield* wasAsked(runId, "fix-4")).toBe(true);
+                expect(yield* wasAsked(runId, "fix-5")).toBe(false);
+                expect(yield* run.asked).toEqual([]);
+              }),
+          );
+          yield* bin.restore();
+        }),
+      ),
+    120_000,
+  );
+
+  for (const control of [HOLD, STOP])
+    scenario(
+      `release on ${name}: a ${control} during failed CI handback prevents its fixer and release`,
+      () =>
+        runEffect(
+          Effect.gen(function* () {
+            const { bin, forge } = yield* releasable(name, {
+              checks: [{ name: "build", state: "failed" }],
+            });
+            const runId = `r-ci-${control}-${name}`;
+            const fs = yield* FileSystem.FileSystem;
+            const controlled = Layer.effect(Host)(
+              Effect.gen(function* () {
+                const host = yield* Host;
+                return Host.of({
+                  ...host,
+                  awaitReview: (asked) =>
+                    host
+                      .awaitReview(asked)
+                      .pipe(
+                        Effect.tap((standing) =>
+                          standing._tag === "FailedCi"
+                            ? fs
+                                .writeFileString(controlPath(dir, control, runId), "")
+                                .pipe(Effect.orDie)
+                            : Effect.void,
+                        ),
+                      ),
+                });
+              }),
+            ).pipe(Layer.provide(releaseHost()));
+            yield* rig.queueOutputs([PACKAGED]);
+            const status = yield* driven(
+              { entry: shipped("release"), runId, input: { mr: target }, host: controlled },
+              (run) =>
+                until(
+                  () => run.status,
+                  (status) => status.status !== "pending",
+                ),
+            );
+            yield* bin.restore();
+            expect(status.status).toBe("suspended");
+            expect(yield* wasAsked(runId, "fix-1")).toBe(false);
+            expect((yield* forge.model()).merges ?? []).toEqual([]);
+            expect((yield* forge.model()).tags ?? []).toEqual([]);
+          }),
+        ),
+      120_000,
+    );
+
+  for (const conflicting of [false, true])
+    scenario(
+      `release on ${name}: a force-pushed head parks the Run, naming why, with nothing reset${conflicting ? " during a target conflict" : ""}`,
+      () =>
+        runEffect(
+          Effect.gen(function* () {
+            const running = [{ name: "build", state: "running" }] as const;
+            const { bin, forge, head, reviewed, changed } = yield* releasable(name, {
+              checks: running,
+            });
+            const runId = `r-forced-${name}`;
+            yield* rig.queueOutputs([PACKAGED]);
+            const why = yield* driven(
+              { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+              (run) =>
+                Effect.gen(function* () {
+                  yield* until(
+                    () => awaitingOn(runId),
+                    (why) => why !== "",
+                  );
+                  const forced = yield* pushedBySomebody(`${head}~1`, true);
+                  yield* changed({
+                    head: forced,
+                    checks: [{ name: "build", state: "passed" }],
+                    mergeable: conflicting ? "conflict" : "yes",
+                  });
+                  yield* until(
+                    () => run.status,
+                    (got) => got.status === "suspended",
+                  );
+                  return yield* until(
+                    () => parkedWhy(runId),
+                    (why) => pipe(why, Str.includes("fast-forward")),
+                  );
+                }),
+            );
+            yield* bin.restore();
+            expect(why).toContain(`does not fast-forward ${pipe(head, Str.slice(0, 8))}`);
+            expect(why).toContain(`Repair it, then resume ${runId}.`);
+            expect(yield* revParse("HEAD", reviewed)).toBe(head);
+            expect(
+              Str.trim(
+                (yield* exec(["git", "branch", "--show-current"], { cwd: reviewed })).stdout,
+              ),
+            ).toBe("feature");
+            expect(
+              Str.trim((yield* exec(["git", "status", "--porcelain"], { cwd: reviewed })).stdout),
+            ).toBe("");
+            expect(yield* wasAsked(runId, "fix-1")).toBe(false);
+            expect((yield* forge.model()).merges ?? []).toEqual([]);
+            expect((yield* forge.model()).tags ?? []).toEqual([]);
+          }),
+        ),
+      120_000,
+    );
 
   scenario(
     `release on ${name}: an auto-merging, closed or hand-merged merge request fails at the start`,
@@ -14320,34 +15045,30 @@ for (const name of ["gitlab", "github"] as const) {
       () =>
         runEffect(
           Effect.gen(function* () {
-            const { bin, forge, head, merged, reviewed } = yield* releasable(
+            const { bin, forge, merged, reviewed, changed } = yield* releasable(
               name,
               {
                 mergeable: "conflict",
                 targetBranch: branch,
+                checks: [{ name: "build", state: "failed" }],
                 jobs: [{ name: "static", state: "passed" }],
               },
               false,
             );
             const runId = `r-conflicting-${name}`;
             yield* ownCheck(runId);
-            const targetHead =
-              branch === "main"
-                ? merged
-                : Str.trim(
-                    (yield* exec(
-                      [
-                        "git",
-                        "commit-tree",
-                        `${merged}^{tree}`,
-                        "-p",
-                        merged,
-                        "-m",
-                        "stable target",
-                      ],
-                      { cwd: reviewed },
-                    )).stdout,
-                  );
+            const fs = yield* FileSystem.FileSystem;
+            yield* fs.writeFileString(`${reviewed}/source.txt`, "source work\n");
+            yield* exec(["git", "add", "source.txt"], { cwd: reviewed });
+            yield* exec(["git", "commit", "-qm", "source work"], { cwd: reviewed });
+            yield* exec(["git", "push", "-q", "origin", "feature"], { cwd: reviewed });
+            const head = yield* revParse("HEAD", reviewed);
+            yield* changed({ head });
+            yield* exec(["git", "merge", "--ff-only", "--quiet", merged], { cwd: rig.projectDir });
+            yield* fs.writeFileString(`${rig.projectDir}/target.txt`, "target work\n");
+            yield* exec(["git", "add", "target.txt"], { cwd: rig.projectDir });
+            yield* exec(["git", "commit", "-qm", "target work"], { cwd: rig.projectDir });
+            const targetHead = yield* revParse("HEAD");
             yield* exec(["git", "push", "-q", "origin", `${targetHead}:refs/heads/${branch}`], {
               cwd: reviewed,
             });
@@ -14382,6 +15103,16 @@ for (const name of ["gitlab", "github"] as const) {
             const taken = yield* revParse("HEAD", reviewed);
             expect(taken).not.toBe(head);
             expect(outcomeText(status)).toBe(`${mr} was left open`);
+            expect((yield* forge.model()).mrs[0]?.head).toBe(taken);
+            expect(
+              Str.trim(
+                (yield* exec(["git", "ls-remote", "origin", "refs/heads/feature"], {
+                  cwd: reviewed,
+                })).stdout,
+              ),
+            ).toBe(`${taken}\trefs/heads/feature`);
+            expect(yield* fs.readFileString(`${reviewed}/source.txt`)).toBe("source work\n");
+            expect(yield* fs.readFileString(`${reviewed}/target.txt`)).toBe("target work\n");
             expect(
               (yield* exec(["git", "merge-base", "--is-ancestor", head, taken], { cwd: reviewed }))
                 .exitCode,
@@ -14399,6 +15130,7 @@ for (const name of ["gitlab", "github"] as const) {
               end: { head_sha: taken },
             });
             expect(yield* asked(runId, "fix-1")).toContain(branch);
+            expect(yield* asked(runId, "fix-1")).not.toContain("CI failed:");
             expect(
               yield* (yield* FileSystem.FileSystem).readFileString(`${rig.root}/repair-heads`),
             ).toBe(`${head}\n`);
@@ -14427,39 +15159,45 @@ for (const name of ["gitlab", "github"] as const) {
               ? conflictRepair(forge, yield* forge.model(), reviewed, "main", true)
               : { verdict: "clean", fixed: [{ title: "claimed the conflict was fixed" }] };
             yield* rig.queueOutputs([PACKAGED, ...Arr.replicate(tried, advances ? 4 : 1)]);
-            const stopped = yield* driven(
-              { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
-              (run) =>
-                Effect.gen(function* () {
-                  if (advances) {
-                    for (const round of [1, 2, 3, 4]) {
-                      const entered = yield* until(
-                        () =>
-                          Effect.all({
-                            fixing: wasAsked(runId, `fix-${round}`),
-                            status: run.status,
-                            why: parkedWhy(runId),
-                          }),
-                        ({ fixing, status, why }) =>
-                          fixing ||
-                          status.status === "failed" ||
-                          (status.status === "suspended" && why !== ""),
-                      );
-                      expect(entered.fixing).toBe(true);
+            const stopped = yield* fastForward(
+              driven(
+                { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+                (run) =>
+                  Effect.gen(function* () {
+                    if (advances) {
+                      for (const round of [1, 2, 3, 4]) {
+                        const entered = yield* until(
+                          () =>
+                            Effect.all({
+                              fixing: wasAsked(runId, `fix-${round}`),
+                              status: run.status,
+                              why: parkedWhy(runId),
+                            }),
+                          ({ fixing, status, why }) =>
+                            fixing ||
+                            status.status === "failed" ||
+                            (status.status === "suspended" && why !== ""),
+                        );
+                        expect(entered.fixing).toBe(true);
+                      }
                     }
-                  }
-                  const stopped = yield* until(
-                    () => Effect.all({ status: run.status, why: parkedWhy(runId) }),
-                    ({ status, why }) =>
-                      status.status === "failed" || (status.status === "suspended" && why !== ""),
-                  );
-                  expect(yield* run.asked).toEqual([]);
-                  return stopped;
-                }),
+                    const stopped = yield* until(
+                      () => Effect.all({ status: run.status, why: parkedWhy(runId) }),
+                      ({ status, why }) =>
+                        status.status === "failed" || (status.status === "suspended" && why !== ""),
+                    );
+                    expect(yield* run.asked).toEqual([]);
+                    return stopped;
+                  }),
+              ),
             );
             yield* bin.restore();
             expect(stopped.status.status).toBe("suspended");
             expect(stopped.why).toContain("conflict");
+            const current = (yield* forge.model()).mrs[0]?.head ?? "";
+            expect(current).not.toBe("");
+            expect(stopped.why).toContain(pipe(current, Str.slice(0, 8)));
+            expect(stopped.why).toContain(advances ? "after 4 repair rounds" : "did not advance");
             expect(
               Arr.filter(yield* prompts(), (one) => pipe(one, Str.includes("/fix-"))),
             ).toHaveLength(advances ? 4 : 1);
@@ -14704,71 +15442,91 @@ for (const name of ["gitlab", "github"] as const) {
             );
             expect(yield* wasAsked(runId, "fix-1")).toBe(false);
             expect(yield* fs.readFileString(`${reviewed}/only-local`)).toBe("never committed\n");
+            expect(yield* revParse("HEAD", reviewed)).toBe(head);
+            expect(
+              Str.trim(
+                (yield* exec(["git", "branch", "--show-current"], { cwd: reviewed })).stdout,
+              ),
+            ).toBe("feature");
           }),
         ),
       120_000,
     );
 
-  scenario(
-    `release on ${name}: a conflicting head pushed after go is adopted before its own fixer and only the repaired head is proved for a fresh go`,
-    () =>
-      runEffect(
-        Effect.gen(function* () {
-          const { bin, forge, head, reviewed, changed } = yield* releasable(name);
-          const runId = `r-pushed-conflicting-${name}`;
-          yield* checkedBy(runId, "check");
-          yield* rig.queueOutputs([
-            PACKAGED,
-            conflictRepair(forge, yield* forge.model(), reviewed),
-          ]);
-          const checkedAt = readVerifications(evidenceDir(dir, runId)).pipe(
-            Effect.map(Arr.map((one) => one.end.head_sha)),
-            Effect.provide(Path.layer),
-          );
-          const { pushed, taken } = yield* driven(
-            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
-            (run) =>
-              Effect.gen(function* () {
-                yield* goAsked(run.asked, "go-1");
-                const pushed = yield* pushedBySomebody(head);
-                yield* changed({ head: pushed, mergeable: "conflict" });
-                yield* run.answer("go-1", "Release");
-                const started = yield* until(
-                  () =>
-                    Effect.all({
-                      fixing: wasAsked(runId, "fix-1"),
-                      why: parkedWhy(runId),
-                      status: run.status,
-                    }),
-                  ({ fixing, why, status }) => fixing || why !== "" || status.status === "failed",
-                );
-                expect(started).toMatchObject({ fixing: true, why: "" });
-                const go = yield* goAsked(run.asked, "go-2");
-                const taken = yield* revParse("HEAD", reviewed);
-                expect(go.prompt).toContain(pipe(taken, Str.slice(0, 8)));
-                expect((yield* forge.model()).merges ?? []).toEqual([]);
-                expect((yield* forge.model()).tags ?? []).toEqual([]);
-                yield* run.answer("go-2", "Finish");
-                yield* ended(run.status);
-                return { pushed, taken };
-              }),
-          );
-          yield* bin.restore();
-          expect(yield* revParse("HEAD", reviewed)).toBe(taken);
-          const heads = yield* checkedAt;
-          expect(heads).toContain(taken);
-          expect(heads).not.toContain(pushed);
-          expect(
-            yield* (yield* FileSystem.FileSystem).readFileString(`${rig.root}/repair-heads`),
-          ).toBe(`${pushed}\n`);
-          expect(
-            (yield* exec(["git", "merge-base", "--is-ancestor", pushed, taken], { cwd: reviewed }))
-              .exitCode,
-          ).toBe(0);
-        }),
-      ),
-    120_000,
-  );
+  for (const duringWait of [false, true])
+    scenario(
+      `release on ${name}: a conflicting head pushed ${duringWait ? "during Review wait" : "after go"} is adopted before its own fixer and only the repaired head is proved for a fresh go`,
+      () =>
+        runEffect(
+          Effect.gen(function* () {
+            const { bin, forge, head, reviewed, changed } = yield* releasable(
+              name,
+              duringWait ? STILL_RUNNING : {},
+            );
+            const runId = `r-pushed-conflicting-${name}`;
+            yield* checkedBy(runId, "check");
+            yield* rig.queueOutputs([
+              PACKAGED,
+              conflictRepair(forge, yield* forge.model(), reviewed),
+            ]);
+            const checkedAt = readVerifications(evidenceDir(dir, runId)).pipe(
+              Effect.map(Arr.map((one) => one.end.head_sha)),
+              Effect.provide(Path.layer),
+            );
+            const { pushed, taken } = yield* driven(
+              { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+              (run) =>
+                Effect.gen(function* () {
+                  if (duringWait) {
+                    yield* until(
+                      () => awaitingOn(runId),
+                      (on) => on !== "",
+                    );
+                    expect(yield* checkedAt).toEqual([head]);
+                    expect(yield* wasAsked(runId, "fix-1")).toBe(false);
+                    expect(yield* run.asked).toEqual([]);
+                  } else yield* goAsked(run.asked, "go-1");
+                  const pushed = yield* pushedBySomebody(head);
+                  yield* changed({ head: pushed, mergeable: "conflict" });
+                  if (!duringWait) yield* run.answer("go-1", "Release");
+                  const started = yield* until(
+                    () =>
+                      Effect.all({
+                        fixing: wasAsked(runId, "fix-1"),
+                        why: parkedWhy(runId),
+                        status: run.status,
+                      }),
+                    ({ fixing, why, status }) => fixing || why !== "" || status.status === "failed",
+                  );
+                  expect(started).toMatchObject({ fixing: true, why: "" });
+                  const decision = duringWait ? "go-1" : "go-2";
+                  const go = yield* goAsked(run.asked, decision);
+                  const taken = yield* revParse("HEAD", reviewed);
+                  expect(go.prompt).toContain(pipe(taken, Str.slice(0, 8)));
+                  expect((yield* forge.model()).merges ?? []).toEqual([]);
+                  expect((yield* forge.model()).tags ?? []).toEqual([]);
+                  yield* run.answer(decision, "Finish");
+                  yield* ended(run.status);
+                  return { pushed, taken };
+                }),
+            );
+            yield* bin.restore();
+            expect(yield* revParse("HEAD", reviewed)).toBe(taken);
+            const heads = yield* checkedAt;
+            expect(heads).toContain(taken);
+            expect(heads).not.toContain(pushed);
+            expect(
+              yield* (yield* FileSystem.FileSystem).readFileString(`${rig.root}/repair-heads`),
+            ).toBe(`${pushed}\n`);
+            expect(
+              (yield* exec(["git", "merge-base", "--is-ancestor", pushed, taken], {
+                cwd: reviewed,
+              })).exitCode,
+            ).toBe(0);
+          }),
+        ),
+      120_000,
+    );
 
   scenario(
     `release on ${name}: a merge the forge refuses while the merge request still reads ready, and no conflicts with its target, fails the Run and asks no further go`,
@@ -15695,14 +16453,15 @@ for (const name of ["gitlab", "github"] as const) {
   );
 
   scenario(
-    `release on ${name}: a go whose pipeline fails while it still runs no longer holds, and is asked again once it is green`,
+    `release on ${name}: a go whose pipeline fails while it still runs returns its claim and repairs before a fresh go`,
     () =>
       runEffect(
         Effect.gen(function* () {
-          const { bin, forge, head, changed } = yield* releasable(name);
+          const { bin, forge, head, reviewed, changed } = yield* releasable(name);
           claimed.length = 0;
           const runId = `r-go-ci-failed-${name}`;
-          yield* rig.queueOutputs([PACKAGED]);
+          yield* checkedBy(runId, "unit");
+          yield* rig.queueOutputs([PACKAGED, ciRepair(forge, yield* forge.model(), reviewed)]);
           const status = yield* driven(
             { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
             (run) =>
@@ -15719,8 +16478,20 @@ for (const name of ["gitlab", "github"] as const) {
                   () => runLog(runId),
                   (log) => pipe(log, Str.includes("no longer holds")),
                 );
+                yield* until(
+                  () => Effect.all({ model: forge.model(), on: awaitingOn(runId) }),
+                  ({ model, on }) => model.mrs[0]?.head !== head && on !== "",
+                );
+                expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+                expect(yield* wasAsked(runId, "fix-1")).toBe(true);
+                expect(Arr.map(yield* run.asked, (row) => row.decision)).toEqual(["go-1"]);
+                expect((yield* forge.model()).merges ?? []).toEqual([]);
+                expect((yield* forge.model()).tags ?? []).toEqual([]);
                 yield* changed(PIPELINE_PASSED);
-                yield* goAsked(run.asked, "go-2");
+                const go = yield* goAsked(run.asked, "go-2");
+                expect(go.prompt).toContain(
+                  pipe((yield* forge.model()).mrs[0]!.head!, Str.slice(0, 8)),
+                );
                 yield* run.answer("go-2", "Finish");
                 return yield* ended(run.status);
               }),
@@ -17646,6 +18417,61 @@ for (const name of ["gitlab", "github"] as const) {
             ),
           ).toEqual([head]);
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: failed CI after the production go rolls stage back and returns its claim before repair and a fresh go`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, base, model, onStage, staging } = yield* testable();
+          claimed.length = 0;
+          const runId = `r-ci-unstage-${name}`;
+          const failed = {
+            ...model,
+            mrs: Arr.map(model.mrs, (one) => ({
+              ...one,
+              checks: [{ name: "build", state: "failed" as const }],
+            })),
+          };
+          yield* checkedBy(runId, "unit");
+          yield* rig.queueOutputs([
+            MR_STAGED,
+            staging,
+            { writes: [forge.holding(failed)], output: UNSTAGED },
+            ciRepair(forge, failed, `${rig.root}/reviewed`),
+          ]);
+          yield* driven(options(runId), (run) =>
+            Effect.gen(function* () {
+              yield* tested(run);
+              yield* forge.set({ ...onStage, mrs: failed.mrs });
+              yield* run.answer("production", "Send to production");
+              yield* until(
+                () => Effect.all({ model: forge.model(), on: awaitingOn(runId) }),
+                ({ model, on }) => model.mrs[0]?.head !== head && on !== "",
+              );
+              expect(yield* wasAsked(runId, "unstage")).toBe(true);
+              expect(yield* wasAsked(runId, "fix-1")).toBe(true);
+              expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+              const current = yield* forge.model();
+              expect(current.environments).toEqual(deploys(base, base));
+              expect(current.merges ?? []).toEqual([]);
+              expect(current.tags ?? []).toEqual([]);
+              expect(yield* asked(runId, "unstage")).toContain("production go no longer holds");
+              yield* forge.set({
+                ...current,
+                mrs: Arr.map(current.mrs, (one) => ({ ...one, ...PIPELINE_PASSED })),
+              });
+              const go = yield* goAsked(run.asked, "go-2");
+              expect(go.prompt).toContain(pipe(current.mrs[0]!.head!, Str.slice(0, 8)));
+              yield* run.answer("go-2", "Finish");
+              expect(outcomeText(yield* ended(run.status))).toBe(`${mr} was left open`);
+            }),
+          );
+          yield* bin.restore();
         }),
       ),
     120_000,

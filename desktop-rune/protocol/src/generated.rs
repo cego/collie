@@ -2703,6 +2703,10 @@ pub struct OffersSuccessItem {
     pub workflow: String,
     pub arguments: Option<serde_json::Value>,
     pub kind: OffersSuccessItemKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ships: Option<Ships>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirm: Option<String>,
     pub primary: bool,
     pub unavailable: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2715,6 +2719,14 @@ pub enum OffersSuccessItemKind {
     Action,
     #[serde(rename = "follow-up")]
     FollowUp,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Ships {
+    #[serde(rename = "merge")]
+    Merge,
+    #[serde(rename = "release")]
+    Release,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -1970,6 +1970,68 @@ test("Merge uses the Release offer even when an unrelated follow-up is primary",
     }),
   ));
 
+test("Ready to ship takes the offer that declares it releases before one that only merges, action or follow-up, and says that offer's title", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const { second } = yield* supersededChain(dir);
+      const offer = (
+        id: string,
+        title: string,
+        ships: "merge" | "release",
+        kind: OfferView["kind"] = "follow-up",
+      ): OfferView => ({
+        id,
+        title,
+        workflow: "delivery",
+        arguments: null,
+        kind,
+        ships,
+        primary: false,
+        unavailable: null,
+      });
+      const read = (offers: ReadonlyArray<OfferView>) =>
+        board(env, [second], {
+          ...unapproved(),
+          forge: new Map([
+            [
+              M_ID,
+              {
+                ...unapproved().forge.get(M_ID)!,
+                mergeable: { state: "mergeable", said: "approved" },
+              },
+            ],
+          ]),
+          head: () => Effect.succeed(M_HEAD),
+          offers: () => Effect.succeed(offers),
+        });
+      const merge = offer("merge", "Merge", "merge");
+      const [both] = yield* read([merge, offer("deliver", "Release", "release")]);
+      expect(primaryAction(both!)).toEqual({
+        kind: "offer",
+        offer: { id: "deliver", title: "Release", run: second.id },
+      });
+      expect(Arr.join(boardLines([both!]), "\n")).toContain(`Release: ${both!.sentence}`);
+      expect(herdLines([both!], 0)).toContain(`Release: ${both!.sentence}`);
+      const [alone] = yield* read([merge]);
+      expect(primaryAction(alone!)).toEqual({
+        kind: "offer",
+        offer: { id: "merge", title: "Merge", run: second.id },
+      });
+      const ship = offer("ship", "Ship it", "release", "action");
+      const [byAction] = yield* read([merge, ship]);
+      expect(primaryAction(byAction!)).toEqual({
+        kind: "offer",
+        offer: { id: "ship", title: "Ship it", run: second.id },
+      });
+      const [actionAlone] = yield* read([ship]);
+      expect(primaryAction(actionAlone!)).toEqual({
+        kind: "offer",
+        offer: { id: "ship", title: "Ship it", run: second.id },
+      });
+    }),
+  ));
+
 test("fresh green work preserves its declared Release title, revoked by a moved head, failed CI, stale answer or unknown mergeability", () =>
   runEffect(
     Effect.gen(function* () {

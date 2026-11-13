@@ -105,6 +105,7 @@ test("Stop drops a waiting reply reader after its queued draft is recovered, wit
       const closed = Deferred.makeUnsafe<void>();
       let connections = 0;
       const client = new ChatClient({
+        threadId: "stop",
         connection: {
           connect: (_messages, _body, signal) => {
             connections++;
