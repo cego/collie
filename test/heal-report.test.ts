@@ -1,6 +1,19 @@
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import { TestClock } from "effect/testing";
 import { expect, test } from "bun:test";
-import { Config, ConfigProvider, Effect, FileSystem, Layer, Schema, flow, Result } from "effect";
+import {
+  Config,
+  ConfigProvider,
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Schema,
+  flow,
+  Result,
+} from "effect";
 import { connect } from "../src/host";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { runEffect } from "./support/effect";
@@ -102,6 +115,36 @@ test(
               issue: `https://${COLLIE}/issues/${issues[0]!.number}`,
             }),
           ]);
+        }),
+      ["parks-for.workflow.ts", "mender.workflow.ts"],
+    ),
+  120_000,
+);
+
+test(
+  "a Machine with no GitHub login records its refused report once, however often it retries",
+  () =>
+    proves(
+      "collie-heal-unlogged-",
+      (world) =>
+        Effect.gen(function* () {
+          const { runId, client, forge } = yield* healed(
+            world,
+            {
+              diagnosis: "The agent it waits on was retired and never stopped.",
+              actions: ["read its record"],
+              result: "escalate",
+              needs_person: "Only you can restart its agent.",
+              finding: FINDING,
+            },
+            { installed: true, loggedIn: [], login: null, mrs: [], issues: [] },
+          );
+          yield* until(
+            () => forge.calls(),
+            (calls) => Arr.filter(calls, (one) => pipe(one, Str.startsWith("auth token"))).length >= 3,
+          );
+          const lines = yield* client.runMetrics({ runId }).pipe(Effect.orDie);
+          expect(reportsOf(lines)).toEqual([expect.objectContaining({ publication: "refused" })]);
         }),
       ["parks-for.workflow.ts", "mender.workflow.ts"],
     ),
@@ -333,6 +376,46 @@ test("an outage is refused with nothing sent", () =>
       expect(yield* report(host, pending(), new Map())).toMatchObject({ publication: "refused" });
       expect(writes(forge)).toEqual([]);
     }),
+  ));
+
+test("a write the forge refuses is refused, keeping no issue, so the next report sends it", () =>
+  onCollie({ issues: [issue(444, ["another-key"])], refusesIssueWrite: 403 }, (host, forge) =>
+    Effect.gen(function* () {
+      const named = pending({ issue: 444 });
+      expect(yield* report(host, named, new Map())).toEqual({
+        publication: "refused",
+        note: expect.stringContaining("403"),
+      });
+      expect(yield* report(host, pending({ key: "a-new-cause" }), new Map())).toEqual({
+        publication: "refused",
+        note: expect.stringContaining("403"),
+      });
+      const { refusesIssueWrite: _, ...answering } = yield* forge.model();
+      yield* forge.set(answering);
+      expect(yield* report(host, named, new Map())).toMatchObject({
+        publication: "linked",
+        issue: `https://${COLLIE}/issues/444`,
+      });
+      expect((yield* forge.model()).issueNotes?.[`${COLLIE}#444`]).toHaveLength(1);
+    }),
+  ));
+
+test("a comment with no answer in time is uncertain and keeps its issue, so it is not sent again", () =>
+  onCollie({}, (host) =>
+    Effect.gen(function* () {
+      const url = `https://${COLLIE}/issues/444`;
+      const silent: HostApi = {
+        ...host,
+        issues: () => Effect.succeed([{ number: 444, title: "Issue 444", body: "", url }]),
+        commentIssue: () => Effect.never,
+      };
+      const reporting = yield* Effect.forkChild(
+        report(silent, pending({ issue: 444 }), new Map()),
+      );
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("10 minutes");
+      expect(yield* Fiber.join(reporting)).toMatchObject({ publication: "uncertain", issue: url });
+    }).pipe(Effect.provide(TestClock.layer())),
   ));
 
 test("a write whose answer was lost is reconciled before it is sent again: a landed filing is found by its marker, a sent comment is not repeated", () =>
