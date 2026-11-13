@@ -3972,7 +3972,6 @@ export const hostLayer = (options: {
           }),
         ).pipe(notifying.withPermits(1), Effect.ignore);
       const lineageOf = lineageIn(store);
-      /** A Run and the Runs it recovers, oldest first. */
       const recoveryLineage = Effect.fnUntraced(function* (runId: string) {
         const lineage: string[] = [];
         let from = runId;
@@ -3984,7 +3983,6 @@ export const hostLayer = (options: {
         }
         return lineage;
       });
-      /** What the cards these Runs continued from proved, and what those had inherited in turn. */
       const inheritedEvidence = (
         runs: ReadonlyArray<string>,
         cwd: string,
@@ -3999,14 +3997,15 @@ export const hostLayer = (options: {
                   ? undefined
                   : Option.getOrUndefined(decodePlacing(row.placing ?? ""))?.continues;
               if (consumed === undefined || seen.has(consumed.run)) return [];
-              const lineage = yield* recoveryLineage(consumed.run);
-              const before = yield* inheritedEvidence(lineage, cwd, new Set([...seen, ...lineage]));
               const own = yield* sourceEvidence({
                 cwd,
                 consumed,
                 sourceDir: runDir(dir, consumed.run),
                 sourceEvidence: evidenceDir(dir, consumed.run),
               });
+              if (own === null) return [];
+              const lineage = yield* recoveryLineage(consumed.run);
+              const before = yield* inheritedEvidence(lineage, cwd, new Set([...seen, ...lineage]));
               return [...before, ...own];
             }),
           ),

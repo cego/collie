@@ -147,6 +147,27 @@ test(
             expect.arrayContaining([replayed, late]),
           );
 
+          const sourceHead = yield* git("rev-parse", "HEAD");
+          const intermediate = yield* offered(source, "intermediate", ["--input", "wait=yes"]);
+          yield* until(
+            () => client.run({ runId: intermediate }).pipe(Effect.orDie),
+            (view) => (view?.waiting.length ?? 0) > 0,
+          );
+          yield* commit("intermediate.txt", "the continuation's work");
+          yield* client
+            .answer({
+              runId: intermediate,
+              decision: "done",
+              value: "yes",
+              request: "intermediate-done",
+            })
+            .pipe(Effect.orDie);
+          expect(yield* settled(intermediate)).toEqual(proof);
+          expect(yield* followUp("intermediate-carried", [], intermediate)).toEqual(proof);
+          yield* git("reset", "-q", "--hard", sourceHead);
+          yield* commit("other.txt", "keep the source without the continuation's work");
+          expect(yield* followUp("intermediate-rewritten", [], intermediate)).toEqual([]);
+
           yield* git("reset", "-q", "--hard", before);
           yield* commit("other.txt", "rewritten");
           expect(yield* followUp("rewritten")).toEqual([]);

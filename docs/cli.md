@@ -1526,6 +1526,7 @@ Both records must show stable trees. Baseline passes before the failure do not e
 Failures on trees that also passed, or replays after that command's first verified fix, are excluded even after intervening commits.
 A follow-up of a follow-up, and a recovery of either, keeps
 what the cards before it proved, each card checked the same way against the follow-up's checkout.
+An invalid consumed card stops inheritance through that Run, even when it has no local verification records.
 Rewritten history or another branch collects
 nothing, and no record is renamed, so one named anything but `regression` still does not
 prove a `bug`.

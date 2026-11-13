@@ -372,10 +372,11 @@ export const sourceEvidence = Effect.fn("Recovery.sourceEvidence")(function* (op
   );
   if (
     card._tag === "None" ||
+    card.value.run !== options.consumed.run ||
     card.value.revision.head_sha !== options.consumed.head_sha ||
     card.value.revision.fingerprint !== options.consumed.fingerprint
   )
-    return [];
+    return null;
   const head = card.value.revision.head_sha;
   const contains = (ancestor: string, of: string) =>
     Effect.map(
@@ -384,7 +385,7 @@ export const sourceEvidence = Effect.fn("Recovery.sourceEvidence")(function* (op
     );
   const tree = yield* treeOf(options.cwd);
   if (tree.branch !== card.value.revision.branch || !(yield* contains(head, tree.head_sha)))
-    return [];
+    return null;
   const listed = new Map(Arr.map(card.value.verifications, (one) => [one.id, one.name]));
   const recorded = yield* readVerifications(options.sourceEvidence).pipe(
     Effect.orElseSucceed(() => []),
