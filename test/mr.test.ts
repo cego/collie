@@ -434,6 +434,7 @@ test("no login and a dead merge request each come back as one stated line", () =
       expect(yield* detailsOver(ref, recorder({ ...READY, [viewOf("42")]: { code: 1 } }))).toEqual({
         _tag: "Unavailable",
         reason: "could not read gitlab.example.com/g/p!42: GitLab answered 404: 404",
+        transient: false,
       });
 
       // Answering, with something that is not a merge request.
@@ -443,6 +444,7 @@ test("no login and a dead merge request each come back as one stated line", () =
         _tag: "Unavailable",
         reason:
           "could not read gitlab.example.com/g/p!42: GitLab answered projects/g%2Fp/merge_requests/42 in a shape Collie does not read",
+        transient: undefined,
       });
     }),
   ));
@@ -583,6 +585,30 @@ test("a command's answer is its stdout, and a human is told both streams", () =>
   ));
 
 for (const name of ["gitlab", "github"] as const) {
+  test(`a signed ${name} review is refused when its head moved or the merge request ended`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        for (const current of [
+          { state: "open" as const, head: "new-head" },
+          { state: "closed" as const, head: "reviewed-head" },
+        ]) {
+          const fake = fakeForge(name, {
+            installed: true,
+            loggedIn: [FORGE_HOST[name]],
+            login: "me",
+            mrs: [{ project: PROJECT[name], iid: "30", ...current }],
+          });
+          const posted = yield* postNote({
+            target: mrTarget(PROJECT[name], "30"), cwd: "/w", body: "Findings",
+            review: { runId: "run-review", head: "reviewed-head", round: 1 },
+          }, fake.run).pipe(Effect.provide(fake.layer));
+          expect(posted.ok).toBe(false);
+          expect(posted.message).toContain("no review posted");
+          expect(fake.model().notes ?? {}).toEqual({});
+        }
+      }),
+    ));
+
   test(`a ${name} merge request assigned to whoever posts is theirs to fix, so nothing is posted`, () =>
     runEffect(
       Effect.gen(function* () {

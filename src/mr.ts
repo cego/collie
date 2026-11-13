@@ -180,6 +180,11 @@ export function postNote<R>(
         return { ok: false, message: `could not read the review before posting: ${found.reason}` };
       if (found.value)
         return { ok: true, message: `posted the review to ${options.target}`, signature };
+      const current = yield* forge.details(mr, options.cwd, run);
+      if (current._tag !== "Details")
+        return { ok: false, message: `could not read ${options.target} before posting: ${current.reason}` };
+      if (current.state !== "opened" || current.head !== head)
+        return { ok: false, message: `${options.target} is no longer open at ${head}; no review posted` };
       body = `Review at ${head}\n\n${Str.trimEnd(body)}\n\n${signature}`;
       const posted = yield* forge.post(mr, body, options.cwd, run);
       return posted.ok ? { ...posted, signature } : posted;
