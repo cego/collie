@@ -20,6 +20,26 @@ const CiTarget = Schema.fromJsonString(
 export const rememberCiTarget = (dir: string, target: typeof CiTarget.Type) =>
   appendJournal(`${dir}/ci-rechecks.jsonl`, CiTarget, target);
 
+const FailedCi = Schema.fromJsonString(
+  Schema.Struct({
+    head: Schema.String,
+    name: Schema.String,
+    mr: Schema.String,
+    cwd: Schema.String,
+  }),
+);
+
+const failedCiJournal = (dir: string) => `${dir}/ci-failed.jsonl`;
+
+export const rememberFailedCi = (dir: string, target: typeof FailedCi.Type) =>
+  Effect.gen(function* () {
+    const last = (yield* readJournal(failedCiJournal(dir), FailedCi).pipe(
+      Effect.orElseSucceed(() => []),
+    )).at(-1);
+    if (last?.head === target.head && last.mr === target.mr) return;
+    yield* appendJournal(failedCiJournal(dir), FailedCi, target);
+  });
+
 const reply = (cleared: boolean, note: string, error = false) => ({ cleared, note, error });
 
 export const recheckPark = (
@@ -68,6 +88,23 @@ export const recheckPark = (
             return reply(false, `job ${target.job} absent at ${target.head}`);
         }
         return reply(true, `jobs ${Arr.join([...latest.keys()], ", ")} present at parked head`);
+      }
+      case "ci-failed": {
+        const targets = yield* readJournal(
+          failedCiJournal(`${stateDir}/runs/${view.runId}`),
+          FailedCi,
+        ).pipe(Effect.orElseSucceed(() => []));
+        const target = targets[targets.length - 1];
+        if (target === undefined) return reply(false, "no failed pipeline recorded");
+        const ref = mrRefOf(target.mr);
+        if (ref === null) return reply(false, `${target.mr} is not a merge request`);
+        const read = yield* forgeOf(ref).readReview(ref, target.cwd, shell);
+        if (!read.ok) return reply(false, read.reason, true);
+        if (read.state !== "open") return reply(true, `${target.mr} is ${read.state}`);
+        if (read.head !== target.head) return reply(true, `head moved to ${read.head}`);
+        return read.pipeline.state === "failed"
+          ? reply(false, `${target.name} still failed at ${target.head}`)
+          : reply(true, `the pipeline at ${target.head} is ${read.pipeline.state}`);
       }
       case "forge-unavailable": {
         const project = mrRefOf(view.mr)?.project ?? (yield* projectHere(view.cwd, shell));

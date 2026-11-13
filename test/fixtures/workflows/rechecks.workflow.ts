@@ -22,6 +22,11 @@ export default defineWorkflow({
       if (input.mr !== undefined && input.mr !== "") {
         yield* host.mergeRequest(id, input.mr);
         const { cwd } = yield* host.place(id);
+        if (input.cause === "ci-failed") {
+          const proved = (yield* host.evidence(id, cwd)).final.head_sha;
+          const standing = yield* host.review({ runId: id, cwd, proved, seen: [] });
+          if (standing._tag === "Moved" || standing._tag === "Ready") return "CI no longer failed";
+        }
         const [spec] = yield* host.approved(id);
         if (spec !== undefined) {
           const job = yield* host.ciJob({ runId: id, cwd, name: spec.name, wait: false });
