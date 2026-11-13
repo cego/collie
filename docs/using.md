@@ -1338,8 +1338,13 @@ is up to date", "Downloading 0.35.0", the ready notice below, or why the check f
 check asked for while one runs joins it rather than downloading twice. It installs nothing until the
 tar it would install verifies against the same key, because Electrobun's bundle hash is
 not authentication. An update that is unsigned or does not match is thrown away and said
-so. One that verifies is announced as "Collie 0.33.0 is ready, restart Desktop", and
-**Restart Desktop** installs it. Desktop never restarts itself: an update that is ready when
+so. One that verifies is announced above whichever page is open, the board, a record or
+Settings, with the chat open or not: "Collie 0.33.0 is ready", with **Restart now** and
+**Later**. The notice takes no focus. **Later** puts it away until a newer version is ready;
+meanwhile the toolbar's **Update ready** brings it back, and Settings keeps **Restart
+Collie**. While an update downloads the toolbar says so. **Restart now** is asked once
+however often it is pressed, and a restart that did not happen says why in the notice.
+Desktop never restarts itself: an update that is ready when
 you quit is installed the next time you start Desktop. It updates itself the same way on a
 Mac. On Linux, [`collie upgrade`](cli.md#upgrading)
 on this computer also stages the same update for Desktop, verified the same way, so the CLI and

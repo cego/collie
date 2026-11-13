@@ -381,9 +381,7 @@ fn main() {
     let headless = !at_start
         && std::env::args().any(|arg| ["--snap", "--tree", "--script"].contains(&arg.as_str()));
     *START.lock().unwrap() = Some(Box::new(move |app: &mut App| {
-        app.core = Some(calls);
-        app.listen_setup();
-        app.follow_flock();
+        app.start(calls);
         if headless {
             let _ = first_live.recv_timeout(Duration::from_secs(60));
         }

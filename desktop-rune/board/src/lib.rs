@@ -12,6 +12,7 @@ pub mod shell;
 pub mod standing;
 pub mod timing;
 pub mod toasts;
+pub mod updates;
 
 pub use shell::view;
 
@@ -55,9 +56,19 @@ pub struct App {
     pub board: board::Board,
     /// What keeps commits off a scroll: the core's changes held meanwhile, a closed chat unbuilt.
     pub quiet: quiet::Quiet,
+    /// Desktop's own update, heard for the whole app.
+    pub updates: updates::Updates,
 }
 
 impl App {
+    /// Hands the app its core and follows what it listens to for as long as it runs.
+    pub fn start(&mut self, core: calls::Core<App>) {
+        self.core = Some(core);
+        self.listen_setup();
+        self.follow_flock();
+        self.listen_updates();
+    }
+
     /// A `say` event heard at `at`; text content of the live turn starts a chat mark.
     pub fn chat_heard(&mut self, turn: u64, event: Result<AguiEvent, String>, at: f64) {
         let content = matches!(&event, Ok(AguiEvent::TextMessageContent(_)));

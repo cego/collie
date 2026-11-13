@@ -1743,7 +1743,8 @@ fn connections_view(app: &App, page: &Settings, k: &Kit, layer: &mut Vec<El>) ->
     out
 }
 
-fn about_view(page: &Settings, k: &Kit) -> El {
+fn about_view(app: &App, k: &Kit) -> El {
+    let page = &app.updates;
     let mut out = col()
         .key("about")
         .role("group")
@@ -1751,7 +1752,7 @@ fn about_view(page: &Settings, k: &Kit) -> El {
         .gap(10.0)
         .w_full()
         .child(heading(k, "About"));
-    if let Some(why) = &page.updates_trouble {
+    if let Some(why) = &page.trouble {
         out = out.child(notice(
             k,
             "updates-trouble",
@@ -1759,18 +1760,23 @@ fn about_view(page: &Settings, k: &Kit) -> El {
             why,
         ));
     }
-    let Some(updates) = &page.updates else {
+    let Some(updates) = &page.heard else {
         return out.child(muted(k, "Reading Desktop's version…"));
     };
     let ready = matches!(updates.news, News::Ready(_));
     let working = page.checking || matches!(updates.news, News::Checking(_) | News::Downloading(_));
     let action = if ready {
-        Button::new("Restart Collie")
-            .variant(ButtonVariant::Contrast)
-            .control_size(ControlSize::Small)
-            .on_press(super::restart)
-            .build(k)
-            .key("restart-desktop")
+        Button::new(if page.restarting {
+            "Restarting…"
+        } else {
+            "Restart Collie"
+        })
+        .variant(ButtonVariant::Contrast)
+        .control_size(ControlSize::Small)
+        .disabled(page.restarting)
+        .on_press(|app: &mut App| app.restart_to_update())
+        .build(k)
+        .key("restart-desktop")
     } else {
         Button::new(if working {
             "Checking…"
@@ -1817,7 +1823,7 @@ fn about_view(page: &Settings, k: &Kit) -> El {
                         .w_full(),
                 )
                 .children(
-                    page.restart_refused
+                    page.refused
                         .as_ref()
                         .map(|why| said_line(k, "restart-refused".into(), &Err(why.clone()))),
                 ),
@@ -2246,7 +2252,7 @@ pub fn view(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         main = main.child(own_view(app, k));
     }
     if show_about {
-        main = main.child(about_view(page, k));
+        main = main.child(about_view(app, k));
     }
 
     let index = index_view(
