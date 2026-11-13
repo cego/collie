@@ -114,6 +114,13 @@ export const twoMachines = <A, E>(
           yield* fs.copyFile(`${fixtures}/${module}`, `${world.user}/${module}`);
         const bin = `${dir}/bin`;
         yield* fs.makeDirectory(bin);
+        const shell = `${bin}/login-shell`;
+        // A fake Machine has its own login environment, without this computer's profiles.
+        yield* fs.writeFileString(
+          shell,
+          '#!/bin/sh\ncase "$1" in -lc|-ilc|-c) shift;; *) exit 64;; esac\nexec /bin/sh -c "$@"\n',
+          { mode: 0o755 },
+        );
         const herdr = `${bin}/herdr`;
         yield* writeFakeHerdrShim(herdr);
         yield* fs.writeFileString(
@@ -141,7 +148,7 @@ export const twoMachines = <A, E>(
           );
         const env = {
           PATH: `${bin}:/usr/bin:/bin`,
-          SHELL: "/bin/sh",
+          SHELL: shell,
           HOME: world.home,
           HERDR_PLUGIN_ROOT: world.install,
           HERDR_PLUGIN_STATE_DIR: world.state,
