@@ -17,6 +17,76 @@ beforeEach(() =>
 afterEach(() => runEffect(rig.close()));
 const actor = { origin: "cli", requestId: "update" } as const;
 
+test("metadata updates keep snapshot bytes and tracking even after the source changes or disappears", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const catalogue = yield* Artefacts;
+      const run = yield* madeRun(rig.stateDir);
+      for (const external of [false, true]) {
+        const path = `${rig.stateDir}/${external ? "export" : "plain"}.md`;
+        yield* fs.writeFileString(path, "# Kept snapshot\n");
+        const first = yield* catalogue.register(
+          run,
+          "inst",
+          { path, snapshot: true, url: external ? "https://example.com/report" : undefined },
+          `first-${external}`,
+          actor,
+        );
+        yield* fs.writeFileString(path, "# Changed source\n");
+        const renamed = yield* catalogue.register(
+          run,
+          "inst",
+          { id: first.item.id, title: "Readable snapshot" },
+          `rename-${external}`,
+          actor,
+        );
+        expect(renamed.item).toMatchObject({
+          digest: first.item.digest,
+          revision: 1,
+          tracking: "snapshot",
+          created: first.item.created,
+          updated: first.item.updated,
+        });
+        expect(
+          Buffer.from(
+            (yield* catalogue.read(run, first.item.id, 1, 0)).content,
+            "base64",
+          ).toString(),
+        ).toBe("# Kept snapshot\n");
+        yield* fs.remove(path);
+        const described = yield* catalogue.register(
+          run,
+          "inst",
+          { id: first.item.id, description: "Retained even without its source" },
+          `describe-${external}`,
+          actor,
+        );
+        expect(described.item).toMatchObject({
+          revision: 1,
+          tracking: "snapshot",
+          digest: first.item.digest,
+        });
+        const replacement = `${path}.replacement.md`;
+        yield* fs.writeFileString(replacement, "# Explicit replacement\n");
+        const retargeted = yield* catalogue.register(
+          run,
+          "inst",
+          { id: first.item.id, path: replacement, snapshot: false },
+          `retarget-${external}`,
+          actor,
+        );
+        expect(retargeted.item).toMatchObject({ revision: 2, tracking: "local" });
+        expect(
+          Buffer.from(
+            (yield* catalogue.read(run, first.item.id, 2, 0)).content,
+            "base64",
+          ).toString(),
+        ).toBe("# Explicit replacement\n");
+      }
+    }),
+  ));
+
 test("renaming discovered material preserves its identity, revision and discovery mapping", () =>
   runEffect(
     Effect.gen(function* () {

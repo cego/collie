@@ -2335,7 +2335,7 @@ const runArtefact = Command.make("artefact").pipe(
         updated: Flag.String("updated").pipe(Flag.optional),
         snapshot: Flag.Boolean("snapshot").pipe(
           Flag.withDescription("Retain this copy only; do not track later changes to the source"),
-          Flag.withDefault(false),
+          Flag.optional,
         ),
         upload: Flag.Boolean("upload").pipe(
           Flag.withDescription(
@@ -2365,7 +2365,7 @@ const runArtefact = Command.make("artefact").pipe(
           metadata: Option.getOrUndefined(metadata),
           registration: {
             ...Rec.map(given, Option.getOrUndefined),
-            snapshot,
+            snapshot: Option.getOrUndefined(snapshot),
             provider: Option.getOrUndefined(
               Option.map(provider, (name) => ({
                 name,

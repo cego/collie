@@ -70,6 +70,31 @@ test(
             "register-cli",
           ]);
           expect(cli.envelope.ok).toBe(true);
+          const desktop = yield* frontDoor(socketOf(world.state));
+          const snapshot = yield* desktop.artefactRegister({
+            runId,
+            path: file,
+            snapshot: true,
+            request: "make-snapshot",
+          });
+          yield* fs.remove(file);
+          const rename = yield* collie(world, [
+            "run",
+            "artefact",
+            "register",
+            runId,
+            "--id",
+            snapshot.item.id,
+            "--title",
+            "Retained snapshot",
+            "--request-id",
+            "rename-snapshot",
+          ]);
+          expect(rename.envelope.ok).toBe(true);
+          expect(rename.envelope.data).toMatchObject({
+            item: { tracking: "snapshot", revision: 1, digest: snapshot.item.digest },
+          });
+          yield* fs.writeFileString(file, "# Delivered\n");
           const registered = yield* Schema.decodeUnknownEffect(
             Schema.Struct({ item: Schema.Struct({ id: Schema.String, title: Schema.String }) }),
           )(cli.envelope.data);
@@ -82,7 +107,6 @@ test(
           expect(tool.envelope.data).toMatchObject({
             text: expect.stringContaining(registered.item.id),
           });
-          const desktop = yield* frontDoor(socketOf(world.state));
           const found = (yield* desktop.artefacts({ runId })).items;
           expect(found).toHaveLength(1);
           expect(found[0]).toMatchObject({

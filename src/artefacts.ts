@@ -425,10 +425,19 @@ const make = Effect.gen(function* () {
     const observed =
       source === undefined
         ? undefined
-        : yield* copied(run, source).pipe(
-            Effect.tapError((error) => (prior === undefined ? Effect.void : failed(prior, error))),
-            Effect.mapError((error) => refused(reasonOf(error))),
-          );
+        : prior !== undefined && input.path === undefined
+          ? {
+              digest: prior.digest,
+              size: prior.size,
+              created: prior.created ?? null,
+              updated: prior.updated ?? null,
+            }
+          : yield* copied(run, source).pipe(
+              Effect.tapError((error) =>
+                prior === undefined ? Effect.void : failed(prior, error),
+              ),
+              Effect.mapError((error) => refused(reasonOf(error))),
+            );
     const metadata = input.metadata ?? prior?.metadata;
     const unchanged =
       prior !== undefined &&
@@ -440,7 +449,12 @@ const make = Effect.gen(function* () {
       jsonText(prior.metadata) === jsonText(metadata);
     const revision = prior === undefined ? 1 : prior.revision + (unchanged ? 0 : 1);
     const description = input.description ?? prior?.description;
-    const tracking = input.snapshot === true ? ("snapshot" as const) : ("local" as const);
+    const tracking =
+      input.snapshot === undefined
+        ? (prior?.tracking ?? "local")
+        : input.snapshot
+          ? "snapshot"
+          : "local";
     const common = {
       installation,
       id: prior?.id ?? (yield* (yield* SecureRandom.SecureRandom).uuidV4()),
@@ -452,7 +466,7 @@ const make = Effect.gen(function* () {
       observedAt: at,
       detectedAt: prior?.revision === revision ? prior.detectedAt : at,
       seen: prior?.seen ?? null,
-      reason: null,
+      reason: input.path === undefined ? (prior?.reason ?? null) : null,
       registeredBy: prior?.registeredBy ?? actor,
     };
     const described: Fields<"description" | "metadata"> = {};
@@ -462,7 +476,10 @@ const make = Effect.gen(function* () {
     if (url !== undefined) hosted.url = url;
     if (provider !== undefined) hosted.provider = provider;
     if (source !== undefined) {
-      hosted.export = { source, availability: "available" };
+      hosted.export =
+        input.path === undefined && prior?.export !== undefined
+          ? prior.export
+          : { source, availability: "available" };
       hosted.tracking = tracking;
     }
     const item: Artefact = external
@@ -482,7 +499,10 @@ const make = Effect.gen(function* () {
           digest: observed?.digest ?? "",
           created: dated(prior?.created, reported(input.created)),
           updated: dated(prior?.updated, reported(input.updated)),
-          sourceAvailability: "untracked",
+          sourceAvailability:
+            input.url === undefined && input.provider === undefined
+              ? (prior?.sourceAvailability ?? "untracked")
+              : "untracked",
           retainedAvailability: observed === undefined ? "none" : "available",
         }
       : {
@@ -495,7 +515,8 @@ const make = Effect.gen(function* () {
           kind: input.kind ?? prior?.kind ?? "file",
           title: input.title ?? prior?.title ?? path.basename(source!),
           mediaType: mediaTypeOf(source!),
-          sourceAvailability: "available",
+          sourceAvailability:
+            input.path === undefined ? (prior?.sourceAvailability ?? "available") : "available",
           retainedAvailability: "available",
           tracking,
         };

@@ -1201,7 +1201,6 @@ const doOne = (machine: Reached, kind: string, action: JsonObject, request: stri
       return Schema.decodeUnknownEffect(RegisterArtefact)({
         ...Struct.omit(action, ["kind", "run", "artefactKind"]),
         kind: action.artefactKind,
-        snapshot: action.snapshot === true,
       }).pipe(
         Effect.mapError((error) => new HostRefused({ reason: error.message })),
         Effect.flatMap((asked) => door.artefactRegister({ ...asked, runId: text("run"), request })),

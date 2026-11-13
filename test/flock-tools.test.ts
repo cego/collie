@@ -605,7 +605,6 @@ test("chat registers a path on the Run's Machine as tracked, one from this compu
           provider: { name: "claude", namespace: "org-1", resource: "0b8c", version: "3" },
           metadata: { pages: 2 },
           created: "2026-11-01T00:00:00Z",
-          snapshot: false,
         },
       ]);
       expect(
@@ -615,6 +614,22 @@ test("chat registers a path on the Run's Machine as tracked, one from this compu
         ),
       ).toEqual(["vm-mk"]);
     }).pipe(Effect.scoped, Effect.provide(platformLayer)),
+  ));
+
+test("chat metadata updates preserve an omitted snapshot choice and forward an explicit false", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      yield* call(asked, "collie_do", {
+        actions: [
+          { kind: "artefact_register", run: "vm-mk:r-2", id: "kept", title: "Renamed" },
+          { kind: "artefact_register", run: "vm-mk:r-2", id: "kept", snapshot: false },
+        ],
+      });
+      const registered = Arr.filter(asked, (one) => one.op === "artefactRegister");
+      expect(registered[0]?.payload).not.toHaveProperty("snapshot");
+      expect(registered[1]?.payload).toHaveProperty("snapshot", false);
+    }),
   ));
 
 test("a bare id only one Machine has acts there, under its own id, in the human's words", () =>
