@@ -9,7 +9,7 @@ publish.workspace = true
 collie-desktop-protocol = { path = "../protocol" }
 serde_json.workspace = true
 ghostty-sys = { path = "../ghostty-sys" }
-base64 = "0.22"
+base64 = "0.23"
 rune.workspace = true
 rune-kit.workspace = true
 swash = "0.2"
