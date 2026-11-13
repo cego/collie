@@ -1,7 +1,8 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
-import { Clock, Effect, FileSystem, PlatformError, Stream } from "effect";
+import { Clock, Effect, Fiber, FileSystem, PlatformError, Stream } from "effect";
+import { TestClock } from "effect/testing";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
   bindingsOf,
@@ -195,6 +196,42 @@ test("an environ /proc shows empty, as mid-exec, proves nothing", () =>
           Effect.provideService(FileSystem.FileSystem, midExec),
         ),
       ).toBeNull();
+    }),
+  ));
+
+test("unrelated process metadata cannot delay finding a bound process, whose bindings are read after its start", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const clock = yield* TestClock.make();
+      let binding = "before-start";
+      const proc = FileSystem.makeNoop({
+        exists: () => Effect.succeed(true),
+        readDirectory: () => Effect.succeed(["7", "8"]),
+        readFileString: (path) =>
+          Effect.suspend(() => {
+            if (path === "/proc/8/stat") return Effect.never;
+            if (path === "/proc/7/stat") {
+              binding = "after-start";
+              return Effect.succeed(
+                Arr.join(["7 (sh)", "S", ...Array(18).fill("1"), "start-7"], " "),
+              );
+            }
+            return Effect.succeed(
+              path === "/proc/7/environ" ? `COLLIE_PROBE=${binding}\0HOME=/x` : "HOME=/x",
+            );
+          }),
+      });
+      yield* Effect.gen(function* () {
+        const finding = yield* boundProcesses(["COLLIE_PROBE"]).pipe(Effect.forkChild);
+        yield* clock.adjust("1 millis");
+        expect(finding.pollUnsafe()).toBeDefined();
+        expect(yield* Fiber.join(finding)).toEqual([
+          { pid: 7, started: "start-7", bound: { COLLIE_PROBE: "after-start" } },
+        ]);
+      }).pipe(
+        Effect.provideService(Clock.Clock, clock),
+        Effect.provideService(FileSystem.FileSystem, proc),
+      );
     }),
   ));
 

@@ -7,6 +7,7 @@ import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import {
   Clock,
+  ConfigProvider,
   DateTime,
   Deferred,
   type Duration,
@@ -39,7 +40,8 @@ import { recordDisposition } from "../src/disposition";
 import { currentEnv, readEnv } from "../src/env";
 import { readLogTail } from "../src/run-log";
 import { Herdr } from "../src/herdr";
-import { BUILD, boardWrites, connect, frontDoor, socketOf } from "../src/host";
+import { BUILD, boardWrites, connect, frontDoor, socketOf, timingFirstValues } from "../src/host";
+import { Foreground, makeForeground, servedNow } from "../src/foreground";
 import { drawerWrites } from "../src/record";
 import { makeRunModel } from "../src/run-model";
 import { handoffsIn } from "../src/handoffs";
@@ -658,6 +660,112 @@ test("a build over 2 s is logged at warn with how long it took, and a faster one
       expect(slow).toHaveLength(1);
       expect(slow[0]).toMatch(/the board took \d+ ms to build/);
       expect(yield* builtIn("1 second")).toEqual([]);
+    }),
+  ));
+
+test("the benchmark log records a board build below the slow-build threshold", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-board-marks-" });
+      const file = `${dir}/marks.log`;
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const clock = yield* TestClock.make();
+          const began = yield* Deferred.make<void>();
+          const finish = yield* Deferred.make<void>();
+          const { boards } = yield* shareBoard({
+            build: Deferred.succeed(began, undefined).pipe(
+              Effect.andThen(Deferred.await(finish)),
+              Effect.as([one]),
+            ),
+            changed: Stream.never,
+          }).pipe(Effect.provideService(Clock.Clock, clock));
+          yield* Deferred.await(began);
+          yield* clock.adjust("125 millis");
+          yield* Deferred.succeed(finish, undefined);
+          yield* Stream.runHead(boards);
+          expect(yield* fs.readFileString(file)).toMatch(/^\d+ board:built 125\n$/);
+        }),
+      ).pipe(
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromUnknown({ COLLIE_RECORD_MARKS: file }),
+        ),
+      );
+    }),
+  ));
+
+test("a read after verify waits for fresh board facts without holding the build's slices", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const foreground = yield* makeForeground;
+      const clock = yield* TestClock.make();
+      yield* Effect.gen(function* () {
+        const changed = yield* Queue.unbounded<void>();
+        const rebuilding = yield* Deferred.make<void>();
+        const buildAllowed = yield* Deferred.make<void>();
+        const reading = yield* Deferred.make<void>();
+        const otherStarted = yield* Deferred.make<void>();
+        const otherAllowed = yield* Deferred.make<void>();
+        let builds = 0;
+        let boundaries = 0;
+        const { boards } = yield* shareBoard({
+          build: Effect.gen(function* () {
+            if (++builds === 1) return [task({ id: "fresh", ready: false, mr: null })];
+            yield* Deferred.succeed(rebuilding, undefined);
+            yield* Deferred.await(buildAllowed);
+            for (let at = 0; at < 3; at++) {
+              yield* foreground.boundary;
+              boundaries++;
+            }
+            return [
+              task({ id: "fresh", ready: true, mr: "https://github.com/cego/collie/pull/1" }),
+            ];
+          }),
+          changed: Stream.fromQueue(changed),
+        });
+        yield* Stream.runHead(boards);
+        const handlers = timingFirstValues({
+          verify: () =>
+            Stream.fromEffect(Queue.offer(changed, undefined).pipe(Effect.as("Result"))),
+          read: () =>
+            Deferred.succeed(reading, undefined).pipe(
+              Effect.andThen(Stream.runHead(boards)),
+              Effect.tap(() => Effect.sync(() => expect(servedNow()).toBe(true))),
+              Effect.map(Option.map((cards) => ({ ready: cards[0]?.ready, mr: cards[0]?.mr }))),
+            ),
+          other: () =>
+            Deferred.succeed(otherStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(otherAllowed)),
+            ),
+        });
+        yield* Stream.runDrain(handlers.verify());
+        yield* Deferred.await(rebuilding);
+        const read = yield* handlers.read().pipe(Effect.forkScoped);
+        yield* Deferred.await(reading);
+        const other = yield* handlers.other().pipe(Effect.forkScoped);
+        yield* Deferred.await(otherStarted);
+        yield* Deferred.succeed(buildAllowed, undefined);
+        yield* clock.adjust("1 millis");
+        expect(boundaries).toBe(0);
+        yield* Deferred.succeed(otherAllowed, undefined);
+        yield* Fiber.join(other);
+        yield* clock.adjust("1 millis");
+        for (let turn = 0; turn < 100 && read.pollUnsafe() === undefined; turn++)
+          yield* Effect.yieldNow;
+        expect(read.pollUnsafe()).toBeDefined();
+        expect(yield* Fiber.join(read)).toEqual(
+          Option.some({
+            ready: true,
+            mr: "https://github.com/cego/collie/pull/1",
+          }),
+        );
+        expect(boundaries).toBe(3);
+      }).pipe(
+        Effect.provideService(Foreground, foreground),
+        Effect.provideService(Clock.Clock, clock),
+      );
     }),
   ));
 

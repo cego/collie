@@ -52,16 +52,29 @@ shows: an act on a Step is stale only where that Step finished after the revisio
 and a Step shown going again finishes anew. Read-your-writes keeps the board's rule: after a write, a reader sees that write's revision
 or a later one.
 
-**D6. Interactive reads come first.** No record frame, offer or act waits on a board derivation, the
-Cleanup sweep or a Measurement. Background work yields in bounded slices:
+**D6. Interactive reads come first.** Every front-door answer is served first, ahead of board
+derivations, the Cleanup sweep and Measurements. Background work yields in bounded slices:
 
 - The board is derived incrementally. A Task's card is kept with the key it was derived from: its
   Runs' revisions, their markers, its agents, its pending work and its merge requests' states. It is
   derived again only when that key moves, or when the time it shows is due to change. A tick that
   moves nothing derives nothing.
 - A pass over many Runs (the model's fill, a re-derive, the engine's sweep, Cleanup) takes a slice
-  boundary before each Run. While a record frame, an offer or an act is being served, a boundary
+  boundary before each Run. While any front-door answer is being served, a boundary
   holds its pass, for at most 250 ms, so a busy front door cannot starve the board.
+- Every RPC handler is served through the shared wrapper. A stream's lease ends on its first
+  value, termination or after 250 ms, whichever comes first. Expiry clears its producer's
+  foreground priority without cancelling it or changing its values or errors. Idle notifications
+  and ongoing Measurements stay background. `bench/front-door-wait.ts` measures `verify` first values, `read` answers and board builds
+  on the record-open fixture's host.
+- A read awaiting a fresh board suspends only its own lease, so the build can advance. It
+  restores that lease only while live, including after errors or cancellation. The board still
+  covers the writes seen before the read; readiness and merge-request facts are not taken from an older board.
+- Physical file operations and commands temporarily release only the requesting lease's background hold.
+  The lease keeps its scheduler priority and original deadline. Its hold returns after all overlapping
+  waits finish, only while the lease remains live. Errors and cancellation follow the same cleanup.
+  The physical FileSystem service and its file handles apply this uniformly; stream reads and sink
+  writes use those handles. Other requests' holds remain effective.
 - The host's scheduler ends a turn of the event loop once it has run fibers for 8 ms, so a request
   waiting behind background fibers is read at the next turn. A fiber serving a read queues its
   tasks ahead of every other fiber's, and the others yield while one waits, so a Run start steps

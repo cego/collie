@@ -8217,6 +8217,7 @@ const makeRegistry: (
       options: yield* decodeStrings(row.options ?? "{}").pipe(
         Effect.orElseSucceed((): Record<string, string> => ({})),
         Effect.flatMap((options) => optionsNow(dir, row.run, options)),
+        Effect.provideService(FileSystem.FileSystem, fs),
         Effect.provideContext(bun),
       ),
     };
@@ -8250,7 +8251,7 @@ const makeRegistry: (
       outcome,
       created: row.admitted,
       waiting: yield* steered(row.run),
-      controls: yield* controlsOf(row.run),
+      controls: yield* controlsOf(row.run, fs),
       parked,
       park: parked === null ? null : parkWithRecovery(info!, recovery),
       recovery: Arr.map(recovery.slice(-20), recoveryLine),
@@ -8321,10 +8322,13 @@ const makeRegistry: (
   });
 
   /** Which controls an operator has set over this run. */
-  const controlsOf = Effect.fn("Engine.controlsOf")(function* (runId: string) {
+  const controlsOf = Effect.fn("Engine.controlsOf")(function* (
+    runId: string,
+    reader: FileSystem.FileSystem = fs,
+  ) {
     const set: string[] = [];
     for (const control of [HOLD, STOP]) {
-      const on = yield* fs
+      const on = yield* reader
         .exists(controlPath(dir, control, runId))
         .pipe(Effect.orElseSucceed(() => false));
       if (on) set.push(control);

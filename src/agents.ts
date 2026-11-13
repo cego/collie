@@ -53,6 +53,7 @@ import {
   launchesOfAgents,
   readLaunches,
   recordLaunch,
+  sameSession,
   StartedWith,
   startedDir,
   withRelaunchLock,
@@ -164,7 +165,14 @@ import { isSuperseded, isUnanswered } from "./store";
 import { gate } from "./steering-caps";
 import { actorOf } from "./audit";
 import { keepQueued, readQueue, type Queued } from "./delivery-queue";
-import { agentName, agentTabLabel, launchedAs, reason, unsafePathComponent } from "./naming";
+import {
+  agentName,
+  agentTabLabel,
+  launchedAs,
+  legacyAgentName,
+  reason,
+  unsafePathComponent,
+} from "./naming";
 import { machineName } from "./peers";
 import type { MachineCatalogue } from "./harness-choice";
 import { askRouteTo } from "./handoff";
@@ -2749,6 +2757,39 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   /** The agents whose step is being launched or given: a steer to one waits for it. */
   const stepsGoingOut = new Map<string, Deferred.Deferred<void>>();
 
+  /** A recorded name is an external identity, even when the current spelling differs. */
+  const nameFor = (ask: AgentAsk) =>
+    under(
+      Effect.gen(function* () {
+        const role = ask.agent ?? ask.operation;
+        const sequence = ask.sequence ?? 1;
+        const held = Arr.findLast(
+          yield* readLaunches(ask.runId),
+          (one) =>
+            (one.sequence ?? 1) === sequence &&
+            (one.operation === ask.operation || launchedAs(one, role)),
+        );
+        if (Option.isSome(held)) return held.value.agent;
+        const canonical = agentName(ask.runId, role, null, sequence);
+        const legacy = legacyAgentName(ask.runId, role, null, sequence);
+        if (legacy === canonical) return canonical;
+        // Core may have started it before its launch record was written. Its saved ask
+        // proves which generation owns the old name; the name alone does not.
+        const fs = yield* FileSystem.FileSystem;
+        const path = startedPath(ask.runId, legacy);
+        if (yield* fs.exists(path)) {
+          const started = yield* fs.readFileString(path).pipe(Effect.flatMap(decodeStarted));
+          if (
+            started.runId === ask.runId &&
+            (started.sequence ?? 1) === sequence &&
+            (started.agent ?? started.operation) === role
+          )
+            return legacy;
+        }
+        return canonical;
+      }).pipe(Effect.mapError((cause) => asUncertain(ask.operation, cause))),
+    );
+
   /** `fresh` starts again an agent gone at delivery, closing the pane herdr still lists it in. */
   const launch = (
     ask: AgentAsk,
@@ -2756,10 +2797,12 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     note: (why: string | null) => Effect.Effect<void> = () => Effect.void,
   ): Effect.Effect<Launched, AgentUncertain | AgentParked> =>
     Effect.gen(function* () {
-      const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1);
+      const agent = yield* nameFor(ask);
       const out = yield* Deferred.make<void>();
       stepsGoingOut.set(agent, out);
-      return yield* launching(ask, fresh, note).pipe(Effect.ensuring(stepGoneOut(agent, out)));
+      return yield* launching(ask, fresh, note, agent).pipe(
+        Effect.ensuring(stepGoneOut(agent, out)),
+      );
     });
   const stepGoneOut = (agent: string, out = stepsGoingOut.get(agent)) =>
     Effect.suspend(() => {
@@ -2772,12 +2815,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     ask: AgentAsk,
     fresh: boolean,
     note: (why: string | null) => Effect.Effect<void>,
+    agent: string,
   ): Effect.Effect<Launched, AgentUncertain | AgentParked> =>
     under(
       Effect.gen(function* () {
-        // Derived, not minted: this is the name a replay looks for rather than starting
-        // a second agent, and a run id is already unique.
-        const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1);
         const listedAt = yield* nowIso;
         const listing = yield* host.herdr.agentList().pipe(Effect.result);
         if (listing._tag === "Failure") {
@@ -2792,7 +2833,19 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         const live = Option.getOrUndefined(
           Arr.findFirst(listing.success, (one) => one.name === agent),
         );
-        if (live !== undefined && (yield* retireLost(ask, listing.success)))
+        const alternate = Arr.findFirst(
+          [
+            agentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1),
+            legacyAgentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1),
+          ],
+          (name) => name !== agent && Arr.some(listing.success, (one) => one.name === name),
+        );
+        if (Option.isSome(alternate))
+          return yield* unsettled(
+            ask,
+            `${alternate.value} is already listed under another spelling; its generation must be established before ${agent} can start`,
+          );
+        if (live !== undefined && (yield* retireLost(ask, agent, listing.success)))
           return yield* launch(ask, false, note);
         const alive = live !== undefined && !fresh;
         const back = live === undefined ? comingBack.get(agent) : undefined;
@@ -2890,7 +2943,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         // On core, one it had is resumed. Claude's and pi's are chosen here so a full stop
         // can resume them; Codex's and OpenCode's are read once they have opened one.
         const had =
-          !alive && backend === "core" ? yield* sessionHad(ask.runId, agent, adapter.kind) : null;
+          !alive && backend === "core"
+            ? yield* sessionHad(ask.runId, agent, adapter.kind, ask.sequence ?? 1)
+            : null;
         const session: StartSession | null =
           had !== null
             ? { id: had, resumed: true }
@@ -2969,7 +3024,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           const again = yield* host.herdr.agentList().pipe(Effect.result);
           if (
             again._tag === "Success" &&
-            (isGone(agent, again.success, asked.why) || (yield* retireLost(ask, again.success)))
+            (isGone(agent, again.success, asked.why) ||
+              (yield* retireLost(ask, agent, again.success)))
           ) {
             // Nothing reached it, so a new one is this work's agent rather than a second.
             yield* log(
@@ -3547,12 +3603,15 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   const launchesOf = (runId: string) => readLaunches(runId);
 
   /** The latest session of this kind recorded for this agent of the Run, where one is. */
-  const sessionHad = (runId: string, agent: string, kind: string) =>
+  const sessionHad = (runId: string, agent: string, kind: string, sequence: number) =>
     Effect.map(launchesOf(runId), (launches) =>
       Option.getOrNull(
         Arr.findLast(
           launches,
-          (one) => one.agent === agent && one.agentSession?.kind === kind,
+          (one) =>
+            one.agent === agent &&
+            (one.sequence ?? 1) === sequence &&
+            one.agentSession?.kind === kind,
         ).pipe(Option.map((one) => one.agentSession?.value ?? null)),
       ),
     );
@@ -3598,7 +3657,27 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       // Ended on purpose since the Run's agents were read.
       if (!(yield* fs.exists(path))) return [];
       const started = yield* fs.readFileString(path).pipe(Effect.flatMap(decodeStarted));
-      const own = Arr.filter(launches, (one) => one.agent === agent);
+      const anchor = Arr.findLast(
+        launches,
+        (one) => one.agent === agent && stemOf(one) === stemOf(started),
+      );
+      if (Option.isNone(anchor)) {
+        yield* log(
+          runId,
+          `${agent}: not started again on core: its started generation has no launch identity`,
+        );
+        return [];
+      }
+      const own = Arr.filter(
+        launches,
+        (one) =>
+          one.agent === agent &&
+          (one === anchor.value ||
+            (anchor.value.terminalId !== undefined && one.terminalId !== undefined
+              ? one.terminalId === anchor.value.terminalId
+              : (one.sequence ?? 1) === (anchor.value.sequence ?? 1) &&
+                sameSession(one.agentSession, anchor.value.agentSession))),
+      );
       const latest = own.at(-1);
       if (latest === undefined) return [];
       const usage = yield* fs.exists(usageWaitPath(latest)).pipe(Effect.result);
@@ -3608,7 +3687,11 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       }
       if (usage.success) return [];
       const adapter = adapterFor(started.harness ?? host.harness);
-      const had = yield* sessionHad(runId, agent, adapter.kind);
+      const had = Option.getOrNull(
+        Arr.findLast(own, (one) => one.agentSession?.kind === adapter.kind).pipe(
+          Option.flatMap((one) => Option.fromNullishOr(one.agentSession?.value)),
+        ),
+      );
       const out =
         Str.trim(yield* fs.readFileString(latest.output).pipe(Effect.orElseSucceed(() => ""))) ===
         "";
@@ -3630,7 +3713,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           .pipe(Effect.orElseSucceed(() => "")),
         authority: yield* run.authority,
       };
-      yield* uncertainStep(ask);
+      yield* uncertainStep(ask, agent);
       const session: StartSession | null =
         had !== null
           ? { id: had, resumed: true }
@@ -3777,9 +3860,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         .pipe(withRecoveryGate(runId)),
     );
 
-  const uncertainStep = (ask: AgentAsk) =>
+  const uncertainStep = (ask: AgentAsk, agent: string) =>
     Effect.gen(function* () {
-      const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1);
       const stem = stemOf(ask);
       const held = Arr.findFirst(
         yield* deliveriesOf(ask.runId),
@@ -3799,12 +3881,11 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         });
     });
 
-  const retireLost = (ask: AgentAsk, listed: ReadonlyArray<AgentInfo>) =>
+  const retireLost = (ask: AgentAsk, agent: string, listed: ReadonlyArray<AgentInfo>) =>
     Effect.gen(function* () {
-      const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1);
       const lost = yield* lostServer(compactionDeps(host, ask.runId), agent);
       if (lost === null) return false;
-      yield* uncertainStep(ask);
+      yield* uncertainStep(ask, agent);
       const owned = yield* readControl(host.env.stateDir, agent).pipe(
         Effect.orElseSucceed(() => null),
       );
@@ -3813,7 +3894,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           ask,
           `${lost}; its control identity does not match this Run and checkout`,
         );
-      const launched = Arr.findLast(yield* launchesOf(ask.runId), (one) => one.agent === agent);
+      const launched = Arr.findLast(
+        yield* launchesOf(ask.runId),
+        (one) => one.agent === agent && (one.sequence ?? 1) === (ask.sequence ?? 1),
+      );
       if (Option.isNone(launched))
         return yield* unsettled(ask, `${lost}; its terminal has no launch identity`);
       const ended = yield* endAgent(endsOf(ask.runId), launched.value, lost, "close", listed).pipe(
@@ -3843,7 +3927,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             const fs = yield* FileSystem.FileSystem;
             if (yield* fs.exists(usageWaitPath(ask)).pipe(Effect.orElseSucceed(() => true)))
               return false;
-            const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, ask.sequence ?? 1);
+            const agent = yield* nameFor(ask);
             const lost = yield* lostServer(compactionDeps(host, ask.runId), agent);
             if (onlyDeadServer && lost === null) return false;
             const completed = waitForOutput(ask.output, unless ?? null, {
@@ -3868,7 +3952,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             const listing = yield* host.herdr.agentList().pipe(Effect.option);
             if (listing._tag === "None") return false;
             if (lost !== null) {
-              if (!(yield* retireLost(ask, listing.value))) return false;
+              if (!(yield* retireLost(ask, agent, listing.value))) return false;
               // A surviving tool can finish the Output while its old server is being retired.
               if ((yield* completed) !== null) return false;
               yield* launch(ask);
@@ -4402,10 +4486,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       under(
         Effect.gen(function* () {
           const held = Option.getOrUndefined(
-            Arr.findLast(
-              yield* launchesOf(runId),
-              (one) => one.agent === agentName(runId, agent, null, one.sequence ?? 1),
-            ),
+            Arr.findLast(yield* launchesOf(runId), (one) => launchedAs(one, agent)),
           );
           if (held === undefined) return null;
           const listing = yield* host.herdr.agentList().pipe(Effect.option);
