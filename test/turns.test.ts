@@ -10,6 +10,7 @@ test("an automatically resumed fiber receives a fresh turn budget", () => {
   let time = 0;
   let steps = 0;
   const yielded: Array<{ steps: number; operations: number }> = [];
+  // oxlint-disable-next-line no-restricted-globals -- The scheduler reads the platform clock outside fibers.
   const clock = spyOn(performance, "now").mockImplementation(() => time);
   const turns = new TurnScheduler();
   const dispatcher = turns.makeDispatcher();
