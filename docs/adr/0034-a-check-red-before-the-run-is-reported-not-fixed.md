@@ -137,3 +137,19 @@ result Collie already held.
   on the tree whole once more, and its named failures alone and at the base, as before.
   From there the rule above holds again, so a resume with nothing repaired costs one more
   run of each failing check and holds the Run again.
+
+## Amended 2026-11-11: the branch's own test is never a Flake
+
+A test that failed and then passed alone was a Flake whoever wrote it, so a branch's flaky new
+test reached its merge request merely unsettled, and could merge and turn the default branch
+red for the Runs after it. The same happened to a check left to CI through its retried job
+(ADR-draft-a-check-left-to-ci-is-proved-by-its-pipeline-job, D4, amended the same day).
+
+- **A test the branch adds or changes is the Run's own.** Collie decides it when it records
+  the test's rerun alone: its file is one the branch adds or modifies since its merge-base
+  with the default branch, or its name contains a string literal of 16 or more characters on
+  a line the branch adds.
+- **Such a test that passes alone is still a gap.** It goes to the gate fixes with the rest,
+  its finding saying it failed and then passed alone, and it is not run at the base: the base
+  cannot have it fail before a change that wrote it.
+- **Any other test that passes alone is a Flake, as before.**

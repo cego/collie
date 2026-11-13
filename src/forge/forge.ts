@@ -16,6 +16,7 @@ import { gitlab } from "./gitlab";
 import type { ForgeHttp } from "./http";
 import type { FiledIssue, IssueList } from "./issues";
 import type { ForgeComment, MergeAnswer, ReviewRead } from "./review";
+import type { FailedTest } from "../own-tests";
 
 export interface Readiness {
   readonly ok: boolean;
@@ -73,8 +74,19 @@ export type JobRead =
       readonly id: string | null;
       /** The merge commit a merged-results pipeline of `head` ran on, else null. */
       readonly merge: string | null;
+      /** Earlier failed attempts, newest first, as `failedAttempt` takes each one. */
+      readonly retryOf: ReadonlyArray<string>;
+      /** The branch the merge request targets, where the forge said. */
+      readonly target: string | null;
     }
   | { readonly ok: false; readonly reason: string };
+
+/** A job's failed attempt: where it is, and the tests its run's failed jobs' logs name as failed. */
+export interface FailedAttempt {
+  readonly url: string | null;
+  /** None where the logs cannot be read or name no test. */
+  readonly tests: ReadonlyArray<FailedTest>;
+}
 
 /** A job of a pipeline read whole; `manual` waits for somebody to start it by hand. */
 export type PipelineJobState = JobState | "manual";
@@ -262,6 +274,13 @@ export interface Forge {
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<BaseJobRead, never, R | ForgeHttp>;
+  /** The failed attempt `id` of a job, and the failed tests its run's failed jobs name. */
+  readonly failedAttempt: <R>(
+    ref: MrRef,
+    id: string,
+    cwd: string,
+    run: Runner<R>,
+  ) => Effect.Effect<FailedAttempt, never, R | ForgeHttp>;
   /** Runs the job `id` again: GitLab's retry, GitHub's rerun. */
   readonly retryJob: <R>(
     ref: MrRef,

@@ -1529,7 +1529,9 @@ The gate runs before the merge request, which is where the claim is made. Collie
 run's own checks itself at the tree as it stands, reading them again at every pass, then
 says what is missing. A check
 that failed and named its failing tests has each of them run once more alone (`rerun`); one
-that passes is a Flake, which is neither a gap nor a pass and is named in the merge request.
+that passes is a Flake, which is neither a gap nor a pass and is named in the merge request,
+unless the branch adds or changes that test: then it is never a Flake but a gap, which goes to
+the fixes.
 A failure outside any test, such as a file's `afterAll` (bun's `(unnamed)`), cannot be run
 alone, so a check that has one names no tests.
 A check that failed naming no tests runs once more whole (`recheck`). Gaps a check could
@@ -1852,7 +1854,10 @@ waits for that job on the merge request's head commit, read through the forge, a
 its pass as a verification of the check, with the job's URL. A failed job is first read
 where the branch leaves its target branch: failed there too, it is reported as failing
 before the run's changes, and left unproved. Otherwise it is retried once, and a pass on
-the retry is reported as a Flake. A job that fails its retry goes to the builder in a CI
+the retry is reported as a Flake, unless the failed attempt's logs name a failed test of
+the branch's own: one whose file the branch adds or changes, or whose name holds a string
+a line the branch adds holds. That job is failed, as is one the forge says was retried
+before, by anyone. A job that fails its retry goes to the builder in a CI
 fix round, at most 4; see [`docs/workflows.md`](workflows.md). A job missing right after
 its retry, as GitHub holds back a job behind `needs` until its needs finish, is waited on
 like a pending one, up to 2 hours. A skipped, cancelled or missing job, a job not finished
