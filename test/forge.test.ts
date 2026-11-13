@@ -278,6 +278,31 @@ for (const name of ["gitlab", "github"] as const) {
       );
     });
 
+    if (name === "github")
+      test("a later changes-requested review replaces the login's approval", () => {
+        const fake = fakeForge(name, model(name));
+        const layer = forgeHttpTest(fake.run, (url, init) =>
+          Str.includes("/reviews?")(url)
+            ? Promise.resolve(
+                Response.json([
+                  { user: { login: "me" }, state: "APPROVED" },
+                  { user: { login: "someone-else" }, state: "APPROVED" },
+                  { user: { login: "me" }, state: "CHANGES_REQUESTED" },
+                  { user: { login: "me" }, state: "COMMENTED" },
+                ]),
+              )
+            : fake.fetch(url, init),
+        );
+        return runEffect(
+          Effect.gen(function* () {
+            expect(yield* forge.approvedAt(ref(name), "me", HEAD, "/w", fake.run)).toEqual({
+              ok: true,
+              value: false,
+            });
+          }).pipe(Effect.provide(layer)),
+        );
+      });
+
     test("lists only issues over HTTP from a cold login", () => {
       const fake = fakeForge(
         name,

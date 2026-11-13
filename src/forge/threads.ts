@@ -196,7 +196,7 @@ export const approvedAt = (
     const latest = Arr.last(
       Arr.filter(
         reviews.value,
-        (one) => one.user?.login === me && (one.state === "APPROVED" || one.state === "DISMISSED"),
+        (one) => one.user?.login === me && one.state !== "COMMENTED" && one.state !== "PENDING",
       ),
     );
     return {
