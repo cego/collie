@@ -332,9 +332,16 @@ test(
   120_000,
 );
 
-test.each(["unknown", "reserved", "submitted"] as const)(
-  "core recovery preserves a later-round %s repair receipt",
-  (state) =>
+test.each([
+  ["unknown", ""],
+  ["reserved", ""],
+  ["submitted", ""],
+  ["unknown", '{"verdict":'],
+  ["reserved", '{"verdict":'],
+  ["submitted", '{"verdict":'],
+] as const)(
+  "core recovery preserves a later-round %s repair receipt with Output %p",
+  (state, output) =>
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -359,6 +366,7 @@ test.each(["unknown", "reserved", "submitted"] as const)(
               note,
             }).pipe(Effect.provide(recordsAt(dir())));
             const before = coreCalls(yield* rig.calls()).length;
+            yield* fs.writeFileString(`${dir()}/agents/${runId}/pi.json`, output);
             yield* core.lose;
             yield* (yield* Agents).resumeLost(runId, runningNow);
             expect(yield* launchesSince(yield* rig.calls(), before)).toHaveLength(0);
