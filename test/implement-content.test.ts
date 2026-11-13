@@ -10,6 +10,23 @@ import implement from "../workflows/implement.md" with { type: "text" };
 import tuneUp from "../workflows/tune-up.md" with { type: "text" };
 import { renderTemplate } from "../src/template";
 
+test.each([
+  ...Arr.map(
+    ["build", "fix", "ci-fix", "criteria", "merge"],
+    (section) => [implement, section] as const,
+  ),
+  [tuneUp, "ci-fix"] as const,
+])("early workflow pushes use the host commit check", (content, section) => {
+  const rendered = renderTemplate(contentOf(content).sections.get(section)!, {
+    run: { id: "run-12345678" },
+  }).text;
+  expect(rendered).toContain("collie run publish run-12345678 --push-only");
+  expect(rendered).not.toContain("git push");
+  expect(rendered).toContain("--request-id");
+  if (section === "ci-fix") expect(rendered).not.toContain("--skip-ci");
+  else expect(rendered).toContain("--skip-ci");
+});
+
 test.each([implement, tuneUp])(
   "the rendered MR instructions publish through the host for new and existing requests",
   (content) => {

@@ -1708,6 +1708,8 @@ export const FrontDoorRpcs = RpcGroup.make(
       title: Schema.String,
       file: Schema.String,
       onto: Schema.optional(Schema.String),
+      pushOnly: Schema.optional(Schema.Boolean),
+      skipCi: Schema.optional(Schema.Boolean),
       request: Schema.String,
     },
     success: Schema.Struct({ url: Schema.String }),

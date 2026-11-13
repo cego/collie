@@ -1024,7 +1024,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       /** The branch a new merge request targets, where it is not the default branch. */
       readonly onto?: string | undefined;
     }) => Effect.Effect<MrReady>;
-    readonly publish: (options: { readonly runId: string; readonly title: string; readonly file: string; readonly onto?: string | undefined }) => Effect.Effect<{ readonly url: string }, WorkflowError>;
+    readonly publish: (options: { readonly runId: string; readonly title: string; readonly file: string; readonly onto?: string | undefined; readonly pushOnly?: boolean | undefined; readonly skipCi?: boolean | undefined }) => Effect.Effect<{ readonly url: string }, WorkflowError>;
     /**
      * The checkout's branch's open merge request where it merges itself once green, else null.
      * Fails, saying why, where the forge cannot be read: not knowing is not a no.
@@ -5107,6 +5107,10 @@ export const hostLayer = (options: {
               const cwd = place.cwd;
               const ready = yield* host.mr({ cwd, onto: asked.onto });
               const fail = (reason: string) => new WorkflowError({ reason });
+              if (asked.skipCi && !asked.pushOnly)
+                return yield* fail("--skip-ci requires --push-only");
+              if (!asked.pushOnly && !asked.file)
+                return yield* fail("a merge request needs --file");
               if (!ready.ok) return yield* fail(ready.reason);
               if (!ready.branch) return yield* fail("a detached checkout cannot be published");
               if (ready.autoMerge)
@@ -5120,9 +5124,11 @@ export const hostLayer = (options: {
               );
               if (!here.ok) return yield* fail(here.reason);
               const path = yield* Path.Path;
-              const file = yield* fs
-                .readFileString(path.resolve(cwd, asked.file))
-                .pipe(Effect.mapError(() => fail(`there is no ${asked.file} to publish`)));
+              const file = asked.pushOnly
+                ? ""
+                : yield* fs
+                    .readFileString(path.resolve(cwd, asked.file))
+                    .pipe(Effect.mapError(() => fail(`there is no ${asked.file} to publish`)));
               const title = redact(asked.title);
               const body = redact(file);
               const existing = ready.existing ? mrRefOf(ready.existing) : null;
@@ -5175,10 +5181,21 @@ export const hostLayer = (options: {
                 if (reason !== null) refused.push(`${one.where}: ${reason}`);
               }
               if (refused.length) return yield* fail(Arr.join(refused, "\n"));
-              if (!ready.existing && !Str.trim(title))
+              if (!asked.pushOnly && !ready.existing && !Str.trim(title))
                 return yield* fail("a new merge request needs --title");
-              const pushed = yield* runShell("git", ["push", "-u", "origin", "HEAD"], cwd);
+              const pushed = yield* runShell(
+                "git",
+                [
+                  "push",
+                  "-u",
+                  "origin",
+                  "HEAD",
+                  ...(asked.skipCi && here.forge.name === "gitlab" ? ["-o", "ci.skip"] : []),
+                ],
+                cwd,
+              );
               if (pushed.code !== 0) return yield* fail(whatItSaid(pushed));
+              if (asked.pushOnly) return { url: ready.existing ?? "" };
               const marked = `${body}\n\n${marker(asked.runId)}`;
               if (ready.existing) {
                 const ref = mrRefOf(ready.existing);

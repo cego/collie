@@ -578,6 +578,8 @@ At the merge request step, the agent writes the description or update note to a 
 The host checks its public text and commit messages, then pushes and opens or updates
 the branch's merge request through [`collie run publish`](cli.md#publish-a-runs-merge-request).
 A refusal names what needs rewording before anything is pushed.
+Earlier build and fix steps use the same command with `--push-only`, so their commit
+messages are checked before review pushes too.
 
 The worktree outlives the merge request: it is still there when the run ends, so you can
 look at what it built. It is removed only once **settled** — the tree is clean, it holds

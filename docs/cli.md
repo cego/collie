@@ -26,6 +26,12 @@ is optional. The host adds a hidden marker and records the returned URL on the R
 Repeating a successful request id returns its result without publishing again.
 `--json` returns `mr_url` and `pushed`. Auto-merge must be off before publishing.
 
+Earlier build and fix steps use `collie run publish <run> --push-only --request-id <request>`.
+This checks commit messages and pushes without opening a merge request or posting a note.
+It needs neither `--title` nor `--file`, and returns `pushed` in JSON.
+Add `--skip-ci` to skip GitLab CI for a review push; GitHub ignores this flag.
+CI fixes omit `--skip-ci` so their pipeline runs. `--skip-ci` requires `--push-only`.
+
 ## Global flags
 
 Put these before the subcommand:

@@ -1168,14 +1168,25 @@ const runPublish = Command.make(
   {
     runId: runIdArg,
     title: Flag.String("title").pipe(Flag.withDefault("")),
-    file: Flag.String("file"),
+    file: Flag.String("file").pipe(Flag.withDefault("")),
     onto: Flag.String("onto").pipe(Flag.optional),
+    pushOnly: Flag.Boolean("push-only").pipe(Flag.withDefault(false)),
+    skipCi: Flag.Boolean("skip-ci").pipe(Flag.withDefault(false)),
     requestId: requestIdFlag,
   },
-  ({ runId, title, file, onto, requestId }) =>
+  ({ runId, title, file, onto, pushOnly, skipCi, requestId }) =>
     runMutationCommand("run-publish", runId, requestId, (env, request) =>
       Effect.flatMap(cliDoor(env), (door) =>
-        publishRun(env, { door, runId, title, file, onto: Option.getOrUndefined(onto), request }),
+        publishRun(env, {
+          door,
+          runId,
+          title,
+          file,
+          onto: Option.getOrUndefined(onto),
+          pushOnly,
+          skipCi,
+          request,
+        }),
       ),
     ),
 ).pipe(

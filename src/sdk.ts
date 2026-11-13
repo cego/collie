@@ -940,6 +940,8 @@ export interface HostApi {
     readonly title: string;
     readonly file: string;
     readonly onto?: string | undefined;
+    readonly pushOnly?: boolean | undefined;
+    readonly skipCi?: boolean | undefined;
   }) => Effect.Effect<{ readonly url: string }, WorkflowError>;
   /**
    * The URL of the checkout's branch's open merge request where it merges itself once

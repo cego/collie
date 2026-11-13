@@ -301,7 +301,7 @@ Run the typecheck and the test files you touched, each through
 Collie measures and reviews the head you push again before the merge request counts as
 ready, and a fix that loses the gain leaves it not ready.
 
-Push without `ci.skip` — `git push -u origin HEAD` — so the pipeline runs on your commit. A
+Push through `collie run publish {{run.id}} --push-only --request-id <request>` so the pipeline runs on your commit. A
 push that fails is reported as `"pushed": false`, not fatal.
 
 Then write your Output. `file` and `title` in `fixed` and `disputed` are exactly as the

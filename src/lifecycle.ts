@@ -1157,6 +1157,8 @@ export const publishRun = (
     readonly title: string;
     readonly file: string;
     readonly onto?: string | undefined;
+    readonly pushOnly?: boolean | undefined;
+    readonly skipCi?: boolean | undefined;
     readonly request: string;
   },
 ) =>
@@ -1169,13 +1171,19 @@ export const publishRun = (
         title: options.title,
         file: options.file,
         onto: options.onto,
+        pushOnly: options.pushOnly,
+        skipCi: options.skipCi,
         request: options.request,
       }),
     options.door,
   ).pipe(
     Effect.map((answer): OpResult =>
       answer.ok
-        ? { ok: true, data: { mr_url: answer.value.url, pushed: true }, human: answer.value.url }
+        ? {
+            ok: true,
+            data: options.pushOnly ? { pushed: true } : { mr_url: answer.value.url, pushed: true },
+            human: options.pushOnly ? "Branch pushed." : answer.value.url,
+          }
         : answer,
     ),
   );

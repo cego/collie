@@ -10,9 +10,9 @@ import { forgeOnPath, serveForges, PROJECT, FORGE_HOST } from "./support/forge";
 
 const Started = Schema.Struct({ runId: Schema.String });
 
-test(
-  "publishing refuses a leaking commit before pushing, then opens once and notes the existing request",
-  () =>
+test.each(["github", "gitlab"] as const)(
+  "%s publishing checks early pushes, then opens once and notes the existing request",
+  (forge) =>
     proves(
       "collie-publish-",
       (world) =>
@@ -27,7 +27,7 @@ test(
             ["update-ref", "refs/remotes/origin/main", "HEAD"],
             ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"],
             ["checkout", "-b", "fix/cache"],
-            ["remote", "add", "origin", `https://${PROJECT.github}.git`],
+            ["remote", "add", "origin", `https://${PROJECT[forge]}.git`],
             ["commit", "--allow-empty", "-m", "Keep cached results", "-m", "Built by this Run."],
           ])
             expect((yield* git(args)).exitCode).toBe(0);
@@ -38,11 +38,11 @@ test(
           const real = Bun.which("git")!;
           yield* bin.add(
             "git",
-            `if [ "$1" = push ]; then echo push >> '${world.home}/pushes'; exit 0; fi\nexec '${real}' "$@"`,
+            `if [ "$1" = push ]; then echo "$*" >> '${world.home}/pushes'; exit 0; fi\nexec '${real}' "$@"`,
           );
-          const fake = yield* forgeOnPath(bin, "github", {
+          const fake = yield* forgeOnPath(bin, forge, {
             installed: true,
-            loggedIn: [FORGE_HOST.github],
+            loggedIn: [FORGE_HOST[forge], "gitlab.cego.dk"],
             login: "mk",
             mrs: [],
           });
@@ -54,6 +54,17 @@ test(
           const { runId } = yield* Schema.decodeUnknownEffect(Started)(started.envelope.data);
           const file = `${world.home}/description.md`;
           yield* fs.writeFileString(file, "Retain results across reconnects.");
+          const skipCiRefused = yield* collie(world, [
+            "run",
+            "publish",
+            runId,
+            "--file",
+            file,
+            "--skip-ci",
+            "--request-id",
+            "skip-ci-with-mr",
+          ]);
+          expect(skipCiRefused.envelope.error?.message).toContain("--skip-ci requires --push-only");
           const publish = (request: string, title = "Keep cached results") =>
             collie(world, [
               "run",
@@ -72,20 +83,47 @@ test(
           expect(refused.envelope.error?.message).toContain("this Run");
           expect(yield* fs.exists(`${world.home}/pushes`)).toBe(false);
           expect((yield* fake.model()).mrs).toEqual([]);
+          const push = (request: string) =>
+            collie(world, [
+              "run",
+              "publish",
+              runId,
+              "--push-only",
+              "--skip-ci",
+              "--request-id",
+              request,
+            ]);
+          const earlyRefused = yield* push("early-leak");
+          expect(earlyRefused.envelope.ok).toBe(false);
+          expect(earlyRefused.envelope.error?.message).toContain(sha);
+          expect(earlyRefused.envelope.error?.message).toContain("this Run");
+          expect(yield* fs.exists(`${world.home}/pushes`)).toBe(false);
           expect(
             (yield* git(["commit", "--amend", "--allow-empty", "-m", "Keep cached results"]))
               .exitCode,
           ).toBe(0);
+          const earlyPushed = yield* push("early-clean");
+          expect(earlyPushed.envelope).toMatchObject({ ok: true, data: { pushed: true } });
+          expect((yield* push("early-clean")).envelope).toEqual(earlyPushed.envelope);
+          expect((yield* fake.model()).mrs).toEqual([]);
+          const earlyLine = `push -u origin HEAD${forge === "gitlab" ? " -o ci.skip" : ""}\n`;
+          expect(yield* fs.readFileString(`${world.home}/pushes`)).toBe(earlyLine);
           const opened = yield* publish("clean");
           expect(opened.envelope).toMatchObject({ ok: true });
           expect((yield* publish("clean")).envelope).toEqual(opened.envelope);
           expect((yield* fake.model()).mrs).toHaveLength(1);
-          expect(yield* fs.readFileString(`${world.home}/pushes`)).toBe("push\n");
+          expect(yield* fs.readFileString(`${world.home}/pushes`)).toBe(
+            `${earlyLine}push -u origin HEAD\n`,
+          );
           const shown = yield* collie(world, ["run", "show", runId]);
           const view = yield* Schema.decodeUnknownEffect(
             Schema.Struct({ run: Schema.Struct({ mr: Schema.String }) }),
           )(shown.envelope.data);
-          expect(view.run.mr).toBe(`https://${PROJECT.github}/pull/1`);
+          expect(view.run.mr).toBe(
+            `https://${PROJECT[forge]}/${forge === "github" ? "pull" : "-/merge_requests"}/1`,
+          );
+          expect((yield* push("existing-push")).envelope.ok).toBe(true);
+          expect(Arr.flatten(Rec.values((yield* fake.model()).notes ?? {}))).toEqual([]);
           yield* fs.writeFileString(file, "Also retain results after a timeout.");
           expect((yield* publish("note")).envelope.ok).toBe(true);
           const model = yield* fake.model();
@@ -112,7 +150,9 @@ test(
             mrs: Arr.map(model.mrs, (mr) => ({ ...mr, targetBranch: "stable" })),
           });
           expect((yield* publish("existing-target")).envelope.error?.message).toContain("this Run");
-          expect(yield* fs.readFileString(`${world.home}/pushes`)).toBe("push\npush\n");
+          expect(yield* fs.readFileString(`${world.home}/pushes`)).toBe(
+            `${earlyLine}push -u origin HEAD\n${earlyLine}push -u origin HEAD\n`,
+          );
         }),
       ["plain.workflow.ts"],
     ),

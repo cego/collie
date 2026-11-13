@@ -83,11 +83,12 @@ work is not a reason to leave it out or to dispute it. Where the spec conflicts 
 or with the code, choose, and record the choice and why under `assumptions` in your Output:
 the human reads each one in the merge request before it lands.
 
-Push before you finish: `git push -u origin HEAD -o ci.skip` on GitLab, or
-`git push -u origin HEAD` on GitHub, onto the branch the work
-source named where there is one. The reviewers read the merge request when there is one,
+Push before you finish: `collie run publish {{run.id}} --push-only --skip-ci --request-id <request>`.
+The host checks every commit message before pushing. On a text refusal, reword locally,
+amending only your own unpushed commits, and retry with a new request id. Never bypass
+the command. The reviewers read the merge request when there is one,
 and a merge request shows the remote — so anything you want reviewed has to be on the
-remote before the review step runs. `ci.skip` because this state is for the reviewers;
+remote before the review step runs. `--skip-ci` skips GitLab CI because this state is for the reviewers;
 the `mr` step's push is the one that should build.
 
 If the push fails — no remote, no permission, a protected branch, a rejected
@@ -168,8 +169,7 @@ fix was implementer-reported, not re-reviewed — so report exactly what you did
 checks said is not read from you: each `checks` entry names a verification, and Collie
 reads its result from the journal, on the tree as it stands.
 
-Push the fixups before you finish — `git push -u origin HEAD -o ci.skip` on GitLab,
-or `git push -u origin HEAD` on GitHub — every
+Push the fixups before you finish — `collie run publish {{run.id}} --push-only --skip-ci --request-id <request>` — every
 iteration: the next round reviews the remote, and a fix it cannot see is a finding it
 raises again. A push that fails is reported as `"pushed": false`, not fatal.
 
@@ -202,7 +202,7 @@ A `collie verify` you started in the background is reported to you when it ends,
 so you may end your turn waiting on it. Never end a turn waiting on any other
 background job.
 
-Push without `ci.skip` — `git push -u origin HEAD` — so the pipeline runs on your commit:
+Push through `collie run publish {{run.id}} --push-only --request-id <request>` so the pipeline runs on your commit:
 Collie waits on the job again on the new head commit. A round that pushes no new commit
 parks the Run. A push that fails is reported as `"pushed": false`, not fatal.
 
@@ -223,8 +223,8 @@ Meet each one, or, where it cannot be met, say plainly why. The ticket's whole l
 
 Build what is missing test first, with {{skill:tdd}}, and run the typecheck and the test
 files you touched, each through `collie verify -- <command>`,
-and never the whole suite: it is the gate's. Commit to this branch and push it, as in the build: `git push -u origin HEAD -o ci.skip`
-on GitLab, or `git push -u origin HEAD` on GitHub. A push that fails is reported as
+and never the whole suite: it is the gate's. Commit to this branch and push it, as in the build:
+`collie run publish {{run.id}} --push-only --skip-ci --request-id <request>`. A push that fails is reported as
 `"pushed": false`, not fatal.
 
 A `collie verify` you started in the background is reported to you when it ends,
@@ -262,8 +262,8 @@ A `collie verify` you started in the background is reported to you when it ends,
 so you may end your turn waiting on it. Never end a turn waiting on any other
 background job.
 
-Push the merge — `git push -u origin HEAD -o ci.skip` on GitLab, or
-`git push -u origin HEAD` on GitHub. A push that fails is reported as `"pushed": false`,
+Push the merge — `collie run publish {{run.id}} --push-only --skip-ci --request-id <request>`.
+A push that fails is reported as `"pushed": false`,
 not fatal.
 
 Then write your Output: `commits` names each commit you made, and `findings` anything
