@@ -59,6 +59,18 @@ export const FakeJob = Schema.Struct({
   retried: Schema.optionalKey(JobStates),
   /** Its id once retried, as the forge gives a retry a job of its own. */
   id: Schema.optionalKey(Schema.Finite),
+  /** Its log, as GitLab's trace or GitHub's job log answers it. */
+  trace: Schema.optionalKey(Schema.String),
+  /** The attempts a retry left behind it, oldest first: GitLab's `include_retried`, GitHub's `filter=all`. */
+  attempts: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        id: Schema.Finite,
+        state: JobStates,
+        trace: Schema.optionalKey(Schema.String),
+      }),
+    ),
+  ),
 });
 export type FakeJob = typeof FakeJob.Type;
 
@@ -102,6 +114,7 @@ export const FakeMr = Schema.Struct({
   state: Schema.Literals(["open", "merged", "closed"]),
   draft: Schema.optionalKey(Schema.Boolean),
   title: Schema.optionalKey(Schema.String),
+  body: Schema.optionalKey(Schema.String),
   author: Schema.optionalKey(Schema.String),
   assignees: Schema.optionalKey(Schema.Array(Schema.String)),
   head: Schema.optionalKey(Schema.String),
@@ -779,7 +792,26 @@ const pipelineIdOf = (mr: FakeMr) => Number(mr.iid) * 100;
 const jobsOf = (jobs: ReadonlyArray<FakeJob>, from: number) =>
   Arr.map(jobs, (job, at) => ({ ...job, id: job.id ?? from + at + 1 }));
 
+/** The job a retry leaves: a job of its own, the attempt it retried listed behind it. */
+const retriedJob = ({ trace, ...job }: FakeJob, n: number): FakeJob => {
+  const id = job.id ?? n + 1;
+  const attempt = trace === undefined ? { id, state: job.state } : { id, state: job.state, trace };
+  return {
+    ...job,
+    state: job.retried ?? job.state,
+    id: id + 100,
+    attempts: [...(job.attempts ?? []), attempt],
+  };
+};
+
 const actionsRun = (mr: FakeMr | undefined) => 4000 + Number(mr?.iid ?? 0);
+
+/** Each job of a pull request's head run, and each attempt behind it, with its `run_attempt`. */
+const actionsAttempts = (mr: FakeMr) =>
+  Arr.flatMap(jobsOf(mr.jobs ?? [], 0), ({ attempts = [], ...job }) => [
+    ...Arr.map(attempts, (one, at) => ({ ...one, name: job.name, attempt: at + 1 })),
+    { ...job, attempt: attempts.length + 1 },
+  ]);
 
 /** The merge request a project's job `id` is on its head pipeline of. */
 const headJobAt = (model: ForgeModel, project: (mr: FakeMr) => boolean, id: number) => {
@@ -1026,6 +1058,27 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
       );
       return mr === undefined ? no() : glabOnMr(model, mr, rest ?? "", args);
     }
+    const trace = /^projects\/([^/]+)\/jobs\/(\d+)(\/trace)?$/.exec(route);
+    if (trace && !args.includes("POST")) {
+      const found = Option.getOrUndefined(
+        Arr.findFirst(
+          Arr.flatMap(model.mrs, (mr) =>
+            Arr.flatMap(jobsOf(mr.jobs ?? [], 0), (job) =>
+              Arr.map([...(job.attempts ?? []), job], (one) => ({ mr, one })),
+            ),
+          ),
+          ({ one }) => one.id === Number(trace[2]),
+        ),
+      );
+      if (found === undefined) return no();
+      return trace[3] === undefined
+        ? json({
+            id: found.one.id,
+            web_url: `https://${found.mr.project}/-/jobs/${found.one.id}`,
+            pipeline: { id: pipelineIdOf(found.mr) },
+          })
+        : ok(found.one.trace ?? "");
+    }
     const retry = /^projects\/([^/]+)\/jobs\/(\d+)\/retry$/.exec(route);
     if (retry && args.includes("POST")) {
       const path = decodeURIComponent(retry[1]!);
@@ -1097,17 +1150,29 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
               jobsOf(mr.base?.jobs ?? [], 1000),
               jobsOf(mr.target?.jobs ?? [], 2000),
             ][id - pipelineIdOf(mr)];
-      const page = Number(/[?&]page=(\d+)/.exec(route)?.[1] ?? "1");
-      const size = Number(/[?&]per_page=(\d+)/.exec(route)?.[1] ?? "20");
+      const retriedToo = pipe(route, Str.includes("include_retried=true"));
+      const attempts = Arr.flatMap(listed ?? [], (job) => [
+        ...Arr.map(retriedToo ? (job.attempts ?? []) : [], (one) => ({
+          ...one,
+          name: job.name,
+        })),
+        job,
+      ]);
       return mr === undefined || listed === undefined
         ? no()
         : json(
-            Arr.map(listed.slice((page - 1) * size, page * size), (job) => ({
-              id: job.id,
-              name: job.name,
-              status: GITLAB_JOB[job.state],
-              web_url: `https://${mr.project}/-/jobs/${job.id}`,
-            })),
+            Arr.map(
+              pageOf(
+                route,
+                Arr.sortWith(attempts, (job) => -job.id, Order.Number),
+              ),
+              (job) => ({
+                id: job.id,
+                name: job.name,
+                status: GITLAB_JOB[job.state],
+                web_url: `https://${mr.project}/-/jobs/${job.id}`,
+              }),
+            ),
           );
     }
     const commit = /\/repository\/commits\/([^/?]+)$/.exec(route);
@@ -1680,7 +1745,10 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
             : [jobsOf(model.checksAt?.[sha] ?? [], 0), sha];
     const page = {
       check_runs: pipe(
-        jobs,
+        Arr.flatMap(jobs, (job) => [
+          job,
+          ...Arr.map(Arr.reverse(job.attempts ?? []), (one) => ({ ...job, ...one })),
+        ]),
         Arr.filter(
           (job, at) =>
             pipe(route, Str.includes("filter=all")) ||
@@ -1707,6 +1775,52 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
     return args.includes("--slurp")
       ? json([page])
       : json({ check_runs: pageOf(route, page.check_runs) });
+  }
+  const actionsJob = /^repos\/(.+)\/actions\/jobs\/(\d+)(\/logs)?$/.exec(route);
+  if (actionsJob) {
+    const [, repo = "", id = "", logs] = actionsJob;
+    const found = Option.getOrUndefined(
+      Arr.findFirst(
+        Arr.flatMap(
+          Arr.filter(model.mrs, (one) => one.project === `github.com/${repo}`),
+          (mr: FakeMr) => Arr.map(actionsAttempts(mr), (job) => ({ mr, job })),
+        ),
+        ({ job }) => job.id === Number(id),
+      ),
+    );
+    if (found === undefined) return no();
+    const run = actionsRun(found.mr);
+    if (logs !== undefined) return found.job.trace === undefined ? no() : ok(found.job.trace);
+    return json({
+      id: found.job.id,
+      run_id: run,
+      run_attempt: found.job.attempt,
+      html_url: `https://github.com/${repo}/actions/runs/${run}/job/${found.job.id}`,
+    });
+  }
+  const attemptJobs = /^repos\/(.+)\/actions\/runs\/(\d+)\/attempts\/(\d+)\/jobs/.exec(route);
+  if (attemptJobs) {
+    const [, repo = "", run = "", attempt = ""] = attemptJobs;
+    const mr = Option.getOrUndefined(
+      Arr.findFirst(
+        model.mrs,
+        (one) => one.project === `github.com/${repo}` && actionsRun(one) === Number(run),
+      ),
+    );
+    if (mr === undefined) return no();
+    const jobs = Arr.flatMap(actionsAttempts(mr), (job) =>
+      job.attempt === Number(attempt)
+        ? [
+            {
+              id: job.id,
+              name: job.name,
+              ...GITHUB_RUN[job.state],
+              html_url: `https://github.com/${repo}/actions/runs/${run}/job/${job.id}`,
+            },
+          ]
+        : [],
+    );
+    return json({ jobs: pageOf(route, jobs) });
   }
   const rerun = /^repos\/(.+)\/actions\/runs\/(\d+)\/rerun-failed-jobs$/.exec(route);
   if (rerun && args.includes("POST")) {
@@ -1931,6 +2045,26 @@ export function answer(
     return { ran: said === undefined ? no().ran : ok(`${said}\n`).ran, model };
   }
   if (cmd !== CLI[forge]) return { ran: no(127).ran, model };
+  if (model.installed && args[0] === (forge === "github" ? "pr" : "mr") && args[1] === "create") {
+    const project =
+      forge === "github" ? `github.com/${flag(args, "--repo")}` : (flag(args, "--repo") ?? "");
+    const iid = String(Math.max(0, ...Arr.map(model.mrs, (one) => Number(one.iid))) + 1);
+    const made: FakeMr = {
+      project,
+      iid,
+      state: "open",
+      title: flag(args, "--title") ?? "",
+      body: flag(args, forge === "github" ? "--body" : "--description") ?? "",
+      assignees: [flag(args, "--assignee") ?? ""],
+      sourceBranch: flag(args, forge === "github" ? "--head" : "--source-branch") ?? "",
+      targetBranch: flag(args, forge === "github" ? "--base" : "--target-branch") ?? "main",
+    };
+    return {
+      ran: ok(`https://${project}/${forge === "github" ? "pull" : "-/merge_requests"}/${iid}\n`)
+        .ran,
+      model: { ...model, mrs: [...model.mrs, made] },
+    };
+  }
   const said = forge === "gitlab" ? glab(model, args, under) : gh(model, args);
   let after = model;
   if (said.oauth !== undefined) after = { ...after, oauth: said.oauth };
@@ -1960,9 +2094,7 @@ export function answer(
           : {
               ...one,
               jobs: Arr.map(one.jobs ?? [], (job, n) =>
-                [at].flat().includes(n)
-                  ? { ...job, state: job.retried ?? job.state, id: (job.id ?? n + 1) + 100 }
-                  : job,
+                [at].flat().includes(n) ? retriedJob(job, n) : job,
               ),
             },
       ),

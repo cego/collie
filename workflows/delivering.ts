@@ -47,6 +47,8 @@ import {
   type Verification,
   type VerifySpec,
 } from "collie";
+import { CommandLine } from "effect/process";
+import { Result } from "effect";
 import { Effect, FileSystem, Schema, Stream } from "effect";
 import { connection } from "./connections.ts";
 import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
@@ -149,8 +151,7 @@ interface Opening {
     readonly template: string;
     readonly issues: string;
     readonly existing: string;
-    readonly create: string;
-    readonly comment: string;
+    readonly publish: string;
   };
   readonly target_repo: string;
 }
@@ -695,8 +696,15 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
               template: ready.template,
               issues: linear.state === "ok" ? Arr.join(ready.issues, ", ") : "",
               existing: ready.existing ?? "",
-              create: ready.commands?.create ?? "",
-              comment: ready.commands?.comment ?? "",
+              publish: Result.getOrThrow(
+                CommandLine.join([
+                  "collie",
+                  "run",
+                  "publish",
+                  runId,
+                  ...(ask.onto ? ["--onto", ask.onto] : []),
+                ]),
+              ),
             },
             // Not read by the shipped content; a fork's may, and `--repo` suits both CLIs.
             target_repo: ready.repository ? `--repo ${ready.repository}` : "",
@@ -851,7 +859,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
       const findings = Arr.map(read.failed, (one) => ({
         severity: "blocker",
         title: `${one.name}: its CI job ${one.job} failed`,
-        detail: `On ${pipe_(read.tree.head, Str.slice(0, 12))}, the merge request's head: ${one.url ?? "the forge gave no URL"}. Its log: ${one.log ?? "the forge gave no command for it"}`,
+        detail: `${one.unproved}. On ${pipe_(read.tree.head, Str.slice(0, 12))}, the merge request's head: ${one.url ?? "the forge gave no URL"}. Its log: ${one.log ?? "the forge gave no command for it"}`,
       }));
       const fixed = yield* ciFix(
         agentWork({

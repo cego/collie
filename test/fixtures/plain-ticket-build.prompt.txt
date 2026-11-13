@@ -89,11 +89,12 @@ work is not a reason to leave it out or to dispute it. Where the spec conflicts 
 or with the code, choose, and record the choice and why under `assumptions` in your Output:
 the human reads each one in the merge request before it lands.
 
-Push before you finish: `git push -u origin HEAD -o ci.skip` on GitLab, or
-`git push -u origin HEAD` on GitHub, onto the branch the work
-source named where there is one. The reviewers read the merge request when there is one,
+Push before you finish: `collie run publish r-plan-speed-implement --push-only --skip-ci --request-id <request>`.
+The host checks every commit message before pushing. On a text refusal, reword locally,
+amending only your own unpushed commits, and retry with a new request id. Never bypass
+the command. The reviewers read the merge request when there is one,
 and a merge request shows the remote — so anything you want reviewed has to be on the
-remote before the review step runs. `ci.skip` because this state is for the reviewers;
+remote before the review step runs. `--skip-ci` skips GitLab CI because this state is for the reviewers;
 the `mr` step's push is the one that should build.
 
 If the push fails — no remote, no permission, a protected branch, a rejected
@@ -159,6 +160,10 @@ That file must match this contract. Where a field carries a description, it is a
           },
           "detail": {
             "type": "string"
+          },
+          "internal": {
+            "type": "boolean",
+            "description": "true only for a finding about Collie's own process"
           },
           "rebuttal": {
             "type": "string"

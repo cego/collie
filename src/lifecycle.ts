@@ -1149,6 +1149,45 @@ export const controlled = (
   };
 };
 
+export const publishRun = (
+  env: PluginEnv,
+  options: {
+    readonly door: Door;
+    readonly runId: string;
+    readonly title: string;
+    readonly file: string;
+    readonly onto?: string | undefined;
+    readonly pushOnly?: boolean | undefined;
+    readonly skipCi?: boolean | undefined;
+    readonly request: string;
+  },
+) =>
+  asksRun(
+    env,
+    options.runId,
+    (client) =>
+      client.publish({
+        runId: options.runId,
+        title: options.title,
+        file: options.file,
+        onto: options.onto,
+        pushOnly: options.pushOnly,
+        skipCi: options.skipCi,
+        request: options.request,
+      }),
+    options.door,
+  ).pipe(
+    Effect.map((answer): OpResult =>
+      answer.ok
+        ? {
+            ok: true,
+            data: options.pushOnly ? { pushed: true } : { mr_url: answer.value.url, pushed: true },
+            human: options.pushOnly ? "Branch pushed." : answer.value.url,
+          }
+        : answer,
+    ),
+  );
+
 /** Picks a Run up again from any door: recovered first, then its stop cleared, so what wakes can run. */
 export const resumeRun = (
   env: PluginEnv,

@@ -3,8 +3,11 @@
 
 import { expect, test } from "bun:test";
 import * as Arr from "effect/Array";
-import { Effect, FileSystem, Tracer } from "effect";
+import { Effect, FileSystem, Schema, Tracer } from "effect";
 import { buildBoard, taskFlowOf } from "../src/board";
+import { recordAudit } from "../src/audit";
+import { laneFor } from "../src/flow-read";
+import { encodeStepLine, STEPS_FILE } from "../src/steps";
 import { readEnv } from "../src/env";
 import type { RunFacts } from "../src/runs";
 import { runEffect } from "./support/effect";
@@ -42,6 +45,56 @@ test("a running Run's Flow reads none of its deliveries", () =>
 test("a finished Run's Flow reads the deliveries that say whether it was Reopened", () =>
   spansOfFlow({ state: "succeeded", finished: "2026-09-14T10:00:00Z" }).then((names) =>
     expect(names).toContain("Steering.deliveriesOf"),
+  ));
+
+test("a lane reads stop attribution only while its Run is stopped", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-flow-audit-" });
+      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" });
+      const run = yield* madeRun(dir);
+      yield* fs.writeFileString(
+        `${run.dir}/${STEPS_FILE}`,
+        encodeStepLine({
+          kind: "enter",
+          key: "work",
+          at: "2026-09-14T10:00:00Z",
+          place: null,
+          step: {
+            id: "work",
+            title: "Work",
+            description: "",
+            kind: "check",
+            role: null,
+            produces: null,
+          },
+        }),
+      );
+      yield* recordAudit(run.dir, {
+        operation: "stop",
+        request: "stop",
+        origin: "cli",
+        result: Schema.String,
+        value: "stopped",
+      });
+      for (const state of ["running", "waiting", "succeeded", "failed", "stopped"] as const) {
+        let reads = 0;
+        const lane = yield* laneFor(env, { ...run, state }, undefined, new Map()).pipe(
+          Effect.provideService(FileSystem.FileSystem, {
+            ...fs,
+            readFileString: (path, encoding) => {
+              if (path === `${run.dir}/operations.jsonl`) reads++;
+              return fs.readFileString(path, encoding);
+            },
+          }),
+        );
+        expect(reads).toBe(state === "stopped" ? 1 : 0);
+        expect(Arr.some(lane.nodes, (node) => node.said === "Stopped by the CLI")).toBe(
+          state === "stopped",
+        );
+      }
+    }),
   ));
 
 test("two Tasks share one reading of the installation and step duration index", () =>

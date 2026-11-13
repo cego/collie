@@ -6,8 +6,8 @@ core in `desktop/src/bun/index.ts`, compiled into the release as `collie-core`.
 The old Nuxt view and Electrobun UI runtime have been removed. The shell speaks `DesktopRpcs`,
 subscribes to `flock`, and draws each Machine and
 its cards. Pressing a card opens its Run's record on the Terminal tab, and its Flow strip on the
-Flow tab at the Run's active Step; on Terminal, and only there, Rune draws the pane's
-terminal from the `terminal` stream, through libghostty-vt, and sends what the human does back
+Flow tab at the Run's active Step. The Terminal tab and a working Step's Terminal part draw the pane
+from the `terminal` stream through libghostty-vt, and send what the human does back
 on `terminalSend`. The record's other tabs (Flow, Summary, Plan, Review, Diff, Evidence, Log,
 Facts, the merge request) read `runDetail` and `runFile`, and its Diff tab shows the Run's diff
 in rune-kit's Diff, where selected lines become review comments. The board's Chat button opens
@@ -73,7 +73,7 @@ HOME and state directory. With no GPU,
 point Vulkan at lavapipe: `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`. On
 Linux, building needs `libxkbcommon-dev` and `libwayland-dev`, and lavapipe is in
 `mesa-vulkan-drivers`. Terminal fallback tests also need `fontconfig` and `fonts-noto-cjk`;
-the bundled monospace font does not contain CJK glyphs. libghostty-vt needs Zig 0.16.0 (`zig` on `PATH`, or `ZIG` naming it)
+the bundled monospace font does not contain CJK glyphs. libghostty-vt needs Zig 0.17.1 (`zig` on `PATH`, or `ZIG` naming it)
 and bindgen needs libclang; its first build takes about four minutes. CI's `desktop-rune` job runs `cargo fmt --check`, `cargo clippy -D
 warnings`, `cargo test`, and the contract, drift and shell tests.
 
@@ -142,6 +142,10 @@ on lavapipe. Its first frame took 387 ms. The live board was one Snapshot of 21 
   in the Run's `handoffs/rune-card-title-issue.md`.
 
 ### Go to pane's terminal
+
+Selecting a Flow Step gives its detail and work the remaining record height. The map,
+details and action forms scroll independently. On a narrow record the details sit above
+the work. Resizing the window or Flock chat refits the terminal without reconnecting its pane.
 
 The terminal keeps today's transport: the `terminal` stream brings frames, and `terminalSend`
 carries input, resizes, scrolls and mouse presses. Leaving the Terminal tab interrupts the
@@ -212,8 +216,8 @@ and background are the app's text and surface, which the view sets (`Tab::set_su
   `fixtures/terminal/styles.ndjson` holds every attribute and glyph class for comparing with
   Ghostty on the same bytes.
 
-**Pins.** Ghostty is the submodule `vendor/ghostty` at `291fd050b9e9c293c8adb6a140742649b7e42d3a`,
-built with Zig 0.16.0, its `minimum_zig_version`. `THIRD-PARTY-NOTICES` names Ghostty (MIT)
+**Pins.** Ghostty is the submodule `vendor/ghostty` at `cf3a8a6594eec899fe6335465668c60f2281ce9c`,
+built with Zig 0.17.1; upstream requires at least 0.17.0. `THIRD-PARTY-NOTICES` names Ghostty (MIT)
 and the herdr-app code adapted (Apache-2.0): `ghostty-sys` and `terminal/src/vt.rs`.
 
 **Recordings.** `core/record-terminal.ts` opens the core's `openTerminal` on a pane, at 100 by

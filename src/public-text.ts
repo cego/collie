@@ -42,7 +42,10 @@ const PHRASES: ReadonlyArray<{ readonly pattern: RegExp; readonly reason: string
   { pattern: /Posted by Collie/g, reason: "signs the post as Collie's" },
   { pattern: /\bCollie\b/g, reason: "names Collie" },
   {
-    pattern: new RegExp(`\\bcollie (?:${Arr.join(SUBCOMMANDS, "|")})\\b`, "g"),
+    pattern: new RegExp(
+      `\\bcollie\\s+(?:-[\\w-]+(?:=(?:"[^"]*"|'[^']*'|\\S+))?\\s+(?:(?:"[^"]*"|'[^']*'|[^\\s-]\\S*)\\s+)?)*(?:${Arr.join(SUBCOMMANDS, "|")})\\b`,
+      "g",
+    ),
     reason: "is a collie command",
   },
   { pattern: /\brun-[0-9a-f]{8}(?:\.[\w.-]+)?/g, reason: "is a Run id" },

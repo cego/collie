@@ -45,6 +45,15 @@ They tell a human what the job runs. Collie never runs them.
 - A failed job goes to the builder with the job's URL and the adapter's command for its
   log, as a CI fix round. The builder fixes, commits and pushes without `ci.skip`, and the
   Run waits again.
+- A failed job that passes when retried, by Collie or by anyone, is read with the logs of
+  its failed attempt's failed jobs. Where they name a failed test that is the branch's own
+  — its file is one the branch adds or modifies since its merge-base with the target
+  branch, or its name contains a string literal of 16 or more characters on a line the
+  branch adds — the job is failed: it goes to a CI fix round at implement and to a fix
+  round at Release's Prove the head, and is never recorded as proof. Where they name none,
+  or cannot be read, the pass stands and the Run records it as an unsettled Flake.
+  (Amended 2026-11-11: a branch's flaky new scenario failed once, passed on retry, was
+  released, and turned its target branch red for the Runs after it.)
 - After the gate's round limit, the Run parks as an unproved gate does.
 - The Run parks unproved, with the reason, in three cases: the pipeline on the head has no
   such job, the job was skipped or cancelled, or the checkout has no forge.
