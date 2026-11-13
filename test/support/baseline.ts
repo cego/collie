@@ -21767,6 +21767,7 @@ scenario(
         expect(noted).toContain("#### Reproduce");
         expect(noted).toContain("sh bench/bench.sh");
         expect(leaksIn(noted)).toEqual([]);
+        expect(noted).not.toContain("ci-fix-1");
         expect(noted).not.toContain(runId);
         expect(noted).not.toContain(dir);
       }),

@@ -2281,7 +2281,7 @@ export default defineWorkflow({
                   const posted = yield* host.note({
                     runId,
                     cwd,
-                    body: `${fix} moved the head; measured again:\n\n${body}`,
+                    body: `Reran the benchmarks after fixing CI:\n\n${body}`,
                   });
                   if (!posted.ok) return yield* new WorkflowError({ reason: posted.message });
                 }),
