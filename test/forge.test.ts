@@ -3231,11 +3231,11 @@ describe("GitHub's merge where the base branch requires a merge queue", () => {
           head,
           mergedBy,
         });
-        expect(yield* mergeQueued(queueing(), other("0ther", "alice"))).toEqual({
+        expect(yield* mergeQueued(queueing(), other("0ther", "github-merge-queue"))).toEqual({
           _tag: "AlreadyMerged",
           merged: MERGED,
           head: "0ther",
-          by: "alice",
+          by: "github-merge-queue",
           at,
         });
         expect(yield* mergeQueued(queueing(), other(HEAD, "alice"))).toEqual({
