@@ -1900,7 +1900,7 @@ test("Merge uses the Release offer even when an unrelated follow-up is primary",
     }),
   ));
 
-test("fresh green work has a Merge shipping action, revoked by a moved head, failed CI, stale answer or unknown mergeability", () =>
+test("fresh green work preserves its declared Release title, revoked by a moved head, failed CI, stale answer or unknown mergeability", () =>
   runEffect(
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
@@ -1920,7 +1920,7 @@ test("fresh green work has a Merge shipping action, revoked by a moved head, fai
             Effect.succeed([
               {
                 id: "release",
-                title: "Release",
+                title: "Release after review",
                 workflow: "release",
                 arguments: null,
                 kind: "follow-up",
@@ -1952,14 +1952,16 @@ test("fresh green work has a Merge shipping action, revoked by a moved head, fai
       expect(sectionsOf(desktop, "").ready).toHaveLength(1);
       expect(primaryAction(desktop[0]!)).toEqual({
         kind: "offer",
-        offer: { id: "release", title: "Release", run: "r-second" },
+        offer: { id: "release", title: "Release after review", run: "r-second" },
       });
       const text = Arr.join(boardLines([received]), "\n");
       expect(text).toContain("Ready to ship · 1");
-      expect(text).toContain("Merge: Ready to release: mk/support!279");
       const chat = herdLines([received], epochMs("2026-09-14T10:05:00Z"));
       expect(chat).toContain("## Ready to ship · 1");
-      expect(chat).toContain("Merge: Ready to release: mk/support!279");
+      expect([text, chat]).toEqual([
+        expect.stringContaining("Release after review: Ready to release: mk/support!279"),
+        expect.stringContaining("Release after review: Ready to release: mk/support!279"),
+      ]);
       const cards = { revision: () => 1, kept: new Map(), markers: new Map() };
       const cached = (now: string) =>
         board(env, [second], {

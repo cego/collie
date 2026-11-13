@@ -1501,9 +1501,9 @@ fn cards_take_the_columns_the_boards_width_fits_at_once_never_springing_into_the
 }
 
 #[test]
-fn work_ready_to_merge_is_its_own_section_and_its_merge_is_offered_by_the_run_that_owns_it() {
+fn ready_to_ship_preserves_the_release_title_and_owning_run() {
     let harness = Harness::new();
-    let offer = json!({"id": "merge", "title": "Merge the MR", "run": "r-owner"});
+    let offer = json!({"id": "release", "title": "Release after review", "run": "r-owner"});
     let mut runtime = runtime(app(
         &harness,
         vec![snapshot(
@@ -1542,8 +1542,8 @@ fn work_ready_to_merge_is_its_own_section_and_its_merge_is_offered_by_the_run_th
         ]
     );
     assert_eq!(cards_in(&runtime, "ready-to-ship"), ["Green and approved"]);
-    let primary = node(&runtime, "card-t-ship-primary").expect("its merge");
-    assert_eq!(primary["name"], "Merge");
+    let primary = node(&runtime, "card-t-ship-primary").expect("its Release offer");
+    assert_eq!(primary["name"], "Release after review");
     press(&mut runtime, "card-t-ship-primary");
     assert_eq!(
         harness.fake.asked_of("offers"),
