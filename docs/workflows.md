@@ -148,6 +148,9 @@ prove the current revision, and delivery updates the branch's existing merge req
 Repeated recoveries retain verification records from the full chain of established
 recoveries, including the original bug reproduction. Each record keeps its Run and
 revision; a passing check still has to match the current tree.
+When an intermediate recovery has no build or ticket Output, the follow-up uses the
+nearest ancestor's original build claims along that chain. A recovery that already
+recorded missing claims can read its ancestry on replay without changing that record.
 The parent keeps its terminal status and finishing revision
 ([ADR-draft-a-finished-delivery-names-the-way-back-to-work](adr/draft-a-finished-delivery-names-the-way-back-to-work.md)).
 

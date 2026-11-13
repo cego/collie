@@ -3864,6 +3864,119 @@ const reviewedRecovery = (
     return { bin, forge, plan, parent, finished, head, opened, consumed };
   });
 
+scenario(
+  "a repeated recovery consumes the original bug claim after a cached null without rewriting history",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, forge, parent, opened } = yield* reviewedRecovery("requirements");
+        const fs = yield* FileSystem.FileSystem;
+        const original = "r-original-builder";
+        const child = "r-repeated-recovery";
+        const proof = {
+          name: "regression",
+          executable: "test",
+          argv: ["-f", "fixed"],
+          cwd: rig.projectDir,
+        };
+        const red = yield* collect(evidenceDir(dir, original), {
+          ...proof,
+          by: "agent",
+          run: original,
+          expect: "fail",
+        });
+        yield* fs.writeFileString(`${rig.projectDir}/fixed`, "fixed\n");
+        yield* exec(["git", "add", "fixed"], { cwd: rig.projectDir });
+        yield* exec(["git", "commit", "-qm", "fix the reproduced bug"], { cwd: rig.projectDir });
+        yield* exec(["git", "push", "-qu", "origin", "HEAD"], { cwd: rig.projectDir });
+        const head = yield* revParse("HEAD", rig.projectDir);
+        const model = yield* forge.model();
+        const currentMr = forge.holding({
+          ...model,
+          mrs: Arr.map(model.mrs, (one) => ({ ...one, head })),
+        });
+        yield* collect(evidenceDir(dir, child), { ...proof, by: "agent", run: child });
+        const originalOutput = asJson({ ...BUILT, reproduced: "regression" });
+        yield* fs.makeDirectory(`${dir}/agents/${original}`, { recursive: true });
+        yield* fs.writeFileString(`${dir}/agents/${original}/01-work.md.json`, originalOutput);
+        yield* fs.writeFileString(`${runDir(dir, parent.runId)}/recovery-parent`, original);
+        yield* fs.makeDirectory(runDir(dir, original), { recursive: true });
+        yield* fs.writeFileString(`${runDir(dir, original)}/recovery-parent`, child);
+        yield* approve(child, ["unit"]);
+        const legacy = `${rig.root}/user/workflows/legacy-recovery.workflow.ts`;
+        yield* fs.writeFileString(
+          legacy,
+          `
+          import shipped from "${shipped("implement")}";
+          import { defineWorkflow } from "collie";
+          import { Effect, Schema } from "effect";
+          import * as Activity from "effect/workflow/Activity";
+          import * as Workflow from "effect/workflow/Workflow";
+          import { WorkflowInstance } from "effect/workflow/WorkflowEngine";
+          export default defineWorkflow({ ...shipped, run: () => Effect.gen(function* () {
+            yield* Activity.make({ name: "recovery-build-claims", success: Schema.Null, execute: Effect.succeed(null) });
+            return yield* Workflow.suspend(yield* WorkflowInstance);
+          }) });
+        `,
+        );
+        const options = {
+          entry: legacy,
+          runId: child,
+          input: {
+            plan: "Recover the existing bug fix and its original proof",
+            recovery: parent.runId,
+            ...FINISH,
+          },
+          options: { outcome: "bug" },
+        };
+        yield* stalled(options);
+        yield* fs.writeFileString(`${runDir(dir, child)}/recovery-parent`, parent.runId);
+        const cached = () =>
+          session(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient;
+              return yield* sql<{ payload: string; claim: string }>`SELECT payload,
+                json_type(payload, '$.value.exit.value') AS claim FROM cluster_replies
+            WHERE request_id IN (SELECT id FROM cluster_messages WHERE tag = 'activity'
+              AND json_extract(payload, '$.name') = 'recovery-build-claims')`;
+            }).pipe(Effect.orDie),
+          );
+        const before = yield* cached();
+        expect(before).toHaveLength(1);
+        expect(before[0]!.claim).toBe("null");
+        yield* rig.queueOutputs([null, null, CLEAN_SYNTHESIS, { ...opened, writes: [currentMr] }]);
+        const result = yield* driven(
+          { ...options, entry: shipped("implement"), restarted: true },
+          (run) =>
+            Effect.gen(function* () {
+              yield* run.resume;
+              const next = yield* until(
+                () => Effect.all({ launches: launchesAt(dir, child), status: run.status }),
+                (got) =>
+                  got.status.status !== "pending" ||
+                  Arr.some(got.launches, (one) => one.operation !== "review-1"),
+              );
+              expect(
+                Arr.sort(
+                  Arr.map(next.launches, (one) => one.operation),
+                  Str.Order,
+                ),
+              ).toEqual(["mr", "review-1"]);
+              return yield* ended(run.status);
+            }),
+        );
+        expect(outcomeText(result)).toBe(OPENED.mr_url);
+        expect(yield* cached()).toEqual(before);
+        expect(yield* fs.readFileString(`${dir}/agents/${original}/01-work.md.json`)).toBe(
+          originalOutput,
+        );
+        expect(yield* readVerifications(evidenceDir(dir, original))).toEqual([red]);
+        yield* bin.restore();
+      }),
+    ),
+  120_000,
+);
+
 for (const [changed, panel] of [
   ["pushed head", false],
   ["requirements", false],
