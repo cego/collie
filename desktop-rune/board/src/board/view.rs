@@ -11,7 +11,7 @@ use crate::record::tabs::recovery_of;
 use crate::shell::Page;
 use crate::{App, flow, icons};
 use collie_desktop_chat::glide::smooth;
-use collie_desktop_protocol::generated::{Decision, GlyphState, LostState, State, Task};
+use collie_desktop_protocol::generated::{Decision, GlyphState, LostState, State};
 use rune::{Color, El, Icon, Key, LiveRegion, col, el, icon, row, text};
 use rune_kit::{
     Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, Loader, Menu, MenuItem,
