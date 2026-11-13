@@ -52,11 +52,8 @@ export const refreshJobs = () => {
           ),
         );
     });
-  const pass = <R>(jobs: ReadonlyArray<RefreshJob<R>>) =>
+  const schedule = <R>(jobs: ReadonlyArray<RefreshJob<R>>) =>
     Effect.gen(function* () {
-      const keys = new Set(Arr.map(jobs, (job) => job.key));
-      for (const key of checked.keys())
-        if (!keys.has(key) && !pending.has(key)) checked.delete(key);
       const now = yield* Clock.currentTimeMillis;
       const ready = Arr.sortWith(
         Arr.filter(jobs, (job) => due(job, now)),
@@ -74,5 +71,12 @@ export const refreshJobs = () => {
       cursor = Option.match(Arr.last(rotated), { onNone: () => cursor, onSome: (job) => job.key });
       yield* Effect.forEach(rotated, refresh, { concurrency: 2, discard: true });
     });
-  return { refresh, pass, status, due };
+  const pass = <R>(jobs: ReadonlyArray<RefreshJob<R>>) =>
+    Effect.gen(function* () {
+      const keys = new Set(Arr.map(jobs, (job) => job.key));
+      for (const key of checked.keys())
+        if (!keys.has(key) && !pending.has(key)) checked.delete(key);
+      yield* schedule(jobs);
+    });
+  return { refresh, pass, schedule, status, due };
 };

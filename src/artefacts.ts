@@ -771,7 +771,7 @@ const make = Effect.gen(function* () {
         ),
       };
     });
-  const pass = (runs: ReadonlyArray<RunFacts>) =>
+  const jobsFor = (runs: ReadonlyArray<RunFacts>) =>
     Effect.gen(function* () {
       const jobs = [];
       for (const run of runs) {
@@ -783,9 +783,11 @@ const make = Effect.gen(function* () {
         for (const item of yield* list(run.id))
           if (item.tracking === "local" || item.provider !== undefined) jobs.push(job(run, item));
       }
-      yield* refreshing.pass(jobs);
+      return jobs;
     });
-  const schedule = (run: RunFacts) => pass([run]);
+  const pass = (runs: ReadonlyArray<RunFacts>) =>
+    jobsFor(runs).pipe(Effect.flatMap(refreshing.pass));
+  const schedule = (run: RunFacts) => jobsFor([run]).pipe(Effect.flatMap(refreshing.schedule));
   /** A page of this host's catalogue, from its metadata alone; no file is read. */
   const search = Effect.fn("Artefacts.search")(function* (
     asked: ArtefactSearch,

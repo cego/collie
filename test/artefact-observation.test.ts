@@ -20,6 +20,62 @@ afterEach(() => runEffect(rig.close()));
 
 const actor = { origin: "agent", requestId: "r" } as const;
 
+test("scheduling one Run preserves another Run's provider retry backoff", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const catalogue = yield* Artefacts;
+      const a = yield* madeRun(rig.stateDir, { id: "run-a" });
+      const b = yield* madeRun(rig.stateDir, { id: "run-b" });
+      const clock = yield* TestClock.make();
+      yield* clock.setTime(100_000);
+      let attempts = 0;
+      const readers = new Map([
+        [
+          "acme",
+          () =>
+            Effect.sync(() => attempts++).pipe(
+              Effect.andThen(
+                Effect.fail(new ObservationFailed({ state: "denied", reason: "No access" })),
+              ),
+            ),
+        ],
+      ]);
+      yield* Effect.gen(function* () {
+        const { item } = yield* catalogue.register(
+          b,
+          "inst",
+          { provider: { name: "acme", resource: "private" } },
+          "register",
+          actor,
+        );
+        yield* clock.adjust(30_001);
+        yield* catalogue.pass([a, b]);
+        expect(attempts).toBe(1);
+        expect((yield* catalogue.list(b.id))[0]).toMatchObject({
+          id: item.id,
+          sourceAvailability: "denied",
+        });
+        yield* catalogue.schedule(a);
+        yield* clock.adjust(31_000);
+        yield* catalogue.pass([a, b]);
+        expect(attempts).toBe(1);
+        yield* clock.adjust(29_000);
+        yield* catalogue.pass([a, b]);
+        expect(attempts).toBe(2);
+        yield* catalogue.schedule(a);
+        yield* clock.adjust(60_001);
+        yield* catalogue.pass([a, b]);
+        expect(attempts).toBe(2);
+        yield* clock.adjust(60_000);
+        yield* catalogue.pass([a, b]);
+        expect(attempts).toBe(3);
+      }).pipe(
+        Effect.provideService(Clock.Clock, clock),
+        Effect.provideService(ProviderReaders, readers),
+      );
+    }),
+  ));
+
 test("a provider reader's answers map to versions, dates and source states by namespaced identity", () =>
   runEffect(
     Effect.gen(function* () {
