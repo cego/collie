@@ -1027,11 +1027,7 @@ export const flockStream = <D extends BoardSource>(
             Effect.andThen(upgradeTo(route, version)),
             Effect.ensuring(Effect.sync(() => upgradingNow.delete(installation))),
             // Failed, or cut off with its connection: asked again when it next connects.
-            Effect.onExit((exit) =>
-              Exit.isSuccess(exit)
-                ? Effect.void
-                : Effect.sync(() => upgrading.delete(installation)),
-            ),
+            Effect.onError(() => Effect.sync(() => upgrading.delete(installation))),
             Effect.match({
               onSuccess: () =>
                 Stream.make(

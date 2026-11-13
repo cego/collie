@@ -16,7 +16,6 @@ import * as Rec from "effect/Record";
 import {
   Context,
   Effect,
-  Exit,
   FileSystem,
   Layer,
   Path,
@@ -775,13 +774,11 @@ function makeStore(
           read = { at, rows };
           return rows;
         }),
-        Effect.onExit((exit) =>
-          Exit.isSuccess(exit)
-            ? Effect.void
-            : Effect.sync(() => {
-                if (which === "all") dirty = "all";
-                else if (dirty !== "all") for (const run of which) dirty.add(run);
-              }),
+        Effect.onError(() =>
+          Effect.sync(() => {
+            if (which === "all") dirty = "all";
+            else if (dirty !== "all") for (const run of which) dirty.add(run);
+          }),
         ),
       );
     });
