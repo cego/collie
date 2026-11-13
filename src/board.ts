@@ -478,9 +478,10 @@ function doneSentence(
       const noun = ref === null ? "merge request" : mrWords(ref).noun;
       return `${Str.toUpperCase(noun[0]!)}${pipe(noun, Str.slice(1))} ${mrLabel(mr)} closed without merging.`;
     }
-    return answered != null
-      ? `${mrLabel(mr)} ${answered.ago === null ? "has not been read" : "was last read as open"}.`
-      : openSentence(mr, checks, agent, readiness);
+    if (answered == null) return openSentence(mr, checks, agent, readiness);
+    if (answered.ago === null) return `${mrLabel(mr)} has not been read.`;
+    const lacking = readiness?.missing[0];
+    return `${mrLabel(mr)} was last read as open${lacking === undefined ? "" : `, but ${lacking.said}`}.`;
   }
   switch (disposition.kind) {
     case "merged": {
