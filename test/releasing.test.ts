@@ -78,6 +78,25 @@ test("a checkout with uncommitted changes is refused even where it is already at
     }).pipe(Effect.scoped),
   ));
 
+for (const detached of [false, true])
+  test(`a ${detached ? "detached checkout" : "different branch"} is refused at the requested head when a source branch is required`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { root, cwd, first } = yield* repository;
+        yield* git(cwd, "checkout", "-q", ...(detached ? ["--detach", first] : ["-b", "other"]));
+        const moved = yield* fastForward({
+          runDir: `${root}/run`,
+          cwd,
+          head: first,
+          branch: "main",
+          run: runner(),
+        });
+        expect(moved._tag).toBe("Refused");
+        if (moved._tag === "Refused") expect(moved.why).toContain("source branch main");
+        expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(first);
+      }).pipe(Effect.scoped),
+    ));
+
 test("a plain push past the journaled head is not refused; the checkout is taken at its real tip", () =>
   runEffect(
     Effect.gen(function* () {
