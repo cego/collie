@@ -12,7 +12,7 @@ collie-desktop-chat = { path = "../chat" }
 collie-desktop-update = { path = "../update" }
 collie-desktop-theme = { path = "../theme" }
 base64 = "0.23"
-rune = { workspace = true, features = ["native-file-dialog"] }
+rune = { workspace = true, features = ["native-file-dialog", "tooling"] }
 rune-mac.workspace = true
 rune-kit.workspace = true
 rune-theme-opencode.workspace = true

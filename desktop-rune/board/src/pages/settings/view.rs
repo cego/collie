@@ -291,7 +291,7 @@ fn combo(
             disabled: o.disabled,
         })
         .collect();
-    let typed = state.search.text.trim();
+    let typed = state.search().text.trim();
     if !typed.is_empty() && !listed.iter().any(|o| o.id == typed) {
         listed.push(ComboboxOption::new(typed, format!("Use {typed}")));
     }
@@ -307,7 +307,6 @@ fn combo(
     .on_choose(move |app: &mut App, id: &str, _: &mut Tx| {
         if let Some(state) = app.pages.settings.combos.get_mut(key) {
             state.close();
-            state.search.clear();
         }
         choose(app, id)
     })

@@ -469,10 +469,10 @@ fn model<S: Host>(chat: &Chat, k: &Kit, layer: &mut Vec<El>, select: &ChoiceSele
             disabled: o.disabled,
         })
         .collect();
-    if let Some(typed) = typed_entry(&chat.model_menu.search.text, select) {
+    if let Some(typed) = typed_entry(&chat.model_menu.search().text, select) {
         options.push(ComboboxOption::new(typed.value, typed.label));
     }
-    let trigger = choice_trigger(k, "chat-model", select, chat.model_menu.open);
+    let trigger = choice_trigger(k, "chat-model", select, chat.model_menu.is_open());
     Combobox::new(
         "chat-model-menu",
         &chat.model_menu,

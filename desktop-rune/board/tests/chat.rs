@@ -491,9 +491,7 @@ fn a_harness_model_or_effort_is_saved_through_settings_and_a_refusal_is_said() {
     assert!(!window.has("chat-failed"));
 
     window.tap("chat-model");
-    window.rt.update(|board, _| {
-        board.chat.model_menu.search = TextEdit::new("claude-opus-9");
-    });
+    window.rt.paste("claude-opus-9");
     window.frame();
     assert!(
         window.has("chat-model-menu-option-claude-opus-9"),
@@ -986,10 +984,10 @@ fn haiku_choices() -> Value {
 
 impl Window {
     fn search_models(&mut self, words: &str) -> Vec<String> {
-        let words = words.to_string();
-        self.rt.update(move |board, _| {
-            board.chat.model_menu.search = TextEdit::new(&words);
-        });
+        // Reopening the menu empties its search, so each query is pasted alone.
+        self.tap("chat-model");
+        self.tap("chat-model");
+        self.rt.paste(words);
         self.frame();
         self.keys()
             .into_iter()
