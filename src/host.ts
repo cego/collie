@@ -2214,7 +2214,9 @@ const frontDoorHandlers = (
               yield* mrsOfTask(view),
               (one) => one.id === target.work.mr,
             );
-            const carrier = Option.isSome(owning) ? yield* known(owning.value.owner) : view;
+            const helper = mrOf(factsOfView(dir, view)) === null;
+            const carrier =
+              helper && Option.isSome(owning) ? yield* known(owning.value.owner) : view;
             const ownMr = mrOf(factsOfView(dir, carrier));
             const own = ownMr === null ? null : yield* mrIdIn(ownMr, carrier.cwd, shell);
             const repository =

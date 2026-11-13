@@ -394,6 +394,98 @@ test(
   120_000,
 );
 
+test(
+  "each Run carrying one merge request hands off its own obligation to a verified remote successor",
+  () =>
+    runEffect(
+      twoMachines(
+        "collie-carriers-handoff-",
+        (first, second) =>
+          Effect.gen(function* () {
+            const mr = "https://github.com/group/app/pull/42";
+            const task = "task-carried";
+            yield* writeTask({
+              id: task,
+              workspace: "w1",
+              label: "project | Carry the change",
+              cwd: first.world.project,
+              created_at: "2026-10-01T09:00:00Z",
+            }).pipe(Effect.provide(recordsAt(first.world.state)), Effect.orDie);
+            const carry = Effect.gen(function* () {
+              const started = yield* first.cli([
+                "run",
+                "start",
+                "targeted",
+                "--task",
+                task,
+                "--input",
+                `target=${mr}`,
+              ]);
+              const { runId } = yield* Schema.decodeUnknownEffect(Started)(
+                started.envelope.data,
+              ).pipe(Effect.orDie);
+              const sourceHost = yield* connect(first.world.state).pipe(Effect.orDie);
+              yield* until(
+                () => sourceHost.run({ runId }).pipe(Effect.orDie),
+                (view) => view?.status.status === "complete",
+              );
+              return runId;
+            });
+            const older = yield* carry;
+            const newer = yield* carry;
+            const target = yield* second.cli([
+              "run",
+              "start",
+              "stops-on-mr",
+              "--input",
+              `mr=${mr}`,
+            ]);
+            const { runId: successor } = yield* Schema.decodeUnknownEffect(Started)(
+              target.envelope.data,
+            ).pipe(Effect.orDie);
+            yield* first.lists([second]);
+            expect((yield* first.cli(["run", "show", successor])).envelope.ok).toBe(true);
+            const landed = () =>
+              Effect.gen(function* () {
+                const printed = yield* first.cli(["board"]);
+                const shown = yield* Schema.decodeUnknownEffect(
+                  Schema.Struct({ tasks: Schema.Array(TaskView) }),
+                )(printed.envelope.data).pipe(Effect.orDie);
+                return Option.getOrUndefined(
+                  Arr.findFirst(shown.tasks, (one) => one.runs.includes(older)),
+                )?.landed;
+              });
+            const handOff = (runId: string, request: string) =>
+              first.cli([
+                "run",
+                "disposition",
+                runId,
+                "--as",
+                "superseded",
+                "--ref",
+                `second:${successor}`,
+                "--request-id",
+                request,
+              ]);
+            const successors = (runId: string) =>
+              Effect.map(
+                readDispositions(runDir(first.world.state, runId)).pipe(Effect.orDie),
+                Arr.map((line) => line.successor?.run),
+              );
+            expect((yield* handOff(older, "older")).envelope.error).toBeUndefined();
+            expect(yield* successors(older)).toEqual([successor]);
+            expect(yield* successors(newer)).toEqual([]);
+            expect(yield* landed()).toBe(false);
+            expect((yield* handOff(newer, "newer")).envelope.error).toBeUndefined();
+            expect(yield* successors(newer)).toEqual([successor]);
+            expect(yield* landed()).toBe(true);
+          }),
+        ["targeted.workflow.ts", "stops-on-mr.workflow.ts"],
+      ),
+    ),
+  120_000,
+);
+
 const Shown = Schema.Record(Schema.String, Schema.Json);
 const CallLine = Schema.fromJsonString(
   Schema.Struct({ cmd: Schema.String, argv: Schema.Array(Schema.String) }),
