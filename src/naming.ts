@@ -37,22 +37,48 @@ export function agentName(
   variantKey: string | null,
   seq: number,
 ): string {
-  const whole = layout(slug, stepId, variantKey, `r${seq}`);
+  return nameWith(slug, stepId, variantKey, seq, false);
+}
+
+/** The name older launches persisted, before a leading letter reserved its own space. */
+export const legacyAgentName = (
+  slug: string,
+  stepId: string,
+  variantKey: string | null,
+  seq: number,
+) => nameWith(slug, stepId, variantKey, seq, true);
+
+function nameWith(
+  slug: string,
+  stepId: string,
+  variantKey: string | null,
+  seq: number,
+  legacy: boolean,
+): string {
+  const whole = layout(slug, stepId, variantKey, `r${seq}`, legacy);
   if (!whole.cut) return whole.name;
   const sum = pipe(
     Bun.hash(JSON.stringify([slug, stepId, variantKey])).toString(36),
     Str.slice(-DIGEST),
   );
-  return layout(slug, stepId, variantKey, `${sum}-r${seq}`).name;
+  return layout(slug, stepId, variantKey, `${sum}-r${seq}`, legacy).name;
 }
 
 /** Whether this launch's agent is the one launched under `name`, as `build`. */
 export const launchedAs = (
   one: { readonly agent: string; readonly runId: string; readonly sequence?: number },
   name: string,
-) => one.agent === agentName(one.runId, name, null, one.sequence ?? 1);
+) =>
+  one.agent === agentName(one.runId, name, null, one.sequence ?? 1) ||
+  one.agent === legacyAgentName(one.runId, name, null, one.sequence ?? 1);
 
-function layout(slug: string, stepId: string, variantKey: string | null, suffix: string) {
+function layout(
+  slug: string,
+  stepId: string,
+  variantKey: string | null,
+  suffix: string,
+  legacy: boolean,
+) {
   const trim = (text: string, room: number) =>
     pipe(text, Str.slice(0, Math.max(0, room)), Str.replace(/-+$/g, ""));
   const step = sanitize(
@@ -64,16 +90,19 @@ function layout(slug: string, stepId: string, variantKey: string | null, suffix:
       "-",
     ),
   );
-  const core = trim(step, MAX - suffix.length - 1);
-  const tail = core ? `${core}-${suffix}` : suffix;
-  const room = MAX - tail.length - 1;
   const clean = sanitize(slug);
-  const head = room > 0 ? trim(clean, room) : "";
-  const name = head ? `${head}-${tail}` : tail;
-  return {
-    name: pipe(/^[a-z]/.test(name) ? name : `w${name}`, Str.slice(0, MAX)),
-    cut: core !== step || head !== clean,
+  const fitted = (limit: number) => {
+    const core = trim(step, limit - suffix.length - 1);
+    const tail = core ? `${core}-${suffix}` : suffix;
+    const room = limit - tail.length - 1;
+    const head = room > 0 ? trim(clean, room) : "";
+    return { name: head ? `${head}-${tail}` : tail, cut: core !== step || head !== clean };
   };
+  const full = fitted(MAX);
+  if (/^[a-z]/.test(full.name)) return full;
+  if (legacy) return { ...full, name: pipe(`w${full.name}`, Str.slice(0, MAX)) };
+  const shorter = fitted(MAX - 1);
+  return { ...shorter, name: `w${shorter.name}` };
 }
 
 /** The readable name for a tab or pane. */

@@ -67,7 +67,7 @@ import {
 import { readStepLines } from "../src/steps";
 import { readMetrics } from "../src/metrics";
 import { measuresOf } from "../src/outcomes";
-import { launchDir, recordLaunch, stemOf } from "../src/launches";
+import { launchDir, recordLaunch, startedDir, stemOf } from "../src/launches";
 import { Collected } from "../src/agents";
 import { Collecting } from "../src/collecting";
 import { holdsBudgetOf, memoryWaitOf, waitForMemory } from "../src/memory-wait";
@@ -3088,6 +3088,189 @@ const claudeOut = {
   ] satisfies ReadonlyArray<UsageReading>),
 };
 const launchOf = (runId: string) => launchedAt(dir, runId, "review");
+
+const numericRun = "run-71558ed9.implement.implement-.";
+const numericRole = "01-public-text-is-checked-and-marked-hidden.md.review-2-1";
+const oldNumericName = "w01-public-text-is-chec-5hhdvh-r";
+const numericAsk = () => ({
+  runId: numericRun,
+  operation: numericRole,
+  agent: numericRole,
+  role: "reviewer",
+  workflow: "implement",
+  harness: "claude",
+  model: "opus",
+  effort: null,
+  permissions: "auto",
+  task: null,
+  cwd: rig.projectDir,
+  prompt: "Review this work.",
+  output: `${launchDir(dir, numericRun)}/${numericRole}.json`,
+  skill: null,
+  sequence: 2,
+});
+
+/** A terminal the previous naming code opened, before this host reconciles its work. */
+const openOldNumeric = (herdr: FakeHerdr, core = false) =>
+  Effect.gen(function* () {
+    if (core)
+      yield* herdr.agentLaunch({
+        name: oldNumericName,
+        argv: ["claude", "--model", "opus"],
+        cwd: rig.projectDir,
+        env: {},
+        labels: { run: numericRun, operation: numericRole },
+      });
+    else {
+      const tab = yield* herdr.tabCreate({ label: "Reviewer", cwd: rig.projectDir });
+      yield* herdr.agentStart({ name: oldNumericName, kind: "claude", paneId: tab.paneId });
+    }
+    return Option.getOrThrow(
+      Arr.findFirst(yield* herdr.agentList(), (one) => one.name === oldNumericName),
+    );
+  });
+
+test("a recorded legacy numeric agent keeps its name through replay, aliases, reused work and revival", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null, null, null, null]);
+      const herdr = new FakeHerdr(rig.pluginEnv());
+      const old = yield* openOldNumeric(herdr);
+      const terminalId = Option.getOrThrow(Option.fromNullishOr(old.terminalId));
+      const ask = numericAsk();
+      expect(agentName(ask.runId, ask.agent, null, ask.sequence)).not.toBe(oldNumericName);
+      yield* session(
+        Effect.gen(function* () {
+          const agents = yield* Agents;
+          yield* recordLaunch({
+            ...Struct.pick(ask, [
+              "runId",
+              "operation",
+              "role",
+              "workflow",
+              "harness",
+              "model",
+              "effort",
+              "output",
+              "sequence",
+            ]),
+            agent: oldNumericName,
+            terminalId,
+            reused: false,
+          }).pipe(Effect.provide(recordsAt(dir)));
+          const first = yield* agents.launch(ask);
+          expect(first.agent).toBe(oldNumericName);
+          expect(first.terminalId).toBe(terminalId);
+          expect(first.reused).toBe(true);
+          expect(yield* agents.choiceOf(numericRun, numericRole)).toMatchObject({
+            harness: "claude",
+            model: "opus",
+            sequence: 2,
+          });
+          yield* agents.launch(ask);
+          expect(sent(yield* rig.calls(), `${numericRole}.r2.prompt.md`)).toBe(1);
+          const followup = {
+            ...ask,
+            operation: "fix-after-review",
+            output: `${launchDir(dir, numericRun)}/fix-after-review.json`,
+            prompt: "Apply the review.",
+          };
+          const reused = yield* agents.launch(followup);
+          yield* agents.launch(followup);
+          expect(reused.agent).toBe(oldNumericName);
+          expect(reused.terminalId).toBe(terminalId);
+          expect(reused.reused).toBe(true);
+          expect(sent(yield* rig.calls(), "fix-after-review.r2.prompt.md")).toBe(1);
+          const steer = {
+            runId: numericRun,
+            to: numericRole,
+            text: "Keep the numeric reviewer.",
+            request: "numeric-alias",
+          };
+          expect(yield* agents.steer(steer)).toMatchObject({
+            agent: oldNumericName,
+            delivered: true,
+          });
+          yield* agents.steer(steer);
+          expect(sent(yield* rig.calls(), "Keep the numeric reviewer.")).toBe(1);
+          expect(yield* agents.revive(followup)).toBe(false);
+          expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
+
+          yield* herdr.paneClose(old.paneId);
+          expect(yield* agents.revive(followup)).toBe(true);
+          expect(yield* agents.revive(followup)).toBe(false);
+          expect(everyLaunch(yield* rig.calls())).toHaveLength(2);
+          expect(Arr.map(yield* herdr.agentList(), (one) => one.name)).toEqual([oldNumericName]);
+          expect(sent(yield* rig.calls(), "fix-after-review.r2.prompt.md")).toBe(2);
+        }),
+        { herdr },
+      );
+    }),
+  ));
+
+for (const identity of [
+  "exact core marker",
+  "no identity",
+  "another generation",
+  "another Run",
+  "another alias",
+])
+  test(`a listed legacy numeric agent with ${identity} starts no duplicate`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const core = identity !== "no identity";
+        if (core) {
+          yield* rig.startCore();
+          yield* fs.writeFileString(`${rig.userDir}/config.json`, '{ "terminal_backend": "core" }');
+        }
+        const env = rig.pluginEnv(core ? { HERDR_SOCKET_PATH: "" } : {});
+        const herdr = new FakeHerdr(env);
+        yield* rig.queueOutputs([null]);
+        const old = yield* openOldNumeric(herdr, core);
+        const ask = numericAsk();
+        if (core) {
+          const started = {
+            ...Struct.omit(ask, ["prompt"]),
+            sequence: identity === "another generation" ? 1 : 2,
+            runId: identity === "another Run" ? "some-other-run" : numericRun,
+            agent: identity === "another alias" ? "other-reviewer" : numericRole,
+          };
+          const path = startedDir(env.stateDir, numericRun);
+          yield* fs.makeDirectory(path, { recursive: true });
+          yield* fs.writeFileString(`${path}/${oldNumericName}.json`, encodeJson(started));
+        }
+        const result = yield* session(
+          Effect.gen(function* () {
+            expect(yield* launchesAt(dir, numericRun)).toEqual([]);
+            return yield* (yield* Agents).launch(ask).pipe(Effect.result);
+          }),
+          { herdr, env },
+        );
+        if (identity === "exact core marker") {
+          expect(result._tag).toBe("Success");
+          expect(Result.isSuccess(result) && result.success).toMatchObject({
+            agent: oldNumericName,
+            terminalId: old.terminalId,
+            reused: true,
+            sequence: 2,
+          });
+        } else {
+          expect(result._tag).toBe("Failure");
+          expect(Result.isFailure(result) && result.failure.reason).toContain("generation");
+        }
+        const calls = yield* rig.calls();
+        expect(
+          everyLaunch(calls).length +
+            Arr.filter(calls, (call) => call.cmd === "terminal.run").length,
+        ).toBe(1);
+        expect(Arr.map(yield* herdr.agentList(), (one) => one.name)).toEqual([oldNumericName]);
+        if (identity !== "exact core marker") {
+          expect(prompts(calls)).toEqual([]);
+          expect(Arr.filter(calls, (call) => call.cmd === "terminal.send")).toEqual([]);
+        }
+      }),
+    ));
 
 test("an exhaustion result is observed only after its operation's usage wait is durable", () =>
   runEffect(

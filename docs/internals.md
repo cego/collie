@@ -1012,6 +1012,9 @@ naming the session (`default` when unset). All of it goes through `src/herdr.ts`
   Starting one again and ending one take the Run's `relaunch/<run>.lock`: an end waits out
   a start already under way and ends the terminal it started, read from the operation's
   launch record, and a start after an end finds no record and starts nothing.
+  Recovery follows the started generation's recorded terminal and session, including
+  later operations that reused it. Older generations keep their own launch records;
+  a missing session never borrows one from an earlier generation with the same name.
 - **A Task** is its record and the `task` label: placement opens no workspace, and a
   Task's `workspace` is null. Cleanup's pass over Task workspaces writes the record's
   `closed_at` an hour after the Task is Finished, which ends a start's join by branch;
@@ -1025,6 +1028,15 @@ reached there; one set back to herdr lists only herdr's, and its agents on core 
 to it. The host's Herds on a Machine set to core are its core Herd as well as each herdr
 session still running, so its board and News keep the core Herd's Runs while Herdr 1 stays
 open.
+
+Agent names reserve space for both their leading letter and generation suffix, including
+long numbered ticket names. Older launches may have truncated that suffix. Replay,
+revival, role reuse and steering retain those persisted names. A matching saved core
+start can also bind its name before the launch record exists. If another spelling is
+already listed without enough identity to reconcile it, the launch waits with an explicit
+reason instead of starting another worker.
+A rollback after new names have been recorded must retain this persisted-name binding;
+an older binary that only recomputes the truncated name cannot safely revive that work.
 
 ## The forge boundary
 
