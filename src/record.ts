@@ -79,8 +79,7 @@ interface Part {
 const sameRevision = (one: RunRevision, other: RunRevision) =>
   one.epoch === other.epoch && one.seq === other.seq;
 
-/** The record without its parts, at the revision of the Runs it read, its Flow timeless. */
-export const recordBase = (sources: RecordSources, runId: string, pages: number) =>
+const recordCard = (sources: RecordSources, runId: string) =>
   Effect.gen(function* () {
     const { env, model } = sources;
     const runs = yield* sources.related(runId, model.planned(runId));
@@ -108,20 +107,29 @@ export const recordBase = (sources: RecordSources, runId: string, pages: number)
       for (const node of lane.nodes)
         if (FINISHED_STEPS.has(node.state)) model.finishedAt(lane.run, node.id, model.highest(ids));
         else model.unfinished(lane.run, node.id);
+    return { run: run.value, runs, ids, card, flow: found === null ? null : timeless(found) };
+  }).pipe(Effect.provideService(FileSystem.FileSystem, sources.model.reading));
+
+/** The record without its parts, at the revision of the Runs it read, its Flow timeless. */
+export const recordBase = (sources: RecordSources, runId: string, pages: number) =>
+  Effect.gen(function* () {
+    const base = yield* recordCard(sources, runId);
+    if (base === null) return null;
+    const { run, runs, ids, card, flow } = base;
     const detail = yield* buildRunDetail({
-      env,
+      env: sources.env,
       runId,
       runs,
       mr: null,
       pages,
       plans: sources.plans,
-      flow: found === null ? null : timeless(found),
+      flow,
       parts: false,
     });
     if (detail === null) return null;
     const mrs = card?.view.mrs ?? [];
     return {
-      run: run.value,
+      run,
       runs,
       ids,
       detail,
@@ -163,9 +171,8 @@ export const FINISHED_STEPS = new Set(["done", "failed", "stopped", "not-run"]);
 /** The Run's Task's Flow as `run show` and chat's `collie_run` say it: the record's, read now. */
 export const recordFlow = (sources: RecordSources, runId: string) =>
   Effect.gen(function* () {
-    const base = yield* recordBase(sources, runId, 1);
-    const found = base?.detail.flow;
-    return found === undefined ? null : timedFlow(found, yield* Clock.currentTimeMillis);
+    const base = yield* recordCard(sources, runId);
+    return base?.flow == null ? null : timedFlow(base.flow, yield* Clock.currentTimeMillis);
   });
 
 /**
