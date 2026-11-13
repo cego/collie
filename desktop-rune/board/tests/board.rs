@@ -628,6 +628,65 @@ fn offers_are_read_for_the_run_and_one_with_arguments_is_invoked_with_what_was_t
 }
 
 #[test]
+fn a_finished_cards_menu_disables_refused_offers_and_invokes_each_owning_run() {
+    for (title, owner, id) in [
+        ("Stage app!12", "r-app", "stage"),
+        ("Release api!7", "r-api", "release"),
+    ] {
+        let harness = Harness::new();
+        let mut runtime = runtime(app(
+            &harness,
+            vec![snapshot(
+                &pc(),
+                vec![task(
+                    "fan",
+                    "Deliver changes",
+                    "done",
+                    json!({"offers": [
+                        {"id": "release", "title": "Release app!12", "run": "r-app",
+                            "unavailable": "a Release is still going"},
+                        {"id": "stage", "title": "Stage app!12", "run": "r-app"},
+                        {"id": "release", "title": "Release api!7", "run": "r-api"}
+                    ]}),
+                )],
+            )],
+        ));
+        press(&mut runtime, "card-fan-menu");
+        let tree = runtime.accessibility_json();
+        let refused = within(&tree)
+            .into_iter()
+            .find(|n| {
+                n["role"] == "menu-item" && n["name"] == "Release app!12 — a Release is still going"
+            })
+            .expect("the refused offer stays visible with its reason");
+        assert!(has_state(refused, "disabled"));
+        choose(&mut runtime, "Release app!12 — a Release is still going");
+        assert!(harness.fake.asked_of("offers").is_empty());
+        assert!(acts(&harness).is_empty());
+
+        choose(&mut runtime, title);
+        assert_eq!(
+            harness.fake.asked_of("offers"),
+            [json!({"installation": "inst-pc", "runId": owner})]
+        );
+        harness.fake.answer(
+            "offers",
+            Ok(json!([
+                {"id": id, "title": title, "workflow": id, "arguments": null,
+                    "kind": "follow-up", "primary": false, "unavailable": null}
+            ])),
+        );
+        settle(&harness, &mut runtime);
+        assert_eq!(
+            acts(&harness)[0]["action"],
+            json!({
+                "_tag": "Invoke", "runId": owner, "offer": id, "input": {}
+            })
+        );
+    }
+}
+
+#[test]
 fn a_question_is_answered_through_act_and_the_card_says_it_is_sending_then_waiting() {
     let harness = Harness::new();
     let asked = question("r-t1", "c1", "Keep the old path working?");
@@ -1442,9 +1501,9 @@ fn cards_take_the_columns_the_boards_width_fits_at_once_never_springing_into_the
 }
 
 #[test]
-fn work_ready_to_merge_is_its_own_section_and_its_merge_is_offered_by_the_run_that_owns_it() {
+fn ready_to_ship_preserves_the_release_title_and_owning_run() {
     let harness = Harness::new();
-    let offer = json!({"id": "merge", "title": "Merge the MR", "run": "r-owner"});
+    let offer = json!({"id": "release", "title": "Release after review", "run": "r-owner"});
     let mut runtime = runtime(app(
         &harness,
         vec![snapshot(
@@ -1483,8 +1542,8 @@ fn work_ready_to_merge_is_its_own_section_and_its_merge_is_offered_by_the_run_th
         ]
     );
     assert_eq!(cards_in(&runtime, "ready-to-ship"), ["Green and approved"]);
-    let primary = node(&runtime, "card-t-ship-primary").expect("its merge");
-    assert_eq!(primary["name"], "Merge");
+    let primary = node(&runtime, "card-t-ship-primary").expect("its Release offer");
+    assert_eq!(primary["name"], "Release after review");
     press(&mut runtime, "card-t-ship-primary");
     assert_eq!(
         harness.fake.asked_of("offers"),
