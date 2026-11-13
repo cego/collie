@@ -438,7 +438,7 @@ export const sdkModules = (): ReadonlyArray<readonly [string, object]> => {
 /** Kept in step with package.json, which `engine.test.ts` checks: the host and an
  *  author's declarations have to be the same Effect, or the types are about another one. */
 export const TOOLCHAIN = {
-  effect: "4.1.0",
+  effect: "4.1.4",
   typescript: "^7.0.2",
 } as const;
 
