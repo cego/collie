@@ -1587,26 +1587,58 @@ test(
   120_000,
 );
 
+/** Observe the stopped process before relying on its socket staying silent. */
+const pauseHost = (state: string, pid: number) =>
+  Effect.gen(function* () {
+    const signalled = yield* signalProcess(pid, "SIGSTOP");
+    yield* Effect.addFinalizer(() => signalProcess(pid, "SIGCONT"));
+    expect(signalled).toBe(true);
+    yield* until(
+      () =>
+        exec(["ps", "-o", "stat=", "-p", String(pid)]).pipe(
+          Effect.map((read) => {
+            expect(read.exitCode).toBe(0);
+            return Str.trim(read.stdout);
+          }),
+        ),
+      (status) => Str.startsWith("T")(status) || Str.startsWith("t")(status),
+    );
+    expect((yield* ownerOf(state))?.pid).toBe(pid);
+  });
+
 test(
   "a host that takes the connection and never answers is reported rather than waited on",
   () =>
     proves(
       Effect.gen(function* () {
         const { state } = yield* workspace("collie-host-silent-");
+        const fs = yield* FileSystem.FileSystem;
         const who = yield* Effect.scoped(
           connect(state).pipe(Effect.flatMap((client) => client.identity())),
         ).pipe(Effect.orDie);
         // Its socket still accepts, and nothing behind it reads.
-        yield* signalProcess(who.pid, "SIGSTOP");
-        const refused = yield* Effect.scoped(connect(state)).pipe(
-          fastForward,
-          Effect.flip,
-          Effect.ensuring(signalProcess(who.pid, "SIGCONT")),
-        );
+        yield* pauseHost(state, who.pid);
+        const outcome = yield* Effect.scoped(
+          connect(state).pipe(
+            Effect.flatMap((client) => client.identity().pipe(Effect.timeoutOption("1 second"))),
+          ),
+        ).pipe(fastForward, Effect.result);
+        if (outcome._tag === "Success")
+          throw new Error(
+            `stopped host unexpectedly accepted a client: ${Bun.inspect({
+              stopped: who,
+              answer: outcome.success,
+              owner: yield* ownerOf(state),
+              process: yield* exec(["ps", "-o", "stat=", "-p", String(who.pid)]),
+              log: yield* fs.readFileString(outputOf(state)).pipe(Effect.orElseSucceed(() => "")),
+            })}`,
+          );
+        const refused = outcome.failure;
         if (refused._tag !== "HostUnavailable") {
           throw new Error(`connected, or refused with ${refused._tag}`);
         }
         expect(refused.reason).toContain(`pid ${who.pid} owns the directory and is not answering`);
+        yield* signalProcess(who.pid, "SIGCONT");
         yield* stopHost(state);
       }),
     ),
@@ -1622,7 +1654,7 @@ test(
         const old = yield* Effect.scoped(
           connect(state).pipe(Effect.flatMap((client) => client.identity())),
         ).pipe(Effect.orDie);
-        yield* signalProcess(old.pid, "SIGSTOP");
+        yield* pauseHost(state, old.pid);
 
         const refused = yield* Effect.scoped(connect(state, { build: "999.0.0" })).pipe(
           (effect) => fastForward(effect, 5),

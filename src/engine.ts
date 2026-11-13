@@ -2055,6 +2055,16 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** Whether a blocking finding says where and why, so it can be acted on. */
   export function substantiated(finding: Finding): boolean;
   export function unsubstantiated(findings: ReadonlyArray<Finding>): string | null;
+  /** Disputes the review has neither confirmed fixed nor withdrawn with a reason. */
+  export function remainingDisputes(
+    disputed: ReadonlyArray<Finding>,
+    review: {
+      readonly findings: ReadonlyArray<Finding>;
+      readonly disputed: ReadonlyArray<Finding>;
+      readonly dropped: ReadonlyArray<Finding>;
+      readonly fixed: ReadonlyArray<Fixed>;
+    },
+  ): Finding[];
   /** A finding the implementer already rejected stops driving the loop. */
   export function splitDisputed(
     findings: ReadonlyArray<Finding>,

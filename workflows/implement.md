@@ -130,8 +130,9 @@ The review found:
 That is one review, synthesised from every reviewer that looked at this branch, so each
 finding arrives once and already reconciled. Apply the ones you agree with, as fixup
 commits on this branch. For any finding you believe is wrong, do not apply it — record it
-under `disputed` with your reason, and the human sees it at the end. A reason you give
-once settles that finding: the reviewers are told about it and the loop stops raising it.
+under `disputed` with your reason. The next review may accept that reason explicitly or
+answer it with a rebuttal. A blocking dispute left unresolved parks the rally for the
+human; a clean verdict or omission alone does not settle it.
 
 Fix test first, with {{skill:tdd}} where a finding is a behaviour: the failing test, then
 the fix. Run the typecheck and the test files you touched, each through `collie verify` as
@@ -160,7 +161,7 @@ background job.
 Never defer a blocking finding to a follow-up or leave it out of your Output: every
 `blocker` and `major` above is either under `fixed` or under `disputed`, never both and
 never neither. A blocking finding you dispute goes to the next review, and one still
-disputed after the last round is written into the merge request for the human. On
+unresolved parks the rally before the merge request. On
 iteration {{max_iterations}} there is no review after you: Collie reads your `fixed`,
 `disputed` and `checks` against the findings above and the merge request says the last
 fix was implementer-reported, not re-reviewed — so report exactly what you did. What your

@@ -2669,6 +2669,63 @@ scenario(
 );
 
 scenario(
+  "fix findings reaches clean without another fixer when review explicitly accepts a blocking dispute",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* reviewedBranch();
+        const runId = "r-review-accepted-dispute";
+        const input = { target: "branch:main...feature" };
+        const finding = {
+          severity: "blocker",
+          title: "the guard is on the wrong side",
+          file: "src/a.ts",
+        };
+        yield* rig.queueOutputs([
+          { ...SYNTHESIS, findings: [finding] },
+          {
+            verdict: "clean",
+            findings: [],
+            fixed: [],
+            disputed: [{ ...finding, reason: "the caller rejects empty lists before this branch" }],
+            checks: [],
+          },
+          {
+            ...SYNTHESIS,
+            verdict: "clean",
+            findings: [],
+            dropped: [
+              {
+                ...finding,
+                reason: "The caller already guards empty lists, so the builder's dispute is valid.",
+              },
+            ],
+          },
+        ]);
+        yield* parked({ entry: shipped("review"), runId, input, decision: "post-1" });
+        const rows = yield* answeredThen({
+          entry: shipped("review"),
+          runId,
+          input,
+          decision: "post-1",
+          value: "Fix findings",
+          until: "post-2",
+        });
+
+        expect(
+          Option.getOrNull(Arr.findFirst(rows, (row) => row.decision === "post-2"))?.prompt,
+        ).toContain("nothing blocking is left");
+        expect(optionsOf(rows, "post-2")).not.toContain("Fix findings");
+        expect(yield* prompts()).toHaveLength(3);
+        expect(yield* wasAsked(runId, "fix-2")).toBe(false);
+        expect(yield* findingsIn(runDir(dir, runId))).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "a review's fix works in the reviewed branch's own checkout, and is verified there",
   () =>
     runEffect(
@@ -7040,7 +7097,7 @@ scenario(
         );
         const rules = [
           "is a follow-up",
-          "unless you can answer the reason",
+          "Check the disputed reason against the code",
           "`collie verify -- <command>`",
           '`"scope_met": true`',
           "`summary` — two sentences",
@@ -9254,6 +9311,123 @@ scenario(
           `${evidenceDir(dir, "r-impl-own-red")}/steering/verifications.jsonl`,
         );
         expect(journal).not.toContain(base);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "implement proceeds to checks and a merge request when review explicitly accepts a blocking dispute",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        const runId = "r-impl-accepted-dispute";
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve(runId, ["unit"]);
+        const finding = {
+          severity: "blocker",
+          title: "the guard is on the wrong side",
+          file: "src/a.ts",
+        };
+        yield* rig.queueOutputs([
+          BUILT,
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [finding] },
+          {
+            verdict: "clean",
+            findings: [],
+            fixed: [],
+            disputed: [{ ...finding, reason: "the caller rejects empty lists before this branch" }],
+            checks: [{ name: "unit" }],
+          },
+          {
+            ...CLEAN_SYNTHESIS,
+            dropped: [
+              {
+                ...finding,
+                reason: "The caller already guards empty lists, so the builder's dispute is valid.",
+              },
+            ],
+          },
+          OPENED,
+        ]);
+
+        expect(
+          yield* stoppedAt({ entry: shipped("implement"), runId, input: { plan, ...FINISH } }),
+        ).toEqual({ status: "complete", why: "" });
+        expect(yield* passesOf(runId)).toEqual(["gate"]);
+        expect(yield* wasAsked(runId, "mr")).toBe(true);
+        expect(yield* wasAsked(runId, "fix-2")).toBe(false);
+        expect(yield* findingsIn(runDir(dir, runId))).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+once(
+  "a reviewer panel's final synthesis explicitly accepts a blocking dispute before implement delivers",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        const runId = "r-panel-accepted-dispute";
+        const entry = yield* fork(
+          "implement",
+          "accepted-dispute-panel",
+          `{ ...shipped.agents, roles: { ...shipped.agents?.roles, reviewer: [{ harness: "claude", model: "opus" }, { harness: "pi", model: "openai-codex/gpt-6-astra" }] } }`,
+        );
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve(runId, ["unit"]);
+        const finding = {
+          severity: "blocker",
+          title: "the guard is on the wrong side",
+          file: "src/a.ts",
+        };
+        const review = { verdict: "findings", findings: [finding] };
+        const accepted = {
+          ...finding,
+          reason: "The caller already guards empty lists, so the builder's dispute is valid.",
+        };
+        const agreed = { verdict: "clean", findings: [], dropped: [accepted] };
+        yield* rig.queueOutputs([
+          BUILT,
+          review,
+          review,
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [finding] },
+          {
+            verdict: "clean",
+            findings: [],
+            fixed: [],
+            disputed: [{ ...finding, reason: "the caller rejects empty lists before this branch" }],
+            checks: [{ name: "unit" }],
+          },
+          agreed,
+          agreed,
+          { ...CLEAN_SYNTHESIS, dropped: [accepted] },
+          OPENED,
+        ]);
+
+        expect(yield* stoppedAt({ entry, runId, input: { plan, ...FINISH } })).toEqual({
+          status: "complete",
+          why: "",
+        });
+        expect(yield* passesOf(runId)).toEqual(["gate"]);
+        expect(yield* wasAsked(runId, "mr")).toBe(true);
+        expect(yield* prompts()).toHaveLength(9);
+        const fanIn = yield* asked(runId, "synthesize-2");
+        expect(fanIn).toContain("the caller rejects empty lists before this branch");
+        expect(yield* asked(runId, "review-2-1")).toContain(
+          "the caller rejects empty lists before this branch",
+        );
+        const fs = yield* FileSystem.FileSystem;
+        for (const seat of [1, 2]) {
+          const output = `${dir}/agents/${runId}/review-2-${seat}.json`;
+          expect(fanIn).toContain(output);
+          expect(yield* fs.readFileString(output)).toContain(accepted.reason);
+        }
+        expect(yield* findingsIn(runDir(dir, runId))).toEqual([]);
       }),
     ),
   120_000,
@@ -19506,7 +19680,11 @@ const improving: HostOverride = Layer.effect(Host)(
 );
 
 /** A `self-improve` Run, executed to its end. */
-const improved = (runId: string, input: Readonly<Record<string, Schema.Json>>) =>
+const improved = (
+  runId: string,
+  input: Readonly<Record<string, Schema.Json>>,
+  host: HostOverride = improving,
+) =>
   session(
     Effect.gen(function* () {
       const made = yield* loaded(shipped("self-improve"), runId);
@@ -19517,7 +19695,7 @@ const improved = (runId: string, input: Readonly<Record<string, Schema.Json>>) =
         .execute({ runId, input })
         .pipe(Effect.result, Effect.provide(made.layer));
     }),
-    improving,
+    host,
   );
 
 const freshDay = () => {
@@ -19806,6 +19984,100 @@ scenario(
         expect(summary).toContain(
           "implement Runs that reached a merge request without failing: 2 of 10 (20%).",
         );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "self-improve replays a window recorded before question measures without repeating its work",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        freshDay();
+        const runId = "r-retrospective-upgraded";
+        const input = { runs: "machine", improvements: 3 };
+        const improvements = Arr.map(["first", "second", "third"], (name) => ({
+          name,
+          keys: [name],
+          why: `Fix ${name}`,
+        }));
+        yield* rig.queueOutputs([
+          triaged(
+            Arr.map(improvements, ({ name }) => finding({ key: name })),
+            improvements,
+          ),
+        ]);
+        for (const { name } of improvements)
+          childWaits.set(`improvement-${name}`, Deferred.makeUnsafe<void>());
+        yield* running({ entry: shipped("self-improve"), runId, input, host: improving }, () =>
+          until(
+            () => Effect.sync(() => started.length),
+            (count) => count === 3,
+          ),
+        );
+        const before = { filed: [...filed], children: [...started] };
+        const promptsBefore = yield* agentPrompts();
+        expect(before.filed).toHaveLength(3);
+        expect(promptsBefore).toHaveLength(1);
+
+        // The window saved before 4c574c7d had no question measures or repeated findings,
+        // and its report's Runs had no questions or merge-request fields. Only this
+        // isolated test host's completed Activity reply is changed; its effects stay.
+        const saved = yield* session(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            yield* sql`UPDATE cluster_replies SET payload = json_set(
+              json_remove(payload, '$.value.exit.value.questions', '$.value.exit.value.repeated'),
+              '$.value.exit.value.report.runs',
+              json((SELECT json_group_array(json_remove(value, '$.questions', '$.mr', '$.merged'))
+                FROM json_each(json_extract(cluster_replies.payload, '$.value.exit.value.report.runs')))))
+              WHERE request_id IN (SELECT id FROM cluster_messages
+                WHERE tag = 'activity' AND json_extract(payload, '$.name') = 'window')`;
+            return yield* sql<{
+              since: string;
+              questions: string | null;
+              repeated: string | null;
+              runs: string;
+            }>`SELECT json_extract(payload, '$.value.exit.value.since') AS since,
+              json_type(payload, '$.value.exit.value.questions') AS questions,
+              json_type(payload, '$.value.exit.value.repeated') AS repeated,
+              json_extract(payload, '$.value.exit.value.report.runs') AS runs
+              FROM cluster_replies WHERE request_id IN (SELECT id FROM cluster_messages
+                WHERE tag = 'activity' AND json_extract(payload, '$.name') = 'window')`;
+          }).pipe(Effect.orDie),
+        );
+        expect(saved).toHaveLength(1);
+        expect(saved[0]!.questions).toBe(null);
+        expect(saved[0]!.repeated).toBe(null);
+        expect(saved[0]!.runs).not.toContain('"questions"');
+        expect(saved[0]!.runs).not.toContain('"mr"');
+        expect(saved[0]!.runs).not.toContain('"merged"');
+        childWaits.clear();
+        const frozen: HostOverride = Layer.effect(Host)(
+          Effect.gen(function* () {
+            const host = yield* Host;
+            return Host.of({
+              ...host,
+              report: () =>
+                Effect.fail(new WorkflowError({ reason: "the saved window must not be reread" })),
+            });
+          }),
+        ).pipe(Layer.provide(improving));
+        const result = yield* improved(runId, input, frozen);
+        expect(saidBy(result)).toContain(
+          "Filed 3, commented 0, refused 0; 3 Improvements, 0 failed",
+        );
+        expect(filed).toEqual(before.filed);
+        expect(commented).toEqual([]);
+        expect(started).toEqual(before.children);
+        expect(yield* agentPrompts()).toEqual(promptsBefore);
+        const summary = yield* readText(`${runDir(dir, runId)}/summary.md`);
+        expect(summary).toContain(saved[0]!.since);
+        expect(summary).toContain(
+          "Question measures were not recorded for this retrospective window.",
+        );
+        expect(summary).not.toContain("0 questions asked");
       }),
     ),
   120_000,
