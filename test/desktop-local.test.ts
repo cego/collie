@@ -5,11 +5,13 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
-import { homedir } from "node:os";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import {
   Config,
   Deferred,
   Effect,
+  Fiber,
   Option,
   Queue,
   Schedule,
@@ -21,6 +23,7 @@ import {
 import {
   type BoardMessage,
   type BoardSnapshot,
+  BRIDGE_READY,
   PROTOCOL,
   recordIn,
   type Toasted,
@@ -39,6 +42,7 @@ import {
   syncNow,
 } from "../desktop/src/bun/machine";
 import type { FlockItem } from "../desktop/src/shared/flock";
+import { TestClock } from "effect/testing";
 import { fastForward, suiteEnv } from "./support/effect";
 import { root, stopHost } from "./support/host";
 import { proves } from "./support/world";
@@ -490,6 +494,50 @@ test("a bridge starts in the home directory, never Desktop's app folder an updat
       expect(failed).toEqual({ state: "unreachable", reason: homedir() });
     }).pipe(Effect.scoped),
   ));
+
+test("a bridge waiting on an SSO login is not held to the readiness deadline, and one that never says it is ready is", () => {
+  const dir = mkdtempSync(`${tmpdir()}/collie-sso-`);
+  const go = `${dir}/go`;
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const heard = yield* Deferred.make<string>();
+      const signingIn = yield* openBridge(
+        [
+          "/bin/sh",
+          "-c",
+          `echo 'Waiting for SSO login for mk@vm-mk' >&2; until [ -e '${go}' ]; do sleep 0.05; done; echo ${BRIDGE_READY}; exec cat >/dev/null`,
+        ],
+        undefined,
+        (said) => Deferred.succeed(heard, said).pipe(Effect.asVoid),
+      ).pipe(Effect.forkScoped);
+      yield* Deferred.await(heard);
+      yield* TestClock.adjust("21 seconds");
+      writeFileSync(go, "");
+      yield* Fiber.join(signingIn);
+
+      const silent = yield* openBridge(["/bin/sh", "-c", "exec cat >/dev/null"]).pipe(
+        Effect.flip,
+        Effect.forkScoped,
+      );
+      const failed = yield* Fiber.join(silent).pipe(
+        Effect.raceFirst(
+          TestClock.adjust("21 seconds").pipe(
+            Effect.andThen(TestClock.withLive(Effect.sleep("50 millis"))),
+            Effect.forever,
+          ),
+        ),
+      );
+      expect(failed).toEqual({
+        state: "unreachable",
+        reason: "/bin/sh -c 'exec cat >/dev/null' did not become ready within 20 seconds",
+      });
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(TestClock.layer()),
+      Effect.ensuring(Effect.sync(() => rmSync(dir, { recursive: true }))),
+    ),
+  );
+});
 
 test("a Machine's build asks for an upgrade only where it is an older release, and for a newer Desktop only outside the window", () => {
   const at = (over: Partial<BoardSnapshot>) => ({ ...snapshot("vm"), ...over });

@@ -222,9 +222,14 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
     }),
   );
   let isReady = false;
+  let signingIn = false;
   const said = yield* stderrTail(child.stderr, (chunk, said) =>
     Effect.sync(() => process.stderr.write(chunk)).pipe(
-      Effect.andThen(!isReady && SSO.test(said) ? waitingOnSso(said) : Effect.void),
+      Effect.andThen(
+        !isReady && SSO.test(said)
+          ? Effect.sync(() => void (signingIn = true)).pipe(Effect.andThen(waitingOnSso(said)))
+          : Effect.void,
+      ),
     ),
   );
   const ready = Promise.withResolvers<void>();
@@ -300,16 +305,20 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
     ),
   );
   const closed = Effect.raceFirst(ended, Deferred.await(broken));
-  yield* Effect.raceFirst(
+  const started = Effect.raceFirst(
     Effect.promise(() => ready.promise),
     ended,
-  ).pipe(
+  );
+  yield* started.pipe(
     Effect.timeoutOrElse({
       duration: "20 seconds",
+      // An SSO login takes as long as its human does.
       orElse: () =>
-        Effect.fail(
-          unreachable(`${CommandLine.display(command)} did not become ready within 20 seconds`),
-        ),
+        signingIn
+          ? started
+          : Effect.fail(
+              unreachable(`${CommandLine.display(command)} did not become ready within 20 seconds`),
+            ),
     }),
   );
   return Object.assign(door, { closed });
