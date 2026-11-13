@@ -106,43 +106,52 @@ fn with_diff() -> Value {
 
 #[test]
 fn facts_list_each_offer_with_its_owner_and_refusal_even_while_details_are_loading() {
-    let harness = Harness::<App>::new();
-    let mut runtime = opened(&harness);
-    runtime.update(|app, _| {
-        let task = app
-            .machines
-            .iter_mut()
-            .filter(|machine| machine.machine.installation == "inst-build")
-            .flat_map(|machine| &mut machine.cards)
-            .find(|task| task.run == "r1")
+    for run in ["r1", "r-app", "r-api"] {
+        let harness = Harness::<App>::new();
+        let mut runtime = opened(&harness);
+        runtime.update(|app, _| {
+            let task = app
+                .machines
+                .iter_mut()
+                .filter(|machine| machine.machine.installation == "inst-build")
+                .flat_map(|machine| &mut machine.cards)
+                .find(|task| task.run == "r1")
+                .unwrap();
+            task.children = serde_json::from_value(json!([
+                {"repo": "app", "run": "r-app", "state": "done", "mr": null},
+                {"repo": "api", "run": "r-api", "state": "done", "mr": null}
+            ]))
             .unwrap();
-        task.offers = serde_json::from_value(json!([
-            {"id": "release", "title": "Release app!12", "run": "r-app"},
-            {"id": "stage", "title": "Stage api!7", "run": "r-api",
-                "unavailable": "a Stage is still going"}
-        ]))
-        .unwrap();
-        app.open_record("inst-build".into(), "r1".into(), "Build box".into(), None);
-    });
-    runtime.frame(100.0);
-    tap(&mut runtime, "tab-facts", 200.0);
-    for reading in [true, false] {
-        if !reading {
-            harness.fake.push("runDetail", Ok(detail(json!({}))));
-            settle(&mut runtime, &harness, 1000.0);
-        }
-        let offers = named(&runtime, "facts-offers");
-        let names: Vec<&str> = within(&offers)
-            .into_iter()
-            .filter_map(|node| node["name"].as_str())
-            .collect();
-        for expected in [
-            "Release app!12",
-            "r-app",
-            "Stage api!7",
-            "r-api — a Stage is still going",
-        ] {
-            assert!(names.contains(&expected), "missing {expected} in {names:?}");
+            task.offers = serde_json::from_value(json!([
+                {"id": "release", "title": "Release app!12", "run": "r-app"},
+                {"id": "stage", "title": "Stage api!7", "run": "r-api",
+                    "unavailable": "a Stage is still going"}
+            ]))
+            .unwrap();
+            app.open_record("inst-build".into(), run.into(), "Build box".into(), None);
+        });
+        runtime.frame(100.0);
+        tap(&mut runtime, "tab-facts", 200.0);
+        for reading in [true, false] {
+            if !reading {
+                harness
+                    .fake
+                    .push("runDetail", Ok(detail(json!({"id": run}))));
+                settle(&mut runtime, &harness, 1000.0);
+            }
+            let offers = named(&runtime, "facts-offers");
+            let names: Vec<&str> = within(&offers)
+                .into_iter()
+                .filter_map(|node| node["name"].as_str())
+                .collect();
+            for expected in [
+                "Release app!12",
+                "r-app",
+                "Stage api!7",
+                "r-api — a Stage is still going",
+            ] {
+                assert!(names.contains(&expected), "missing {expected} in {names:?}");
+            }
         }
     }
 }

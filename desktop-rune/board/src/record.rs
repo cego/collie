@@ -410,7 +410,14 @@ impl App {
             .iter()
             .filter(|m| m.machine.installation == record.installation)
             .flat_map(|m| &m.cards)
-            .find(|task| task.run == record.run || task.runs.contains(&record.run))
+            .find(|task| {
+                task.run == record.run
+                    || task.runs.contains(&record.run)
+                    || task
+                        .children
+                        .iter()
+                        .any(|child| child.run.as_deref() == Some(record.run.as_str()))
+            })
     }
 
     /// Whether the open record's Machine is reached; one the board does not list is taken as
