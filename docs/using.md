@@ -2202,6 +2202,11 @@ what Desktop starts, `collie` and herdr among it, still gets your `XDG_STATE_HOM
 
 ### The Flock chat
 
+After an update, a Machine may still be building its first board. Once its connection
+has answered with the host's identity, the Flock chat can read its workspaces, a Run
+named as `<machine>:<run>`, and its files without waiting for that board. The board
+continues to say it is connecting; writes and board actions wait for its live snapshot.
+
 Right of the board is a conversation about the whole Flock, 32rem wide but never more than
 40% of the window. It follows what arrives while you are near the bottom, and stays where
 you are once you scroll up. Ask what is happening anywhere
