@@ -4877,20 +4877,20 @@ export const hostLayer = (options: {
           under(
             Effect.gen(function* () {
               const own = yield* treeOf(yield* store.run(runId), runId, dir);
-              const parent = yield* fs
-                .readFileString(`${runDir(dir, runId)}/recovery-parent`)
-                .pipe(Effect.orElseSucceed(() => ""));
-              const prior =
-                parent === ""
-                  ? []
-                  : yield* readVerifications(evidenceDir(dir, parent)).pipe(
-                      Effect.orElseSucceed((): ReadonlyArray<Verification> => []),
-                    );
+              const lineage: string[] = [];
+              let from = runId;
+              while (from !== "" && !lineage.includes(from)) {
+                lineage.unshift(from);
+                from = yield* fs
+                  .readFileString(`${runDir(dir, from)}/recovery-parent`)
+                  .pipe(Effect.orElseSucceed(() => ""));
+              }
               return yield* Effect.all({
-                verifications: readVerifications(evidenceDir(dir, runId)).pipe(
-                  Effect.orElseSucceed((): ReadonlyArray<Verification> => []),
-                  Effect.map((own) => [...prior, ...own]),
-                ),
+                verifications: Effect.forEach(lineage, (from) =>
+                  readVerifications(evidenceDir(dir, from)).pipe(
+                    Effect.orElseSucceed((): ReadonlyArray<Verification> => []),
+                  ),
+                ).pipe(Effect.map(Arr.flatten)),
                 final: fingerprint(cwd),
                 commands: Effect.forEach(yield* approvedOf(dir, runId), (spec) =>
                   commandOf({ ...own, cwd }, spec),

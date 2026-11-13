@@ -83,6 +83,7 @@ import {
   Host,
   Run,
   WorkflowError,
+  evidenceGapsOf,
   type ActionFacts,
   type ChildAsk,
   type Claimed,
@@ -3572,6 +3573,74 @@ const recoveredRun = (runId: string, input: Readonly<Record<string, Schema.Json>
       return yield* ended(run.status);
     }),
   );
+
+scenario("repeated recovery retains the original bug reproduction without changing its proof", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* repository();
+      const fs = yield* FileSystem.FileSystem;
+      const original = "r-evidence-original";
+      const parent = "r-evidence-parent";
+      const current = "r-evidence-current";
+      const spec = {
+        name: "regression",
+        executable: "test",
+        argv: ["-f", "fixed"],
+        cwd: rig.projectDir,
+      };
+      const red = yield* collect(evidenceDir(dir, original), {
+        ...spec,
+        run: original,
+        by: "agent",
+        expect: "fail",
+      });
+      yield* collect(evidenceDir(dir, "r-unrelated"), {
+        ...spec,
+        run: "r-unrelated",
+        by: "agent",
+        expect: "fail",
+      });
+      yield* fs.writeFileString(`${rig.projectDir}/fixed`, "fixed\n");
+      const middle = yield* collect(evidenceDir(dir, parent), {
+        ...spec,
+        run: parent,
+        by: "agent",
+      });
+      const green = yield* collect(evidenceDir(dir, current), {
+        ...spec,
+        run: current,
+        by: "agent",
+      });
+      for (const [child, from] of [
+        [current, parent],
+        [parent, original],
+      ] as const) {
+        yield* fs.makeDirectory(runDir(dir, child), { recursive: true });
+        yield* fs.writeFileString(`${runDir(dir, child)}/recovery-parent`, from);
+      }
+      yield* fs.writeFileString(`${evidenceDir(dir, current)}/approved.json`, asApproved([spec]));
+      const evidence = session(
+        Effect.flatMap(Host, (host) => host.evidence(current, rig.projectDir)),
+      );
+      const collected = yield* evidence;
+      expect(collected.verifications).toEqual([red, middle, green]);
+      expect(
+        evidenceGapsOf({
+          kind: "bug",
+          evidence: collected,
+          approved: [spec],
+          outputs: { build: { reproduced: "regression" } },
+          reviewed: [],
+          roots: [],
+          tickets: [],
+        }),
+      ).toEqual([]);
+      yield* fs.makeDirectory(runDir(dir, original), { recursive: true });
+      yield* fs.writeFileString(`${runDir(dir, original)}/recovery-parent`, current);
+      expect((yield* evidence).verifications).toEqual([red, middle, green]);
+    }),
+  ),
+);
 
 for (const feature of [false, true])
   scenario(
@@ -12582,7 +12651,6 @@ const ciRepair = (
   };
 };
 
-/** A release fixer's plain push after merging the named target into its current source checkout. */
 const conflictRepair = (
   forge: { readonly holding: (next: ForgeModel) => { path: string; text: string } },
   model: ForgeModel,

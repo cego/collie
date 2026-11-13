@@ -145,6 +145,9 @@ The host reads the facts again when you take the offer. A clean checkout behind 
 pushed branch fast-forwards; divergent history or unpublished work refuses that checkout
 change. Changed requirements, head, outcome, or target require review again. Checks still
 prove the current revision, and delivery updates the branch's existing merge request.
+Repeated recoveries retain verification records from the full chain of established
+recoveries, including the original bug reproduction. Each record keeps its Run and
+revision; a passing check still has to match the current tree.
 The parent keeps its terminal status and finishing revision
 ([ADR-draft-a-finished-delivery-names-the-way-back-to-work](adr/draft-a-finished-delivery-names-the-way-back-to-work.md)).
 
