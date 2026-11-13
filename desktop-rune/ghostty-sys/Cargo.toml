@@ -1,0 +1,11 @@
+[package]
+name = "ghostty-sys"
+version = "0.0.0"
+description = "Generated bindings to libghostty-vt, built from vendor/ghostty"
+edition.workspace = true
+license = "MIT AND Apache-2.0"
+publish.workspace = true
+links = "ghostty-vt"
+
+[build-dependencies]
+bindgen = "0.72"

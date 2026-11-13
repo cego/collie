@@ -732,12 +732,14 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly _tag: "Ready"; readonly head: string; readonly approvers: ReadonlyArray<string> }
     | { readonly _tag: "Unanswered"; readonly head: string; readonly comments: ReadonlyArray<OpenComment>; readonly approvers?: ReadonlyArray<string> }
     | { readonly _tag: "Moved"; readonly head: string }
+    | { readonly _tag: "Conflicting"; readonly head: string }
     | { readonly _tag: "Merged"; readonly sha: string; readonly by: string; readonly at: string }
     | { readonly _tag: "Closed" }
     | { readonly _tag: "Held" }
     | { readonly _tag: "Waiting"; readonly why: ReadonlyArray<string>; readonly approvers?: ReadonlyArray<string> }
     | { readonly _tag: "Unreadable"; readonly reason: string };
   export const ReviewStandingSchema: Schema.Codec<ReviewStanding, unknown, never, never>;
+  export const CONFLICTS: string;
   /** Whether a standing is still waiting on a teammate's approval, among whatever else. */
   export function waitsOnApproval(standing: ReviewStanding): boolean;
 
@@ -1159,6 +1161,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
        * Stop ends it.
        */
       readonly whileConflicting?: boolean;
+      /** Return a confirmed target conflict at its current head for repair. */
+      readonly returnConflicts?: boolean;
     }) => Effect.Effect<ReviewStanding, WorkflowError>;
     /**
      * One read of whether the Changes the ticket at \`ticket\` names on its **Needs merged:** line
@@ -1198,6 +1202,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly runId: string;
       readonly cwd: string;
       readonly head: string;
+      /** Where supplied, require this source branch before moving the checkout. */
+      readonly branch?: string;
     }) => Effect.Effect<FastForward>;
     /** Reads \`tag\` back from origin and the forge against what it must prove. Take it inside an Activity. */
     readonly readTag: (options: {
@@ -2050,6 +2056,16 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** Whether a blocking finding says where and why, so it can be acted on. */
   export function substantiated(finding: Finding): boolean;
   export function unsubstantiated(findings: ReadonlyArray<Finding>): string | null;
+  /** Disputes the review has neither confirmed fixed nor withdrawn with a reason. */
+  export function remainingDisputes(
+    disputed: ReadonlyArray<Finding>,
+    review: {
+      readonly findings: ReadonlyArray<Finding>;
+      readonly disputed: ReadonlyArray<Finding>;
+      readonly dropped: ReadonlyArray<Finding>;
+      readonly fixed: ReadonlyArray<Fixed>;
+    },
+  ): Finding[];
   /** A finding the implementer already rejected stops driving the loop. */
   export function splitDisputed(
     findings: ReadonlyArray<Finding>,
@@ -4395,6 +4411,7 @@ export const hostLayer = (options: {
         readonly cwd: string;
         readonly proved: string;
         readonly seen: ReadonlyArray<string>;
+        readonly returnConflicts?: boolean;
       }) =>
         Effect.gen(function* () {
           const mr = yield* mergeRequestOf(fs, dir, asked.runId);
@@ -5296,6 +5313,7 @@ export const hostLayer = (options: {
               for (;;) {
                 const { mr, read, standing } = yield* reviewRead(asked);
                 const wait = reviewWaitOf(mr, read);
+                if (standing._tag === "Conflicting") return standing;
                 if (asked.whileConflicting === true) {
                   const conflicting =
                     read.ok && read.state === "open" && conflictsWithTarget(read.mergeable);
@@ -5409,6 +5427,7 @@ export const hostLayer = (options: {
               runDir: runDir(dir, asked.runId),
               cwd: asked.cwd,
               head: asked.head,
+              branch: asked.branch,
               run: runShell,
             }),
           ).pipe(Effect.orDie),

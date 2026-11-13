@@ -140,6 +140,12 @@ Arbitrary edits to a module have no seamless-resume guarantee. Adding an Activit
 one that has already completed changes what replay matches; a run in flight is best
 finished before that kind of edit, and a new one started after it.
 
+A completed Activity's saved result must still decode under its current `success` schema.
+When adding a field, keep it optional for saved results that predate it and handle its
+absence explicitly. Missing historical measurements are unknown, not zero. Keep the
+Activity's name and result: changing its name to bypass a decoding failure repeats its
+effects. Cover such changes by replaying a saved result in the earlier shape.
+
 ## Services
 
 A service of your own is an ordinary `Context.Service`, and your definition's `layer`
@@ -908,9 +914,13 @@ repair, as the release's re-reading of a go does. With `whileConflicting: true` 
 only while the forge says the merge request conflicts with its target branch, parked as Needs
 you with the line that says its branch must take the target, and returns the standing at
 `proved` as soon as the forge no longer says so, the merge request is merged or closed, or a
-Hold or Stop ends it (`Held`). A head pushed while it still conflicts keeps it waiting. The
-release takes it before it proves a head and when a check left to CI finds the conflict. Take either inside an Activity, and suspend on `Held`
-there, so a resume waits again.
+Hold or Stop ends it (`Held`). A head pushed while it still conflicts keeps it waiting.
+With `returnConflicts: true`, a confirmed target conflict instead returns `Conflicting`
+with its current `head`, before `Moved` or `Unanswered`, including when combined with
+`whileConflicting`. Unknown mergeability and other forge blocks retain their ordinary
+waiting behavior. Release uses this option to repair a conflict before proving the pushed
+head and asking a fresh go. Take either inside an Activity, and suspend on `Held` there,
+so a resume waits again.
 
 `host.prerequisites({ runId, cwd, ticket })` reads the ticket file at `ticket` again, and
 asks once whether every Change its `**Needs merged:**` line names has landed. It answers a
@@ -958,7 +968,8 @@ the next round: a `fixed` answer counts only where the head carries its commit.
 `head`, writing the move to the Run's log. It answers `At` with the `head` and where it
 moved `from`, or `Refused` with `why`: a checkout with uncommitted changes, a head origin
 lacks, or one that does not fast-forward, as after a force push. Nothing is reset or
-discarded.
+discarded. With optional `branch`, it refuses a detached checkout or a different source
+branch before moving anything, even when already at `head`.
 
 `host.readTag({ runId, cwd, tag, merged, pipeline, proves, stage, production })` reads a
 tag back from origin and the forge rather than from an Output, against what it must prove.
@@ -1388,10 +1399,15 @@ name rather than its place.
 
 ## Reviewing and fixing, until it converges
 
-A review/fix rally is a loop you write, over three functions every workflow shares. There
+A review/fix rally is a loop you write, over functions every workflow shares. There
 is no repeat declaration, no scheduler and no second reading of when a loop is done: every
-rally converges, stands on a dispute and runs out of rounds where these three decide.
+rally converges, stands on a dispute and runs out of rounds where these decide.
 
+- **`remainingDisputes(disputed, review)`** — keep carried disputes unless the review
+  explicitly confirms them `fixed` or withdraws them under `dropped` with a reason.
+  Matching uses file and title. A finding still in the review's `findings` or `disputed`
+  stays unresolved, even if also listed as resolved. A clean verdict or omission clears
+  nothing. Assign the returned list before splitting and settling the round.
 - **`splitDisputed(findings, disputed)`** — what is still the implementer's. A finding the
   implementer already rejected with a reason stops driving the loop; a reviewer who answers
   that reason with a `rebuttal` puts it back.
