@@ -75,7 +75,15 @@ import { HOLD, STOP, controlPath, controlSet } from "./controls";
 import manifest from "../herdr-plugin.toml";
 import { Agents } from "./agents";
 import * as Sdk from "./sdk";
-import { recoveryFrom, reviewScope, recordReview, sourceEvidence, takePushed } from "./recovery";
+import {
+  ConsumedCard,
+  consumedCard,
+  recoveryFrom,
+  reviewScope,
+  recordReview,
+  sourceEvidence,
+  takePushed,
+} from "./recovery";
 import {
   Children,
   Host,
@@ -4890,23 +4898,23 @@ export const hostLayer = (options: {
               const parent = yield* fs
                 .readFileString(`${runDir(dir, runId)}/recovery-parent`)
                 .pipe(Effect.orElseSucceed(() => ""));
-              const source = row?.parent == null ? null : yield* store.run(row.parent);
+              const consumed =
+                row === null
+                  ? undefined
+                  : Option.getOrUndefined(decodePlacing(row.placing ?? ""))?.continues;
               const prior =
                 parent !== ""
                   ? yield* readVerifications(evidenceDir(dir, parent)).pipe(
                       Effect.orElseSucceed((): ReadonlyArray<Verification> => []),
                     )
-                  : row !== null &&
-                      source !== null &&
-                      source.workflow === row.workflow &&
-                      source.task === row.task
-                    ? yield* sourceEvidence({
+                  : consumed === undefined
+                    ? []
+                    : yield* sourceEvidence({
                         cwd,
-                        admitted: row.admitted,
-                        sourceDir: runDir(dir, source.run),
-                        sourceEvidence: evidenceDir(dir, source.run),
-                      })
-                    : [];
+                        consumed,
+                        sourceDir: runDir(dir, consumed.run),
+                        sourceEvidence: evidenceDir(dir, consumed.run),
+                      });
               return yield* Effect.all({
                 verifications: readVerifications(evidenceDir(dir, runId)).pipe(
                   Effect.orElseSucceed((): ReadonlyArray<Verification> => []),
@@ -6291,6 +6299,8 @@ const Placing = Schema.Struct({
   root: Schema.optionalKey(Schema.NullOr(Schema.String)),
   workspace: Schema.optionalKey(Schema.NullOr(Schema.String)),
   checkout: Schema.optionalKey(Schema.NullOr(Cut)),
+  /** The source's final card a follow-up of the same work was admitted from. */
+  continues: Schema.optionalKey(ConsumedCard),
 });
 type Placing = typeof Placing.Type;
 const PlacingJson = Schema.fromJsonString(Placing);
@@ -6909,6 +6919,8 @@ export interface StartOptions {
   /** A new Task to open for it, under this label, on the checkout it is given. */
   readonly taskLabel?: string | undefined;
   readonly parent?: string | null;
+  /** The parent's final card this follow-up carries the same work on from. */
+  readonly continues?: ConsumedCard | undefined;
   /** What the front door knows of the Run's Intent. */
   readonly intent?: IntentSeed;
   /** The approved set given with the start, over the project's and the user's files. */
@@ -9379,6 +9391,7 @@ const makeRegistry: (
         from: request.kind === "existing" ? request.path : options.project,
         taskLabel: options.taskLabel ?? null,
         root: options.root ?? null,
+        ...(options.continues !== undefined && { continues: options.continues }),
       }),
       generation: generation.name,
       execution: yield* generation.registration.workflow.executionId(payload),
@@ -9742,9 +9755,23 @@ const makeRegistry: (
           if (previous.risks !== undefined) carried.risks = previous.risks;
         }
       }
+      const startedWith: Readonly<Record<string, Schema.Json>> = input;
+      const carriedWork = Arr.filter(
+        Rec.keys(offer.inputs),
+        (name) => offer.inputs[name] === "started-with",
+      );
+      const sameWork =
+        offer.kind === "follow-up" &&
+        offer.workflow === generation.id &&
+        carriedWork.length > 0 &&
+        Arr.every(
+          carriedWork,
+          (name) => JSON.stringify(filled[name]) === JSON.stringify(startedWith[name]),
+        );
       // The offer's own workflow settles what it was given, so arguments it will not
       // take are refused here and nothing is started.
       return yield* startWork({
+        continues: sameWork ? yield* consumedCard(row.run, where) : undefined,
         generation: starting,
         request: options.request,
         project: row.project,

@@ -1,7 +1,3 @@
-// A follow-up started fresh, with no recovery, carries on its source's work: the evidence
-// collector reads the source's own verification records, unchanged, where that work is
-// still what the follow-up is on.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
@@ -17,7 +13,7 @@ const Ran = Schema.Struct({ verification: Schema.Struct({ id: Schema.String }) }
 const Started = Schema.Struct({ run: Schema.String });
 
 test(
-  "a recovery-empty follow-up collects the source's genuine records on its work, and none on rewritten history",
+  "a recovery-empty follow-up collects the source's pre-fix records on the card it consumed, and none for other work, a post-fix replay or rewritten history",
   () =>
     proves(
       "collie-source-evidence-",
@@ -44,14 +40,14 @@ test(
               project: world.project,
               id: "carried",
               request: "source",
-              input: { text: "source" },
+              input: { text: "the work", wait: "yes" },
             })
             .pipe(Effect.orDie);
           yield* until(
             () => client.run({ runId: source }).pipe(Effect.orDie),
             (view) => (view?.waiting.length ?? 0) > 0,
           );
-          const verify = (name: string, executable: string, expecting: ReadonlyArray<string>) =>
+          const verify = (name: string, rest: ReadonlyArray<string>) =>
             Effect.gen(function* () {
               const ran = yield* collie(world, [
                 "verify",
@@ -61,18 +57,21 @@ test(
                 world.project,
                 "--name",
                 name,
-                ...expecting,
-                "--",
-                executable,
+                ...rest,
               ]);
               expect(ran.envelope.error).toBeUndefined();
               return (yield* Schema.decodeUnknownEffect(Ran)(ran.envelope.data).pipe(Effect.orDie))
                 .verification.id;
             });
-          const red = yield* verify("regression", "/bin/false", ["--expect", "fail"]);
+          const fixed = `${world.home}/fixed`;
+          const regression = ["/usr/bin/test", "-e", fixed] as const;
+          const red = yield* verify("regression", ["--expect", "fail", "--", ...regression]);
           yield* commit("fix.txt", "the fix");
-          const replayed = yield* verify("regression", "/bin/false", ["--expect", "fail"]);
-          const green = yield* verify("regression", "/bin/true", []);
+          yield* fs.writeFileString(fixed, "").pipe(Effect.orDie);
+          const green = yield* verify("regression", ["--", ...regression]);
+          yield* fs.remove(fixed).pipe(Effect.orDie);
+          const replayed = yield* verify("regression", ["--expect", "fail", "--", ...regression]);
+          yield* commit("notes.md", "the notes");
           yield* client
             .answer({ runId: source, decision: "done", value: "yes", request: "done" })
             .pipe(Effect.orDie);
@@ -80,19 +79,18 @@ test(
             () => client.run({ runId: source }).pipe(Effect.orDie),
             (view) => view?.status.status === "complete",
           );
-          const late = yield* verify("late", "/bin/true", []);
+          const late = yield* verify("late", ["--", "/bin/true"]);
           const sourced = yield* readVerifications(evidenceDir(world.state, source)).pipe(
             Effect.orDie,
           );
-          const followUp = (request: string) =>
+          const followUp = (request: string, input: ReadonlyArray<string> = []) =>
             Effect.gen(function* () {
               const started = yield* collie(world, [
                 "run",
                 "action",
                 source,
                 "again",
-                "--input",
-                "text=carry on",
+                ...input,
                 "--request-id",
                 request,
               ]);
@@ -107,6 +105,7 @@ test(
               return done?.status.status === "complete" ? done.status.value : null;
             });
 
+          expect(yield* followUp("other", ["--input", "text=other work"])).toEqual([]);
           expect(yield* followUp("carry")).toEqual([red, green]);
           expect(Arr.map(sourced, (one) => one.id)).toEqual(
             expect.arrayContaining([replayed, late]),

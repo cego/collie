@@ -5,7 +5,7 @@ import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { defaultBase, classifyWorkSource } from "./inputs";
 import { readIntent } from "./intent";
 import { isBlocking, SynthesisSchema, FindingSchema } from "./output";
-import { readVerifications, sameTree, treeOf } from "./verify";
+import { readVerifications, sameAsked, sameTree, treeOf, type Verification } from "./verify";
 import { appendJournal, readJournalWhole } from "./journal";
 import { readCards, readFinalCard } from "./cards";
 import { shell } from "./mr";
@@ -327,23 +327,56 @@ export const branchMovement = Effect.fn("Recovery.branchMovement")(function* (ru
   return `Pushed branch: ${n} commit${n === "1" ? "" : "s"} past ${finished}, now ${head}.${run.state === "failed" ? " The failed record is stale." : " The succeeded record describes the earlier head."}`;
 });
 
+/** The card a follow-up continues from, bound when it is admitted. */
+export const ConsumedCard = Schema.Struct({
+  run: Schema.String,
+  card: Schema.String,
+  head_sha: Schema.String,
+  fingerprint: Schema.String,
+});
+export type ConsumedCard = typeof ConsumedCard.Type;
+
+/** The last final card `run` wrote, as a follow-up admitted now consumes it. */
+export const consumedCard = Effect.fn("Recovery.consumedCard")(function* (
+  run: string,
+  runDir: string,
+) {
+  const card = Arr.findLast(
+    yield* readCards(runDir).pipe(Effect.orElseSucceed(() => [])),
+    (one) => one.kind === "final",
+  );
+  return card._tag === "None"
+    ? undefined
+    : {
+        run,
+        card: card.value.id,
+        head_sha: card.value.revision.head_sha,
+        fingerprint: card.value.revision.fingerprint,
+      };
+});
+
 /**
- * The verifications a follow-up's source listed on its last final card before the
- * follow-up was admitted, unchanged, where the follow-up's checkout still carries that
- * card's work on its branch. A failure recorded on the card's own head is left out: it ran
- * after that work, so it cannot show the failure before it.
+ * The verifications the consumed card listed, unchanged, where that card is unaltered and
+ * the follow-up's checkout still carries its work on its branch. A failure is left out
+ * where it ran on the card's own head, or where the same command had already passed at or
+ * before its commit: either ran after the fix, so it cannot show the failure before it.
  */
 export const sourceEvidence = Effect.fn("Recovery.sourceEvidence")(function* (options: {
   readonly cwd: string;
-  readonly admitted: string;
+  readonly consumed: ConsumedCard;
   readonly sourceDir: string;
   readonly sourceEvidence: string;
 }) {
-  const card = Arr.findLast(
+  const card = Arr.findFirst(
     yield* readCards(options.sourceDir).pipe(Effect.orElseSucceed(() => [])),
-    (one) => one.kind === "final" && one.at <= options.admitted,
+    (one) => one.kind === "final" && one.id === options.consumed.card,
   );
-  if (card._tag === "None") return [];
+  if (
+    card._tag === "None" ||
+    card.value.revision.head_sha !== options.consumed.head_sha ||
+    card.value.revision.fingerprint !== options.consumed.fingerprint
+  )
+    return [];
   const head = card.value.revision.head_sha;
   const contains = (ancestor: string, of: string) =>
     Effect.map(
@@ -354,15 +387,36 @@ export const sourceEvidence = Effect.fn("Recovery.sourceEvidence")(function* (op
   if (tree.branch !== card.value.revision.branch || !(yield* contains(head, tree.head_sha)))
     return [];
   const listed = new Map(Arr.map(card.value.verifications, (one) => [one.id, one.name]));
-  return yield* Effect.filter(
-    yield* readVerifications(options.sourceEvidence).pipe(Effect.orElseSucceed(() => [])),
-    (one) =>
-      listed.get(one.id) !== one.name
-        ? Effect.succeed(false)
-        : one.expect !== "fail"
-          ? Effect.succeed(true)
-          : one.start.head_sha === head
-            ? Effect.succeed(false)
-            : contains(one.start.head_sha, head),
+  const recorded = yield* readVerifications(options.sourceEvidence).pipe(
+    Effect.orElseSucceed(() => []),
+  );
+  const fixedBefore = (red: Verification, at: number) =>
+    Effect.map(
+      Effect.findFirst(
+        Arr.filter(
+          Arr.take(recorded, at),
+          (one) => one.expect === "pass" && one.result === "pass" && sameAsked(one, red),
+        ),
+        (green) => contains(green.start.head_sha, red.start.head_sha),
+      ),
+      (found) => found._tag === "Some",
+    );
+  return Arr.map(
+    yield* Effect.filter(
+      Arr.map(recorded, (one, at) => [one, at] as const),
+      ([one, at]) =>
+        listed.get(one.id) !== one.name
+          ? Effect.succeed(false)
+          : one.expect !== "fail"
+            ? Effect.succeed(true)
+            : one.start.head_sha === head
+              ? Effect.succeed(false)
+              : Effect.zipWith(
+                  contains(one.start.head_sha, head),
+                  fixedBefore(one, at),
+                  (before, fixed) => before && !fixed,
+                ),
+    ),
+    ([one]) => one,
   );
 });

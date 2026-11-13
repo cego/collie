@@ -1510,13 +1510,16 @@ evidence a merge request is written from.
 
 A follow-up started with `recovery=` empty still carries on its source's work, so its
 evidence includes the source's own verification records, unchanged, where they are that
-work's: the follow-up is the same workflow in the same Task, its checkout is on the branch
-of the source's last final card before the follow-up started, and that card's head is in its
-history. Only the records that card lists are taken, and a `--expect fail` among them only
-where it was recorded on a commit before the card's head: a failure recorded on that head
-ran after the work it would have to show failing. Rewritten history, another branch, or a
-record made after that card collects nothing, and no record is renamed, so one named
-anything but `regression` still does not prove a `bug`.
+work's. Its admission binds the source's last final card, and only when the follow-up is
+the same workflow carrying every input its offer fills from what the source was started
+with, unchanged: a follow-up given other work binds nothing. The collector then takes only
+the records that bound card lists, and only while the card is unaltered, the follow-up's
+checkout is on its branch and its head is in that checkout's history. A `--expect fail`
+among them counts only where it was recorded on a commit before the card's head, and before
+the same command had passed on that commit or an earlier one: a failure recorded after the
+fix cannot show the failure before it. Rewritten history or another branch collects
+nothing, and no record is renamed, so one named anything but `regression` still does not
+prove a `bug`.
 
 A reference inside the run is under its own directory or its checkout, or, for a run given
 another Run's own plan directory, under that Run's directory, where its handoffs are.
