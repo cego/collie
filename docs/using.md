@@ -4093,9 +4093,16 @@ when its recorded limits reset, or when a reading no more than five minutes old 
 account, taken after it ran out, shows those
 limits in a later window with room. The old agent is stopped before its replacement starts
 on the same work. Missing or unreadable readings, and a healthier reading of the same
-window, do not erase the earlier exhaustion. Runs recorded before this recovery metadata
-was added can still recover at their recorded reset time; no observation time is invented
-when they replay.
+window, do not erase the earlier exhaustion.
+
+Older incidents without an observation time can recover at their recorded reset, or get
+one retry from fresh current capacity: a successful reading for a known current account,
+with every applicable window healthy and at least one reset later than the saved reset.
+That permits a bounded retry; it does not prove which old account or window recovered.
+If the replacement exhausts its quota, its newly recorded observation prevents another
+such retry, even when its usage source is unreadable. Ambiguous, stale or incomplete
+readings and old incidents without a known reset keep waiting. Replay invents no past
+observation time and does not repeat a recorded launch.
 
 While that wait is active, a dead server or a lost core terminal does not restart the
 exhausted agent. Recovery still starts agents on other Subscriptions. If a tool writes valid
