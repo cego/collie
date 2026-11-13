@@ -1,6 +1,6 @@
 // Pair a long Run's Step history through the same duration recording API as the host.
 import { strict as assert } from "node:assert";
-import { DateTime, Effect, FileSystem, Schema } from "effect";
+import { Console, DateTime, Effect, FileSystem, Schema } from "effect";
 import { platformLayer } from "../src/platform";
 import { rememberStepDurations, usualStepTimes } from "../src/step-durations";
 import type { StepLine } from "../src/steps";
@@ -27,7 +27,7 @@ for (let n = 0; n < 10_000; n++) {
   );
 }
 
-const result = await Effect.runPromise(
+await Effect.runPromise(
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-duration-bench-" });
@@ -36,10 +36,11 @@ const result = await Effect.runPromise(
     const times = yield* usualStepTimes(dir, "bench");
     assert.equal(times.size, 8);
     for (const ms of times.values()) assert.equal(ms, 1000);
-    return yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
-      steps: lines.length / 2,
-      medians: times.size,
-    });
+    yield* Console.log(
+      yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+        steps: lines.length / 2,
+        medians: times.size,
+      }),
+    );
   }).pipe(Effect.scoped, Effect.provide(platformLayer)),
 );
-console.log(result);
