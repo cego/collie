@@ -1689,7 +1689,7 @@ test("a managed Codex server's late Output during retirement prevents rebuilding
   ));
 
 test("a reused managed Codex server dying just before delivery is replaced without parking", () =>
-  runLive(
+  runEffect(
     Effect.gen(function* () {
       const managed = yield* managedCodex;
       class DiesBeforeDelivery extends FakeHerdr {
