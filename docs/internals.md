@@ -1106,8 +1106,8 @@ These calls go to the forge in-process through the [`forges`](https://forges.lin
 pinned to one exact version, rather than through `gh` or `glab`
 ([ADR-draft-a-forge-is-asked-over-http-with-its-clis-login](adr/draft-a-forge-is-asked-over-http-with-its-clis-login.md)):
 
-- The CI job reads a check left to CI is proved by: `job`, `baseJob`, `retryJob` and
-  `runStatus`. Each sends the REST requests its CLI sent, a merge request's head included.
+- The CI job reads a check left to CI is proved by: `job`, `baseJob`, `targetJob`,
+  `retryJob` and `runStatus`. Each sends the REST requests its CLI sent, a merge request's head included.
   On GitHub a job's id is its Actions run and job, `<run>/<job>`, read from the check
   run's URL. `retryJob` reruns that run's failed jobs (`rerun-failed-jobs`), and `jobLog`
   is `gh run view <run> --log-failed`. A gate job, such as Collie's own `test`, needs the
@@ -1132,7 +1132,7 @@ pinned to one exact version, rather than through `gh` or `glab`
   read to the end; GitHub's issues exclude pull requests.
 - Review reads, replies, merging and release reads: `readReview`, `reply`, `merge`,
   `deployed`, `tagPipeline` and `pipeline`. They keep their REST routes; GitHub reads the
-  pull request, review threads and default merge method through GraphQL. Comments,
+  pull request, review threads, default merge method and merge queue through GraphQL. Comments,
   reviews, threads, deployments and pipeline jobs are read to the end. A failed merge is
   read back to distinguish one that landed, a moved head and a refusal; a timeout,
   network failure or 5xx never resends the merge.
@@ -1308,6 +1308,36 @@ PATH, and HTTP served on loopback for host-driven tests, all answering from the 
 contract against both. `test/forge-boundary.test.ts` fails on a `glab` or `gh` invocation
 in `src/` or `workflows/` outside its adapter, and on workflow content that names either; its
 allowlist names each file that still does, with the ticket that moves it.
+
+### Merging through a merge queue
+
+Where a pull request's base branch has a merge queue, which GraphQL's
+`repository.mergeQueue(branch:)` reports, the GitHub adapter's `merge` does not call REST's
+merge. It calls `enqueuePullRequest` with `expectedHeadOid` set to the head it was asked to
+merge, unless the pull request is already in the queue at that head, as after a host
+restart. It then reads the pull request every 30 s for up to two hours, Collie's CI bound.
+A merge the queue made at that head answers `Merged` with the queue's merge commit, and any
+other merge answers `AlreadyMerged`; a pull request the queue removed answers `Refused` with
+the reason of its latest `RemovedFromMergeQueueEvent`; a moved head answers `HeadMoved`. One
+still queued after two hours is dequeued and refused as timed out, so nothing merges while
+no Run waits on it. Where GitHub refuses the dequeue, the adapter asks again at every read
+and answers only once the pull request is out of the queue or merged. GitHub attributes a
+queue's merge to `github-merge-queue`, and a GitHub landing attempt left while queued
+settles as landed when that login merged it at the attempted head. A repository without a queue merges
+through REST as before, and GitLab's merge is unchanged.
+
+Collie's own master is meant to require its queue, by the ruleset in
+`.github/rulesets/master.json`: a merge queue squashing as master's history does, and the
+CI gate `test` as its required check, which `ci.yml` also runs on every merge group. Apply
+it with
+
+```sh
+gh api -X POST repos/cego/collie/rulesets --input .github/rulesets/master.json
+```
+
+only once a Collie release carrying the queued merge is installed on every Machine that
+releases cego/collie. Release runs on the installed Collie, and an older one's REST merge
+cannot land a head on a branch that requires a queue.
 
 ## Definitions and layers
 

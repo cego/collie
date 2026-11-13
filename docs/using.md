@@ -709,7 +709,9 @@ carrying a deploy: it stays under Working and says what it waits for and on whom
 nothing in News. Once such a wait outlasts its patience — 2 hours where nobody acts, 2 days
 where a person does — it parks, and the card goes to Needs you. A parked card carries one
 more line naming its [**Park cause**](../CONTEXT.md) and what that cause lets Collie do —
-`Parked: ci-job-absent · Collie rechecks`, or `· needs you` — and the drawer's **parked**
+`Parked: ci-job-absent · Collie rechecks`,
+`Parked: target-red · Collie rechecks` for a CI failure its target branch shares too,
+or `· needs you` — and the drawer's **parked**
 section adds why a person is needed; `collie run show` gives the same as `park` with its
 `cause` and `kind`. Recheck parks stay quiet while Collie checks their facts and resumes
 those whose cause clears. After three automatic tries for the same cause, another park

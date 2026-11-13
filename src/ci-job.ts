@@ -7,13 +7,14 @@ import { Clock, Duration, Effect, FileSystem } from "effect";
 import { mrRefOf } from "./board-model";
 import { checkProof } from "./check-proof";
 import { forgeOf, type JobState } from "./forge/forge";
+import type { MrRef } from "./board-model";
 import { noteVerification } from "./metrics";
 import { shell, type Runner } from "./mr";
 import { appendLog } from "./oversight";
 import { conflictsWithTarget } from "./review-wait";
 import { epochMs, nowIso } from "./time";
 import { rememberCiTarget } from "./park-recheck";
-import { branchChange, ownTests, type BranchChange } from "./own-tests";
+import { branchChange, ownTests, type BranchChange, type FailedTest } from "./own-tests";
 import {
   appendVerification,
   encodeVerifying,
@@ -44,11 +45,121 @@ export type CiJob =
       readonly url: string | null;
       /** The command that prints its log, where there is such a job. */
       readonly log: string | null;
-      /** It failed where the branch leaves its target too: not this Run's to fix. */
-      readonly before?: { readonly at: string; readonly url: string | null };
+      /**
+       * It failed where the branch leaves its target too, or with `branch` on that target
+       * branch's newest commit: not this Run's to fix.
+       */
+      readonly before?: {
+        readonly at: string;
+        readonly url: string | null;
+        readonly branch?: string;
+      };
       /** Missing because the merge request conflicts with its target branch. */
       readonly conflicts?: true;
     };
+
+/** The same job failed on the target branch's newest commit, and which of `failed`'s tests failed there too. */
+export interface TargetFailure {
+  readonly job: string;
+  readonly branch: string;
+  readonly at: string;
+  readonly url: string | null;
+  readonly tests: ReadonlyArray<FailedTest>;
+  /** Every test `failed` names failed there too, or it names none: the failure is the target's. */
+  readonly shared: boolean;
+}
+
+const sameTest = (one: FailedTest, other: FailedTest) =>
+  one.name === other.name && (one.file === null || other.file === null || one.file === other.file);
+
+/** Job `job`, failed in attempt `failed`, compared with the target's newest commit; null where it did not fail there. */
+export const targetFailure = Effect.fn("CiJob.targetFailure")(function* <R>(
+  ref: MrRef,
+  job: string,
+  failed: string | null,
+  cwd: string,
+  run: Runner<R>,
+) {
+  const forge = forgeOf(ref);
+  const there = yield* forge.targetJob(ref, job, cwd, run);
+  if (!there.ok || there.state !== "failed" || there.at === null) return null;
+  const mine = failed === null ? [] : (yield* forge.failedAttempt(ref, failed, cwd, run)).tests;
+  const theirs =
+    mine.length === 0 || there.id === null
+      ? []
+      : (yield* forge.failedAttempt(ref, there.id, cwd, run)).tests;
+  const tests = Arr.filter(mine, (one) => Arr.some(theirs, (other) => sameTest(one, other)));
+  return {
+    job,
+    branch: there.branch,
+    at: there.at,
+    url: there.url,
+    tests,
+    shared: tests.length === mine.length,
+  } satisfies TargetFailure;
+});
+
+/**
+ * The failure of `jobs` on the merge request's head, where every one of them that failed there
+ * failed on the target branch's newest commit too, test by test; else null.
+ */
+export const sharedFailure = Effect.fn("CiJob.sharedFailure")(function* <R>(
+  ref: MrRef,
+  jobs: ReadonlyArray<string>,
+  cwd: string,
+  run: Runner<R>,
+) {
+  const forge = forgeOf(ref);
+  let shared: TargetFailure | null = null;
+  for (const job of jobs) {
+    const read = yield* forge.job(ref, job, cwd, run);
+    if (!read.ok) return null;
+    if (read.state !== "failed") continue;
+    const target = yield* targetFailure(ref, job, read.id, cwd, run);
+    if (target?.shared !== true) return null;
+    shared ??= target;
+  }
+  return shared;
+});
+
+/** What a Release parked on a failure its target shared does once that target passes. */
+export type TakeTarget =
+  | { readonly _tag: "Moved"; readonly head: string }
+  /** The source branch has the target's newest commit already, so its failed jobs were retried. */
+  | { readonly _tag: "Retried" }
+  | { readonly _tag: "Take" };
+
+/** `head`, where the failure was the target's: moved since, or the target to take, or retried where taken. */
+export const takeTarget = Effect.fn("CiJob.takeTarget")(function* <R>(
+  ref: MrRef,
+  jobs: ReadonlyArray<string>,
+  head: string,
+  cwd: string,
+  run: Runner<R>,
+) {
+  const forge = forgeOf(ref);
+  const failed: string[] = [];
+  let newest: string | null = null;
+  for (const job of jobs) {
+    const read = yield* forge.job(ref, job, cwd, run);
+    if (!read.ok) return { _tag: "Take" } satisfies TakeTarget;
+    if (read.head !== head) return { _tag: "Moved", head: read.head } satisfies TakeTarget;
+    if (read.state === "failed" && read.id !== null) failed.push(read.id);
+    if (newest === null) {
+      const there = yield* forge.targetJob(ref, job, cwd, run);
+      if (there.ok && there.at !== null) {
+        yield* shell("git", ["fetch", "-q", "origin", there.branch], cwd);
+        newest = there.at;
+      }
+    }
+  }
+  const taken =
+    newest !== null &&
+    (yield* shell("git", ["merge-base", "--is-ancestor", newest, head], cwd)).code === 0;
+  if (!taken) return { _tag: "Take" } satisfies TakeTarget;
+  for (const id of failed) yield* forge.retryJob(ref, id, cwd, run);
+  return { _tag: "Retried" } satisfies TakeTarget;
+});
 
 export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
   readonly runId: string;
@@ -75,6 +186,7 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
   const tree = yield* fingerprint(cwd);
   const head = tree.head_sha;
   yield* rememberCiTarget(asked.runDir, { head, job, mr: asked.mr, cwd }).pipe(Effect.orDie);
+  let alsoTarget = "";
   const unproved = (
     why: string,
     state: JobState | null = null,
@@ -82,7 +194,7 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
     log: string | null = null,
   ) =>
     ({
-      unproved: `${spec.name} is left to CI and unproved: job ${job} on ${pipe_(head, Str.slice(0, 12))} ${why}`,
+      unproved: `${spec.name} is left to CI and unproved: job ${job} on ${pipe_(head, Str.slice(0, 12))} ${why}${alsoTarget}`,
       state,
       url,
       log,
@@ -122,6 +234,17 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
           : read.state;
       const log = read.id === null ? null : forge.jobLog(ref, read.id);
       if (state === "failed" && asked.settle === true && retried === null) {
+        const target = yield* targetFailure(ref, job, read.id, cwd, asked.run);
+        if (target?.shared === true)
+          return {
+            ...unproved("is failed", state, read.url, log),
+            before: { at: target.at, url: target.url, branch: target.branch },
+          } satisfies CiJob;
+        if (target !== null && target.tests.length > 0)
+          alsoTarget = `; of its failed tests, ${Arr.join(
+            Arr.map(target.tests, (one) => `"${one.name}"`),
+            ", ",
+          )} also ${target.tests.length === 1 ? "fails" : "fail"} on ${target.branch} at ${pipe_(target.at, Str.slice(0, 12))}`;
         const base = yield* forge.baseJob(ref, job, cwd, asked.run);
         if (base.ok && base.state === "failed") {
           const before: CiJob = {

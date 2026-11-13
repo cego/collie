@@ -906,3 +906,106 @@ test(
     ),
   120_000,
 );
+
+test(
+  "a target-red park waits for the target branch's job, starts no Heal, and resumes once it passed",
+  () =>
+    proves(
+      "collie-recovery-target-",
+      (world) =>
+        Effect.gen(function* () {
+          yield* exec(
+            [
+              "git",
+              "-c",
+              "user.name=t",
+              "-c",
+              "user.email=t@example.test",
+              "commit",
+              "-qm",
+              "initial",
+              "--allow-empty",
+            ],
+            { cwd: world.project },
+          );
+          const head = Str.trim(
+            (yield* exec(["git", "rev-parse", "HEAD"], { cwd: world.project })).stdout,
+          );
+          const bin = yield* Effect.acquireRelease(FakeBin.make(`${world.home}/bin`), (bin) =>
+            bin.restore(),
+          );
+          const tip = Str.repeat(40)("c");
+          const mr = (state: "failed" | "pending" | "passed") => ({
+            project: "gitlab.example.com/mk/project",
+            iid: "7",
+            state: "open" as const,
+            head,
+            targetBranch: "main",
+            jobs: state === "passed" ? [{ name: "test", state: "passed" as const }] : [],
+            target: { at: tip, jobs: [{ name: "test", state }] },
+          });
+          const model = { installed: true, loggedIn: ["gitlab.example.com"], login: "me" };
+          const forge = yield* forgeOnPath(bin, "gitlab", { ...model, mrs: [mr("failed")] });
+          const COLLIE_FORGE_API = yield* serveForges(forge);
+          const env = {
+            PATH: `${bin.dir}:/usr/bin:/bin`,
+            COLLIE_FORGE_API,
+            COLLIE_RECOVERY_EVERY: "100 millis",
+          };
+          yield* collie(world, ["board"], env);
+          const started = yield* collie(
+            world,
+            [
+              "run",
+              "start",
+              "rechecks",
+              "--input",
+              "cause=target-red",
+              "--input",
+              `file=${world.home}/fact`,
+              "--input",
+              "mr=https://gitlab.example.com/mk/project/-/merge_requests/7",
+              "--verify",
+              asJson({ name: "check", executable: "bun", argv: ["test"], cwd: ".", ci: "test" }),
+            ],
+            env,
+          );
+          expect(started.envelope).toMatchObject({ ok: true });
+          const runId = yield* idOf(started.envelope.data);
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const uncleared = (lines: ReadonlyArray<{ action?: string; outcome?: string }>) =>
+            Arr.filter(lines, (line) => line.action === "rechecked" && line.outcome === "uncleared")
+              .length;
+          const red = yield* until(
+            () => client.runMetrics({ runId }).pipe(Effect.orDie),
+            (lines) => uncleared(lines) >= 2,
+          );
+          yield* forge.set({ ...model, mrs: [mr("pending")] });
+          yield* until(
+            () => client.runMetrics({ runId }).pipe(Effect.orDie),
+            (lines) => uncleared(lines) >= uncleared(red) + 2,
+          );
+          const parked = yield* client.run({ runId }).pipe(Effect.orDie);
+          expect(parked?.status.status).toBe("suspended");
+          expect(parked?.park).toMatchObject({ cause: "target-red", kind: "rechecks" });
+          yield* forge.set({ ...model, mrs: [mr("passed")] });
+          const done = yield* until(
+            () => client.run({ runId }).pipe(Effect.orDie),
+            (view) => view?.status.status === "complete",
+          );
+          expect(done?.status).toEqual({ status: "complete", value: "CI gate passed" });
+          const metrics = yield* client.runMetrics({ runId }).pipe(Effect.orDie);
+          expect(metrics).toContainEqual(
+            expect.objectContaining({
+              cause: "target-red",
+              action: "rechecked",
+              outcome: "cleared",
+            }),
+          );
+          expect(Arr.filter(metrics, (line) => line.action === "healed")).toEqual([]);
+          expect(yield* client.runs({ task: null }).pipe(Effect.orDie)).toHaveLength(1);
+        }),
+      ["rechecks.workflow.ts"],
+    ),
+  120_000,
+);

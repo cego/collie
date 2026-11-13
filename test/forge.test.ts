@@ -1856,6 +1856,57 @@ for (const name of ["gitlab", "github"] as const) {
       }),
     ));
 
+  test(`the ${name} forge reads a job on the target branch's newest commit, its failed tests by its id, and says when it cannot`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const TIP = pipe("c", Str.repeat(40));
+        const log = "test/a.test.ts:\n(fail) a thing works [1.00ms]\n";
+        const fake = (over: Partial<FakeMr>, rest: Partial<ForgeModel> = {}) =>
+          fakeForge(
+            name,
+            model(name, { mrs: [mr(name, { targetBranch: "main", ...over })], ...rest }),
+          );
+        const read = (one: ReturnType<typeof fake>) =>
+          forge
+            .targetJob(ref(name), "nuxi-typecheck", "/w", one.run)
+            .pipe(Effect.provide(one.layer));
+        const red = fake({
+          jobs: [{ name: "nuxi-typecheck", state: "passed" }],
+          target: {
+            at: TIP,
+            jobs: [
+              { name: "lint", state: "passed" },
+              { name: "nuxi-typecheck", state: "failed", trace: log },
+            ],
+          },
+        });
+        const id = name === "github" ? "5030/2002" : "2002";
+        expect(yield* read(red)).toEqual({
+          ok: true,
+          branch: "main",
+          at: TIP,
+          state: "failed",
+          url:
+            name === "github"
+              ? "https://github.com/owner/repo/actions/runs/5030/job/2002"
+              : "https://gitlab.example.com/group/app/-/jobs/2002",
+          id,
+        });
+        expect(
+          (yield* forge.failedAttempt(ref(name), id, "/w", red.run).pipe(Effect.provide(red.layer)))
+            .tests,
+        ).toEqual([{ name: "a thing works", file: "test/a.test.ts" }]);
+        expect(
+          yield* read(fake({ target: { at: TIP, jobs: [{ name: "lint", state: "failed" }] } })),
+        ).toMatchObject({ ok: true, branch: "main", state: "missing", id: null });
+        for (const rest of [{ installed: false }, { loggedIn: [] }]) {
+          const unread = yield* read(fake({ target: { at: TIP, jobs: [] } }, rest));
+          expect(unread.ok).toBe(false);
+          expect("reason" in unread ? unread.reason : "").not.toBe("");
+        }
+      }),
+    ));
+
   test(`the ${name} forge retries a job once asked, and says how to read its log`, () => {
     const fake = fakeForge(
       name,
@@ -3105,6 +3156,207 @@ describe("GitHub's pull request reads over HTTP", () => {
           state: "merged",
           mergedSha: MERGED,
           mergedAt: "2026-10-15T08:00:00Z",
+        });
+      }),
+    ));
+});
+
+describe("GitHub's merge where the base branch requires a merge queue", () => {
+  const github = FORGES.github;
+  const queueing = (over: Partial<FakeMr> = {}) =>
+    fakeForge(
+      "github",
+      model("github", {
+        mergeMethod: "SQUASH",
+        mergeQueues: ["main"],
+        mrs: [mr("github", { targetBranch: "main", mergedSha: MERGED, ...over })],
+      }),
+    );
+  /**
+   * The merge at HEAD, `queue` doing what the queue does once the merge waits on it: after
+   * its requests for the merge method, the queue, the pull request and, unless `queued`, the
+   * enqueue.
+   */
+  const mergeQueued = (
+    fake: ReturnType<typeof fakeForge>,
+    queue: (pull: FakeMr) => FakeMr = (pull) => pull,
+    queued = false,
+  ) =>
+    Effect.gen(function* () {
+      const merging = yield* Effect.forkChild(github.merge(ref("github"), HEAD, "/w", fake.run));
+      yield* Effect.yieldNow.pipe(
+        Effect.repeat({
+          until: () =>
+            fake.requests.length >= (queued ? 3 : 4) || merging.pollUnsafe() !== undefined,
+        }),
+      );
+      fake.set({ ...fake.model(), mrs: Arr.map(fake.model().mrs, queue) });
+      while (merging.pollUnsafe() === undefined) {
+        yield* TestClock.adjust("30 seconds");
+        yield* Effect.yieldNow;
+      }
+      return yield* Fiber.join(merging);
+    }).pipe(Effect.provide(Layer.merge(fake.layer, TestClock.layer())));
+  const mergedByQueue = (pull: FakeMr): FakeMr => {
+    const { queued: _, ...rest } = pull;
+    return {
+      ...rest,
+      state: "merged",
+      mergedBy: "github-merge-queue",
+      mergedAt: "2026-10-20T12:30:00Z",
+    };
+  };
+  const merges = (fake: ReturnType<typeof fakeForge>) =>
+    Arr.filter(fake.requests, (one) => one.method === "PUT");
+
+  test("enqueues the asked head, never merges through REST, and answers the queue's merge", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fake = queueing();
+        expect(yield* mergeQueued(fake, mergedByQueue)).toEqual({
+          _tag: "Merged",
+          merged: MERGED,
+        });
+        expect(fake.model().enqueued).toEqual([{ key: `${PROJECT.github}#30`, head: HEAD }]);
+        expect(merges(fake)).toEqual([]);
+      }),
+    ));
+
+  test("a merge seen while queued that is not the queue's at the asked head is someone else's", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const at = "2026-10-20T12:30:00Z";
+        const other = (head: string, mergedBy: string) => (pull: FakeMr) => ({
+          ...mergedByQueue(pull),
+          head,
+          mergedBy,
+        });
+        expect(yield* mergeQueued(queueing(), other("0ther", "github-merge-queue"))).toEqual({
+          _tag: "AlreadyMerged",
+          merged: MERGED,
+          head: "0ther",
+          by: "github-merge-queue",
+          at,
+        });
+        expect(yield* mergeQueued(queueing(), other(HEAD, "alice"))).toEqual({
+          _tag: "AlreadyMerged",
+          merged: MERGED,
+          head: HEAD,
+          by: "alice",
+          at,
+        });
+      }),
+    ));
+
+  test("a pull request the queue removes is refused with GitHub's reason", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fake = queueing();
+        const answer = yield* mergeQueued(fake, (pull) => {
+          const { queued: _, ...rest } = pull;
+          return { ...rest, dequeuedFor: "a required status check failed" };
+        });
+        expect(answer._tag).toBe("Refused");
+        if (answer._tag === "Refused")
+          expect(answer.reason).toContain("a required status check failed");
+        expect(fake.model().mrs[0]?.state).toBe("open");
+      }),
+    ));
+
+  test("a pull request still queued after two hours is dequeued and refused as timed out", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fake = queueing();
+        const answer = yield* mergeQueued(fake);
+        expect(answer._tag).toBe("Refused");
+        if (answer._tag === "Refused") expect(answer.reason).toContain("after 2 hours");
+        expect(fake.model().dequeued).toEqual([`${PROJECT.github}#30`]);
+        expect(fake.model().mrs[0]?.queued).toBeUndefined();
+      }),
+    ));
+
+  test("a pull request GitHub will not dequeue after two hours is still waited on until the queue merges it", () => {
+    const fake = queueing({ queued: HEAD });
+    fake.set({ ...fake.model(), refusesDequeue: true });
+    return runEffect(
+      Effect.gen(function* () {
+        const merging = yield* Effect.forkChild(github.merge(ref("github"), HEAD, "/w", fake.run));
+        yield* TestClock.adjust("2 hours");
+        for (const _ of Arr.range(1, 4)) {
+          yield* TestClock.adjust("30 seconds");
+          yield* Effect.yieldNow;
+        }
+        expect(merging.pollUnsafe()).toBeUndefined();
+        expect(fake.model().mrs[0]?.queued).toBe(HEAD);
+        fake.set({ ...fake.model(), mrs: Arr.map(fake.model().mrs, mergedByQueue) });
+        while (merging.pollUnsafe() === undefined) {
+          yield* TestClock.adjust("30 seconds");
+          yield* Effect.yieldNow;
+        }
+        expect(yield* Fiber.join(merging)).toEqual({ _tag: "Merged", merged: MERGED });
+      }).pipe(Effect.provide(Layer.merge(fake.layer, TestClock.layer()))),
+    );
+  });
+
+  test("a pull request already queued at the head is waited on, not enqueued again", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fake = queueing({ queued: HEAD });
+        expect(yield* mergeQueued(fake, mergedByQueue, true)).toEqual({
+          _tag: "Merged",
+          merged: MERGED,
+        });
+        expect(fake.model().enqueued).toBeUndefined();
+        expect(merges(fake)).toEqual([]);
+      }),
+    ));
+
+  test("a base branch without a queue merges through REST at the head by the repository's method", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fake = fakeForge(
+          "github",
+          model("github", {
+            mergeMethod: "SQUASH",
+            mergeQueues: ["release"],
+            mrs: [mr("github", { targetBranch: "main", mergedSha: MERGED })],
+          }),
+        );
+        expect(
+          yield* github.merge(ref("github"), HEAD, "/w", fake.run).pipe(Effect.provide(fake.layer)),
+        ).toEqual({ _tag: "Merged", merged: MERGED });
+        expect(fake.model().merges).toMatchObject([
+          {
+            sha: HEAD,
+            method: "squash",
+            fields: [`sha=${HEAD}`, "merge_method=squash"],
+          },
+        ]);
+        expect(fake.model().enqueued).toBeUndefined();
+      }),
+    ));
+
+  test("a pull request with its checks passed and its approvals in reads as mergeable", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fake = queueing({
+          checks: [{ name: "test", state: "passed" }],
+          reviews: [
+            {
+              id: 901,
+              author: "ann",
+              state: "APPROVED",
+              at: "2026-10-20T10:00:00Z",
+            },
+          ],
+        });
+        const review = yield* github
+          .readReview(ref("github"), "/w", fake.run)
+          .pipe(Effect.provide(fake.layer));
+        expect(review).toMatchObject({
+          ok: true,
+          approved: true,
+          mergeable: { state: "mergeable", said: "mergeable" },
         });
       }),
     ));

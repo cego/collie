@@ -43,7 +43,7 @@ import type { Report } from "./report";
 export type { Report } from "./report";
 export type { Produces, StepKind, StepMeta } from "./steps";
 import type { VerifySpec } from "./verify-spec";
-import type { CiJob } from "./ci-job";
+import type { CiJob, TakeTarget, TargetFailure } from "./ci-job";
 import type { ParkCause } from "./park-cause";
 import type { PipelineStart } from "./forge/forge";
 import type { ChildProcessSpawner } from "effect/process";
@@ -240,7 +240,7 @@ export {
 
 export type { FailedTest, Snapshot, Verification } from "./verify";
 export type { VerifySpec } from "./verify-spec";
-export type { CiJob } from "./ci-job";
+export type { CiJob, TakeTarget, TargetFailure } from "./ci-job";
 export type { JobState, PipelineStart } from "./forge/forge";
 
 /** This Run's checks as a human would type them, for a prompt to name what it faces. */
@@ -956,11 +956,31 @@ export interface HostApi {
     readonly name: string;
     readonly wait?: boolean;
     /**
-     * A failed job is read where the branch leaves its target, and is retried once and
-     * waited on where it did not fail there too (ADR-0034): `before` and `retried` say which.
+     * A failed job is read on the target branch's newest commit, then where the branch leaves
+     * its target, and is retried once and waited on where it did not fail there too
+     * (ADR-0034): `before`, with `branch` for the target's, and `retried` say which.
      */
     readonly settle?: boolean;
   }) => Effect.Effect<CiJob>;
+  /**
+   * The failure of this Run's checks left to CI on the head of the merge request it recorded,
+   * where each job that failed there failed on its target branch's newest commit too, in every
+   * test its failed attempt names or with none named: the settle's comparison. Else null.
+   */
+  readonly targetFailure: (options: {
+    readonly runId: string;
+    readonly cwd: string;
+  }) => Effect.Effect<TargetFailure | null>;
+  /**
+   * What a Release that saw a failure its target shared at `head` does now: `Moved` where the
+   * merge request's head is no longer `head`; `Retried` where `head` already has the target
+   * branch's newest commit, its failed jobs retried; else `Take`, the target to merge in.
+   */
+  readonly takeTarget: (options: {
+    readonly runId: string;
+    readonly cwd: string;
+    readonly head: string;
+  }) => Effect.Effect<TakeTarget>;
   /**
    * A pipeline on `cwd`'s HEAD, through the forge of the merge request the Run recorded,
    * unless that head has one that was not skipped. GitLab starts the merge request's, and the

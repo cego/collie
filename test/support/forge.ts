@@ -156,6 +156,10 @@ export const FakeMr = Schema.Struct({
   rules: Schema.optionalKey(Schema.Array(FakeRule)),
   /** GitLab's merge status says changes were requested. */
   changesRequested: Schema.optionalKey(Schema.Boolean),
+  /** GitHub: the head its merge queue entry is at. */
+  queued: Schema.optionalKey(Schema.String),
+  /** GitHub: the reason of its latest removal from the merge queue. */
+  dequeuedFor: Schema.optionalKey(Schema.String),
 });
 export type FakeMr = typeof FakeMr.Type;
 
@@ -330,6 +334,16 @@ export const ForgeModel = Schema.Struct({
       codeOwners: Schema.optionalKey(Schema.Boolean),
     }),
   ),
+  /** GitHub: the base branches whose merge queue is required. */
+  mergeQueues: Schema.optionalKey(Schema.Array(Schema.String)),
+  /** GitHub: pull requests enqueued, by key, at the `expectedHeadOid` asked. */
+  enqueued: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ key: Schema.String, head: Schema.String })),
+  ),
+  /** GitHub: pull requests dequeued, by key. */
+  dequeued: Schema.optionalKey(Schema.Array(Schema.String)),
+  /** GitHub refuses to take a pull request out of its merge queue. */
+  refusesDequeue: Schema.optionalKey(Schema.Boolean),
   /** GitHub's `viewerDefaultMergeMethod`; `MERGE` where unsaid. */
   mergeMethod: Schema.optionalKey(Schema.Literals(["MERGE", "SQUASH", "REBASE"])),
   /** Replies posted, by `project!iid` or `project#iid`: the thread, null for none, and the body. */
@@ -390,7 +404,13 @@ interface Answer {
     readonly pipeline: NonNullable<ForgeModel["pipelinesOn"]>[string][number];
   };
   readonly oauth?: { readonly token: string; readonly expiry: string };
-  readonly replied?: { readonly mr: FakeMr; readonly thread: string | null; readonly body: string };
+  readonly replied?: {
+    readonly mr: FakeMr;
+    readonly thread: string | null;
+    readonly body: string;
+  };
+  readonly enqueued?: { readonly mr: FakeMr; readonly head: string };
+  readonly dequeued?: FakeMr;
   readonly merged?: {
     readonly mr: FakeMr;
     readonly sha: string;
@@ -804,6 +824,8 @@ const retriedJob = ({ trace, ...job }: FakeJob, n: number): FakeJob => {
 };
 
 const actionsRun = (mr: FakeMr | undefined) => 4000 + Number(mr?.iid ?? 0);
+/** The Actions run of a pull request's target branch's newest commit. */
+const targetRun = (mr: FakeMr) => 5000 + Number(mr.iid);
 
 /** Each job of a pull request's head run, and each attempt behind it, with its `run_attempt`. */
 const actionsAttempts = (mr: FakeMr) =>
@@ -811,6 +833,9 @@ const actionsAttempts = (mr: FakeMr) =>
     ...Arr.map(attempts, (one, at) => ({ ...one, name: job.name, attempt: at + 1 })),
     { ...job, attempt: attempts.length + 1 },
   ]);
+
+const targetAttempts = (mr: FakeMr) =>
+  Arr.map(jobsOf(mr.target?.jobs ?? [], 2000), (job) => ({ ...job, attempt: 1 }));
 
 /** The merge request a project's job `id` is on its head pipeline of. */
 const headJobAt = (model: ForgeModel, project: (mr: FakeMr) => boolean, id: number) => {
@@ -1061,11 +1086,12 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
     if (trace && !args.includes("POST")) {
       const found = Option.getOrUndefined(
         Arr.findFirst(
-          Arr.flatMap(model.mrs, (mr) =>
-            Arr.flatMap(jobsOf(mr.jobs ?? [], 0), (job) =>
-              Arr.map([...(job.attempts ?? []), job], (one) => ({ mr, one })),
+          Arr.flatMap(model.mrs, (mr) => [
+            ...Arr.flatMap(jobsOf(mr.jobs ?? [], 0), (job) =>
+              Arr.map([...(job.attempts ?? []), job], (one) => ({ mr, one, pipeline: 0 })),
             ),
-          ),
+            ...Arr.map(jobsOf(mr.target?.jobs ?? [], 2000), (one) => ({ mr, one, pipeline: 2 })),
+          ]),
           ({ one }) => one.id === Number(trace[2]),
         ),
       );
@@ -1074,7 +1100,7 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
         ? json({
             id: found.one.id,
             web_url: `https://${found.mr.project}/-/jobs/${found.one.id}`,
-            pipeline: { id: pipelineIdOf(found.mr) },
+            pipeline: { id: pipelineIdOf(found.mr) + found.pipeline },
           })
         : ok(found.one.trace ?? "");
     }
@@ -1371,6 +1397,11 @@ function ghOnPull(pull: FakeMr, kind: string, rest: string, args: ReadonlyArray<
 
 /** A pull request as GitHub's GraphQL answers the panel's query. */
 const ghPullNode = (model: ForgeModel, pull: FakeMr) => ({
+  id: `PR_${pull.iid}`,
+  mergeQueueEntry: pull.queued === undefined ? null : { headCommit: { oid: pull.queued } },
+  timelineItems: {
+    nodes: pull.dequeuedFor === undefined ? [] : [{ reason: pull.dequeuedFor }],
+  },
   title: pull.title ?? "",
   state: Str.toUpperCase(pull.state),
   isDraft: pull.draft ?? false,
@@ -1423,19 +1454,54 @@ const ghPullNode = (model: ForgeModel, pull: FakeMr) => ({
 function ghGraphql(model: ForgeModel, args: ReadonlyArray<string>): Answer | undefined {
   const query = field(args, "query") ?? "";
   const typed = (name: string) => field(args, name, "-F");
+  const asked = Option.getOrUndefined(
+    Arr.findFirst(
+      model.mrs,
+      (one) =>
+        one.project === `github.com/${typed("owner")}/${typed("name")}` &&
+        one.iid === typed("number"),
+    ),
+  );
+  const queueing = /(enqueue|dequeue)PullRequest/.exec(query)?.[1];
+  if (queueing !== undefined) {
+    const pull = Option.getOrUndefined(
+      Arr.findFirst(model.mrs, (one) => `PR_${one.iid}` === typed("id")),
+    );
+    const refusal = (message: string) =>
+      json({ data: null, errors: [{ type: "UNPROCESSABLE", message }] });
+    if (pull === undefined) return refusal("Could not resolve to a node.");
+    if (queueing === "dequeue")
+      return model.refusesDequeue === true
+        ? refusal("Something went wrong while executing your query.")
+        : { ...json({ data: { dequeuePullRequest: {} } }), dequeued: pull };
+    if (pull.state !== "open") return refusal("Pull request is not open.");
+    if (typed("head") !== pull.head) return refusal("Head sha didn't match expected head sha.");
+    return {
+      ...json({ data: { enqueuePullRequest: {} } }),
+      enqueued: { mr: pull, head: typed("head") ?? "" },
+    };
+  }
+  if (pipe(query, Str.includes("mergeQueue(")))
+    return json({
+      data: {
+        repository: {
+          mergeQueue: (model.mergeQueues ?? []).includes(typed("branch") ?? "")
+            ? { id: `MQ_${typed("branch")}` }
+            : null,
+        },
+      },
+    });
   if (pipe(query, Str.includes("viewerDefaultMergeMethod")))
     return json({
-      data: { repository: { viewerDefaultMergeMethod: model.mergeMethod ?? "MERGE" } },
+      data: {
+        repository: {
+          viewerDefaultMergeMethod: model.mergeMethod ?? "MERGE",
+          pullRequest: asked === undefined ? null : ghPullNode(model, asked),
+        },
+      },
     });
   if (pipe(query, Str.includes("statusCheckRollup")) || pipe(query, Str.includes("mergedBy"))) {
-    const pull = Option.getOrUndefined(
-      Arr.findFirst(
-        model.mrs,
-        (one) =>
-          one.project === `github.com/${typed("owner")}/${typed("name")}` &&
-          one.iid === typed("number"),
-      ),
-    );
+    const pull = asked;
     if (pull === undefined)
       return json({
         data: { repository: { pullRequest: null } },
@@ -1764,7 +1830,7 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
                   name: job.name,
                   head_sha: at,
                   ...GITHUB_RUN[job.state],
-                  html_url: `https://github.com/${repo}/actions/runs/${actionsRun(head ?? base ?? target)}/job/${job.id}`,
+                  html_url: `https://github.com/${repo}/actions/runs/${head === undefined && base === undefined && target !== undefined ? targetRun(target) : actionsRun(head ?? base)}/job/${job.id}`,
                 },
               ]
             : [],
@@ -1782,13 +1848,16 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
       Arr.findFirst(
         Arr.flatMap(
           Arr.filter(model.mrs, (one) => one.project === `github.com/${repo}`),
-          (mr: FakeMr) => Arr.map(actionsAttempts(mr), (job) => ({ mr, job })),
+          (mr: FakeMr) => [
+            ...Arr.map(actionsAttempts(mr), (job) => ({ mr, job, run: actionsRun(mr) })),
+            ...Arr.map(targetAttempts(mr), (job) => ({ mr, job, run: targetRun(mr) })),
+          ],
         ),
         ({ job }) => job.id === Number(id),
       ),
     );
     if (found === undefined) return no();
-    const run = actionsRun(found.mr);
+    const run = found.run;
     if (logs !== undefined) return found.job.trace === undefined ? no() : ok(found.job.trace);
     return json({
       id: found.job.id,
@@ -1800,14 +1869,15 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
   const attemptJobs = /^repos\/(.+)\/actions\/runs\/(\d+)\/attempts\/(\d+)\/jobs/.exec(route);
   if (attemptJobs) {
     const [, repo = "", run = "", attempt = ""] = attemptJobs;
-    const mr = Option.getOrUndefined(
-      Arr.findFirst(
-        model.mrs,
-        (one) => one.project === `github.com/${repo}` && actionsRun(one) === Number(run),
-      ),
-    );
-    if (mr === undefined) return no();
-    const jobs = Arr.flatMap(actionsAttempts(mr), (job) =>
+    const ofRepo = Arr.filter(model.mrs, (one) => one.project === `github.com/${repo}`);
+    const head = Arr.findFirst(ofRepo, (one) => actionsRun(one) === Number(run));
+    const target = Arr.findFirst(ofRepo, (one) => targetRun(one) === Number(run));
+    if (head._tag === "None" && target._tag === "None") return no();
+    const listed =
+      head._tag === "Some"
+        ? actionsAttempts(head.value)
+        : targetAttempts(Option.getOrThrow(target));
+    const jobs = Arr.flatMap(listed, (job) =>
       job.attempt === Number(attempt)
         ? [
             {
@@ -2099,10 +2169,33 @@ export function answer(
     const comment = thread === null ? unthreaded : { ...unthreaded, thread };
     after = {
       ...after,
-      replies: { ...replies, [key]: [...(replies[key] ?? []), { thread, body }] },
+      replies: {
+        ...replies,
+        [key]: [...(replies[key] ?? []), { thread, body }],
+      },
       mrs: Arr.map(after.mrs, (one) =>
         one === mr ? { ...one, comments: [...(one.comments ?? []), comment] } : one,
       ),
+    };
+  }
+  if (said.enqueued !== undefined) {
+    const { mr, head } = said.enqueued;
+    after = {
+      ...after,
+      enqueued: [...(after.enqueued ?? []), { key: keyOf(forge, mr), head }],
+      mrs: Arr.map(after.mrs, (one) => (one === mr ? { ...one, queued: head } : one)),
+    };
+  }
+  if (said.dequeued !== undefined) {
+    const mr = said.dequeued;
+    after = {
+      ...after,
+      dequeued: [...(after.dequeued ?? []), keyOf(forge, mr)],
+      mrs: Arr.map(after.mrs, (one) => {
+        if (one !== mr) return one;
+        const { queued: _, ...rest } = one;
+        return rest;
+      }),
     };
   }
   if (said.merged !== undefined) {

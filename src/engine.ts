@@ -149,7 +149,7 @@ import {
 } from "./metrics";
 import { ForgeHttp, forgeHttpLayer } from "./forge/http";
 import { EngineTouches, engineTouchesLayer, touching } from "./engine-touches";
-import { ciJob } from "./ci-job";
+import { ciJob, sharedFailure, takeTarget } from "./ci-job";
 import { land, LandingSchema, readLanding, takeOver } from "./landing";
 import {
   carried,
@@ -866,11 +866,25 @@ export const SDK_DECLARATIONS = `declare module "collie" {
         readonly url: string | null;
         /** The command that prints its log, where there is such a job. */
         readonly log: string | null;
-        /** It failed where the branch leaves its target too: not this Run's to fix. */
-        readonly before?: { readonly at: string; readonly url: string | null };
+        /** It failed where the branch leaves its target too, or with \`branch\` on that branch's newest commit: not this Run's to fix. */
+        readonly before?: { readonly at: string; readonly url: string | null; readonly branch?: string };
         /** Missing because the merge request conflicts with its target branch. */
         readonly conflicts?: true;
       };
+  /** A failed job's same job failed on the target branch's newest commit, with the failed tests it shares. */
+  export interface TargetFailure {
+    readonly job: string;
+    readonly branch: string;
+    readonly at: string;
+    readonly url: string | null;
+    readonly tests: ReadonlyArray<FailedTest>;
+    readonly shared: boolean;
+  }
+  /** What a Release that saw a failure its target shared does once that target passes. */
+  export type TakeTarget =
+    | { readonly _tag: "Moved"; readonly head: string }
+    | { readonly _tag: "Retried" }
+    | { readonly _tag: "Take" };
 
   /** What asking for a pipeline on a merge request's head came to. */
   export type PipelineStart =
@@ -1039,8 +1053,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
      * which must be cwd's HEAD. A pass is recorded once per tree as the check's \`ci\`
      * Verification. With wait, a pending or running job is read again every 30 s for up to 2
      * hours. Anything else is why it is unproved, naming the check, the job and the commit.
-     * With settle, a failed job is read where the branch leaves its target, and is retried
-     * once and waited on where it did not fail there too.
+     * With settle, a failed job is read on the target branch's newest commit, then where the
+     * branch leaves its target, and is retried once and waited on where it did not fail there too.
      */
     readonly ciJob: (options: {
       readonly runId: string;
@@ -1049,6 +1063,17 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly wait?: boolean;
       readonly settle?: boolean;
     }) => Effect.Effect<CiJob>;
+    /** This Run's CI failure on its merge request's head where its target branch's newest commit shares it, else null. */
+    readonly targetFailure: (options: {
+      readonly runId: string;
+      readonly cwd: string;
+    }) => Effect.Effect<TargetFailure | null>;
+    /** What a Release that saw a failure its target shared at \`head\` does now: Moved, Retried or Take. */
+    readonly takeTarget: (options: {
+      readonly runId: string;
+      readonly cwd: string;
+      readonly head: string;
+    }) => Effect.Effect<TakeTarget>;
     /**
      * A pipeline on cwd's HEAD, through the forge of the merge request the Run recorded,
      * unless that head has one that was not skipped. GitLab starts the merge request's, and
@@ -3528,6 +3553,10 @@ export const freezeApproved = Effect.fn("Engine.freezeApproved")(function* (opti
 });
 
 const approvedOf = (dir: string, runId: string) => approvedIn(evidenceDir(dir, runId));
+const ciJobsOfIn = (dir: string, runId: string) =>
+  Effect.map(approvedOf(dir, runId), (approved) =>
+    Arr.flatMap(approved, (spec) => (spec.ci === undefined ? [] : [spec.ci])),
+  );
 
 /** Where a host keeps what a Run claimed, so a resume knows whose the claim was. */
 const claimPath = (dir: string, runId: string) => `${runDir(dir, runId)}/helle.json`;
@@ -5094,6 +5123,33 @@ export const hostLayer = (options: {
                   run: runShell,
                 }),
                 stopped,
+              );
+            }),
+          ).pipe(Effect.orDie),
+        targetFailure: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const ref = mrRefOf(yield* mergeRequestOf(fs, dir, asked.runId));
+              if (ref === null) return null;
+              return yield* sharedFailure(
+                ref,
+                yield* ciJobsOfIn(dir, asked.runId),
+                asked.cwd,
+                runShell,
+              );
+            }),
+          ).pipe(Effect.orDie),
+        takeTarget: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const ref = mrRefOf(yield* mergeRequestOf(fs, dir, asked.runId));
+              if (ref === null) return { _tag: "Take" } as const;
+              return yield* takeTarget(
+                ref,
+                yield* ciJobsOfIn(dir, asked.runId),
+                asked.head,
+                asked.cwd,
+                runShell,
               );
             }),
           ).pipe(Effect.orDie),

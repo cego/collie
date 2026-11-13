@@ -12989,6 +12989,43 @@ const repliesOf = (model: ForgeModel) => Rec.values(model.replies ?? {}).flat();
 
 const signed = (runId: string) => `\n\nPosted by Collie's Run ${runId} on ${hostname()}.`;
 
+/** A bun run's log, as both forges give a job's, failing `failed` in one file. */
+const failingIn = (...failed: ReadonlyArray<string>) =>
+  Arr.join(["test/a.test.ts:", ...Arr.map(failed, (one) => `(fail) ${one} [1.00ms]`)], "\n");
+
+const targetTest = (at: string, state: "failed" | "passed", ...failed: ReadonlyArray<string>) => ({
+  target: { at, jobs: [{ name: "test", state, trace: failingIn(...failed) }] },
+});
+
+/** Where each forge says the target branch's `test` job ran. */
+const TARGET_JOB = {
+  gitlab: "https://gitlab.example.com/group/app/-/jobs/2001",
+  github: "https://github.com/owner/repo/actions/runs/5030/job/2001",
+} as const;
+
+const recoveriesHealed = (runId: string) =>
+  Effect.map(readMetrics(evidenceDir(dir, runId)), (lines) =>
+    Arr.filter(lines, (line) => line.action === "healed"),
+  );
+
+/** The fixer taking the target: `main` merged into the source branch and plain-pushed, leaving `over`. */
+const targetTaken = (
+  forge: { readonly holding: (next: ForgeModel) => { path: string; text: string } },
+  model: ForgeModel,
+  reviewed: string,
+  over: Partial<FakeMr>,
+) => {
+  const taken = forge.holding({
+    ...model,
+    mrs: Arr.map(model.mrs, (one) => ({ ...one, head: "REPAIRED_HEAD", ...over })),
+  });
+  return {
+    writes: [taken],
+    sh: `cd '${reviewed}' && git fetch -q origin && git merge --no-ff --no-edit origin/main && git push -q origin HEAD:feature && sed -i "s/REPAIRED_HEAD/$(git rev-parse HEAD)/" '${taken.path}'`,
+    output: { verdict: "clean", fixed: [{ title: "took the target" }] },
+  };
+};
+
 /** Collie's own Checks: `check`, left to CI's `test` job, counting any local run. */
 const ownCheck = (runId: string) =>
   FileSystem.FileSystem.pipe(
@@ -14786,6 +14823,216 @@ for (const name of ["gitlab", "github"] as const) {
                 expect(yield* wasAsked(runId, "fix-4")).toBe(true);
                 expect(yield* wasAsked(runId, "fix-5")).toBe(false);
                 expect(yield* run.asked).toEqual([]);
+              }),
+          );
+          yield* bin.restore();
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: failed CI the target branch shares test by test parks target-red, naming the target, with no fix round and no Heal`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const shared = failingIn("a shared thing works");
+          const { bin, forge, head, merged, changed } = yield* releasable(name, {
+            checks: [{ name: "test", state: "failed" }],
+            jobs: [{ name: "test", state: "failed", retried: "failed", trace: shared }],
+          });
+          yield* changed(targetTest(merged, "failed", "a shared thing works", "another"));
+          const runId = `r-target-red-${name}`;
+          yield* ownCheck(runId);
+          yield* rig.queueOutputs([PACKAGED]);
+          yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                const stopped = yield* until(
+                  () => Effect.all({ why: parkedWhy(runId), status: run.status }),
+                  ({ why, status }) => why !== "" || status.status === "failed",
+                );
+                expect(stopped.status.status).not.toBe("failed");
+                expect(yield* parkedCause(runId)).toBe("target-red");
+                expect(stopped.why).toContain("main");
+                expect(stopped.why).toContain(pipe(merged, Str.slice(0, 8)));
+                expect(stopped.why).toContain(pipe(head, Str.slice(0, 8)));
+                expect(stopped.why).toContain(TARGET_JOB[name]);
+                expect(stopped.why).not.toContain("Repair it");
+                expect(yield* wasAsked(runId, "fix-1")).toBe(false);
+                expect(yield* recoveriesHealed(runId)).toEqual([]);
+              }),
+          );
+          yield* bin.restore();
+          expect((yield* forge.model()).merges ?? []).toEqual([]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: failed CI during Review wait that the target branch shares parks target-red with no repair round`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, merged, changed } = yield* releasable(name, {
+            checks: [{ name: "build", state: "running" }],
+            jobs: [{ name: "test", state: "passed" }],
+          });
+          const runId = `r-target-red-wait-${name}`;
+          yield* ownCheck(runId);
+          yield* rig.queueOutputs([PACKAGED]);
+          yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                yield* until(
+                  () => awaitingOn(runId),
+                  (on) => on !== "",
+                );
+                const shared = failingIn("a shared thing works");
+                yield* changed({
+                  checks: [{ name: "test", state: "failed" }],
+                  checksUrl: PIPELINE_OF[name],
+                  jobs: [{ name: "test", state: "failed", trace: shared }],
+                  ...targetTest(merged, "failed", "a shared thing works"),
+                });
+                const stopped = yield* until(
+                  () =>
+                    Effect.all({
+                      why: parkedWhy(runId),
+                      fixing: wasAsked(runId, "fix-1"),
+                      status: run.status,
+                    }),
+                  ({ why, fixing, status }) => why !== "" || fixing || status.status === "failed",
+                );
+                expect(stopped.fixing).toBe(false);
+                expect(yield* parkedCause(runId)).toBe("target-red");
+                expect(stopped.why).toContain(TARGET_JOB[name]);
+                expect(yield* recoveriesHealed(runId)).toEqual([]);
+              }),
+          );
+          yield* bin.restore();
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: failed CI the target branch shared resumes by taking the green target before CI is read, then keeps all four repair rounds`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const shared = failingIn("a shared thing works");
+          const { bin, forge, head, merged, reviewed, changed } = yield* releasable(name, {
+            checks: [{ name: "test", state: "failed" }],
+            jobs: [{ name: "test", state: "failed", retried: "failed", trace: shared }],
+          });
+          yield* changed(targetTest(merged, "failed", "a shared thing works"));
+          const runId = `r-target-red-resume-${name}`;
+          yield* ownCheck(runId);
+          const own = failingIn("this branch's thing works");
+          const later = { ...(yield* forge.model()) };
+          const repair = ciRepair(forge, later, reviewed, "failed", [
+            { name: "test", state: "passed" },
+          ]);
+          yield* rig.queueOutputs([
+            PACKAGED,
+            targetTaken(forge, later, reviewed, {
+              checks: [{ name: "build", state: "failed" }],
+              jobs: [{ name: "test", state: "failed", retried: "failed", trace: own }],
+              ...targetTest(merged, "passed"),
+            }),
+            ...Arr.replicate(repair, 5),
+          ]);
+          yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                yield* until(
+                  () => parkedCause(runId),
+                  (cause) => cause === "target-red",
+                );
+                yield* until(
+                  () => run.status,
+                  (status) => status.status === "suspended",
+                );
+                yield* changed(targetTest(merged, "passed"));
+                yield* run.resume;
+                const stopped = yield* until(
+                  () => Effect.all({ why: parkedWhy(runId), status: run.status }),
+                  ({ why, status }) =>
+                    (why !== "" && !Str.includes("main")(why)) || status.status === "failed",
+                );
+                expect(stopped.status.status).not.toBe("failed");
+                const taking = yield* asked(runId, "fix-1");
+                expect(taking).toContain("Take the green target branch");
+                expect(taking).not.toContain("CI failed");
+                expect(taking).not.toContain("unproved");
+                expect(yield* runLog(runId)).not.toContain(`retried job test for check on ${head}`);
+                const proved = Arr.map(yield* ciRecords(runId), (one) => one.end.head_sha);
+                expect(proved).not.toContain(head);
+                expect(stopped.why).toContain("4 CI repair rounds");
+                expect(yield* wasAsked(runId, "fix-5")).toBe(true);
+                expect(yield* wasAsked(runId, "fix-6")).toBe(false);
+                const taken = Str.trim(
+                  (yield* exec(["git", "log", "--merges", "-1", "--format=%H", `${head}..HEAD`], {
+                    cwd: reviewed,
+                  })).stdout,
+                );
+                expect(yield* revParse(`${taken}^2`, reviewed)).toBe(merged);
+                expect(yield* asked(runId, "fix-2")).toContain(pipe(taken, Str.slice(0, 12)));
+              }),
+          );
+          yield* bin.restore();
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: failed CI the target branch shares only in part reaches its fixer, naming the target's tests`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, merged, reviewed, changed } = yield* releasable(name, {
+            checks: [{ name: "test", state: "failed" }],
+            jobs: [
+              {
+                name: "test",
+                state: "failed",
+                retried: "failed",
+                trace: failingIn("a shared thing works", "this branch's thing works"),
+              },
+            ],
+          });
+          yield* changed(targetTest(merged, "failed", "a shared thing works"));
+          const runId = `r-target-red-part-${name}`;
+          yield* ownCheck(runId);
+          yield* rig.queueOutputs([
+            PACKAGED,
+            ciRepair(forge, yield* forge.model(), reviewed, "running", [
+              { name: "test", state: "passed" },
+            ]),
+          ]);
+          yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                yield* until(
+                  () => Effect.all({ on: awaitingOn(runId), why: parkedWhy(runId) }),
+                  ({ on, why }) => on !== "" || why !== "",
+                );
+                expect(yield* parkedWhy(runId)).toBe("");
+                const finding = yield* asked(runId, "fix-1");
+                expect(finding).toContain(
+                  `"a shared thing works" also fails on main at ${pipe(merged, Str.slice(0, 12))}`,
+                );
+                yield* changed({ checks: [{ name: "build", state: "passed" }] });
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Finish");
+                expect(outcomeText(yield* ended(run.status))).toBe(`${mr} was left open`);
               }),
           );
           yield* bin.restore();
