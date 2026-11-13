@@ -26,6 +26,7 @@ import type { AgentEntry } from "../src/registry";
 import type { RunFacts } from "../src/runs";
 import { madeRun, runFacts } from "./support/records";
 import {
+  buildCachesSweeper,
   measurementTreesSweeper,
   renovateClonesSweeper,
   settlingOf,
@@ -4118,5 +4119,107 @@ test("the worktree sweep keeps the tab of a finished Run's agent that is not Qui
       ]);
       expect(Arr.map(stops, (one) => one.agent)).toEqual(["impl-1-5"]);
       expect(yield* rig.cmds()).not.toContain("tab close");
+    }),
+  ));
+
+const CACHE_TAG = "Signature: 8a477f597d28d172789f06886806bc55\n# a Cargo target\n";
+
+/**
+ * A real checkout of a repository that ignores `target/` and `node_modules/`, holding a
+ * tagged `crate/target` and a `node_modules` whose tag lacks the signature, and the Run
+ * record that says Collie made it.
+ */
+const cachedCheckout = Effect.fn("worktreeTest.cachedCheckout")(function* (
+  name: string,
+  over: Partial<RunFacts> = {},
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const repo = `${rig.root}/repos/${name}`;
+  const checkout = `${rig.root}/checkouts/${name}`;
+  const git = (cwd: string, ...args: string[]) =>
+    shell("git", ["-c", "user.name=t", "-c", "user.email=t@example.test", ...args], cwd);
+  yield* fs.makeDirectory(`${repo}/crate`, { recursive: true });
+  yield* git(repo, "init", "-q");
+  yield* fs.writeFileString(`${repo}/.gitignore`, "target/\nnode_modules/\n");
+  yield* fs.writeFileString(`${repo}/crate/lib.rs`, "fn main() {}\n");
+  yield* git(repo, "add", ".");
+  yield* git(repo, "commit", "-q", "-m", "init");
+  expect((yield* git(repo, "worktree", "add", "-q", "-b", name, checkout)).code).toBe(0);
+  const cache = `${checkout}/crate/target`;
+  yield* fs.makeDirectory(`${cache}/debug`, { recursive: true });
+  yield* fs.writeFileString(`${cache}/CACHEDIR.TAG`, CACHE_TAG);
+  yield* fs.writeFileString(`${cache}/debug/out`, Str.repeat(4096)("x"));
+  const untagged = `${checkout}/node_modules`;
+  yield* fs.makeDirectory(untagged);
+  yield* fs.writeFileString(`${untagged}/CACHEDIR.TAG`, "not a signature\n");
+  const made = yield* fs.stat(`${checkout}/.git`);
+  const run = runFacts({
+    id: `run-${name}`,
+    state: "failed",
+    cwd: checkout,
+    worktree: {
+      path: checkout,
+      branch: name,
+      managed_by: "git",
+      workspace_id: null,
+      created_by_collie: true,
+      created_branch: true,
+      created_on: null,
+      made_at: Option.getOrNull(made.mtime)?.getTime() ?? null,
+      root_tab_id: null,
+      root_pane_id: null,
+    },
+    ...over,
+  });
+  return { checkout, cache, untagged, run };
+});
+
+test("a sweep removes the build cache only from a checkout Collie made, and never an untagged directory", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const ours = yield* cachedCheckout("ours");
+      const theirs = yield* cachedCheckout("theirs");
+      const runs = [
+        ours.run,
+        { ...theirs.run, worktree: { ...theirs.run.worktree!, created_by_collie: false } },
+      ];
+
+      const report = yield* sweep([buildCachesSweeper(Effect.succeed(runs))], rig.stateDir, "host");
+      expect(Arr.map(report.remove, (item) => [item.kind, item.target])).toEqual([
+        ["build-cache", ours.cache],
+      ]);
+      expect(report.remove[0]?.bytes).toBeGreaterThanOrEqual(4096);
+      expect(report.keep).toEqual([]);
+      expect(yield* fs.exists(ours.cache)).toBe(false);
+      expect(yield* fs.exists(`${ours.checkout}/crate/lib.rs`)).toBe(true);
+      expect(yield* fs.exists(ours.untagged)).toBe(true);
+      expect(yield* fs.exists(theirs.cache)).toBe(true);
+    }),
+  ));
+
+test("a Run that comes to work in the checkout between judging and removing keeps its build cache", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { checkout, cache, run } = yield* cachedCheckout("late");
+      const runs: RunFacts[] = [run];
+      const sweeper = buildCachesSweeper(Effect.succeed(runs));
+
+      const judged = yield* sweeper.judge;
+      expect(judged.remove).toEqual([
+        {
+          kind: "build-cache",
+          target: cache,
+          bytes: judged.remove[0]?.bytes ?? 0,
+          reason: "no live Run works in this checkout",
+        },
+      ]);
+      runs.push(runFacts({ id: "run-came", state: "running", cwd: checkout }));
+
+      expect(yield* sweeper.remove(judged.remove[0]!)).toEqual({
+        kept: "run-came still works in this checkout",
+      });
+      expect(yield* fs.exists(cache)).toBe(true);
     }),
   ));

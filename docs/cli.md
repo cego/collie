@@ -2321,6 +2321,12 @@ is its directory. It is kept while its Run has not ended, and, whatever its Run'
 while a Measurement is running on this Machine. Once neither holds, a sweep removes it with
 git's record of the worktree.
 
+The `build-cache` kind is a git-ignored directory holding a signed `CACHEDIR.TAG`, such as a
+Cargo `target`, in a worktree Collie made; its target is that directory. It is kept while a
+Run that has not ended works in that worktree, with "<run> still works in this checkout",
+and judged again just before a sweep removes it
+([ADR-draft-a-worktrees-build-cache-goes-once-no-live-run-works-in-it](adr/draft-a-worktrees-build-cache-goes-once-no-live-run-works-in-it.md)).
+
 ## Usage
 
 ```sh

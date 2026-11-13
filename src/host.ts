@@ -177,6 +177,7 @@ import {
   desktopSweeper,
   renovateClonesSweeper,
   measurementTreesSweeper,
+  buildCachesSweeper,
   retentionSweeper,
   runnersSweeper,
   settlingOf,
@@ -1457,6 +1458,7 @@ const hostBoard = (dir: string) =>
           checksSweeper(checks),
           renovateClonesSweeper(env.stateDir, all),
           measurementTreesSweeper(env.stateDir, all),
+          buildCachesSweeper(board.runs.pipe(Effect.orElseSucceed(() => []))),
           desktopSweeper(
             desktopRootOf(dataHomeOf(env.home, env.raw["XDG_DATA_HOME"])),
             `${env.raw["XDG_STATE_HOME"] || `${env.home}/.local/state`}/collie-desktop`,
