@@ -1,10 +1,55 @@
 import * as Arr from "effect/Array";
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { Clock, Deferred, Effect, Fiber, Queue, Result, Scheduler, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { Foreground, makeForeground, servedNow } from "../src/foreground";
 import { timingFirstValues } from "../src/host";
 import { TurnScheduler } from "../src/turns";
+
+test("an automatically resumed fiber receives a fresh turn budget", () => {
+  let time = 0;
+  let steps = 0;
+  const yielded: Array<{ steps: number; operations: number }> = [];
+  const clock = spyOn(performance, "now").mockImplementation(() => time);
+  const turns = new TurnScheduler();
+  const dispatcher = turns.makeDispatcher();
+  const scheduler: Scheduler.Scheduler = {
+    executionMode: "async",
+    shouldYield(fiber) {
+      const over = turns.shouldYield(fiber);
+      if (over && steps < 300) yielded.push({ steps, operations: fiber.currentOpCount });
+      return over;
+    },
+    makeDispatcher() {
+      return {
+        scheduleTask(task, priority) {
+          dispatcher.scheduleTask(() => {
+            time += 100;
+            task();
+          }, priority);
+        },
+        flush: () => dispatcher.flush(),
+      };
+    },
+  };
+  return Effect.runPromise(
+    Effect.forEach(
+      Arr.range(1, 300),
+      () =>
+        Effect.sync(() => {
+          steps++;
+          if (steps === 40) time += 20;
+        }),
+      { discard: true },
+    ),
+    { scheduler },
+  )
+    .then(() => {
+      expect(steps).toBe(300);
+      expect(yielded).toHaveLength(1);
+    })
+    .finally(() => clock.mockRestore());
+});
 
 test("a served fiber's turns come before those of busy background fibers", () => {
   let steps = 0;

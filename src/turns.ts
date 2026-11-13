@@ -79,10 +79,9 @@ export class TurnScheduler implements Scheduler.Scheduler {
   /** When the running fiber's stretch began: one fiber runs at a time. */
   private since = 0;
   shouldYield(fiber: Parameters<Scheduler.Scheduler["shouldYield"]>[0]) {
-    if (fiber.currentOpCount === 1) {
-      this.since = now();
-      return false;
-    }
+    // Automatic resumptions run their saved instruction before consulting the scheduler.
+    if (fiber.currentOpCount <= 3) this.since = now();
+    if (fiber.currentOpCount === 1) return false;
     if (this.inner.shouldYield(fiber)) return true;
     if ((fiber.currentOpCount & 63) !== 0) return false;
     // Background work steps aside while a served fiber's task waits.
