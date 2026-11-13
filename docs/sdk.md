@@ -833,6 +833,9 @@ agent starts on a skill the work cannot do without.
 Run just filed: a forge's open listing can lag a filing by seconds.
 `host.fileIssue({ runId, title, body })` returns the filed issue's `number` and `url`.
 `host.commentIssue({ runId, number, body })` comments on one there.
+Each takes `on: "collie"` to ask Collie's own repository, github.com/cego/collie, instead
+of the Run's checkout, with the Machine's GitHub login. Its text is checked the same way,
+with no checkout of the Run's exempted.
 
 Before filing or commenting, the host redacts credential-shaped values with the
 Conversation's redaction. It refuses text naming another checkout under the Projects

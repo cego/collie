@@ -292,6 +292,8 @@ export const ForgeModel = Schema.Struct({
   ),
   /** The status GitLab refuses a note on a merge request with. */
   refusesNote: Schema.optionalKey(Schema.Finite),
+  /** The status the forge refuses a new issue or an issue comment with. */
+  refusesIssueWrite: Schema.optionalKey(Schema.Finite),
   /** The shas each sha descends from. */
   ancestry: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String))),
   /** Repositories gh cannot read, by `owner/repo`. */
@@ -603,6 +605,8 @@ function issueApi(
   const project = `${forge === "github" ? "github.com" : flag(args, "--hostname")}/${path}`;
   if (flag(args, "-X") === "POST" && match[2] !== undefined && match[3] !== undefined) {
     if (Arr.some(model.mrs, (one) => one.project === project && one.iid === match[2])) return null;
+    if (model.refusesIssueWrite !== undefined)
+      return refused(`${model.refusesIssueWrite} Forbidden`);
     const noted = issueAnswer(forge, model, [
       "issue",
       "comment",
@@ -617,6 +621,8 @@ function issueApi(
       : { ...noted, ...json({ id: 1, body: field(args, "body") ?? "" }) };
   }
   if (flag(args, "-X") === "POST" && match[2] === undefined) {
+    if (model.refusesIssueWrite !== undefined)
+      return refused(`${model.refusesIssueWrite} Forbidden`);
     const filed = issueAnswer(forge, model, [
       "issue",
       "create",

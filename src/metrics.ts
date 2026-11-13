@@ -48,7 +48,27 @@ export const HealFinding = Schema.Struct({
   fix: Schema.String,
   /** The test that would show it. */
   regression: Schema.String,
+  /** The issue on Collie's repository the healer says is about the same cause, or null. */
+  issue: Schema.optionalKey(Schema.NullOr(Schema.Int)),
+  title: Schema.optionalKey(Schema.String),
+  /** What happened and what should have, without the healed Run's names. */
+  observed: Schema.optionalKey(Schema.String),
+  expected: Schema.optionalKey(Schema.String),
 });
+export type HealFinding = typeof HealFinding.Type;
+
+/**
+ * Where a Heal's finding stands on Collie's repository: `refused` sent nothing, `uncertain`
+ * sent a write whose answer was lost, and both are tried again.
+ */
+export const Publication = Schema.Literals([
+  "filed",
+  "linked",
+  "refused",
+  "uncertain",
+  "not-filed",
+]);
+export type Publication = typeof Publication.Type;
 
 export const MetricSchema = Schema.Struct({
   at: Schema.String,
@@ -61,6 +81,7 @@ export const MetricSchema = Schema.Struct({
     "evidence",
     "checkpoint",
     "recovery",
+    "report",
   ]),
   /** What it is about: an agent, a step, a verification name, a ticket. */
   subject: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed(""))),
@@ -82,6 +103,9 @@ export const MetricSchema = Schema.Struct({
   heal: Schema.optionalKey(Schema.String),
   /** What a Heal found about Collie, as its Output said it. */
   finding: Schema.optionalKey(HealFinding),
+  /** A `report` line's standing, and the issue it was filed as or linked to. */
+  publication: Schema.optionalKey(Publication),
+  issue: Schema.optionalKey(Schema.String),
 });
 export type Metric = Schema.Schema.Type<typeof MetricSchema>;
 const MetricJson = Schema.fromJsonString(MetricSchema);

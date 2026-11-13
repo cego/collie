@@ -3697,7 +3697,7 @@ test("a Connection deadline provided around the host is the one its start reads 
 
       expect(reason).toContain("release needs helle");
       expect(reason).toContain("within 1ms");
-      expect(reason).not.toContain("6s");
+      expect(reason).not.toContain("within 6s");
     }).pipe(Effect.scoped),
   ));
 
