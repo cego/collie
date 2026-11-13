@@ -5,7 +5,7 @@ import { stripVTControlCharacters } from "node:util";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
-import { Effect, FileSystem, Option, Path, Result, Schema } from "effect";
+import { Clock, Duration, Effect, FileSystem, Option, Path, Result, Schema } from "effect";
 import { CommandLine } from "effect/process";
 import {
   mrPath,
@@ -927,21 +927,130 @@ const MergeMethod = Schema.Struct({
   repository: Schema.NullOr(
     Schema.Struct({
       viewerDefaultMergeMethod: Schema.Literals(["MERGE", "SQUASH", "REBASE"]),
+      pullRequest: Schema.NullOr(Schema.Struct({ id: Schema.String, baseRefName: Schema.String })),
     }),
   ),
 });
-const MERGE_METHOD = `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { viewerDefaultMergeMethod } }`;
+const MERGE_METHOD = `query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { viewerDefaultMergeMethod pullRequest(number: $number) { id baseRefName } } }`;
+const MergeQueue = Schema.Struct({
+  repository: Schema.NullOr(
+    Schema.Struct({
+      mergeQueue: Schema.NullOr(Schema.Struct({ id: Schema.String })),
+    }),
+  ),
+});
+const MERGE_QUEUE = `query($owner: String!, $name: String!, $branch: String!) { repository(owner: $owner, name: $name) { mergeQueue(branch: $branch) { id } } }`;
 const MergedPull = Schema.Struct({
   state: Schema.String,
   headRefOid: optionalText,
   mergeCommit: Schema.optionalKey(Schema.NullOr(Schema.Struct({ oid: Schema.String }))),
   mergedAt: optionalText,
   mergedBy: Schema.optionalKey(Schema.NullOr(Login)),
+  mergeQueueEntry: Schema.optionalKey(
+    Schema.NullOr(
+      Schema.Struct({
+        headCommit: Schema.NullOr(Schema.Struct({ oid: Schema.String })),
+      }),
+    ),
+  ),
+  timelineItems: Schema.optionalKey(
+    Schema.Struct({
+      nodes: Schema.Array(Schema.Struct({ reason: optionalText })),
+    }),
+  ),
 });
 const MergedData = Schema.Struct({
   repository: Schema.NullOr(Schema.Struct({ pullRequest: Schema.NullOr(MergedPull) })),
 });
-const MERGED_PULL = `query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { state headRefOid mergeCommit { oid } mergedAt mergedBy { login } } } }`;
+const MERGED_PULL = `query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { state headRefOid mergeCommit { oid } mergedAt mergedBy { login } mergeQueueEntry { headCommit { oid } } timelineItems(last: 1, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) { nodes { ... on RemovedFromMergeQueueEvent { reason } } } } } }`;
+const ENQUEUE = `mutation($id: ID!, $head: GitObjectID!) { enqueuePullRequest(input: { pullRequestId: $id, expectedHeadOid: $head }) { clientMutationId } }`;
+const DEQUEUE = `mutation($id: ID!) { dequeuePullRequest(input: { id: $id }) { clientMutationId } }`;
+const Mutated = Schema.Struct({});
+/** How often a queued pull request is read, and for how long: Collie's CI bound. */
+const QUEUE_POLL = Duration.seconds(30);
+const QUEUE_BOUND = Duration.hours(2);
+type Merged = typeof MergedPull.Type;
+
+/** A merge already made, by anyone, as the merge's answer says it. */
+const alreadyMerged = (pull: Merged): MergeAnswer => ({
+  _tag: "AlreadyMerged",
+  merged: pull.mergeCommit?.oid ?? "",
+  head: pull.headRefOid ?? "",
+  by: pull.mergedBy?.login ?? "",
+  at: pull.mergedAt ?? "",
+});
+
+/**
+ * The merge through the base branch's merge queue: `head` enqueued unless its entry is
+ * already there, then read every 30 s until the queue merges or removes it. One still
+ * queued after two hours is dequeued, so nothing merges while no Run waits on it.
+ */
+const mergeQueued = Effect.fnUntraced(function* (
+  ref: MrRef,
+  id: string,
+  head: string,
+  cwd: string,
+): Effect.fn.Return<MergeAnswer, never, ForgeHttp> {
+  const where = mrWords(ref).label;
+  const [owner, name = ""] = Str.split(mrPath(ref), "/");
+  const read = Effect.map(
+    graphqlAs(MergedData, LOGIN, cwd, MERGED_PULL, {
+      owner,
+      name,
+      number: Number(ref.iid),
+    }),
+    (said) => (said.ok ? (said.value.repository?.pullRequest ?? null) : null),
+  );
+  const moved = (pull: Merged): MergeAnswer | undefined =>
+    (pull.headRefOid ?? "") === head
+      ? undefined
+      : { _tag: "HeadMoved", head: pull.headRefOid ?? "" };
+  const before = yield* read;
+  if (before?.state === "MERGED") return alreadyMerged(before);
+  const movedBefore = before === null ? undefined : moved(before);
+  if (movedBefore !== undefined) return movedBefore;
+  if (before?.mergeQueueEntry?.headCommit?.oid !== head) {
+    const enqueued = yield* graphqlAs(Mutated, LOGIN, cwd, ENQUEUE, {
+      id,
+      head,
+    });
+    if (!enqueued.ok) {
+      const after = yield* read;
+      if (after?.state === "MERGED") return alreadyMerged(after);
+      return (
+        (after === null ? undefined : moved(after)) ?? {
+          _tag: "Refused",
+          reason: `GitHub refused to add ${where} to its merge queue: ${enqueued.reason}`,
+        }
+      );
+    }
+  }
+  const deadline = (yield* Clock.currentTimeMillis) + Duration.toMillis(QUEUE_BOUND);
+  while ((yield* Clock.currentTimeMillis) < deadline) {
+    yield* Effect.sleep(QUEUE_POLL);
+    const pull = yield* read;
+    if (pull === null) continue;
+    if (pull.state === "MERGED")
+      return {
+        _tag: "Merged",
+        merged: pull.mergeCommit?.oid ?? "",
+      };
+    const movedNow = moved(pull);
+    if (movedNow !== undefined) return movedNow;
+    if (pull.mergeQueueEntry == null) {
+      const reason = pull.timelineItems?.nodes.at(-1)?.reason ?? "no reason given";
+      return {
+        _tag: "Refused",
+        reason: `GitHub's merge queue removed ${where} without merging it: ${reason}`,
+      };
+    }
+  }
+  const dequeued = yield* graphqlAs(Mutated, LOGIN, cwd, DEQUEUE, { id });
+  return {
+    _tag: "Refused",
+    reason: `${where} was still in the merge queue after 2 hours${dequeued.ok ? ", so Collie took it out" : ` and could not be taken out: ${dequeued.reason}`}`,
+  };
+});
 
 /** GitHub's merge endpoint at `head`, by the repository's default merge method for the viewer. */
 function merge(
@@ -953,12 +1062,31 @@ function merge(
     const where = mrWords(ref).label;
     const repo = mrPath(ref);
     const [owner, name = ""] = Str.split(repo, "/");
-    const method = yield* graphqlAs(MergeMethod, LOGIN, cwd, MERGE_METHOD, { owner, name });
+    const method = yield* graphqlAs(MergeMethod, LOGIN, cwd, MERGE_METHOD, {
+      owner,
+      name,
+      number: Number(ref.iid),
+    });
     if (!method.ok || method.value.repository === null)
       return {
         _tag: "Refused",
         reason: `gh would not say how ${repo} merges${!method.ok ? `: ${method.reason}` : ""}`,
       };
+    const target = method.value.repository.pullRequest;
+    if (target !== null) {
+      const queue = yield* graphqlAs(MergeQueue, LOGIN, cwd, MERGE_QUEUE, {
+        owner,
+        name,
+        branch: target.baseRefName,
+      });
+      if (!queue.ok)
+        return {
+          _tag: "Refused",
+          reason: `gh would not say whether ${target.baseRefName} of ${repo} has a merge queue: ${queue.reason}`,
+        };
+      if (queue.value.repository?.mergeQueue != null)
+        return yield* mergeQueued(ref, target.id, head, cwd);
+    }
     const merging = yield* request(LOGIN, cwd, "PUT", `repos/${repo}/pulls/${ref.iid}/merge`, {
       sha: head,
       merge_method: Str.toLowerCase(method.value.repository.viewerDefaultMergeMethod),
@@ -972,14 +1100,7 @@ function merge(
     if (merging.ok) return { _tag: "Merged", merged: pull?.mergeCommit?.oid ?? "" };
     const refusal = `GitHub refused to merge ${where}: ${merging.reason}`;
     if (pull === null) return { _tag: "Refused", reason: refusal };
-    if (pull.state === "MERGED")
-      return {
-        _tag: "AlreadyMerged",
-        merged: pull.mergeCommit?.oid ?? "",
-        head: pull.headRefOid ?? "",
-        by: pull.mergedBy?.login ?? "",
-        at: pull.mergedAt ?? "",
-      };
+    if (pull.state === "MERGED") return alreadyMerged(pull);
     if ((pull.headRefOid ?? "") !== head) return { _tag: "HeadMoved", head: pull.headRefOid ?? "" };
     return { _tag: "Refused", reason: refusal };
   });

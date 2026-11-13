@@ -6,7 +6,7 @@ import * as Arr from "effect/Array";
 import { DateTime, Effect, FileSystem, Option, Schema } from "effect";
 import { mrRefOf } from "./board-model";
 import { forgeOf } from "./forge/forge";
-import type { ReviewRead } from "./forge/review";
+import { QUEUE_MERGERS, type ReviewRead } from "./forge/review";
 import { mrIdIn, type Runner } from "./mr";
 import { appendLog } from "./oversight";
 import { WorkflowError } from "./sdk";
@@ -82,8 +82,9 @@ export type Settled =
   | { readonly _tag: "Outside"; readonly sha: string; readonly by: string; readonly at: string };
 
 /**
- * An attempt with no outcome, on the forge's word: merged by Collie's login at its head no
- * earlier than it was written is the merge it made; any other merge is someone else's.
+ * An attempt with no outcome, on the forge's word: merged by Collie's login, or by the merge
+ * queue it was added to, at its head no earlier than it was written is the merge it made; any
+ * other merge is someone else's.
  */
 export function settleAttempt(
   attempt: Landing,
@@ -91,7 +92,7 @@ export function settleAttempt(
 ): Settled {
   if (read.state !== "merged" || read.merged === null) return { _tag: "Unmerged" };
   const { sha, by, at } = read.merged;
-  return by === read.login &&
+  return (by === read.login || QUEUE_MERGERS.has(by)) &&
     read.head === attempt.head &&
     epochMs(at) >= epochMs(attempt.at) - CLOCK_SKEW_MS
     ? { _tag: "Landed", sha }

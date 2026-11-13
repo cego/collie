@@ -156,6 +156,10 @@ export const FakeMr = Schema.Struct({
   rules: Schema.optionalKey(Schema.Array(FakeRule)),
   /** GitLab's merge status says changes were requested. */
   changesRequested: Schema.optionalKey(Schema.Boolean),
+  /** GitHub: the head its merge queue entry is at. */
+  queued: Schema.optionalKey(Schema.String),
+  /** GitHub: the reason of its latest removal from the merge queue. */
+  dequeuedFor: Schema.optionalKey(Schema.String),
 });
 export type FakeMr = typeof FakeMr.Type;
 
@@ -330,6 +334,14 @@ export const ForgeModel = Schema.Struct({
       codeOwners: Schema.optionalKey(Schema.Boolean),
     }),
   ),
+  /** GitHub: the base branches whose merge queue is required. */
+  mergeQueues: Schema.optionalKey(Schema.Array(Schema.String)),
+  /** GitHub: pull requests enqueued, by key, at the `expectedHeadOid` asked. */
+  enqueued: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ key: Schema.String, head: Schema.String })),
+  ),
+  /** GitHub: pull requests dequeued, by key. */
+  dequeued: Schema.optionalKey(Schema.Array(Schema.String)),
   /** GitHub's `viewerDefaultMergeMethod`; `MERGE` where unsaid. */
   mergeMethod: Schema.optionalKey(Schema.Literals(["MERGE", "SQUASH", "REBASE"])),
   /** Replies posted, by `project!iid` or `project#iid`: the thread, null for none, and the body. */
@@ -390,7 +402,13 @@ interface Answer {
     readonly pipeline: NonNullable<ForgeModel["pipelinesOn"]>[string][number];
   };
   readonly oauth?: { readonly token: string; readonly expiry: string };
-  readonly replied?: { readonly mr: FakeMr; readonly thread: string | null; readonly body: string };
+  readonly replied?: {
+    readonly mr: FakeMr;
+    readonly thread: string | null;
+    readonly body: string;
+  };
+  readonly enqueued?: { readonly mr: FakeMr; readonly head: string };
+  readonly dequeued?: FakeMr;
   readonly merged?: {
     readonly mr: FakeMr;
     readonly sha: string;
@@ -1371,6 +1389,11 @@ function ghOnPull(pull: FakeMr, kind: string, rest: string, args: ReadonlyArray<
 
 /** A pull request as GitHub's GraphQL answers the panel's query. */
 const ghPullNode = (model: ForgeModel, pull: FakeMr) => ({
+  id: `PR_${pull.iid}`,
+  mergeQueueEntry: pull.queued === undefined ? null : { headCommit: { oid: pull.queued } },
+  timelineItems: {
+    nodes: pull.dequeuedFor === undefined ? [] : [{ reason: pull.dequeuedFor }],
+  },
   title: pull.title ?? "",
   state: Str.toUpperCase(pull.state),
   isDraft: pull.draft ?? false,
@@ -1423,19 +1446,52 @@ const ghPullNode = (model: ForgeModel, pull: FakeMr) => ({
 function ghGraphql(model: ForgeModel, args: ReadonlyArray<string>): Answer | undefined {
   const query = field(args, "query") ?? "";
   const typed = (name: string) => field(args, name, "-F");
+  const asked = Option.getOrUndefined(
+    Arr.findFirst(
+      model.mrs,
+      (one) =>
+        one.project === `github.com/${typed("owner")}/${typed("name")}` &&
+        one.iid === typed("number"),
+    ),
+  );
+  const queueing = /(enqueue|dequeue)PullRequest/.exec(query)?.[1];
+  if (queueing !== undefined) {
+    const pull = Option.getOrUndefined(
+      Arr.findFirst(model.mrs, (one) => `PR_${one.iid}` === typed("id")),
+    );
+    const refusal = (message: string) =>
+      json({ data: null, errors: [{ type: "UNPROCESSABLE", message }] });
+    if (pull === undefined) return refusal("Could not resolve to a node.");
+    if (queueing === "dequeue")
+      return { ...json({ data: { dequeuePullRequest: {} } }), dequeued: pull };
+    if (pull.state !== "open") return refusal("Pull request is not open.");
+    if (typed("head") !== pull.head) return refusal("Head sha didn't match expected head sha.");
+    return {
+      ...json({ data: { enqueuePullRequest: {} } }),
+      enqueued: { mr: pull, head: typed("head") ?? "" },
+    };
+  }
+  if (pipe(query, Str.includes("mergeQueue(")))
+    return json({
+      data: {
+        repository: {
+          mergeQueue: (model.mergeQueues ?? []).includes(typed("branch") ?? "")
+            ? { id: `MQ_${typed("branch")}` }
+            : null,
+        },
+      },
+    });
   if (pipe(query, Str.includes("viewerDefaultMergeMethod")))
     return json({
-      data: { repository: { viewerDefaultMergeMethod: model.mergeMethod ?? "MERGE" } },
+      data: {
+        repository: {
+          viewerDefaultMergeMethod: model.mergeMethod ?? "MERGE",
+          pullRequest: asked === undefined ? null : ghPullNode(model, asked),
+        },
+      },
     });
   if (pipe(query, Str.includes("statusCheckRollup")) || pipe(query, Str.includes("mergedBy"))) {
-    const pull = Option.getOrUndefined(
-      Arr.findFirst(
-        model.mrs,
-        (one) =>
-          one.project === `github.com/${typed("owner")}/${typed("name")}` &&
-          one.iid === typed("number"),
-      ),
-    );
+    const pull = asked;
     if (pull === undefined)
       return json({
         data: { repository: { pullRequest: null } },
@@ -2099,10 +2155,33 @@ export function answer(
     const comment = thread === null ? unthreaded : { ...unthreaded, thread };
     after = {
       ...after,
-      replies: { ...replies, [key]: [...(replies[key] ?? []), { thread, body }] },
+      replies: {
+        ...replies,
+        [key]: [...(replies[key] ?? []), { thread, body }],
+      },
       mrs: Arr.map(after.mrs, (one) =>
         one === mr ? { ...one, comments: [...(one.comments ?? []), comment] } : one,
       ),
+    };
+  }
+  if (said.enqueued !== undefined) {
+    const { mr, head } = said.enqueued;
+    after = {
+      ...after,
+      enqueued: [...(after.enqueued ?? []), { key: keyOf(forge, mr), head }],
+      mrs: Arr.map(after.mrs, (one) => (one === mr ? { ...one, queued: head } : one)),
+    };
+  }
+  if (said.dequeued !== undefined) {
+    const mr = said.dequeued;
+    after = {
+      ...after,
+      dequeued: [...(after.dequeued ?? []), keyOf(forge, mr)],
+      mrs: Arr.map(after.mrs, (one) => {
+        if (one !== mr) return one;
+        const { queued: _, ...rest } = one;
+        return rest;
+      }),
     };
   }
   if (said.merged !== undefined) {

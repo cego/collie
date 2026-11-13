@@ -1,10 +1,12 @@
-# The same gate on every push and pull request: the script contributors run, then the
-# thing that actually ships.
+# The same gate on every push, pull request and merge group: the script contributors run,
+# then the thing that actually ships.
 name: ci
 on:
   push:
     branches: [master]
   pull_request:
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.sha }}

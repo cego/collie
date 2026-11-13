@@ -1,6 +1,7 @@
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
@@ -125,5 +126,69 @@ test("the required CI gate refuses each failed, cancelled or skipped dependency"
       for (const name of needs)
         for (const result of ["failure", "cancelled", "skipped"])
           expect((yield* check(name, result)).exitCode).not.toBe(0);
+    }),
+  ));
+
+const Gated = Schema.Struct({
+  on: Schema.Record(Schema.String, Schema.Unknown),
+  jobs: Schema.Record(
+    Schema.String,
+    Schema.Struct({
+      needs: Schema.optionalKey(Schema.Union([Schema.String, Schema.Array(Schema.String)])),
+      if: Schema.optionalKey(Schema.String),
+      uses: Schema.optionalKey(Schema.String),
+    }),
+  ),
+});
+const Ruleset = Schema.Struct({
+  rules: Schema.Array(
+    Schema.Struct({
+      type: Schema.String,
+      parameters: Schema.optionalKey(
+        Schema.Struct({
+          required_status_checks: Schema.optionalKey(
+            Schema.Array(Schema.Struct({ context: Schema.String })),
+          ),
+        }),
+      ),
+    }),
+  ),
+});
+
+test("the merge queue's required check is the CI gate Collie's check is left to, run on every merge group", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = fileURLToPath(new URL("..", import.meta.url));
+      const userDir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-own-checks-" });
+      const [check] = yield* approvedFrom({ cwd: root, userDir });
+      const gated = (file: string) =>
+        Effect.map(fs.readFileString(`${root}${file}`), (text) =>
+          flow(Schema.decodeUnknownResult(Gated), Result.getOrThrow)(Bun.YAML.parse(text)),
+        );
+      const ruleset = yield* Schema.decodeEffect(Schema.fromJsonString(Ruleset))(
+        yield* fs.readFileString(`${root}.github/rulesets/master.json`),
+      ).pipe(Effect.orDie);
+      const required = Arr.flatMap(ruleset.rules, (rule) =>
+        Arr.map(rule.parameters?.required_status_checks ?? [], (one) => one.context),
+      );
+      expect(required).toEqual([check!.ci!]);
+      expect(Arr.map(ruleset.rules, (rule) => rule.type)).toContain("merge_queue");
+
+      const ci = yield* gated(".github/workflows/ci.yml");
+      expect(Rec.keys(ci.on)).toContain("merge_group");
+      const gate = ci.jobs[check!.ci!];
+      for (const name of [gate?.needs ?? []].flat()) {
+        const job = ci.jobs[name];
+        expect({ name, if: job?.if }).toEqual({ name, if: undefined });
+        if (job?.uses !== undefined)
+          for (const [inner, called] of Rec.toEntries(
+            (yield* gated(pipe_(job.uses, Str.replace(/^\.\//, "")))).jobs,
+          ))
+            expect({ name: `${name}/${inner}`, if: called.if }).toEqual({
+              name: `${name}/${inner}`,
+              if: undefined,
+            });
+      }
     }),
   ));

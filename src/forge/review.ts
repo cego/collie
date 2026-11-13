@@ -50,6 +50,12 @@ export type ReviewRead =
     }
   | { readonly ok: false; readonly reason: string };
 
+/** The logins a forge's merge queue merges as, for whoever queued the merge request. */
+export const QUEUE_MERGERS: ReadonlySet<string> = new Set([
+  "github-merge-queue",
+  "github-merge-queue[bot]",
+]);
+
 /** What a merge at a given head came to. */
 export type MergeAnswer =
   | { readonly _tag: "Merged"; readonly merged: string }
