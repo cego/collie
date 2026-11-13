@@ -12,7 +12,7 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import solidPlugin from "@opentui/solid/bun-plugin";
 import type { PlatformServices } from "../../src/platform";
-import { Effect, FileSystem, Schema, type Scope, flow, Result } from "effect";
+import { Config, Effect, FileSystem, Schema, type Scope, flow, Result } from "effect";
 import { exec } from "./command";
 import { suiteEnv } from "./effect";
 import { writeFakeHerdrShim } from "./fake-herdr-core";
@@ -204,11 +204,14 @@ export const releaseBinary = Effect.fn("PeerTest.releaseBinary")(function* (
   version: string,
 ) {
   const manifest = yield* (yield* FileSystem.FileSystem).readFileString(`${root}herdr-plugin.toml`);
+  const musl = (yield* Config.String("OPENTUI_LIBC").pipe(Config.withDefault(""))) === "musl";
   const built = yield* Effect.promise(() =>
     Bun.build({
       // A release carries the host door's Worker entry, as tools/build.ts builds it.
       entrypoints: [`${root}src/main.ts`, `${root}src/door.ts`],
       target: "bun",
+      // As tools/build.ts pins it, so only this libc's renderer package must be installed.
+      define: { "process.env.OPENTUI_LIBC": musl ? '"musl"' : '"glibc"' },
       bytecode: true,
       format: "esm",
       plugins: [
