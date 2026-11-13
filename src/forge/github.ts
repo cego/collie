@@ -29,6 +29,7 @@ import type {
   FromBranch,
   FromBranchList,
   BaseJobRead,
+  TargetJobRead,
   FailedAttempt,
   JobRead,
   JobState,
@@ -635,6 +636,33 @@ function baseJob(
         reason: `no check run ${name} at ${pipe(base, Str.slice(0, 12))} or on ${target}`,
       };
     return { ok: true, at: found.head_sha, state: stateOf(found), url: found.html_url ?? null };
+  });
+}
+
+/** The newest check run named `name` at the head of the pull request's base branch. */
+function targetJob(
+  ref: MrRef,
+  name: string,
+  cwd: string,
+): Effect.Effect<TargetJobRead, never, ForgeHttp> {
+  return Effect.gen(function* () {
+    const repo = mrPath({ project: ref.project, iid: "" });
+    const pull = yield* rest(PullRefs, cwd, `repos/${repo}/pulls/${ref.iid}`);
+    if (!pull.ok)
+      return { ok: false, reason: `could not read ${mrWords(ref).label}: ${pull.reason}` };
+    const branch = pull.value.base.ref;
+    const there = yield* checkRun(repo, branch, name, cwd);
+    if (!there.ok)
+      return { ok: false, reason: `could not list the check runs on ${branch}: ${there.reason}` };
+    const found = there.value;
+    return {
+      ok: true,
+      branch,
+      at: found?.head_sha ?? null,
+      state: found === undefined ? "missing" : stateOf(found),
+      url: found?.html_url ?? null,
+      id: actionsJob(found?.html_url),
+    };
   });
 }
 
@@ -1511,6 +1539,7 @@ export const github: Forge = {
   protects,
   job,
   baseJob,
+  targetJob,
   retryJob,
   failedAttempt,
   startPipeline: () =>

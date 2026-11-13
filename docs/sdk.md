@@ -1627,13 +1627,25 @@ by the forge adapter (`glab ci trace <id> --repo <project>` on GitLab; on GitHub
 view <run> --log-failed --repo <owner/repo>`, the failed jobs of the job's Actions run), so
 a prompt hands an agent the adapter's command rather than naming a CLI of its own
 (ADR-0050). With `settle: true` a failed job is
-settled first: the adapter reads the same job at the merge-base of the merge request's head
-and its target branch, or on the target branch's latest pipeline where that commit has
-none, and one that failed there too answers with `before: { at, url }` and is not retried.
+settled first. The adapter reads the same job on the target branch's newest commit; where it
+failed there in every test the failed attempt names, or the attempt names none, it answers
+with `before: { at, url, branch }` and is not retried. Where only some of those tests failed
+there, the unproved sentence names them. Otherwise the adapter reads the same job at the
+merge-base of the merge request's head and its target branch, or on the target branch's
+latest pipeline where that commit has none, and one that failed there too answers with
+`before: { at, url }` and is not retried.
 Otherwise the adapter retries it once — GitLab's job retry, GitHub's rerun of that job —
 and waits on it; a pass then answers `{ proved, retried: true }`, a Flake. Name either on
 the merge request with `host.note({ runId, cwd, body })`, which puts a note on the merge
 request the Run recorded.
+
+`host.targetFailure({ runId, cwd })` asks the same comparison of the Run's checks left to CI
+on the merge request's head: it answers `{ job, branch, at, url, tests, shared: true }` where
+each job that failed there failed on the target branch's newest commit too, else null.
+`host.takeTarget({ runId, cwd, head })` says what a Release that saw such a failure at `head`
+does once the target passes: `Moved` with the head where the merge request moved, `Retried`
+where `head` already has the target's newest commit and its failed jobs were retried, else
+`Take`.
 
 A merge request's head that an earlier push with `ci.skip` carried has no pipeline to read a
 job from. `host.startPipeline({ runId, cwd })` asks the forge adapter for one on `cwd`'s

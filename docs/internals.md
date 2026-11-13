@@ -1106,8 +1106,8 @@ These calls go to the forge in-process through the [`forges`](https://forges.lin
 pinned to one exact version, rather than through `gh` or `glab`
 ([ADR-draft-a-forge-is-asked-over-http-with-its-clis-login](adr/draft-a-forge-is-asked-over-http-with-its-clis-login.md)):
 
-- The CI job reads a check left to CI is proved by: `job`, `baseJob`, `retryJob` and
-  `runStatus`. Each sends the REST requests its CLI sent, a merge request's head included.
+- The CI job reads a check left to CI is proved by: `job`, `baseJob`, `targetJob`,
+  `retryJob` and `runStatus`. Each sends the REST requests its CLI sent, a merge request's head included.
   On GitHub a job's id is its Actions run and job, `<run>/<job>`, read from the check
   run's URL. `retryJob` reruns that run's failed jobs (`rerun-failed-jobs`), and `jobLog`
   is `gh run view <run> --log-failed`. A gate job, such as Collie's own `test`, needs the

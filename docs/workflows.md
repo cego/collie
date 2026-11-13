@@ -318,11 +318,18 @@ target. A job missing while the forge has not yet said whether it can merge is w
 pending. A merge of the merge request while the run waits stops it, through
 the merge watch, and records nothing for the job.
 
-A failed job is settled before anyone fixes it. The run reads the same job where the branch
-leaves its target branch, or on the target branch's latest pipeline where that commit has
-none: failed there too, it failed before the run's changes, and the merge request and the
-run's log say so, with the commit, and the job gets no fix (ADR-0034). Anything else there —
-no merge-base, no pipeline, no such job, any other result — makes the failure the run's own.
+A failed job is settled before anyone fixes it. The run first reads the same job on
+its target branch's newest commit. Where it failed there, and every failed test the
+run's failed attempt names failed there too, or the attempt names none, the failure
+is the target's. The merge request and the run's log say so, naming the target
+branch, its commit and its job, and the job gets no fix. A job still pending,
+running or missing there does not count. Otherwise the run reads the same job where
+the branch leaves its target branch, or on the target branch's latest pipeline where
+that commit has none. If it failed there too, it failed before the run's changes:
+the merge request and the run's log say so, with the commit, and the job gets no fix
+(ADR-0034). Anything else there (no merge-base, no pipeline, no such job, any other
+result) makes the failure the run's own. Where only some of its failed tests fail on
+the target too, its fix round names which ones are the target's.
 That job is then retried once through the forge; a pass on the retry is a Flake, named on
 the merge request and the log, and recorded as the check's proof. Not where the failed
 attempt's logs name a failed test of the branch's own — one whose file the branch adds or
@@ -696,7 +703,12 @@ not needing you: the card stays under Working and says "Waiting for CI and a tea
 approval on `<mr>`.", with no notification and nothing in News, until the wait outlasts 2
 hours (2 days for a person), when it parks. Terminal failed CI at the proved head goes to
 the same agent's fixer, even when local Checks pass or none are configured. The finding
-names the failed head, check or pipeline, and its forge URL when available. Proof fixes
+names the failed head, check or pipeline, and its forge URL when available. A failure the target branch's newest pipeline shares, test by test, is not the
+fixer's. The Run parks with the cause `target-red`, naming the target branch, its
+commit and its job. It spends no round on it and starts no Heal. Collie rechecks the
+target and resumes the Run once that job passes there. The fixer then merges the
+current target into the source branch and plain-pushes, outside the four rounds, and
+Collie proves the new head. Proof fixes
 and CI repairs share four rounds across proof and review reentry until readiness. A green
 local Check or a success claim cannot clear remote failure or restart that allowance.
 No remote progress parks early; continued failure after four repairs parks with the head

@@ -152,6 +152,19 @@ export type BaseJobRead =
     }
   | { readonly ok: false; readonly reason: string };
 
+/** A job on the target branch's newest commit; `at` is null where no pipeline names one. */
+export type TargetJobRead =
+  | {
+      readonly ok: true;
+      readonly branch: string;
+      readonly at: string | null;
+      readonly state: JobState;
+      readonly url: string | null;
+      /** What `failedAttempt` takes; null where there is no such job. */
+      readonly id: string | null;
+    }
+  | { readonly ok: false; readonly reason: string };
+
 export interface ReviewCommands {
   readonly diff: string;
   readonly view: string;
@@ -274,6 +287,13 @@ export interface Forge {
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<BaseJobRead, never, R | ForgeHttp>;
+  /** The job named `name` on the merge request's target branch's newest commit. */
+  readonly targetJob: <R>(
+    ref: MrRef,
+    name: string,
+    cwd: string,
+    run: Runner<R>,
+  ) => Effect.Effect<TargetJobRead, never, R | ForgeHttp>;
   /** The failed attempt `id` of a job, and the failed tests its run's failed jobs name. */
   readonly failedAttempt: <R>(
     ref: MrRef,

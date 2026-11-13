@@ -30,6 +30,7 @@ import type {
   FromBranch,
   FromBranchList,
   BaseJobRead,
+  TargetJobRead,
   FailedAttempt,
   JobRead,
   JobState,
@@ -886,6 +887,40 @@ function baseJob(
   });
 }
 
+/** The job named `name` in the newest pipeline on the merge request's target branch. */
+function targetJob(
+  ref: MrRef,
+  name: string,
+  cwd: string,
+): Effect.Effect<TargetJobRead, never, ForgeHttp> {
+  return Effect.gen(function* () {
+    const where = whereOf(ref);
+    const reached = projectRest(ref, cwd);
+    if (!reached.ok) return reached;
+    const mr = yield* reached.rest(MrBase, `merge_requests/${ref.iid}`);
+    if (!mr.ok) return { ok: false, reason: `could not read ${where}: ${mr.reason}` };
+    const branch = mr.value.target_branch;
+    if (!branch) return { ok: false, reason: `GitLab would not say what ${where} targets` };
+    const listed = yield* reached.rest(
+      Pipelines,
+      `pipelines?ref=${encodeURIComponent(branch)}&per_page=1`,
+    );
+    if (!listed.ok)
+      return { ok: false, reason: `could not list the pipelines on ${branch}: ${listed.reason}` };
+    const pipeline = listed.value[0];
+    if (pipeline === undefined)
+      return { ok: true, branch, at: null, state: "missing", url: null, id: null };
+    const found = yield* jobIn(reached, cwd, pipeline.id, name);
+    if (!found.ok)
+      return {
+        ok: false,
+        reason: `could not list the jobs of pipeline ${pipeline.id}: ${found.reason}`,
+      };
+    const { state, url, id } = found.value;
+    return { ok: true, branch, at: pipeline.sha, state, url, id };
+  });
+}
+
 const Username = Schema.Struct({ username: Schema.String });
 const ReviewMr = Schema.Struct({
   state: Schema.String,
@@ -1375,6 +1410,7 @@ export const gitlab: Forge = {
   protects,
   job,
   baseJob,
+  targetJob,
   retryJob,
   failedAttempt,
   startPipeline,

@@ -1856,6 +1856,57 @@ for (const name of ["gitlab", "github"] as const) {
       }),
     ));
 
+  test(`the ${name} forge reads a job on the target branch's newest commit, its failed tests by its id, and says when it cannot`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const TIP = pipe("c", Str.repeat(40));
+        const log = "test/a.test.ts:\n(fail) a thing works [1.00ms]\n";
+        const fake = (over: Partial<FakeMr>, rest: Partial<ForgeModel> = {}) =>
+          fakeForge(
+            name,
+            model(name, { mrs: [mr(name, { targetBranch: "main", ...over })], ...rest }),
+          );
+        const read = (one: ReturnType<typeof fake>) =>
+          forge
+            .targetJob(ref(name), "nuxi-typecheck", "/w", one.run)
+            .pipe(Effect.provide(one.layer));
+        const red = fake({
+          jobs: [{ name: "nuxi-typecheck", state: "passed" }],
+          target: {
+            at: TIP,
+            jobs: [
+              { name: "lint", state: "passed" },
+              { name: "nuxi-typecheck", state: "failed", trace: log },
+            ],
+          },
+        });
+        const id = name === "github" ? "5030/2002" : "2002";
+        expect(yield* read(red)).toEqual({
+          ok: true,
+          branch: "main",
+          at: TIP,
+          state: "failed",
+          url:
+            name === "github"
+              ? "https://github.com/owner/repo/actions/runs/5030/job/2002"
+              : "https://gitlab.example.com/group/app/-/jobs/2002",
+          id,
+        });
+        expect(
+          (yield* forge.failedAttempt(ref(name), id, "/w", red.run).pipe(Effect.provide(red.layer)))
+            .tests,
+        ).toEqual([{ name: "a thing works", file: "test/a.test.ts" }]);
+        expect(
+          yield* read(fake({ target: { at: TIP, jobs: [{ name: "lint", state: "failed" }] } })),
+        ).toMatchObject({ ok: true, branch: "main", state: "missing", id: null });
+        for (const rest of [{ installed: false }, { loggedIn: [] }]) {
+          const unread = yield* read(fake({ target: { at: TIP, jobs: [] } }, rest));
+          expect(unread.ok).toBe(false);
+          expect("reason" in unread ? unread.reason : "").not.toBe("");
+        }
+      }),
+    ));
+
   test(`the ${name} forge retries a job once asked, and says how to read its log`, () => {
     const fake = fakeForge(
       name,

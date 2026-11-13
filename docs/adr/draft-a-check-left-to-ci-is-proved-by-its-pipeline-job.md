@@ -45,6 +45,18 @@ They tell a human what the job runs. Collie never runs them.
 - A failed job goes to the builder with the job's URL and the adapter's command for its
   log, as a CI fix round. The builder fixes, commits and pushes without `ci.skip`, and the
   Run waits again.
+- A failed job is first read on the target branch's newest commit. Where it failed
+  there, and every failed test the merge request's failed attempt names failed there
+  too, or the attempt names none, the failure is the target's. It gets no fix round,
+  at implement or at Release, and it is named with the target branch, its commit and
+  its job. Release parks on it with the cause `target-red`
+  ([ADR-draft-a-run-recovers-where-it-parks](draft-a-run-recovers-where-it-parks.md)).
+  A job pending, running or missing on the target is not shared. Where only some of
+  the failed tests fail on the target, the failure stays the branch's, and its fix
+  round names which tests are the target's. (Amended 2026-11-13: the target branch
+  turned red after the merge-base the open merge requests had left it at, and that
+  merge-base was green. So every open Release handed its fixer a failure only the
+  target could repair.)
 - A failed job that passes when retried, by Collie or by anyone, is read with the logs of
   its failed attempt's failed jobs. Where they name a failed test that is the branch's own
   — its file is one the branch adds or modifies since its merge-base with the target
