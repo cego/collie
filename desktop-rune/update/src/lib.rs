@@ -4,14 +4,25 @@
 use base64::Engine;
 use ed25519_dalek::pkcs8::DecodePublicKey;
 use ed25519_dalek::{Signature, VerifyingKey};
+use serde::Deserialize;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+
+#[derive(Deserialize, PartialEq, Eq)]
+struct Identity {
+    identifier: String,
+    channel: String,
+    version: String,
+    hash: String,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Applied {
     Nothing,
     Installed,
+    /// Another launcher consumed the staged update while this one waited.
+    Relaunch,
     Refused(String),
 }
 
@@ -40,7 +51,28 @@ pub fn installed_from(exe: &Path) -> Option<(PathBuf, String)> {
     let bundle = exe
         .ancestors()
         .find(|dir| dir.extension().is_some_and(|ext| ext == "app"))
-        .or_else(|| exe.parent())?;
+        .or_else(|| {
+            let parent = exe.parent()?;
+            if parent.file_name()? == "bin" {
+                parent.parent()
+            } else {
+                Some(parent)
+            }
+        })?;
+    // Linux reports a running executable's new path after an exchange, even after that
+    // old bundle was deleted. A launch caught there still restarts from the installed app.
+    if let Some(unpacked) = bundle.parent()
+        && unpacked.file_name()? == "unpacked"
+        && unpacked.parent()?.file_name()? == ".update"
+    {
+        let install = unpacked.parent()?.parent()?;
+        let name = if install.join("app/bin/launcher").is_file() {
+            "app".to_string()
+        } else {
+            bundle.file_name()?.to_str()?.to_string()
+        };
+        return Some((install.into(), name));
+    }
     Some((
         bundle.parent()?.to_path_buf(),
         bundle.file_name()?.to_str()?.to_string(),
@@ -48,10 +80,27 @@ pub fn installed_from(exe: &Path) -> Option<(PathBuf, String)> {
 }
 
 pub fn apply_staged(install: &Path, bundle: &str, release_key: &str) -> Applied {
+    // The shell supplies its installed basename. Keep that boundary here as well: callers
+    // must never turn an archive, metadata or exchange target into a path outside install.
+    if bundle.is_empty() || matches!(bundle, "." | "..") || bundle.contains(['/', '\\', '\0']) {
+        return Applied::Refused("the installed bundle name is not a single filename".into());
+    }
     let staged = install.join(".update");
+    let archive = staged.join(format!("{bundle}.tar"));
+    let pending = archive.is_file();
+    // Keep the lock outside .update: removing a locked file lets a later launcher acquire
+    // a different inode while an earlier launcher still holds the original one.
+    let _lock = match lock_install(install) {
+        Ok(lock) => lock,
+        Err(e) => return Applied::Refused(format!("the installation could not be locked: {e}")),
+    };
     let installed = install.join(bundle);
-    let Ok(tar) = fs::read(staged.join(format!("{bundle}.tar"))) else {
-        return Applied::Nothing;
+    let Ok(tar) = fs::read(archive) else {
+        return if pending {
+            Applied::Relaunch
+        } else {
+            Applied::Nothing
+        };
     };
     let signature = fs::read_to_string(staged.join(format!("{bundle}.tar.sig"))).ok();
     let applied = match verify(&tar, signature.as_deref(), release_key) {
@@ -66,13 +115,71 @@ pub fn apply_staged(install: &Path, bundle: &str, release_key: &str) -> Applied 
     applied
 }
 
+fn lock_install(install: &Path) -> io::Result<fs::File> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(install.join(".collie-update.lock"))?;
+    loop {
+        // SAFETY: the descriptor is valid. Dropping the File releases this process's lock.
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } == 0 {
+            return Ok(lock);
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
 fn swap(tar: &[u8], staged: &Path, installed: &Path, bundle: &str) -> io::Result<()> {
+    let expected: Identity =
+        serde_json::from_slice(&fs::read(staged.join(format!("{bundle}.tar.json")))?)?;
     let unpacked = staged.join("unpacked");
     let _ = fs::remove_dir_all(&unpacked);
     tar::Archive::new(tar).unpack(&unpacked)?;
-    let next = unpacked.join(bundle);
+    // The stable Linux installer calls its installed bundle `app`.
+    let next = unpacked.join(if bundle == "app" {
+        "collie-desktop"
+    } else {
+        bundle
+    });
     if !next.is_dir() {
         return Err(io::Error::other(format!("the update holds no {bundle}")));
+    }
+    let metadata = if bundle.ends_with(".app") {
+        next.join("Contents/Resources/version.json")
+    } else {
+        next.join("Resources/version.json")
+    };
+    let actual: Identity = serde_json::from_slice(&fs::read(metadata)?)?;
+    if actual != expected
+        || actual.identifier != "dk.cego.collie.desktop"
+        || actual.channel != "stable"
+    {
+        return Err(io::Error::other(
+            "the signed bundle does not match the requested Collie update",
+        ));
+    }
+    let executables = if bundle.ends_with(".app") {
+        "Contents/MacOS"
+    } else {
+        "bin"
+    };
+    for name in ["launcher", "collie-core"] {
+        use std::os::unix::fs::PermissionsExt;
+        let file = fs::symlink_metadata(next.join(executables).join(name))?;
+        if !file.is_file() || file.permissions().mode() & 0o111 == 0 {
+            return Err(io::Error::other(
+                "the update has no runnable shell and core",
+            ));
+        }
     }
     exchange(&next, installed)
 }

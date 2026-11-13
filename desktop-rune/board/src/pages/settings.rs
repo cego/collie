@@ -683,29 +683,12 @@ pub fn save_token(app: &mut App, which: Which) {
     );
 }
 
-pub fn paste_gitlab(app: &mut App) {
-    let Some(core) = app.core.clone() else {
-        return;
-    };
-    let token = &mut app.pages.settings.gitlab;
-    if token.saving {
+pub fn paste_gitlab(app: &mut App, text: &str) {
+    if app.pages.settings.gitlab.saving {
         return;
     }
-    token.saving = true;
-    token.said = None;
-    core.request(
-        "pasteGitlab",
-        (),
-        |app: &mut App, said: Result<String, CallError>| {
-            let kept = said.is_ok();
-            let token = &mut app.pages.settings.gitlab;
-            token.saving = false;
-            token.said = Some(said.map_err(|why| why.0));
-            if kept {
-                refresh_connections(app);
-            }
-        },
-    );
+    app.pages.settings.gitlab.edit.text = text.to_string();
+    save_token(app, Which::Gitlab);
 }
 
 /// Asks Helle whose the typed token is; an answer for a token since changed is dropped.

@@ -667,14 +667,29 @@ fn offers_of(harness: &Harness<App>, offers: Value) -> Runtime<App> {
 }
 
 #[test]
-fn an_offer_that_says_what_it_does_is_confirmed_before_it_is_invoked_even_with_nothing_to_fill() {
+fn a_confirmed_offer_waits_for_its_named_button_before_invoking() {
     let harness = Harness::new();
-    let mut runtime = offers_of(
+    let mut state = app(
         &harness,
-        json!([{"id": "merge", "title": "Merge", "workflow": "release", "arguments": null,
-            "kind": "follow-up", "ships": "merge", "primary": true, "unavailable": null,
-            "confirm": "Merges it and stops: nothing is tagged or deployed."}]),
+        vec![snapshot(
+            &pc(),
+            vec![task("t1", "Shipped", "done", json!({}))],
+        )],
     );
+    state.do_action(
+        "inst-pc:t1",
+        &collie_desktop_board::board::cards::CardAction::Offers,
+    );
+    harness.fake.answer(
+        "offers",
+        Ok(json!([{
+            "id": "merge", "title": "Merge", "workflow": "release", "arguments": null,
+            "kind": "follow-up", "ships": "merge", "primary": true, "unavailable": null,
+            "confirm": "Merges it and stops: nothing is tagged or deployed."
+        }])),
+    );
+    let mut runtime = runtime(state);
+    settle(&harness, &mut runtime);
     press(&mut runtime, "offer-merge");
     assert!(acts(&harness).is_empty(), "nothing is taken before its yes");
     assert_eq!(

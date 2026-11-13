@@ -203,7 +203,7 @@ fn nav_row(app: &App, page: Page, k: &Kit) -> El {
 }
 
 /// Collie's mark and name over the pages.
-fn signature(k: &Kit) -> El {
+fn signature(app: &App, k: &Kit) -> El {
     row()
         .key("signature")
         .a11y_hidden()
@@ -211,7 +211,7 @@ fn signature(k: &Kit) -> El {
         .center_y()
         .px(8.0)
         .pb(6.0)
-        .child(collie_desktop_theme::mark(k, 24.0))
+        .child(collie_desktop_theme::mark(&app.chat.logo, 24.0))
         .child(text("collie").font(k.ty.body_medium).color(k.c.text_strong))
 }
 
@@ -291,7 +291,7 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
     let mut sidebar = Sidebar::new()
         .label("Pages")
         .row_gap(1.0)
-        .header(signature(k));
+        .header(signature(app, k));
     for row in rows {
         sidebar = sidebar.child(row);
     }

@@ -27,6 +27,7 @@ import {
   staleAgainst,
 } from "../src/verify";
 import type { VerifySpec } from "../src/intent";
+import { fileTime } from "../src/time";
 import { loggedGit } from "./support/bin";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
@@ -504,6 +505,42 @@ test("a fingerprint leaves the index and the working tree as they were", () =>
       expect(before).toEqual(["tracked.txt\n", "second.txt\ntracked.txt\n", "untracked.txt\n"]);
       yield* fingerprint(repo);
       expect(yield* state()).toEqual(before);
+    }),
+  ));
+
+test("a fingerprint writes nothing to the checkout's index, so it holds no lock a commit beside it would meet", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      // A file touched and not edited: a status of git's own would write its new time to the index.
+      const touched = fileTime("2026-01-01T00:00:00Z");
+      yield* fs.utimes(path.join(repo, "tracked.txt"), touched, touched);
+      const index = path.join(repo, ".git", "index");
+      const before = yield* fs.readFile(index);
+      yield* fingerprint(repo);
+      expect(yield* fs.readFile(index)).toEqual(before);
+    }),
+  ));
+
+test("an edit of the same size, in the second its file was staged, moves the tree", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const file = path.join(repo, "tracked.txt");
+      const index = path.join(repo, ".git", "index");
+      // One second holds the staging, the index and the edit. A file's change time cannot be
+      // set, so the repository is one that does not read it.
+      const second = fileTime("2026-01-01T00:00:00Z");
+      yield* git(["config", "core.trustctime", "false"]);
+      yield* fs.utimes(file, second, second);
+      yield* git(["add", "-A"]);
+      const before = yield* fingerprint(repo);
+      yield* fs.utimes(index, second, second);
+      yield* fs.writeFileString(file, "two\n");
+      yield* fs.utimes(file, second, second);
+      expect(sameTree(before, yield* fingerprint(repo))).toBe(false);
     }),
   ));
 

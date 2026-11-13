@@ -13,11 +13,12 @@ import * as Rec from "effect/Record";
 import { Clock, Effect, FileSystem, Option, Path, Result, Schema, flow } from "effect";
 import { AUDIT_FILE, readAudit } from "./audit";
 import { FINAL_DIFF, planDirOf } from "./run-detail";
+import { LOG_INDEX } from "./run-log";
 import { openReports, readDrift } from "./drift";
 import { describeAction } from "./lines";
 import type { PickItem } from "./inputs";
 import { LEADING_GLYPH, type AgentInfo } from "./herdr";
-import { latest, readDispositions, refWords } from "./disposition";
+import { latest, readDispositions, refRuns } from "./disposition";
 import { readSeen, seenSince } from "./seen";
 import { runTitle } from "./naming";
 import { changeKey, planIssuesIn, planReposOf } from "./plan";
@@ -915,8 +916,8 @@ const FINISHED_FOR_MS = 24 * 60 * 60 * 1000;
 /**
  * When anything in this directory was last written, as `touchedDirAt` measures it but
  * without the files Collie writes about a Run from outside: a disposition, who saw it, the
- * diff kept for its drawer and the trail of who asked for what are bookkeeping, and must not
- * make a dead Run look alive or ended just now.
+ * diff kept for its drawer, its log's index written by a read, and the trail of who asked for
+ * what are bookkeeping, and must not make a dead Run look alive or ended just now.
  */
 const writtenIn = Effect.fn("Board.writtenIn")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -928,7 +929,7 @@ const writtenIn = Effect.fn("Board.writtenIn")(function* (dir: string) {
     );
   let newest = 0;
   for (const name of yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []))) {
-    if (name === FINAL_DIFF || name === AUDIT_FILE) continue;
+    if (name === FINAL_DIFF || name === AUDIT_FILE || name === LOG_INDEX) continue;
     if (name !== "steering") {
       newest = Math.max(newest, yield* at(path.join(dir, name)));
       continue;
@@ -1028,6 +1029,7 @@ const ledgerOf = Effect.fn("Board.ledgerOf")(function* (
   run: RunFacts,
   card: string,
   cardOf: ReadonlyMap<string, string>,
+  machine: string,
 ) {
   const lines = yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => []));
   return yield* Effect.forEach(lines, (line) =>
@@ -1037,7 +1039,7 @@ const ledgerOf = Effect.fn("Board.ledgerOf")(function* (
         run: run.id,
         line,
         mr,
-        elsewhere: Arr.some(refWords(line.ref), (word) => {
+        elsewhere: Arr.some(refRuns(line.ref, machine), (word) => {
           const named = cardOf.get(word);
           return named !== undefined && named !== card;
         }),
@@ -1341,7 +1343,10 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         for (const run of everyRun) owed ??= yield* branchOwed(run);
         const ledgers = new Map(
           yield* Effect.forEach(everyRun, (run) =>
-            Effect.map(ledgerOf(run, id, cardOf), (lines) => [run.id, lines] as const),
+            Effect.map(
+              ledgerOf(run, id, cardOf, opts.env.machine ?? machineName()),
+              (lines) => [run.id, lines] as const,
+            ),
           ),
         );
         const recorded = Arr.flatten([...ledgers.values()]);

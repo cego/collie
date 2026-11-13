@@ -124,12 +124,8 @@ export interface AppState {
   now: number;
   /** How many cards fit across, where the pane is wide enough for the choice. */
   density: Density;
-  board: WorkspaceView;
-  /**
-   * Every workspace of this herdr session Collie has work in, or null while the scope
-   * is local — the wide board is read only while it is the one showing.
-   */
-  wide: WideView | null;
+  /** A newer release, shown in the header independently of the host's Tasks. */
+  newer?: string | null;
   note: string | null;
   /** Every finished Run of this checkout, whatever session it came from. */
   history: RunRow[] | null;
@@ -138,19 +134,13 @@ export interface AppState {
   /** The selected Run, read from its directory. Null for any other Selection. */
   detail: RunDetail | null;
   /**
-   * What steering has found about each Run on the board. Herd-wide, because a mark is
-   * what makes a row worth selecting — a human must not have to select a Run to find
-   * out that it has drifted.
-   */
-  marks: Marks;
-  /**
    * The Runs the board has marked to stop and not yet sent, so a card says it is going
    * and the toast can still take it back. The bridge's own, not something a load reads.
    */
   stopping: ReadonlyArray<string>;
   /**
-   * What the Live region draws, or null until the Runs view has been shown. Produced for
-   * the Selection's Run, and the Herd's newest cards while nothing is selected.
+   * The selected Run's live evidence and the Herd's pending proposals. Null outside
+   * the Runs view; with no drawer, only the Herd's proposals are displayed.
    */
   live: Live | null;
   previewing: string | null;
@@ -893,7 +883,14 @@ export function selectableRows(rows: readonly Row[]): Row[] {
  * human happens to be looking — `n` reaches one from Settings, and the button offering
  * it is drawn there for the same reason.
  */
-export function runsRows(state: AppState): Row[] {
+interface RunRowsState {
+  filter: Filter;
+  board: WorkspaceView;
+  wide: WideView | null;
+  marks: Marks;
+}
+
+export function runsRows(state: RunRowsState): Row[] {
   const filter = state.filter;
   if (filter.kind === "run") return onlyRun(everyRow(state), filter.id);
   if (filter.kind === "workspace" && state.wide) {
@@ -909,7 +906,7 @@ export function runsRows(state: AppState): Row[] {
 }
 
 /** The Herd's whole board, and this board's own until the wide one has been read. */
-function everyRow(state: AppState): Row[] {
+function everyRow(state: RunRowsState): Row[] {
   return state.wide ? wideRows(state.wide, state.marks) : rowsOf(state.board, state.marks);
 }
 
@@ -945,11 +942,10 @@ function onlyRun(rows: readonly Row[], runId: string): Row[] {
 export function viewRows(state: AppState): Row[] {
   switch (state.view) {
     case "runs":
-      return runsRows(state);
+      // Tasks are cards, not rows in the auxiliary pane.
+      return [];
     case "history":
-      return Arr.map(state.history ?? [], (r) =>
-        runRow(r, state.board.now, "history", state.marks),
-      );
+      return Arr.map(state.history ?? [], (r) => runRow(r, state.now, "history"));
     case "workflows":
       // Workflows only: a persona is instructions, not something that can be run, so a
       // persona row here offered a key that did nothing. Fork is where they are acted on.

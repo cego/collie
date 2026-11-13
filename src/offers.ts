@@ -80,8 +80,14 @@ export function offersFrom(
 ): Offer[] {
   const offers: Offer[] = [];
   for (const one of declared) {
-    if (one.kind === "follow-up" && facts.disposed) continue;
-    const unavailable = refusal(one, facts) ?? options.refused?.get(one.id) ?? null;
+    const refused = options.refused?.get(one.id);
+    if (
+      one.kind === "follow-up" &&
+      facts.disposed &&
+      !(options.keepUnavailable === true && refused !== undefined)
+    )
+      continue;
+    const unavailable = refused ?? refusal(one, facts);
     if (unavailable !== null && options.keepUnavailable !== true) continue;
     const offer: Types.Mutable<Offer> = {
       id: one.id,

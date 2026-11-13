@@ -12,6 +12,16 @@ use std::time::Duration;
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures");
 
+#[test]
+fn a_staged_update_asks_the_shell_to_restart_once_without_breaking_rpc_frames() {
+    let input = std::io::Cursor::new(b"{\"_tag\":\"Restart\"}\n".to_vec());
+    let client = Client::new(input, Vec::new()).unwrap();
+    let restart = client.restarts().unwrap();
+    restart.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(client.restarting());
+    assert!(client.restarts().is_none());
+}
+
 fn lines(path: &str) -> Vec<Value> {
     std::fs::read_to_string(format!("{FIXTURES}/{path}"))
         .unwrap()

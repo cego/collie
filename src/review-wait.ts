@@ -31,12 +31,17 @@ export const ReviewStandingSchema = Schema.Union([
   Schema.TaggedStruct("Unanswered", {
     head: Schema.String,
     comments: Schema.Array(OpenCommentSchema),
+    approvers: Schema.optionalKey(Schema.Array(Schema.String)),
   }),
   Schema.TaggedStruct("Moved", { head: Schema.String }),
+  Schema.TaggedStruct("Conflicting", { head: Schema.String }),
   Schema.TaggedStruct("Merged", { sha: Schema.String, by: Schema.String, at: Schema.String }),
   Schema.TaggedStruct("Closed", {}),
   Schema.TaggedStruct("Held", {}),
-  Schema.TaggedStruct("Waiting", { why: Schema.Array(Schema.String) }),
+  Schema.TaggedStruct("Waiting", {
+    why: Schema.Array(Schema.String),
+    approvers: Schema.optionalKey(Schema.Array(Schema.String)),
+  }),
   Schema.TaggedStruct("Unreadable", { reason: Schema.String }),
 ]);
 export type ReviewStanding = typeof ReviewStandingSchema.Type;
@@ -57,7 +62,11 @@ export const waitsOnApproval = (standing: ReviewStanding) =>
  */
 export function standingOf(
   read: ReviewRead,
-  against: { readonly proved: string; readonly seen: ReadonlyArray<string> },
+  against: {
+    readonly proved: string;
+    readonly seen: ReadonlyArray<string>;
+    readonly returnConflicts?: boolean;
+  },
 ): ReviewStanding {
   if (!read.ok) return { _tag: "Unreadable", reason: read.reason };
   if (read.state === "merged")
@@ -68,6 +77,8 @@ export function standingOf(
       at: read.merged?.at ?? "",
     };
   if (read.state === "closed") return { _tag: "Closed" };
+  if (against.returnConflicts === true && conflictsWithTarget(read.mergeable))
+    return { _tag: "Conflicting", head: read.head };
   if (read.head !== against.proved) return { _tag: "Moved", head: read.head };
   const open = Arr.filter(read.comments, (one) => one.external && !one.answered);
   const fresh = Arr.filter(open, (one) => !against.seen.includes(one.id));
@@ -85,6 +96,7 @@ export function standingOf(
         file,
         line,
       })),
+      approvers: read.approvers,
     };
   const short = pipe(read.head, Str.slice(0, 8));
   const why = [
@@ -104,7 +116,7 @@ export function standingOf(
   ];
   return why.length === 0
     ? { _tag: "Ready", head: read.head, approvers: read.approvers }
-    : { _tag: "Waiting", why };
+    : { _tag: "Waiting", why, approvers: read.approvers };
 }
 
 /** The merge request's head, which of a round's commits it carries, and its open external comments. */

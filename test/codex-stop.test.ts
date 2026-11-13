@@ -23,7 +23,7 @@ import { PARKED, controlPath, foundationLayer, pollStatus } from "../src/engine"
 import { compactionSweeper, sweep } from "../src/cleanup";
 import { Herdr } from "../src/herdr";
 import { recordClaudeEvent } from "../src/compactors";
-import { installControls, withControlLock } from "../src/compaction";
+import { installControls, readControl, withControlLock } from "../src/compaction";
 import { processOf } from "../src/processes";
 import { FakeHerdr } from "./support/recorder";
 import { agentName } from "../src/naming";
@@ -373,6 +373,60 @@ test("a process left in the server's session gets one SIGTERM and ends", () =>
       expect(alive(child)).toBe(false);
     }),
   ));
+
+test.each([true, false])(
+  "a server lost before inspection cannot be quiet where orphaned children cannot be enumerated (already gone: %s)",
+  (alreadyGone) =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* working({ child: "ends" });
+        const child = Option.getOrUndefined(
+          Arr.findFirst(yield* events(), (one) => one.child !== undefined),
+        )!.child!;
+        const control = (yield* readControl(`${rig.root}/state`, agent))!;
+        const pid = control.pid!;
+        const fs = yield* FileSystem.FileSystem;
+        const loseServer = Effect.gen(function* () {
+          kill(pid);
+          while ((yield* processOf(pid)) !== null)
+            yield* TestClock.withLive(Effect.sleep("10 millis"));
+        }).pipe(Effect.provideService(FileSystem.FileSystem, fs));
+        if (alreadyGone) yield* loseServer;
+        let reads = 0;
+        // This platform can inspect live processes, but cannot find a dead parent's session.
+        const withoutSessions = {
+          ...fs,
+          exists: (path: string) => {
+            if (path !== "/proc/self/stat") return fs.exists(path);
+            reads++;
+            return !alreadyGone && reads === 2
+              ? loseServer.pipe(Effect.as(false))
+              : Effect.succeed(false);
+          },
+        };
+        const stopped = yield* COMPACTION_PORTS.codex!.stop!(
+          {
+            agent,
+            cwd: control.cwd,
+            endpoint: "ws://127.0.0.1:1",
+            pid,
+            command: control.command!,
+            started: null,
+            signalled: [],
+            noted: [],
+          },
+          () => Effect.void,
+          100,
+        ).pipe(Effect.provideService(FileSystem.FileSystem, withoutSessions));
+        expect(alive(child)).toBe(true);
+        expect(stopped.state).toBe("failed");
+        expect(stopped.reason).toContain(
+          "cannot establish whether its child processes have stopped",
+        );
+        expect(stopped.signalled).toEqual([]);
+      }),
+    ),
+);
 
 test("a process the first stop noted is still the server's after the server has gone, and the next stop ends it", () =>
   runEffect(

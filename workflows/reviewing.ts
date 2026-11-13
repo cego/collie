@@ -10,6 +10,7 @@
 // of them copied from the other. The Markdown beside this file is the content.
 
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import {
   Agents,
   FixOutputSchema,
@@ -30,6 +31,7 @@ import {
   leaveReview,
   mrForgeFacts,
   parseMrTarget,
+  remainingDisputes,
   renderRecordedChecks,
   repoArgs,
   riskLine,
@@ -85,6 +87,7 @@ const SYNTHESIZE = content.template("synthesize", {
   run: Schema.Struct({ dir: text, id: text }),
   previous: Schema.Struct({ review: text }),
   fan_in: text,
+  disputed: text,
   obstacle: text,
 });
 
@@ -157,6 +160,17 @@ export interface ReviewAsk {
   readonly source?: string | null;
 }
 
+/** The disagreement is evidence for the review, alongside the finding that prompted it. */
+const formatDisputes = (disputed: ReadonlyArray<Finding>) =>
+  formatFindings(
+    Arr.map(disputed, (finding) => {
+      const reason = Str.trim(finding.reason ?? "");
+      return reason === ""
+        ? finding
+        : { ...finding, detail: Str.trim(`${finding.detail ?? ""}\nDisputed because: ${reason}`) };
+    }),
+  );
+
 /** What the reviewers and the synthesis are both told, beside the section they are given. */
 export const told = (ask: ReviewAsk, run: { readonly dir: string; readonly id: string }) => ({
   inputs: {
@@ -170,7 +184,7 @@ export const told = (ask: ReviewAsk, run: { readonly dir: string; readonly id: s
   previous: { review: ask.previous, fix: ask.answered },
   iteration: String(ask.at),
   max_iterations: String(ask.of),
-  disputed: formatFindings(ask.disputed),
+  disputed: formatDisputes(ask.disputed),
   risks: riskLine(ask.risks),
   target_repo: Arr.join(repoArgs(parseMrTarget(ask.target)?.project ?? null), " "),
   mr: mrForgeFacts(ask.target) ?? NO_MR,
@@ -407,6 +421,7 @@ export const rally = (ask: {
             of: ask.resume === undefined ? ROUNDS : 1,
             disputed,
           });
+          disputed = remainingDisputes(disputed, synthesis);
           const split = splitDisputed(synthesis.findings, disputed);
           const round = settleRound({ live: split.live, disputed, at, seen });
           if (round.go === "halt" && round.halt === "dispute_unresolved") {

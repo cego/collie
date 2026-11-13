@@ -73,8 +73,10 @@ pub mod freedesktop {
             tokio::select! {
                 post = asked.recv() => {
                     let Some((notice, clicked)) = post else { return Ok(()) };
-                    let hints: HashMap<&str, Value> =
-                        HashMap::from([("suppress-sound", Value::from(notice.silent))]);
+                    let hints: HashMap<&str, Value> = HashMap::from([
+                        ("suppress-sound", Value::from(notice.silent)),
+                        ("desktop-entry", Value::from("collie-desktop")),
+                    ]);
                     let reply = bus
                         .call_method(Some(NAME), PATH, Some(NAME), "Notify", &(
                             "Collie", 0u32, "", notice.title.as_str(), notice.body.as_str(),

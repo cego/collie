@@ -41,6 +41,38 @@ const comment = (id: string, over: Partial<ReviewComment> = {}): ReviewComment =
 
 const at = { proved: HEAD, seen: [] };
 
+test("a repair caller receives a confirmed target conflict before a moved head or comments", () => {
+  const conflicted = read({
+    head: MOVED,
+    mergeable: { state: "blocked", said: "conflict" },
+    comments: [comment("1")],
+  });
+  expect(standingOf(conflicted, { ...at, returnConflicts: true })).toEqual({
+    _tag: "Conflicting",
+    head: MOVED,
+  });
+  expect(standingOf(conflicted, at)).toEqual({ _tag: "Moved", head: MOVED });
+});
+
+test("conflict repair does not classify unknown mergeability or another forge block as a conflict", () => {
+  for (const mergeable of [null, { state: "blocked" as const, said: "draft status" }]) {
+    expect(standingOf(read({ mergeable }), { ...at, returnConflicts: true })._tag).toBe("Waiting");
+  }
+});
+
+test("a conflict repair read still reports merged, closed and unreadable states first", () => {
+  const options = { ...at, returnConflicts: true };
+  for (const state of ["merged", "closed"] as const) {
+    expect(
+      standingOf(read({ state, mergeable: { state: "blocked", said: "conflict" } }), options)._tag,
+    ).toBe(state === "merged" ? "Merged" : "Closed");
+  }
+  expect(standingOf({ ok: false, reason: "forge unavailable" }, options)).toEqual({
+    _tag: "Unreadable",
+    reason: "forge unavailable",
+  });
+});
+
 test("an approved, answered, green and mergeable merge request at the proved head is ready", () => {
   expect(standingOf(read(), at)).toEqual({ _tag: "Ready", head: HEAD, approvers: ["alice"] });
 });
@@ -80,10 +112,12 @@ test("only an unanswered external comment not seen before is returned", () => {
         line: null,
       },
     ],
+    approvers: ["alice"],
   });
   expect(standingOf(read({ comments }), { proved: HEAD, seen: ["1"] })).toEqual({
     _tag: "Waiting",
     why: ["1 unanswered comment"],
+    approvers: ["alice"],
   });
 });
 
@@ -105,10 +139,12 @@ test("what is missing is said, every piece of it", () => {
       "the pipeline at 1a2b3c4d, whose lint failed",
       "it conflicts with its target branch, and its branch must take the target",
     ],
+    approvers: ["alice"],
   });
   expect(standingOf(read({ pipeline: { state: "running" }, mergeable: null }), at)).toEqual({
     _tag: "Waiting",
     why: ["the pipeline at 1a2b3c4d", "mergeability (the forge has not said)"],
+    approvers: ["alice"],
   });
 });
 
@@ -204,14 +240,22 @@ test("each forge's word for a conflict with the target is the same conflict, and
   for (const said of ["conflicting", "dirty", "cannot be merged"]) {
     const conflicting = read({ mergeable: { state: "blocked", said } });
     expect(reviewWaitOf(MR, conflicting)).toEqual({ _tag: "Blocked", why: [CONFLICTS] });
-    expect(standingOf(conflicting, at)).toEqual({ _tag: "Waiting", why: [CONFLICTS] });
+    expect(standingOf(conflicting, at)).toEqual({
+      _tag: "Waiting",
+      why: [CONFLICTS],
+      approvers: ["alice"],
+    });
   }
   const draft = read({ mergeable: { state: "blocked", said: "draft status" } });
   expect(reviewWaitOf(MR, draft)).toEqual({
     _tag: "Blocked",
     why: ["the forge will not merge it: draft status"],
   });
-  expect(standingOf(draft, at)).toEqual({ _tag: "Waiting", why: ["mergeability (draft status)"] });
+  expect(standingOf(draft, at)).toEqual({
+    _tag: "Waiting",
+    why: ["mergeability (draft status)"],
+    approvers: ["alice"],
+  });
 });
 
 test("a forge that cannot be read is awaited on nobody", () => {
@@ -226,6 +270,7 @@ test("changes requested keep a merge request from being ready", () => {
   expect(standingOf(read({ changesRequested: true }), at)).toEqual({
     _tag: "Waiting",
     why: ["changes requested"],
+    approvers: ["alice"],
   });
 });
 

@@ -1,6 +1,6 @@
 //! A Run's evidence files as the record shows them, and how far its plan is: copies of
 //! `evidence.ts` and `planProgress` in `plan-view.ts`. Rune has no web view, so a report or a
-//! video opens in the browser, written aside first (ADR-draft-collie-desktop-is-drawn-by-rune).
+//! video opens in the browser, written aside first (ADR-0066).
 
 use collie_desktop_protocol::generated::{EvidenceItem, Ticket};
 use std::path::PathBuf;

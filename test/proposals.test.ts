@@ -40,7 +40,7 @@ import { runEffect } from "./support/effect";
 import { hosted, hostedRun, settledRun } from "./support/hosted";
 import { save } from "./support/world";
 import { connect } from "../src/host";
-import { writeConfigValue } from "../src/config";
+import { savedReaches, writeConfigValue } from "../src/config";
 import type { World } from "./support/world";
 import { epochMs } from "../src/time";
 
@@ -544,6 +544,46 @@ test(
         // Told how chat names one, not the command line's flag.
         expect(nowhere.error.message).toContain("the action's workspace");
         expect(nowhere.error.message).not.toContain("--input");
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "chat's start at projects-root remembers how far it goes for projects-root, not for chat's own directory",
+  () =>
+    inHerd(({ world, env, herdFile }) =>
+      Effect.gen(function* () {
+        const root = `${world.home}/projects`;
+        yield* FileSystem.FileSystem.pipe(
+          Effect.flatMap((fs) => fs.makeDirectory(root, { recursive: true })),
+        );
+        yield* writeConfigValue(world.config, "projects.root", root);
+        yield* save(world.user, ["reached.workflow.ts"]);
+        const proposal = yield* record(herdFile, {
+          interpretation: "start it",
+          targets: [],
+          actions: [
+            {
+              kind: "start",
+              workflow: "reached",
+              workspace: "projects-root",
+              // oxlint-disable-next-line unicorn/no-thenable -- the Input is named `then`
+              inputs: { goal: "x", then: "ship" },
+            },
+          ],
+          allowedNow: [],
+          intentVersions: {},
+          by: "evaluator:call-1",
+        });
+        const started = yield* carryOutProposal(env, proposal.id, proposal.content_hash, {
+          origin: "chat",
+          requestId: "req-3",
+        });
+        expect(started.ok).toBe(true);
+        expect(yield* savedReaches(env.userDir)).toEqual([
+          { workflow: "reached", project: "projects-root", value: "ship" },
+        ]);
       }),
     ),
   60_000,

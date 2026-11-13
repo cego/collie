@@ -1336,10 +1336,6 @@ fn form_view(app: &App, record: &Record, k: &Kit) -> Option<El> {
     )
 }
 
-/// The questions of a Step one at a time, "Question k of n" with Back and Next when there are
-/// several, each answered by an option or in words and sent on its own.
-/// A Step's Start: what it starts, why it cannot now, what it does and the inputs it takes,
-/// as the board's offers dialog asks them.
 fn offer_form(
     offer: Option<&collie_desktop_protocol::generated::OffersSuccessItem>,
     fields: &[crate::board::offer_form::OfferEntry],

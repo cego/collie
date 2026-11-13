@@ -56,7 +56,11 @@ pub(crate) fn entries<S: Host>(chat: &Chat, k: &Kit) -> Vec<El> {
     let mut entries = Vec::new();
     let messages = &chat.transcript.messages;
     if messages.is_empty() && !chat.transcript.running {
-        entries.push(if chat.loaded { empty(k) } else { loading(k) });
+        entries.push(if chat.loaded {
+            empty(chat, k)
+        } else {
+            loading(k)
+        });
     }
     let last = messages.len().saturating_sub(1);
     for (at, m) in messages.iter().enumerate() {
@@ -262,11 +266,11 @@ fn placeholder(k: &Kit, key: &str, mark: El, title: &str, said: &str) -> El {
         )
 }
 
-fn empty(k: &Kit) -> El {
+fn empty(chat: &Chat, k: &Kit) -> El {
     placeholder(
         k,
         "chat-empty",
-        icon(&collie_desktop_theme::MARK, 24.0).color(collie_desktop_theme::tones(k.dark).brand.fg),
+        collie_desktop_theme::mark(&chat.logo, 32.0),
         "Ask about the Flock",
         "The chat sees every Machine's board. Ask what needs you, or select a card to ask about it.",
     )

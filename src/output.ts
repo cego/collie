@@ -68,7 +68,7 @@ export const FindingSchema = Schema.Struct({
   detail: Schema.optionalKey(Schema.String),
   /** A reviewer's answer to the implementer's reason for disputing this finding. */
   rebuttal: Schema.optionalKey(Schema.String),
-  /** Why a synthesis dropped this finding; only a `dropped` entry carries one. */
+  /** Why the implementer disputes this finding, or the review withdraws it. */
   reason: Schema.optionalKey(Schema.String),
 });
 
@@ -80,7 +80,7 @@ export interface Finding {
   detail?: string;
   /** A reviewer's answer to the implementer's reason for disputing this finding. */
   rebuttal?: string;
-  /** Why a synthesis dropped this finding; only a `dropped` entry carries one. */
+  /** Why the implementer disputes this finding, or the review withdraws it. */
   reason?: string;
 }
 
@@ -102,7 +102,7 @@ export interface ReviewOutput {
 export interface Synthesis extends ReviewOutput {
   /** Two sentences: what the change does, and what is wrong with it. */
   summary: string;
-  /** What one reviewer raised that this synthesis could not defend from the diff. */
+  /** Findings withdrawn with a reason, including disputes the review accepts. */
   dropped: Finding[];
   /** What the previous review over this target raised and this one found fixed. */
   fixed: Fixed[];
@@ -922,6 +922,29 @@ export interface Split {
   settled: Finding[];
   /** Disputes a reviewer answered, so they are back in front of the implementer. */
   rebutted: Finding[];
+}
+
+/** A review can confirm a fix or withdraw a disputed finding; silence leaves it unresolved. */
+export function remainingDisputes(
+  disputed: ReadonlyArray<Finding>,
+  review: {
+    readonly findings: ReadonlyArray<Finding>;
+    readonly disputed: ReadonlyArray<Finding>;
+    readonly dropped: ReadonlyArray<Finding>;
+    readonly fixed: ReadonlyArray<Fixed>;
+  },
+): Finding[] {
+  const standing = new Set(Arr.map([...review.findings, ...review.disputed], findingKey));
+  const resolved = new Set(
+    Arr.map(
+      [...review.fixed, ...Arr.filter(review.dropped, (one) => Str.trim(one.reason ?? "") !== "")],
+      findingKey,
+    ),
+  );
+  return Arr.filter(
+    disputed,
+    (one) => standing.has(findingKey(one)) || !resolved.has(findingKey(one)),
+  );
 }
 
 /**

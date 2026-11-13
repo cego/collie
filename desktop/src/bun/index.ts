@@ -33,13 +33,11 @@ import * as RpcServer from "effect/rpc/RpcServer";
 import Electrobun, {
   BrowserView,
   BrowserWindow,
-  type RPCSchema,
   Utils,
   Updater,
-} from "electrobun/bun";
+} from "../../../desktop-rune/core/platform";
 import {
   type Channel,
-  type FrameSchema,
   heldUntilListened,
   serverProtocol,
   type ToMain,
@@ -192,13 +190,11 @@ import { applyAtLaunch, restartToUpdate, updatesOf } from "./updates";
 import manifest from "../../../herdr-plugin.toml";
 import { timingLine } from "../shared/record";
 
-type Frames = RPCSchema<FrameSchema>;
-
 /** A window on the view, and the channel its RPC rides. */
 const windowOn = (url: string, title: string, frame: BrowserWindow["frame"]) => {
   // The view loads while Desktop starts, so it asks before anything serves it.
   const inbox = heldUntilListened<ToMain>();
-  const rpc = BrowserView.defineRPC<{ bun: Frames; webview: Frames }>({
+  const rpc = BrowserView.defineRPC({
     maxRequestTime: 10_000,
     handlers: {
       requests: {},
@@ -232,7 +228,7 @@ const OPENER = process.platform === "darwin" ? "open" : "xdg-open";
 /** Opens a web page in the human's own browser. */
 const openUrl = (url: string) =>
   Effect.sync(() => {
-    if (which(OPENER) === null) return void Utils.openExternal(url);
+    if (which(OPENER) === null) return Utils.openExternal(url);
     Bun.spawn([OPENER, url], {
       env: childEnv(),
       cwd: CHILD_CWD,

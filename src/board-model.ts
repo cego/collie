@@ -2797,19 +2797,18 @@ export function cardActions(view: TaskView): CardAction[] {
   return actions;
 }
 
-/**
- * The one action that ends a card's wait, drawn first on it. Working cards go to their
- * tab; waiting cards get the action that lands or retires the work; an unseen report gets
- * Acknowledge; any other finished or decision card has none — its buttons are the
- * decision's own, or the menu's.
- */
-/** The word a ready card's shipping is said with: its offer's own title where it has one. */
 export function shippingLabel(view: Pick<TaskView, "shipping" | "offer">): string | null {
   if (view.shipping == null) return null;
   if (view.shipping === "merge") return view.offer?.title ?? "Merge";
   return view.shipping === "stage" ? "Stage" : "Deploy";
 }
 
+/**
+ * The one action that ends a card's wait, drawn first on it. Working cards go to their
+ * tab; waiting cards get the action that lands or retires the work; an unseen report gets
+ * Acknowledge; any other finished or decision card has none — its buttons are the
+ * decision's own, or the menu's.
+ */
 export function primaryAction(view: TaskView): CardAction | null {
   if (view.decision !== null) return null;
   if (view.state === "active" || view.state === "quiet") return { kind: "go-to-tab" };

@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4"
       - run: bun install --frozen-lockfile
@@ -37,7 +37,7 @@ jobs:
         shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4"
       - run: bun install --frozen-lockfile
@@ -53,13 +53,17 @@ jobs:
 
   # The required check. Never skipped, which a required check would read as passing.
   test:
-    needs: [static, suite]
+    needs: [static, suite, desktop, desktop-rune, desktop-native]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - run: |
           echo "static: ${{ needs.static.result }}, suite: ${{ needs.suite.result }}"
-          test "${{ needs.static.result }}" = success && test "${{ needs.suite.result }}" = success
+          test "${{ needs.static.result }}" = success
+          test "${{ needs.suite.result }}" = success
+          test "${{ needs.desktop.result }}" = success
+          test "${{ needs.desktop-rune.result }}" = success
+          test "${{ needs.desktop-native.result }}" = success
 
   # The runner built and smoked on a Mac, and the installers' signature check run with the
   # Mac's own LibreSSL. Not the whole suite: a Mac-only defect past these is when to add it.
@@ -67,7 +71,7 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4"
       - run: bun install --frozen-lockfile
@@ -80,39 +84,22 @@ jobs:
         env:
           COLLIE_OPENSSL: /usr/bin/openssl
 
-  # Desktop built for Apple silicon, signed ad hoc, and the gate the release runs on its bundles.
-  desktop-macos:
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4"
-      - run: bun install --frozen-lockfile
-      - run: bun run build
-        working-directory: desktop
-        env:
-          ELECTROBUN_DEVELOPER_ID: "-"
-      - run: sh tools/verify-mac-app.sh desktop
-      - run: ls desktop/artifacts
+  desktop-native:
+    uses: ./.github/workflows/rune-bundle.yml
 
   desktop:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4"
       # Desktop's Effect is the root's, so the board's Schemas exist once.
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
         working-directory: desktop
-      # The release builds the view on a fresh checkout, so CI does too.
-      - run: bun run view
-        working-directory: desktop
 
-  # The Rune spike (desktop-rune/README.md), which no release ships, so `test` does not need
-  # it. Its view test draws on lavapipe, Mesa's software Vulkan. libghostty-vt builds from the
+  # The native view tests draw on lavapipe, Mesa's software Vulkan. libghostty-vt builds from the
   # vendor/ghostty submodule with the Zig it pins, and bindgen needs libclang.
   desktop-rune:
     runs-on: ubuntu-latest
@@ -122,8 +109,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: true
-      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev mesa-vulkan-drivers libclang-dev
-      - uses: mlugg/setup-zig@v2
+      # The terminal's wide-glyph test exercises a real system CJK fallback.
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev mesa-vulkan-drivers libclang-dev fontconfig fonts-noto-cjk
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.16.0
       # Installs the toolchain desktop-rune/rust-toolchain.toml pins.
@@ -134,7 +122,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
         working-directory: desktop-rune
       # protocol/tests/core.rs starts Desktop's main process under Bun.
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4"
       - run: bun install --frozen-lockfile

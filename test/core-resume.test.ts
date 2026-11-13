@@ -19,7 +19,7 @@ import { TestClock } from "effect/testing";
 import { Agents, agentsLayer, type AgentHost, type RunNow } from "../src/agents";
 import { endAgent } from "../src/agent-end";
 import type { Backend } from "../src/herdr";
-import { readLaunches } from "../src/launches";
+import { launchDir, readLaunches, stemOf } from "../src/launches";
 import {
   PARK_CAUSE,
   Registry,
@@ -496,6 +496,155 @@ const runningNow: RunNow = {
   questions: { ask: () => Effect.void, asked: Effect.succeed([]), close: () => Effect.void },
 };
 
+test("quota incident publication waits for an admitted core recovery", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const core = yield* rig.startCore();
+      yield* rig.queueOutputs([null, null]);
+      const runId = yield* hosted(
+        Effect.gen(function* () {
+          const runId = yield* started("claude", "r1");
+          yield* idleAfterItsStep(agentName(runId, "claude", null, 1));
+          yield* recordedSession(runId, "claude");
+          return runId;
+        }),
+      );
+      const launching = yield* Deferred.make<void>();
+      const proceed = yield* Deferred.make<void>();
+      class HeldLaunch extends FakeHerdr {
+        override agentLaunch(opts: Parameters<FakeHerdr["agentLaunch"]>[0]) {
+          return Deferred.succeed(launching, undefined).pipe(
+            Effect.andThen(Deferred.await(proceed)),
+            Effect.andThen(super.agentLaunch(opts)),
+          );
+        }
+      }
+      const wait = `${launchDir(dir(), runId)}/claude.usage-wait`;
+      let writing = false;
+      const observedFs: FileSystem.FileSystem = {
+        ...fs,
+        writeFileString: (path, data, options) =>
+          Effect.sync(() => {
+            if (Str.startsWith(wait)(path)) writing = true;
+          }).pipe(Effect.andThen(fs.writeFileString(path, data, options))),
+      };
+      yield* core.lose;
+      const before = coreCalls(yield* rig.calls()).length;
+      yield* Effect.gen(function* () {
+        const agents = yield* Agents;
+        const launched = Option.getOrThrow(
+          Arr.findLast(yield* readLaunches(runId), (one) => one.harness === "claude"),
+        );
+        const recovery = yield* Effect.forkChild(agents.resumeLost(runId, runningNow));
+        yield* Deferred.await(launching);
+        // Run to the first suspension: publication must wait at recovery admission,
+        // before it can enter the real filesystem write observed above.
+        const publishing = yield* Effect.forkChild(
+          agents.usageWaiting(launched, {
+            _tag: "RanOut",
+            why: "session limit reached during recovery",
+            transcript: null,
+            resetsAt: null,
+          }),
+          { startImmediately: true },
+        );
+        const wroteBeforeRelease = writing;
+        yield* Deferred.succeed(proceed, undefined);
+        expect(wroteBeforeRelease).toBe(false);
+        yield* Fiber.join(recovery);
+        yield* Fiber.join(publishing);
+        expect(writing).toBe(true);
+        expect(yield* fs.exists(wait)).toBe(true);
+
+        yield* core.lose;
+        yield* agents.resumeLost(runId, runningNow);
+        expect(
+          Arr.map(yield* launchesSince(yield* rig.calls(), before), (launch) => launch.name),
+        ).toEqual([agentName(runId, "claude", null, 1)]);
+      }).pipe(
+        Effect.ensuring(Deferred.succeed(proceed, undefined)),
+        Effect.provide(
+          agentsLayer({ ...hostOf(), herdr: new HeldLaunch(env()) }).pipe(
+            Layer.provideMerge(foundationLayer({ dir: dir(), userDir: rig.userDir })),
+          ),
+        ),
+        Effect.provideService(FileSystem.FileSystem, observedFs),
+        Effect.scoped,
+      );
+    }),
+  ));
+
+test("core recovery resumes each agent only after its own quota wait clears", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const core = yield* rig.startCore();
+      yield* rig.queueOutputs([{ verdict: "reviewed" }, null, null]);
+      const runId = yield* hosted(
+        Effect.gen(function* () {
+          const runId = yield* started("claude,codex", "r1");
+          yield* idleAfterItsStep(agentName(runId, "codex", null, 1));
+          yield* recordedSession(runId, "codex");
+          return runId;
+        }),
+      );
+      // The prior host has stopped; call the recovery boundary without another engine
+      // concurrently resuming the workflow and changing its usage wait.
+      yield* Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const agents = yield* Agents;
+        const launches = yield* readLaunches(runId);
+        const claude = Option.getOrThrow(Arr.findLast(launches, (one) => one.harness === "claude"));
+        const codex = Option.getOrThrow(Arr.findLast(launches, (one) => one.harness === "codex"));
+        const claudeWait = `${launchDir(dir(), runId)}/${stemOf(claude)}.usage-wait`;
+        const codexWait = `${launchDir(dir(), runId)}/${stemOf(codex)}.usage-wait`;
+        yield* agents.usageWaiting(claude, {
+          _tag: "RanOut",
+          why: "Claude session full",
+          transcript: null,
+          resetsAt: null,
+        });
+        yield* agents.usageWaiting(codex, {
+          _tag: "RanOut",
+          why: "ChatGPT weekly limit reached",
+          transcript: null,
+          resetsAt: null,
+        });
+        expect(yield* fs.exists(claudeWait)).toBe(true);
+        expect(yield* fs.exists(codexWait)).toBe(true);
+        yield* agents.usageWaiting(claude, null);
+        yield* core.lose;
+        const before = coreCalls(yield* rig.calls()).length;
+        yield* agents.resumeLost(runId, runningNow);
+        expect(
+          Arr.map(yield* launchesSince(yield* rig.calls(), before), (launch) => launch.name),
+        ).toEqual([agentName(runId, "claude", null, 1)]);
+        yield* agents.resumeLost(runId, runningNow);
+        expect(
+          Arr.map(yield* launchesSince(yield* rig.calls(), before), (launch) => launch.name),
+        ).toEqual([agentName(runId, "claude", null, 1)]);
+
+        yield* agents.usageWaiting(codex, null);
+        yield* agents.resumeLost(runId, runningNow);
+        const calls = yield* rig.calls();
+        expect(Arr.map(yield* launchesSince(calls, before), (launch) => launch.name)).toEqual([
+          agentName(runId, "claude", null, 1),
+          agentName(runId, "codex", null, 1),
+        ]);
+        expect(Arr.map(sendsSince(calls, before), (send) => send.terminal)).toEqual([
+          agentName(runId, "codex", null, 1),
+        ]);
+      }).pipe(
+        Effect.provide(
+          agentsLayer(hostOf()).pipe(
+            Layer.provideMerge(foundationLayer({ dir: dir(), userDir: rig.userDir })),
+          ),
+        ),
+        Effect.scoped,
+      );
+    }),
+  ));
+
 test(
   "a host started on a Machine set to herdr starts again an agent core lost after the Machine switched to core",
   () =>
@@ -541,36 +690,49 @@ test(
       Effect.gen(function* () {
         yield* rig.startCore();
         yield* rig.queueOutputs([null]);
-        const { ended, left } = yield* hosted(
+        const { runId, launched } = yield* hosted(
           Effect.gen(function* () {
             const runId = yield* started("pi", "r1");
             const agent = agentName(runId, "pi", null, 1);
             yield* idleAfterItsStep(agent);
-            const agents = yield* Agents;
-            const recoveries: Array<Fiber.Fiber<void>> = [];
-            class ExitSeenWhileClosing extends FakeHerdr {
-              override paneClose(paneId: string, backend?: Backend) {
-                return super.paneClose(paneId, backend).pipe(
-                  Effect.andThen(Effect.forkChild(agents.resumeLost(runId, runningNow))),
-                  Effect.map((recovery) => {
-                    recoveries.push(recovery);
-                  }),
-                );
-              }
-            }
-            const herdr = new ExitSeenWhileClosing(env());
+            yield* recordedSession(runId, "pi");
             const launched = Option.getOrThrow(
               Arr.findLast(yield* readLaunches(runId), (one) => one.agent === agent),
             );
-            const ended = yield* endAgent(
-              { herdr, stateDir: dir(), ports: {}, log: () => Effect.void, cwd: rig.projectDir },
-              launched,
-              "it ran out",
-              "close",
-            );
-            yield* Fiber.joinAll(recoveries);
-            return { ended, left: yield* herdr.agentList() };
+            return { runId, launched };
           }),
+        );
+        // Stop the workflow host before testing recovery's race with endAgent. Its
+        // still-active Output collection would otherwise be another recovery caller.
+        const { ended, left } = yield* Effect.gen(function* () {
+          const agents = yield* Agents;
+          const recoveries: Array<Fiber.Fiber<void>> = [];
+          class ExitSeenWhileClosing extends FakeHerdr {
+            override paneClose(paneId: string, backend?: Backend) {
+              return super.paneClose(paneId, backend).pipe(
+                Effect.andThen(Effect.forkChild(agents.resumeLost(runId, runningNow))),
+                Effect.map((recovery) => {
+                  recoveries.push(recovery);
+                }),
+              );
+            }
+          }
+          const herdr = new ExitSeenWhileClosing(env());
+          const ended = yield* endAgent(
+            { herdr, stateDir: dir(), ports: {}, log: () => Effect.void, cwd: rig.projectDir },
+            launched,
+            "it ran out",
+            "close",
+          );
+          yield* Fiber.joinAll(recoveries);
+          return { ended, left: yield* herdr.agentList() };
+        }).pipe(
+          Effect.provide(
+            agentsLayer(hostOf()).pipe(
+              Layer.provideMerge(foundationLayer({ dir: dir(), userDir: rig.userDir })),
+            ),
+          ),
+          Effect.scoped,
         );
         expect(ended).toEqual({ _tag: "Closed", ended: true });
         expect(left).toEqual([]);

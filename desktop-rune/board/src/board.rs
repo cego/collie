@@ -843,8 +843,6 @@ impl App {
         })
     }
 
-    /// Picked, and made at once where it neither takes anything nor asks first; asked about
-    /// otherwise.
     pub fn pick_offer(&mut self, offer: OffersSuccessItem) {
         let at_once = !offer_form::asks_before_taking(&offer);
         if let Some(Dialog::Offers { picked, fields, .. }) = &mut self.board.dialog {

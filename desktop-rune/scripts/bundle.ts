@@ -1,5 +1,4 @@
-// Builds the Rune spike's bundle for this computer, and the update archive and manifest a
-// release would carry beside it (desktop-rune/README.md):
+// Builds Collie for this computer, with the stable update archive, manifest and installer (desktop-rune/README.md):
 //
 //   bun run desktop-rune/scripts/bundle.ts [out]   # out defaults to desktop-rune/dist
 //
@@ -16,37 +15,40 @@ import { pipe } from "effect/Function";
 import { Cause, Console, Effect, FileSystem, Path, Schema, Stream } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import * as HttpClient from "effect/http/HttpClient";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import { MAC_ENTITLEMENTS, macSigning } from "../../desktop/scripts/mac-signing";
+import { appliedSignatureOf, RELEASE_PUBLIC_KEY, verifyRelease } from "../../src/signing";
 import manifest from "../../herdr-plugin.toml";
 
 export type Os = "linux" | "macos";
 type Env = Record<string, string | undefined>;
 
 const ROOT = new URL("../../", import.meta.url).pathname;
-const IDENTIFIER = "dk.cego.collie.desktop.rune";
+const IDENTIFIER = "dk.cego.collie.desktop";
 const CHANNEL = "stable";
 const BASE_URL = "https://github.com/cego/collie/releases/latest/download";
 
-export const bundleNameOf = (os: Os) => (os === "macos" ? "Collie.app" : "collie-desktop");
+export const bundleNameOf = (os: Os) => (os === "macos" ? "collie-desktop.app" : "collie-desktop");
 
 /** Where each part sits inside the bundle. */
 const layoutOf = (os: Os) =>
   os === "macos"
     ? {
-        shell: "Contents/MacOS/collie-desktop",
+        shell: "Contents/MacOS/launcher",
         core: "Contents/MacOS/collie-core",
         icon: "Contents/Resources/Collie.icns",
         version: "Contents/Resources/version.json",
       }
     : {
-        shell: "collie-desktop",
-        core: "collie-core",
-        icon: "collie.png",
-        version: "version.json",
+        shell: "bin/launcher",
+        core: "bin/collie-core",
+        icon: "Resources/appIcon.png",
+        version: "Resources/version.json",
       };
 
-/** Names the update files apart from Electrobun's, which the same release carries. */
-const prefixOf = (os: Os, arch: string) => `rune-${CHANNEL}-${os}-${arch}`;
+/** Preserve the update filenames already installed apps request. */
+const prefixOf = (os: Os, arch: string) => `${CHANNEL}-${os}-${arch}`;
 
 const run = Effect.fn("bundle.run")(function* (
   command: string,
@@ -71,7 +73,7 @@ const run = Effect.fn("bundle.run")(function* (
     return yield* new Cause.UnknownError(exitCode, `${command} failed: ${stderr}`);
 }, Effect.scoped);
 
-/** Desktop's main process with the stdio stand-in for Electrobun, needing no Bun to run. */
+/** Desktop's native core, compiled so it needs no installed Bun. */
 export const compileCore = (outfile: string) =>
   run(
     process.execPath,
@@ -96,7 +98,7 @@ ${pipe(
     ["CFBundleName", "Collie"],
     ["CFBundleDisplayName", "Collie"],
     ["CFBundleIdentifier", IDENTIFIER],
-    ["CFBundleExecutable", "collie-desktop"],
+    ["CFBundleExecutable", "launcher"],
     ["CFBundleIconFile", "Collie"],
     ["CFBundlePackageType", "APPL"],
     ["CFBundleShortVersionString", version],
@@ -117,7 +119,7 @@ Name=Collie
 Exec=collie-desktop
 Icon=collie
 Categories=Development;
-StartupWMClass=${IDENTIFIER}
+StartupWMClass=collie-desktop
 `;
 
 const entitlementsPlist = `<?xml version="1.0" encoding="UTF-8"?>
@@ -141,7 +143,7 @@ export const macSignings = (
   // Apple's timestamp server serves a real identity only.
   const timestamp = identity === "-" ? [] : ["--timestamp"];
   return Arr.map(
-    [`${app}/Contents/MacOS/collie-core`, `${app}/Contents/MacOS/collie-desktop`, app],
+    [`${app}/Contents/MacOS/collie-core`, `${app}/Contents/MacOS/launcher`, app],
     (path) => [
       "--force",
       ...timestamp,
@@ -207,6 +209,8 @@ export interface AssembleOptions {
   readonly shell: string;
   readonly core: string;
   readonly icon: string;
+  /** Retained only for the old updater's bundle validation and uninstall contract. */
+  readonly manager: string;
   readonly version: string;
   readonly baseUrl: string;
   /** Runs on the finished bundle before it is archived, as signing does. */
@@ -221,6 +225,8 @@ export interface AssembleOptions {
 
 const VersionJson = Schema.fromJsonString(
   Schema.Struct({
+    name: Schema.String,
+    displayName: Schema.String,
     version: Schema.String,
     channel: Schema.String,
     identifier: Schema.String,
@@ -230,6 +236,7 @@ const VersionJson = Schema.fromJsonString(
 );
 const Manifest = Schema.fromJsonString(
   Schema.Struct({
+    schemaVersion: Schema.Literal(1),
     identifier: Schema.String,
     channel: Schema.String,
     platform: Schema.String,
@@ -262,6 +269,7 @@ export const assemble = Effect.fn("bundle.assemble")(function* (options: Assembl
   yield* put(layout.shell, options.shell, 0o755);
   yield* put(layout.core, options.core, 0o755);
   yield* put(layout.icon, options.icon, 0o644);
+  yield* put(`${os === "macos" ? "Contents/" : ""}Resources/uninstall`, options.manager, 0o755);
   const hasher = new Bun.CryptoHasher("sha256");
   hasher.update(yield* fs.readFile(options.shell));
   hasher.update(yield* fs.readFile(options.core));
@@ -269,6 +277,8 @@ export const assemble = Effect.fn("bundle.assemble")(function* (options: Assembl
   yield* fs.writeFileString(
     path.join(bundle, layout.version),
     yield* Schema.encodeEffect(VersionJson)({
+      name: "collie-desktop",
+      displayName: "Collie",
       version: options.version,
       channel: CHANNEL,
       identifier: IDENTIFIER,
@@ -286,12 +296,13 @@ export const assemble = Effect.fn("bundle.assemble")(function* (options: Assembl
   const prefix = prefixOf(os, arch);
   const file = `${prefix}-collie-desktop${os === "macos" ? ".app" : ""}.tar.zst`;
   const tar = path.join(artifacts, `${prefix}.tar`);
-  yield* run("tar", ["-cf", tar, "-C", build, name]);
+  yield* run("tar", ["--format=ustar", "-cf", tar, "-C", build, name]);
   yield* fs.writeFile(path.join(artifacts, file), Bun.zstdCompressSync(yield* fs.readFile(tar)));
   yield* fs.remove(tar);
   yield* fs.writeFileString(
     path.join(artifacts, `${prefix}-update.json`),
     yield* Schema.encodeEffect(Manifest)({
+      schemaVersion: 1,
       identifier: IDENTIFIER,
       channel: CHANNEL,
       platform: os,
@@ -302,6 +313,70 @@ export const assemble = Effect.fn("bundle.assemble")(function* (options: Assembl
     }),
   );
 });
+
+/** The installed v2 updater requires its native manager in every replacement bundle. */
+const compatibilityManager = (os: Os, arch: string, work: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const archive = `stable-${os}-${arch}-collie-desktop${os === "macos" ? ".app" : ""}.tar.zst`;
+    const base = "https://github.com/cego/collie/releases/download/0.132.2";
+    const bytes = (file: string) =>
+      HttpClient.get(`${base}/${file}`).pipe(
+        Effect.flatMap((response) =>
+          Effect.gen(function* () {
+            if (response.status !== 200)
+              return yield* new Cause.UnknownError(response.status, `could not download ${file}`);
+            return yield* response.arrayBuffer;
+          }),
+        ),
+        Effect.map((body) => new Uint8Array(body)),
+      );
+    const tar = Bun.zstdDecompressSync(yield* bytes(archive));
+    const signatureName = appliedSignatureOf(archive);
+    if (signatureName === null)
+      return yield* new Cause.UnknownError(null, "the compatibility archive has no signature name");
+    const signature = new TextDecoder().decode(yield* bytes(signatureName));
+    const checked = verifyRelease(tar, signature, RELEASE_PUBLIC_KEY);
+    if (!checked.ok) return yield* new Cause.UnknownError(null, checked.reason);
+    const source = `${work}/compatibility`;
+    yield* fs.makeDirectory(source, { recursive: true });
+    yield* fs.writeFile(`${source}/bundle.tar`, tar);
+    const member = `collie-desktop${os === "macos" ? ".app/Contents" : ""}/Resources/uninstall`;
+    yield* run("tar", ["-xf", `${source}/bundle.tar`, "-C", source, member]);
+    return `${source}/${member}`;
+  }).pipe(Effect.provide(FetchHttpClient.layer));
+
+/** Keep the existing one-line installer's signed asset names. */
+export const packageInstaller = (out: string, os: Os, arch: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const build = `${out}/build/${os}-${arch}`;
+    if (os === "macos") {
+      yield* run("hdiutil", [
+        "create",
+        "-volname",
+        "Collie",
+        "-srcfolder",
+        `${build}/${bundleNameOf(os)}`,
+        "-ov",
+        "-format",
+        "UDZO",
+        `${out}/artifacts/${os}-${arch}-collie-desktop.dmg`,
+      ]);
+    } else {
+      yield* fs.copyFile(`${ROOT}desktop-rune/scripts/install-linux.sh`, `${build}/installer`);
+      yield* fs.chmod(`${build}/installer`, 0o755);
+      yield* run("tar", [
+        "--format=ustar",
+        "-czf",
+        `${out}/artifacts/${os}-${arch}-collie-desktop-Setup.tar.gz`,
+        "-C",
+        build,
+        "./installer",
+        "./collie-desktop",
+      ]);
+    }
+  });
 
 /** The macOS icon, from the brand tile as Desktop's build makes its icon set. */
 const macIcon = (work: string) =>
@@ -337,10 +412,12 @@ const program = Effect.gen(function* () {
     shell: `${ROOT}desktop-rune/target/release/collie-desktop-board`,
     core: `${work}/collie-core`,
     icon: os === "macos" ? yield* macIcon(work) : `${ROOT}assets/brand/logos/collie-tile-256.png`,
+    manager: yield* compatibilityManager(os, process.arch, work),
     version: manifest.version,
     baseUrl: BASE_URL,
     prepare: os === "macos" ? signMac(env, work) : undefined,
   });
+  yield* packageInstaller(out, os, process.arch);
   yield* fs.remove(work, { recursive: true });
   yield* Console.log(`built ${bundleNameOf(os)} under ${out}`);
 });

@@ -302,7 +302,6 @@ impl App {
         );
     }
 
-    /// Makes the picked offer with what was typed, once every field it needs has words.
     pub fn make_offer_in_record(&mut self) {
         let Some(record) = &mut self.record.open else {
             return;

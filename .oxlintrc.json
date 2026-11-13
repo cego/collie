@@ -120,7 +120,7 @@
       // The benchmark's drivers, and the Rune spike's stand-in for electrobun and its terminal
       // recorder, speak to Chrome, processes and sockets on their own terms.
       "files": [
-        "desktop-rune/core/electrobun-stdio.ts",
+        "desktop-rune/core/platform.ts",
         "desktop-rune/core/record-terminal.ts",
         "bench/desktop-start/run.ts",
         "bench/desktop-start/start.ts",

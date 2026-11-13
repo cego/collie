@@ -171,8 +171,12 @@ const updateFixtures = Effect.gen(function* () {
   const work = `${dir}/work`;
   const write = (path: string, data: string | Uint8Array) =>
     Effect.promise(() => Bun.write(path, data));
-  yield* write(`${work}/collie-desktop/collie-desktop`, "#!/bin/sh\necho 0.131.0\n");
-  yield* write(`${work}/collie-desktop/version.json`, '{"version":"0.131.0"}\n');
+  yield* write(`${work}/collie-desktop/bin/launcher`, "#!/bin/sh\necho 0.131.0\n");
+  yield* write(`${work}/collie-desktop/bin/collie-core`, "#!/bin/sh\nexit 0\n");
+  yield* write(
+    `${work}/collie-desktop/Resources/version.json`,
+    '{"version":"0.131.0","hash":"new0131","identifier":"dk.cego.collie.desktop","channel":"stable"}\n',
+  );
   const flags = ["--sort=name", "--mtime=@0", "--owner=0", "--group=0", "--numeric-owner"];
   const tarred = Bun.spawn(
     [

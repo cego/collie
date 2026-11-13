@@ -8,7 +8,7 @@ use std::path::Path;
 use std::process::Command;
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/update");
-const BUNDLE: &str = "collie-desktop";
+const BUNDLE: &str = "app";
 
 fn fixture(name: &str) -> Vec<u8> {
     fs::read(format!("{FIXTURES}/{name}")).unwrap()
@@ -22,8 +22,8 @@ fn key() -> String {
 fn installed() -> tempfile::TempDir {
     let install = tempfile::tempdir().unwrap();
     let bundle = install.path().join(BUNDLE);
-    fs::create_dir(&bundle).unwrap();
-    let launcher = bundle.join("collie-desktop");
+    fs::create_dir_all(bundle.join("bin")).unwrap();
+    let launcher = bundle.join("bin/launcher");
     fs::write(&launcher, "#!/bin/sh\necho 0.130.0\n").unwrap();
     fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
     install
@@ -33,6 +33,7 @@ fn stage(install: &Path, tar: &[u8], signature: Option<&[u8]>) {
     let staged = install.join(".update");
     fs::create_dir_all(&staged).unwrap();
     fs::write(staged.join(format!("{BUNDLE}.tar")), tar).unwrap();
+    fs::write(staged.join(format!("{BUNDLE}.tar.json")), r#"{"version":"0.131.0","hash":"new0131","identifier":"dk.cego.collie.desktop","channel":"stable"}"#).unwrap();
     if let Some(signature) = signature {
         fs::write(staged.join(format!("{BUNDLE}.tar.sig")), signature).unwrap();
     }
@@ -40,7 +41,7 @@ fn stage(install: &Path, tar: &[u8], signature: Option<&[u8]>) {
 
 /// What the installed launcher says when it is run.
 fn launched(install: &Path) -> String {
-    let launcher = install.join(BUNDLE).join("collie-desktop");
+    let launcher = install.join(BUNDLE).join("bin/launcher");
     // Another test's fork can hold the launcher open for writing until it execs.
     let out = (0..50)
         .find_map(|_| match Command::new(&launcher).output() {
@@ -76,7 +77,7 @@ fn a_staged_bundle_with_a_valid_signature_replaces_the_installed_one() {
     assert_eq!(launched(install.path()), "0.131.0");
     assert_eq!(
         leftovers(install.path()),
-        [BUNDLE],
+        [".collie-update.lock", BUNDLE],
         "nothing staged is left"
     );
 }
@@ -89,6 +90,41 @@ fn nothing_staged_leaves_the_installed_bundle_alone() {
         Applied::Nothing
     );
     assert_eq!(launched(install.path()), "0.130.0");
+}
+
+#[test]
+fn an_update_bundle_name_cannot_escape_its_installation() {
+    let install = installed();
+    stage(
+        install.path(),
+        &fixture("bundle.tar"),
+        Some(&fixture("bundle.tar.sig")),
+    );
+    for name in [
+        "",
+        ".",
+        "..",
+        "../app",
+        "/app",
+        "other/app",
+        "app/.",
+        "other\\app",
+        "app\0",
+    ] {
+        assert!(
+            matches!(
+                apply_staged(install.path(), name, &key()),
+                Applied::Refused(_)
+            ),
+            "accepted {name:?}"
+        );
+        assert!(
+            !install.path().join(".collie-update.lock").exists(),
+            "invalid names must be rejected before filesystem writes"
+        );
+        assert!(install.path().join(".update/app.tar").is_file());
+        assert_eq!(launched(install.path()), "0.130.0");
+    }
 }
 
 #[test]
@@ -106,7 +142,7 @@ fn a_bundle_whose_signature_does_not_match_is_refused_and_the_installed_one_rema
     assert_eq!(launched(install.path()), "0.130.0");
     assert_eq!(
         leftovers(install.path()),
-        [BUNDLE],
+        [".collie-update.lock", BUNDLE],
         "the refused bundle is thrown away"
     );
 }
@@ -136,7 +172,7 @@ fn an_unsigned_bundle_is_refused_and_the_installed_one_remains() {
     };
     assert!(why.contains("unsigned"), "{why}");
     assert_eq!(launched(install.path()), "0.130.0");
-    assert_eq!(leftovers(install.path()), [BUNDLE]);
+    assert_eq!(leftovers(install.path()), [".collie-update.lock", BUNDLE]);
 }
 
 #[test]
@@ -155,7 +191,7 @@ fn a_bundle_that_fails_halfway_through_unpacking_leaves_the_installed_one_runnab
     assert_eq!(launched(install.path()), "0.130.0");
     assert_eq!(
         leftovers(install.path()),
-        [BUNDLE],
+        [".collie-update.lock", BUNDLE],
         "the half-unpacked bundle is gone"
     );
 }
@@ -164,16 +200,12 @@ fn a_bundle_that_fails_halfway_through_unpacking_leaves_the_installed_one_runnab
 fn the_installed_and_unpacked_bundles_trade_places_in_one_step() {
     let install = installed();
     let next = install.path().join("next");
-    fs::create_dir(&next).unwrap();
-    fs::write(next.join("collie-desktop"), "#!/bin/sh\necho 0.131.0\n").unwrap();
-    fs::set_permissions(
-        next.join("collie-desktop"),
-        fs::Permissions::from_mode(0o755),
-    )
-    .unwrap();
+    fs::create_dir_all(next.join("bin")).unwrap();
+    fs::write(next.join("bin/launcher"), "#!/bin/sh\necho 0.131.0\n").unwrap();
+    fs::set_permissions(next.join("bin/launcher"), fs::Permissions::from_mode(0o755)).unwrap();
     exchange(&next, &install.path().join(BUNDLE)).unwrap();
     assert_eq!(launched(install.path()), "0.131.0");
-    let old = fs::read_to_string(next.join("collie-desktop")).unwrap();
+    let old = fs::read_to_string(next.join("bin/launcher")).unwrap();
     assert!(old.contains("0.130.0"), "{old}");
 }
 
@@ -195,6 +227,15 @@ fn collies_release_key_is_one_the_shell_reads() {
 fn the_install_and_bundle_are_found_from_the_running_shell() {
     use collie_desktop_update::installed_from;
     assert_eq!(
+        installed_from(Path::new(
+            "/data/dk.cego.collie.desktop/stable/app/bin/launcher"
+        )),
+        Some((
+            Path::new("/data/dk.cego.collie.desktop/stable").into(),
+            "app".into()
+        ))
+    );
+    assert_eq!(
         installed_from(Path::new("/opt/collie/collie-desktop/collie-desktop")),
         Some((Path::new("/opt/collie").into(), "collie-desktop".into()))
     );
@@ -203,5 +244,96 @@ fn the_install_and_bundle_are_found_from_the_running_shell() {
             "/Applications/Collie.app/Contents/MacOS/collie-desktop"
         )),
         Some((Path::new("/Applications").into(), "Collie.app".into()))
+    );
+}
+
+#[test]
+fn a_signed_bundle_for_another_requested_version_does_not_replace_the_app() {
+    let install = installed();
+    stage(
+        install.path(),
+        &fixture("bundle.tar"),
+        Some(&fixture("bundle.tar.sig")),
+    );
+    fs::write(install.path().join(".update/app.tar.json"), r#"{"version":"99.0.0","hash":"new0131","identifier":"dk.cego.collie.desktop","channel":"stable"}"#).unwrap();
+    assert!(matches!(
+        apply_staged(install.path(), BUNDLE, &key()),
+        Applied::Refused(_)
+    ));
+    assert_eq!(launched(install.path()), "0.130.0");
+}
+
+#[test]
+fn concurrent_launches_wait_for_the_install_lock_and_apply_an_update_once() {
+    use std::os::fd::AsRawFd;
+    use std::sync::{Arc, Barrier, mpsc};
+    use std::time::Duration;
+
+    let install = installed();
+    stage(
+        install.path(),
+        &fixture("bundle.tar"),
+        Some(&fixture("bundle.tar.sig")),
+    );
+    let lock = fs::File::create(install.path().join(".collie-update.lock")).unwrap();
+    // SAFETY: the file remains open until after both launches finish.
+    assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) }, 0);
+    let ready = Arc::new(Barrier::new(3));
+    let (send, receive) = mpsc::channel();
+    std::thread::scope(|threads| {
+        for _ in 0..2 {
+            let (send, ready, path) = (send.clone(), ready.clone(), install.path());
+            threads.spawn(move || {
+                ready.wait();
+                send.send(apply_staged(path, BUNDLE, &key())).unwrap();
+            });
+        }
+        ready.wait();
+        let premature = receive.recv_timeout(Duration::from_millis(100));
+        // Release even if the assertion fails, so waiting launches can finish.
+        assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) }, 0);
+        assert!(
+            matches!(premature, Err(mpsc::RecvTimeoutError::Timeout)),
+            "a launch ignored the installation lock: {premature:?}"
+        );
+    });
+    let outcomes = [receive.recv().unwrap(), receive.recv().unwrap()];
+    assert!(outcomes.contains(&Applied::Installed), "{outcomes:?}");
+    assert!(outcomes.contains(&Applied::Relaunch), "{outcomes:?}");
+    assert_eq!(launched(install.path()), "0.131.0");
+    assert!(!install.path().join(".update").exists());
+}
+
+#[test]
+fn a_launcher_moved_by_another_update_restarts_beside_the_installed_core() {
+    let install = installed();
+    stage(
+        install.path(),
+        &fixture("bundle.tar"),
+        Some(&fixture("bundle.tar.sig")),
+    );
+    assert_eq!(
+        apply_staged(install.path(), BUNDLE, &key()),
+        Applied::Installed
+    );
+    // /proc/self/exe of the waiting Linux process points at the removed old bundle.
+    let moved = install
+        .path()
+        .join(".update/unpacked/collie-desktop/bin/launcher (deleted)");
+    let (root, bundle) = collie_desktop_update::installed_from(&moved).unwrap();
+    assert_eq!(root, install.path());
+    assert_eq!(bundle, BUNDLE);
+    let launcher = root.join(bundle).join("bin/launcher");
+    assert_eq!(
+        String::from_utf8(Command::new(&launcher).output().unwrap().stdout)
+            .unwrap()
+            .trim(),
+        "0.131.0"
+    );
+    assert!(
+        Command::new(launcher.parent().unwrap().join("collie-core"))
+            .status()
+            .unwrap()
+            .success()
     );
 }

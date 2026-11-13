@@ -49,6 +49,7 @@ const PART: usize = 1024 * 1024;
 
 #[derive(Default)]
 pub struct Chat {
+    pub logo: collie_desktop_theme::Logo,
     pub transcript: Transcript,
     pub composer: TextEdit,
     /// Routes turns elsewhere than the core's `say`, as a recorder or a test does.

@@ -678,6 +678,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly _tag: "HarnessBroken"; readonly why: ReadonlyArray<string> }
     | { readonly _tag: "ProofUnavailable"; readonly lost: ReadonlyArray<{ readonly metric: string; readonly why: string }> };
   export function calibrationOf(measured: Pick<Measurement, "plan" | "result">): Calibration;
+  /**
+   * The harness \`commits\` that \`at\` lacks, in order: those after the longest prefix whose touched
+   * files \`at\` holds exactly as that prefix left them, whatever their SHAs.
+   */
+  export function harnessLacking(cwd: string, at: string, commits: ReadonlyArray<string>): Effect.Effect<ReadonlyArray<string>, never, ChildProcessSpawner.ChildProcessSpawner>;
 
   /** What a merge at a head came to: \`MergedOutside\` is a merge this Run did not make. */
   export type MergeOutcome =
@@ -721,14 +726,16 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** Where a merge request's review stands, judged against the head the Run's Checks were proved on. */
   export type ReviewStanding =
     | { readonly _tag: "Ready"; readonly head: string; readonly approvers: ReadonlyArray<string> }
-    | { readonly _tag: "Unanswered"; readonly head: string; readonly comments: ReadonlyArray<OpenComment> }
+    | { readonly _tag: "Unanswered"; readonly head: string; readonly comments: ReadonlyArray<OpenComment>; readonly approvers?: ReadonlyArray<string> }
     | { readonly _tag: "Moved"; readonly head: string }
+    | { readonly _tag: "Conflicting"; readonly head: string }
     | { readonly _tag: "Merged"; readonly sha: string; readonly by: string; readonly at: string }
     | { readonly _tag: "Closed" }
     | { readonly _tag: "Held" }
-    | { readonly _tag: "Waiting"; readonly why: ReadonlyArray<string> }
+    | { readonly _tag: "Waiting"; readonly why: ReadonlyArray<string>; readonly approvers?: ReadonlyArray<string> }
     | { readonly _tag: "Unreadable"; readonly reason: string };
   export const ReviewStandingSchema: Schema.Codec<ReviewStanding, unknown, never, never>;
+  export const CONFLICTS: string;
   /** Whether a standing is still waiting on a teammate's approval, among whatever else. */
   export function waitsOnApproval(standing: ReviewStanding): boolean;
 
@@ -962,7 +969,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     /** Every question this run has been asked, oldest first, with its answer once it has one. */
     readonly asked: (
       runId: string,
-    ) => Effect.Effect<ReadonlyArray<{ readonly name: string; readonly answer: string | null }>>;
+    ) => Effect.Effect<ReadonlyArray<{
+      readonly name: string;
+      readonly answer: string | null;
+      /** Who answered it, where the Run's audit says: a front door, and for chat the human's words that turn. */
+      readonly by?: { readonly origin: string; readonly said?: string };
+    }>>;
     /** Answers an open question with \`value\` as Collie, waking nothing that waits on it. */
     readonly close: (runId: string, decision: string, value: string) => Effect.Effect<void>;
     /** What has been verified for this run, and the tree in front of it now. */
@@ -1145,6 +1157,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
        * Stop ends it.
        */
       readonly whileConflicting?: boolean;
+      /** Return a confirmed target conflict at its current head for repair. */
+      readonly returnConflicts?: boolean;
     }) => Effect.Effect<ReviewStanding, WorkflowError>;
     /**
      * One read of whether the Changes the ticket at \`ticket\` names on its **Needs merged:** line
@@ -1184,6 +1198,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly runId: string;
       readonly cwd: string;
       readonly head: string;
+      /** Where supplied, require this source branch before moving the checkout. */
+      readonly branch?: string;
     }) => Effect.Effect<FastForward>;
     /** Reads \`tag\` back from origin and the forge against what it must prove. Take it inside an Activity. */
     readonly readTag: (options: {
@@ -1281,6 +1297,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly status: "pending" | "suspended" | "complete" | "failed";
       /** The issues its input says \`Closes #n\` for. */
       readonly closes: ReadonlyArray<number>;
+      readonly mr: string | null;
+      /** Its merge request's disposition was recorded as merged. */
+      readonly merged: boolean;
+      /** The questions it asked that were not set aside, with what answered each. */
+      readonly questions: ReadonlyArray<{ readonly name: string; readonly answer: string | null }>;
     }>;
     readonly workflows: ReadonlyArray<WorkflowTally>;
     readonly failed: ReadonlyArray<{ runId: string; workflow: string; reason: string }>;
@@ -2043,6 +2064,16 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** Whether a blocking finding says where and why, so it can be acted on. */
   export function substantiated(finding: Finding): boolean;
   export function unsubstantiated(findings: ReadonlyArray<Finding>): string | null;
+  /** Disputes the review has neither confirmed fixed nor withdrawn with a reason. */
+  export function remainingDisputes(
+    disputed: ReadonlyArray<Finding>,
+    review: {
+      readonly findings: ReadonlyArray<Finding>;
+      readonly disputed: ReadonlyArray<Finding>;
+      readonly dropped: ReadonlyArray<Finding>;
+      readonly fixed: ReadonlyArray<Fixed>;
+    },
+  ): Finding[];
   /** A finding the implementer already rejected stops driving the loop. */
   export function splitDisputed(
     findings: ReadonlyArray<Finding>,
@@ -4385,6 +4416,7 @@ export const hostLayer = (options: {
         readonly cwd: string;
         readonly proved: string;
         readonly seen: ReadonlyArray<string>;
+        readonly returnConflicts?: boolean;
       }) =>
         Effect.gen(function* () {
           const mr = yield* mergeRequestOf(fs, dir, asked.runId);
@@ -5286,6 +5318,7 @@ export const hostLayer = (options: {
               for (;;) {
                 const { mr, read, standing } = yield* reviewRead(asked);
                 const wait = reviewWaitOf(mr, read);
+                if (standing._tag === "Conflicting") return standing;
                 if (asked.whileConflicting === true) {
                   const conflicting =
                     read.ok && read.state === "open" && conflictsWithTarget(read.mergeable);
@@ -5399,6 +5432,7 @@ export const hostLayer = (options: {
               runDir: runDir(dir, asked.runId),
               cwd: asked.cwd,
               head: asked.head,
+              branch: asked.branch,
               run: runShell,
             }),
           ).pipe(Effect.orDie),
@@ -6831,6 +6865,8 @@ export interface RegistryApi {
     readonly input: Readonly<Record<string, Schema.Json>>;
     readonly request: string;
     readonly attachments?: ReadonlyArray<string> | undefined;
+    /** The human who took the offer, recorded as who started the Run it starts. */
+    readonly started?: Started | undefined;
   }) => Effect.Effect<Admitted, HostRefused | RequestConflict, HostServices>;
   /** The generation a run is on and the execution it was admitted as. */
   readonly routed: (
@@ -8948,6 +8984,7 @@ const makeRegistry: (
   const registering = yield* Semaphore.make(1);
   // A grant is a read and a write of one file: two at once would each drop the other's.
   const granting = yield* Semaphore.make(1);
+  const invoking = yield* Semaphore.make(1);
 
   const mint = Effect.fn("Engine.Registry.mint")(function* (file: string) {
     // Read as it is now to learn the id this file claims, then register the next
@@ -8988,12 +9025,6 @@ const makeRegistry: (
     );
   });
 
-  /**
-   * A Run, the module it would be offered from now, and the facts those offers are
-   * decided on. The generation is resolved in the Run's own project rather than taken
-   * from the row: what is offered is the current code's to say, and a module that has
-   * been edited away leaves the Run readable and its offers refused with the reason.
-   */
   /** A follow-up takes what its workflow needs and the offer does not fill, so a front door asks for it. */
   const unfilled = (offer: Offer, project: string, filled: Readonly<Record<string, Schema.Json>>) =>
     resolve({ project, id: offer.workflow }).pipe(
@@ -9027,7 +9058,11 @@ const makeRegistry: (
       })),
     );
 
-  const offeredBy = Effect.fn("Engine.Registry.offeredBy")(function* (runId: string) {
+  /** Resolve offers from current project code; removed modules leave the Run readable but refuse its offers. */
+  const offeredBy = Effect.fn("Engine.Registry.offeredBy")(function* (
+    runId: string,
+    request?: string,
+  ) {
     const row = yield* store.run(runId);
     if (row === null) {
       return yield* new HostRefused({ reason: `no run "${runId}" was started here` });
@@ -9074,7 +9109,7 @@ const makeRegistry: (
       facts.recovery = yield* recoveryFor(store, dir, runId, runId, workSource).pipe(
         Effect.provideContext(bun),
       );
-    const available: Declared[] = [];
+    const refused = new Map<string, string>();
     const readings = new Map<ConnectionId, ConnectionReading>();
     for (const offer of generation.offers) {
       const ids = yield* connectionIds(
@@ -9083,7 +9118,6 @@ const makeRegistry: (
         placedOf(row, options).cwd,
         input,
       );
-      let usable = true;
       for (const id of ids) {
         const reading =
           readings.get(id) ??
@@ -9091,12 +9125,11 @@ const makeRegistry: (
             Effect.provideContext(bun),
           ));
         readings.set(id, reading);
-        if (reading.state !== "ok") usable = false;
+        if (reading.state !== "ok" && !refused.has(offer.id))
+          refused.set(offer.id, `needs ${id}: ${reading.detail}. Fix: ${reading.fix}`);
       }
-      if (usable) available.push(offer);
     }
     // A plan spanning repositories is a fan-out, which an offer does not start.
-    const refused = new Map<string, string>();
     for (const offer of generation.offers) {
       const field = Option.getOrUndefined(
         Arr.findFirst(Rec.toEntries(offer.inputs), ([, source]) => source === "plan-dir"),
@@ -9157,7 +9190,37 @@ const makeRegistry: (
       }).pipe(Effect.provideContext(bun));
       if (still !== null) for (const offer of again) refused.set(offer.id, still);
     }
-    return { row, generation: { ...generation, offers: available }, facts, where, refused, input };
+    const runs = yield* store.runs;
+    const mr = facts.mrUrl;
+    const mrId = mr === null ? null : yield* mrIdIn(mr, placedOf(row, options).cwd, runShell);
+    const merged = mrId === null ? undefined : (yield* readMrStates(dir)).get(mrId);
+    for (const offer of generation.offers) {
+      const fields = Arr.filter(
+        Rec.toEntries(offer.inputs),
+        ([, source]) => source === "merge-request",
+      );
+      const withMr = mr !== null && fields.length > 0;
+      if (withMr && (merged === "merged" || merged === "on-stage" || merged === "in-prod"))
+        refused.set(offer.id, `${mr} is merged`);
+      const workflow = offer.workflow === SELF ? generation.id : offer.workflow;
+      for (const candidate of runs) {
+        if (candidate.workflow !== workflow || candidate.request === request) continue;
+        if (candidate.parent !== runId) {
+          if (!withMr) continue;
+          const given = yield* decodeInput(candidate.input).pipe(
+            Effect.orElseSucceed((): Record<string, Schema.Json> => ({})),
+          );
+          if (!Arr.some(fields, ([name]) => given[name] === mr)) continue;
+        }
+        if (yield* workflowEnded(candidate.run)) continue;
+        refused.set(
+          offer.id,
+          `a ${offer.title}${withMr ? ` of ${mr}` : ""} is still going: ${candidate.run}`,
+        );
+        break;
+      }
+    }
+    return { row, generation, facts, where, refused, input };
   });
 
   const connectionIds = Effect.fn("Engine.Registry.connectionIds")(function* (
@@ -9636,8 +9699,12 @@ const makeRegistry: (
       readonly input: Readonly<Record<string, Schema.Json>>;
       readonly request: string;
       readonly attachments?: ReadonlyArray<string> | undefined;
+      readonly started?: Started | undefined;
     }) {
-      const { row, generation, facts, where, refused, input } = yield* offeredBy(options.runId);
+      const { row, generation, facts, where, refused, input } = yield* offeredBy(
+        options.runId,
+        options.request,
+      );
       // Asked again here, of the module as it is now: the card this was read from may
       // have been drawn before the file was edited, and a card is not authority.
       const offer = Option.getOrUndefined(
@@ -9694,10 +9761,11 @@ const makeRegistry: (
         parent: row.run,
         verify: inherited,
         attachments: options.attachments,
+        started: options.started,
         // A follow-up carries on the parent's work, so it is on the parent's branch.
         options: carried,
       });
-    }),
+    }, invoking.withPermits(1)),
 
     start: startWork,
     check: (options) => settleStart(options, "run-check").pipe(Effect.asVoid),

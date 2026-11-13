@@ -1,4 +1,4 @@
-//! The app's own log: `desktop.log` under `$XDG_STATE_HOME/collie-desktop-rune`, one JSON line an
+//! The app's own log: `desktop.log` under `$XDG_STATE_HOME/collie-desktop`, one JSON line an
 //! event, kept once as `desktop.log.1` past 1 MiB, as the core keeps `actions.log`
 //! (`desktop/src/bun/sent.ts`). A line holds where and what, a reason and ids: never a
 //! message's words, an answer's value or a file's content. A write that fails is dropped.
@@ -26,7 +26,7 @@ thread_local! {
     static HERE: RefCell<Option<Target>> = const { RefCell::new(None) };
 }
 
-/// `$XDG_STATE_HOME/collie-desktop-rune`, else `~/.local/state/collie-desktop-rune`.
+/// `$XDG_STATE_HOME/collie-desktop`, else `~/.local/state/collie-desktop`.
 /// `COLLIE_RUNE_LOG_DIR` puts it elsewhere, as a headless run's does.
 pub fn dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("COLLIE_RUNE_LOG_DIR").filter(|d| !d.is_empty()) {
@@ -36,7 +36,7 @@ pub fn dir() -> Option<PathBuf> {
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))?;
-    Some(state.join("collie-desktop-rune"))
+    Some(state.join("collie-desktop"))
 }
 
 /// Logs the app's events from here on, in `dir()`.

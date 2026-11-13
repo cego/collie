@@ -1,4 +1,4 @@
-//! The spike app: starts Desktop's main process as its core, speaks `DesktopRpcs` to it over
+//! Collie: starts Desktop's main process as its core, speaks `DesktopRpcs` to it over
 //! stdio, draws the board `flock` streams, and a pressed card's pane on the `terminal` stream.
 
 use collie_desktop_board::calls::{Answer, CallError, Calls, Each, Ended, Live, Stop};
@@ -241,7 +241,7 @@ fn update_at_launch() -> Vec<(&'static str, std::ffi::OsString)> {
     use collie_desktop_update::{Applied, apply_staged, installed_from};
     let exe = std::env::current_exe().expect("the shell's own path");
     let Some((install, bundle, version)) = installed_from(&exe).and_then(|(install, bundle)| {
-        let version = ["version.json", "Contents/Resources/version.json"]
+        let version = ["Resources/version.json", "Contents/Resources/version.json"]
             .iter()
             .map(|at| install.join(&bundle).join(at))
             .find(|at| at.is_file())?;
@@ -249,16 +249,26 @@ fn update_at_launch() -> Vec<(&'static str, std::ffi::OsString)> {
     }) else {
         return Vec::new();
     };
-    match apply_staged(&install, &bundle, include_str!("../../../release.pub")) {
-        Applied::Installed => {
-            use std::os::unix::process::CommandExt;
-            let failed = std::process::Command::new(&exe)
-                .args(std::env::args_os().skip(1))
-                .exec();
-            eprintln!("the updated shell did not start: {failed}");
-        }
-        Applied::Refused(why) => eprintln!("update not installed: {why}"),
-        Applied::Nothing => {}
+    let launcher = install.join(&bundle).join(if bundle.ends_with(".app") {
+        "Contents/MacOS/launcher"
+    } else {
+        "bin/launcher"
+    });
+    let mut refused = false;
+    let applied = apply_staged(&install, &bundle, include_str!("../../../release.pub"));
+    // A concurrent updater can move this process's executable even before it sees a tar.
+    let moved = std::env::current_exe().is_ok_and(|current| current != launcher);
+    if moved || matches!(applied, Applied::Installed | Applied::Relaunch) {
+        use std::os::unix::process::CommandExt;
+        let failed = std::process::Command::new(&launcher)
+            .args(std::env::args_os().skip(1))
+            .exec();
+        eprintln!("the updated shell did not start: {failed}");
+        std::process::exit(1);
+    }
+    if let Applied::Refused(why) = applied {
+        refused = true;
+        eprintln!("update not installed: {why}");
     }
     vec![
         (
@@ -266,6 +276,10 @@ fn update_at_launch() -> Vec<(&'static str, std::ffi::OsString)> {
             install.join(".update").join(format!("{bundle}.tar")).into(),
         ),
         ("COLLIE_RUNE_VERSION", version.into()),
+        (
+            "COLLIE_RUNE_UPDATE_REFUSED",
+            if refused { "1" } else { "0" }.into(),
+        ),
     ]
 }
 
@@ -324,8 +338,8 @@ fn main() {
     let core = Core::start_with(&env);
     let client = core.client.clone();
 
-    // The desktop entry's name, so the window is shown as its launcher's, never stable Desktop's.
-    rune::set_app_id("dk.cego.collie.desktop.rune");
+    // Match the existing launcher entry so an upgrade keeps one app in the desktop shell.
+    rune::set_app_id("collie-desktop");
     let app = rune::App::new(AppSpec {
         fonts: rune_theme_opencode::FONTS,
         families: rune_theme_opencode::FAMILIES,
@@ -339,6 +353,14 @@ fn main() {
     .modifier_keys();
     let mut app = app;
     let handle = app.handle();
+    if let Some(restarts) = client.restarts() {
+        let quitting = handle.clone();
+        std::thread::spawn(move || {
+            if restarts.recv().is_ok() {
+                quitting.quit();
+            }
+        });
+    }
     let poster = std::sync::Mutex::new(handle.clone());
     let (live, first_live) = std::sync::mpsc::channel();
     let calls = collie_desktop_board::calls::Core::new(
@@ -373,6 +395,14 @@ fn main() {
     notifications(&handle, &client);
     let ran = app.try_run();
     core.stop();
+    if client.restarting() {
+        use std::os::unix::process::CommandExt;
+        let failed = std::process::Command::new(std::env::current_exe().expect("the shell's path"))
+            .args(std::env::args_os().skip(1))
+            .exec();
+        eprintln!("Collie could not restart: {failed}");
+        std::process::exit(1);
+    }
     if let Err(error) = ran {
         eprintln!("{error}");
         std::process::exit(1);

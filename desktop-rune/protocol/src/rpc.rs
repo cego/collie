@@ -48,6 +48,8 @@ pub enum FromCore {
     },
     /// Not Effect's: the stdio stand-in's `Utils.showNotification`, for the shell to post.
     Notify(Notice),
+    /// A verified update is staged; the shell closes the core before relaunching itself.
+    Restart,
 }
 
 /// A notification the main process asks the shell to post, as Electrobun's `showNotification`
