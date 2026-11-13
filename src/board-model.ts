@@ -2641,6 +2641,13 @@ export function dispositionActions(view: TaskView): DisposeAction[] {
  */
 export type Section = "needs-you" | "ready-to-ship" | "working" | "waiting" | "finished";
 
+/** What a Ready to ship card's line opens with: a merge's Release offer under its own title. */
+export function shippingLabel(view: Pick<TaskView, "shipping" | "offer">): string {
+  if (view.shipping == null) return "";
+  if (view.shipping === "merge") return `${view.offer?.title ?? "Merge"}: `;
+  return view.shipping === "stage" ? "Stage: " : "Deploy: ";
+}
+
 export function sectionOf(view: Pick<TaskView, "state" | "landed" | "shipping">): Section {
   // Read off the state alone, because a Decision is not the only way to stop for a
   // human: an agent at its harness's own dialog is one too, and a section derived from

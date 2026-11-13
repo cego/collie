@@ -77,6 +77,7 @@ import {
   readyToRelease,
   SECTIONS,
   sectionOf,
+  shippingLabel,
   sortBoard,
   type BoardAgent,
   type BoardChild,
@@ -2150,7 +2151,7 @@ function textSection(
   under: { run: string; lines: ReadonlyArray<string> } | null,
 ): string[] {
   const rows = Arr.flatMap(views, (view) => [
-    `  ${GLYPH_FOR[view.state]} ${view.name} · ${view.project} — ${view.shipping == null ? "" : `${view.shipping === "merge" ? "Merge" : view.shipping === "stage" ? "Stage" : "Deploy"}: `}${view.sentence}`,
+    `  ${GLYPH_FOR[view.state]} ${view.name} · ${view.project} — ${shippingLabel(view)}${view.sentence}`,
     ...(view.drift === null ? [] : [`    ↯ ${view.drift}`]),
     ...(view.held === null ? [] : [`    ${view.held}`]),
     ...(under !== null && under.run === view.run ? under.lines : []),

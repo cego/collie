@@ -1243,10 +1243,7 @@ function itemFor(view: TaskView, action: CardAction, primary: boolean): MenuItem
     case "offer":
       return {
         key: primary || (view.offers?.length ?? 0) < 2 ? "i" : "",
-        label:
-          primary && view.shipping === "merge"
-            ? "Merge"
-            : `${action.offer.title}${action.offer.unavailable === undefined ? "" : ` — ${action.offer.unavailable}`}`,
+        label: `${action.offer.title}${action.offer.unavailable === undefined ? "" : ` — ${action.offer.unavailable}`}`,
         disabled: action.offer.unavailable === undefined ? undefined : true,
         command: { _tag: "InvokeOffer", runId: action.offer.run ?? runId, offer: action.offer.id },
       };

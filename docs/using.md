@@ -668,9 +668,10 @@ split by whether the work **landed**. The order is the board model's own, and th
 board and chat's `collie_herd` list the sections the same way.
 
 **Ready to ship** holds work whose next shipping action has every gate satisfied at its
-current head, on forge answers read within two merge-watch rounds. The card names
-**Merge**, **Stage** or **Deploy**. Merge invokes the existing Release offer, whose Run
-still asks its own Go. A declared Go uses the existing answer buttons. The host checks
+current head, on forge answers read within two merge-watch rounds. A merge is the
+existing Release offer, named by its own title and invoked on the Run that owns it, whose
+Run still asks its own Go; otherwise the card names **Stage** or **Deploy**. A declared Go
+uses the existing answer buttons. The host checks
 Merge and Stage from an MR against Ready to release, and Deploy against its recorded
 stage proof for that head or tag. A stale answer, moved head or failed gate takes it out;
 a Go that no longer holds appears in Needs you and says why. A Stage Run asks no Go.
@@ -753,7 +754,7 @@ forge's last answer is more than two merge-watch rounds old, the card adds when 
 read; it last answered 6 minutes ago.` A `merged` recorded by hand is outranked by the forge
 reading the merge request open after it, and the card is owed again. Where
 every gate holds on fresh evidence at its head, it is **Ready to release** and moves
-to **Ready to ship** with Merge. Its sentence says: `Ready to
+to **Ready to ship** with its Release offer. Its sentence says: `Ready to
 release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: Release, or tell
 builder to.` The agent is named only while it is alive. A GitHub pull request reads as
 `owner/repo#30`, a GitLab merge request as `group/project!42`. A Run that ended with
