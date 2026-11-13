@@ -1678,7 +1678,7 @@ test("a managed Codex server's late Output during retirement prevents rebuilding
   ));
 
 test("a reused managed Codex server dying just before delivery is replaced without parking", () =>
-  runEffect(
+  runLive(
     Effect.gen(function* () {
       const managed = yield* managedCodex;
       class DiesBeforeDelivery extends FakeHerdr {
@@ -1896,7 +1896,7 @@ test.each([
           Effect.gen(function* () {
             yield* Effect.forkChild(started("r1"));
             if (!replay) yield* lose;
-            yield* spend(20_000);
+            yield* until(parked("r1"));
             expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
             expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
             expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(
