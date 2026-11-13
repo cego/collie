@@ -1876,13 +1876,9 @@ function fromRuns(
     const landed =
       (run.worktree !== null && settling.landedAt.has(run.worktree.path)) ||
       settling.landedOn.has(onBranch(run.project, run.branch ?? run.worktree?.branch ?? ""));
-    // A pinned review checkout is made again at its next round, so nothing resumes in it.
-    const pinned =
-      worktree !== null && Str.startsWith(REVIEWING)(Str.split(worktree.path, "/").at(-1) ?? "");
     const resumable =
       (run.state === "stopped" || (run.state === "failed" && !roaming.includes(at ?? ""))) &&
-      !landed &&
-      !pinned;
+      !landed;
     if (going) paths.set(run.cwd, "a run is still working in it");
     else if (checking.has(run.id)) paths.set(run.cwd, "its check is still running in it");
     else if (resumable) paths.set(run.cwd, `a ${run.state} run can resume in it`);

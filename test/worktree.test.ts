@@ -895,7 +895,7 @@ test("a failed Run's clean roaming checkout is pruned, failed Runs inside it or 
     }),
   ));
 
-test("a stopped review's checkout pinned at a merge request's head is pruned, as its next round pins one again", () =>
+test("a stopped review keeps its pinned checkout so its interrupted round can resume", () =>
   runOnPath(
     Effect.gen(function* () {
       const at = join(rig.root, "worktrees", "project", reviewingDir("r-follow"));
@@ -909,8 +909,9 @@ test("a stopped review's checkout pinned at a merge request's head is pruned, as
       yield* settledGit({ "rev-parse --abbrev-ref --symbolic-full-name @{u}": "" });
 
       expect(yield* prune()).toEqual([
-        `♻ removed ${reviewingDir("r-follow")} · its Run is over and it holds nothing`,
+        `kept ${reviewingDir("r-follow")} · a stopped run can resume in it`,
       ]);
+      expect(yield* asked()).not.toContain(`worktree remove ${at}`);
     }),
   ));
 
