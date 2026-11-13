@@ -744,6 +744,14 @@ fix — and the message says whether the approval landed. Its refusal is its mes
 merge request, no CLI or login for its forge, or one assigned to whoever is running this —
 whose findings are theirs to fix rather than to post to themselves.
 
+Every host operation that sends **Public text** (`CONTEXT.md`) checks it first: `host.post`,
+`host.note`, `host.reply`, `host.fileIssue`, `host.commentIssue` and
+`host.shareForApproval`, whose text is the merge request's title. Text that names Collie, a
+Run or its id, a `collie` command, a plan ticket or Collie's own paths and vocabulary is
+refused, naming each phrase and why; it is never rewritten. Each refuses in its usual way:
+a message, a `why`, or a `WorkflowError`. A target in the repository the installation's
+releases come from takes any text. The phrases are data in `src/public-text.ts`.
+
 `mrForgeFacts(target)` is pure: for an `mr:` target it gives the forge's name and noun and
 the `diff`, `view` and `checkout` command lines a prompt hands a reviewer, written by that
 forge's adapter, and null for any other target. `target_repo` is still filled in for a
@@ -967,10 +975,10 @@ Call it inside a journaled Activity after the operator agrees to share.
 The shipped release workflow asks the operator to share the address themselves when Slack is unavailable.
 
 `host.reply({ runId, cwd, comment, body })` replies to the comment with id `comment` on
-the merge request the Run recorded, posting `body` as it is, in the comment's thread where
-it has one. It never resolves a thread. It answers `posted`, or `already` where the forge
+the merge request the Run recorded, posting `body` with only a hidden marker,
+`<!-- collie:<run> -->`, after it, in the comment's thread where it has one. It never resolves a thread. It answers `posted`, or `already` where the forge
 reads the comment as answered — as after a restart that posted the reply before its
-Activity was journaled — and fails with `WorkflowError` when the forge refuses. Take each
+Activity was journaled, a reply it finds by that marker — and fails with `WorkflowError` when the forge refuses. Take each
 reply inside an Activity of its own. `host.reviewHead({ runId, cwd, commits })` reads the
 merge request's `head` as the forge reports it, which of `commits` it `carries` once
 origin is fetched, and the ids of its external comments still `open`. `settleAnswers`
@@ -1442,6 +1450,15 @@ it, each with its own fix. A module of your own can import it the same way.
 `ReviewOutputSchema`, `FixOutputSchema` and `SynthesisSchema` are the shapes those steps
 write. Hand one to `agentWork` and what comes back is its own type — the same contract the
 shipped steps are held to, not a copy of it.
+
+`SynthesisSchema` accepts an optional `public_summary` for the MR's audience. A finding's
+optional `internal: true` marks a concern about Collie's own process. `renderReview`
+retains the complete review and fixed history for `review.md`; `renderPublicReview` uses
+the public summary and non-internal live findings, in severity order. With no public findings, it says there is
+nothing to fix. Older Outputs use `summary` as the public summary and unmarked findings
+remain public. The shipped review workflow writes this rendering to `public-review.md`
+beside `review.md`, then passes that file to `host.post` for the Public text check.
+Approval still follows every live finding, including internal ones.
 
 A review's `verdict` of `findings` means it found some. A fix's means it left some
 unresolved, each listed in `findings`. What it fixed goes in `fixed`, and what it disputes

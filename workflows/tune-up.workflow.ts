@@ -668,7 +668,7 @@ const keyOf = (one: External) =>
 const markerOf = (key: string) => `collie:${key}`;
 
 /** One external finding as the human reads it, in the report and in its question. */
-const previewOf = (one: External, key: string) =>
+const previewOf = (one: External) =>
   redact(
     Arr.join(
       [
@@ -684,7 +684,6 @@ const previewOf = (one: External, key: string) =>
         ...(one.existing === undefined ? [] : [`- Existing issue: ${one.existing}`]),
         "- Acceptance criteria:",
         ...Arr.map(one.criteria, (criterion) => `  - ${criterion}`),
-        `- Key: ${key}, carried by its issue as ${markerOf(key)}`,
       ],
       "\n",
     ),
@@ -739,18 +738,15 @@ const tableOf = (measured: Measurement) => [
  * an agent's numbers, with every credential-shaped value taken out.
  */
 const bodyOf = (got: {
-  readonly runId: string;
   readonly final: Measurement;
   readonly original: Measurement | null;
   readonly finals: ReadonlyArray<Measurement>;
   readonly plans: ReadonlyArray<string>;
-  readonly planFile: string;
   readonly written: Harnessed;
   readonly found: Discovered;
   readonly cycles: ReadonlyArray<Cycled>;
   readonly evidence: string;
   readonly review: SynthesisReport;
-  readonly archive: string;
   readonly tradeoff: string | null;
 }) => {
   const { final, found } = got;
@@ -776,7 +772,7 @@ const bodyOf = (got: {
         [
           `## Tune-up: ${primary} ${verdictOf(primary)?.verdict ?? "unjudged"} against the merge base`,
           "",
-          `The host's \`final\` Measurement ${final.id}, on ${final.machine}, compares ${final.base.commit} with the harness applied against this branch at ${final.candidate.head_sha}${final.candidate.harness_applied === undefined ? "" : `, which ships without the harness and was measured with it applied in a scratch tree`}.`,
+          `The final benchmark, on ${final.machine}, compares ${final.base.commit} with the harness applied against this branch at ${final.candidate.head_sha}${final.candidate.harness_applied === undefined ? "" : `, which ships without the harness and was measured with it applied in a scratch tree`}.`,
           "",
           ...tableOf(final),
           ...(got.tradeoff === null
@@ -791,7 +787,7 @@ const bodyOf = (got: {
             ? []
             : [
                 "",
-                `Against the base the Run started from, ${got.original.base.commit} (\`final\` Measurement ${got.original.id}):`,
+                `Against the starting base, ${got.original.base.commit}:`,
                 "",
                 ...tableOf(got.original),
               ]),
@@ -803,7 +799,6 @@ const bodyOf = (got: {
             ? []
             : [`- Prepared once per tree: \`${commandLine(plan.prepare)}\``]),
           `- Harness commits ${Arr.join(plan.harness.commits, ", ")}, touching only ${Arr.join(plan.harness.paths, ", ")}, taken off this branch`,
-          `- Archived with Run ${got.runId} in ${got.archive}: the harness as patches, the raw results, the plan, each Measurement's intervals and the revisions measured, and how to reproduce them`,
           "",
           "### Regressions and tradeoffs",
           "",
@@ -813,7 +808,7 @@ const bodyOf = (got: {
           }),
           ...Arr.map(
             Arr.filter(got.cycles, (one) => !one.kept),
-            (one) => `- Not kept: ${cycleLine(one)}`,
+            (one) => `- Not kept: ${one.tried}: ${one.why}`,
           ),
           "",
           "### Tests and review",
@@ -840,7 +835,7 @@ const bodyOf = (got: {
           "<details>",
           "<summary>Evidence to audit and reproduce</summary>",
           "",
-          `#### Samples of \`final\` Measurement ${final.id}`,
+          "#### Samples of the final benchmark",
           "",
           ...Arr.flatMap(plan.metrics, (metric) =>
             Arr.map(
@@ -882,18 +877,16 @@ const bodyOf = (got: {
           ...Arr.map(got.plans, (reason, at) => `- Plan ${at + 1}: ${reason}`),
           ...Arr.map(
             got.finals,
-            (one) =>
-              `- ${one.id}: ${one.base.commit} against ${one.candidate.head_sha}: ${verdictsLine(one)}`,
+            (one) => `- ${one.base.commit} against ${one.candidate.head_sha}: ${verdictsLine(one)}`,
           ),
           "",
           "#### Reproduce",
           "",
           "```sh",
           `git checkout ${final.candidate.head_sha}`,
-          `collie measure --run ${got.runId} --base ${final.base.commit} --plan ${got.planFile} --pass final`,
+          ...(plan.prepare === null ? [] : [commandLine(plan.prepare)]),
+          ...Arr.map(plan.commands, commandLine),
           "```",
-          "",
-          `The full record is kept with Run ${got.runId}.`,
           "",
           "</details>",
           "",
@@ -1499,7 +1492,7 @@ export default defineWorkflow({
           const decided = `${key}.decided`;
           if (one.existing !== undefined)
             return yield* recorded(decided, `external ${key}: existing ${one.existing}`);
-          const finding = previewOf(one, key);
+          const finding = previewOf(one);
           const team =
             one.team ??
             (yield* ask({
@@ -1601,7 +1594,7 @@ export default defineWorkflow({
                         "",
                         "Improvements only another repository can make. None is assumed done: no Measurement, outcome or merge readiness counts on any of them.",
                         "",
-                        ...Arr.flatMap(keyed, ({ key, one }) => [previewOf(one, key), ""]),
+                        ...Arr.flatMap(keyed, ({ one }) => [previewOf(one), ""]),
                       ],
                       "\n",
                     ),
@@ -2194,26 +2187,16 @@ export default defineWorkflow({
             reason: "no `final` Measurement against the merge base to write the merge request from",
           });
         const fs = yield* FileSystem.FileSystem;
-        const planFile = `${place.dir}/handoffs/tune-up-plan.json`;
-        yield* fs.writeFileString(
-          planFile,
-          yield* Schema.encodeEffect(Schema.fromJsonString(Planned.fields.plan))(plan).pipe(
-            Effect.orDie,
-          ),
-        );
         const body = bodyOf({
-          runId,
           final,
           original: proved.original,
           finals: taken,
           plans: reasons,
-          planFile,
           written,
           found,
           cycles: cycled,
-          evidence: renderEvidence(evidence),
+          evidence: renderEvidence({ ...evidence, measurements: [] }),
           review: latest.reviewed,
-          archive,
           tradeoff,
         });
         yield* archivedResults(archiving);
@@ -2293,13 +2276,15 @@ export default defineWorkflow({
               yield* Activity.make({
                 name: `${fix}.noted`,
                 success: Schema.Void,
-                execute: Effect.asVoid(
-                  host.note({
+                error: WorkflowError,
+                execute: Effect.gen(function* () {
+                  const posted = yield* host.note({
                     runId,
                     cwd,
-                    body: `${fix} moved the head; measured again:\n\n${body}`,
-                  }),
-                ),
+                    body: `Reran the benchmarks after fixing CI:\n\n${body}`,
+                  });
+                  if (!posted.ok) return yield* new WorkflowError({ reason: posted.message });
+                }),
               });
             return latest;
           }),

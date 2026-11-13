@@ -721,9 +721,12 @@ new external comment, or a reply in a thread after Collie's, starts a comment ro
 `answer-<n>`: the agent checks each against the code, fixes what holds test first and
 pushes with a plain push, and disputes what it judges wrong, with a reason. Collie then
 replies to each comment on the forge, linking it: "Fixed in `<sha>`: …" once the merge
-request's head carries that commit, or "Not changed: …" with the reason. Each reply ends
-with a line naming the Run and its Machine ("Posted by Collie's Run … on …"), so a reviewer
-can tell it from your own words though it is posted as your login. The host records every
+request's head carries that commit, or "Not changed: …" with the reason. A reply reads as
+yours: nothing on the page names Collie. Its raw text ends with a hidden marker,
+`<!-- collie:<run> -->`, by which Collie finds its own reply after a crash and chat tells you
+which replies a Run posted. The host refuses a reply, note, review, issue or Slack share
+that names Collie or its process (Public text, in `CONTEXT.md`), and says which phrase it
+found; nothing is rewritten, and Collie's own repository takes any text. The host records every
 reply on the Run, where `collie run show`, the drawer and Desktop's record list it, and a
 reply that disputes a comment reaches the board and chat as News; nothing waits for you. It
 never resolves a thread, and a restart never posts a reply twice. A comment a round left out,
@@ -1364,10 +1367,12 @@ with no Discover or Harness Output fails the Run, naming the files it looked for
    is `handoffs/tune-up-merge-request.md`, which Collie writes from the Measurements, with
    credential-shaped values taken out: the base and candidate table with each metric's
    ratio and interval, any tradeoff you accepted under **Accepted tradeoffs**, apart from
-   the verdicts, the commands and harness commits and where the archive is, the guardrails
+   the verdicts, the commands and harness commits, the guardrails
    and Cycles not kept, the checks and the review, the opportunities left, what to monitor after
    deploying, and, collapsed, every sample of the `final` Measurement, the frozen plan,
-   every plan and `final` Measurement, the commands to reproduce it and the Run id.
+   every plan and `final` Measurement, and the repository's commands to reproduce it.
+   Run ids and archive paths stay in the Run's record. A CI fix posts the replacement
+   evidence as a note; a refusal fails the Run with the host's reason.
 10. **External report**, at whichever end the Run reaches, after the merge request or with
     its findings alone. Discover and each Cycle hand on what only another repository could
     change, and Collie writes each to `handoffs/tune-up-external.md`: the owning repository
@@ -1378,7 +1383,8 @@ with no Discover or Harness Output fails the Run, naming the files it looked for
     `Post` only, its question showing the finding. A finding with no known team asks for the
     team in your own words first. Post has the tuner search Linear, read-only, for the issue
     carrying the key's marker and for open issues asking for the same change, and file one
-    issue carrying the marker only where it found none. A finding that already matched an
+    issue carrying the marker in a hidden HTML comment only where it found none.
+    Searches still recognise earlier issues whose marker was visible. A finding that already matched an
     issue when it was found is recorded as `existing` and not asked. Your answer and the
     issue's URL go in the Run's log. A host restarted while an issue was being filed never
     files blind: it searches again, records the issue it finds, and otherwise asks again,

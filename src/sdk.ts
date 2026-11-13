@@ -199,6 +199,7 @@ export {
   formatFindings,
   isBlocking,
   remainingDisputes,
+  renderPublicReview,
   renderReview,
   settleFinalFix,
   settleRound,

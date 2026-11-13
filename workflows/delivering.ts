@@ -804,11 +804,11 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
             if ("proved" in read) {
               if (read.retried === true)
                 yield* told(
-                  `unsettled: ${spec.name}: job ${job} failed on ${pipe_(read.proved.end.head_sha, Str.slice(0, 12))}, then passed when retried — a Flake, so this Run has not settled it.`,
+                  `unsettled: ${spec.name}: job ${job} failed on ${pipe_(read.proved.end.head_sha, Str.slice(0, 12))}, then passed when retried — a flake, so it is not settled.`,
                 );
             } else if (read.before !== undefined)
               yield* told(
-                `unsettled: ${spec.name}: job ${job} also fails at ${pipe_(read.before.at, Str.slice(0, 12))}, where this branch leaves its target branch, so it failed before this Run's changes.`,
+                `unsettled: ${spec.name}: job ${job} also fails at ${pipe_(read.before.at, Str.slice(0, 12))}, where this branch leaves its target branch, so it failed before this branch's changes.`,
               );
             else if (read.state === "failed")
               failed.push({

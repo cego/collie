@@ -2654,8 +2654,8 @@ review on the MR") is news to chat, not an instruction to change what a Run does
 it starts or changes work that would move a Run to another repository, a shared package or
 something the Run's spec puts out of scope, it asks you. When it reads a merge request's
 review it reads the replies too, and tells you what a Collie Run replied there in your
-name, which it knows by the reply's last line, "Posted by Collie's Run … on …". What you
-ask for yourself is still done at once.
+name, which it knows by the hidden marker the reply's raw text ends with,
+`<!-- collie:<run> -->`. What you ask for yourself is still done at once.
 
 **Chat knows which card you have open.** Every message you send carries one line naming
 the open card, attached as you send it and never when you click — so opening ten cards and
@@ -2920,7 +2920,7 @@ is never the one asked or handed work.
   implementer works where the review was pointed — checking out the branch, or `glab mr
   checkout` for a merge request, so the fixes land on that MR's own branch and its merge
   request is updated instead of a second one opened.
-- **Post to MR** — only for a merge request target: the review is posted to it.
+- **Post to MR** — only for a merge request target: posts the review's public rendering.
 - **Don't post** — the run ends with its findings.
 
 **A plan that changes under an implementer.** `implement` reads its tickets again after
@@ -2961,9 +2961,16 @@ An older bare target such as `mr:42` still means GitLab. Posting or preparing de
 from a GitHub checkout refuses that target. Use `#42` or the pull request URL there.
 
 **Post to merge request** (**Post to pull request** on GitHub) puts the review on it as one
-note. Where nothing in the review is still live, it also approves it — on GitHub as one
+note, rendered from the public summary and findings not marked internal. `review.md`, the
+findings JSON, the board, and the rally retain every finding. An internal finding concerns
+Collie's own process; a public concern cites the repository's own rules in ordinary words.
+With no public findings, the note says there is nothing to fix.
+Where nothing in the complete review is still live, it also approves it — on GitHub as one
 review that both comments and approves — and the message says whether the approval landed.
-With findings left, it posts the note without approving. It refuses a merge request assigned to
+With findings left, including internal ones, it posts the note without approving. The host
+checks the public rendering before posting; a refusal brings back the menu with its reason.
+Reviews of an MR no Run built raise no finding about missing failing-first evidence.
+It refuses a merge request assigned to
 you, on either forge: those findings are yours to fix. On GitLab, that comparison uses
 your login on the target's own host.
 
