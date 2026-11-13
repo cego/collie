@@ -142,13 +142,10 @@ export const sessionOf = Effect.fn("Processes.sessionOf")(function* (root: numbe
         return yield* fromProc(pid);
       }).pipe(
         Effect.catchTag("PlatformError", (cause) =>
-          cause.reason._tag === "NotFound"
-            ? Effect.succeed(null)
-            : processAbsent(pid).pipe(
-                // A process can exit between its stat and cmdline reads. A generic read
-                // error alone proves nothing; only ESRCH from the pid probe proves exit.
-                Effect.flatMap((absent) => (absent ? Effect.succeed(null) : Effect.fail(cause))),
-              ),
+          processAbsent(pid).pipe(
+            // ESRCH independently proves a raced read was of an exiting process.
+            Effect.flatMap((absent) => (absent ? Effect.succeed(null) : Effect.fail(cause))),
+          ),
         ),
       );
       if (one !== null && one.session === root) found.push(one);

@@ -73,7 +73,7 @@ HOME and state directory. With no GPU,
 point Vulkan at lavapipe: `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`. On
 Linux, building needs `libxkbcommon-dev` and `libwayland-dev`, and lavapipe is in
 `mesa-vulkan-drivers`. Terminal fallback tests also need `fontconfig` and `fonts-noto-cjk`;
-the bundled monospace font does not contain CJK glyphs. libghostty-vt needs Zig 0.16.0 (`zig` on `PATH`, or `ZIG` naming it)
+the bundled monospace font does not contain CJK glyphs. libghostty-vt needs Zig 0.17.1 (`zig` on `PATH`, or `ZIG` naming it)
 and bindgen needs libclang; its first build takes about four minutes. CI's `desktop-rune` job runs `cargo fmt --check`, `cargo clippy -D
 warnings`, `cargo test`, and the contract, drift and shell tests.
 
@@ -115,7 +115,7 @@ faithfully:
 
 ### Build times and size
 
-vm-mk: 24 cores, rustc 1.99.1, dependencies already fetched, a target directory of its own.
+vm-mk: 24 cores, rustc 1.100.0, dependencies already fetched, a target directory of its own.
 
 | Build                                        | Time    |
 | -------------------------------------------- | ------- |
@@ -216,8 +216,8 @@ and background are the app's text and surface, which the view sets (`Tab::set_su
   `fixtures/terminal/styles.ndjson` holds every attribute and glyph class for comparing with
   Ghostty on the same bytes.
 
-**Pins.** Ghostty is the submodule `vendor/ghostty` at `291fd050b9e9c293c8adb6a140742649b7e42d3a`,
-built with Zig 0.16.0, its `minimum_zig_version`. `THIRD-PARTY-NOTICES` names Ghostty (MIT)
+**Pins.** Ghostty is the submodule `vendor/ghostty` at `cf3a8a6594eec899fe6335465668c60f2281ce9c`,
+built with Zig 0.17.1; upstream requires at least 0.17.0. `THIRD-PARTY-NOTICES` names Ghostty (MIT)
 and the herdr-app code adapted (Apache-2.0): `ghostty-sys` and `terminal/src/vt.rs`.
 
 **Recordings.** `core/record-terminal.ts` opens the core's `openTerminal` on a pane, at 100 by
@@ -324,7 +324,9 @@ inspector beside it once there is room. A Step's open questions are answered one
 "Question k of n", each its own `Answer`. A question the board also has is answered through the
 board's questionnaire, as `FlowDecision.vue` does: Hold the Run among its options, words for the
 agent instead, a status line, and the next question once the host takes the answer. Its Start asks the Run what it `offers` now and sends
-`Invoke` with the inputs typed, as the board's offers dialog does.
+`Invoke` with validated inputs, as the board's offers dialog does. Both use
+`board/src/board/offer_form.rs` for typed controls, defaults, help, and field errors.
+An offer's confirmation waits for its named button even when it takes no inputs.
 
 The Diff tab reads each file's patch (`diff:<path>`) and parses it with rune-kit's
 `diff::parse`: only an open file's, four at a time, so a big file is read once it is opened; a

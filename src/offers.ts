@@ -13,8 +13,8 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
-import type { ActionFacts } from "./sdk";
-import type { Schema } from "effect";
+import type { ActionFacts, OfferGiven, Ships } from "./sdk";
+import { Schema, type Types } from "effect";
 import type { ConnectionId } from "./connection-model";
 
 /** A workflow an offer starts that is the one declaring it, whatever that is called. */
@@ -35,6 +35,9 @@ export interface Declared {
   readonly eligible: (facts: ActionFacts) => boolean;
   /** The inputs Collie fills from the Run: input name to the fact it comes from. */
   readonly inputs: Readonly<Record<string, Source>>;
+  readonly given?: OfferGiven | undefined;
+  readonly ships?: Ships | undefined;
+  readonly confirm?: string | undefined;
 }
 
 /** One offer as a front door shows it. */
@@ -47,6 +50,9 @@ export interface Offer {
   readonly kind: Declared["kind"];
   /** What Collie fills in from the Run, so a front door asks only for the rest. */
   readonly inputs: Readonly<Record<string, Source>>;
+  readonly given?: OfferGiven;
+  readonly ships?: Ships;
+  readonly confirm?: string;
   /** The first eligible one, which a front door may present as the obvious thing to do. */
   readonly primary: boolean;
   /** Why this offer cannot be made, where it is listed at all. */
@@ -83,7 +89,7 @@ export function offersFrom(
       continue;
     const unavailable = refused ?? refusal(one, facts);
     if (unavailable !== null && options.keepUnavailable !== true) continue;
-    offers.push({
+    const offer: Types.Mutable<Offer> = {
       id: one.id,
       title: one.entry === undefined ? one.title : `${one.title} — ${one.entry(facts)}`,
       workflow: one.workflow === SELF ? (options.self ?? SELF) : one.workflow,
@@ -92,13 +98,36 @@ export function offersFrom(
       inputs: one.inputs,
       primary: false,
       unavailable,
-    });
+    };
+    if (one.given !== undefined) offer.given = one.given;
+    if (one.ships !== undefined) offer.ships = one.ships;
+    if (one.confirm !== undefined) offer.confirm = one.confirm;
+    offers.push(offer);
   }
   const first = Option.getOrElse(
     Arr.findFirstIndex(offers, (one) => one.unavailable === null),
     () => -1,
   );
   return Arr.map(offers, (one, at) => (at === first ? { ...one, primary: true } : one));
+}
+
+const asJsonRecord = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Json));
+const isNames = Schema.is(Schema.Array(Schema.String));
+
+/** Drawn arguments without `names`, which are not the caller's to give; null once none are left. */
+export function argumentsWithout(
+  drawn: Schema.Json | null,
+  names: ReadonlySet<string>,
+): Schema.Json | null {
+  const document = Option.getOrUndefined(asJsonRecord(drawn));
+  const drawnProperties = Option.getOrUndefined(asJsonRecord(document?.properties));
+  if (document === undefined || drawnProperties === undefined) return drawn;
+  const properties = Rec.filter(drawnProperties, (_, name) => !names.has(name));
+  if (Rec.isEmptyRecord(properties)) return null;
+  const { required } = document;
+  return isNames(required)
+    ? { ...document, properties, required: Arr.filter(required, (name) => !names.has(name)) }
+    : { ...document, properties };
 }
 
 /**
@@ -208,7 +237,10 @@ export function declaredIn(offers: ReadonlyArray<OfferDef>): Declared[] {
 
 /** What an offer passes, filled from the Run it is being made about. */
 export function inputsFor(
-  offer: { readonly inputs: Readonly<Record<string, Source>> },
+  offer: {
+    readonly inputs: Readonly<Record<string, Source>>;
+    readonly given?: OfferGiven | undefined;
+  },
   from: {
     readonly runId: string;
     readonly runDir: string;
@@ -240,7 +272,7 @@ export function inputsFor(
     const filled = value(source, name);
     if (filled !== undefined) given[name] = filled;
   }
-  return given;
+  return { ...given, ...offer.given };
 }
 
 /**

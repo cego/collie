@@ -1241,6 +1241,12 @@ came to. A kind outside that set is refused with the name of the tool that does 
 amending an Intent, forking a definition, changing the defaults, keeping a run's checks for
 its repository, a cleanup and an upgrade are `collie_propose`'s.
 
+`collie_do` also accepts `request_id` for an explicit retry of the same action list, in both
+Native chat and Desktop's Flock chat. Each action retains its request within that batch.
+Flock chat reports a disconnected write as unconfirmed with an unknown outcome and returns
+`Request: <batch id>`; inspect the Run or its receipts before retrying with that batch id.
+It never automatically resubmits the write when the connection returns. A new id is new work.
+
 A `start` names its workspace by id, label, a checkout's path on this Machine, or a
 repository's directory name under the Projects root (or `projects-root`). A path that is no
 directory here is refused as that, with the Projects root; any other name that matches

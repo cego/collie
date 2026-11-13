@@ -12,7 +12,7 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import solidPlugin from "@opentui/solid/bun-plugin";
 import type { PlatformServices } from "../../src/platform";
-import { Effect, FileSystem, Schema, type Scope, flow, Result } from "effect";
+import { Config, Effect, FileSystem, Schema, type Scope, flow, Result } from "effect";
 import { exec } from "./command";
 import { suiteEnv } from "./effect";
 import { writeFakeHerdrShim } from "./fake-herdr-core";
@@ -114,6 +114,13 @@ export const twoMachines = <A, E>(
           yield* fs.copyFile(`${fixtures}/${module}`, `${world.user}/${module}`);
         const bin = `${dir}/bin`;
         yield* fs.makeDirectory(bin);
+        const shell = `${bin}/login-shell`;
+        // A fake Machine has its own login environment, without this computer's profiles.
+        yield* fs.writeFileString(
+          shell,
+          '#!/bin/sh\ncase "$1" in -lc|-ilc|-c) shift;; *) exit 64;; esac\nexec /bin/sh -c "$@"\n',
+          { mode: 0o755 },
+        );
         const herdr = `${bin}/herdr`;
         yield* writeFakeHerdrShim(herdr);
         yield* fs.writeFileString(
@@ -141,7 +148,7 @@ export const twoMachines = <A, E>(
           );
         const env = {
           PATH: `${bin}:/usr/bin:/bin`,
-          SHELL: "/bin/sh",
+          SHELL: shell,
           HOME: world.home,
           HERDR_PLUGIN_ROOT: world.install,
           HERDR_PLUGIN_STATE_DIR: world.state,
@@ -197,11 +204,14 @@ export const releaseBinary = Effect.fn("PeerTest.releaseBinary")(function* (
   version: string,
 ) {
   const manifest = yield* (yield* FileSystem.FileSystem).readFileString(`${root}herdr-plugin.toml`);
+  const musl = (yield* Config.String("OPENTUI_LIBC").pipe(Config.withDefault(""))) === "musl";
   const built = yield* Effect.promise(() =>
     Bun.build({
       // A release carries the host door's Worker entry, as tools/build.ts builds it.
       entrypoints: [`${root}src/main.ts`, `${root}src/door.ts`],
       target: "bun",
+      // As tools/build.ts pins it, so only this libc's renderer package must be installed.
+      define: { "process.env.OPENTUI_LIBC": musl ? '"musl"' : '"glibc"' },
       bytecode: true,
       format: "esm",
       plugins: [

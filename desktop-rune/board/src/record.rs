@@ -83,7 +83,7 @@ pub enum Form {
         chosen: String,
         /// None until the Run has said what it offers.
         offer: Option<collie_desktop_protocol::generated::OffersSuccessItem>,
-        fields: Vec<(String, bool, TextEdit)>,
+        fields: Vec<crate::board::offer_form::OfferEntry>,
     },
     /// A proposal waiting for a yes or a no.
     Proposal {
@@ -412,7 +412,14 @@ impl App {
             .iter()
             .filter(|m| m.machine.installation == record.installation)
             .flat_map(|m| &m.cards)
-            .find(|task| task.run == record.run || task.runs.contains(&record.run))
+            .find(|task| {
+                task.run == record.run
+                    || task.runs.contains(&record.run)
+                    || task
+                        .children
+                        .iter()
+                        .any(|child| child.run.as_deref() == Some(record.run.as_str()))
+            })
     }
 
     /// Whether the open record's Machine is reached; one the board does not list is taken as

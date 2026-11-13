@@ -178,6 +178,11 @@ Reactivity key, which the board follows. The first host on a state directory imp
 A starting host registers every saved generation before a Run it recovers looks one up, so a
 parent resumed in the swap reads a child of any generation.
 
+`patches/effect@4.1.4.patch` prevents a conditional SQL activity reset from replaying the
+interrupt that suspended it. The existing transaction protects the reply check and cleanup;
+a stale reset leaves newer replies and interrupts intact. Remove the patch only when an
+upstream release passes `test/effect-sql-reset.test.ts` and the release-set scenarios.
+
 Once it answers, a starting host ends every check a previous host left running in its
 state directory: one recorded under `running-checks/`, or a process marked with this
 installation's id. A host that has just made that id looks for none, since no process can
@@ -829,18 +834,18 @@ one `replySchemas` record, and the test asserts its table covers every key of it
 adding a decoded call without a row turns that test red rather than going unchecked.
 The one exception is `agent explain --json`, which herdr's schema gives only as `explain:
 true`, so there is nothing to check its struct against. `promptBox` reads one field of it,
-the `prompt_box_body` rule's `evidence.region_preview`; the pinned 0.9.3 answers it
+the `prompt_box_body` rule's `evidence.region_preview`; the pinned 0.9.5 answers it
 (`herdr agent explain --file <screen> --agent claude --json` checks a binary without a
 server), and a reply without it reads as a box nobody can see, which asks a
 human rather than pressing Enter.
 
 `machine list --json` is the third: a bare array of saved machines. Its struct,
 `HerdrMachine` in `src/peers-model.ts`, is what Desktop decodes too, and
-`test/herdr-contract.test.ts` holds it to what the pinned 0.9.3 prints.
+`test/herdr-contract.test.ts` holds it to what the pinned 0.9.5 prints.
 
 `session list --json` is the second: it answers with a bare `{ sessions }` rather than an
 envelope, so it is not in the socket schema either. The host reads it to find every running
-session on the Machine (the pinned 0.9.3 has the command), and an answer it cannot decode
+session on the Machine (the pinned 0.9.5 has the command), and an answer it cannot decode
 reads as the one session the host inherited. Each
 session's agents come from `agent list` with that session's `HERDR_SOCKET_PATH`, and its
 changes from `events.subscribe` on its socket: pane lifecycle events and each agent pane's
@@ -865,7 +870,7 @@ Where a checkout goes is Collie's own setting, `worktrees_directory`
 
 One gotcha the engine works around rather than reports: `tab create --cwd` and
 `pane split --cwd` echo the directory back but leave the pane's shell in the workspace
-directory (probed against herdr 0.8.2; not yet probed against the pinned 0.9.3). So every
+directory (probed against herdr 0.8.2; not yet probed against the pinned 0.9.5). So every
 pane the engine opens is `cd`-ed into
 `run.record.cwd` explicitly before its agent starts, and that `cd` is what puts a run's
 tabs in one workspace and its work in another directory. Keep both: the `--cwd` is

@@ -1220,6 +1220,7 @@ export interface MenuItem {
   key: string;
   label: string;
   command: Command;
+  disabled?: boolean;
 }
 
 /** A card's action as this board draws it: the key beside it, its label, and its command. */
@@ -1241,8 +1242,9 @@ function itemFor(view: TaskView, action: CardAction, primary: boolean): MenuItem
       };
     case "offer":
       return {
-        key: "i",
-        label: primary && view.shipping === "merge" ? "Merge" : action.offer.title,
+        key: primary || (view.offers?.length ?? 0) < 2 ? "i" : "",
+        label: `${action.offer.title}${action.offer.unavailable === undefined ? "" : ` — ${action.offer.unavailable}`}`,
+        disabled: action.offer.unavailable === undefined ? undefined : true,
         command: { _tag: "InvokeOffer", runId: action.offer.run ?? runId, offer: action.offer.id },
       };
     case "check-output":
@@ -1369,7 +1371,8 @@ export const ALL_KEYS: ReadonlyArray<{ key: string; what: string }> = [
   { key: "r", what: "Re-read what is on screen" },
   { key: "?", what: "This list; any key closes it" },
   { key: "q", what: "Close the tab" },
-  { key: "enter", what: "Open record — on a card's menu" },
+  { key: "↑↓", what: "Choose a menu item" },
+  { key: "enter", what: "Open record, or select the chosen menu item" },
   { key: "g", what: "Go to its tab" },
   { key: "s", what: "Steer…" },
   { key: "a", what: "Attach files…" },

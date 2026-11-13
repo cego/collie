@@ -58,9 +58,14 @@ test.each(["listing", "member", "ps"])(
     ),
 );
 
-test.skipIf(process.platform !== "linux").each([true, false])(
-  "an Unknown session cmdline error is ignored only for a proven absent process (exited: %p)",
-  (exited) =>
+test.skipIf(process.platform !== "linux").each([
+  [true, "Unknown"],
+  [false, "Unknown"],
+  [true, "NotFound"],
+  [false, "NotFound"],
+] as const)(
+  "a session cmdline error is ignored only for a proven absent process (exited: %p, error: %s)",
+  (exited, error) =>
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -79,7 +84,7 @@ test.skipIf(process.platform !== "linux").each([true, false])(
         expect(yield* processAbsent(child.pid)).toBe(false);
         const cmdline = `/proc/${child.pid}/cmdline`;
         const unknown = PlatformError.systemError({
-          _tag: "Unknown",
+          _tag: error,
           module: "FileSystem",
           method: "readFile",
           pathOrDescriptor: cmdline,

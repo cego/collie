@@ -23,19 +23,19 @@
     "smoke": "sh tools/smoke.sh bin/collie"
   },
   "dependencies": {
-    "@comark/ansi": "0.7.0",
-    "@effect/platform-bun": "4.1.0",
-    "@effect/sql-sqlite-bun": "4.1.0",
-    "@opentui/core": "^0.5.14",
-    "@opentui/solid": "^0.5.14",
-    "comark": "0.7.0",
-    "effect": "4.1.0",
-    "forges": "0.2.0",
-    "solid-js": "^1.9.16"
+    "@comark/ansi": "0.9.2",
+    "@effect/platform-bun": "4.1.4",
+    "@effect/sql-sqlite-bun": "4.1.4",
+    "@opentui/core": "^0.8.4",
+    "@opentui/solid": "^0.8.4",
+    "comark": "0.9.2",
+    "effect": "4.1.4",
+    "forges": "0.3.2",
+    "solid-js": "^1.9.19"
   },
   "devDependencies": {
     "@effect/tsgo": "0.63.0",
-    "@modelcontextprotocol/sdk": "1.32.1",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "@oxlint/plugins": "1.90.0",
     "@types/bun": "1.4.2",
     "oxfmt": "0.72.0",
@@ -46,5 +46,8 @@
   },
   "engines": {
     "bun": ">=1.4.0"
+  },
+  "patchedDependencies": {
+    "effect@4.1.4": "patches/effect@4.1.4.patch"
   }
 }

@@ -18,6 +18,7 @@ import {
   mrReadiness,
   sectionOf,
   SECTIONS,
+  shippingLabel,
   type TaskView,
   mrNounOf,
 } from "./board-model";
@@ -93,6 +94,7 @@ export const SETTLE_KINDS = ["confirm", "decline", "disposition", "seen"] as con
 
 const AskedInput = Schema.Struct({
   actions: Schema.Array(Schema.Union([ActionSchema, SettleSchema])),
+  request_id: Schema.optionalKey(Schema.String),
 });
 export const decodeAsked = decodeStrict(AskedInput);
 
@@ -112,6 +114,7 @@ const MEMBERS = new Map<
  * leave `run` out for the board's selection to stand in. Decoded again once it has.
  */
 const DoInput = Schema.Struct({
+  request_id: Schema.optionalKey(Schema.String),
   actions: Schema.Array(
     Schema.Union(
       Arr.map([...MEMBERS.values()], (member) =>
@@ -370,7 +373,8 @@ export const CollieTools = Toolkit.make(
       "`collie_herd` lists, or leave `run` out to act on the card the board has open, " +
       "which the answer then names. What is not here is what you would be asking for yourself — " +
       "amending an Intent, forking a definition, changing the defaults, upgrading, " +
-      "cleaning up — and that is `collie_propose`.",
+      "cleaning up — and that is `collie_propose`. Reuse request_id with the same actions " +
+      "when explicitly retrying an unconfirmed request; inspect unknown outcomes first.",
     parameters: DoInput,
   }),
   collieTool("collie_propose", {
@@ -441,7 +445,12 @@ function cardLine(view: TaskView): string {
           Arr.map(view.agents, (agent) => agent.name),
           ", ",
         )}`;
-  return `- run ${view.run}: ${view.name}${project}, ${view.state}${where}${agents}. ${view.shipping == null ? "" : `${view.shipping === "merge" ? "Merge" : view.shipping === "stage" ? "Stage" : "Deploy"}: `}${view.sentence}${view.drift === null ? "" : ` ${view.drift}`}`;
+  const offers = Arr.map(
+    view.offers ?? (view.offer === null ? [] : [view.offer]),
+    (offer) =>
+      `${offer.title} (${offer.id} on run ${offer.run ?? view.run})${offer.unavailable === undefined ? "" : `: ${offer.unavailable}`}`,
+  );
+  return `- run ${view.run}: ${view.name}${project}, ${view.state}${where}${agents}. ${shippingLabel(view)}${view.sentence}${view.drift === null ? "" : ` ${view.drift}`}${offers.length === 0 ? "" : ` Offers: ${Arr.join(offers, "; ")}.`}`;
 }
 
 /** The board as chat reads it: the header, then each section's cards in the board's order. */

@@ -169,7 +169,7 @@ test("a herdr older than the manifest's minimum is not linked, and the rest stil
       const done = yield* run("prepare.sh", undefined, { FAKE_HERDR_VERSION: "0.7.1" });
 
       expect(done.out).toContain(
-        "prepare: plugin-link: skipped — herdr 0.7.1 is older than the 0.9.3 Collie needs; collie doctor says how to upgrade",
+        "prepare: plugin-link: skipped — herdr 0.7.1 is older than the 0.9.5 Collie needs; collie doctor says how to upgrade",
       );
       expect(yield* exists(`${home}/herdr-calls`)).toBe(false);
       expect(done.out).toContain("prepare: runner: done");
@@ -182,12 +182,12 @@ test("a herdr older than the manifest's minimum is not linked, and the rest stil
 test("herdr's version is compared as numbers, part by part", () =>
   runEffect(
     Effect.gen(function* () {
-      for (const version of ["0.9.3", "0.9.10", "0.10.0", "1.0.0"]) {
+      for (const version of ["0.9.5", "0.9.10", "0.10.0", "1.0.0"]) {
         yield* remove(`${home}/linked`);
         const done = yield* run("prepare.sh", undefined, { FAKE_HERDR_VERSION: version });
         expect(done.out).toContain("prepare: plugin-link: done");
       }
-      for (const version of ["0.7.1", "0.9.2", "0.8.10"]) {
+      for (const version of ["0.7.1", "0.9.4", "0.8.10"]) {
         const done = yield* run("prepare.sh", undefined, { FAKE_HERDR_VERSION: version });
         expect(done.out).toContain(`prepare: plugin-link: skipped — herdr ${version} is older`);
       }

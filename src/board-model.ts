@@ -2,9 +2,8 @@
 // and count its cards, decide what each one offers and read what it names. No I/O and no
 // Bun-only import: a browser bundle imports this too.
 
-import * as Struct from "effect/Struct";
 import * as Str from "effect/String";
-import { pipe } from "effect/Function";
+import { flow, pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import { Effect, Option, Schema, SchemaGetter } from "effect";
@@ -99,7 +98,7 @@ export type FlowLaneAction = typeof FlowLaneAction.Type;
 /** The strip a card draws: the leading Run's Steps, then its merge request's way out. */
 export const FlowStrip = Schema.Struct({
   glyphs: Schema.Array(Schema.Struct({ title: Schema.String, state: FlowState })),
-  /** How many of the glyphs, at the end, are the Release row's. */
+  /** How many glyphs at the end are the merge request's way out, including its shipping Offer. */
   release: Schema.Finite,
   current: Schema.NullOr(
     Schema.Struct({ title: Schema.String, said: Schema.NullOr(Schema.String) }),
@@ -250,6 +249,7 @@ export const BoardOffer = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
   run: Schema.optionalKey(Schema.String),
+  unavailable: Schema.optionalKey(Schema.String),
 });
 export type BoardOffer = typeof BoardOffer.Type;
 
@@ -524,6 +524,7 @@ export const TaskView = Schema.Struct({
   planReady: Schema.Boolean,
   /** That action: the Run's primary offer as its module declares it now, or null for none. */
   offer: Schema.NullOr(BoardOffer),
+  offers: Schema.optionalKey(Schema.Array(BoardOffer)),
   /** The Run a card's actions act on: the one the sentence is about. */
   run: Schema.String,
   /** Every Run of this Task, newest first, for the drawer. */
@@ -1122,6 +1123,10 @@ export const OfferView = Schema.Struct({
   /** What it takes, as JSON Schema; null where it takes nothing. */
   arguments: Schema.NullOr(Schema.Json),
   kind: Schema.Literals(["action", "follow-up"]),
+  /** What taking it ships: `merge` only merges, `release` also tags and deploys. */
+  ships: Schema.optionalKey(Schema.Literals(["merge", "release"])),
+  /** What taking it does, which a front door shows and asks about before taking it. */
+  confirm: Schema.optionalKey(Schema.String),
   primary: Schema.Boolean,
   /** Why it cannot be made now, or null when it can. */
   unavailable: Schema.NullOr(Schema.String),
@@ -2280,47 +2285,260 @@ export function mrTarget(project: string | null, iid: string): string {
   return mrWords({ project: project || null, iid }).target;
 }
 
+/** How a front door asks for one field of an offer's arguments, drawn from its JSON Schema. */
+export type OfferControl =
+  | { readonly kind: "text" | "boolean" | "number" | "integer" | "list" }
+  | { readonly kind: "enum"; readonly options: ReadonlyArray<Schema.Json> }
+  /** JSON as typed, which must be an object or a list where `holds` says so. */
+  | { readonly kind: "json"; readonly holds: "object" | "array" | null };
+
+/** One field of an offer's arguments, as a form asks for it. */
+export interface OfferField {
+  readonly name: string;
+  readonly label: string;
+  /** The schema's own description, or null where it has none. */
+  readonly help: string | null;
+  readonly required: boolean;
+  readonly control: OfferControl;
+  /** What the form starts with, as an entry; undefined starts it unset. */
+  readonly initial: string | undefined;
+}
+
 /**
- * What an offer's arguments take, from what a human typed into each: text as typed for a
- * text field, anything else as the JSON it spells where it parses. Blank optional fields
- * are left out.
+ * What a form's entries send, or why each that cannot be sent cannot. An entry is text: a
+ * boolean's is `true` or `false`, an enum's is the option itself, a list's is one item per
+ * line. A missing entry is unset; so is a blank one, except an enum's empty option.
  */
-export const offerInput = (drawn: Schema.Json | null, typed: Readonly<Record<string, string>>) => {
+export type OfferInput =
+  | { readonly _tag: "Valid"; readonly input: { [name: string]: Schema.Json } }
+  | { readonly _tag: "Invalid"; readonly errors: { [name: string]: string } };
+
+/** The fields an offer's arguments name, each with the control its schema draws. */
+export const offerFields = (drawn: Schema.Json | null): ReadonlyArray<OfferField> => {
   const takes = decodeArguments(drawn);
-  const input: { [name: string]: Schema.Json } = {};
-  if (takes._tag === "None") return input;
-  for (const [name, field] of Rec.toEntries(takes.value.properties ?? {})) {
-    const text = typed[name] ?? "";
-    if (text === "" && !(takes.value.required ?? []).includes(name)) continue;
-    const parsed = isTextField(field) ? Option.none() : parseJson(text);
-    input[name] = Option.isSome(parsed) ? parsed.value : text;
-  }
-  return input;
+  if (takes._tag === "None") return [];
+  const required = takes.value.required ?? [];
+  return Arr.map(Rec.toEntries(takes.value.properties ?? {}), ([name, schema]) => {
+    const field = Option.getOrElse(decodeField(schema), () => NO_FIELD);
+    const control = controlOf(field);
+    const needed = required.includes(name);
+    return {
+      name,
+      label: labelOf(name),
+      help: field.description ?? null,
+      required: needed,
+      control,
+      initial:
+        field.default !== undefined
+          ? entryOf(control, field.default)
+          : needed && control.kind === "boolean"
+            ? "false"
+            : undefined,
+    };
+  });
 };
 
-/** What was given an offer as text, each value read as `offerInput` reads it; nothing added. */
+/** What a form's entries send, every field read as its control takes it. */
+export const offerInput = (
+  drawn: Schema.Json | null,
+  typed: Readonly<Record<string, string>>,
+): OfferInput => {
+  const input: { [name: string]: Schema.Json } = {};
+  const errors: { [name: string]: string } = {};
+  for (const field of offerFields(drawn)) {
+    const read = readEntry(field, typed[field.name]);
+    if (read._tag === "Unset") {
+      if (field.required) errors[field.name] = `${field.label} needs a value`;
+    } else if (read._tag === "Refused") errors[field.name] = `${field.label} ${read.why}`;
+    else input[field.name] = read.value;
+  }
+  return Rec.isEmptyRecord(errors) ? { _tag: "Valid", input } : { _tag: "Invalid", errors };
+};
+
+/**
+ * What was given an offer as text, each value read as its field takes it; nothing added. A
+ * value its field cannot take is passed on as given, for the offer's workflow to refuse.
+ */
 export const givenOfferInput = (
   drawn: Schema.Json | null,
   given: Readonly<Record<string, string>>,
 ): { [name: string]: Schema.Json } => {
-  const typed = offerInput(drawn, given);
+  const fields = new Map(Arr.map(offerFields(drawn), (field) => [field.name, field] as const));
   return Rec.fromEntries(
-    Arr.map(
-      Rec.toEntries(given),
-      ([name, text]) => [name, Rec.has(typed, name) ? typed[name]! : text] as const,
-    ),
+    Arr.map(Rec.toEntries(given), ([name, text]) => {
+      const field = fields.get(name);
+      if (field?.control.kind === "list")
+        return [name, Option.getOrElse(parseJson(text), () => text)] as const;
+      const read = field === undefined ? null : readEntry(field, text);
+      return [name, read?._tag === "Read" ? read.value : text] as const;
+    }),
   );
 };
 
-/** The fields an offer's arguments name, and whether each must be given. */
-export const offerFields = (drawn: Schema.Json | null) => {
-  const takes = decodeArguments(drawn);
-  if (takes._tag === "None") return [];
-  return Arr.map(Struct.keys(takes.value.properties ?? {}), (name) => ({
-    name,
-    required: (takes.value.required ?? []).includes(name),
-  }));
+/** One choice a select draws for a field: a key it can carry, its label, and the entry it makes. */
+export interface OfferChoice {
+  readonly key: string;
+  readonly label: string;
+  /** Undefined for the choice that leaves the field unset. */
+  readonly entry: string | undefined;
+}
+
+/** The choices an enum or a boolean field is picked from, unset first where it is optional. */
+export const offerChoices = (field: OfferField): ReadonlyArray<OfferChoice> => {
+  const unset: ReadonlyArray<OfferChoice> = field.required
+    ? []
+    : [{ key: "unset", label: "Not set", entry: undefined }];
+  const { control } = field;
+  if (control.kind === "boolean")
+    return [
+      ...unset,
+      { key: "true", label: "Yes", entry: "true" },
+      { key: "false", label: "No", entry: "false" },
+    ];
+  if (control.kind !== "enum") return [];
+  return [
+    ...unset,
+    ...Arr.map(optionEntries(control.options), (entry, at) => ({
+      key: `option-${at}`,
+      label: optionLabel(entry),
+      entry,
+    })),
+  ];
 };
+
+/** Whether a front door asks before it takes this offer: it has fields, or a confirmation. */
+export const asksBeforeTaking = (offer: {
+  readonly arguments: Schema.Json | null;
+  readonly confirm?: string;
+}) => offer.confirm !== undefined || offerFields(offer.arguments).length > 0;
+
+const DrawnField = Schema.Struct({
+  type: Schema.optional(Schema.String),
+  enum: Schema.optional(Schema.Array(Schema.Json)),
+  items: Schema.optional(Schema.Struct({ type: Schema.optional(Schema.String) })),
+  anyOf: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        type: Schema.optional(Schema.String),
+        enum: Schema.optional(Schema.Array(Schema.Json)),
+      }),
+    ),
+  ),
+  description: Schema.optional(Schema.String),
+  default: Schema.optional(Schema.Json),
+});
+type DrawnField = typeof DrawnField.Type;
+const NO_FIELD: DrawnField = {};
+const EMPTY_OPTION = "(empty)";
+const decodeField = Schema.decodeUnknownOption(DrawnField);
+const isText = Schema.is(Schema.String);
+
+const controlOf = (field: DrawnField): OfferControl => {
+  if (field.enum !== undefined) return { kind: "enum", options: field.enum };
+  const anyOf = field.anyOf ?? [];
+  if (Arr.isReadonlyArrayNonEmpty(anyOf) && Arr.every(anyOf, (one) => one.enum !== undefined))
+    return { kind: "enum", options: Arr.flatMap(anyOf, (one) => one.enum ?? []) };
+  const number = Arr.some(anyOf, (one) => one.type === "number");
+  switch (number ? "number" : field.type) {
+    case "string":
+      return { kind: "text" };
+    case "boolean":
+      return { kind: "boolean" };
+    case "integer":
+      return { kind: "integer" };
+    case "number":
+      return { kind: "number" };
+    case "array":
+      return field.items?.type === "string" ? { kind: "list" } : { kind: "json", holds: "array" };
+    case "object":
+      return { kind: "json", holds: "object" };
+    default:
+      return JSON_ANY;
+  }
+};
+const JSON_ANY: OfferControl = { kind: "json", holds: null };
+
+const optionEntries = (options: ReadonlyArray<Schema.Json>): ReadonlyArray<string> => {
+  const plain = Arr.map(options, (option) => (isText(option) ? option : encodeJson(option)));
+  return new Set(plain).size === plain.length
+    ? plain
+    : Arr.map(options, (option) => encodeJson(option));
+};
+const optionLabel = (entry: string) => (entry === "" ? EMPTY_OPTION : entry);
+
+const labelOf = (name: string) =>
+  pipe(name, Str.replaceAll("_", " "), Str.replaceAll("-", " "), Str.capitalize);
+
+const entryOf = (control: OfferControl, value: Schema.Json): string => {
+  if (control.kind === "list" && Arr.isArray(value) && Arr.every(value, isText))
+    return Arr.join(value, "\n");
+  if (control.kind === "enum") {
+    const at = Arr.findFirstIndex(control.options, (one) => encodeJson(one) === encodeJson(value));
+    if (Option.isSome(at)) return optionEntries(control.options)[at.value]!;
+  }
+  if (isText(value) && control.kind === "text") return value;
+  return encodeJson(value);
+};
+
+type Entry =
+  | { readonly _tag: "Unset" }
+  | { readonly _tag: "Read"; readonly value: Schema.Json }
+  | { readonly _tag: "Refused"; readonly why: string };
+
+const readEntry = (field: OfferField, entry: string | undefined): Entry => {
+  if (entry === undefined) return { _tag: "Unset" };
+  const { control } = field;
+  if (control.kind === "enum") {
+    const entries = optionEntries(control.options);
+    return Option.match(
+      Arr.findFirstIndex(entries, (one) => one === entry),
+      {
+        onSome: (at): Entry => ({ _tag: "Read", value: control.options[at]! }),
+        onNone: (): Entry => ({
+          _tag: "Refused",
+          why: `must be one of: ${Arr.join(Arr.map(entries, optionLabel), ", ")}`,
+        }),
+      },
+    );
+  }
+  const text = Str.trim(entry);
+  if (text === "") return { _tag: "Unset" };
+  switch (control.kind) {
+    case "text":
+      return { _tag: "Read", value: entry };
+    case "boolean":
+      return text === "true" || text === "false"
+        ? { _tag: "Read", value: text === "true" }
+        : { _tag: "Refused", why: "must be yes or no" };
+    case "number":
+    case "integer": {
+      const value = Number(text);
+      if (!Number.isFinite(value)) return { _tag: "Refused", why: "must be a number" };
+      return control.kind === "integer" && !Number.isInteger(value)
+        ? { _tag: "Refused", why: "must be a whole number" }
+        : { _tag: "Read", value };
+    }
+    case "list":
+      return {
+        _tag: "Read",
+        value: Arr.filter(Arr.map(Str.split(entry, "\n"), Str.trim), (one) => one !== ""),
+      };
+    case "json": {
+      const parsed = parseJson(text);
+      if (Option.isNone(parsed)) return { _tag: "Refused", why: "is not valid JSON" };
+      return holdsRefusal(control.holds, parsed.value) ?? { _tag: "Read", value: parsed.value };
+    }
+  }
+};
+
+const holdsRefusal = (holds: "object" | "array" | null, value: Schema.Json): Entry | null => {
+  if (holds === "object" && !isJsonObject(value))
+    return { _tag: "Refused", why: "must be a JSON object" };
+  if (holds === "array" && !Arr.isArray(value))
+    return { _tag: "Refused", why: "must be a JSON list" };
+  return null;
+};
+const isJsonObject = Schema.is(Schema.Record(Schema.String, Schema.Json));
 
 const decodeArguments = Schema.decodeUnknownOption(
   Schema.Struct({
@@ -2328,8 +2546,11 @@ const decodeArguments = Schema.decodeUnknownOption(
     required: Schema.optional(Schema.Array(Schema.String)),
   }),
 );
-const isTextField = Schema.is(Schema.Struct({ type: Schema.Literal("string") }));
 const parseJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
+const encodeJson = flow(
+  Schema.encodeUnknownOption(Schema.fromJsonString(Schema.Json)),
+  Option.getOrElse(() => ""),
+);
 
 /** Nothing is driving it any more, so there is nothing to stop, steer or answer. */
 export function isSettled(state: TaskState): boolean {
@@ -2566,10 +2787,7 @@ export function disposeLabel(action: DisposeAction): string {
     : `Mark ${action.disposition} ${action.named}`;
 }
 
-/**
- * What this Task can be asked for, in the order a menu shows it. Only what would work: an
- * item the human has to try to find out is refused is worse than no item.
- */
+/** A Task's menu actions, including unavailable Offers with their reasons. */
 export function cardActions(view: TaskView): CardAction[] {
   const actions: CardAction[] = [{ kind: "go-to-tab" }];
   if (!isSettled(view.state)) actions.push({ kind: "steer" }, { kind: "attach" });
@@ -2577,7 +2795,8 @@ export function cardActions(view: TaskView): CardAction[] {
   const mr = mrRefOf(view.mr);
   if (several.length > 0) actions.push(...Arr.map(several, openEach));
   else if (mr !== null) actions.push({ kind: "open-mr", mr });
-  if (view.offer !== null) actions.push({ kind: "offer", offer: view.offer });
+  for (const offer of view.offers ?? (view.offer === null ? [] : [view.offer]))
+    actions.push({ kind: "offer", offer });
   if (view.check !== null) actions.push({ kind: "check-output" });
   actions.push({ kind: "offers" });
   if (canResume(view.state)) actions.push({ kind: "resume" });
@@ -2649,6 +2868,13 @@ export function dispositionActions(view: TaskView): DisposeAction[] {
  * liveness beats history, and history is split by whether the work landed.
  */
 export type Section = "needs-you" | "ready-to-ship" | "working" | "waiting" | "finished";
+
+/** What a Ready to ship card's line opens with: a merge's Release offer under its own title. */
+export function shippingLabel(view: Pick<TaskView, "shipping" | "offer">): string {
+  if (view.shipping == null) return "";
+  if (view.shipping === "merge") return `${view.offer?.title ?? "Merge"}: `;
+  return view.shipping === "stage" ? "Stage: " : "Deploy: ";
+}
 
 export function sectionOf(view: Pick<TaskView, "state" | "landed" | "shipping">): Section {
   // Read off the state alone, because a Decision is not the only way to stop for a

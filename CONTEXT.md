@@ -54,6 +54,11 @@ restart ([ADR-0046](docs/adr/0046-an-attachment-is-uploaded-once-and-belongs-to-
 
 **Output** — A structured JSON file an agent writes to the Run directory for one operation (e.g. a review verdict + findings). It is decoded against the Workflow's schema before anything believes it, and one that does not decode buys one repair. One still unusable after its repair parks the Run at its Step, and a resume reads the file again before giving one more repair. Workflows read Outputs, never terminal text. Collie waits for it against the agent's idle time only: while herdr reports the agent working or blocked, a question it asked is open on the Run, or a `collie verify` it asked for waits while its Machine is **Short of memory**, the budget does not run (ADR-0062). When the budget runs out, the Run is parked and keeps waiting: an Output written later is collected without a resume (ADR-0062, amended 2026-10-19).
 
+Managed server health has a separate readiness deadline. A terminal reporting
+working or blocked does not pause that deadline while its server remains unhealthy.
+A health park keeps collecting usable Output. Recovery requires proof that the
+owned predecessor is Quiet and preserves unresolved Delivery receipts.
+
 **Finding status** — `open`, `fixed`, `disputed` or `obsolete`, for one finding with a stable
 id, anchored to the head it was judged at and the note that posted it.
 
@@ -308,6 +313,10 @@ from: its question tool never shows the agent as blocked. When core loses an inc
 Run still running — its holder lost, `hc server stop`, a reboot — the host starts the next
 one: a fresh terminal under the same name, in the same checkout, resuming the harness
 session recorded at launch. An incarnation Collie ended is never started again.
+
+A managed server can exit while its terminal remains listed. That terminal's status
+does not prove the worker alive. Replacement still requires the recorded ownership
+and Quiet checks, and never repeats a completed Step.
 
 **Drift** — A recorded evidence–Intent mismatch. `rule` drift Collie establishes itself;
 `semantic` drift is judged against bounded actual evidence. Nothing passes on an absence.

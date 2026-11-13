@@ -11,7 +11,7 @@ collie-desktop-terminal = { path = "../terminal" }
 collie-desktop-chat = { path = "../chat" }
 collie-desktop-update = { path = "../update" }
 collie-desktop-theme = { path = "../theme" }
-base64 = "0.22"
+base64 = "0.23"
 rune = { workspace = true, features = ["native-file-dialog"] }
 rune-mac.workspace = true
 rune-kit.workspace = true
