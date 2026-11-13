@@ -219,23 +219,25 @@ export const reviewPass = (ask: ReviewAsk) =>
     const { id } = yield* Run;
     const host = yield* Host;
     const { dir, cwd } = yield* host.place(id);
+    const confirmHead = Effect.gen(function* () {
+      if (ask.head)
+        yield* Activity.make({
+          name: `${ask.prefix ?? ""}review-head-confirmed-${ask.at}`,
+          success: Schema.String,
+          error: WorkflowError,
+          execute: host.reviewedHead({ target: ask.target, cwd }).pipe(
+            Effect.filterOrFail(
+              (head) => head === ask.head,
+              () =>
+                new WorkflowError({
+                  reason: `${HEAD_MOVED} ${ask.head}; review again before posting`,
+                }),
+            ),
+          ),
+        });
+    });
     const keepLedger = (report: SynthesisReport) =>
       Effect.gen(function* () {
-        if (ask.head)
-          yield* Activity.make({
-            name: `${ask.prefix ?? ""}review-head-confirmed-${ask.at}`,
-            success: Schema.String,
-            error: WorkflowError,
-            execute: host.reviewedHead({ target: ask.target, cwd }).pipe(
-              Effect.filterOrFail(
-                (head) => head === ask.head,
-                () =>
-                  new WorkflowError({
-                    reason: `${HEAD_MOVED} ${ask.head}; review again before posting`,
-                  }),
-              ),
-            ),
-          });
         if (ask.ledger === undefined) {
           yield* leaveReview(dir, report);
           return report;
@@ -285,7 +287,7 @@ export const reviewPass = (ask: ReviewAsk) =>
           .writeFileString(`${dir}/review-head`, ask.head ?? "")
           .pipe(Effect.orDie);
         return recorded;
-      });
+      }).pipe(Effect.tap(() => confirmHead));
     // A check left to CI is read from the forge where the Run has a merge request, never run.
     const leftToCi = yield* Effect.forEach(
       Arr.filter(yield* host.approved(id), (spec) => spec.ci !== undefined),

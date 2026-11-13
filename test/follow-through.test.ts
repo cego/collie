@@ -319,7 +319,12 @@ for (const id of ["review", "second-look"])
             { ...F1, status: "fixed" },
             { ...F2, status: "fixed" },
           ]);
-          yield* rig.queueOutputs([review([F1, F2]), fixed, fixed]);
+          const discovered = { id: "F3", severity: "major", title: "validate the redirect" };
+          yield* rig.queueOutputs([
+            review([F1, F2]),
+            review([...fixed.findings, discovered]),
+            review([...fixed.findings, { ...discovered, status: "fixed" }]),
+          ]);
           const entry = yield* entryOf(id);
           let second = "";
           let third = "";
@@ -376,8 +381,19 @@ for (const id of ["review", "second-look"])
                 `Review by Collie for @mk · ${runId} round 1 at ${first}`,
                 `Review by Collie for @mk · ${runId} round 3 at ${third}`,
               ]);
-              expect(notes[1]).toContain(`all findings fixed at \`${third}\``);
+              expect(notes[1]).toContain("F3: fixed — validate the redirect");
               expect(yield* host.agentStarts).toHaveLength(3);
+              const fs = yield* FileSystem.FileSystem;
+              const prompts = yield* fs.readDirectory(`${host.dir()}/agents/${runId}`);
+              const thirdPrompt = Option.getOrThrow(
+                Arr.findFirst(
+                  prompts,
+                  (file) => file.startsWith("review-3-") && file.endsWith(".prompt.md"),
+                ),
+              );
+              expect(
+                yield* fs.readFileString(`${host.dir()}/agents/${runId}/${thirdPrompt}`),
+              ).toContain('"title": "validate the redirect"');
             }),
           );
         }),

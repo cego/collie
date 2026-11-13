@@ -269,7 +269,15 @@ export default defineWorkflow({
             }).pipe(
               Effect.catchIf(
                 (failure) => carry && Str.startsWith(HEAD_MOVED)(failure.reason),
-                () => Effect.succeed(null),
+                () =>
+                  findingsIn(place.dir).pipe(
+                    Effect.tap((findings) =>
+                      Effect.sync(() => {
+                        ledger = findings;
+                      }),
+                    ),
+                    Effect.as(null),
+                  ),
               ),
             ),
             { round },
