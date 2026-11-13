@@ -250,9 +250,14 @@ for (const id of ["review", "second-look"])
 
 const follows = `${fixtures}/follows-mr.workflow.ts`;
 
-for (const following of [true, false])
+for (const { following, after, refused } of [
+  { following: true, after: 503, refused: false },
+  { following: false, after: 429, refused: true },
+  { following: true, after: "push", refused: false },
+  { following: true, after: "push", refused: true },
+] as const)
   test(
-    `${following ? "followed" : "manual"} GitHub approval attempts dismissal before reporting a transient post-submit check`,
+    `${following ? "followed" : "manual"} GitHub approval fails after ${after} with dismissal ${refused ? "refused" : "accepted"}`,
     () =>
       host.runEffect(
         Effect.gen(function* () {
@@ -270,14 +275,20 @@ for (const following of [true, false])
           const api = yield* serveForges({
             forge: "github",
             face: async (url, init) => {
-              if (accepted && url.endsWith("/pulls/7") && init?.method === "GET")
-                return Response.json(
-                  { message: "temporarily unavailable" },
-                  { status: following ? 503 : 429 },
+              if (accepted && url.endsWith("/pulls/7") && init?.method === "GET") {
+                if (after !== "push")
+                  return Response.json({ message: "temporarily unavailable" }, { status: after });
+                const now = await runLive(forge.model());
+                await runLive(
+                  forge.set({
+                    ...now,
+                    mrs: now.mrs.map((one) => ({ ...one, head: "f".repeat(40) })),
+                  }),
                 );
+              }
               if (url.endsWith("/dismissals")) {
                 dismissed += 1;
-                if (!following) return Response.json({ message: "Forbidden" }, { status: 403 });
+                if (refused) return Response.json({ message: "Forbidden" }, { status: 403 });
               }
               const response = await forge.face(url, init);
               if (url.endsWith("/reviews") && init?.method === "POST") accepted = true;
@@ -315,12 +326,14 @@ for (const following of [true, false])
               expect(dismissed).toBe(1);
               expect(done?.park).toBeNull();
               const reason = done?.status.status === "failed" ? done.status.reason : "";
-              if (!following) {
-                expect(done?.status.status).toBe("failed");
-                expect(reason).toContain("approval may still be active");
+              expect(done?.status.status).toBe("failed");
+              expect(reason).toContain(
+                refused ? "approval may still be active" : "approval withdrawn",
+              );
+              if (refused) {
                 expect(reason).toContain("review 1");
               }
-              expect((yield* forge.model()).approved ?? []).toHaveLength(following ? 0 : 1);
+              expect((yield* forge.model()).approved ?? []).toHaveLength(refused ? 1 : 0);
               expect(
                 Arr.filter(
                   forge.requests(),

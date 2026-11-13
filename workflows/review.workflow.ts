@@ -413,7 +413,10 @@ export default defineWorkflow({
                       execute: host.approveReview({ target: asked.target, cwd: place.cwd, head }),
                     })
                   : null;
-              if (approved !== null) yield* fact(`approve-said-${round}`, approved.message);
+              if (approved !== null) {
+                yield* fact(`approve-said-${round}`, approved.message);
+                if (!approved.ok) return yield* new WorkflowError({ reason: approved.message });
+              }
               woke = yield* watch(
                 approved?.ok === true ? { ...watching, approved: head } : watching,
               );
