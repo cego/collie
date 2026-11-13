@@ -100,6 +100,32 @@ for (const name of ["gitlab", "github"] as const) {
         }),
       ));
 
+    if (name === "gitlab")
+      for (const flag of ["collapsed", "too_large"])
+        test(`refuses a re-review when GitLab marks a file ${flag}`, () => {
+          const fake = fakeForge(name, model(name, { ancestry: { [HEAD]: [MERGED] } }));
+          const layer = forgeHttpTest(fake.run, (url, init) =>
+            Str.includes("/repository/compare?")(url)
+              ? Promise.resolve(
+                  Response.json({
+                    compare_timeout: false,
+                    diffs: [{ new_path: "src/omitted.ts", diff: "", [flag]: true }],
+                  }),
+                )
+              : fake.fetch(url, init),
+          );
+          return runEffect(
+            Effect.gen(function* () {
+              const diff = yield* forge.reviewChanges(ref(name), MERGED, HEAD, "/w", fake.run);
+              expect(diff.ok).toBe(false);
+              if (!diff.ok) {
+                expect(diff.reason).toContain("incomplete");
+                expect(diff.reason).toContain("src/omitted.ts");
+              }
+            }).pipe(Effect.provide(layer)),
+          );
+        });
+
     test("pins approval to the reviewed head", () => {
       const fake = fakeForge(name, model(name));
       return runEffect(

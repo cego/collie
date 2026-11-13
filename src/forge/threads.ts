@@ -128,7 +128,14 @@ export const reviewChanges = (
       if (base.ok && base.value.id === previous) {
         const compared = yield* requestAs(
           Schema.Struct({
-            diffs: Schema.Array(Schema.Struct({ new_path: Schema.String, diff: Schema.String })),
+            diffs: Schema.Array(
+              Schema.Struct({
+                new_path: Schema.String,
+                diff: Schema.String,
+                collapsed: Schema.optionalKey(Schema.Boolean),
+                too_large: Schema.optionalKey(Schema.Boolean),
+              }),
+            ),
             compare_timeout: Schema.optionalKey(Schema.Boolean),
           }),
           login,
@@ -136,6 +143,18 @@ export const reviewChanges = (
           `${route}/compare?from=${encodeURIComponent(previous)}&to=${encodeURIComponent(head)}&straight=true`,
         );
         if (!compared.ok) return compared;
+        const omitted = Arr.filter(
+          compared.value.diffs,
+          (one) => one.collapsed === true || one.too_large === true,
+        );
+        if (omitted.length > 0)
+          return {
+            ok: false as const,
+            reason: `GitLab interdiff is incomplete: omitted content for ${Arr.join(
+              Arr.map(omitted, (one) => one.new_path),
+              ", ",
+            )}; supply the missing diffs before reviewing`,
+          };
         if (!compared.value.compare_timeout)
           changes = Arr.join(
             Arr.map(compared.value.diffs, (one) => `${one.new_path}\n${one.diff}`),
