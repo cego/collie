@@ -8213,7 +8213,6 @@ scenario(
         expect(yield* asked(runId, "ci-fix-1")).toContain(
           `failed in this branch's own test "${OWN_TEST}", and passed only when retried`,
         );
-        // The retried pass proved nothing: the only proof is the fix's.
         const [proof, ...more] = yield* ciRecords(runId);
         expect(more).toEqual([]);
         expect(proof).toMatchObject({ name: "nuxi", end: { head_sha: fix.sha } });
