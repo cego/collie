@@ -5,6 +5,8 @@
 import * as Arr from "effect/Array";
 import { Cause, Clock, Effect, Option, type Scope, Stream, SubscriptionRef } from "effect";
 import type { BoardMessage, BoardSnapshot, TaskView } from "./board-model";
+import { recordMarks } from "./record-marks";
+import { Foreground } from "./foreground";
 
 /** How long a build may take before the host log says so. */
 const SLOW_BUILD_MS = 2_000;
@@ -27,6 +29,7 @@ export const shareBoard = <A, E, R, R2>(options: {
   Scope.Scope | R | R2
 > =>
   Effect.gen(function* () {
+    const mark = yield* recordMarks;
     let seen = 0;
     const latest = yield* SubscriptionRef.make(
       Option.none<{ readonly covers: number; readonly board: A }>(),
@@ -35,6 +38,7 @@ export const shareBoard = <A, E, R, R2>(options: {
       const started = yield* Clock.currentTimeMillis;
       const built = yield* options.build;
       const took = (yield* Clock.currentTimeMillis) - started;
+      if (mark !== null) yield* mark("board:built", String(took));
       if (took > SLOW_BUILD_MS) yield* Effect.logWarning(`the board took ${took} ms to build`);
       return built;
     });
@@ -60,18 +64,21 @@ export const shareBoard = <A, E, R, R2>(options: {
       ),
       Effect.forkScoped,
     );
-    const boards = Stream.unwrap(
-      Effect.sync(() => {
-        const since = seen;
-        return SubscriptionRef.changes(latest).pipe(
-          // A reader that reads slowly skips to the latest board; a client is told by diff.
-          Stream.buffer({ capacity: 1, strategy: "sliding" }),
-          Stream.filter(Option.isSome),
-          Stream.map((built) => built.value),
-          Stream.filter((built) => built.covers >= since),
-          Stream.map((built) => built.board),
-        );
-      }),
+    const boards = Stream.transformPull(
+      Stream.unwrap(
+        Effect.sync(() => {
+          const since = seen;
+          return SubscriptionRef.changes(latest).pipe(
+            // A reader that reads slowly skips to the latest board; a client is told by diff.
+            Stream.buffer({ capacity: 1, strategy: "sliding" }),
+            Stream.filter(Option.isSome),
+            Stream.map((built) => built.value),
+            Stream.filter((built) => built.covers >= since),
+            Stream.map((built) => built.board),
+          );
+        }),
+      ),
+      (pull) => Effect.map(Foreground, ({ wait }) => wait(pull)),
     );
     const latestBoard = SubscriptionRef.changes(latest).pipe(
       Stream.filter(Option.isSome),
@@ -80,6 +87,7 @@ export const shareBoard = <A, E, R, R2>(options: {
       Effect.flatMap((board) =>
         Option.isSome(board) ? Effect.succeed(board.value) : Effect.never,
       ),
+      (effect) => Effect.flatMap(Foreground, ({ wait }) => wait(effect)),
     );
     return { boards, latest: latestBoard };
   });

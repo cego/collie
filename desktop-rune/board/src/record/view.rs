@@ -7,6 +7,7 @@ use super::review::{Anchor, Draft, add_draft, edit_draft, plan_anchor, remove_dr
 use super::tabs::{self, KeyAction, KeyFacts, Landing, SummarySection, Tab, Target};
 use super::when::{now, when_of};
 use super::{Form, Item, Record};
+use crate::board::cards::{self, CardAction};
 use crate::flow::actions::{ActionView, Tone, lane_actions, next_move, step_actions};
 use crate::flow::inspector::{self, Part};
 use crate::{App, flow, icons};
@@ -441,7 +442,7 @@ pub fn view(app: &App, k: &Kit) -> Option<El> {
         "evidence" => scrolled("evidence-scroll", evidence_tab(record, k)),
         "log" => log_tab(record, k),
         "terminal" => terminal_tab(app, record, k),
-        "facts" => scrolled("facts-scroll", facts_tab(record, k)),
+        "facts" => scrolled("facts-scroll", facts_tab(app, record, k)),
         mr => scrolled("mr-scroll", mr_tab(record, mr, k)),
     };
     let mut panel = col()
@@ -901,22 +902,41 @@ fn flow_tab(app: &App, record: &Record, k: &Kit) -> El {
     let inspector = inspector_view(app, record, map.width, k);
     let form = form_view(app, record, k);
     let inspected = inspector.is_some();
-    let tab = col()
-        .key("flow-tab")
-        .gap(20.0)
-        .grow(1.0)
-        .min_h(0.0)
+    let mut rail = col()
+        .key("flow-map-scroll")
+        .min_h(56.0)
         .w_full()
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
         .scroll_anchor()
         .scroll_edge_fade(16.0)
+        .child(flow::flow_map(map, super::flow_of, App::step_chosen, k));
+    rail = if inspected {
+        rail.shrink().max_h(record.flow_height * 0.3)
+    } else {
+        rail.grow(1.0)
+    };
+    col()
+        .key("flow-tab")
+        .gap(20.0)
+        .grow(1.0)
+        .min_h(0.0)
+        .w_full()
+        .on_layout(|app: &mut App, [_, _, _, height]| {
+            if let Some(record) = &mut app.record.open
+                && (record.flow_height - height).abs() > 0.5
+            {
+                record.flow_height = height;
+            }
+        })
         .child(toolbar)
-        .child(flow::flow_map(map, super::flow_of, App::step_chosen, k))
+        .child(collie_desktop_chat::glide::smooth::<App>(
+            rail,
+            "flow-map-scroll",
+        ))
         .children(inspector)
-        .children(form.filter(|_| !inspected));
-    collie_desktop_chat::glide::smooth::<App>(tab, "flow-tab")
+        .children(form.filter(|_| !inspected))
 }
 
 /// The selected Step's details: its state, what it is for, its actions, facts and notes.
@@ -1182,12 +1202,10 @@ fn inspector_view(app: &App, record: &Record, width: f32, k: &Kit) -> Option<El>
                 .child(
                     col()
                         .w_full()
-                        .max_h(420.0)
                         .padding(12.0)
                         .radius(k.radius.md)
                         .fill(k.c.layer_01)
                         .border(1.0, k.c.border_weak)
-                        .scroll(ScrollSpec { stick_bottom: true })
                         .child(mono(lines, "inspector-log", k)),
                 ),
             None => quiet(inspector::quiet_work(&node), k),
@@ -1215,6 +1233,13 @@ fn inspector_view(app: &App, record: &Record, width: f32, k: &Kit) -> Option<El>
         Part::Decision => rune::el(),
         _ => quiet(inspector::quiet_work(&node), k),
     };
+    let work = if part == Part::Terminal && live && inspector::at_work(&node) {
+        work
+    } else {
+        scrolled("inspector-content", work).scroll(ScrollSpec {
+            stick_bottom: part == Part::Log,
+        })
+    };
     let form = form_view(app, record, k);
     let work = col()
         .key("inspector-work")
@@ -1222,25 +1247,42 @@ fn inspector_view(app: &App, record: &Record, width: f32, k: &Kit) -> Option<El>
         .label("Step work")
         .gap(12.0)
         .grow(1.0)
+        .min_h(0.0)
         .min_w(0.0)
         .children(form)
         .children(part_tabs.map(|tabs| row().child(tabs)))
         .child(work);
-    let context = step_context(app, record, &spot, parent, &node, lane, k);
+    let context = col()
+        .key("inspector-context-scroll")
+        .min_h(0.0)
+        .scroll(ScrollSpec {
+            stick_bottom: false,
+        })
+        .child(step_context(app, record, &spot, parent, &node, lane, k));
     let beside = width >= SIDE_BY_SIDE;
     let body = if beside {
         row()
             .gap(24.0)
+            .grow(1.0)
+            .min_h(0.0)
             .w_full()
             .child(context.w(CONTEXT_W))
             .child(rune::el().w(1.0).fill(k.c.border_weak).a11y_hidden())
             .child(work)
     } else {
-        col().gap(16.0).w_full().child(context).child(work)
+        col()
+            .gap(16.0)
+            .grow(1.0)
+            .min_h(0.0)
+            .w_full()
+            .child(context.w_full().shrink().max_h(record.flow_height * 0.25))
+            .child(work)
     };
     Some(
         panel(k)
             .key("inspector")
+            .grow(1.0)
+            .min_h(0.0)
             .role("group")
             .label(format!("Step {}", node.title))
             .child(body),
@@ -1327,13 +1369,27 @@ fn form_view(app: &App, record: &Record, k: &Kit) -> Option<El> {
                 .child(cancel),
         ),
     };
-    Some(
-        panel(k)
-            .key("flow-form")
-            .role("group")
-            .label("Action")
-            .child(body),
-    )
+    let form = col()
+        .key("flow-form-scroll")
+        .w_full()
+        .min_h(0.0)
+        .shrink()
+        .scroll(ScrollSpec {
+            stick_bottom: false,
+        })
+        .scroll_anchor()
+        .scroll_edge_fade(16.0)
+        .child(
+            panel(k)
+                .key("flow-form")
+                .role("group")
+                .label("Action")
+                .child(body),
+        );
+    Some(collie_desktop_chat::glide::smooth::<App>(
+        form,
+        "flow-form-scroll",
+    ))
 }
 
 fn offer_form(
@@ -3021,12 +3077,15 @@ fn agent_one(tab: &super::agents::AgentTab, k: &Kit) -> El {
         .key("agent-one")
         .gap(8.0)
         .center_y()
+        .shrink()
         .min_w(0.0)
         .child(agent_dot(&tab.state, k))
         .child(
             text(tab.label.clone())
                 .font(k.ty.text_xsmall_medium)
-                .color(k.c.text_base),
+                .color(k.c.text_base)
+                .truncate()
+                .shrink(),
         )
         .child(
             text(match &tab.now {
@@ -3036,6 +3095,7 @@ fn agent_one(tab: &super::agents::AgentTab, k: &Kit) -> El {
             .font(k.ty.text_xsmall)
             .color(k.c.text_faint)
             .truncate()
+            .shrink()
             .min_w(0.0),
         )
 }
@@ -3085,6 +3145,7 @@ fn pane_facts(app: &App, link: &Link, k: &Kit) -> Vec<El> {
                 .font(k.ty.text_xsmall)
                 .color(k.c.text_muted)
                 .truncate()
+                .shrink()
                 .min_w(0.0)
         });
     // In the bar: a line of its own would take a row from the pane under its program.
@@ -3243,9 +3304,6 @@ fn terminal_tab(app: &App, record: &Record, k: &Kit) -> El {
         )
 }
 
-/// How tall a Step's terminal is drawn on Flow: steady, so its program's rows never shift.
-const STEP_PANE_H: f32 = 420.0;
-
 /// A working Step's own pane, drawn in its Terminal part with a way to the full Terminal tab.
 fn step_terminal(app: &App, record: &Record, k: &Kit) -> El {
     let agents = app
@@ -3274,6 +3332,8 @@ fn step_terminal(app: &App, record: &Record, k: &Kit) -> El {
         .child(open);
     col()
         .key("step-terminal")
+        .grow(1.0)
+        .min_h(0.0)
         .gap(8.0)
         .w_full()
         .instant_changes()
@@ -3283,7 +3343,8 @@ fn step_terminal(app: &App, record: &Record, k: &Kit) -> El {
         .child(
             col()
                 .key("terminal-body")
-                .h(STEP_PANE_H)
+                .grow(1.0)
+                .min_h(0.0)
                 .w_full()
                 .radius(k.radius.md)
                 .border(1.0, k.c.border_weak)
@@ -3353,12 +3414,33 @@ fn pill(key: &str, said: &str, label: &str, tone: rune_kit::StateColors, k: &Kit
         )
 }
 
-fn facts_tab(record: &Record, k: &Kit) -> El {
+fn facts_tab(app: &App, record: &Record, k: &Kit) -> El {
+    let offered: Vec<_> = app
+        .task_of_record()
+        .into_iter()
+        .flat_map(|task| {
+            cards::card_actions(task)
+                .into_iter()
+                .filter_map(move |action| {
+                    let CardAction::Offer(offer) = action else {
+                        return None;
+                    };
+                    let owner = offer.run.unwrap_or_else(|| task.run.clone());
+                    let said = match offer.unavailable {
+                        Some(why) => format!("{owner} — {why}"),
+                        None => owner,
+                    };
+                    Some(fact(&offer.title, said, k))
+                })
+        })
+        .collect();
+    let offers = (!offered.is_empty()).then(|| section("facts-offers", "Offers", k, offered));
     let Some(detail) = record.detail() else {
         return col()
             .gap(4.0)
             .child(fact("Run", record.run.clone(), k))
-            .child(fact("Machine", record.machine.clone(), k));
+            .child(fact("Machine", record.machine.clone(), k))
+            .children(offers);
     };
     let mut rows = vec![
         fact("Run", detail.id.clone(), k),
@@ -3434,7 +3516,11 @@ fn facts_tab(record: &Record, k: &Kit) -> El {
     });
     ruled(
         col().key("facts").max_w(READING_W).w_full(),
-        [facts(rows)].into_iter().chain(agents).chain(steering),
+        [facts(rows)]
+            .into_iter()
+            .chain(agents)
+            .chain(steering)
+            .chain(offers),
         k,
     )
 }

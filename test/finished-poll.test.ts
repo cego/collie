@@ -7,7 +7,7 @@ import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
-import { Effect, FileSystem, Layer, Queue, type Schema, type Scope } from "effect";
+import { Effect, FileSystem, Layer, Queue, Schema, type Scope } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { fastForward, runEffect as runLive } from "./support/effect";
@@ -24,11 +24,12 @@ import {
   type Generation,
   type HostServices,
 } from "../src/engine";
-import type { RequestedBy } from "../src/board-model";
+import type { RunReport, RequestedBy } from "../src/board-model";
 import { Store } from "../src/store";
 import { writeTask } from "../src/task";
 import { socketOf } from "../src/host";
 import { reportsLayer } from "../src/reports";
+import { DEFAULT_AUTHORITY, IntentSchema } from "../src/intent";
 import type { Peer } from "../src/peers-model";
 
 const ROOT = new URL("../", import.meta.url).pathname;
@@ -168,7 +169,60 @@ const write = (path: string, text: string) =>
     Effect.orDie,
   );
 
-const REPORT = '{"state":"delivered","at":"2026-10-15T00:00:00.000Z","note":"done","closed":true}';
+const REPORT: RunReport = {
+  state: "delivered",
+  at: "2026-10-15T00:00:00.000Z",
+  note: "done",
+  closed: true,
+};
+
+test("Run listings and related views use their supplied reader for intent and displayed controls", () =>
+  runEffect(
+    hosted(
+      Effect.gen(function* () {
+        const registry = yield* Registry;
+        const fs = yield* FileSystem.FileSystem;
+        const run = yield* started(yield* loaded("quiet"), "reader-snapshot", {});
+        yield* settled(run.runId, "complete");
+        const intent = yield* Schema.encodeEffect(Schema.fromJsonString(IntentSchema))({
+          version: 1,
+          run: run.runId,
+          goal: "Reader snapshot",
+          outcome: "performance",
+          constraints: [],
+          authority: DEFAULT_AUTHORITY,
+          parent: null,
+          history: [],
+        });
+        const reader: FileSystem.FileSystem = {
+          ...fs,
+          readFileString: (path, encoding) =>
+            path === `${runDir(dir(), run.runId)}/intent.json`
+              ? Effect.succeed(intent)
+              : fs.readFileString(path, encoding),
+          exists: (path) =>
+            path === controlPath(dir(), HOLD, run.runId) ? Effect.succeed(true) : fs.exists(path),
+        };
+        const all = yield* registry.views(null, reader);
+        expect(
+          Option.getOrUndefined(Arr.findFirst(all, (view) => view.runId === run.runId)),
+        ).toMatchObject({
+          options: { outcome: "performance" },
+          controls: [HOLD],
+        });
+        const related = yield* registry.related(run.runId, [], reader);
+        expect(
+          Option.getOrUndefined(Arr.findFirst(related, (view) => view.runId === run.runId)),
+        ).toMatchObject({
+          options: { outcome: "performance" },
+          controls: [HOLD],
+        });
+        const fresh = yield* registry.view(run.runId);
+        expect(fresh?.options.outcome).not.toBe("performance");
+        expect(fresh?.controls).toEqual([]);
+      }),
+    ),
+  ));
 
 test(
   "a completed Run is polled at most once across two listings, and its files are read on each",
@@ -188,7 +242,7 @@ test(
           expect(first?.report).toBeUndefined();
           expect(first?.controls).toEqual([]);
 
-          yield* write(`${runDir(dir(), run.runId)}/report.json`, REPORT);
+          yield* (yield* Store).reported(run.runId, REPORT);
           yield* write(controlPath(dir(), HOLD, run.runId), "");
           const second = Option.getOrUndefined(
             Arr.findFirst(yield* registry.views(null), (view) => view.runId === run.runId),
@@ -360,8 +414,6 @@ const asker: RequestedBy = {
   machine: { installation: "this-machine", name: "here" },
 };
 
-const CLOSED = '{"state":"delivered","at":"2026-10-15T00:00:00.000Z","note":"done","closed":true}';
-
 test(
   "the reports sweep builds a view only for the Run an agent started, and never delivers its closed report again",
   () =>
@@ -373,18 +425,25 @@ test(
           yield* settled(asked.runId, "complete");
           for (const request of ["r1", "r2"])
             yield* settled((yield* started(quiet, request, {})).runId, "complete");
-          const report = `${runDir(dir(), asked.runId)}/report.json`;
-          yield* write(report, CLOSED);
+          const store = yield* Store;
+          yield* store.reported(asked.runId, REPORT);
+          const waiting = yield* started(
+            yield* loaded("asks"),
+            "waiting",
+            { goal: "still going" },
+            null,
+            asker,
+          );
+          yield* settled(waiting.runId, "suspended");
 
           yield* sweeping;
           yield* until(
             () => Effect.succeed(built),
-            (views) => views.length >= 2,
+            (views) => Arr.filter(views, (run) => run === waiting.runId).length >= 2,
           );
 
-          expect(new Set(built)).toEqual(new Set([asked.runId]));
-          const fs = yield* FileSystem.FileSystem;
-          expect(yield* fs.readFileString(report)).toBe(CLOSED);
+          expect(new Set(built)).toEqual(new Set([waiting.runId]));
+          expect((yield* (yield* Registry).view(asked.runId))?.report).toEqual(REPORT);
         }),
       ),
     ),
@@ -407,8 +466,7 @@ test(
           });
           const run = yield* started(yield* loaded("reported"), "r1", {}, "task-1");
           yield* settled(run.runId, "complete");
-          const report = `${runDir(dir(), run.runId)}/report.json`;
-          yield* write(report, pipe_(CLOSED, Str.replace('"closed":true', '"closed":false')));
+          yield* (yield* Store).reported(run.runId, { ...REPORT, closed: false });
 
           yield* sweeping;
           yield* until(

@@ -615,7 +615,10 @@ fn label_of(action: &CardAction, primary: bool) -> Option<String> {
             mr.url()?;
             cards::open_mr_label(mr, primary, named.as_deref())
         }
-        CardAction::Offer(offer) => offer.title.clone(),
+        CardAction::Offer(offer) => offer.unavailable.as_ref().map_or_else(
+            || offer.title.clone(),
+            |why| format!("{} — {why}", offer.title),
+        ),
         CardAction::Offers => "What it offers…".into(),
         CardAction::Resume => (if primary { "Resume" } else { "Resume run" }).into(),
         CardAction::FollowUp => "Follow-up run".into(),
@@ -650,6 +653,31 @@ fn small_button(label: String, variant: ButtonVariant) -> Button {
     Button::new(label)
         .variant(variant)
         .control_size(ControlSize::Small)
+}
+
+/// A small button that narrows to the room it has, cutting its label short but still read
+/// whole, and shown whole on hover.
+fn fitting_button(
+    k: &Kit,
+    label: String,
+    variant: ButtonVariant,
+    press: impl Fn(&mut App) + 'static,
+) -> El {
+    let shown = label.clone();
+    small_button(label, variant)
+        .label_with(move |font, ink| {
+            text(shown.clone())
+                .font(font)
+                .color(ink)
+                .truncate()
+                .help_when_truncated(shown)
+                .min_w(0.0)
+                .shrink()
+        })
+        .on_press(press)
+        .build(k)
+        .min_w(0.0)
+        .shrink()
 }
 
 fn card(
@@ -703,7 +731,9 @@ fn card(
         .on_close(|app: &mut App| app.board.menu = None);
     for (action, label) in menu_actions {
         let key = key.clone();
-        let item = MenuItem::new(label).danger(action == CardAction::Stop);
+        let item = MenuItem::new(label)
+            .danger(action == CardAction::Stop)
+            .disabled(matches!(&action, CardAction::Offer(offer) if offer.unavailable.is_some()));
         menu = menu.item(if action == CardAction::Attach {
             item.on_select_tx(move |app: &mut App, tx| {
                 app.attach_to(&key);
@@ -815,44 +845,58 @@ fn card(
                 .w_full(),
         );
 
-    // Its merge requests, where it has several or another Machine holds one too.
+    // Its merge requests, where it has several or another Machine holds one too: each one's
+    // line, then its actions on a row of their own that wraps on a narrow card.
     if let Some(mrs) = mrs {
-        let mut list = col().key("mrs").gap(6.0).w_full();
+        let mut list = col().key("mrs").gap(8.0).w_full();
         for (at, one) in mrs.iter().enumerate() {
-            let mut line = row()
-                .key(format!("mr-{at}"))
+            let mut actions = row()
+                .key("actions")
                 .w_full()
-                .gap(6.0)
-                .center_y()
-                .child(
-                    text(one.mr.line.clone())
-                        .font(k.ty.small.lh(16.0))
-                        .color(c.text_muted)
-                        .wrap()
-                        .max_lines(2)
-                        .grow(1.0)
-                        .shrink(),
-                );
+                .flex_wrap()
+                .gaps(2.0, 4.0)
+                // Ghost buttons: their labels line up with the line above.
+                .ml(-10.0);
             if let Some((label, url)) = &one.mr.open {
                 let url = url.clone();
-                line = line.child(
-                    small_button(label.clone(), ButtonVariant::GhostMuted)
-                        .on_press(move |app: &mut App| app.open_link(url.clone()))
-                        .build(k)
-                        .key(format!("{id}-mr-{at}-open")),
+                actions = actions.child(
+                    fitting_button(k, label.clone(), ButtonVariant::GhostMuted, move |app| {
+                        app.open_link(url.clone())
+                    })
+                    .key(format!("{id}-mr-{at}-open")),
                 );
             }
             if one.links.len() > 1 {
-                for link in &one.links {
+                for (n, link) in one.links.iter().enumerate() {
                     let to = link.key.clone();
-                    line = line.child(
-                        small_button(format!("on {}", link.machine), ButtonVariant::GhostFaint)
-                            .on_press(move |app: &mut App| app.open_card(&to))
-                            .build(k),
+                    actions = actions.child(
+                        fitting_button(
+                            k,
+                            format!("on {}", link.machine),
+                            ButtonVariant::GhostFaint,
+                            move |app| app.open_card(&to),
+                        )
+                        .key(format!("{id}-mr-{at}-on-{n}")),
                     );
                 }
             }
-            list = list.child(line);
+            list = list.child(
+                col()
+                    .key(format!("mr-{at}"))
+                    .w_full()
+                    .gap(2.0)
+                    .child(
+                        text(one.mr.line.clone())
+                            .key("line")
+                            .font(k.ty.small.lh(16.0))
+                            .color(c.text_muted)
+                            .wrap()
+                            .max_lines(2)
+                            .help_when_truncated(one.mr.line.clone())
+                            .w_full(),
+                    )
+                    .child(actions),
+            );
         }
         card = card.child(list);
     }
@@ -1039,7 +1083,9 @@ fn card(
         cards::primary_action(task).and_then(|a| label_of(&a, true).map(|l| (a, l)))
     {
         let key = key.clone();
-        let mut button = small_button(label, ButtonVariant::Neutral).disabled(!live);
+        let mut button = small_button(label, ButtonVariant::Neutral).disabled(
+            !live || matches!(&action, CardAction::Offer(offer) if offer.unavailable.is_some()),
+        );
         if action == CardAction::GoToTab {
             button = button.icon(&icons::PANE);
         }

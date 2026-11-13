@@ -668,12 +668,13 @@ split by whether the work **landed**. The order is the board model's own, and th
 board and chat's `collie_herd` list the sections the same way.
 
 **Ready to ship** holds work whose next shipping action has every gate satisfied at its
-current head, on forge answers read within two merge-watch rounds. The card names its
-offer, **Stage** or **Deploy**. A ready merge request's button is the offer that ships
-it, by what the offer declares: one that releases before one that only merges, so a
-finished implement Run reads **Release** — merge, tag and deploy — and **Merge**, which
-merges and stops, is in What it offers…. Either one says what it will do and asks before
-it starts, and its Run still asks its own Go. A declared Go uses the existing answer buttons. The host checks
+current head, on forge answers read within two merge-watch rounds. A ready merge
+request's button is the offer that ships it, under its own title and invoked on the Run
+that owns it, chosen by what the offer declares: one that releases before one that only
+merges, so a finished implement Run reads **Release** — merge, tag and deploy — and
+**Merge**, which merges and stops, is in its menu. Either one says what it will do and
+asks before it starts, and its Run still asks its own Go. Otherwise the card names
+**Stage** or **Deploy**. A declared Go uses the existing answer buttons. The host checks
 Merge and Stage from an MR against Ready to release, and Deploy against its recorded
 stage proof for that head or tag. A stale answer, moved head or failed gate takes it out;
 a Go that no longer holds appears in Needs you and says why. A Stage Run asks no Go.
@@ -757,7 +758,7 @@ read; it last answered 6 minutes ago.` A `merged` recorded by hand is outranked 
 reading the merge request open after it, and the card is owed again. Where
 every gate holds on fresh evidence at its head, it is **Ready to release** and moves
 to **Ready to ship** with the offer that ships it. Its sentence says: `Ready to
-release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: merge it, or tell
+release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: Release, or tell
 builder to.` The agent is named only while it is alive. A GitHub pull request reads as
 `owner/repo#30`, a GitLab merge request as `group/project!42`. A Run that ended with
 nothing to file — no branch, no merge request, no plan, no question — is finished, not
@@ -934,7 +935,9 @@ request is what the host's merge watch last read, and `R` asks it again.
 **Point at a card** and, where its age was, `go to tab` and `⋯` appear; the card does not
 move or grow. `⋯` opens that Task's menu, and so does a right-click anywhere on the card —
 use `⋯` in a terminal that keeps the right button for its own menu. Clicking anywhere else
-closes it, as does Esc, and the key beside each item does it from the keyboard:
+closes it, as does Esc. Use `↑↓` to choose an item and Enter to select it.
+The key beside an item selects it directly. When several Offers share a card, choose
+each with the arrow keys:
 
 |         |                    |                                                          |
 | ------- | ------------------ | -------------------------------------------------------- |
@@ -969,7 +972,9 @@ open, and adds **Mark merged** and **Mark abandoned** once the work is over — 
 [beside the run's status, never over it](cli.md#what-became-of-the-work), with its merge request
 as the reference where the board knows one. A Task with several merge requests has one of
 each per merge request, `Mark merged app!12`, and `Open MR app!12`, with no key of their
-own; **What it offers…** lists each owning Run's offers, `Release app!12`, made by that Run.
+own. A finished delivery's card menu lists **Release** and **Stage** for each merge request,
+on the Run that owns it: **Release app!12**, for example. Available offers come first;
+an unavailable offer shows its reason. **What it offers…** lists the same owning Runs' offers.
 An offer that takes anything asks for it with a control drawn from what its workflow
 declares: a checkbox or a Yes / No / Not set choice for a flag, a choice of the declared
 values, a number, one item per line for a list, and the field's own description beside it.
@@ -1164,7 +1169,8 @@ and the keys are shortcuts for what is already on screen. There is no footer of 
 | `q`   | Close the tab                                                 |
 
 A card's menu takes the key beside each of its items — the table
-[above](#the-control-plane), and the second half of what `?` lists — and `Esc` closes it. A field takes its own keys and nothing
+[above](#the-control-plane), and the second half of what `?` lists. Use `↑↓` to choose
+an item and Enter to select it; `Esc` closes the menu. A field takes its own keys and nothing
 else, because every other key is being typed rather than pressed: an answer, a steer and a
 Settings value send with Enter, the search hands the keys back and keeps what you typed,
 and Esc leaves any of them — clearing the search, which is what it is for. A proposal takes
@@ -1449,6 +1455,10 @@ Steer…, the Run's offers (asked of its host when opened, with a field for each
 Resume, Follow-up, Hold or Release, Stop, and Mark merged, abandoned or superseded — and
 the card's first action is the TUI card's own. Following a check's output is not on Desktop
 yet. Open merge request — Open pull request on GitHub — opens it in your browser.
+
+A finished delivery's menu lists Release and Stage for each merge request, on its owning
+Run. Unavailable actions stay visible with their reason and cannot be selected. The record's
+Facts tab lists these offers, their owning Runs, and any refusal, even while its details load.
 
 Each card names its merge request as its forge does: "merge request `group/app!42`" and
 "its pipeline" on GitLab, "pull request `cego/collie#30`" and "its checks" on GitHub. The
@@ -2210,6 +2220,11 @@ session's socket. Desktop never starts, signals or connects to a host by any oth
 what Desktop starts, `collie` and herdr among it, still gets your `XDG_STATE_HOME`.
 
 ### The Flock chat
+
+After an update, a Machine may still be building its first board. Once its connection
+has answered with the host's identity, the Flock chat can read its workspaces, a Run
+named as `<machine>:<run>`, and its files without waiting for that board. The board
+continues to say it is connecting; writes and board actions wait for its live snapshot.
 
 Right of the board is a conversation about the whole Flock, 32rem wide but never more than
 40% of the window. It follows what arrives while you are near the bottom, and stays where

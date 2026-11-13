@@ -75,7 +75,9 @@ const backdate = (runs: ReadonlyArray<string>) =>
     db.close();
   });
 
-export const prepare = (counts = COUNTS) =>
+export const prepare = (
+  counts: Omit<typeof COUNTS, "largeSteps"> & { readonly largeSteps?: number } = COUNTS,
+) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     Bun.spawnSync(["git", "init", "-q"], { cwd: world.project });
@@ -99,7 +101,7 @@ export const prepare = (counts = COUNTS) =>
     const large = yield* startEach(
       Array.from({ length: counts.large }, () => ({
         id: "bench-steps",
-        input: { steps: String(counts.largeSteps), live: "no" },
+        input: { steps: String(counts.largeSteps ?? COUNTS.largeSteps), live: "no" },
       })),
     );
     const lives = yield* startEach(

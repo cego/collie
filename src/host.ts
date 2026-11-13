@@ -38,6 +38,7 @@ import {
   Duration,
   Effect,
   Exit,
+  Fiber,
   FileSystem,
   Layer,
   Logger,
@@ -80,7 +81,13 @@ import { markFirst } from "./record-marks";
 import { doorThread, engineEnd, type EngineEnd, type Listed, type Opened } from "./door";
 import { SLOW_RPC_MS, firstValueTimed } from "./first-value";
 import { TurnScheduler } from "./turns";
-import { Foreground, foregroundLayer, servedNow } from "./foreground";
+import {
+  Foreground,
+  PATIENCE,
+  foregroundFileSystem,
+  foregroundLayer,
+  servedNow,
+} from "./foreground";
 import { tracingLayer } from "./tracing";
 import * as Scheduler from "effect/Scheduler";
 import {
@@ -647,7 +654,38 @@ export const slowRpcsLayer = Layer.succeed(SlowRpcs)((effect, { rpc }) =>
       }),
 );
 
-/** Logs each stream among `handlers` that is slow to send its first value. */
+const serveAnswer = <A, E, R>(
+  answer: Effect.Effect<A, E, R> | Stream.Stream<A, E, R>,
+  name: string,
+) => {
+  if (Stream.isStream(answer))
+    return Stream.transformPull(
+      firstValueTimed(answer, (ms) =>
+        Effect.logWarning(`the ${name} stream took ${ms} ms to send its first value`),
+      ),
+      (pull, scope) =>
+        Effect.map(Foreground, ({ serve }) => {
+          let first = true;
+          return Effect.suspend(() => {
+            if (!first) return pull;
+            first = false;
+            return Effect.flatMap(
+              serve(
+                Effect.gen(function* () {
+                  const pulling = yield* Effect.forkIn(pull, scope);
+                  yield* Fiber.await(pulling).pipe(Effect.timeoutOption(PATIENCE));
+                  return pulling;
+                }),
+              ),
+              Fiber.join,
+            );
+          });
+        }),
+    );
+  return Effect.flatMap(Foreground, ({ serve }) => serve(answer));
+};
+
+/** Serves each answer first, timing streams only until their first value. */
 export const timingFirstValues = <
   H extends Record<string, (...args: ReadonlyArray<never>) => object>,
 >(
@@ -656,11 +694,7 @@ export const timingFirstValues = <
   // SAFETY: each handler is replaced by one taking its arguments and answering its type.
   Rec.map(handlers, (handler, name) => (...args: ReadonlyArray<never>) => {
     const answer = handler(...args);
-    return Stream.isStream(answer)
-      ? firstValueTimed(answer, (ms) =>
-          Effect.logWarning(`the ${name} stream took ${ms} ms to send its first value`),
-        )
-      : answer;
+    return Stream.isStream(answer) || Effect.isEffect(answer) ? serveAnswer(answer, name) : answer;
   }) as H;
 
 /** What an agent of a Heal may ask beyond acting: reading, and declaring who it is. */
@@ -1310,7 +1344,7 @@ const hostBoard = (dir: string) =>
     const cards: KeptCards | undefined =
       model === undefined
         ? undefined
-        : { revision: model.highest, kept: new Map(), markers: new Map() };
+        : { revision: model.inputsAt, kept: new Map(), markers: new Map() };
     /** The offers a build read, which the door is told of with its listing. */
     const offered = new Map<string, ReadonlyArray<OfferView>>();
     const boardOf = (facts: ReadonlyArray<RunFacts>, alive: ReadonlyArray<AgentInfo>) =>
@@ -1479,6 +1513,7 @@ const hostBoard = (dir: string) =>
       herdr,
       bun,
       listing,
+      runs,
       kept,
       factsOf,
       offered,
@@ -1673,13 +1708,14 @@ const doorFeedLayer = (door: EngineEnd, panels: MrPanels) =>
         Effect.forever,
         Effect.forkScoped,
       );
-      const { boards, kept, factsOf, offered, bun, agentsSeen } = yield* SharedBoard;
+      const { boards, kept, factsOf, offered, bun, agentsSeen, alive } = yield* SharedBoard;
       const agents = (alive: ReadonlyArray<AgentInfo>) =>
         door.post({ _tag: "Listed", runs: [], gone: [], order: null, alive, offers: [] });
       yield* Effect.acquireRelease(
         Effect.sync(() => agentsSeen.add(agents)),
         () => Effect.sync(() => agentsSeen.delete(agents)),
       );
+      yield* alive.pipe(Effect.map(agents), Effect.forkScoped);
       const registry = yield* Registry;
       /** The revision its view was read at, while that view is kept; a going Run's is not. */
       const readAt = (run: RunFacts) => {
@@ -1691,7 +1727,7 @@ const doorFeedLayer = (door: EngineEnd, panels: MrPanels) =>
       const posted = new Map<string, RunFacts>();
       let order: ReadonlyArray<string> = [];
       yield* Effect.forkScoped(
-        Stream.runForEach(boards, ({ runs, alive }) =>
+        Stream.runForEach(boards, ({ runs }) =>
           Effect.sync(() => {
             const ids = Arr.map(runs, (run) => run.id);
             const present = new Set(ids);
@@ -1709,7 +1745,6 @@ const doorFeedLayer = (door: EngineEnd, panels: MrPanels) =>
               runs: fresh,
               gone,
               order: moved ? ids : null,
-              alive,
               offers,
             });
           }),
@@ -3862,19 +3897,22 @@ const frontDoorHandlers = (
                 const { describeOffers, refusal } = yield* Effect.promise(
                   () => import("./lifecycle"),
                 );
-                const runs = yield* Effect.cached(
-                  registry
-                    .views(null)
-                    .pipe(
-                      Effect.map((views) =>
-                        newestFirst(Arr.map(views, (view) => factsOfView(dir, view))),
-                      ),
-                    ),
+                const runs = Effect.map(shared.runs, newestFirst);
+                const runId = Option.getOrUndefined(
+                  Schema.decodeUnknownOption(Schema.String)(input.run),
+                );
+                const related = yield* Effect.cached(
+                  record !== undefined && runId !== undefined
+                    ? record
+                        .related(runId, record.model.planned(runId))
+                        .pipe(Effect.map(newestFirst))
+                    : runs,
                 );
                 const offers = (id: string) =>
                   registry.offers(id).pipe(Effect.provideContext(hosted));
                 return yield* answerRead(askerEnv(client), tool, input, {
-                  runs,
+                  runs: record === undefined ? related : runs,
+                  related,
                   offers: (id) =>
                     offers(id).pipe(
                       Effect.map((listed) =>
@@ -3898,7 +3936,7 @@ const frontDoorHandlers = (
                           return yield* taskFlowOf(
                             {
                               env: askerEnv(client),
-                              runs: yield* runs,
+                              runs: yield* related,
                               alive: yield* shared.aliveNow,
                               offers: (run) => offers(run).pipe(Effect.orElseSucceed(() => [])),
                             },
@@ -4126,6 +4164,7 @@ export const serve = (named: string): Effect.Effect<void, never, PlatformService
   }).pipe(
     Effect.orDie,
     Effect.provideService(Scheduler.Scheduler, new TurnScheduler(servedNow)),
+    Effect.updateService(FileSystem.FileSystem, foregroundFileSystem),
     Effect.provide(Layer.merge(tracingLayer(BUILD), foregroundLayer)),
   );
 

@@ -343,6 +343,7 @@ import {
   type VerifySpec,
 } from "./verify-spec";
 import { rerunArgv } from "./bun-tests";
+import { branchChange, ownTests } from "./own-tests";
 import {
   checkCwd,
   commandOf,
@@ -361,6 +362,7 @@ import {
   VERIFYING_FILE,
   type CheckPass,
   type CheckRun,
+  type FailedTest,
   type Verification,
 } from "./verify";
 import * as Workflow from "effect/workflow/Workflow";
@@ -438,7 +440,7 @@ export const sdkModules = (): ReadonlyArray<readonly [string, object]> => {
 /** Kept in step with package.json, which `engine.test.ts` checks: the host and an
  *  author's declarations have to be the same Effect, or the types are about another one. */
 export const TOOLCHAIN = {
-  effect: "4.1.0",
+  effect: "4.1.4",
   typescript: "^7.0.2",
 } as const;
 
@@ -511,6 +513,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly failed?: ReadonlyArray<FailedTest>;
     /** The one test a \`rerun\` ran. */
     readonly test?: FailedTest;
+    /** Whether a \`rerun\`'s test is the branch's own since the default branch, so never a Flake. */
+    readonly own?: boolean;
     /** The pipeline job a \`ci\` pass read, and the merge commit it ran on where not the head itself. */
     readonly job?: { readonly name: string; readonly url: string | null; readonly merge?: string };
   }
@@ -3739,6 +3743,13 @@ const defaultMergeBase = (cwd: string) =>
     return { found: true, branch, base: Str.trim(merged.stdout) } as const;
   });
 
+/** Whether the branch at `cwd` adds or changes `test` since it left the default branch. */
+const branchOwns = (cwd: string, test: FailedTest) =>
+  Effect.gen(function* () {
+    const branch = yield* defaultBase(runShell, cwd);
+    return branch !== null && ownTests([test], yield* branchChange(cwd, branch)).length > 0;
+  });
+
 /**
  * Runs `body` with the checkout at its merge-base with the default branch, then puts it
  * back. A checkout with changes of its own is refused: they would travel to the base.
@@ -4064,7 +4075,9 @@ export const hostLayer = (options: {
                         { ...own, cwd: asked.cwd },
                         spec,
                         rerun,
-                        { pass: asked.at === "default-base" ? "baseline" : "rerun" },
+                        asked.at === "default-base"
+                          ? { pass: "baseline" }
+                          : { pass: "rerun", own: yield* branchOwns(asked.cwd, rerun) },
                         log,
                       )
                 ).pipe(
@@ -6286,7 +6299,6 @@ const PlacingJson = Schema.fromJsonString(Placing);
 const decodePlacing = Schema.decodeUnknownOption(PlacingJson);
 const encodePlacing = flow(Schema.encodeResult(PlacingJson), Result.getOrThrow);
 
-/** The reports sweep asks of every row each second; a row read again unchanged is the same object. */
 const owing = new WeakMap<RunRow, boolean>();
 
 /** Whether a Run's report is owed: an agent started it, or its Task closes once it is reported. */
@@ -8203,11 +8215,7 @@ const makeRegistry: (
     const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
     const placing = Option.getOrUndefined(decodePlacing(row.placing ?? ""));
     const report = Option.getOrUndefined(
-      Schema.decodeOption(Schema.fromJsonString(RunReport))(
-        yield* fs
-          .readFileString(`${runDir(dir, row.run)}/report.json`)
-          .pipe(Effect.orElseSucceed(() => "")),
-      ),
+      Schema.decodeOption(Schema.fromJsonString(RunReport))(row.report ?? ""),
     );
     const linkNotices = yield* readLinkDeliveries(runDir(dir, row.run)).pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
@@ -8235,6 +8243,7 @@ const makeRegistry: (
       options: yield* decodeStrings(row.options ?? "{}").pipe(
         Effect.orElseSucceed((): Record<string, string> => ({})),
         Effect.flatMap((options) => optionsNow(dir, row.run, options)),
+        Effect.provideService(FileSystem.FileSystem, fs),
         Effect.provideContext(bun),
       ),
     };
@@ -8268,7 +8277,7 @@ const makeRegistry: (
       outcome,
       created: row.admitted,
       waiting: yield* steered(row.run),
-      controls: yield* controlsOf(row.run),
+      controls: yield* controlsOf(row.run, fs),
       parked,
       park: parked === null ? null : parkWithRecovery(info!, recovery),
       recovery: Arr.map(recovery.slice(-20), recoveryLine),
@@ -8339,10 +8348,13 @@ const makeRegistry: (
   });
 
   /** Which controls an operator has set over this run. */
-  const controlsOf = Effect.fn("Engine.controlsOf")(function* (runId: string) {
+  const controlsOf = Effect.fn("Engine.controlsOf")(function* (
+    runId: string,
+    reader: FileSystem.FileSystem = fs,
+  ) {
     const set: string[] = [];
     for (const control of [HOLD, STOP]) {
-      const on = yield* fs
+      const on = yield* reader
         .exists(controlPath(dir, control, runId))
         .pipe(Effect.orElseSucceed(() => false));
       if (on) set.push(control);

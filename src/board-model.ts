@@ -98,7 +98,7 @@ export type FlowLaneAction = typeof FlowLaneAction.Type;
 /** The strip a card draws: the leading Run's Steps, then its merge request's way out. */
 export const FlowStrip = Schema.Struct({
   glyphs: Schema.Array(Schema.Struct({ title: Schema.String, state: FlowState })),
-  /** How many of the glyphs, at the end, are the Release row's. */
+  /** How many glyphs at the end are the merge request's way out, including its shipping Offer. */
   release: Schema.Finite,
   current: Schema.NullOr(
     Schema.Struct({ title: Schema.String, said: Schema.NullOr(Schema.String) }),
@@ -249,6 +249,7 @@ export const BoardOffer = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
   run: Schema.optionalKey(Schema.String),
+  unavailable: Schema.optionalKey(Schema.String),
 });
 export type BoardOffer = typeof BoardOffer.Type;
 
@@ -523,6 +524,7 @@ export const TaskView = Schema.Struct({
   planReady: Schema.Boolean,
   /** That action: the Run's primary offer as its module declares it now, or null for none. */
   offer: Schema.NullOr(BoardOffer),
+  offers: Schema.optionalKey(Schema.Array(BoardOffer)),
   /** The Run a card's actions act on: the one the sentence is about. */
   run: Schema.String,
   /** Every Run of this Task, newest first, for the drawer. */
@@ -2776,10 +2778,7 @@ export function disposeLabel(action: DisposeAction): string {
     : `Mark ${action.disposition} ${action.named}`;
 }
 
-/**
- * What this Task can be asked for, in the order a menu shows it. Only what would work: an
- * item the human has to try to find out is refused is worse than no item.
- */
+/** A Task's menu actions, including unavailable Offers with their reasons. */
 export function cardActions(view: TaskView): CardAction[] {
   const actions: CardAction[] = [{ kind: "go-to-tab" }];
   if (!isSettled(view.state)) actions.push({ kind: "steer" }, { kind: "attach" });
@@ -2787,7 +2786,8 @@ export function cardActions(view: TaskView): CardAction[] {
   const mr = mrRefOf(view.mr);
   if (several.length > 0) actions.push(...Arr.map(several, openEach));
   else if (mr !== null) actions.push({ kind: "open-mr", mr });
-  if (view.offer !== null) actions.push({ kind: "offer", offer: view.offer });
+  for (const offer of view.offers ?? (view.offer === null ? [] : [view.offer]))
+    actions.push({ kind: "offer", offer });
   if (view.check !== null) actions.push({ kind: "check-output" });
   actions.push({ kind: "offers" });
   if (canResume(view.state)) actions.push({ kind: "resume" });
@@ -2797,12 +2797,6 @@ export function cardActions(view: TaskView): CardAction[] {
     actions.push({ kind: "stop" });
   }
   return actions;
-}
-
-export function shippingLabel(view: Pick<TaskView, "shipping" | "offer">): string | null {
-  if (view.shipping == null) return null;
-  if (view.shipping === "merge") return view.offer?.title ?? "Merge";
-  return view.shipping === "stage" ? "Stage" : "Deploy";
 }
 
 /**
@@ -2865,6 +2859,13 @@ export function dispositionActions(view: TaskView): DisposeAction[] {
  * liveness beats history, and history is split by whether the work landed.
  */
 export type Section = "needs-you" | "ready-to-ship" | "working" | "waiting" | "finished";
+
+/** What a Ready to ship card's line opens with: a merge's Release offer under its own title. */
+export function shippingLabel(view: Pick<TaskView, "shipping" | "offer">): string {
+  if (view.shipping == null) return "";
+  if (view.shipping === "merge") return `${view.offer?.title ?? "Merge"}: `;
+  return view.shipping === "stage" ? "Stage: " : "Deploy: ";
+}
 
 export function sectionOf(view: Pick<TaskView, "state" | "landed" | "shipping">): Section {
   // Read off the state alone, because a Decision is not the only way to stop for a

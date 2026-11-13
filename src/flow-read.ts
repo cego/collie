@@ -55,7 +55,7 @@ export interface LaneContext {
   readonly children: ReadonlyArray<ChildFact>;
   readonly toCome: ReadonlyArray<{ readonly repo: string; readonly wave: number }>;
   readonly wait: LaneWait | null;
-  readonly offer: { readonly id: string; readonly title: string } | null;
+  readonly offer: { readonly id: string; readonly title: string; readonly run?: string } | null;
   readonly readiness: string | null;
 }
 
@@ -115,7 +115,7 @@ export const laneFor = Effect.fn("Flow.lane")(function* (
   );
   const stop = Option.getOrUndefined(
     Arr.findLast(
-      yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => [])),
+      run.state === "stopped" ? yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => [])) : [],
       (line) => line.operation === "stop",
     ),
   );
@@ -173,7 +173,7 @@ export interface TaskFacts {
   /** Whether the Task's work has settled, so nothing is current. */
   readonly settled: boolean;
   readonly waitOf: (run: RunFacts) => LaneWait | null;
-  readonly offer: { readonly id: string; readonly title: string } | null;
+  readonly offer: { readonly id: string; readonly title: string; readonly run?: string } | null;
   readonly mr: string | null;
   /** The Run whose merge request the Task's is. */
   readonly merging: string;
@@ -232,9 +232,13 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
 ) {
   const inputs = given ?? (yield* flowInputsFor(env, task.all));
   const { installation } = inputs;
-  const rows = [...task.rows].sort((one, other) =>
-    pipe_(one.created, Str.localeCompare(other.created)),
+  const rows = [...task.rows];
+  const offerOwner = Option.getOrUndefined(
+    Arr.findFirst(task.all, (run) => run.id === task.offer?.run),
   );
+  if (offerOwner !== undefined && !Arr.some(rows, (run) => run.id === offerOwner.id))
+    rows.push(offerOwner);
+  rows.sort((one, other) => pipe_(one.created, Str.localeCompare(other.created)));
   const byId = new Map(Arr.map(rows, (run) => [run.id, run]));
   const inTask = new Set(Arr.map(rows, (run) => run.id));
   const machine = machineOf(env);
@@ -311,7 +315,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
       children,
       toCome: Arr.filter(waves, (one) => one.run === null),
       wait: task.waitOf(run),
-      offer: run.id === task.leader.id ? task.offer : null,
+      offer: run.id === (task.offer?.run ?? task.leader.id) ? task.offer : null,
       readiness: run.id === task.merging ? task.readiness : null,
     });
     const links = Arr.map(yield* readRunLinks(run.dir), (one) => ({
