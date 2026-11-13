@@ -1661,7 +1661,11 @@ test("a reused managed Codex server dying just before delivery is replaced witho
               this.killed = true;
               managed.state.reachable = false;
               managed.children[0]!.kill();
-              return Effect.promise(() => managed.children[0]!.exited).pipe(Effect.andThen(status));
+              return Effect.promise(() => managed.children[0]!.exited).pipe(
+                // Retirement may outlast 30 simulated seconds without stalling the process.
+                Effect.andThen(spend(35_000)),
+                Effect.andThen(status),
+              );
             }
             return status;
           });
@@ -1682,7 +1686,6 @@ test("a reused managed Codex server dying just before delivery is replaced witho
       yield* rig.queueOutputs(["first", "second"]);
       const result = yield* continued.execute({ runId: "r1", input: {} }).pipe(
         Effect.result,
-        Effect.timeoutOption(30_000),
         Effect.provide(
           body.pipe(
             Layer.provideMerge(
@@ -1701,9 +1704,7 @@ test("a reused managed Codex server dying just before delivery is replaced witho
       );
       expect(herdr.killed).toBe(true);
       expect(everyLaunch(yield* rig.calls())).toHaveLength(2);
-      expect(Option.isSome(result) && result.value._tag === "Success" && result.value.success).toBe(
-        "second",
-      );
+      expect(result).toMatchObject({ _tag: "Success", success: "second" });
       expect(managed.children).toHaveLength(2);
       expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
     }).pipe(Effect.scoped),
