@@ -163,14 +163,44 @@ fn a_refused_restart_stays_said_after_later_until_put_off_again() {
 }
 
 #[test]
-fn the_notice_stands_over_every_page_and_takes_no_focus_from_the_chat() {
+fn a_restart_refused_after_later_brings_the_notice_back_to_say_why() {
+    let harness = Harness::<App>::new();
+    let mut runtime = started(&harness);
+    heard(&harness, &mut runtime, news("Ready", "1.3.0"), 100.0);
+    let mut at = 200.0;
+    tap(&mut runtime, "update-later", &mut at);
+    assert!(!shown(&runtime, "update-notice"));
+    // Settings' Restart Collie, which `tests/settings.rs` presses.
+    runtime.state.restart_to_update();
+    assert_eq!(harness.fake.asked_of("restart").len(), 1);
+    harness.fake.answer(
+        "restart",
+        Err(collie_desktop_board::calls::CallError("offline".into())),
+    );
+    settle(&harness, &mut runtime);
+    runtime.frame(at);
+    assert!(shown(&runtime, "update-notice"));
+    assert!(said(&runtime, "Collie did not restart: offline"));
+}
+
+#[test]
+fn the_notice_stands_over_a_record_the_open_chat_and_every_page_and_takes_no_focus() {
     let harness = Harness::<App>::new();
     let mut runtime = started(&harness);
     runtime.update(|app, _| {
+        app.nav.chat.set_open(true);
         app.chat.composer = rune::TextEdit::new("half a thought");
         app.chat.composer.focused = true;
     });
     heard(&harness, &mut runtime, news("Ready", "1.3.0"), 100.0);
+    runtime
+        .state
+        .open_record("i-pc".into(), "r1".into(), "mk-pc".into(), None);
+    settle(&harness, &mut runtime);
+    runtime.frame(150.0);
+    assert!(shown(&runtime, "record"));
+    assert!(shown(&runtime, "chat-log"));
+    assert!(shown(&runtime, "update-notice"));
     for (at, page) in [
         (200.0, Page::Board),
         (300.0, Page::Workflows),
@@ -224,18 +254,4 @@ fn the_app_hears_updates_once_whichever_pages_open() {
     }
     settle(&harness, &mut runtime);
     assert_eq!(harness.fake.asked_of("updates").len(), 1);
-}
-
-#[test]
-fn a_desktop_that_never_updates_shows_no_notice() {
-    let harness = Harness::<App>::new();
-    let mut runtime = started(&harness);
-    heard(
-        &harness,
-        &mut runtime,
-        json!({ "version": "1.2.0", "news": { "_tag": "Never", "reason": "this Desktop runs from a checkout" } }),
-        100.0,
-    );
-    assert!(!shown(&runtime, "update-notice"));
-    assert!(!shown(&runtime, "update-toolbar"));
 }

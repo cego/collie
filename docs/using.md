@@ -1335,8 +1335,8 @@ Desktop then keeps itself up to date. It checks the latest release when it start
 an hour has passed, by the clock, after; it looks each minute, so a check missed while the
 computer slept runs within a minute of waking. A check that could not reach the releases is
 tried again five minutes later. It offers only a version newer than its own and downloads it
-in the background. A check is given up after two minutes and a download after thirty, so one
-that hangs never holds up the next. A version whose download does not verify is not fetched
+in the background. A check is given up after two minutes, a download after thirty and the
+fetch of its signature after one, so one that hangs never holds up the next or a restart. A version whose download does not verify is not fetched
 again; a signature that could not be fetched fails the check, which is tried again, rather
 than refusing the update. **Settings**, under **About**, shows
 Desktop's own version with **Check for updates**, which checks now and says what it found: "Collie 0.34.0
