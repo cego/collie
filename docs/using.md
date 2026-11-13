@@ -1446,6 +1446,10 @@ Resume, Follow-up, Hold or Release, Stop, and Mark merged, abandoned or supersed
 the card's first action is the TUI card's own. Following a check's output is not on Desktop
 yet. Open merge request — Open pull request on GitHub — opens it in your browser.
 
+A finished delivery's menu lists Release and Stage for each merge request, on its owning
+Run. Unavailable actions stay visible with their reason and cannot be selected. The record's
+Facts tab lists these offers, their owning Runs, and any refusal, even while its details load.
+
 Each card names its merge request as its forge does: "merge request `group/app!42`" and
 "its pipeline" on GitLab, "pull request `cego/collie#30`" and "its checks" on GitHub. The
 same words are in the drawer, the record's **Merge request** or **Pull request** tab, a

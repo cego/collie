@@ -615,8 +615,15 @@ fn label_of(task: &Task, action: &CardAction, primary: bool) -> Option<String> {
             mr.url()?;
             cards::open_mr_label(mr, primary, named.as_deref())
         }
-        CardAction::Offer(_) if primary && cards::ships_by_merge(task) => "Merge".into(),
-        CardAction::Offer(offer) => offer.title.clone(),
+        CardAction::Offer(offer)
+            if primary && cards::ships_by_merge(task) && offer.unavailable.is_none() =>
+        {
+            "Merge".into()
+        }
+        CardAction::Offer(offer) => offer.unavailable.as_ref().map_or_else(
+            || offer.title.clone(),
+            |why| format!("{} — {why}", offer.title),
+        ),
         CardAction::Offers => "What it offers…".into(),
         CardAction::Resume => (if primary { "Resume" } else { "Resume run" }).into(),
         CardAction::FollowUp => "Follow-up run".into(),
@@ -704,7 +711,9 @@ fn card(
         .on_close(|app: &mut App| app.board.menu = None);
     for (action, label) in menu_actions {
         let key = key.clone();
-        let item = MenuItem::new(label).danger(action == CardAction::Stop);
+        let item = MenuItem::new(label)
+            .danger(action == CardAction::Stop)
+            .disabled(matches!(&action, CardAction::Offer(offer) if offer.unavailable.is_some()));
         menu = menu.item(if action == CardAction::Attach {
             item.on_select_tx(move |app: &mut App, tx| {
                 app.attach_to(&key);
@@ -1040,7 +1049,9 @@ fn card(
         cards::primary_action(task).and_then(|a| label_of(task, &a, true).map(|l| (a, l)))
     {
         let key = key.clone();
-        let mut button = small_button(label, ButtonVariant::Neutral).disabled(!live);
+        let mut button = small_button(label, ButtonVariant::Neutral).disabled(
+            !live || matches!(&action, CardAction::Offer(offer) if offer.unavailable.is_some()),
+        );
         if action == CardAction::GoToTab {
             button = button.icon(&icons::PANE);
         }

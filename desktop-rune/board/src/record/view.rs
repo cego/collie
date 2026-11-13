@@ -7,6 +7,7 @@ use super::review::{Anchor, Draft, add_draft, edit_draft, plan_anchor, remove_dr
 use super::tabs::{self, KeyAction, KeyFacts, Landing, SummarySection, Tab, Target};
 use super::when::{now, when_of};
 use super::{Form, Item, Record};
+use crate::board::cards::{self, CardAction};
 use crate::flow::actions::{ActionView, Tone, lane_actions, next_move, step_actions};
 use crate::flow::inspector::{self, Part};
 use crate::{App, flow, icons};
@@ -441,7 +442,7 @@ pub fn view(app: &App, k: &Kit) -> Option<El> {
         "evidence" => scrolled("evidence-scroll", evidence_tab(record, k)),
         "log" => log_tab(record, k),
         "terminal" => terminal_tab(app, record, k),
-        "facts" => scrolled("facts-scroll", facts_tab(record, k)),
+        "facts" => scrolled("facts-scroll", facts_tab(app, record, k)),
         mr => scrolled("mr-scroll", mr_tab(record, mr, k)),
     };
     let mut panel = col()
@@ -3368,12 +3369,33 @@ fn pill(key: &str, said: &str, label: &str, tone: rune_kit::StateColors, k: &Kit
         )
 }
 
-fn facts_tab(record: &Record, k: &Kit) -> El {
+fn facts_tab(app: &App, record: &Record, k: &Kit) -> El {
+    let offered: Vec<_> = app
+        .task_of_record()
+        .into_iter()
+        .flat_map(|task| {
+            cards::card_actions(task)
+                .into_iter()
+                .filter_map(move |action| {
+                    let CardAction::Offer(offer) = action else {
+                        return None;
+                    };
+                    let owner = offer.run.unwrap_or_else(|| task.run.clone());
+                    let said = match offer.unavailable {
+                        Some(why) => format!("{owner} — {why}"),
+                        None => owner,
+                    };
+                    Some(fact(&offer.title, said, k))
+                })
+        })
+        .collect();
+    let offers = (!offered.is_empty()).then(|| section("facts-offers", "Offers", k, offered));
     let Some(detail) = record.detail() else {
         return col()
             .gap(4.0)
             .child(fact("Run", record.run.clone(), k))
-            .child(fact("Machine", record.machine.clone(), k));
+            .child(fact("Machine", record.machine.clone(), k))
+            .children(offers);
     };
     let mut rows = vec![
         fact("Run", detail.id.clone(), k),
@@ -3449,7 +3471,11 @@ fn facts_tab(record: &Record, k: &Kit) -> El {
     });
     ruled(
         col().key("facts").max_w(READING_W).w_full(),
-        [facts(rows)].into_iter().chain(agents).chain(steering),
+        [facts(rows)]
+            .into_iter()
+            .chain(agents)
+            .chain(steering)
+            .chain(offers),
         k,
     )
 }
