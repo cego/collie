@@ -441,6 +441,7 @@ const EXECUTION = {
   running: "running",
   waiting: "suspended",
   succeeded: "completed",
+  ended: "completed",
   failed: "failed",
   stopped: "stopped",
 } as const;

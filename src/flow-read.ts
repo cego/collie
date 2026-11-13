@@ -42,6 +42,7 @@ const executionOfState = (state: RunState): Execution => {
     case "waiting":
       return "suspended";
     case "succeeded":
+    case "ended":
       return "completed";
     case "failed":
       return "failed";

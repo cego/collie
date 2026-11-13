@@ -40,6 +40,13 @@ export const attentionFor = Effect.fn("attention.attentionFor")(function* (run: 
     } satisfies Attention;
   const after = ["show", "actions"];
   switch (run.state) {
+    case "ended":
+      return {
+        category: "completed",
+        reason: "ended",
+        explanation: `${run.id} ended; outcome unavailable.`,
+        actions: after,
+      } satisfies Attention;
     case "succeeded":
       return {
         category: "completed",

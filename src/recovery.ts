@@ -5,9 +5,9 @@ import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { defaultBase, classifyWorkSource } from "./inputs";
 import { readIntent } from "./intent";
 import { isBlocking, SynthesisSchema, FindingSchema } from "./output";
-import { sameTree, treeOf } from "./verify";
+import { readVerifications, sameAsked, sameTree, treeOf, type Verification } from "./verify";
 import { appendJournal, readJournalWhole } from "./journal";
-import { readFinalCard } from "./cards";
+import { readCards, readFinalCard } from "./cards";
 import { shell } from "./mr";
 import { nowIso } from "./time";
 
@@ -325,4 +325,111 @@ export const branchMovement = Effect.fn("Recovery.branchMovement")(function* (ru
   if (count.code !== 0) return `Pushed branch history unavailable at ${head}.`;
   const n = Str.trim(count.stdout);
   return `Pushed branch: ${n} commit${n === "1" ? "" : "s"} past ${finished}, now ${head}.${run.state === "failed" ? " The failed record is stale." : " The succeeded record describes the earlier head."}`;
+});
+
+/** The card a follow-up continues from, bound when it is admitted. */
+export const ConsumedCard = Schema.Struct({
+  run: Schema.String,
+  card: Schema.String,
+  head_sha: Schema.String,
+  fingerprint: Schema.String,
+});
+export type ConsumedCard = typeof ConsumedCard.Type;
+
+/** The last final card `run` wrote, as a follow-up admitted now consumes it. */
+export const consumedCard = Effect.fn("Recovery.consumedCard")(function* (
+  run: string,
+  runDir: string,
+) {
+  const card = Arr.findLast(
+    yield* readCards(runDir).pipe(Effect.orElseSucceed(() => [])),
+    (one) => one.kind === "final",
+  );
+  return card._tag === "None"
+    ? undefined
+    : {
+        run,
+        card: card.value.id,
+        head_sha: card.value.revision.head_sha,
+        fingerprint: card.value.revision.fingerprint,
+      };
+});
+
+/**
+ * The verifications the consumed card listed, unchanged, where that card is unaltered and
+ * the follow-up's checkout still carries its work on its branch. A failure needs the
+ * same work's first verified fix, so later replays cannot stand in for its regression.
+ */
+export const sourceEvidence = Effect.fn("Recovery.sourceEvidence")(function* (options: {
+  readonly cwd: string;
+  readonly consumed: ConsumedCard;
+  readonly sourceDir: string;
+  readonly sourceEvidence: string;
+}) {
+  const card = Arr.findFirst(
+    yield* readCards(options.sourceDir).pipe(Effect.orElseSucceed(() => [])),
+    (one) => one.kind === "final" && one.id === options.consumed.card,
+  );
+  if (
+    card._tag === "None" ||
+    card.value.run !== options.consumed.run ||
+    card.value.revision.head_sha !== options.consumed.head_sha ||
+    card.value.revision.fingerprint !== options.consumed.fingerprint
+  )
+    return null;
+  const head = card.value.revision.head_sha;
+  const contains = (ancestor: string, of: string) =>
+    Effect.map(
+      shell("git", ["merge-base", "--is-ancestor", ancestor, of], options.cwd),
+      (ran) => ran.code === 0,
+    );
+  const tree = yield* treeOf(options.cwd);
+  if (tree.branch !== card.value.revision.branch || !(yield* contains(head, tree.head_sha)))
+    return null;
+  const listed = new Map(Arr.map(card.value.verifications, (one) => [one.id, one.name]));
+  const recorded = yield* readVerifications(options.sourceEvidence).pipe(
+    Effect.orElseSucceed(() => []),
+  );
+  const passedOn = (red: Verification) =>
+    Arr.some(
+      recorded,
+      (one) =>
+        one.expect === "pass" &&
+        one.result === "pass" &&
+        sameAsked(one, red) &&
+        sameTree(one.start, red.start),
+    );
+  const pending: Verification[] = [];
+  const fixed: Verification[] = [];
+  const beforeFix = new Set<string>();
+  for (const one of recorded) {
+    if (
+      listed.get(one.id) !== one.name ||
+      one.result !== "pass" ||
+      !sameTree(one.start, one.end) ||
+      !(yield* contains(one.start.head_sha, head))
+    )
+      continue;
+    if (one.expect === "fail") {
+      if (
+        one.start.head_sha !== head &&
+        !passedOn(one) &&
+        !Arr.some(fixed, (green) => sameAsked(green, one))
+      )
+        pending.push(one);
+    } else {
+      const reds = yield* Effect.filter(pending, (red) =>
+        sameAsked(red, one) && !sameTree(red.start, one.start)
+          ? contains(red.start.head_sha, one.start.head_sha)
+          : Effect.succeed(false),
+      );
+      if (reds.length === 0) continue;
+      fixed.push(one);
+      for (const red of reds) beforeFix.add(red.id);
+    }
+  }
+  return Arr.filter(
+    recorded,
+    (one) => listed.get(one.id) === one.name && (one.expect !== "fail" || beforeFix.has(one.id)),
+  );
 });

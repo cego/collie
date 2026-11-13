@@ -16,6 +16,12 @@ import { readEnv } from "../src/env";
 import { resetExecutors } from "../src/executors";
 import { connect } from "../src/host";
 import { isSettled } from "../src/lifecycle";
+import { finishedOnRecord, cardsPath } from "../src/cards";
+import { factsOfView } from "../src/runs";
+import { buildBoard } from "../src/board";
+import { sectionOf } from "../src/board-model";
+import { recordDisposition } from "../src/disposition";
+import { nowIso } from "../src/time";
 import { carryOutAsked } from "../src/run-actions";
 import { DELIVERY_TOKEN } from "../src/dispatcher";
 import { runDir } from "../src/engine";
@@ -184,6 +190,55 @@ test(
 );
 /** Chat, under a request id of each call's own: one id twice is one operation. */
 const chat = () => ({ origin: "chat" as const, requestId: `req-chat-${++asked}` });
+
+test(
+  "historical final evidence agrees across stop, view, board and chat without inventing success",
+  () =>
+    steerable("collie-historical-final-", (world) =>
+      Effect.gen(function* () {
+        const { env, runId } = yield* finishedWithAgent(world);
+        const fs = yield* FileSystem.FileSystem;
+        const dir = runDir(world.state, runId);
+        const finished = yield* until(
+          () => finishedOnRecord(dir),
+          (at) => at !== null,
+        );
+        const history = yield* fs.readFileString(yield* cardsPath(dir)).pipe(Effect.orDie);
+        yield* stopHost(world.state);
+        yield* fs.remove(`${world.user}/told.workflow.ts`).pipe(Effect.orDie);
+        yield* fs.remove(`${dir}/terminal.json`).pipe(Effect.orDie);
+        yield* recordDisposition(dir, {
+          at: yield* nowIso,
+          by: "mk",
+          kind: "merged",
+          ref: "content!1",
+          note: null,
+        });
+
+        const [stopped] = yield* carryOutAsked(env, [{ kind: "stop", run: runId }], chat());
+        expect(stopped?.state).toBe("applied");
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const view = yield* client.run({ runId }).pipe(Effect.orDie);
+        expect(view?.status).toMatchObject({ status: "ended" });
+        expect(view?.status.status === "ended" ? view.status.at : null).toBe(finished);
+        expect(view?.controls).toEqual([]);
+        expect(view?.diagnostic).toContain("told.workflow.ts");
+        expect(isSettled(view!)).toBe(true);
+        const facts = factsOfView(world.state, view!);
+        expect(facts.state).toBe("ended");
+        const [card] = yield* buildBoard({ env, runs: [facts], includeHistory: true });
+        expect(card?.landed).toBe(true);
+        expect(sectionOf(card!)).toBe("finished");
+        expect(card?.sentence).not.toContain("open");
+        expect(yield* toolNamed("collie_run")!.call(env, { run: runId })).toContain(
+          "outcome unavailable",
+        );
+        expect(yield* fs.exists(`${dir}/terminal.json`)).toBe(false);
+        expect(yield* fs.readFileString(yield* cardsPath(dir))).toBe(history);
+      }),
+    ),
+  120_000,
+);
 
 /** A world whose fake agent answers its one prompt with an Output, and is then left alive. */
 const steerable = <A, E>(

@@ -88,6 +88,7 @@ import {
   NEEDS_INPUT,
   REFUSED_INPUT,
   runDir,
+  terminalStatus,
   type Given,
   type OpenDecision,
   type RunView,
@@ -1481,6 +1482,8 @@ export const nextAction = (view: RunView): string | null =>
 /** The one word a listing gives a Run, and the sentence behind it where there is one. */
 export const statusOf = (view: RunView): string => {
   switch (view.status.status) {
+    case "ended":
+      return `ended at ${view.status.at}; outcome unavailable`;
     case "complete":
       return `complete: ${resultText(view.status.value)}`;
     case "failed":
@@ -1493,8 +1496,7 @@ export const statusOf = (view: RunView): string => {
 export { resultText } from "./report";
 
 /** Whether the engine can still change this Run's state. */
-export const isSettled = (view: RunView): boolean =>
-  view.status.status === "complete" || view.status.status === "failed";
+export const isSettled = (view: RunView): boolean => terminalStatus(view.status);
 
 /**
  * What a Run offers to do next. The host answers, because only it holds the module

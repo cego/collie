@@ -75,7 +75,15 @@ import { HOLD, STOP, controlPath, controlSet } from "./controls";
 import manifest from "../herdr-plugin.toml";
 import { Agents } from "./agents";
 import * as Sdk from "./sdk";
-import { recoveryFrom, reviewScope, recordReview, takePushed } from "./recovery";
+import {
+  ConsumedCard,
+  consumedCard,
+  recoveryFrom,
+  reviewScope,
+  recordReview,
+  sourceEvidence,
+  takePushed,
+} from "./recovery";
 import {
   Children,
   Host,
@@ -3964,6 +3972,45 @@ export const hostLayer = (options: {
           }),
         ).pipe(notifying.withPermits(1), Effect.ignore);
       const lineageOf = lineageIn(store);
+      const recoveryLineage = Effect.fnUntraced(function* (runId: string) {
+        const lineage: string[] = [];
+        let from = runId;
+        while (from !== "" && !lineage.includes(from)) {
+          lineage.unshift(from);
+          from = yield* fs
+            .readFileString(`${runDir(dir, from)}/recovery-parent`)
+            .pipe(Effect.orElseSucceed(() => ""));
+        }
+        return lineage;
+      });
+      const inheritedEvidence = (
+        runs: ReadonlyArray<string>,
+        cwd: string,
+        seen: ReadonlySet<string>,
+      ): Effect.Effect<ReadonlyArray<Verification>, never, Collecting> =>
+        Effect.map(
+          Effect.forEach(runs, (runId) =>
+            Effect.gen(function* () {
+              const row = yield* store.run(runId).pipe(Effect.orDie);
+              const consumed =
+                row === null
+                  ? undefined
+                  : Option.getOrUndefined(decodePlacing(row.placing ?? ""))?.continues;
+              if (consumed === undefined || seen.has(consumed.run)) return [];
+              const own = yield* sourceEvidence({
+                cwd,
+                consumed,
+                sourceDir: runDir(dir, consumed.run),
+                sourceEvidence: evidenceDir(dir, consumed.run),
+              });
+              if (own === null) return [];
+              const lineage = yield* recoveryLineage(consumed.run);
+              const before = yield* inheritedEvidence(lineage, cwd, new Set([...seen, ...lineage]));
+              return [...before, ...own];
+            }),
+          ),
+          Arr.flatten,
+        );
       const hostStarted = yield* nowIso;
       /** A pass this host collected that answers for this check now, said in the Run log. */
       const relyOn = (runId: string, run: CheckRun, spec: VerifySpec, recorded: CheckPass) =>
@@ -4908,20 +4955,18 @@ export const hostLayer = (options: {
           under(
             Effect.gen(function* () {
               const own = yield* treeOf(yield* store.run(runId), runId, dir);
-              const lineage: string[] = [];
-              let from = runId;
-              while (from !== "" && !lineage.includes(from)) {
-                lineage.unshift(from);
-                from = yield* fs
-                  .readFileString(`${runDir(dir, from)}/recovery-parent`)
-                  .pipe(Effect.orElseSucceed(() => ""));
-              }
+              const lineage = yield* recoveryLineage(runId);
+              const inherited = yield* inheritedEvidence(lineage, cwd, new Set(lineage));
               return yield* Effect.all({
                 verifications: Effect.forEach(lineage, (from) =>
                   readVerifications(evidenceDir(dir, from)).pipe(
                     Effect.orElseSucceed((): ReadonlyArray<Verification> => []),
                   ),
-                ).pipe(Effect.map(Arr.flatten)),
+                ).pipe(
+                  Effect.map((lines) =>
+                    Arr.dedupeWith([...inherited, ...Arr.flatten(lines)], (a, b) => a.id === b.id),
+                  ),
+                ),
                 final: fingerprint(cwd),
                 commands: Effect.forEach(yield* approvedOf(dir, runId), (spec) =>
                   commandOf({ ...own, cwd }, spec),
@@ -5945,6 +5990,7 @@ export const answerDecision = (
  */
 export const RunStatus = Schema.Union([
   Schema.Struct({ status: Schema.Literals(["pending", "suspended"]) }),
+  Schema.Struct({ status: Schema.Literal("ended"), at: Schema.String }),
   /** The result as the workflow's own success schema encodes it. */
   Schema.Struct({ status: Schema.Literal("complete"), value: Schema.Json }),
   Schema.Struct({
@@ -5955,6 +6001,9 @@ export const RunStatus = Schema.Union([
     error: Schema.optionalKey(Schema.Json),
   }),
 ]);
+
+export const terminalStatus = (status: typeof RunStatus.Type): boolean =>
+  status.status === "complete" || status.status === "failed" || status.status === "ended";
 
 export const pollStatus = (
   result: Option.Option<Workflow.Result<unknown, unknown>>,
@@ -6298,6 +6347,8 @@ const Placing = Schema.Struct({
   root: Schema.optionalKey(Schema.NullOr(Schema.String)),
   workspace: Schema.optionalKey(Schema.NullOr(Schema.String)),
   checkout: Schema.optionalKey(Schema.NullOr(Cut)),
+  /** The source's final card a follow-up of the same work was admitted from. */
+  continues: Schema.optionalKey(ConsumedCard),
 });
 type Placing = typeof Placing.Type;
 const PlacingJson = Schema.fromJsonString(Placing);
@@ -6916,6 +6967,8 @@ export interface StartOptions {
   /** A new Task to open for it, under this label, on the checkout it is given. */
   readonly taskLabel?: string | undefined;
   readonly parent?: string | null;
+  /** The parent's final card this follow-up carries the same work on from. */
+  readonly continues?: ConsumedCard | undefined;
   /** What the front door knows of the Run's Intent. */
   readonly intent?: IntentSeed;
   /** The approved set given with the start, over the project's and the user's files. */
@@ -8315,6 +8368,10 @@ const makeRegistry: (
         Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(RunStatus))),
         Effect.orElseSucceed(() => null),
       );
+      const finished = yield* finishedOnRecord(runDir(dir, row.run)).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideContext(bun),
+      );
       return {
         ...about,
         status:
@@ -8322,7 +8379,9 @@ const makeRegistry: (
             ? { ...recorded, entry: admitted.entry || recorded.entry }
             : recorded?.status === "complete"
               ? recorded
-              : { status: "pending" as const },
+              : finished !== null
+                ? { status: "ended" as const, at: finished }
+                : { status: "pending" as const },
         diagnostic:
           unavailable.get(row.generation) ?? `${row.generation} is not registered in this host`,
       };
@@ -8623,7 +8682,7 @@ const makeRegistry: (
       entry.said = said;
       changed = true;
       // A run the engine has finished with cannot change again, so nothing asks after.
-      if (view.status.status === "complete" || view.status.status === "failed") {
+      if (terminalStatus(view.status)) {
         watched.delete(runId);
       }
     }
@@ -8675,11 +8734,7 @@ const makeRegistry: (
     // With its module gone the engine cannot be asked, and the finish's record answers.
     if (Option.isNone(found)) {
       const current = yield* view(runId);
-      return (
-        current?.status.status === "complete" ||
-        current?.status.status === "failed" ||
-        (yield* finishedOnRecord(runDir(dir, runId))) !== null
-      );
+      return current !== null && terminalStatus(current.status);
     }
     const { generation, execution } = found.value;
     const workflow = generation.registration.workflow;
@@ -9396,6 +9451,7 @@ const makeRegistry: (
         from: request.kind === "existing" ? request.path : options.project,
         taskLabel: options.taskLabel ?? null,
         root: options.root ?? null,
+        ...(options.continues !== undefined && { continues: options.continues }),
       }),
       generation: generation.name,
       execution: yield* generation.registration.workflow.executionId(payload),
@@ -9767,9 +9823,23 @@ const makeRegistry: (
           if (previous.risks !== undefined) carried.risks = previous.risks;
         }
       }
+      const startedWith: Readonly<Record<string, Schema.Json>> = input;
+      const carriedWork = Arr.filter(
+        Rec.keys(offer.inputs),
+        (name) => offer.inputs[name] === "started-with",
+      );
+      const sameWork =
+        offer.kind === "follow-up" &&
+        offer.workflow === generation.id &&
+        carriedWork.length > 0 &&
+        Arr.every(
+          carriedWork,
+          (name) => JSON.stringify(filled[name]) === JSON.stringify(startedWith[name]),
+        );
       // The offer's own workflow settles what it was given, so arguments it will not
       // take are refused here and nothing is started.
       return yield* startWork({
+        continues: sameWork ? yield* consumedCard(row.run, where) : undefined,
         generation: starting,
         request: options.request,
         project: row.project,

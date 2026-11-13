@@ -39,6 +39,12 @@ export const readDispositions = Effect.fn("Disposition.read")(function* (runDir:
 /** The words of a ref, any of which may be a Run's id. */
 export const refWords = (ref: string) => Str.split(ref, /[\s;,]+/);
 
+export const qualifiedRuns = (ref: string) =>
+  Arr.flatMap(refWords(ref), (word) => {
+    const match = /^([^:/]+):(run-[\w.-]+)$/.exec(word);
+    return match === null ? [] : [{ machine: match[1]!, run: match[2]! }];
+  });
+
 /** The Runs a ref names on `machine`: bare, or `<machine>:<run>` by it or its first label. */
 export const refRuns = (ref: string, machine: string) => {
   const names = new Set([machine, Str.split(machine, ".")[0]!]);

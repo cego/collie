@@ -113,6 +113,7 @@ const watched = (
   return target === null
     ? Effect.succeed(null)
     : watchedMr({
+        stateDir: rig.pluginEnv().stateDir,
         panels: over.panels ?? new Map(),
         target,
         cwd: rig.projectDir,
