@@ -1621,6 +1621,76 @@ const M = "https://gitlab.cego.dk/mk/support/-/merge_requests/279";
 const M_ID = "gitlab.cego.dk/mk/support!279";
 const M_HEAD = "77215b10aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
+test("an old open forge answer is historical, and a fresh answer removes that qualification", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, {
+        state: "succeeded",
+        mr: M,
+        finished: "2026-09-14T09:00:00Z",
+      });
+      const read = (at: string) =>
+        board(env, [run], {
+          mrStates: new Map([[M_ID, "open"]]),
+          forge: new Map([[M_ID, { checks: { state: "unknown" }, head: M_HEAD, read: at }]]),
+        });
+      const [old] = yield* read("2026-09-14T08:00:00Z");
+      expect(old?.sentence).toContain("last read as open");
+      expect(old?.sentence).not.toContain("is open");
+      expect(old?.landed).toBe(false);
+      const [fresh] = yield* read("2026-09-14T10:04:00Z");
+      expect(fresh?.sentence).toContain("is open");
+      expect(fresh?.sentence).not.toContain("last read");
+    }),
+  ));
+
+test("a recorded merge overrides an older open answer in every card field until a fresh reopen", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, {
+        task: TASK.id,
+        state: "succeeded",
+        mr: M,
+        branch: "mk/landed",
+        created: "2026-09-14T08:00:00Z",
+        finished: "2026-09-14T09:00:00Z",
+      });
+      yield* recordDisposition(run.dir, {
+        at: "2026-09-14T09:30:00Z",
+        by: "mk",
+        kind: "merged",
+        ref: M,
+        note: null,
+      });
+      const read = (at: string, runs: ReadonlyArray<RunFacts> = [run]) =>
+        board(env, runs, {
+          mrStates: new Map([[M_ID, "open"]]),
+          forge: new Map([[M_ID, { checks: { state: "unknown" }, head: M_HEAD, read: at }]]),
+        });
+      const [settled] = yield* read("2026-09-14T09:00:00Z");
+      expect(settled?.landed).toBe(true);
+      expect(settled?.mrState).toBe("merged");
+      expect(settled?.mrs?.[0]?.state).toBe("merged");
+      expect(settled?.sentence).toContain("Merged as");
+      const unique = yield* madeRun(dir, {
+        id: "r-card-offers",
+        task: TASK.id,
+        state: "succeeded",
+        branch: "mk/unpublished-card-offers",
+        created: "2026-09-14T09:40:00Z",
+        finished: "2026-09-14T09:50:00Z",
+      });
+      expect((yield* read("2026-09-14T09:00:00Z", [run, unique]))[0]?.landed).toBe(false);
+      const [reopened] = yield* read("2026-09-14T10:00:00Z");
+      expect(reopened?.landed).toBe(false);
+      expect(reopened?.mrState).toBe("open");
+      expect(reopened?.mrs?.[0]?.settled).toBeNull();
+      expect(reopened?.sentence).not.toContain("Merged as");
+    }),
+  ));
+
 test("a Repo run's branch without an MR keeps its Task out of Finished and History", () =>
   runEffect(
     Effect.gen(function* () {

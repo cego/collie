@@ -12,7 +12,14 @@ import { recordAudit } from "../src/audit";
 import { buildBoard } from "../src/board";
 import { sectionOf, type MrState, type TaskView } from "../src/board-model";
 import { readDispositions, recordDisposition } from "../src/disposition";
-import { MERGE_POLL_MS, readForge, readMrStates, settleMerges, watchedMr } from "../src/merges";
+import {
+  MERGE_POLL_MS,
+  readForge,
+  readMrStates,
+  settleMerges,
+  watchedMr,
+  writeMrStates,
+} from "../src/merges";
 import { foundationLayer, runDir } from "../src/engine";
 import { Agents, agentsLayer } from "../src/agents";
 import { recordLaunch } from "../src/launches";
@@ -104,6 +111,185 @@ const seeded = Effect.fn("merges.seeded")(function* () {
       buildBoard({ env, runs: [run], ...over }),
   };
 });
+
+test("a closed forge refresh settles superseded work after its checkout disappeared", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { stateDir } = yield* seeded();
+      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: stateDir });
+      const run = yield* madeRun(stateDir, {
+        state: "succeeded",
+        mr: MR,
+        cwd: `${stateDir}/removed`,
+        project: `${stateDir}/removed`,
+        branch: "mk/obsolete",
+        finished: "2026-09-17T09:00:00Z",
+      });
+      yield* recordDisposition(run.dir, {
+        at: "2026-09-17T09:30:00Z",
+        by: "mk",
+        kind: "superseded",
+        ref: "released-successor-commit",
+        note: null,
+      });
+      yield* writeMrStates(
+        stateDir,
+        new Map([[`${GITLAB}!65`, "open"]]),
+        new Map([
+          [
+            `${GITLAB}!65`,
+            { checks: { state: "unknown" }, head: null, read: "2026-09-17T08:00:00Z" },
+          ],
+        ]),
+      );
+      const views = yield* buildBoard({ env, runs: [run], includeHistory: true });
+      expect(views[0]?.landed).toBe(false);
+      const base = gitlab("closed");
+      const boundary: Runner = (cmd, args, cwd) =>
+        fs.exists(cwd).pipe(
+          Effect.orElseSucceed(() => false),
+          Effect.flatMap((exists) =>
+            exists
+              ? base(cmd, args, cwd)
+              : Effect.succeed({
+                  code: 127,
+                  stdout: "",
+                  stderr: "working directory does not exist",
+                }),
+          ),
+        );
+      latest.set("gitlab", { ...latest.get("gitlab")!, run: boundary });
+      yield* settleMerges({
+        stateDir,
+        cwd: stateDir,
+        runs: [run],
+        views,
+        run: boundary,
+        record: () => Effect.die("the MR is already recorded"),
+        stop: () => Effect.die("completed work"),
+        now: epochMs("2026-09-19T10:00:00Z"),
+        checked: new Map(),
+        states: new Map(),
+        panels: new Map(),
+        making: new Set(),
+      });
+      const [after] = yield* buildBoard({ env, runs: [run], includeHistory: true });
+      expect(after?.mrState).toBe("closed");
+      expect(after?.landed).toBe(true);
+      expect(after?.mrs?.[0]?.settled).toBe("superseded");
+      expect(sectionOf(after!)).toBe("finished");
+      expect(after?.sentence).not.toContain("is open");
+      expect((yield* readForge(stateDir)).get(`${GITLAB}!65`)?.read).toBe(
+        "2026-09-19T10:00:00.000Z",
+      );
+    }),
+  ));
+
+test("a fresh detail read also reconciles the board and a watch's older in-memory state", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const { stateDir, run, board } = yield* seeded();
+      const id = `${GITLAB}!65`;
+      yield* writeMrStates(stateDir, new Map([[id, "open"]]));
+      const now = epochMs("2026-09-17T10:00:00Z");
+      const runner = gitlab("merged");
+      const panels = new Map();
+      const panel = yield* watchedMr({
+        stateDir,
+        panels,
+        target: MR,
+        cwd: stateDir,
+        run: runner,
+        now,
+        fresh: true,
+      });
+      expect(panel).toMatchObject({ _tag: "Details", state: "merged" });
+      const [after] = yield* board({ now, includeHistory: true });
+      expect(after?.mrState).toBe("merged");
+      expect(after?.landed).toBe(true);
+      expect(after?.sentence).toContain("Merged");
+      expect(after?.sentence).not.toContain("is open");
+      const states = new Map<string, MrState>([[id, "open"]]);
+      yield* settleMerges({
+        stateDir,
+        cwd: stateDir,
+        runs: [run],
+        views: [after!],
+        run: gitlab("open"),
+        record: () => Effect.void,
+        stop: () => Effect.die("completed work"),
+        now: now + 1_000,
+        checked: new Map(),
+        states,
+        panels,
+        making: new Set(),
+      });
+      expect(states.get(id)).toBe("merged");
+      expect((yield* board({ now: now + 1_000, includeHistory: true }))[0]?.landed).toBe(true);
+    }),
+  ));
+
+test("a delayed old answer cannot replace a newer forge state or its freshness", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "forge-order-" });
+      const id = `${GITLAB}!65`;
+      yield* writeMrStates(
+        dir,
+        new Map([[id, "closed"]]),
+        new Map([
+          [
+            id,
+            {
+              checks: { state: "passed" },
+              head: "new-head",
+              read: "2026-09-17T10:00:00Z",
+              asked: "2026-09-17T10:00:00Z",
+            },
+          ],
+        ]),
+      );
+      yield* writeMrStates(
+        dir,
+        new Map([[id, "open"]]),
+        new Map([
+          [
+            id,
+            {
+              checks: { state: "unknown" },
+              head: "old-head",
+              read: "2026-09-17T09:00:00Z",
+              asked: "2026-09-17T09:00:00Z",
+            },
+          ],
+        ]),
+      );
+      expect((yield* readMrStates(dir)).get(id)).toBe("closed");
+      expect((yield* readForge(dir)).get(id)?.head).toBe("new-head");
+      yield* writeMrStates(
+        dir,
+        new Map([[id, "open"]]),
+        new Map([
+          [
+            id,
+            {
+              checks: { state: "unknown" },
+              head: "old-head",
+              read: "2026-09-17T09:00:00Z",
+              asked: "2026-09-17T11:00:00Z",
+            },
+          ],
+        ]),
+      );
+      expect((yield* readMrStates(dir)).get(id)).toBe("closed");
+      expect((yield* readForge(dir)).get(id)).toMatchObject({
+        read: "2026-09-17T10:00:00Z",
+        asked: "2026-09-17T11:00:00Z",
+      });
+    }),
+  ));
 
 test("History-folded merge requests are reconciled on the first round and followed when reopened", () =>
   runWithForge(
@@ -1679,7 +1865,7 @@ test("no gh, or a gh nobody logged in to, leaves the card unchecked and disclose
         const { card } = yield* cardAfter(PR, github("open", [], over));
         expect(card.checks).toEqual({ state: "unchecked" });
         expect(card.sentence).toBe(
-          "cego/collie#30 is open; nothing has checked it. GitHub could not be read; it has not answered yet.",
+          "cego/collie#30 has not been read. GitHub could not be read; it has not answered yet.",
         );
       }
     }),
@@ -1758,6 +1944,9 @@ test("a pull request's panel is read for the drawer as a merge request's is, and
         ],
       ] as const) {
         const panel = yield* watchedMr({
+          stateDir: yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({
+            prefix: "detail-forge-",
+          }),
           panels: new Map(),
           target,
           cwd: "/project",

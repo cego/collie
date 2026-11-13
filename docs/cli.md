@@ -1354,6 +1354,11 @@ sends them there.
 
 ## What became of the work
 
+The board and a fresh Run detail share dated forge answers. A newer open answer revokes
+an older merged disposition; a failed read preserves the last answer and dates it.
+An old open answer is described as last read, rather than asserted current.
+Qualified merge requests can still refresh after their checkout disappears.
+
 ```sh
 collie --json run disposition <run-id>
 collie --json run disposition <run-id> --as merged --ref "cego/collie!43"

@@ -1676,7 +1676,15 @@ const recordSources = (opts: { readonly panels: MrPanels | null; readonly plans:
           return Effect.succeed(null);
         return Clock.currentTimeMillis.pipe(
           Effect.flatMap((now) =>
-            watchedMr({ panels, target, cwd: env.cwd, run: shell, now, fresh }),
+            watchedMr({
+              stateDir: env.stateDir,
+              panels,
+              target,
+              cwd: env.cwd,
+              run: shell,
+              now,
+              fresh,
+            }),
           ),
           Effect.provideContext(bun),
           Effect.provideService(ForgeHttp, forgeHttp),
@@ -3967,6 +3975,7 @@ const frontDoorHandlers = (
               target === null
                 ? null
                 : yield* watchedMr({
+                    stateDir: env.stateDir,
                     panels,
                     target,
                     cwd: env.cwd,
