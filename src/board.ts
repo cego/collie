@@ -1245,21 +1245,20 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         const everyRun = [...runs, ...children];
         if (opts.only !== undefined && !Arr.some(everyRun, (run) => run.id === opts.only))
           return null;
-        const missingCheckouts = new Map(
-          yield* Effect.forEach(everyRun, (run) =>
-            Effect.gen(function* () {
-              const missing =
-                run.worktree !== null &&
-                !(yield* fs.exists(run.worktree.path).pipe(Effect.orElseSucceed(() => true)));
-              return [run.id, missing] as const;
-            }),
-          ),
-        );
+        const missingCheckouts = new Map<string, boolean>();
+        for (const run of everyRun)
+          missingCheckouts.set(
+            run.id,
+            run.worktree !== null &&
+              !(yield* fs.exists(run.worktree.path).pipe(Effect.orElseSucceed(() => true))),
+          );
         const pending = Arr.flatMap(everyRun, (run) => pendingFor(proposals, run.id, now));
         const cards = opts.only === undefined ? opts.cards : undefined;
-        const carried = yield* Effect.forEach(everyRun, (run) =>
-          Effect.map(mrIdOf(run), (id) => ({ run, id, mr: mrOf(run) })),
-        );
+        const carried: { run: RunFacts; id: string | null; mr: string | null }[] = [];
+        for (const run of everyRun) {
+          const mr = mrOf(run);
+          carried.push({ run, id: mr === null ? null : yield* mrIdOf(run), mr });
+        }
         const key =
           cards === undefined
             ? ""
