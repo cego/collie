@@ -877,6 +877,67 @@ test("quota incident publication waits for an admitted core recovery", () =>
     }),
   ));
 
+test("one Run's core recovery does not hold up another Run's revive", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const listing = yield* Deferred.make<void>();
+      const proceed = yield* Deferred.make<void>();
+      class HeldList extends FakeHerdr {
+        override agentList() {
+          return Deferred.succeed(listing, undefined).pipe(
+            Effect.andThen(Deferred.await(proceed)),
+            Effect.andThen(super.agentList()),
+          );
+        }
+      }
+      const other = agentName("run-b", "work", null, 1);
+      for (const [runId, agent] of [
+        ["run-a", agentName("run-a", "work", null, 1)],
+        ["run-b", other],
+      ] as const) {
+        yield* fs.makeDirectory(startedDir(dir(), runId), { recursive: true });
+        yield* fs.writeFileString(`${startedDir(dir(), runId)}/${agent}.json`, "{}");
+      }
+      yield* Effect.gen(function* () {
+        const agents = yield* Agents;
+        const recovery = yield* Effect.forkChild(agents.resumeLost("run-a", runningNow));
+        yield* Deferred.await(listing);
+        const revived = yield* TestClock.withLive(
+          agents
+            .revive({
+              runId: "run-b",
+              operation: "work",
+              role: "implementer",
+              agent: null,
+              workflow: "w",
+              task: null,
+              cwd: rig.projectDir,
+              prompt: "",
+              output: `${launchDir(dir(), "run-b")}/work.json`,
+              skill: null,
+              harness: null,
+              model: null,
+              effort: null,
+              permissions: null,
+            })
+            .pipe(Effect.timeoutOption("10 seconds")),
+        );
+        expect(revived).toEqual(Option.some(false));
+        yield* Deferred.succeed(proceed, undefined);
+        yield* Fiber.join(recovery);
+      }).pipe(
+        Effect.ensuring(Deferred.succeed(proceed, undefined)),
+        Effect.provide(
+          agentsLayer({ ...hostOf(), herdr: new HeldList(env()) }).pipe(
+            Layer.provideMerge(foundationLayer({ dir: dir(), userDir: rig.userDir })),
+          ),
+        ),
+        Effect.scoped,
+      );
+    }),
+  ));
+
 test("core recovery resumes each agent only after its own quota wait clears", () =>
   runEffect(
     Effect.gen(function* () {

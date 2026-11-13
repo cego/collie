@@ -3923,59 +3923,53 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     usable?: (text: string) => boolean,
   ) =>
     under(
-      resuming
-        .withPermits(1)(
-          Effect.gen(function* () {
-            const fs = yield* FileSystem.FileSystem;
-            if (yield* fs.exists(usageWaitPath(ask)).pipe(Effect.orElseSucceed(() => true)))
-              return false;
-            const agent = yield* nameFor(ask);
-            const lost = yield* lostServer(compactionDeps(host, ask.runId), agent);
-            if (onlyDeadServer && lost === null) return false;
-            const completed = waitForOutput(ask.output, unless ?? null, {
-              pollMs: host.pollMs ?? DEFAULT_POLL_MS,
-              budgetMs: 0,
-              counts: Effect.succeed(false),
-              usable: usable ?? (() => true),
-              settled: Effect.suspend(() => host.herdr.agentStatus(agent)).pipe(
-                Effect.orElseSucceed(() => null),
-                Effect.map((status) => status !== "working" && status !== "blocked"),
-              ),
-            });
-            if ((yield* completed) !== null) return false;
-            // The host starts an agent on core again, in the session it had.
-            if (
-              lost === null &&
-              (yield* fs
-                .exists(startedPath(ask.runId, agent))
-                .pipe(Effect.orElseSucceed(() => false)))
-            )
-              return false;
-            const listing = yield* host.herdr.agentList().pipe(Effect.option);
-            if (listing._tag === "None") return false;
-            if (lost !== null) {
-              if (!(yield* retireLost(ask, agent, listing.value))) return false;
-              // A surviving tool can finish the Output while its old server is being retired.
-              if ((yield* completed) !== null) return false;
-              yield* launch(ask);
-              return true;
-            }
-            // Asked only of one herdr lists: it has no delivery to say whether it is inactive.
-            const refusal = Arr.some(listing.value, (one) => one.name === agent)
-              ? yield* host.herdr
-                  .agentStatus(agent)
-                  .pipe(Effect.match({ onFailure: herdrFailureReason, onSuccess: () => "" }))
-              : "";
-            if (!isGone(agent, listing.value, refusal)) return false;
-            yield* log(
-              ask.runId,
-              `${agent}: gone before ${ask.operation} was written; starting it again`,
-            );
-            yield* launch(ask, true);
-            return true;
-          }),
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        if (yield* fs.exists(usageWaitPath(ask)).pipe(Effect.orElseSucceed(() => true)))
+          return false;
+        const agent = yield* nameFor(ask);
+        const lost = yield* lostServer(compactionDeps(host, ask.runId), agent);
+        if (onlyDeadServer && lost === null) return false;
+        const completed = waitForOutput(ask.output, unless ?? null, {
+          pollMs: host.pollMs ?? DEFAULT_POLL_MS,
+          budgetMs: 0,
+          counts: Effect.succeed(false),
+          usable: usable ?? (() => true),
+          settled: Effect.suspend(() => host.herdr.agentStatus(agent)).pipe(
+            Effect.orElseSucceed(() => null),
+            Effect.map((status) => status !== "working" && status !== "blocked"),
+          ),
+        });
+        if ((yield* completed) !== null) return false;
+        // The host starts an agent on core again, in the session it had.
+        if (
+          lost === null &&
+          (yield* fs.exists(startedPath(ask.runId, agent)).pipe(Effect.orElseSucceed(() => false)))
         )
-        .pipe(withRecoveryGate(ask.runId)),
+          return false;
+        const listing = yield* host.herdr.agentList().pipe(Effect.option);
+        if (listing._tag === "None") return false;
+        if (lost !== null) {
+          if (!(yield* retireLost(ask, agent, listing.value))) return false;
+          // A surviving tool can finish the Output while its old server is being retired.
+          if ((yield* completed) !== null) return false;
+          yield* launch(ask);
+          return true;
+        }
+        // Asked only of one herdr lists: it has no delivery to say whether it is inactive.
+        const refusal = Arr.some(listing.value, (one) => one.name === agent)
+          ? yield* host.herdr
+              .agentStatus(agent)
+              .pipe(Effect.match({ onFailure: herdrFailureReason, onSuccess: () => "" }))
+          : "";
+        if (!isGone(agent, listing.value, refusal)) return false;
+        yield* log(
+          ask.runId,
+          `${agent}: gone before ${ask.operation} was written; starting it again`,
+        );
+        yield* launch(ask, true);
+        return true;
+      }).pipe(withRecoveryGate(ask.runId)),
     );
 
   const handOff = (options: {
