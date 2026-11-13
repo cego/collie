@@ -2641,7 +2641,7 @@ for (const name of ["gitlab", "github"] as const) {
           };
           const { model } = yield* posted(runId, internal);
           expect(Rec.values(model.notes ?? {}).flat()).toEqual([
-            "Updates profile verification. No runtime regression was found.\n\nNothing to fix.\n",
+            `Updates profile verification. No runtime regression was found.\n\nNothing to fix.\n${signed(runId)}`,
           ]);
           expect(model.approved ?? []).toEqual([]);
           expect(yield* readText(`${runDir(dir, runId)}/review.md`)).toContain(
@@ -15128,7 +15128,9 @@ for (const name of ["gitlab", "github"] as const) {
               ).toEqual([`<${mr}|Verified &lt;gitlab token&gt;.>`]);
             } else {
               expect(sent).toMatchObject({ ok: true });
-              expect(Rec.values(model.notes ?? {}).flat()).toEqual(["Verified <gitlab token>."]);
+              expect(Rec.values(model.notes ?? {}).flat()).toEqual([
+                `Verified <gitlab token>.${operation === "post" ? signed(runId) : ""}`,
+              ]);
             }
           }),
         ),

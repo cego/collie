@@ -5613,7 +5613,7 @@ export const hostLayer = (options: {
                       {
                         target: asked.target,
                         cwd: asked.cwd,
-                        body,
+                        body: `${body}\n\n${marker(asked.runId)}`,
                         approve: asked.approve === true,
                         gitlabHost: defaults.gitlabHost,
                       },
