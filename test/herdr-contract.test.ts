@@ -274,7 +274,7 @@ test("a request missing a param herdr requires is reported", () => {
 });
 
 // `machine list --json` answers with a bare array rather than an envelope, so herdr's
-// schema does not describe it either. This is the shape the pinned 0.9.3 prints for a
+// schema does not describe it either. This is the shape the pinned 0.9.5 prints for a
 // saved machine, read through the one call that asks it.
 test("machine list decodes what the pinned herdr prints, and keeps only the fields Collie reads", () =>
   runEffect(
