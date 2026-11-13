@@ -1,6 +1,7 @@
 //! The board on a made-up Flock, with no core, for looking at a screen headlessly:
 //! `cargo run -p collie-desktop-board --example scene -- <scene> --snap out.png`.
-//! Scenes: `answer` (a question with options), `words` (a question answered in words).
+//! Scenes: `answer` (a question with options), `words` (a question answered in words), `pr400`
+//! (a working card whose pull request two Machines hold).
 
 use collie_desktop_board::{App, shell::view};
 use rune::AppSpec;
@@ -28,8 +29,40 @@ fn question(id: &str, text: &str, options: Value) -> Value {
         "text": text, "options": options})
 }
 
+fn machine(installation: &str, name: &str, tasks: Vec<Value>) -> Value {
+    json!({"machine": {"installation": installation, "profile": format!("p-{name}"), "name": name},
+        "message": {"_tag": "Snapshot", "installation": installation, "build": "0.118.0",
+        "protocol": 7, "files": true, "herds": [{"id": "h1"}], "seq": 1, "tasks": tasks}})
+}
+
+fn pr400(id: &str, age: &str) -> Value {
+    task(
+        id,
+        "Fix Desktop retaining a broken VM chat channel",
+        "active",
+        json!({"project": "/home/mk/collie", "branch": "desktop-replaces-a-dead-chat-channel",
+            "sentence": "Running startup-final-tests, 16 s.", "age": age,
+            "agents": [{"name": "build", "status": "working", "now": null, "run": format!("r-{id}")}],
+            "mr": "https://github.com/cego/collie/pull/400", "mrState": "open",
+            "flow": {"glyphs": [{"title": "build", "state": "running"}], "release": 0.0, "current": null}}),
+    )
+}
+
 fn make() -> App {
     let scene = std::env::args().nth(1).unwrap_or_else(|| "answer".into());
+    if scene == "pr400" {
+        let mut app = App::default();
+        app.board.clock = Some(NOW);
+        app.board.utc_offset = Some(0);
+        app.nav.chat.set_open(false);
+        for one in [
+            machine("inst-laptop", "mk-laptop", vec![pr400("t1", "22h")]),
+            machine("inst-vm", "vm-mk", vec![pr400("t2", "21h")]),
+        ] {
+            app.apply(serde_json::from_value(one).unwrap());
+        }
+        return app;
+    }
     let asked = match scene.as_str() {
         "words" => question("c1", "What should the new endpoint be called?", json!([])),
         _ => question(
