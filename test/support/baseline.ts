@@ -2068,7 +2068,7 @@ scenario(
         expect(mr).toContain(`final Measurement ${final.id}: bench.count gain`);
         expect(mr).toContain("bench.size no-change");
         expect(mr).toContain(
-          "Where the evidence names a `final` Measurement, put its id and each metric's verdict in the description.",
+          "For measurements, report the measured results and metric verdicts in ordinary terms.",
         );
       }),
     ),
