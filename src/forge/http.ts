@@ -247,6 +247,16 @@ export const request = (
     ),
   );
 
+/** A GET of `path`, its body read as text, as a job's log is. */
+export const requestText = (login: ForgeLogin, cwd: string, path: string) =>
+  Effect.flatMap(ForgeHttp, (http) =>
+    http.ask(login, cwd, (provider, signal) =>
+      provider
+        .request("GET", path, { signal, raw: true })
+        .then((answer) => new Response(answer.body).text()),
+    ),
+  );
+
 /** Reads `body` as `schema`, or says what was asked was answered in another shape. */
 const decodedAs =
   <S extends Schema.Decoder<unknown>>(schema: S, login: ForgeLogin, what: string) =>

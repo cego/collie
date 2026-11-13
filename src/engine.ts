@@ -348,6 +348,7 @@ import {
   type VerifySpec,
 } from "./verify-spec";
 import { rerunArgv } from "./bun-tests";
+import { branchChange, ownTests } from "./own-tests";
 import {
   checkCwd,
   commandOf,
@@ -366,6 +367,7 @@ import {
   VERIFYING_FILE,
   type CheckPass,
   type CheckRun,
+  type FailedTest,
   type Verification,
 } from "./verify";
 import * as Workflow from "effect/workflow/Workflow";
@@ -516,6 +518,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly failed?: ReadonlyArray<FailedTest>;
     /** The one test a \`rerun\` ran. */
     readonly test?: FailedTest;
+    /** Whether a \`rerun\`'s test is the branch's own since the default branch, so never a Flake. */
+    readonly own?: boolean;
     /** The pipeline job a \`ci\` pass read, and the merge commit it ran on where not the head itself. */
     readonly job?: { readonly name: string; readonly url: string | null; readonly merge?: string };
   }
@@ -3856,6 +3860,13 @@ const defaultMergeBase = (cwd: string) =>
     return { found: true, branch, base: Str.trim(merged.stdout) } as const;
   });
 
+/** Whether the branch at `cwd` adds or changes `test` since it left the default branch. */
+const branchOwns = (cwd: string, test: FailedTest) =>
+  Effect.gen(function* () {
+    const branch = yield* defaultBase(runShell, cwd);
+    return branch !== null && ownTests([test], yield* branchChange(cwd, branch)).length > 0;
+  });
+
 /**
  * Runs `body` with the checkout at its merge-base with the default branch, then puts it
  * back. A checkout with changes of its own is refused: they would travel to the base.
@@ -4215,7 +4226,9 @@ export const hostLayer = (options: {
                         { ...own, cwd: asked.cwd },
                         spec,
                         rerun,
-                        { pass: asked.at === "default-base" ? "baseline" : "rerun" },
+                        asked.at === "default-base"
+                          ? { pass: "baseline" }
+                          : { pass: "rerun", own: yield* branchOwns(asked.cwd, rerun) },
                         log,
                       )
                 ).pipe(
