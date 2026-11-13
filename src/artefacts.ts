@@ -608,6 +608,7 @@ const make = Effect.gen(function* () {
         }
         yield* Effect.gen(function* () {
           const prior = origins.get(ref);
+          if (prior?.tracking === "snapshot") return;
           if (
             Arr.some(
               Str.split(name, /[\\/]/),

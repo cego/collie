@@ -19,6 +19,41 @@ beforeEach(() =>
 afterEach(() => runEffect(rig.close()));
 const actor = { origin: "cli", requestId: "update" } as const;
 
+test("discovered snapshots remain frozen when their sources change or disappear", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const catalogue = yield* Artefacts;
+      const run = yield* madeRun(rig.stateDir);
+      const roots = [
+        `${run.dir}/attachments`,
+        run.evidence,
+        `${run.dir}/handoffs`,
+        `${run.dir}/plan`,
+      ];
+      for (const root of roots) {
+        yield* fs.makeDirectory(root, { recursive: true });
+        yield* fs.writeFileString(`${root}/note.md`, "# Frozen material\n");
+      }
+      const discovered = yield* catalogue.reconcile(run);
+      expect(discovered.items).toHaveLength(4);
+      const frozen = yield* Effect.forEach(discovered.items, (item) =>
+        catalogue
+          .register(run, "inst", { id: item.id, snapshot: true }, item.id, actor)
+          .pipe(Effect.map((result) => result.item)),
+      );
+      for (const root of roots) yield* fs.writeFileString(`${root}/note.md`, "# Changed source\n");
+      const changed = yield* catalogue.reconcile(run);
+      expect(changed.items).toEqual(frozen);
+      for (const root of roots) yield* fs.remove(`${root}/note.md`);
+      expect((yield* catalogue.reconcile(run)).items).toEqual(frozen);
+      for (const item of frozen)
+        expect(
+          Buffer.from((yield* catalogue.read(run, item.id, 1, 0)).content, "base64").toString(),
+        ).toBe("# Frozen material\n");
+    }),
+  ));
+
 test("transferred files and assets have unknown source dates unless the caller reports them", () =>
   runEffect(
     Effect.gen(function* () {
