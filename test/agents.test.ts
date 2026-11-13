@@ -5047,7 +5047,6 @@ test(
         for (let replay = 0; replay < 2; replay++) {
           yield* session(
             Effect.gen(function* () {
-              const before = usageReads;
               yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
               const parked = yield* until(parkedSays(`${successor} ran out`)).pipe(
                 Effect.timeoutOption("2 minutes"),
@@ -5057,9 +5056,11 @@ test(
                 launches: harnessesStarted(yield* rig.calls()),
                 log: yield* read(`${dir}/agents/r1/agents.log`),
               }).toMatchObject({ parked: true, launches: ["codex", "codex"] });
-              // Exercise more than one quota poll in each host lifetime.
-              yield* spend(130_000);
-              expect(usageReads).toBeGreaterThanOrEqual(before + 2);
+              for (let poll = 0; poll < 2; poll++) {
+                const before = usageReads;
+                yield* TestClock.adjust("1 minute");
+                yield* until(Effect.sync(() => usageReads > before));
+              }
               expect(harnessesStarted(yield* rig.calls())).toEqual(["codex", "codex"]);
               expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
               const launched = Option.getOrThrow(
