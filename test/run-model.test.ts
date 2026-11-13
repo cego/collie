@@ -3,7 +3,7 @@ import * as Str from "effect/String";
 import * as Struct from "effect/Struct";
 import { heapStats } from "bun:jsc";
 import { expect, test } from "bun:test";
-import { Deferred, Effect, Fiber, FileSystem, Layer, Queue, Schema, Stream } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Layer, Option, Queue, Schema, Stream } from "effect";
 import { ChildProcessSpawner } from "effect/process";
 import { TaskView } from "../src/board-model";
 import { buildBoard } from "../src/board";
@@ -416,6 +416,68 @@ test("a branch head read before its checkout is watched is read again, so a move
       expect(yield* model.head(run)).toBe(two);
     }).pipe(Effect.scoped),
   ));
+
+for (const late of [false, true])
+  test(`a commit before checkout watch registration completes publishes an autonomous invalidation${late ? " to a late subscriber" : ""}`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-run-model-" });
+        const repo = `${dir}/repo`;
+        const git = (...args: ReadonlyArray<string>) =>
+          exec(["git", "-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", ...args]);
+        yield* fs.makeDirectory(repo, { recursive: true });
+        yield* git("init", "-q", "-b", "mk/ship");
+        yield* git("commit", "-q", "--allow-empty", "-m", "one");
+        const first = Str.trim((yield* git("rev-parse", "HEAD")).stdout);
+        const register = yield* Deferred.make<void>();
+        let ready = 0;
+        const model = yield* makeRunModel(dir, "installation").pipe(
+          Effect.provideService(FileSystem.FileSystem, {
+            ...fs,
+            watch: (path, options) =>
+              Stream.unwrap(
+                Effect.as(
+                  Deferred.await(register),
+                  fs.watch(path, {
+                    ...options,
+                    onReady: () => {
+                      options?.onReady?.();
+                      ready++;
+                    },
+                  }),
+                ),
+              ),
+          }),
+        );
+        const run = runFacts({ id: "r1", cwd: repo, branch: "mk/ship" });
+        yield* model.observe([run]);
+        // Pull now: acquiring the pull alone does not subscribe to the model's events.
+        const listen = Stream.toPull(model.moved).pipe(
+          Effect.flatMap((pull) => Effect.forkChild(pull, { startImmediately: true })),
+        );
+        const listening = late ? null : yield* listen;
+        const before = model.revision(run.id).seq;
+        expect(yield* model.head(run)).toBe(first);
+        expect(ready).toBe(0);
+
+        yield* git("commit", "-q", "--allow-empty", "-m", "two");
+        const second = Str.trim((yield* git("rev-parse", "HEAD")).stdout);
+        yield* Deferred.succeed(register, undefined);
+        yield* until(
+          () => Effect.sync(() => ready),
+          (count) => count === 3,
+        );
+
+        const notification = listening ?? (yield* listen);
+        // No head read or filesystem change prompts the board to notice the registration gap.
+        expect(
+          Option.isSome(yield* Fiber.join(notification).pipe(Effect.timeoutOption("1 second"))),
+        ).toBe(true);
+        expect(model.revision(run.id).seq).toBeGreaterThan(before);
+        expect(yield* model.head(run)).toBe(second);
+      }).pipe(Effect.scoped),
+    ));
 
 test("a branch head read while its checkout moves is not kept, so the move reaches the next read", () =>
   runEffect(

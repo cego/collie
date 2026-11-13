@@ -41,6 +41,38 @@ const comment = (id: string, over: Partial<ReviewComment> = {}): ReviewComment =
 
 const at = { proved: HEAD, seen: [] };
 
+test("a repair caller receives a confirmed target conflict before a moved head or comments", () => {
+  const conflicted = read({
+    head: MOVED,
+    mergeable: { state: "blocked", said: "conflict" },
+    comments: [comment("1")],
+  });
+  expect(standingOf(conflicted, { ...at, returnConflicts: true })).toEqual({
+    _tag: "Conflicting",
+    head: MOVED,
+  });
+  expect(standingOf(conflicted, at)).toEqual({ _tag: "Moved", head: MOVED });
+});
+
+test("conflict repair does not classify unknown mergeability or another forge block as a conflict", () => {
+  for (const mergeable of [null, { state: "blocked" as const, said: "draft status" }]) {
+    expect(standingOf(read({ mergeable }), { ...at, returnConflicts: true })._tag).toBe("Waiting");
+  }
+});
+
+test("a conflict repair read still reports merged, closed and unreadable states first", () => {
+  const options = { ...at, returnConflicts: true };
+  for (const state of ["merged", "closed"] as const) {
+    expect(
+      standingOf(read({ state, mergeable: { state: "blocked", said: "conflict" } }), options)._tag,
+    ).toBe(state === "merged" ? "Merged" : "Closed");
+  }
+  expect(standingOf({ ok: false, reason: "forge unavailable" }, options)).toEqual({
+    _tag: "Unreadable",
+    reason: "forge unavailable",
+  });
+});
+
 test("an approved, answered, green and mergeable merge request at the proved head is ready", () => {
   expect(standingOf(read(), at)).toEqual({ _tag: "Ready", head: HEAD, approvers: ["alice"] });
 });

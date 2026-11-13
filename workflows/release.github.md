@@ -66,10 +66,17 @@ commit, and a comment you leave out goes to the next round.
 
 ## fix
 
-Fix round {{iteration}} of at most {{max_iterations}}. Collie ran this Run's checks on
-the pull request's head, and this failed:
+Fix round {{iteration}} of at most {{max_iterations}}. Collie found these failures on
+the pull request's head:
 
 {{findings}}
+
+For a confirmed target-branch conflict, read the pull request's actual target branch,
+fetch it and merge its current head into this checkout's source branch. Resolve the
+conflicts preserving both branches' intended changes and history; do not assume the
+target is the repository's default branch. Commit and plain-push the repair. Do not
+reset, force-push, merge the pull request, tag or deploy. Add focused regression coverage
+where resolving the conflict changes behavior.
 
 Fix the cause test first, with {{skill:tdd}}, commit it to this checkout's branch and push
 with a plain `git push origin HEAD` — never a force push. Where you are sure a failure is not this
