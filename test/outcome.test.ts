@@ -625,6 +625,35 @@ test("the rendered evidence says who collected each result, and which tree it wa
   expect(rendered).toContain("- lint: pass (by agent)");
 });
 
+test("public evidence names repository commands and results without private labels or collectors", () => {
+  const rendered = renderEvidence(
+    collected({
+      verifications: [
+        record({
+          name: "private-check-label",
+          asked: "bun",
+          executable: "/bin/bun",
+          argv: ["test", "test/cache.test.ts"],
+        }),
+        record({
+          name: "private-baseline",
+          asked: "bun",
+          executable: "/bin/bun",
+          argv: ["test", "test/retry.test.ts"],
+          by: "agent",
+          expect: "fail",
+          exit: 1,
+          end: EARLIER,
+        }),
+      ],
+    }),
+    "public",
+  );
+  expect(rendered).toBe(
+    "- `bun test test/cache.test.ts`: pass (exit 0)\n- `bun test test/retry.test.ts`: pass (exit 1, expected to fail) (on an earlier tree)",
+  );
+});
+
 test("a reviewer is handed the recorded checks: result, who, tree, when, and the baseline", () => {
   expect(renderRecordedChecks(collected({ verifications: [] }))).toBe(
     "(nothing is recorded for this Run)",

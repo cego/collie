@@ -21740,6 +21740,7 @@ scenario(
         expect(verdictsOf(measured[0]!)).toEqual(["bench.count gain", "bench.size no-change"]);
         const body = yield* readText(`${runDir(dir, runId)}/handoffs/tune-up-merge-request.md`);
         expect(leaksIn(body)).toEqual([]);
+        expect(body).not.toMatch(/\(by (?:collie|agent)\)|- unit:/);
         expect(body).toContain(original);
         expect(Arr.map(measured, (one) => one.candidate.head_sha)).toEqual([
           yield* headOf(),
@@ -21850,6 +21851,7 @@ scenario(
         expect(noted).toContain("#### Reproduce");
         expect(noted).toContain("sh bench/bench.sh");
         expect(leaksIn(noted)).toEqual([]);
+        expect(noted).not.toMatch(/\(by (?:collie|agent)\)|- unit:/);
         expect(noted).not.toContain("ci-fix-1");
         expect(noted).not.toContain(runId);
         expect(noted).not.toContain(dir);

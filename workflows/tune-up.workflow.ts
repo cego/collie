@@ -2198,7 +2198,7 @@ export default defineWorkflow({
           written,
           found,
           cycles: cycled,
-          evidence: renderEvidence({ ...evidence, measurements: [] }),
+          evidence: renderEvidence(evidence, "public"),
           review: latest.reviewed,
           tradeoff,
         });

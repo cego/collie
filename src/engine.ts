@@ -2383,13 +2383,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** Text with every credential-shaped value replaced, before it is published. */
   export function redact(text: string): string;
 
-  /** What was actually collected, and by whom, for a merge request to say what it proved. */
+  /** Recorded evidence for prompts, or repository commands and results for public text. */
   export function renderEvidence(got: {
     readonly verifications: ReadonlyArray<Verification>;
     readonly final: Snapshot;
     /** The latest \`final\` of these is named with its verdicts. */
     readonly measurements?: ReadonlyArray<Measurement>;
-  }): string;
+  }, audience?: "internal" | "public"): string;
 
   /** Where a reference a Run's Outputs give may point: its own directory, its checkout, and a planning Run's. */
   export function evidenceRoots(own: string, cwd: string, workSource: string): string[];

@@ -1536,7 +1536,10 @@ is no flag to ask for it.
 `host.approved(runId)` is the Run's checks as they stand now, for a prompt to name what the
 work will be held to — `renderApproved` writes it out — and
 `renderEvidence(host.evidence(...))` is what was actually collected and by whom, with the latest `final` Measurement, for a
-merge request to say what it proved. `redact(text)` takes every credential-shaped value out
+prompt to say what was proved. Use `renderEvidence(evidence, "public")` for published text:
+it lists repository commands and results, preserving earlier-tree and expected-failure qualifiers,
+and omits private check labels, collectors, and measurement records.
+`redact(text)` takes every credential-shaped value out
 of text you publish yourself, as Collie does before it files an issue. `renderRecordedChecks` writes the same journal for a
 reviewer — the latest of each check, by whom, whether on the tree in front of it, when,
 whether the same command was seen failing on an earlier tree, and the baseline — so a review reads what was run rather than running it again. The list can grow while the Run works, since an

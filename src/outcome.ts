@@ -715,16 +715,20 @@ export function endsWithoutPatch(kind: Outcome, got: Collected): boolean {
   );
 }
 
-/** What the `mr` prompt says was actually proved, and by whom. */
+/** Recorded evidence for prompts, or repository commands and results for public text. */
 export function renderEvidence(
   got: Pick<Collected, "verifications" | "final" | "measurements">,
+  audience: "internal" | "public" = "internal",
 ): string {
   const latest = new Map<string, Verification>();
+  const command = (v: Verification) => CommandLine.display([v.asked ?? v.executable, ...v.argv]);
   for (const v of got.verifications) if (!ranOneTest(v)) latest.set(`${v.name}:${v.by}`, v);
-  const measured = finalMeasurementLine(got.measurements ?? []);
+  const measured = audience === "public" ? null : finalMeasurementLine(got.measurements ?? []);
   const lines = Arr.map([...latest.values()], (v) => {
     const stale = sameTree(v.end, got.final) ? "" : " (on an earlier tree)";
     const expected = v.expect === "fail" ? ", expected to fail" : "";
+    if (audience === "public")
+      return `- \`${command(v)}\`: ${v.result} (exit ${v.exit}${expected})${stale}`;
     return `- ${v.name}: ${v.result} (by ${v.by}${expected})${stale}`;
   });
   if (measured !== null) lines.push(`- ${measured}`);
