@@ -178,6 +178,11 @@ Reactivity key, which the board follows. The first host on a state directory imp
 A starting host registers every saved generation before a Run it recovers looks one up, so a
 parent resumed in the swap reads a child of any generation.
 
+`patches/effect@4.1.4.patch` prevents a conditional SQL activity reset from replaying the
+interrupt that suspended it. The existing transaction protects the reply check and cleanup;
+a stale reset leaves newer replies and interrupts intact. Remove the patch only when an
+upstream release passes `test/effect-sql-reset.test.ts` and the release-set scenarios.
+
 Once it answers, a starting host ends every check a previous host left running in its
 state directory: one recorded under `running-checks/`, or a process marked with this
 installation's id. A host that has just made that id looks for none, since no process can

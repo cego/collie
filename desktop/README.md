@@ -17,6 +17,14 @@ clear of the chat. Each Machine's saved board is drawn as soon as
 output and Attach files. The toolbar shows each Subscription account's Usage, as today's header
 does. An `act` that the host refused has no Try again.
 
+The connection is ready for read-only Flock tools once its bridges and host identity
+answer; it does not wait for the host's initial board build. Workspaces, explicitly
+Machine-qualified Run reads, and remote file reads remain available while that board
+loads. The board stays labelled as connecting, and writes and board actions still
+require its complete live snapshot. An opening bridge must become ready within two
+minutes, and the host must then identify itself within five seconds. Failed openings
+close their scopes before a fallback or retry; the first board must match that identity.
+
 | Crate or file                | What it owns                                                                                                                                                                                                                                 |
 | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `protocol/src/generated.rs`  | The Rust types of the RPCs spoken (`flock`, `syncNow`, `terminal`, `terminalSend`, `say`, `runDetail`, `runFile`), generated; never edited by hand                                                                                           |
@@ -77,7 +85,7 @@ HOME and state directory. With no GPU,
 point Vulkan at lavapipe: `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`. On
 Linux, building needs `libxkbcommon-dev` and `libwayland-dev`, and lavapipe is in
 `mesa-vulkan-drivers`. Terminal fallback tests also need `fontconfig` and `fonts-noto-cjk`;
-the bundled monospace font does not contain CJK glyphs. libghostty-vt needs Zig 0.16.0 (`zig` on `PATH`, or `ZIG` naming it)
+the bundled monospace font does not contain CJK glyphs. libghostty-vt needs Zig 0.17.1 (`zig` on `PATH`, or `ZIG` naming it)
 and bindgen needs libclang; its first build takes about four minutes. CI's `desktop` job runs the core's typecheck, `cargo fmt --check`, `cargo clippy -D
 warnings`, `cargo test`, and the contract, drift and shell tests.
 
@@ -220,8 +228,8 @@ and background are the app's text and surface, which the view sets (`Tab::set_su
   `fixtures/terminal/styles.ndjson` holds every attribute and glyph class for comparing with
   Ghostty on the same bytes.
 
-**Pins.** Ghostty is the submodule `vendor/ghostty` at `291fd050b9e9c293c8adb6a140742649b7e42d3a`,
-built with Zig 0.16.0, its `minimum_zig_version`. `THIRD-PARTY-NOTICES` names Ghostty (MIT)
+**Pins.** Ghostty is the submodule `vendor/ghostty` at `cf3a8a6594eec899fe6335465668c60f2281ce9c`,
+built with Zig 0.17.1; upstream requires at least 0.17.0. `THIRD-PARTY-NOTICES` names Ghostty (MIT)
 and the herdr-app code adapted (Apache-2.0): `ghostty-sys` and `terminal/src/vt.rs`.
 
 **Recordings.** `core/record-terminal.ts` opens the core's `openTerminal` on a pane, at 100 by

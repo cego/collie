@@ -138,6 +138,8 @@ pub struct Task {
     #[serde(rename = "planReady")]
     pub plan_ready: bool,
     pub offer: Option<Offer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offers: Option<Vec<Offer>>,
     pub run: String,
     pub runs: Vec<String>,
     pub at: f64,
@@ -560,6 +562,8 @@ pub struct Offer {
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

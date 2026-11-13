@@ -440,7 +440,7 @@ export const sdkModules = (): ReadonlyArray<readonly [string, object]> => {
 /** Kept in step with package.json, which `engine.test.ts` checks: the host and an
  *  author's declarations have to be the same Effect, or the types are about another one. */
 export const TOOLCHAIN = {
-  effect: "4.1.0",
+  effect: "4.1.4",
   typescript: "^7.0.2",
 } as const;
 
@@ -6281,7 +6281,6 @@ const PlacingJson = Schema.fromJsonString(Placing);
 const decodePlacing = Schema.decodeUnknownOption(PlacingJson);
 const encodePlacing = flow(Schema.encodeResult(PlacingJson), Result.getOrThrow);
 
-/** The reports sweep asks of every row each second; a row read again unchanged is the same object. */
 const owing = new WeakMap<RunRow, boolean>();
 
 /** Whether a Run's report is owed: an agent started it, or its Task closes once it is reported. */
@@ -8198,11 +8197,7 @@ const makeRegistry: (
     const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
     const placing = Option.getOrUndefined(decodePlacing(row.placing ?? ""));
     const report = Option.getOrUndefined(
-      Schema.decodeOption(Schema.fromJsonString(RunReport))(
-        yield* fs
-          .readFileString(`${runDir(dir, row.run)}/report.json`)
-          .pipe(Effect.orElseSucceed(() => "")),
-      ),
+      Schema.decodeOption(Schema.fromJsonString(RunReport))(row.report ?? ""),
     );
     const linkNotices = yield* readLinkDeliveries(runDir(dir, row.run)).pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
