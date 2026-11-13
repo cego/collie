@@ -445,7 +445,7 @@ test(
             ).pipe(Effect.orDie);
             yield* first.lists([second]);
             expect((yield* first.cli(["run", "show", successor])).envelope.ok).toBe(true);
-            const landed = () =>
+            const card = () =>
               Effect.gen(function* () {
                 const printed = yield* first.cli(["board"]);
                 const shown = yield* Schema.decodeUnknownEffect(
@@ -453,7 +453,7 @@ test(
                 )(printed.envelope.data).pipe(Effect.orDie);
                 return Option.getOrUndefined(
                   Arr.findFirst(shown.tasks, (one) => one.runs.includes(older)),
-                )?.landed;
+                );
               });
             const handOff = (runId: string, request: string) =>
               first.cli([
@@ -475,10 +475,12 @@ test(
             expect((yield* handOff(older, "older")).envelope.error).toBeUndefined();
             expect(yield* successors(older)).toEqual([successor]);
             expect(yield* successors(newer)).toEqual([]);
-            expect(yield* landed()).toBe(false);
+            // The card shows the older handoff once the board has read it.
+            const handedOff = yield* until(card, (shown) => shown?.disposition != null);
+            expect(handedOff?.landed).toBe(false);
             expect((yield* handOff(newer, "newer")).envelope.error).toBeUndefined();
             expect(yield* successors(newer)).toEqual([successor]);
-            expect(yield* landed()).toBe(true);
+            yield* until(card, (shown) => shown?.landed === true);
           }),
         ["targeted.workflow.ts", "stops-on-mr.workflow.ts"],
       ),
