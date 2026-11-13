@@ -4,6 +4,7 @@
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import * as Rec from "effect/Record";
+import * as Str from "effect/String";
 import { Effect, Schema } from "effect";
 import * as Option from "effect/Option";
 import { connect, frontDoor, socketOf, type HostClient } from "../src/host";
@@ -211,6 +212,63 @@ test(
           const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
           const child = Option.getOrUndefined(Arr.findFirst(runs, (one) => one.parent === runId));
           expect(child?.input).toEqual({ mr: MR, notify: true, ship: "merge" });
+          yield* stopHost(world.state);
+        }),
+      [],
+    ),
+  300_000,
+);
+
+test(
+  "the TUI preserves an empty enum choice, distinguishes unset, and cancels without starting a Run",
+  () =>
+    proves(
+      "collie-offer-tui-choice-",
+      (world) =>
+        Effect.gen(function* () {
+          const project = `${world.project}/work`;
+          yield* save(`${project}/.collie/workflows`, ["choice-offer.workflow.ts"]);
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const runId = yield* finished(client, project, "choice-offer").pipe(Effect.orDie);
+          const env = yield* currentEnv;
+          for (const [title, expected, count] of [
+            // oxlint-disable-next-line unicorn/no-thenable -- the workflow Input is named `then`
+            ["(empty)", { mr: MR, then: "" }, 2],
+            ["Not set", { mr: MR }, 3],
+          ] as const) {
+            const choices: string[][] = [];
+            const prompts: FlowPrompts = {
+              menu: (items) => {
+                choices.push(Arr.map(items, (one) => one.title));
+                return Effect.succeed(
+                  Option.getOrNull(Arr.findFirst(items, (one) => one.title === title)),
+                );
+              },
+              ask: () => Effect.succeed(""),
+            };
+            const note = yield* makeOffer(env, prompts, runId, "choose");
+            expect(note).toStartWith("Started run ");
+            const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
+            expect(runs.length).toBe(count);
+            const child = Option.getOrUndefined(
+              Arr.findFirst(
+                runs,
+                (one) => note !== null && Str.startsWith(`Started run ${one.runId} `)(note),
+              ),
+            );
+            expect(child?.input).toEqual(expected);
+            expect(choices).toEqual([["Not set", "(empty)", "finish"]]);
+            yield* until(
+              () => client.run({ runId: child!.runId }).pipe(Effect.orDie),
+              (view) => view?.status.status === "complete",
+            );
+          }
+          const cancelled: FlowPrompts = {
+            menu: () => Effect.succeed(null),
+            ask: () => Effect.succeed(null),
+          };
+          expect(yield* makeOffer(env, cancelled, runId, "choose")).toBeNull();
+          expect((yield* client.runs({ task: null }).pipe(Effect.orDie)).length).toBe(3);
           yield* stopHost(world.state);
         }),
       [],
