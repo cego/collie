@@ -58,6 +58,7 @@ import {
 } from "./threads";
 import {
   judgeComments,
+  QUEUE_MERGERS,
   type CommentKind,
   type ForgeComment,
   type MergeAnswer,
@@ -999,7 +1000,6 @@ const QUEUE_POLL = Duration.seconds(30);
 const QUEUE_BOUND = Duration.hours(2);
 type Merged = typeof MergedPull.Type;
 
-/** A merge already made, by anyone, as the merge's answer says it. */
 const alreadyMerged = (pull: Merged): MergeAnswer => ({
   _tag: "AlreadyMerged",
   merged: pull.mergeCommit?.oid ?? "",
@@ -1011,7 +1011,8 @@ const alreadyMerged = (pull: Merged): MergeAnswer => ({
 /**
  * The merge through the base branch's merge queue: `head` enqueued unless its entry is
  * already there, then read every 30 s until the queue merges or removes it. One still
- * queued after two hours is dequeued, so nothing merges while no Run waits on it.
+ * queued after two hours is dequeued, and read until it is out or merged, so nothing
+ * merges while no Run waits on it. Only the queue's merge at `head` is this merge.
  */
 const mergeQueued = Effect.fnUntraced(function* (
   ref: MrRef,
@@ -1054,30 +1055,26 @@ const mergeQueued = Effect.fnUntraced(function* (
     }
   }
   const deadline = (yield* Clock.currentTimeMillis) + Duration.toMillis(QUEUE_BOUND);
-  while ((yield* Clock.currentTimeMillis) < deadline) {
+  let tookOut = false;
+  while (true) {
     yield* Effect.sleep(QUEUE_POLL);
     const pull = yield* read;
-    if (pull === null) continue;
-    if (pull.state === "MERGED")
-      return {
-        _tag: "Merged",
-        merged: pull.mergeCommit?.oid ?? "",
-      };
-    const movedNow = moved(pull);
+    if (pull?.state === "MERGED")
+      return (pull.headRefOid ?? "") === head && QUEUE_MERGERS.has(pull.mergedBy?.login ?? "")
+        ? { _tag: "Merged", merged: pull.mergeCommit?.oid ?? "" }
+        : alreadyMerged(pull);
+    const movedNow = pull === null ? undefined : moved(pull);
     if (movedNow !== undefined) return movedNow;
-    if (pull.mergeQueueEntry == null) {
-      const reason = pull.timelineItems?.nodes.at(-1)?.reason ?? "no reason given";
+    if (pull !== null && pull.mergeQueueEntry == null)
       return {
         _tag: "Refused",
-        reason: `GitHub's merge queue removed ${where} without merging it: ${reason}`,
+        reason: tookOut
+          ? `${where} was still in the merge queue after 2 hours, so Collie took it out`
+          : `GitHub's merge queue removed ${where} without merging it: ${pull.timelineItems?.nodes.at(-1)?.reason ?? "no reason given"}`,
       };
-    }
+    if ((yield* Clock.currentTimeMillis) >= deadline)
+      tookOut = (yield* graphqlAs(Mutated, LOGIN, cwd, DEQUEUE, { id })).ok || tookOut;
   }
-  const dequeued = yield* graphqlAs(Mutated, LOGIN, cwd, DEQUEUE, { id });
-  return {
-    _tag: "Refused",
-    reason: `${where} was still in the merge queue after 2 hours${dequeued.ok ? ", so Collie took it out" : ` and could not be taken out: ${dequeued.reason}`}`,
-  };
 });
 
 /** GitHub's merge endpoint at `head`, by the repository's default merge method for the viewer. */

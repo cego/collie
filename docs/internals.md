@@ -1316,12 +1316,14 @@ Where a pull request's base branch has a merge queue, which GraphQL's
 merge. It calls `enqueuePullRequest` with `expectedHeadOid` set to the head it was asked to
 merge, unless the pull request is already in the queue at that head, as after a host
 restart. It then reads the pull request every 30 s for up to two hours, Collie's CI bound.
-A merge the queue made answers `Merged` with the queue's merge commit; a pull request the
-queue removed answers `Refused` with the reason of its latest `RemovedFromMergeQueueEvent`;
-a moved head answers `HeadMoved`. One still queued after two hours is dequeued and refused
-as timed out, so nothing merges while no Run waits on it. GitHub attributes a queue's
-merge to `github-merge-queue`, and a landing attempt left while queued settles as landed
-when that login merged it at the attempted head. A repository without a queue merges
+A merge the queue made at that head answers `Merged` with the queue's merge commit, and any
+other merge answers `AlreadyMerged`; a pull request the queue removed answers `Refused` with
+the reason of its latest `RemovedFromMergeQueueEvent`; a moved head answers `HeadMoved`. One
+still queued after two hours is dequeued and refused as timed out, so nothing merges while
+no Run waits on it. Where GitHub refuses the dequeue, the adapter asks again at every read
+and answers only once the pull request is out of the queue or merged. GitHub attributes a
+queue's merge to `github-merge-queue`, and a GitHub landing attempt left while queued
+settles as landed when that login merged it at the attempted head. A repository without a queue merges
 through REST as before, and GitLab's merge is unchanged.
 
 Collie's own master is meant to require its queue, by the ruleset in

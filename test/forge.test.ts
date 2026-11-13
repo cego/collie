@@ -3222,6 +3222,32 @@ describe("GitHub's merge where the base branch requires a merge queue", () => {
       }),
     ));
 
+  test("a merge seen while queued that is not the queue's at the asked head is someone else's", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const at = "2026-10-20T12:30:00Z";
+        const other = (head: string, mergedBy: string) => (pull: FakeMr) => ({
+          ...mergedByQueue(pull),
+          head,
+          mergedBy,
+        });
+        expect(yield* mergeQueued(queueing(), other("0ther", "alice"))).toEqual({
+          _tag: "AlreadyMerged",
+          merged: MERGED,
+          head: "0ther",
+          by: "alice",
+          at,
+        });
+        expect(yield* mergeQueued(queueing(), other(HEAD, "alice"))).toEqual({
+          _tag: "AlreadyMerged",
+          merged: MERGED,
+          head: HEAD,
+          by: "alice",
+          at,
+        });
+      }),
+    ));
+
   test("a pull request the queue removes is refused with GitHub's reason", () =>
     runEffect(
       Effect.gen(function* () {
@@ -3248,6 +3274,29 @@ describe("GitHub's merge where the base branch requires a merge queue", () => {
         expect(fake.model().mrs[0]?.queued).toBeUndefined();
       }),
     ));
+
+  test("a pull request GitHub will not dequeue after two hours is still waited on until the queue merges it", () => {
+    const fake = queueing({ queued: HEAD });
+    fake.set({ ...fake.model(), refusesDequeue: true });
+    return runEffect(
+      Effect.gen(function* () {
+        const merging = yield* Effect.forkChild(github.merge(ref("github"), HEAD, "/w", fake.run));
+        yield* TestClock.adjust("2 hours");
+        for (const _ of Arr.range(1, 4)) {
+          yield* TestClock.adjust("30 seconds");
+          yield* Effect.yieldNow;
+        }
+        expect(merging.pollUnsafe()).toBeUndefined();
+        expect(fake.model().mrs[0]?.queued).toBe(HEAD);
+        fake.set({ ...fake.model(), mrs: Arr.map(fake.model().mrs, mergedByQueue) });
+        while (merging.pollUnsafe() === undefined) {
+          yield* TestClock.adjust("30 seconds");
+          yield* Effect.yieldNow;
+        }
+        expect(yield* Fiber.join(merging)).toEqual({ _tag: "Merged", merged: MERGED });
+      }).pipe(Effect.provide(Layer.merge(fake.layer, TestClock.layer()))),
+    );
+  });
 
   test("a pull request already queued at the head is waited on, not enqueued again", () =>
     runEffect(

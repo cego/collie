@@ -342,6 +342,8 @@ export const ForgeModel = Schema.Struct({
   ),
   /** GitHub: pull requests dequeued, by key. */
   dequeued: Schema.optionalKey(Schema.Array(Schema.String)),
+  /** GitHub refuses to take a pull request out of its merge queue. */
+  refusesDequeue: Schema.optionalKey(Schema.Boolean),
   /** GitHub's `viewerDefaultMergeMethod`; `MERGE` where unsaid. */
   mergeMethod: Schema.optionalKey(Schema.Literals(["MERGE", "SQUASH", "REBASE"])),
   /** Replies posted, by `project!iid` or `project#iid`: the thread, null for none, and the body. */
@@ -832,7 +834,6 @@ const actionsAttempts = (mr: FakeMr) =>
     { ...job, attempt: attempts.length + 1 },
   ]);
 
-/** Each job of a pull request's target branch's newest run, each its first attempt. */
 const targetAttempts = (mr: FakeMr) =>
   Arr.map(jobsOf(mr.target?.jobs ?? [], 2000), (job) => ({ ...job, attempt: 1 }));
 
@@ -1470,7 +1471,9 @@ function ghGraphql(model: ForgeModel, args: ReadonlyArray<string>): Answer | und
       json({ data: null, errors: [{ type: "UNPROCESSABLE", message }] });
     if (pull === undefined) return refusal("Could not resolve to a node.");
     if (queueing === "dequeue")
-      return { ...json({ data: { dequeuePullRequest: {} } }), dequeued: pull };
+      return model.refusesDequeue === true
+        ? refusal("Something went wrong while executing your query.")
+        : { ...json({ data: { dequeuePullRequest: {} } }), dequeued: pull };
     if (pull.state !== "open") return refusal("Pull request is not open.");
     if (typed("head") !== pull.head) return refusal("Head sha didn't match expected head sha.");
     return {
