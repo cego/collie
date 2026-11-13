@@ -5872,7 +5872,8 @@ export const hostLayer = (options: {
             }),
           ),
         approveReview: (asked) =>
-          reviewForge(
+          // Approval may already stand: finish verification and dismissal without parking to replay it.
+          under(
             Effect.gen(function* () {
               const ref = parseMrTarget(asked.target);
               if (ref === null)

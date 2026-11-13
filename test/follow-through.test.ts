@@ -13,7 +13,7 @@ import { Rig } from "./support/recorder";
 import { runEffect as runLive } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
 import { exec } from "./support/command";
-import { type FakeMr, type ForgeModel } from "./support/forge";
+import { serveForges, type FakeMr, type ForgeModel } from "./support/forge";
 import { fixtures } from "./support/host";
 import { ROOT, until, watching } from "./support/watching";
 import { HOLD, Registry } from "../src/engine";
@@ -83,10 +83,10 @@ const repository = Effect.gen(function* () {
 });
 
 /** The author pushes a commit, and GitLab moves the merge request's ref to it. */
-const pushed = (what: string) =>
+const pushed = (what: string, ref = MR_REF) =>
   Effect.gen(function* () {
     yield* git(["commit", "-q", "--allow-empty", "-m", what]);
-    yield* git(["push", "-q", "--force", "origin", `HEAD:${MR_REF}`]);
+    yield* git(["push", "-q", "--force", "origin", `HEAD:${ref}`]);
     return Str.trim((yield* git(["rev-parse", "HEAD"])).stdout);
   });
 
@@ -249,6 +249,90 @@ for (const id of ["review", "second-look"])
   );
 
 const follows = `${fixtures}/follows-mr.workflow.ts`;
+
+for (const following of [true, false])
+  test(
+    `${following ? "followed" : "manual"} GitHub approval attempts dismissal before reporting a transient post-submit check`,
+    () =>
+      host.runEffect(
+        Effect.gen(function* () {
+          yield* repository;
+          const head = yield* pushed("ready to approve", "refs/pull/7/head");
+          const target = "https://github.com/acme/app/pull/7";
+          const forge = yield* host.github({
+            installed: true,
+            loggedIn: ["github.com"],
+            login: "mk",
+            mrs: [{ project: "github.com/acme/app", iid: "7", state: "open", author: "ann", head }],
+          });
+          let accepted = false;
+          let dismissed = 0;
+          const api = yield* serveForges({
+            forge: "github",
+            face: async (url, init) => {
+              if (accepted && url.endsWith("/pulls/7") && init?.method === "GET")
+                return Response.json(
+                  { message: "temporarily unavailable" },
+                  { status: following ? 503 : 429 },
+                );
+              if (url.endsWith("/dismissals")) {
+                dismissed += 1;
+                if (!following) return Response.json({ message: "Forbidden" }, { status: 403 });
+              }
+              const response = await forge.face(url, init);
+              if (url.endsWith("/reviews") && init?.method === "POST") accepted = true;
+              return response;
+            },
+          });
+          yield* host.settingOn(following);
+          yield* rig.queueOutputs([review([])]);
+          yield* host.session(
+            { ...forge, api },
+            Effect.gen(function* () {
+              const { runId } = yield* host.started(yield* entryOf("review"), "cli-1", { target });
+              const decision = following ? "approve-1" : "post-1";
+              yield* until(
+                () => asked(runId),
+                (rows) => Arr.some(rows, (row) => row.decision === decision),
+              );
+              yield* (yield* Registry).answer({
+                runId,
+                decision,
+                value: following ? "Approve" : `Post and approve ${head.slice(0, 7)}`,
+                request: "approve",
+              });
+              const { view: done } = yield* until(
+                () =>
+                  Effect.all({
+                    view: host.status(runId),
+                    watch: host.watchOf(runId, target),
+                  }),
+                ({ view, watch }) =>
+                  view?.status.status === "failed" ||
+                  (view?.status.status === "suspended" && view.park != null) ||
+                  watch?.name === "follow-1",
+              );
+              expect(dismissed).toBe(1);
+              expect(done?.park).toBeNull();
+              const reason = done?.status.status === "failed" ? done.status.reason : "";
+              if (!following) {
+                expect(done?.status.status).toBe("failed");
+                expect(reason).toContain("approval may still be active");
+                expect(reason).toContain("review 1");
+              }
+              expect((yield* forge.model()).approved ?? []).toHaveLength(following ? 0 : 1);
+              expect(
+                Arr.filter(
+                  forge.requests(),
+                  (one) => one.method === "POST" && one.url.endsWith("/reviews"),
+                ),
+              ).toHaveLength(1);
+            }),
+          );
+        }),
+      ),
+    180_000,
+  );
 
 for (const state of ["closed", "merged"] as const)
   test(

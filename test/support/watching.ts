@@ -50,12 +50,12 @@ export const watching = (rig: Rig) => {
   const toasts: string[] = [];
 
   /** glab on PATH and GitLab served, for the whole test, as a host's restart leaves the forge as it was. */
-  const gitlab = (model: ForgeModel) =>
+  const gitlab = (model: ForgeModel, name: "gitlab" | "github" = "gitlab") =>
     Effect.gen(function* () {
       const bin = yield* Effect.acquireRelease(FakeBin.make(`${rig.root}/bin`), (made) =>
         made.restore(),
       );
-      const faked = yield* forgeOnPath(bin, "gitlab", model);
+      const faked = yield* forgeOnPath(bin, name, model);
       let before = (_url: string, _init?: RequestInit): Promise<void> => Promise.resolve();
       let after = (_url: string, _init: RequestInit | undefined, response: Response) =>
         Promise.resolve(response);
@@ -222,6 +222,7 @@ export const watching = (rig: Rig) => {
     dir,
     toasts,
     gitlab,
+    github: (model: ForgeModel) => gitlab(model, "github"),
     session,
     mergeWatched,
     recovering,
