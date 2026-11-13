@@ -117,7 +117,8 @@ test("reports are imported once on upgrade and remain authoritative after restar
         yield* sql`DROP INDEX collie_runs_reports`;
         yield* sql`ALTER TABLE collie_runs DROP COLUMN report_pending`;
         yield* sql`ALTER TABLE collie_runs DROP COLUMN report`;
-        yield* sql`DELETE FROM collie_migrations WHERE migration_id = 19`;
+        yield* sql`DROP TABLE collie_watches`;
+        yield* sql`DELETE FROM collie_migrations WHERE migration_id >= 19`;
       }).pipe(Effect.provide(opens(file)));
       const original = {
         state: "delivered" as const,
