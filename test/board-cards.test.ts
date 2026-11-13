@@ -67,7 +67,7 @@ test(
           runs,
           registered: [],
           offers: (run) => Effect.sync(() => (derived.push(run), [])),
-          cards: { revision: model.highest, kept, markers: new Map() },
+          cards: { revision: model.inputsAt, kept, markers: new Map() },
         }).pipe(
           Effect.provideService(FileSystem.FileSystem, model.reading),
           Effect.tap(() => Queue.offer(built, derived.length)),
@@ -101,6 +101,51 @@ test(
   60_000,
 );
 
+test("stamping a card's age or record keeps its derivation until source facts change", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      const { dir, env, runs: initial } = yield* planners(3, "2026-10-30T09:30:00Z");
+      let runs = initial;
+      const model = yield* makeRunModel(dir, "installation");
+      const derived: string[] = [];
+      const cards: KeptCards = { revision: model.inputsAt, kept: new Map(), markers: new Map() };
+      const build = (kept?: KeptCards) =>
+        buildBoard({
+          env,
+          runs,
+          registered: [],
+          offers: (run) => Effect.sync(() => (derived.push(run), [])),
+          cards: kept,
+        }).pipe(Effect.provideService(FileSystem.FileSystem, model.reading));
+      yield* model.observe(runs);
+      const first = model.stamp(yield* build(cards));
+      expect(derived.length).toBe(3);
+      derived.length = 0;
+
+      yield* TestClock.adjust("1 hour");
+      const later = model.stamp(yield* build(cards));
+      expect(later[0]!.age).not.toBe(first[0]!.age);
+      expect(later[0]!.revision!.seq).toBeGreaterThan(first[0]!.revision!.seq);
+      const id = runs[0]!.id;
+      model.stampRecord("record", id, [id], "first");
+      model.stampRecord("record", id, [id], "second");
+      yield* build(cards);
+      expect(derived).toEqual([]);
+
+      runs = [{ ...runs[0]!, summary: "New engine facts" }, ...runs.slice(1)];
+      yield* model.observe(runs);
+      yield* build(cards);
+      expect(derived).toEqual([id]);
+      derived.length = 0;
+      const changed = runs[1]!;
+      yield* model.writing.writeFileString(`${changed.dir}/plan/issues/02-next.md`, "# Next\n");
+      const updated = yield* build(cards);
+      expect(derived).toEqual([changed.id]);
+      expect(updated).toEqual(yield* build());
+    }).pipe(Effect.provide(TestClock.layer())),
+  ));
+
 test("a kept card says the time as one derived now does, hours on", () =>
   runEffect(
     Effect.gen(function* () {
@@ -108,7 +153,7 @@ test("a kept card says the time as one derived now does, hours on", () =>
       // Finished half an hour ago: shown as quiet, then gone a day after.
       const { dir, env, runs } = yield* planners(20, "2026-10-30T09:30:00Z");
       const model = yield* makeRunModel(dir, "installation");
-      const cards: KeptCards = { revision: model.highest, kept: new Map(), markers: new Map() };
+      const cards: KeptCards = { revision: model.inputsAt, kept: new Map(), markers: new Map() };
       const build = (kept?: KeptCards) =>
         buildBoard({
           env,
@@ -139,7 +184,7 @@ test("a build reads only the check markers of Runs that moved since the last", (
           return model.reading.readFileString(path, encoding);
         },
       };
-      const cards: KeptCards = { revision: model.highest, kept: new Map(), markers: new Map() };
+      const cards: KeptCards = { revision: model.inputsAt, kept: new Map(), markers: new Map() };
       const build = buildBoard({
         env,
         runs,
@@ -176,7 +221,7 @@ test("once the model is disabled, a kept card is derived again from the disk", (
       const run = runs[1]!;
       yield* fs.remove(`${run.dir}/plan`, { recursive: true });
       const model = yield* makeRunModel(dir, "installation");
-      const cards: KeptCards = { revision: model.highest, kept: new Map(), markers: new Map() };
+      const cards: KeptCards = { revision: model.inputsAt, kept: new Map(), markers: new Map() };
       const opts = { env, runs, registered: [], offers: () => Effect.succeed([]) };
       const kept = buildBoard({ ...opts, cards }).pipe(
         Effect.provideService(FileSystem.FileSystem, model.reading),
