@@ -34,6 +34,7 @@ pub struct Collection {
     pub attempted: AtomicBool,
     /// A path on the Run's own Machine to register.
     pub path: TextEdit,
+    pub url: TextEdit,
 }
 
 pub enum Preview {
@@ -47,6 +48,16 @@ pub enum Preview {
     Unsupported,
     Failed(String),
     Video(crate::video::Player),
+    /// A link with no retained copy: it is opened in the browser, never read.
+    Link,
+}
+
+enum Locator {
+    /// A path on the Run's own Machine.
+    MachinePath,
+    /// A path on this computer, sent to the Run's Machine where that is another.
+    HerePath,
+    Url,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -221,7 +232,9 @@ impl App {
                 return;
             }
             match chosen {
-                Ok(Some(path)) => app.register_artefact(false, path.display().to_string()),
+                Ok(Some(path)) => {
+                    app.register_artefact(Locator::HerePath, path.display().to_string())
+                }
                 Ok(None) => {}
                 Err(why) => {
                     app.record.open.as_mut().unwrap().artefacts.failed =
@@ -240,18 +253,32 @@ impl App {
             return;
         }
         record.artefacts.path = TextEdit::default();
-        self.register_artefact(true, path);
+        self.register_artefact(Locator::MachinePath, path);
     }
 
-    /// `on_machine` names a path on the Run's Machine; otherwise it is on this computer.
-    fn register_artefact(&mut self, on_machine: bool, path: String) {
+    pub fn register_artefact_url(&mut self) {
+        let Some(record) = &mut self.record.open else {
+            return;
+        };
+        let url = record.artefacts.url.text.trim().to_string();
+        if url.is_empty() {
+            return;
+        }
+        record.artefacts.url = TextEdit::default();
+        self.register_artefact(Locator::Url, url);
+    }
+
+    fn register_artefact(&mut self, locator: Locator, at: String) {
         let (Some(core), Some(record)) = (self.core.clone(), &mut self.record.open) else {
             return;
         };
         record.artefacts.failed = None;
         let serial = record.serial;
-        let (installation, run_id, request) =
-            (record.installation.clone(), record.run.clone(), act::new_request());
+        let (installation, run_id, request) = (
+            record.installation.clone(),
+            record.run.clone(),
+            act::new_request(),
+        );
         let done = move |app: &mut App, answer: Result<ArtefactRegistered, _>| {
             let Some(record) = app.record.open.as_mut().filter(|r| r.serial == serial) else {
                 return;
@@ -264,33 +291,38 @@ impl App {
                 Err(why) => record.artefacts.failed = Some(format!("Register failed: {why}")),
             }
         };
-        if on_machine {
-            core.request(
-                "artefactRegister",
-                ArtefactRegisterPayload {
-                    installation,
-                    run_id,
-                    request,
-                    path,
-                    id: None,
-                    title: None,
-                    kind: None,
-                    role: None,
-                    snapshot: None,
-                },
-                done,
-            )
-        } else {
-            core.request(
+        let payload = |path, url| ArtefactRegisterPayload {
+            installation: installation.clone(),
+            run_id: run_id.clone(),
+            request: request.clone(),
+            path,
+            url,
+            id: None,
+            title: None,
+            kind: None,
+            role: None,
+            description: None,
+            snapshot: None,
+            provider: None,
+            metadata: None,
+            created: None,
+            updated: None,
+        };
+        match locator {
+            Locator::MachinePath => {
+                core.request("artefactRegister", payload(Some(Some(at)), None), done)
+            }
+            Locator::Url => core.request("artefactRegister", payload(None, Some(Some(at))), done),
+            Locator::HerePath => core.request(
                 "artefactImport",
                 ArtefactImportPayload {
                     installation,
                     run_id,
-                    path,
+                    path: at,
                     request,
                 },
                 done,
-            )
+            ),
         }
     }
 
@@ -326,6 +358,10 @@ impl App {
             return;
         };
         record.artefacts.selected = Some((id.into(), item.revision));
+        if item.digest.is_empty() {
+            record.artefacts.preview = Some(Preview::Link);
+            return;
+        }
         record.artefacts.preview = Some(Preview::Loading);
         let key = selection(record).unwrap();
         self.read_artefact_part(key, item, Vec::new());
@@ -370,6 +406,9 @@ impl App {
                             changes.post(move |_: &mut App| { posted.store(false, Ordering::Release); });
                         });
                         let player = crate::video::Player::open(&path, notify);
+                        if item.url.is_some() {
+                            return Preview::Video(player);
+                        }
                         let once = Arc::new(AtomicBool::new(false));
                         let shown = core.clone();
                         let selected = key.clone();
@@ -598,10 +637,13 @@ pub fn frame_drawn(runtime: &rune::Runtime<App>) {
     if !loaded {
         return;
     }
+    // An export's preview is not an inspection of the hosted page it stands beside.
     if selected(record).is_none_or(|item| {
-        item.seen
-            .as_ref()
-            .is_some_and(|seen| seen.revision == item.revision)
+        item.url.is_some()
+            || item
+                .seen
+                .as_ref()
+                .is_some_and(|seen| seen.revision == item.revision)
     }) {
         return;
     }
@@ -612,6 +654,10 @@ pub fn frame_drawn(runtime: &rune::Runtime<App>) {
 
 fn path_of(app: &mut App) -> &mut TextEdit {
     &mut app.record.open.as_mut().unwrap().artefacts.path
+}
+
+fn url_of(app: &mut App) -> &mut TextEdit {
+    &mut app.record.open.as_mut().unwrap().artefacts.url
 }
 
 pub fn view(record: &Record, k: &Kit) -> El {
@@ -651,7 +697,35 @@ pub fn view(record: &Record, k: &Kit) -> El {
                 .build(k)
                 .key("artefact-register"),
         );
-    let mut body = col().key("artefacts").gap(12.0).w_full().child(register);
+    let link = row()
+        .gap(8.0)
+        .center_y()
+        .w_full()
+        .child(
+            TextInput::new(&state.url)
+                .width(None)
+                .placeholder("https://…")
+                .label("URL to register")
+                .on_edit(url_of)
+                .on_submit(|app: &mut App, _: &mut Tx| app.register_artefact_url())
+                .build(k)
+                .key("artefact-url")
+                .grow(1.0)
+                .min_w(0.0),
+        )
+        .child(
+            Button::new("Register link")
+                .disabled(state.url.text.trim().is_empty())
+                .on_press(App::register_artefact_url)
+                .build(k)
+                .key("artefact-register-url"),
+        );
+    let mut body = col()
+        .key("artefacts")
+        .gap(12.0)
+        .w_full()
+        .child(register)
+        .child(link);
     if state.loading {
         body = body.child(quiet("Reading artefacts…", k).role("status"));
     }
@@ -683,10 +757,13 @@ pub fn view(record: &Record, k: &Kit) -> El {
                 _ => "",
             };
             body = body.child(
-                Button::new(format!("{} · {} · {status}{tracking}", item.title, item.role))
-                    .on_press(move |app: &mut App| app.select_artefact(&id))
-                    .build(k)
-                    .key(format!("artefact-{}", item.id)),
+                Button::new(format!(
+                    "{} · {} · {status}{tracking}",
+                    item.title, item.role
+                ))
+                .on_press(move |app: &mut App| app.select_artefact(&id))
+                .build(k)
+                .key(format!("artefact-{}", item.id)),
             );
         }
     }
@@ -705,16 +782,44 @@ pub fn view(record: &Record, k: &Kit) -> El {
         .and_then(|d| d.as_ref())
         .map(|d| format!("{} ({})", d.at, d.provenance))
         .unwrap_or_else(|| "Unknown".into());
+    let held = if item.digest.is_empty() {
+        format!("revision {}", item.revision)
+    } else {
+        format!(
+            "{} · {} bytes · revision {}",
+            item.media_type, item.size, item.revision
+        )
+    };
+    let hosted = item.provider.as_ref().map_or(String::new(), |p| {
+        let version = p.version.as_ref().map_or("version unknown".into(), |v| {
+            format!("version {v} ({})", p.provenance)
+        });
+        format!(
+            " · {} {} · {version}",
+            p.name,
+            p.resource.as_deref().unwrap_or("")
+        )
+    });
+    let source = if item.source_availability == "untracked" {
+        "External updates not tracked".to_string()
+    } else {
+        format!("Source: {}", item.source_availability)
+    };
     let header = col()
         .gap(4.0)
         .child(text(item.title.clone()).selectable(true))
-        .child(quiet(
-            format!(
-                "{} · {} bytes · revision {}",
-                item.media_type, item.size, item.revision
-            ),
-            k,
-        ))
+        .child(quiet(format!("{}{hosted}", item.kind), k))
+        .children(item.url.as_ref().map(|url| {
+            text(url.clone())
+                .selectable(true)
+                .key("artefact-destination")
+        }))
+        .children(
+            item.description
+                .as_ref()
+                .map(|d| text(d.clone()).selectable(true)),
+        )
+        .child(quiet(held, k))
         .child(quiet(
             format!("Created: {date} · Observed: {}", item.observed_at),
             k,
@@ -725,15 +830,32 @@ pub fn view(record: &Record, k: &Kit) -> El {
         ))
         .child(quiet(format!("Registered: {}", item.registered_at), k))
         .child(quiet(
-            format!(
-                "Source: {} · Retained: {}",
-                item.source_availability, item.retained_availability
-            ),
+            format!("{source} · Retained: {}", item.retained_availability),
             k,
-        ));
+        ))
+        .children(item.export.as_ref().map(|export| {
+            quiet(
+                format!("Export: {} ({})", export.source, export.availability),
+                k,
+            )
+        }))
+        .children(item.metadata.as_ref().map(|metadata| {
+            mono(
+                &serde_json::to_string_pretty(metadata).unwrap_or_default(),
+                "artefact-metadata",
+                k,
+            )
+        }));
     let header = header.children(item.reason.as_ref().map(|reason| quiet(reason, k)));
+    let browser = item.url.clone().map(|url| {
+        Button::new("Open in browser")
+            .on_press(move |app: &mut App| app.open_link_in_record(url.clone()))
+            .build(k)
+            .key("artefact-browser")
+    });
     let actions = row()
         .gap(8.0)
+        .children(browser)
         .child(
             Button::new("Open")
                 .disabled(state.bytes.is_none())
@@ -783,6 +905,7 @@ pub fn view(record: &Record, k: &Kit) -> El {
                     .child(text(format!("{:.1} / {duration:.1} seconds", state.time)).key("artefact-time").role("status").label("Elapsed and duration"))
                     .child(Button::new(if state.muted { "Unmute" } else { "Mute" }).on_press(App::mute_artefact).build(k).key("artefact-mute")))
         },
+        Some(Preview::Link) => quiet("No copy is retained for this link; Open in browser shows it.", k),
         _ => quiet("Loading selected revision…", k).role("status"),
     }.key("artefact-preview");
     body.child(header).child(actions).child(preview)

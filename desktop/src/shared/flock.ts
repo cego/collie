@@ -14,7 +14,7 @@ import {
   Artefact,
   ArtefactCollection,
   ArtefactRegistered,
-  RegisterFile,
+  RegisterArtefact,
 } from "../../../src/artefact-model";
 import { Staged, StagedOrRefused } from "./attachments";
 import { ChatChoices } from "./chat-choices";
@@ -718,7 +718,7 @@ export const DesktopRpcs = RpcGroup.make(
       installation: Schema.String,
       runId: Schema.String,
       request: Schema.String,
-      ...RegisterFile.fields,
+      ...RegisterArtefact.fields,
     },
     success: ArtefactRegistered,
     error: ActionFailed,

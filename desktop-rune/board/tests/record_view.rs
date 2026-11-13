@@ -510,23 +510,39 @@ fn picker_import_is_fenced_by_the_record_opening_and_transfer_failure_never_mark
     let mut runtime = opened(&harness);
     collection(&mut runtime, &harness, vec![]);
     runtime.update(|app, tx| app.pick_artefact(tx));
-    runtime.resolve_file_dialog(Some(std::path::PathBuf::from("/local/report.md"))).unwrap();
+    runtime
+        .resolve_file_dialog(Some(std::path::PathBuf::from("/local/report.md")))
+        .unwrap();
     runtime.frame(250.0);
     let asked = &harness.fake.asked_of("artefactImport")[0];
     assert_eq!(asked["installation"], "inst-build");
     assert_eq!(asked["runId"], "r1");
     assert_eq!(asked["path"], "/local/report.md");
-    harness.fake.answer("artefactImport", Err(CallError("Transfer failed".into())));
+    harness
+        .fake
+        .answer("artefactImport", Err(CallError("Transfer failed".into())));
     settle(&mut runtime, &harness, 300.0);
-    assert!(runtime.accessibility_json().to_string().contains("Transfer failed"));
+    assert!(
+        runtime
+            .accessibility_json()
+            .to_string()
+            .contains("Transfer failed")
+    );
     assert!(harness.fake.asked_of("artefactSeen").is_empty());
     runtime.update(|app, tx| app.pick_artefact(tx));
     runtime.update(|app, _| {
         app.back();
-        app.open_record("inst-build".into(), "r1".into(), "Build box".into(), Some("artefacts"));
+        app.open_record(
+            "inst-build".into(),
+            "r1".into(),
+            "Build box".into(),
+            Some("artefacts"),
+        );
     });
     let before = harness.fake.asked_of("artefactImport").len();
-    runtime.resolve_file_dialog(Some(std::path::PathBuf::from("/local/stale.md"))).unwrap();
+    runtime
+        .resolve_file_dialog(Some(std::path::PathBuf::from("/local/stale.md")))
+        .unwrap();
     runtime.frame(400.0);
     assert_eq!(harness.fake.asked_of("artefactImport").len(), before);
 }
@@ -553,7 +569,18 @@ fn a_machine_path_registers_on_the_runs_machine_and_rereads_the_collection() {
     );
     settle(&mut runtime, &harness, 400.0);
     assert_eq!(harness.fake.asked_of("artefacts").len(), reads + 1);
-    assert!(runtime.state.record.open.as_ref().unwrap().artefacts.path.text.is_empty());
+    assert!(
+        runtime
+            .state
+            .record
+            .open
+            .as_ref()
+            .unwrap()
+            .artefacts
+            .path
+            .text
+            .is_empty()
+    );
     assert!(harness.fake.asked_of("artefactSeen").is_empty());
 }
 
@@ -577,7 +604,11 @@ fn an_overdue_tracked_source_reads_as_stale_and_pending_not_current() {
 fn transferred_bytes_that_do_not_match_the_revision_digest_are_refused_and_never_seen() {
     let harness = Harness::<App>::new();
     let mut runtime = opened(&harness);
-    collection(&mut runtime, &harness, vec![artefact("a1", "note.txt", "text/plain", b"good", 1)]);
+    collection(
+        &mut runtime,
+        &harness,
+        vec![artefact("a1", "note.txt", "text/plain", b"good", 1)],
+    );
     selected_bytes(&mut runtime, &harness, "a1", b"evil");
     let tree = runtime.accessibility_json().to_string();
     assert!(tree.contains("does not match this revision"));
@@ -590,18 +621,174 @@ fn transferred_bytes_that_do_not_match_the_revision_digest_are_refused_and_never
 fn an_unreachable_owner_keeps_the_cached_collection_and_says_why() {
     let harness = Harness::<App>::new();
     let mut runtime = opened(&harness);
-    collection(&mut runtime, &harness, vec![artefact("a1", "note.txt", "text/plain", b"good", 1)]);
+    collection(
+        &mut runtime,
+        &harness,
+        vec![artefact("a1", "note.txt", "text/plain", b"good", 1)],
+    );
     runtime.update(|app, _| app.read_artefacts(true));
     settle(&mut runtime, &harness, 300.0);
     let asked = harness.fake.asked_of("artefacts");
     assert_eq!(asked.last().unwrap()["installation"], "inst-build");
-    harness.fake.answer("artefacts", Err(CallError("Build box is unreachable".into())));
+    harness.fake.answer(
+        "artefacts",
+        Err(CallError("Build box is unreachable".into())),
+    );
     settle(&mut runtime, &harness, 400.0);
     let tree = runtime.accessibility_json().to_string();
     assert!(tree.contains("Build box is unreachable"));
     assert!(tree.contains("note.txt · handoff · Unseen"));
     assert!(harness.fake.asked_of("artefactImport").is_empty());
     assert!(harness.fake.asked_of("artefactRegister").is_empty());
+}
+
+fn link(id: &str, kind: &str, title: &str, url: &str) -> Value {
+    json!({"id":id, "run":"r1", "kind":kind, "role":"deliverable", "title":title,
+        "ref":format!("url:{url}"), "source":url, "url":url, "mediaType":"", "size":0, "revision":2, "digest":"",
+        "created":null, "updated":null, "registeredAt":"2026-01-01T00:00:00Z", "observedAt":"2026-11-01T00:00:00Z",
+        "detectedAt":"2026-11-01T00:00:00Z", "seen":null, "sourceAvailability":"untracked", "retainedAvailability":"none", "reason":null})
+}
+
+#[test]
+fn a_link_shows_its_destination_and_opens_the_registered_url_without_reading_or_acknowledging_it() {
+    use collie_desktop_board::record::artefacts::frame_drawn;
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    let url = "https://claude.ai/code/artifact/0b8c";
+    let mut item = link("l1", "acme.dev/diagram", "Design notes", url);
+    item["provider"] = json!({"name":"claude", "namespace":"org-1", "resource":"0b8c", "version":"3",
+        "provenance":"caller-reported", "observedAt":"2026-11-01T00:00:00Z"});
+    item["metadata"] = json!({"layers":[{"name":"<script>alert(1)</script>"}]});
+    collection(&mut runtime, &harness, vec![item]);
+    runtime.update(|app, _| app.select_artefact("l1"));
+    settle(&mut runtime, &harness, 300.0);
+    assert!(harness.fake.asked_of("artefactRead").is_empty());
+    let tree = runtime.accessibility_json().to_string();
+    for shown in [
+        "Design notes",
+        url,
+        "acme.dev/diagram · claude 0b8c · version 3 (caller-reported)",
+        "External updates not tracked",
+        "Created: Unknown",
+        "<script>alert(1)</script>",
+    ] {
+        assert!(tree.contains(shown), "{shown} missing from {tree}");
+    }
+    let open = named(&runtime, "artefact-browser");
+    assert_eq!(open["role"], "button");
+    assert_eq!(open["name"], "Open in browser");
+    harness
+        .fake
+        .will_answer("openLink", Err(CallError("no browser".into())));
+    tap(&mut runtime, "artefact-browser", 400.0);
+    settle(&mut runtime, &harness, 600.0);
+    assert_eq!(harness.fake.asked_of("openLink")[0]["url"], url);
+    assert!(
+        runtime
+            .accessibility_json()
+            .to_string()
+            .contains("no browser")
+    );
+    frame_drawn(&runtime);
+    assert!(harness.fake.asked_of("artefactSeen").is_empty());
+    tap(&mut runtime, "artefact-seen", 700.0);
+    assert_eq!(harness.fake.asked_of("artefactSeen")[0]["revision"], 2);
+}
+
+#[test]
+fn a_links_export_uses_the_file_presentation_and_never_acknowledges_the_hosted_observation() {
+    use collie_desktop_board::record::artefacts::{Preview, frame_drawn};
+    use sha2::Digest;
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    let md = b"# Exported\n";
+    let clip = include_bytes!("../../fixtures/artefact-video.mp4");
+    let exported = |id: &str, title: &str, media: &str, bytes: &[u8]| {
+        let mut item = link(
+            id,
+            "claude-artefact",
+            title,
+            "https://claude.ai/code/artifact/x",
+        );
+        item["mediaType"] = json!(media);
+        item["size"] = json!(bytes.len());
+        item["revision"] = json!(1);
+        item["digest"] = json!(format!("{:x}", sha2::Sha256::digest(bytes)));
+        item["retainedAvailability"] = json!("available");
+        item["export"] = json!({"source":"/srv/export", "availability":"available"});
+        item
+    };
+    collection(
+        &mut runtime,
+        &harness,
+        vec![
+            exported("md", "notes.md", "text/markdown", md),
+            exported("clip", "demo.mp4", "video/mp4", clip),
+        ],
+    );
+    selected_bytes(&mut runtime, &harness, "md", md);
+    assert!(
+        within(&runtime.accessibility_json())
+            .iter()
+            .any(|n| n["name"] == "Exported")
+    );
+    assert_eq!(
+        named(&runtime, "artefact-browser")["name"],
+        "Open in browser"
+    );
+    frame_drawn(&runtime);
+    assert!(harness.fake.asked_of("artefactSeen").is_empty());
+    selected_bytes(&mut runtime, &harness, "clip", clip);
+    assert!(matches!(
+        runtime
+            .state
+            .record
+            .open
+            .as_ref()
+            .unwrap()
+            .artefacts
+            .preview,
+        Some(Preview::Video(_))
+    ));
+}
+
+#[test]
+fn a_link_url_is_registered_from_its_own_named_field() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    collection(&mut runtime, &harness, vec![]);
+    let field = named(&runtime, "artefact-url");
+    assert!(
+        within(&field)
+            .iter()
+            .any(|n| n["name"] == "URL to register"
+                && n["actions"].to_string().contains("set-value"))
+    );
+    assert_eq!(
+        named(&runtime, "artefact-register-url")["name"],
+        "Register link"
+    );
+    runtime.update(|app, _| {
+        app.record.open.as_mut().unwrap().artefacts.url =
+            TextEdit::new(" https://example.com/report ");
+        app.register_artefact_url();
+    });
+    settle(&mut runtime, &harness, 300.0);
+    let asked = &harness.fake.asked_of("artefactRegister")[0];
+    assert_eq!(asked["url"], "https://example.com/report");
+    assert!(asked.get("path").is_none());
+    assert!(
+        runtime
+            .state
+            .record
+            .open
+            .as_ref()
+            .unwrap()
+            .artefacts
+            .url
+            .text
+            .is_empty()
+    );
 }
 
 fn within(node: &Value) -> Vec<&Value> {

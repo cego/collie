@@ -37,5 +37,13 @@ selection, tab, revision, or record changes. Linux bundles carry the required pl
 libraries, scanner, and distribution copyright notices. Unsupported media keeps open/save
 actions. No webview or provider account integration is introduced.
 
+External material is registered, not fetched. A provider resource's identity includes
+its namespace, so equal ids in two accounts stay apart; a new version or destination is
+the next revision. A provider observation and a retained export are separate facts: an
+edited export changes the retained copy, never the provider version. Collie ships no
+provider reader, so external updates are shown as untracked rather than guessed; a
+documented reader can be added behind one observation boundary without changing the
+catalogue. Opening a link is a handoff, never an inspection.
+
 Snapshots belong to the owning Run and disappear with its cleanup. They are not backups.
 Registration and cross-Run search extend this catalogue in subsequent slices.

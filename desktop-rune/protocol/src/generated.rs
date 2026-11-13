@@ -2467,6 +2467,14 @@ pub struct Artefact {
     pub pending: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stale: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<Provider>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub export: Option<Export>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2487,6 +2495,23 @@ pub enum Tracking {
     Local,
     #[serde(rename = "snapshot")]
     Snapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Provider {
+    pub name: String,
+    pub namespace: Option<String>,
+    pub resource: Option<String>,
+    pub version: Option<String>,
+    pub provenance: String,
+    #[serde(rename = "observedAt")]
+    pub observed_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Export {
+    pub source: String,
+    pub availability: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2529,25 +2554,41 @@ pub struct ArtefactRegisterPayload {
     #[serde(rename = "runId")]
     pub run_id: String,
     pub request: String,
-    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub path: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub url: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
     pub id: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
     pub title: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
-    pub kind: Option<Option<ArtefactRegisterPayloadKind>>,
+    pub kind: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
     pub role: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub description: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
     pub snapshot: Option<Option<bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub provider: Option<Option<ArtefactRegisterPayloadProvider>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub metadata: Option<Option<serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub created: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub updated: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum ArtefactRegisterPayloadKind {
-    #[serde(rename = "file")]
-    File,
-    #[serde(rename = "asset")]
-    Asset,
+pub struct ArtefactRegisterPayloadProvider {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub namespace: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub resource: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub version: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

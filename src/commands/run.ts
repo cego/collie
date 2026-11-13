@@ -1,6 +1,6 @@
 import * as Arr from "effect/Array";
 import { withArtefacts, uploadArtefact } from "../artefact-client";
-import type { RegisterFile } from "../artefact-model";
+import type { RegisterArtefact } from "../artefact-model";
 import { parkLine } from "../park-cause";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -2047,7 +2047,8 @@ const artefactResult = (read: {
   readonly offset?: number;
   readonly op: string;
   readonly requestId?: Option.Option<string>;
-  readonly registration?: RegisterFile;
+  readonly registration?: RegisterArtefact;
+  readonly metadata?: string;
   readonly upload?: boolean;
 }) =>
   Effect.gen(function* () {
@@ -2059,7 +2060,13 @@ const artefactResult = (read: {
         const runId = runFacts(resolved).id;
         const door = yield* cliDoor(resolved.env);
         if (read.registration !== undefined) {
-          const input = read.registration;
+          const metadata =
+            read.metadata === undefined
+              ? Option.some(undefined)
+              : Schema.decodeOption(Schema.fromJsonString(Schema.Json))(read.metadata);
+          if (Option.isNone(metadata)) return err("invalid_input", "--metadata is not JSON");
+          const input = { ...read.registration, metadata: metadata.value };
+          const path = input.path;
           const files = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
           return yield* mutation(
             resolved.env,
@@ -2074,8 +2081,8 @@ const artefactResult = (read: {
                     client.board(),
                     Effect.gen(function* () {
                       const sent =
-                        read.upload === true
-                          ? { path: yield* uploadArtefact(client, input.path), snapshot: true }
+                        read.upload === true && path !== undefined
+                          ? { path: yield* uploadArtefact(client, path), snapshot: true }
                           : {};
                       return yield* client.artefactRegister({ runId, request, ...input, ...sent });
                     }).pipe(Effect.provideContext(files)),
@@ -2201,16 +2208,51 @@ const runArtefact = Command.make("artefact").pipe(
         runId: runIdArg,
         path: Flag.String("path").pipe(
           Flag.withDescription(
-            "The file, on the Machine running this command with --upload, else on the Run's Machine",
+            "The file, on the Machine running this command with --upload, else on the Run's Machine; with --url, its retained export",
           ),
+          Flag.optional,
+        ),
+        url: Flag.String("url").pipe(
+          Flag.withDescription("An http or https destination: a link, Claude artefact or Site"),
+          Flag.optional,
         ),
         id: Flag.String("id").pipe(
           Flag.withDescription("Retarget this artefact instead of registering a new one"),
           Flag.optional,
         ),
         title: Flag.String("title").pipe(Flag.optional),
-        kind: Flag.Literals("kind", ["file", "asset"]).pipe(Flag.withDefault("file")),
-        role: Flag.String("role").pipe(Flag.withDefault("deliverable")),
+        kind: Flag.String("kind").pipe(
+          Flag.withDescription(
+            "file, asset, link, claude-artefact, codex-site or a namespaced kind of your own",
+          ),
+          Flag.optional,
+        ),
+        role: Flag.String("role").pipe(Flag.optional),
+        description: Flag.String("description").pipe(Flag.optional),
+        provider: Flag.String("provider").pipe(
+          Flag.withDescription("Who hosts the resource, such as claude or codex-sites"),
+          Flag.optional,
+        ),
+        namespace: Flag.String("namespace").pipe(
+          Flag.withDescription("The provider account or workspace the resource belongs to"),
+          Flag.optional,
+        ),
+        resource: Flag.String("resource").pipe(
+          Flag.withDescription(
+            "The provider's id for it, such as an artefact id or Site project id",
+          ),
+          Flag.optional,
+        ),
+        version: Flag.String("version").pipe(
+          Flag.withDescription("The version the provider returned, reported as such"),
+          Flag.optional,
+        ),
+        metadata: Flag.String("metadata").pipe(
+          Flag.withDescription("Up to 16 KiB of JSON kept with the artefact as data"),
+          Flag.optional,
+        ),
+        created: Flag.String("created").pipe(Flag.optional),
+        updated: Flag.String("updated").pipe(Flag.optional),
         snapshot: Flag.Boolean("snapshot").pipe(
           Flag.withDescription("Retain this copy only; do not track later changes to the source"),
           Flag.withDefault(false),
@@ -2223,16 +2265,35 @@ const runArtefact = Command.make("artefact").pipe(
         ),
         requestId: requestIdFlag,
       },
-      ({ runId, requestId, id, title, upload, ...input }) =>
+      ({
+        runId,
+        requestId,
+        upload,
+        snapshot,
+        metadata,
+        provider,
+        namespace,
+        resource,
+        version,
+        ...given
+      }) =>
         artefactResult({
           runId,
           requestId,
           upload,
           op: "register",
+          metadata: Option.getOrUndefined(metadata),
           registration: {
-            ...input,
-            id: Option.getOrUndefined(id),
-            title: Option.getOrUndefined(title),
+            ...Rec.map(given, Option.getOrUndefined),
+            snapshot,
+            provider: Option.getOrUndefined(
+              Option.map(provider, (name) => ({
+                name,
+                namespace: Option.getOrUndefined(namespace),
+                resource: Option.getOrUndefined(resource),
+                version: Option.getOrUndefined(version),
+              })),
+            ),
           },
         }),
     ),

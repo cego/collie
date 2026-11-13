@@ -88,8 +88,8 @@ const machine = (
             kind: payload.kind ?? "file",
             role: "deliverable",
             title: "report.md",
-            ref: `registered:${payload.path}`,
-            source: payload.path,
+            ref: `registered:${payload.path ?? payload.url}`,
+            source: payload.path ?? payload.url ?? "",
             mediaType: "text/markdown",
             size: 5,
             revision: 1,
@@ -455,7 +455,7 @@ test("Flock material reads and receipts keep the selected revision on the qualif
     }),
   ));
 
-test("chat registers a path on the Run's Machine as tracked and one from this computer as a sent snapshot", () =>
+test("chat registers a path on the Run's Machine as tracked, one from this computer as a sent snapshot, and a link as itself", () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -466,6 +466,15 @@ test("chat registers a path on the Run's Machine as tracked and one from this co
         actions: [
           { kind: "artefact_register", run: "vm-mk:r-2", path: "vm-mk:/srv/report.md" },
           { kind: "artefact_register", run: "vm-mk:r-2", path: here, title: "Local" },
+          {
+            kind: "artefact_register",
+            run: "vm-mk:r-2",
+            url: "https://claude.ai/code/artifact/0b8c",
+            artefactKind: "claude-artefact",
+            provider: { name: "claude", namespace: "org-1", resource: "0b8c", version: "3" },
+            metadata: { pages: 2 },
+            created: "2026-11-01T00:00:00Z",
+          },
         ],
       });
       expect(said).toContain("artefact_register: applied");
@@ -478,6 +487,16 @@ test("chat registers a path on the Run's Machine as tracked and one from this co
           title: "Local",
           snapshot: true,
         }),
+        {
+          runId: "r-2",
+          request: expect.any(String),
+          url: "https://claude.ai/code/artifact/0b8c",
+          kind: "claude-artefact",
+          provider: { name: "claude", namespace: "org-1", resource: "0b8c", version: "3" },
+          metadata: { pages: 2 },
+          created: "2026-11-01T00:00:00Z",
+          snapshot: false,
+        },
       ]);
       expect(
         Arr.map(

@@ -7,7 +7,7 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import { uploadArtefact, withArtefacts } from "../../../src/artefact-client";
-import type { RegisterFile } from "../../../src/artefact-model";
+import type { RegisterArtefact } from "../../../src/artefact-model";
 import {
   Cause,
   Clock,
@@ -1670,7 +1670,7 @@ export const artefactReadOn = (
   );
 export const artefactRegisterOn = (
   door: Reached,
-  asked: RegisterFile & { readonly runId: string; readonly request: string },
+  asked: RegisterArtefact & { readonly runId: string; readonly request: string },
 ) =>
   over(
     door,

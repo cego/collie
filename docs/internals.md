@@ -2800,5 +2800,11 @@ per source, holds two permits, times a check out after five seconds, and backs a
 source off. Desktop's `artefactImport` registers a local path directly where the Run is
 on this computer, and otherwise sends it through the host's upload store first.
 
+A link, Claude artefact, or Site is a row keyed by its provider resource and namespace,
+or else by its URL; it has no revision bytes unless an export was registered beside it.
+`refreshCopy` follows that export and leaves the provider observation alone, and
+`observe` asks a `ProviderReaders` entry for the provider, if one is provided, under a
+five-second timeout. None ships, so production registrations stay `untracked`.
+
 See [the material guide](artefacts.md#evidence-by-layer) for the checks at each layer and
 the native operator observations that remain pending.

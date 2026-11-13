@@ -804,6 +804,9 @@ installation, Run, and id. Content revisions are immutable; seen names an exact 
 An Attachment remains what the Run was given, an Output remains an agent's structured
 answer, and Evidence remains proof. Listing material changes none of those meanings
 ([ADR-draft-a-run-retains-its-material-by-revision](docs/adr/draft-a-run-retains-its-material-by-revision.md)).
+An external Artefact — a link, Claude artefact, or Site — is identified by its provider
+resource within its namespace, or by its URL; what a caller says of it is
+**caller-reported**, and only a verified provider reader makes it **provider-verified**.
 
 **Evidence** — A Verification collected at a revision: a command Collie ran, or a pipeline job Collie read from the forge on that commit for a check left to CI. An Output field saying the tests pass is a claim, and is shown as one. The gate before a merge request reads evidence, never claims.
 

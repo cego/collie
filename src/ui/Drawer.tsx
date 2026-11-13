@@ -51,7 +51,7 @@ import { C, stateGlyph, stepGlyph } from "./sections";
 import { handoffsDir } from "../handoffs";
 import { replyLine } from "../replies";
 import { PARK_CAUSES, parkLine } from "../park-cause";
-import type { ArtefactCollection } from "../artefact-model";
+import { artefactLines, type ArtefactCollection } from "../artefact-model";
 
 /** How many of a running check's last lines the Summary shows. */
 const DRAWER_LINES = 8;
@@ -452,17 +452,11 @@ export function Drawer(props: DrawerProps) {
             <For each={props.artefacts?.items ?? []}>
               {(item) => (
                 <box style={{ flexDirection: "column" }}>
-                  <text>{`${item.title} · ${item.role} · ${item.mediaType} · ${item.size} bytes · revision ${item.revision}`}</text>
-                  <text
-                    fg={C.dim}
-                  >{`Created: ${item.created?.at ?? "unknown"} · Observed: ${item.observedAt} · ${item.sourceAvailability} source · ${item.retainedAvailability} retained`}</text>
-                  <text fg={C.dim}>
-                    {item.seen?.revision === item.revision
-                      ? "Seen"
-                      : item.seen
-                        ? "Updated"
-                        : "Unseen"}
-                  </text>
+                  <For each={artefactLines(props.view.run, item).slice(0, 3)}>
+                    {(line, index) =>
+                      index() === 0 ? <text>{line}</text> : <text fg={C.dim}>{line}</text>
+                    }
+                  </For>
                   <box style={{ flexDirection: "row", gap: 1 }}>
                     <Button
                       label="Mark seen"
@@ -487,9 +481,7 @@ export function Drawer(props: DrawerProps) {
                       }
                     />
                   </box>
-                  <text
-                    fg={C.dim}
-                  >{`collie run artefact read ${props.view.run} ${item.id} --revision ${item.revision}`}</text>
+                  <text fg={C.dim}>{artefactLines(props.view.run, item)[3]}</text>
                 </box>
               )}
             </For>

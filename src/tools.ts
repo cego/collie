@@ -408,7 +408,7 @@ const settle = Effect.fn("Tools.settle")(function* (
       ? {
           kind,
           state: "applied",
-          note: `artefact ${done.value.address.id}: revision ${done.value.retained.revision} retained (${done.value.retained.digest})`,
+          note: `artefact ${done.value.address.id}: revision ${done.value.retained.revision} ${done.value.retained.digest === "" ? "registered" : `retained (${done.value.retained.digest})`}`,
         }
       : { kind, state: "failed", note: done.error.message };
   }

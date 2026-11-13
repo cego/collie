@@ -186,7 +186,44 @@ describe.skipIf(cargo === null)("DesktopRpcs between the main process and the Ru
           pending: true,
           stale: true,
         };
+        const link = {
+          ...item,
+          id: "l1",
+          kind: "acme.dev/diagram",
+          ref: "provider:claude:org-1:0b8c",
+          source: "https://claude.ai/code/artifact/0b8c",
+          url: "https://claude.ai/code/artifact/0b8c",
+          description: "<b>not markup</b>",
+          provider: {
+            name: "claude",
+            namespace: null,
+            resource: "0b8c",
+            version: null,
+            provenance: "caller-reported",
+            observedAt: "2026-11-01T00:00:00Z",
+          },
+          export: { source: "/srv/export.md", availability: "missing" },
+          sourceAvailability: "auth-expired",
+        };
         const parts = [
+          [
+            "artefactRegister",
+            {
+              installation: "inst-1",
+              runId: "r1",
+              url: "https://claude.ai/code/artifact/0b8c",
+              kind: "acme.dev/diagram",
+              provider: { name: "claude", resource: "0b8c" },
+              metadata: { layers: [{ name: "<script>x</script>" }], zoom: 2.5 },
+              created: "2026-11-01T00:00:00Z",
+              request: "q-link",
+            },
+            {
+              address: { installation: "inst-1", run: "r1", id: "l1" },
+              item: link,
+              retained: { revision: 2, digest: "", size: 0 },
+            },
+          ],
           [
             "artefactRegister",
             {
@@ -219,6 +256,7 @@ describe.skipIf(cargo === null)("DesktopRpcs between the main process and the Ru
             {
               items: [
                 item,
+                link,
                 {
                   ...item,
                   id: "a2",

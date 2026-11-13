@@ -11,7 +11,7 @@ import * as AiError from "effect/ai/AiError";
 import * as Tool from "effect/ai/Tool";
 import * as Toolkit from "effect/ai/Toolkit";
 import { ActionSchema } from "./actions";
-import { RegisterFile } from "./artefact-model";
+import { RegisterArtefact } from "./artefact-model";
 import {
   ASKED_KINDS,
   headerSentence,
@@ -73,10 +73,10 @@ export const ProposeInput = Schema.Struct({
  */
 const SettleSchema = Schema.Union([
   Schema.Struct({
-    ...RegisterFile.fields,
+    ...RegisterArtefact.fields,
     kind: Schema.Literal("artefact_register"),
     run: Schema.String,
-    artefactKind: RegisterFile.fields.kind,
+    artefactKind: RegisterArtefact.fields.kind,
   }),
   Schema.Struct({
     kind: Schema.Literal("confirm"),

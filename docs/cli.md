@@ -3213,12 +3213,21 @@ collie run artefact seen <run> <id> --revision 1 --request-id inspected-1
 collie run artefact unseen <run> <id> --request-id clear-1
 collie run artefact register <run> --path /abs/report.md --request-id deliver-1
 collie run artefact register <run> --path ./clip.mp4 --upload
+collie run artefact register <run> --url https://example.com/report --title Report
+collie run artefact register <run> --url https://claude.ai/code/artifact/<id> --kind claude-artefact \
+  --provider claude --namespace <org> --resource <id> --version 3 --path ./export.md
+collie run artefact register <run> --kind codex-site --provider codex-sites \
+  --namespace <workspace> --resource <project-id>
 ```
 
 `register` copies a file on the Run's Machine and tracks it; `--upload` sends a file from
-this computer instead, as a retained snapshot. `--title`, `--role`, `--kind file|asset`,
-and `--snapshot` (copy once, do not track) are optional; `--id` retargets an existing
-artefact. The reply is the address and the retained revision, digest, and size.
+this computer instead, as a retained snapshot. `--url` registers a link without fetching
+it; `--provider`, `--namespace`, `--resource`, and `--version` name the hosted resource it
+is, reported as given. `--title`, `--role`, `--description`, `--kind`, `--metadata` (JSON),
+`--created` and `--updated` (ISO timestamps), and `--snapshot` (copy once, do not track)
+are optional; `--id` retargets an existing artefact and keeps what it does not replace.
+The reply is the address and the retained revision, digest, and size; a link with no
+export has an empty digest.
 
 `read` returns a base64 part of the immutable revision, capped at 4 MiB. Advance the byte
 offset until the reported size is reached. Files are limited to 100 MiB. Inspect metadata

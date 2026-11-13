@@ -2,6 +2,7 @@ import {
   Cause,
   Clock,
   Context,
+  Data,
   Effect,
   FileSystem,
   Layer,
@@ -10,17 +11,19 @@ import {
   Schema,
   Semaphore,
   Schedule,
+  Struct,
+  type Types,
 } from "effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import { Artefact, type ArtefactCollection, type RegisterFile } from "./artefact-model";
+import { Artefact, type ArtefactCollection, RegisterArtefact } from "./artefact-model";
 import { ATTACHMENT_BYTES, mediaTypeOf, sha256Hex } from "./attachments";
 import { HostRefused, PART_BYTES, RequestConflict, type RunFile } from "./board-model";
 import { AuditLine } from "./audit";
 import type { RunFacts } from "./runs";
-import { epochMs, nowIso } from "./time";
+import { epochMs, isoAt, nowIso } from "./time";
 import type { PlatformError } from "effect/PlatformError";
 import { StoreWrites } from "./store-writes";
 import { refreshJobs } from "./artefact-refresh";
@@ -40,17 +43,100 @@ const availabilityOf = (error: CopyFailure) =>
       : error.reason._tag === "PermissionDenied"
         ? "denied"
         : "refresh-failed";
-const ASKED = Schema.fromJsonString(
-  Schema.Tuple([
-    Schema.String,
-    Schema.NullOr(Schema.String),
-    Schema.NullOr(Schema.String),
-    Schema.NullOr(Schema.String),
-    Schema.NullOr(Schema.String),
-    Schema.Boolean,
-  ]),
-);
+const ASKED = Schema.fromJsonString(RegisterArtefact);
+const JSON_TEXT = Schema.fromJsonString(Schema.Json);
 const blob = (run: RunFacts, digest: string) => `${run.dir}/.artefacts/${digest}`;
+
+/** A verified provider read refused; each state stays distinct from the others and from "untracked". */
+export class ObservationFailed extends Data.TaggedError("ObservationFailed")<{
+  readonly state: "unsupported" | "auth-expired" | "denied" | "missing";
+  readonly reason: string;
+}> {}
+export interface ProviderRead {
+  readonly version: string | null;
+  readonly url: string | null;
+  readonly created: string | null;
+  readonly updated: string | null;
+}
+export type ProviderReader = (resource: {
+  readonly namespace: string | null;
+  readonly resource: string | null;
+  readonly url: string | null;
+}) => Effect.Effect<ProviderRead, ObservationFailed>;
+/** Verified readers by provider name. None ships: without one a provider's updates are untracked. */
+export class ProviderReaders extends Context.Service<
+  ProviderReaders,
+  ReadonlyMap<string, ProviderReader>
+>()("collie/ProviderReaders") {}
+const OBSERVATION_TIMEOUT = "5 seconds";
+
+const KIND = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
+const METADATA_BYTES = 16 * 1024;
+const safeUrl = (url: string) =>
+  url.length <= 8192 &&
+  !/[\s\x00-\x1f]/.test(url) &&
+  URL.canParse(url) &&
+  /^https?:$/.test(new URL(url).protocol) &&
+  new URL(url).hostname !== "";
+const sourceDate = (at: string | undefined) =>
+  at === undefined || !ISO.test(at) || Number.isNaN(epochMs(at)) ? undefined : isoAt(epochMs(at));
+/** Why `input` cannot be registered, checked before anything is read or written. */
+const invalid = (input: RegisterArtefact): string | undefined => {
+  const provider = input.provider;
+  if (
+    input.path === undefined &&
+    input.url === undefined &&
+    provider?.resource === undefined &&
+    input.id === undefined
+  )
+    return "Registration needs a path, a URL or a provider resource";
+  if (input.url !== undefined && !safeUrl(input.url))
+    return "A registered URL must be an http or https address without spaces or control characters";
+  if (input.kind !== undefined && !KIND.test(input.kind))
+    return "A kind is up to 128 letters, digits and . _ : / -";
+  if (provider !== undefined && !KIND.test(provider.name))
+    return "A provider name is up to 128 letters, digits and . _ : / -";
+  if (
+    Arr.some(
+      [provider?.namespace, provider?.resource, provider?.version],
+      (one) => one !== undefined && (one.length > 512 || /[\x00-\x1f]/.test(one)),
+    )
+  )
+    return "A provider namespace, resource or version is up to 512 printable characters";
+  if ((input.title?.length ?? 0) > 512 || (input.role?.length ?? 0) > 128)
+    return "The title or role is too long";
+  if ((input.description?.length ?? 0) > 4096) return "The description exceeds 4 KiB";
+  if (
+    input.metadata !== undefined &&
+    new TextEncoder().encode(jsonText(input.metadata)).length > METADATA_BYTES
+  )
+    return "Extension metadata exceeds 16 KiB";
+  for (const at of [input.created, input.updated])
+    if (at !== undefined && sourceDate(at) === undefined)
+      return `"${at}" is not an ISO timestamp with a time zone`;
+  return undefined;
+};
+const reported = (at: string | undefined) => {
+  const iso = sourceDate(at);
+  return iso === undefined ? undefined : { at: iso, provenance: "caller-reported" };
+};
+type SourceDate = Artefact["created"];
+/** A verified date stays; a report never stands in for one. */
+const dated = (prior: SourceDate, next: SourceDate) =>
+  prior?.provenance === "provider-verified" ? prior : (next ?? prior ?? null);
+const isExternal = (item: Artefact) => item.url !== undefined || item.provider !== undefined;
+type Fields<K extends keyof Artefact> = Types.Mutable<Partial<Pick<Artefact, K>>>;
+const located = (url: string | undefined) => {
+  const fields: Fields<"url" | "source"> = {};
+  if (url !== undefined) {
+    fields.url = url;
+    fields.source = url;
+  }
+  return fields;
+};
+const jsonText = (value: Schema.Json | undefined) =>
+  value === undefined ? "" : Option.getOrElse(Schema.encodeOption(JSON_TEXT)(value), () => "");
 
 const retain = Effect.fn("Artefacts.retain")(function* (
   run: RunFacts,
@@ -142,74 +228,139 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const data = yield* encode(item);
           yield* sql`INSERT INTO collie_artefacts (run, id, origin, data) VALUES (${item.run}, ${item.id}, ${item.ref}, ${data}) ON CONFLICT(run, id) DO UPDATE SET origin = excluded.origin, data = excluded.data`;
-          yield* sql`INSERT OR IGNORE INTO collie_artefact_revisions (run, id, revision, digest, size) VALUES (${item.run}, ${item.id}, ${item.revision}, ${item.digest}, ${item.size})`;
+          if (item.digest !== "")
+            yield* sql`INSERT OR IGNORE INTO collie_artefact_revisions (run, id, revision, digest, size) VALUES (${item.run}, ${item.id}, ${item.revision}, ${item.digest}, ${item.size})`;
         }),
       )
       .pipe(Effect.orDie);
+  /** An external entry's export failing leaves its hosted source's state alone. */
   const failed = (prior: Artefact, error: CopyFailure) =>
     Effect.gen(function* () {
       const reason = reasonOf(error);
       const availability = availabilityOf(error);
-      const item = {
-        ...prior,
-        observedAt: yield* nowIso,
-        sourceAvailability: availability,
-        reason,
-      };
+      const item =
+        prior.export === undefined
+          ? { ...prior, observedAt: yield* nowIso, sourceAvailability: availability, reason }
+          : { ...prior, export: { ...prior.export, availability }, reason };
       yield* put(item).pipe(Effect.orDie);
-      if (prior.sourceAvailability !== availability || prior.reason !== reason)
+      if (
+        (prior.export?.availability ?? prior.sourceAvailability) !== availability ||
+        prior.reason !== reason
+      )
         yield* notify(prior.run);
       return item;
     });
-  const refreshRegistered = Effect.fn("Artefacts.refreshRegistered")(function* (
+  const refreshCopy = Effect.fn("Artefacts.refreshCopy")(function* (
     run: RunFacts,
     prior: Artefact,
   ) {
     if (prior.tracking !== "local") return prior;
-    const result = yield* copied(run, prior.source).pipe(Effect.result);
+    const result = yield* copied(run, prior.export?.source ?? prior.source).pipe(Effect.result);
     if (result._tag === "Failure") return yield* failed(prior, result.failure);
     const at = yield* nowIso;
     const changed = result.success.digest !== prior.digest;
-    const item = {
-      ...prior,
-      ...result.success,
+    const retained = Struct.omit(result.success, ["created", "updated"]);
+    const item =
+      prior.export === undefined
+        ? {
+            ...prior,
+            ...result.success,
+            observedAt: at,
+            sourceAvailability: "available",
+            reason: null,
+          }
+        : { ...prior, ...retained, export: { ...prior.export, availability: "available" } };
+    const next = {
+      ...item,
       revision: prior.revision + (changed ? 1 : 0),
       detectedAt: changed ? at : prior.detectedAt,
+    };
+    yield* save(next);
+    if (changed || (prior.export?.availability ?? prior.sourceAvailability) !== "available")
+      yield* notify(run.id);
+    return next;
+  });
+  /** What a verified reader says of a provider resource; without a reader nothing is claimed. */
+  const observe = Effect.fn("Artefacts.observe")(function* (prior: Artefact) {
+    const provider = prior.provider;
+    const reader =
+      provider === undefined
+        ? undefined
+        : Option.getOrUndefined(yield* Effect.serviceOption(ProviderReaders))?.get(provider.name);
+    if (provider === undefined || reader === undefined) return prior;
+    const answer = yield* reader({
+      namespace: provider.namespace,
+      resource: provider.resource,
+      url: prior.url ?? null,
+    }).pipe(Effect.timeout(OBSERVATION_TIMEOUT), Effect.result);
+    const at = yield* nowIso;
+    if (answer._tag === "Failure") {
+      const failure = answer.failure;
+      const item = {
+        ...prior,
+        observedAt: at,
+        ...(failure._tag === "ObservationFailed"
+          ? { sourceAvailability: failure.state, reason: failure.reason }
+          : {
+              sourceAvailability: "timeout",
+              reason: `The provider did not answer within ${OBSERVATION_TIMEOUT}`,
+            }),
+      };
+      yield* put(item).pipe(Effect.orDie);
+      if (item.sourceAvailability !== prior.sourceAvailability) yield* notify(prior.run);
+      return item;
+    }
+    const read = answer.success;
+    const url = read.url !== null && safeUrl(read.url) ? read.url : prior.url;
+    const verified = (value: string | null) => {
+      const iso = sourceDate(value ?? undefined);
+      return iso === undefined ? undefined : { at: iso, provenance: "provider-verified" };
+    };
+    const changed = url !== prior.url || read.version !== provider.version;
+    const item: Artefact = {
+      ...prior,
+      ...located(url),
+      provider: {
+        ...provider,
+        version: read.version,
+        provenance: "provider-verified",
+        observedAt: at,
+      },
+      created: verified(read.created) ?? prior.created ?? null,
+      updated: verified(read.updated) ?? prior.updated ?? null,
       observedAt: at,
       sourceAvailability: "available",
       reason: null,
+      revision: prior.revision + (changed ? 1 : 0),
+      detectedAt: changed ? at : prior.detectedAt,
     };
     yield* save(item);
-    if (changed || prior.sourceAvailability !== "available") yield* notify(run.id);
+    if (changed || prior.sourceAvailability !== "available") yield* notify(prior.run);
     return item;
   });
+  const refreshRegistered = (run: RunFacts, prior: Artefact) =>
+    refreshCopy(run, prior).pipe(Effect.flatMap(observe));
   const register = Effect.fn("Artefacts.register")(function* (
     run: RunFacts,
     installation: string,
-    input: RegisterFile,
+    input: RegisterArtefact,
     request: string,
     actor: AuditLine["actor"],
   ) {
     const path = yield* Path.Path;
+    const wrong = invalid(input);
+    if (wrong !== undefined) return yield* refused(wrong);
     if (
-      !path.isAbsolute(input.path) ||
-      input.path.length > 8192 ||
-      Arr.contains(Str.split(input.path, /[\\/]/), "..") ||
-      /[\x00-\x1f]/.test(input.path)
+      input.path !== undefined &&
+      (!path.isAbsolute(input.path) ||
+        input.path.length > 8192 ||
+        Arr.contains(Str.split(input.path, /[\\/]/), "..") ||
+        /[\x00-\x1f]/.test(input.path))
     )
       return yield* refused(
         "Registration needs an absolute file path without traversal or control characters",
       );
-    if ((input.title?.length ?? 0) > 512 || (input.role?.length ?? 0) > 128)
-      return yield* refused("The title or role is too long");
-    const asked = yield* Schema.encodeEffect(ASKED)([
-      input.path,
-      input.id ?? null,
-      input.title ?? null,
-      input.kind ?? null,
-      input.role ?? null,
-      input.snapshot ?? false,
-    ]).pipe(Effect.orDie);
+    const asked = yield* Schema.encodeEffect(ASKED)(input).pipe(Effect.orDie);
     const receipt = (yield* sql<{
       asked: string;
       data: string;
@@ -224,49 +375,119 @@ const make = Effect.gen(function* () {
         });
       return { item: yield* decode(receipt.data), fresh: false };
     }
-    const source = path.normalize(input.path);
-    const ref = `registered:${source}`;
     const items = yield* list(run.id);
-    const prior = Option.getOrUndefined(
-      Arr.findFirst(items, (one) =>
-        input.id === undefined ? one.ref === ref : one.id === input.id,
-      ),
-    );
-    if (input.id !== undefined && prior === undefined) return yield* refused("No such artefact");
+    const named = Option.getOrUndefined(Arr.findFirst(items, (one) => one.id === input.id));
+    if (input.id !== undefined && named === undefined) return yield* refused("No such artefact");
+    // An update by id keeps each locator it does not replace.
+    const given = input.path ?? named?.export?.source;
+    const file = given ?? (named === undefined || isExternal(named) ? undefined : named.source);
+    const source = file === undefined ? undefined : path.normalize(file);
+    const url = input.url ?? named?.url;
+    const at = yield* nowIso;
+    const provider =
+      input.provider === undefined
+        ? named?.provider
+        : {
+            name: input.provider.name,
+            namespace: input.provider.namespace ?? null,
+            resource: input.provider.resource ?? null,
+            version: input.provider.version ?? null,
+            provenance: "caller-reported",
+            observedAt: at,
+          };
+    const external = url !== undefined || provider !== undefined;
+    const ref =
+      provider?.resource != null
+        ? `provider:${Arr.join(
+            Arr.map(
+              [provider.name, provider.namespace ?? "", provider.resource],
+              encodeURIComponent,
+            ),
+            ":",
+          )}`
+        : url !== undefined
+          ? `url:${url}`
+          : `registered:${source}`;
+    const prior = named ?? Option.getOrUndefined(Arr.findFirst(items, (one) => one.ref === ref));
     if (Arr.some(items, (one) => one.ref === ref && prior !== undefined && one.id !== prior.id))
       return yield* refused("This source already belongs to another artefact");
-    const observed = yield* copied(run, source).pipe(
-      Effect.tapError((error) => (prior === undefined ? Effect.void : failed(prior, error))),
-      Effect.mapError((error) => refused(reasonOf(error))),
-    );
-    const at = yield* nowIso;
-    const revision =
-      prior === undefined
-        ? 1
-        : prior.revision + (prior.digest === observed.digest && prior.source === source ? 0 : 1);
-    const item: Artefact = {
-      ...prior,
-      ...observed,
+    const observed =
+      source === undefined
+        ? undefined
+        : yield* copied(run, source).pipe(
+            Effect.tapError((error) => (prior === undefined ? Effect.void : failed(prior, error))),
+            Effect.mapError((error) => refused(reasonOf(error))),
+          );
+    const metadata = input.metadata ?? prior?.metadata;
+    const unchanged =
+      prior !== undefined &&
+      prior.ref === ref &&
+      prior.digest === (observed?.digest ?? "") &&
+      (prior.export?.source ?? (isExternal(prior) ? undefined : prior.source)) === source &&
+      prior.url === url &&
+      prior.provider?.version === provider?.version &&
+      jsonText(prior.metadata) === jsonText(metadata);
+    const revision = prior === undefined ? 1 : prior.revision + (unchanged ? 0 : 1);
+    const description = input.description ?? prior?.description;
+    const tracking = input.snapshot === true ? ("snapshot" as const) : ("local" as const);
+    const common = {
       installation,
       id: prior?.id ?? (yield* (yield* SecureRandom.SecureRandom).uuidV4()),
       run: run.id,
       ref,
-      source,
-      kind: input.kind ?? prior?.kind ?? "file",
       role: input.role ?? prior?.role ?? "deliverable",
-      title: input.title ?? prior?.title ?? path.basename(source),
-      mediaType: mediaTypeOf(source),
       revision,
       registeredAt: prior?.registeredAt ?? at,
       observedAt: at,
       detectedAt: prior?.revision === revision ? prior.detectedAt : at,
       seen: prior?.seen ?? null,
-      sourceAvailability: "available",
-      retainedAvailability: "available",
       reason: null,
-      tracking: input.snapshot === true ? "snapshot" : "local",
       registeredBy: prior?.registeredBy ?? actor,
     };
+    const described: Fields<"description" | "metadata"> = {};
+    if (description !== undefined) described.description = description;
+    if (metadata !== undefined) described.metadata = metadata;
+    const hosted: Fields<"url" | "provider" | "export" | "tracking"> = {};
+    if (url !== undefined) hosted.url = url;
+    if (provider !== undefined) hosted.provider = provider;
+    if (source !== undefined) {
+      hosted.export = { source, availability: "available" };
+      hosted.tracking = tracking;
+    }
+    const item: Artefact = external
+      ? {
+          ...common,
+          ...described,
+          ...hosted,
+          kind: input.kind ?? prior?.kind ?? "link",
+          title:
+            input.title ??
+            prior?.title ??
+            url ??
+            Str.trim(`${provider?.name} ${provider?.resource ?? ""}`),
+          source: url ?? `${provider?.name}/${provider?.resource ?? ""}`,
+          mediaType: source === undefined ? "" : mediaTypeOf(source),
+          size: observed?.size ?? 0,
+          digest: observed?.digest ?? "",
+          created: dated(prior?.created, reported(input.created)),
+          updated: dated(prior?.updated, reported(input.updated)),
+          sourceAvailability: "untracked",
+          retainedAvailability: observed === undefined ? "none" : "available",
+        }
+      : {
+          ...common,
+          ...described,
+          ...observed!,
+          created: observed!.created ?? reported(input.created) ?? null,
+          updated: observed!.updated ?? reported(input.updated) ?? null,
+          source: source!,
+          kind: input.kind ?? prior?.kind ?? "file",
+          title: input.title ?? prior?.title ?? path.basename(source!),
+          mediaType: mediaTypeOf(source!),
+          sourceAvailability: "available",
+          retainedAvailability: "available",
+          tracking,
+        };
     yield* sql
       .withTransaction(
         Effect.gen(function* () {
@@ -289,7 +510,8 @@ const make = Effect.gen(function* () {
     const origins = new Map(Arr.map(existing, (item) => [item.ref, item]));
     if (!background)
       for (const item of existing)
-        if (item.tracking === "local") yield* refreshRegistered(run, item);
+        if (item.tracking === "local" || item.provider !== undefined)
+          yield* refreshRegistered(run, item);
     let remaining = background ? 8 : Number.POSITIVE_INFINITY;
     const cursor = discoveryCursor.get(run.id) ?? "";
     for (const [prefix, root, role] of [
@@ -449,7 +671,8 @@ const make = Effect.gen(function* () {
           Arr.findFirst(yield* list(run.id), (one) => one.id === item.id),
         );
         if (current === undefined) return true;
-        return (yield* refreshRegistered(run, current)).sourceAvailability === "available";
+        const next = yield* refreshRegistered(run, current);
+        return (next.export?.availability ?? next.sourceAvailability) === "available";
       }),
     ),
   });

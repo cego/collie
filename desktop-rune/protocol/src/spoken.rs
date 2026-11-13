@@ -48,9 +48,10 @@ pub fn retyped(tag: &str, part: Part, value: Value) -> serde_json::Result<Value>
         ("artefactRegister" | "artefactImport", Part::Done) => {
             through::<crate::generated::ArtefactRegistered>(value)
         }
-        ("artefacts" | "artefactRead" | "artefactSeen" | "artefactRegister" | "artefactImport", Part::Error) => {
-            through::<ActionFailed>(value)
-        }
+        (
+            "artefacts" | "artefactRead" | "artefactSeen" | "artefactRegister" | "artefactImport",
+            Part::Error,
+        ) => through::<ActionFailed>(value),
         _ => Err(serde::de::Error::custom(format!(
             "{tag}'s {part:?} has no Rust type"
         ))),

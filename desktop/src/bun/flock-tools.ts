@@ -6,11 +6,12 @@
 
 import * as Rec from "effect/Record";
 import { withArtefacts } from "../../../src/artefact-client";
+import { RegisterArtefact } from "../../../src/artefact-model";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Num from "effect/Number";
 import { pipe } from "effect/Function";
-import { Cause, Clock, Effect, Exit, FileSystem, Option, Result, Schema } from "effect";
+import { Cause, Clock, Effect, Exit, FileSystem, Option, Result, Schema, Struct } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Tool from "effect/ai/Tool";
 import * as Toolkit from "effect/ai/Toolkit";
@@ -1112,9 +1113,9 @@ const CARRIES = new Set(["start", "followup", "take_offer", "deliver"]);
 
 /** The action with the files it carries as paths on its Machine. */
 const withFiles = (flock: FlockChat, machine: Reached, action: JsonObject) => {
-  if (textAt(action, "kind") === "artefact_register") {
+  if (textAt(action, "kind") === "artefact_register" && isString(action.path)) {
     // Only a path on the Run's own Machine stays tracked; any other is sent as a snapshot.
-    const path = textAt(action, "path");
+    const path = action.path;
     return carriedPaths(flock, machine, [path]).pipe(
       Effect.map((paths): JsonObject => ({
         ...action,
@@ -1138,18 +1139,15 @@ const doOne = (machine: Reached, kind: string, action: JsonObject, request: stri
   const text = (key: string) => textAt(action, key);
   switch (kind) {
     case "artefact_register":
-      return door
-        .artefactRegister({
-          runId: text("run"),
-          request,
-          path: text("path"),
-          id: isString(action.id) ? action.id : undefined,
-          title: isString(action.title) ? action.title : undefined,
-          kind: action.artefactKind === "asset" ? "asset" : "file",
-          role: isString(action.role) ? action.role : undefined,
-          snapshot: action.snapshot === true,
-        })
-        .pipe(Effect.map((done) => ({ state: "applied", note: JSON.stringify(done) })));
+      return Schema.decodeUnknownEffect(RegisterArtefact)({
+        ...Struct.omit(action, ["kind", "run", "artefactKind"]),
+        kind: action.artefactKind,
+        snapshot: action.snapshot === true,
+      }).pipe(
+        Effect.mapError((error) => new HostRefused({ reason: error.message })),
+        Effect.flatMap((asked) => door.artefactRegister({ ...asked, runId: text("run"), request })),
+        Effect.map((done) => ({ state: "applied", note: JSON.stringify(done) })),
+      );
     case "confirm":
       return door.confirm({ proposal: text("proposal"), hash: text("hash"), request }).pipe(
         Effect.map(({ results }) => ({
