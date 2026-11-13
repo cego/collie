@@ -312,7 +312,8 @@ background job.
 The host checks the title, description or note, and every commit message before it pushes.
 If it refuses, reword the named text locally, amending only your own unpushed commits,
 and retry with a new request id. Do not bypass the command. It pushes without `ci.skip`;
-Collie starts a missing head pipeline once you are done.
+Collie starts a missing head pipeline once you are done. Never start one yourself, and
+never report a missing or skipped pipeline as a finding.
 Merge only when a message of its own asks you to merge this merge request: the human typing
 in this pane, or a Delivery from the human, from chat for the human, or from another agent
 writing as itself. Who sent it is recorded, never a reason to refuse. Every request gets the

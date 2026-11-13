@@ -3766,7 +3766,7 @@ for (const feature of [false, true])
           ).toBe("done");
           const opening = yield* asked(child, "mr");
           expect(opening).toContain(OPENED.mr_url);
-          expect(opening).toContain("Do **not** open a second merge request");
+          expect(opening).toContain("no second one is opened");
           yield* bin.restore();
         }),
       ),
@@ -3938,7 +3938,7 @@ scenario(
         expect(opening).toBeGreaterThan(checked);
         const prompt = yield* asked(child, "mr");
         expect(prompt).toContain(OPENED.mr_url);
-        expect(prompt).toContain("Do **not** open a second merge request");
+        expect(prompt).toContain("no second one is opened");
         expect((yield* ran(parent))._tag).toBe("Failure");
         expect(yield* launchesAt(dir, parent.runId)).toHaveLength(1);
         yield* bin.restore();
@@ -4075,7 +4075,7 @@ for (const changed of [
           expect(yield* asked(child, "fix-1")).toContain(missing.title);
           const prompt = yield* asked(child, "mr");
           expect(prompt).toContain(OPENED.mr_url);
-          expect(prompt).toContain("Do **not** open a second merge request");
+          expect(prompt).toContain("no second one is opened");
           yield* bin.restore();
         }),
       ),
@@ -5190,7 +5190,7 @@ scenario(
           "Raise as blocking an `after merge` answer to a criterion this Run could have shown",
         );
         expect(yield* asked("r-answered-later", "mr")).toContain(
-          "- 01-first.md: **Counted.** Every registry is counted once. — after merge: only the deploy shows it",
+          "- **Counted.** Every registry is counted once. — after merge: only the deploy shows it",
         );
       }),
     ),
@@ -8151,7 +8151,7 @@ scenario(
           "nuxi: its CI job nuxi-job failed",
           `https://${PROJECT.gitlab}/-/jobs/101`,
           CI_LOG(101),
-          "without `ci.skip`",
+          `collie run publish ${runId} --push-only --request-id <request>`,
         ])
           expect(prompt).toContain(text);
         const [proof, ...more] = yield* ciRecords(runId);
@@ -10681,7 +10681,7 @@ scenario(
           `pipeline: started https://${PROJECT.gitlab}/-/pipelines/${one!.id} on ${sha12(head)}`,
         );
         const mr = flat(yield* asked(runId, "mr"));
-        expect(mr).toContain("Collie starts the head's pipeline");
+        expect(mr).toContain("Collie starts a missing head pipeline");
         expect(mr).toContain("Never start one yourself");
         expect(flat(yield* asked(runId, "review-1"))).toContain(
           "the Merge request step starts and proves it once the merge request is open",
