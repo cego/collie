@@ -5,6 +5,7 @@ import * as Cause from "effect/Cause";
 // prompting, rendering, and turning a result into text or JSON.
 
 import * as Struct from "effect/Struct";
+import { parkLine } from "./park-cause";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -1419,6 +1420,7 @@ export const runFacts = Effect.fn("operations.runFacts")(function* (
   const watched = yield* watchedOf(env);
   const lines = [
     `Status: ${run.state}`,
+    ...(run.park == null ? [] : [parkLine(run.park)]),
     `Directory: ${run.cwd}`,
     `Workspace: ${run.workspace ?? "its Task's"}`,
     `Goal: ${intent?.goal ?? run.settled.inputs.goal ?? "(none recorded)"}`,
@@ -1459,6 +1461,7 @@ export const runFacts = Effect.fn("operations.runFacts")(function* (
     ...(yield* planLines(run)),
     ...(yield* verdictLines(run)),
     ...(yield* logLines(run)),
+    ...((run.recovery?.length ?? 0) === 0 ? [] : ["", "### Recovery", "", ...(run.recovery ?? [])]),
   ];
   const cards = yield* readCards(run.dir).pipe(Effect.orElseSucceed(() => []));
   for (const entry of cards.slice(-CARDS_IN_CONTEXT)) {

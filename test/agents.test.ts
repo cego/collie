@@ -46,11 +46,14 @@ import {
   decodeOutput,
   promptFor,
   type AgentHost,
+  type RanOut,
 } from "../src/agents";
 import { Children, Host, Run, WorkflowAgents, jsonSchemaFor, step, withAgents } from "../src/sdk";
 import { asRun, enveloped } from "./support/enveloped";
 import {
+  HOLD,
   PARKED,
+  PARK_CAUSE,
   STOP,
   controlPath,
   evidenceDir,
@@ -63,11 +66,13 @@ import {
 } from "../src/engine";
 import { readStepLines } from "../src/steps";
 import { readMetrics } from "../src/metrics";
-import { recordLaunch } from "../src/launches";
+import { measuresOf } from "../src/outcomes";
+import { launchDir, recordLaunch, stemOf } from "../src/launches";
 import { Collected } from "../src/agents";
 import { Collecting } from "../src/collecting";
 import { holdsBudgetOf, memoryWaitOf, waitForMemory } from "../src/memory-wait";
 import type { UsageReading } from "../src/usage-model";
+import { isoAt } from "../src/time";
 import { readCards } from "../src/cards";
 import { readDrift } from "../src/drift";
 import { FixOutputSchema, SynthesisSchema } from "../src/output";
@@ -86,6 +91,7 @@ import { runFacts } from "./support/records";
 import { agentName } from "../src/naming";
 import {
   controlDir,
+  readControl,
   withControlLock,
   type AgentContext,
   type CompactionOutcome,
@@ -853,6 +859,7 @@ test("an Output still unusable after its repair parks the Step, saying what to c
       expect(why).toContain(outputPath("r1"));
       expect(why).toContain(`["note"]`);
       expect(why).toEndWith("Correct it, then resume r1.");
+      expect(yield* read(controlPath(dir, PARK_CAUSE, "r1"))).toBe("step-failed");
       expect(Arr.last(yield* readStepLines(runDir(dir, "r1")))).toEqual(
         Option.some(expect.objectContaining({ kind: "fail", key: "review", why })),
       );
@@ -1301,6 +1308,407 @@ test(
   120_000,
 );
 
+/** A managed server with a real process identity and a fake harness readiness boundary. */
+const managedCodex = Effect.gen(function* () {
+  const children = yield* Effect.acquireRelease(
+    Effect.sync((): Bun.Subprocess[] => []),
+    (children) =>
+      Effect.forEach(children, (child) =>
+        Effect.gen(function* () {
+          if (child.exitCode === null) child.kill();
+          yield* Effect.promise(() => child.exited);
+        }),
+      ),
+  );
+  const state = { reachable: true };
+  const spawnServer = () => {
+    const child = Bun.spawn(
+      [process.execPath, "-e", "setInterval(() => {}, 1000); // managed-codex-fixture"],
+      { stdin: "ignore", stdout: "ignore", stderr: "ignore" },
+    );
+    children.push(child);
+    return child;
+  };
+  const ports: CompactionPorts = {
+    codex: {
+      gate: Effect.void,
+      install: () =>
+        Effect.sync(() => {
+          const child = spawnServer();
+          state.reachable = true;
+          const endpoint = `ws://127.0.0.1:${43000 + children.length}`;
+          return {
+            args: ["--remote", endpoint],
+            endpoint,
+            pid: child.pid,
+            command: "managed-codex-fixture",
+          };
+        }),
+      ready: () => Effect.sync(() => state.reachable),
+      questions: () => Effect.succeed([]),
+      usage: () => Effect.succeed(null),
+      request: () => Effect.succeed(null),
+      poll: () => Effect.succeed(null),
+      stop: COMPACTION_PORTS.codex!.stop,
+    },
+  };
+  return { children, state, ports, spawnServer };
+});
+
+class StaleWorkingTerminal extends FakeHerdr {
+  stale = false;
+  override agentStatus(target: string) {
+    return this.stale ? Effect.succeed("working" as const) : super.agentStatus(target);
+  }
+  override agentStart(...args: Parameters<FakeHerdr["agentStart"]>) {
+    this.stale = false;
+    return super.agentStart(...args);
+  }
+}
+
+test.each([false, true])(
+  "a managed Codex server that dies while its terminal stays working is recovered once (host replay: %p)",
+  (replay) =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const managed = yield* managedCodex;
+        yield* rig.queueOutputs([null]);
+        const herdr = new StaleWorkingTerminal(rig.pluginEnv());
+        const over = { herdr, harness: "codex", model: "default", ports: managed.ports };
+        const acknowledged = steps("r1").pipe(
+          Effect.provideService(Path.Path, yield* Path.Path),
+          Effect.map(
+            (found) => found.length > 0 && Arr.every(found, (one) => one.state === "acknowledged"),
+          ),
+        );
+        const killServer = Effect.gen(function* () {
+          yield* until(acknowledged);
+          expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
+          expect(Arr.some(yield* herdr.agentList(), (one) => one.name === agentFor("r1"))).toBe(
+            true,
+          );
+          herdr.stale = true;
+          expect(yield* herdr.agentStatus(agentFor("r1"))).toBe("working");
+          managed.state.reachable = false;
+          const child = managed.children[0]!;
+          child.kill();
+          yield* Effect.promise(() => child.exited);
+        });
+        if (replay)
+          yield* session(Effect.forkChild(started("r1")).pipe(Effect.andThen(killServer)), over);
+        const result = yield* session(
+          Effect.gen(function* () {
+            const fiber = yield* Effect.forkChild(started("r1"));
+            if (!replay) yield* killServer;
+            // Independent of the idle budget: the stale TUI never becomes idle.
+            yield* spend(20_000);
+            expect(everyLaunch(yield* rig.calls())).toHaveLength(2);
+            yield* fs.writeFileString(outputPath("r1"), '{"verdict":"clean","note":"recovered"}');
+            return yield* Fiber.join(fiber);
+          }),
+          over,
+        );
+        expect(result._tag === "Success" && result.success.note).toBe("recovered");
+        expect(managed.children).toHaveLength(2);
+        expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
+        expect(everyLaunch(yield* rig.calls())).toHaveLength(2);
+      }).pipe(Effect.scoped),
+    ),
+  60_000,
+);
+
+test("an unreachable managed Codex server that is still alive is never given a second writer", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const managed = yield* managedCodex;
+      yield* rig.queueOutputs([null]);
+      const herdr = new StaleWorkingTerminal(rig.pluginEnv());
+      const result = yield* session(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(started("r1"));
+          yield* until(
+            steps("r1").pipe(
+              Effect.provideService(Path.Path, yield* Path.Path),
+              Effect.map(
+                (found) =>
+                  found.length > 0 && Arr.every(found, (one) => one.state === "acknowledged"),
+              ),
+            ),
+          );
+          herdr.stale = true;
+          managed.state.reachable = false;
+          yield* spend(20_000);
+          expect(managed.children[0]!.exitCode).toBe(null);
+          expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
+          expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
+          managed.state.reachable = true;
+          herdr.stale = false;
+          yield* fs.writeFileString(outputPath("r1"), '{"verdict":"clean","note":"still mine"}');
+          return yield* Fiber.join(fiber);
+        }),
+        { herdr, harness: "codex", model: "default", ports: managed.ports },
+      );
+      expect(result._tag === "Success" && result.success.note).toBe("still mine");
+      expect(managed.children).toHaveLength(1);
+    }).pipe(Effect.scoped),
+  ));
+
+test.each(["missing identity", "reused pid"] as const)(
+  "an unreachable managed Codex server with %p is not replaced or signalled",
+  (identity) =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const managed = yield* managedCodex;
+        yield* rig.queueOutputs([null]);
+        const herdr = new StaleWorkingTerminal(rig.pluginEnv());
+        const result = yield* session(
+          Effect.gen(function* () {
+            const fiber = yield* Effect.forkChild(started("r1"));
+            yield* until(
+              steps("r1").pipe(
+                Effect.provideService(Path.Path, yield* Path.Path),
+                Effect.map(
+                  (found) =>
+                    found.length > 0 && Arr.every(found, (one) => one.state === "acknowledged"),
+                ),
+              ),
+            );
+            const agent = agentFor("r1");
+            const record = yield* readControl(hostOf().env.stateDir, agent);
+            expect(record).not.toBe(null);
+            const original = managed.children[0]!;
+            original.kill();
+            yield* Effect.promise(() => original.exited);
+            const stranger = identity === "reused pid" ? managed.spawnServer() : null;
+            yield* fs.writeFileString(
+              `${yield* controlDir(hostOf().env.stateDir, agent)}/control.json`,
+              encodeJson({
+                ...record,
+                pid: stranger?.pid ?? record!.pid,
+                started: stranger === null ? null : "a-different-process-start",
+              }),
+            );
+            herdr.stale = true;
+            managed.state.reachable = false;
+            yield* spend(20_000);
+            expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
+            expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
+            if (stranger !== null) expect(stranger.exitCode).toBe(null);
+            herdr.stale = false;
+            yield* fs.writeFileString(
+              outputPath("r1"),
+              '{"verdict":"clean","note":"already finished"}',
+            );
+            return yield* Fiber.join(fiber);
+          }),
+          { herdr, harness: "codex", model: "default", ports: managed.ports },
+        );
+        expect(result._tag === "Success" && result.success.note).toBe("already finished");
+      }).pipe(Effect.scoped),
+    ),
+);
+
+test("a dead managed Codex server whose stop cannot prove quiet is never replaced", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const managed = yield* managedCodex;
+      const ports: CompactionPorts = {
+        codex: {
+          ...managed.ports.codex!,
+          stop: () =>
+            Effect.succeed({
+              state: "failed",
+              turns: null,
+              reason: "a tool child may still write",
+              signalled: [],
+              left: [],
+              noted: [],
+            }),
+        },
+      };
+      yield* rig.queueOutputs([null]);
+      const herdr = new StaleWorkingTerminal(rig.pluginEnv());
+      yield* session(
+        Effect.gen(function* () {
+          yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+          yield* until(
+            steps("r1").pipe(
+              Effect.provideService(Path.Path, yield* Path.Path),
+              Effect.map(
+                (found) =>
+                  found.length > 0 && Arr.every(found, (one) => one.state === "acknowledged"),
+              ),
+            ),
+          );
+          herdr.stale = true;
+          managed.state.reachable = false;
+          managed.children[0]!.kill();
+          yield* Effect.promise(() => managed.children[0]!.exited);
+          yield* until(suspended("r1"));
+          expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(
+            "a tool child may still write",
+          );
+          expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
+          expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
+        }),
+        { herdr, harness: "codex", model: "default", ports },
+      );
+      expect(managed.children).toHaveLength(1);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a reused managed Codex server that died after its first Output is replaced before the next step", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const managed = yield* managedCodex;
+      const herdr = new StaleWorkingTerminal(rig.pluginEnv());
+      const continued = enveloped({ name: "dead-server-reuse", input: {}, success: Schema.String });
+      const body = continued.toLayer((payload) =>
+        Effect.gen(function* () {
+          yield* agentWork({ operation: "first", agent: "worker", instructions: "One." });
+          managed.state.reachable = false;
+          herdr.stale = true;
+          managed.children[0]!.kill();
+          yield* Effect.promise(() => managed.children[0]!.exited);
+          return yield* agentWork({ operation: "second", agent: "worker", instructions: "Two." });
+        }).pipe(asRun(payload)),
+      );
+      yield* rig.queueOutputs(["first", "second"]);
+      const result = yield* continued.execute({ runId: "r1", input: {} }).pipe(
+        Effect.result,
+        Effect.provide(
+          body.pipe(
+            Layer.provideMerge(
+              agentsLayer({
+                ...hostOf(),
+                herdr,
+                harness: "codex",
+                model: "default",
+                ports: managed.ports,
+              }),
+            ),
+            Layer.provideMerge(foundationLayer({ dir })),
+          ),
+        ),
+        Effect.scoped,
+      );
+      expect(result._tag === "Success" && result.success).toBe("second");
+      expect(managed.children).toHaveLength(2);
+      expect(everyLaunch(yield* rig.calls())).toHaveLength(2);
+      expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a managed Codex server's late Output during retirement prevents rebuilding finished work", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const managed = yield* managedCodex;
+      const ports: CompactionPorts = {
+        codex: {
+          ...managed.ports.codex!,
+          stop: (target, note, budgetMs) =>
+            fs
+              .writeFileString(outputPath("r1"), '{"verdict":"clean","note":"tool finished"}')
+              .pipe(
+                Effect.orDie,
+                Effect.andThen(COMPACTION_PORTS.codex!.stop!(target, note, budgetMs)),
+              ),
+        },
+      };
+      yield* rig.queueOutputs([null]);
+      const herdr = new StaleWorkingTerminal(rig.pluginEnv());
+      const result = yield* session(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(started("r1"));
+          yield* until(
+            steps("r1").pipe(
+              Effect.provideService(Path.Path, yield* Path.Path),
+              Effect.map(
+                (found) =>
+                  found.length > 0 && Arr.every(found, (one) => one.state === "acknowledged"),
+              ),
+            ),
+          );
+          herdr.stale = true;
+          managed.state.reachable = false;
+          managed.children[0]!.kill();
+          yield* Effect.promise(() => managed.children[0]!.exited);
+          return yield* Fiber.join(fiber);
+        }),
+        { herdr, harness: "codex", model: "default", ports },
+      );
+      expect(result._tag === "Success" && result.success.note).toBe("tool finished");
+      expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
+      expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
+      expect(managed.children).toHaveLength(1);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a reused managed Codex server dying just before delivery is replaced without parking", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const managed = yield* managedCodex;
+      class DiesBeforeDelivery extends FakeHerdr {
+        killed = false;
+        override agentStatus(target: string) {
+          const status = super.agentStatus(target);
+          return Effect.suspend(() => {
+            if (!this.killed && Bun.file(`${dir}/agents/r1/second.prompt.md`).size > 0) {
+              this.killed = true;
+              managed.state.reachable = false;
+              managed.children[0]!.kill();
+              return Effect.promise(() => managed.children[0]!.exited).pipe(Effect.andThen(status));
+            }
+            return status;
+          });
+        }
+      }
+      const herdr = new DiesBeforeDelivery(rig.pluginEnv());
+      const continued = enveloped({
+        name: "delivery-server-race",
+        input: {},
+        success: Schema.String,
+      });
+      const body = continued.toLayer((payload) =>
+        Effect.gen(function* () {
+          yield* agentWork({ operation: "first", agent: "worker", instructions: "One." });
+          return yield* agentWork({ operation: "second", agent: "worker", instructions: "Two." });
+        }).pipe(asRun(payload)),
+      );
+      yield* rig.queueOutputs(["first", "second"]);
+      const result = yield* continued.execute({ runId: "r1", input: {} }).pipe(
+        Effect.result,
+        Effect.timeoutOption(30_000),
+        Effect.provide(
+          body.pipe(
+            Layer.provideMerge(
+              agentsLayer({
+                ...hostOf(),
+                herdr,
+                harness: "codex",
+                model: "default",
+                ports: managed.ports,
+              }),
+            ),
+            Layer.provideMerge(foundationLayer({ dir })),
+          ),
+        ),
+        Effect.scoped,
+      );
+      expect(herdr.killed).toBe(true);
+      expect(everyLaunch(yield* rig.calls())).toHaveLength(2);
+      expect(Option.isSome(result) && result.value._tag === "Success" && result.value.success).toBe(
+        "second",
+      );
+      expect(managed.children).toHaveLength(2);
+      expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
+    }).pipe(Effect.scoped),
+  ));
+
 test(
   "a resume sent while the Run is collected past its budget starts no second delivery or collection",
   () =>
@@ -1642,7 +2050,7 @@ for (const [what, herdr] of [
   ["unreadable", () => new Unreadable(rig.pluginEnv())],
 ] as const)
   test(
-    `an agent whose status is ${what} and that writes nothing parks once the budget is spent idle`,
+    `an agent whose status is ${what} and that writes nothing parks as idle-budget once the budget is spent idle`,
     () =>
       runEffect(
         Effect.gen(function* () {
@@ -1655,10 +2063,205 @@ for (const [what, herdr] of [
           expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(
             `has written nothing to ${outputPath("r1")} after 2 minutes idle. Collie keeps collecting it;`,
           );
+          expect(yield* read(controlPath(dir, PARK_CAUSE, "r1"))).toBe("idle-budget");
+          expect(Arr.map(yield* halts("r1"), (line) => line.cause)).toEqual(["idle-budget"]);
         }),
       ),
     60_000,
   );
+
+/**
+ * Each prompt starts a turn herdr reports `working` for its next reads, then `ending`;
+ * the turns after the first `ends` never end.
+ */
+class Turns extends FakeHerdr {
+  private working = 0;
+  private prompted = 0;
+  constructor(
+    private readonly ending: "idle" | "blocked" = "idle",
+    private readonly ends = Infinity,
+  ) {
+    super(rig.pluginEnv());
+  }
+  protected override exec(args: string[]) {
+    if (args[0] === "agent" && args[1] === "prompt") {
+      this.prompted += 1;
+      this.working = this.prompted > this.ends ? Infinity : 10;
+    }
+    return super.exec(args);
+  }
+  going = false;
+  override agentStatus() {
+    if (this.working === 0)
+      return Effect.succeed(this.prompted > 0 ? this.ending : ("idle" as const));
+    if (!this.going) this.working -= 1;
+    return Effect.succeed("working" as const);
+  }
+}
+
+const REMINDER = "Your turn ended without writing your Output";
+
+const reminders = Effect.map(
+  Effect.suspend(() => rig.calls()),
+  (calls) => Arr.filter(prompts(calls), (one) => pipe(one, Str.includes(REMINDER))),
+);
+
+const halts = (runId: string) =>
+  Effect.map(readMetrics(evidenceDir(dir, runId)), (lines) =>
+    Arr.filter(lines, (line) => line.kind === "halt"),
+  );
+
+test("a reminder counts as recovered once the Output decodes, including after its existing repair", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null, { verdict: "maybe" }, { verdict: "clean", note: "repaired" }]);
+      const result = yield* session(started("r1"), { herdr: new Turns(), collectMs: 60_000 });
+      expect(result._tag === "Success" && result.success.note).toBe("repaired");
+      expect(yield* reminders).toHaveLength(1);
+      expect(sent(yield* rig.calls(), "not usable")).toBe(1);
+      const recovery = Arr.filter(
+        yield* readMetrics(evidenceDir(dir, "r1")),
+        (line) => line.kind === "recovery",
+      );
+      expect(recovery.at(-1)).toMatchObject({
+        cause: "output-absent",
+        action: "reminded",
+        outcome: "output-written",
+        build: expect.any(String),
+        value: expect.any(Number),
+      });
+      expect(
+        measuresOf([{ runId: "r1", records: null, metrics: recovery }]).recoveries.byCause,
+      ).toMatchObject([{ count: 1, recovered: 1 }]);
+    }),
+  ));
+
+test(
+  "an agent whose turn ends without its Output is reminded at once, and the Output of its next turn is collected",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([null, { verdict: "clean", note: "after the reminder" }]);
+        const result = yield* session(Effect.raceFirst(started("r1"), untilParked("r1")), {
+          herdr: new Turns(),
+          collectMs: 60_000,
+        });
+        expect(result !== "parked" && result._tag === "Success" && result.success.note).toBe(
+          "after the reminder",
+        );
+        const sent = yield* reminders;
+        expect(sent).toHaveLength(1);
+        expect(sent[0]).toContain(`OUTPUT_PATH: ${outputPath("r1")}`);
+        expect(sent[0]).toContain("A chat message is not the Output");
+        expect(yield* halts("r1")).toEqual([]);
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "an agent that writes no Output after two reminders parks its step as output-absent, and is not reminded again",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([null, null, null, null]);
+        const result = yield* session(
+          Effect.raceFirst(
+            started("r1"),
+            untilParked("r1").pipe(Effect.andThen(spend(5_000)), Effect.as("parked" as const)),
+          ),
+          { herdr: new Turns(), collectMs: 600_000 },
+        );
+        expect(result).toBe("parked");
+        expect(yield* reminders).toHaveLength(2);
+        expect(yield* read(controlPath(dir, PARK_CAUSE, "r1"))).toBe("output-absent");
+        expect(yield* read(controlPath(dir, PARKED, "r1"))).toMatch(
+          /and again after each of 2 reminders, sent \d{4}-\d\d-\d\dT\S+ and \d{4}-\d\d-\d\dT\S+\./,
+        );
+        expect(yield* read(outputPath("r1"))).toBe("");
+        const reminded = Arr.filter(
+          yield* readMetrics(evidenceDir(dir, "r1")),
+          (line) => line.kind === "recovery" && line.action === "reminded",
+        );
+        expect(Arr.map(reminded, (line) => line.outcome)).toEqual(["still-absent", "still-absent"]);
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "a host stopped once its first reminder went out does not send that reminder again when it starts",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* rig.queueOutputs([null, null]);
+        const remindedOnce: Reached = Effect.gen(function* () {
+          if ((yield* reminders).length === 0) return false;
+          yield* TestClock.withLive(Effect.sleep("300 millis"));
+          return true;
+        }).pipe(Effect.orElseSucceed(() => false));
+        yield* interrupted("r1", remindedOnce, { herdr: new Turns("idle", 1), collectMs: 600_000 });
+
+        const result = yield* session(
+          Effect.gen(function* () {
+            const fiber = yield* Effect.forkChild(started("r1"));
+            yield* TestClock.withLive(Effect.sleep("500 millis"));
+            yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"late"}`);
+            return yield* Fiber.join(fiber);
+          }),
+          { herdr: new Turns(), collectMs: 600_000 },
+        );
+        expect(result._tag === "Success" && result.success.note).toBe("late");
+        expect(yield* reminders).toHaveLength(1);
+      }),
+    ),
+  60_000,
+);
+
+test("an agent herdr reports blocked when its turn stops is not reminded", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* rig.queueOutputs([null, null]);
+      const result = yield* session(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(started("r1"));
+          yield* until(prompted("Your task for this step"));
+          yield* spend(30_000);
+          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"answered"}`);
+          return yield* Fiber.join(fiber);
+        }),
+        { herdr: new Turns("blocked"), collectMs: 600_000 },
+      );
+      expect(result._tag === "Success" && result.success.note).toBe("answered");
+      expect(yield* reminders).toEqual([]);
+    }),
+  ));
+
+test("an agent whose turn ends while its Run is held is reminded only once the Hold is lifted", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null, { verdict: "clean", note: "after the hold" }]);
+      const herdr = new Turns();
+      herdr.going = true;
+      const result = yield* session(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(started("r1"));
+          yield* until(prompted("Your task for this step"));
+          yield* control(HOLD, "r1", true);
+          herdr.going = false;
+          yield* spend(30_000);
+          expect(yield* reminders).toEqual([]);
+          yield* control(HOLD, "r1", false);
+          return yield* Fiber.join(fiber);
+        }),
+        { herdr, collectMs: 600_000 },
+      );
+      expect(result._tag === "Success" && result.success.note).toBe("after the hold");
+      expect(yield* reminders).toHaveLength(1);
+    }),
+  ));
 
 /** Claude's `PreToolUse` for one `AskUserQuestion` call of two questions. */
 const askedTwo = flow(
@@ -2485,6 +3088,43 @@ const claudeOut = {
   ] satisfies ReadonlyArray<UsageReading>),
 };
 const launchOf = (runId: string) => launchedAt(dir, runId, "review");
+
+test("an exhaustion result is observed only after its operation's usage wait is durable", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* rig.queueOutputs([null]);
+      yield* session(
+        Effect.gen(function* () {
+          const agents = yield* Agents;
+          const launched = yield* agents.launch({
+            runId: "r1",
+            operation: "review",
+            role: "reviewer",
+            workflow: "agent-work",
+            harness: "claude",
+            agent: null,
+            model: "opus",
+            effort: null,
+            permissions: null,
+            task: null,
+            cwd: rig.projectDir,
+            prompt: "Review the diff.",
+            output: outputPath("r1"),
+            skill: null,
+          });
+          const wait = `${launchDir(dir, "r1")}/${stemOf(launched)}.usage-wait`;
+          expect(yield* fs.exists(wait)).toBe(false);
+          const result = yield* agents.ranOut(launched);
+          expect(result._tag).toBe("RanOut");
+          expect(yield* fs.exists(wait)).toBe(true);
+          expect(yield* agents.usageIncident(launched)).toEqual(result);
+        }),
+        claudeOut,
+      );
+    }),
+  ));
+
 test("an agent's launch record keeps the harness session herdr reports for it", () =>
   runEffect(
     Effect.gen(function* () {
@@ -2874,12 +3514,15 @@ test("an agent that ran out with nothing to take over, and whose harness then st
 test("a replay rechecks a fallback after the earlier host recorded that nothing had room", () =>
   runEffect(
     Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
       yield* rig.queueOutputs([null, { verdict: "clean", note: "recovered on codex" }]);
       yield* interrupted("r1", parked("r1"), {
         ...claudeOut,
         fallbacks: Effect.succeed([]),
         collectMs: 2_000,
       });
+      const wait = `${launchDir(dir, "r1")}/${stemOf(yield* launchOf("r1"))}.usage-wait`;
+      expect(yield* fs.exists(wait)).toBe(true);
       const result = yield* releasedInto("r1", {
         ...claudeOut,
         fallbacks: Effect.succeed(["codex/gpt-6.1-sol"]),
@@ -2888,6 +3531,7 @@ test("a replay rechecks a fallback after the earlier host recorded that nothing 
       expect(result._tag === "Success" && result.success.note).toBe("recovered on codex");
       expect(harnessesStarted(yield* rig.calls())).toEqual(["claude", "codex"]);
       expect(closedPanes(yield* rig.calls())).toHaveLength(1);
+      expect(yield* fs.exists(wait)).toBe(false);
     }),
   ));
 
@@ -3047,6 +3691,550 @@ test("a Codex agent whose own app server says its limit is reached is replaced",
       expect(harnessesStarted(yield* rig.calls())).toEqual(["codex", "claude"]);
       expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
         "review: codex/default ran out (weekly 100%, resets",
+      );
+    }),
+  ));
+
+test("quota incident publication waits for an admitted managed-server revival", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const managed = yield* managedCodex;
+      const retiring = yield* Deferred.make<void>();
+      const proceed = yield* Deferred.make<void>();
+      const wait = `${launchDir(dir, "r1")}/review.usage-wait`;
+      let writing = false;
+      const observedFs: FileSystem.FileSystem = {
+        ...fs,
+        writeFileString: (path, data, options) =>
+          Effect.sync(() => {
+            if (pipe(path, Str.startsWith(wait))) writing = true;
+          }).pipe(Effect.andThen(fs.writeFileString(path, data, options))),
+      };
+      const ports: CompactionPorts = {
+        codex: {
+          ...managed.ports.codex!,
+          stop: (target, note, budgetMs) =>
+            Deferred.succeed(retiring, undefined).pipe(
+              Effect.andThen(Deferred.await(proceed)),
+              Effect.andThen(COMPACTION_PORTS.codex!.stop!(target, note, budgetMs)),
+            ),
+        },
+      };
+      yield* rig.queueOutputs([null, null]);
+      yield* session(
+        Effect.gen(function* () {
+          const agents = yield* Agents;
+          const ask = {
+            runId: "r1",
+            operation: "review",
+            role: "reviewer",
+            workflow: "agent-work",
+            harness: "codex",
+            agent: null,
+            model: "default",
+            effort: null,
+            permissions: null,
+            task: null,
+            cwd: rig.projectDir,
+            prompt: "Review the diff.",
+            output: outputPath("r1"),
+            skill: null,
+          };
+          const launched = yield* agents.launch(ask);
+          managed.state.reachable = false;
+          managed.children[0]!.kill();
+          yield* Effect.promise(() => managed.children[0]!.exited);
+          const recovery = yield* Effect.forkChild(agents.revive(ask, undefined, true));
+          yield* Deferred.await(retiring);
+          const incident: RanOut = {
+            _tag: "RanOut",
+            why: "weekly limit reached during recovery",
+            transcript: null,
+            resetsAt: null,
+          };
+          // Run to the first suspension: publication must wait at recovery admission,
+          // before it can enter the real filesystem write observed above.
+          const publishing = yield* Effect.forkChild(agents.usageWaiting(launched, incident), {
+            startImmediately: true,
+          });
+          const cancelled = yield* Effect.forkChild(
+            agents.usageWaiting(launched, { ...incident, why: "cancelled publisher" }),
+            { startImmediately: true },
+          );
+          yield* Fiber.interrupt(cancelled);
+          const unrelated = { ...launched, runId: "r2" };
+          yield* fs.makeDirectory(launchDir(dir, unrelated.runId), { recursive: true });
+          const independent = yield* agents
+            .usageWaiting(unrelated, incident)
+            .pipe(Effect.timeoutOption("1 minute"));
+          expect(independent._tag).toBe("Some");
+          expect(yield* agents.usageIncident(unrelated)).toEqual(incident);
+          const wroteBeforeRelease = writing;
+          yield* Deferred.succeed(proceed, undefined);
+          expect(wroteBeforeRelease).toBe(false);
+          expect(yield* Fiber.join(recovery)).toBe(true);
+          yield* Fiber.join(publishing);
+          expect(writing).toBe(true);
+          expect(yield* fs.exists(wait)).toBe(true);
+          expect(yield* agents.usageIncident(launched)).toEqual(incident);
+          expect(everyLaunch(yield* rig.calls())).toHaveLength(2);
+
+          managed.state.reachable = false;
+          managed.children[1]!.kill();
+          yield* Effect.promise(() => managed.children[1]!.exited);
+          expect(yield* agents.revive(ask, undefined, true)).toBe(false);
+          expect(everyLaunch(yield* rig.calls())).toHaveLength(2);
+        }).pipe(Effect.ensuring(Deferred.succeed(proceed, undefined))),
+        { harness: "codex", model: "default", ports },
+      ).pipe(Effect.provideService(FileSystem.FileSystem, observedFs));
+    }).pipe(Effect.scoped),
+  ));
+
+test("a quota incident survives a host crash before its collection result is recorded", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const managed = yield* managedCodex;
+      yield* rig.queueOutputs([
+        null,
+        { verdict: "clean", note: "recovered the unrecorded incident" },
+      ]);
+      const now = yield* Clock.currentTimeMillis;
+      const exhausted: UsageReading = {
+        subscription: "chatgpt",
+        account: "acct",
+        accountLabel: null,
+        plan: "pro",
+        windows: [
+          {
+            kind: "weekly",
+            label: "Weekly",
+            model: null,
+            usedPercent: 100,
+            resetsAt: isoAt(now + 3_600_000),
+            reached: true,
+          },
+        ],
+        at: isoAt(now),
+        source: "codex-app-server",
+        problem: null,
+      };
+      const available = {
+        ...exhausted,
+        windows: [{ ...exhausted.windows[0]!, usedPercent: 0, reached: false }],
+      };
+      const wait = `${launchDir(dir, "r1")}/review.usage-wait`;
+      const written = yield* Deferred.make<void>();
+      const pauseAfterWrite = (path: string) =>
+        path === wait
+          ? Deferred.succeed(written, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.interruptible,
+            )
+          : Effect.void;
+      const crashingFs: FileSystem.FileSystem = {
+        ...fs,
+        writeFileString: (path, data, options) =>
+          fs.writeFileString(path, data, options).pipe(Effect.tap(() => pauseAfterWrite(path))),
+        rename: (from, to) => fs.rename(from, to).pipe(Effect.tap(() => pauseAfterWrite(to))),
+      };
+      const herdr = new FakeHerdr(rig.pluginEnv());
+      const over = {
+        herdr,
+        harness: "codex",
+        model: "default",
+        ports: managed.ports,
+        fallbacks: Effect.succeed([]),
+        collectMs: 2_000,
+      };
+      yield* interrupted("r1", Deferred.isDone(written), {
+        ...over,
+        readings: Effect.succeed([{ ...available, at: isoAt(now - 60_000) }]),
+        ownReading: () => Effect.succeed(exhausted),
+      }).pipe(Effect.provideService(FileSystem.FileSystem, crashingFs));
+      expect(yield* fs.exists(wait)).toBe(true);
+      expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
+      managed.state.reachable = false;
+      managed.children[0]!.kill();
+      yield* Effect.promise(() => managed.children[0]!.exited);
+      const terminal = Option.getOrThrow(
+        Arr.findFirst(yield* herdr.agentList(), (one) => one.name === agentFor("r1")),
+      );
+      yield* herdr.paneClose(terminal.paneId);
+
+      const result = yield* session(started("r1").pipe(Effect.timeoutOption("2 minutes")), {
+        ...over,
+        readings: Effect.succeed([
+          {
+            ...available,
+            at: isoAt(yield* Clock.currentTimeMillis),
+            windows: [{ ...available.windows[0]!, resetsAt: isoAt(now + 7_200_000) }],
+          },
+        ]),
+        ownReading: () => Effect.succeed(null),
+      });
+      expect(result._tag).toBe("Some");
+      expect(
+        result._tag === "Some" && result.value._tag === "Success" && result.value.success.note,
+      ).toBe("recovered the unrecorded incident");
+      expect(everyLaunch(yield* rig.calls())).toHaveLength(2);
+      expect(managed.children).toHaveLength(2);
+      expect(yield* fs.exists(wait)).toBe(false);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a quota wait does not revive a dead managed Codex server before its usage recovers", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const managed = yield* managedCodex;
+      const herdr = new StaleWorkingTerminal(rig.pluginEnv());
+      yield* rig.queueOutputs([null, { verdict: "clean", note: "after usage recovered" }]);
+      const now = yield* Clock.currentTimeMillis;
+      const exhausted: UsageReading = {
+        subscription: "chatgpt",
+        account: "acct",
+        accountLabel: null,
+        plan: "pro",
+        windows: [
+          {
+            kind: "weekly",
+            label: "Weekly",
+            model: null,
+            usedPercent: 100,
+            resetsAt: isoAt(now + 3_600_000),
+            reached: true,
+          },
+        ],
+        at: isoAt(now),
+        source: "codex-app-server",
+        problem: null,
+      };
+      const available = {
+        ...exhausted,
+        windows: [{ ...exhausted.windows[0]!, usedPercent: 0, reached: false }],
+      };
+      let machine: UsageReading = { ...available, at: isoAt(now - 60_000) };
+      const result = yield* session(
+        Effect.gen(function* () {
+          const waiting = yield* Effect.forkChild(started("r1"));
+          yield* until(parkedSays("before writing"));
+          herdr.stale = true;
+          managed.state.reachable = false;
+          managed.children[0]!.kill();
+          yield* Effect.promise(() => managed.children[0]!.exited);
+          yield* spend(20_000);
+          expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
+          expect(managed.children).toHaveLength(1);
+
+          machine = {
+            ...available,
+            at: isoAt(yield* Clock.currentTimeMillis),
+            windows: [{ ...available.windows[0]!, resetsAt: isoAt(now + 7_200_000) }],
+          };
+          yield* TestClock.adjust("1 minute");
+          return yield* Fiber.join(waiting).pipe(Effect.timeoutOption("2 minutes"));
+        }),
+        {
+          herdr,
+          harness: "codex",
+          model: "default",
+          ports: managed.ports,
+          fallbacks: Effect.succeed([]),
+          readings: Effect.sync(() => [machine]),
+          ownReading: (agent) => Effect.succeed(agent === agentFor("r1") ? exhausted : null),
+          collectMs: 2_000,
+        },
+      );
+      expect(result._tag).toBe("Some");
+      expect(
+        result._tag === "Some" && result.value._tag === "Success" && result.value.success.note,
+      ).toBe("after usage recovered");
+      const calls = yield* rig.calls();
+      expect(harnessesStarted(calls)).toEqual(["codex", "codex"]);
+      expect(closedPanes(calls)).toHaveLength(1);
+      expect(sent(calls, "Your task for this step")).toBe(2);
+      expect(managed.children).toHaveLength(2);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a quota fallback keeps valid late Output written while retiring its managed Codex server", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const managed = yield* managedCodex;
+      const ports: CompactionPorts = {
+        codex: {
+          ...managed.ports.codex!,
+          stop: (target, note, budgetMs) =>
+            Effect.gen(function* () {
+              yield* fs.writeFileString(
+                outputPath("r1"),
+                '{"verdict":"clean","note":"finished during retirement"}',
+              );
+              managed.children[0]!.kill();
+              yield* Effect.promise(() => managed.children[0]!.exited);
+              return yield* COMPACTION_PORTS.codex!.stop!(target, note, budgetMs);
+            }).pipe(Effect.orDie),
+        },
+      };
+      yield* rig.queueOutputs([null, { verdict: "clean", note: "unnecessary successor" }]);
+      const now = yield* Clock.currentTimeMillis;
+      const exhausted: UsageReading = {
+        subscription: "chatgpt",
+        account: "acct",
+        accountLabel: null,
+        plan: "pro",
+        windows: [
+          {
+            kind: "weekly",
+            label: "Weekly",
+            model: null,
+            usedPercent: 100,
+            resetsAt: isoAt(now + 3_600_000),
+            reached: true,
+          },
+        ],
+        at: isoAt(now),
+        source: "codex-app-server",
+        problem: null,
+      };
+      let fallbacks: ReadonlyArray<string> = [];
+      const result = yield* session(
+        Effect.gen(function* () {
+          const waiting = yield* Effect.forkChild(started("r1"));
+          yield* until(parkedSays("before writing"));
+          expect(harnessesStarted(yield* rig.calls())).toEqual(["codex"]);
+          fallbacks = ["claude/opus"];
+          yield* TestClock.adjust("1 minute");
+          return yield* Fiber.join(waiting);
+        }),
+        {
+          harness: "codex",
+          model: "default",
+          ports,
+          fallbacks: Effect.sync(() => fallbacks),
+          readings: Effect.succeed([{ ...exhausted, windows: [] }]),
+          ownReading: (agent) => Effect.succeed(agent === agentFor("r1") ? exhausted : null),
+          collectMs: 2_000,
+        },
+      );
+      expect(result._tag === "Success" && result.success.note).toBe("finished during retirement");
+      const calls = yield* rig.calls();
+      expect(everyLaunch(calls)).toHaveLength(1);
+      expect(sent(calls, "Your task for this step")).toBe(1);
+      expect(closedPanes(calls)).toHaveLength(1);
+      expect(managed.children).toHaveLength(1);
+      expect(managed.children[0]!.signalCode).toBe("SIGTERM");
+    }).pipe(Effect.scoped),
+  ));
+
+for (const recovery of ["a newer matching reset", "its known reset passing"])
+  test(
+    `a spent subscription recovers on ${recovery} without resuming the Run`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          yield* rig.queueOutputs([
+            null,
+            { verdict: "clean", note: "the subscription has room again" },
+          ]);
+          const now = yield* Clock.currentTimeMillis;
+          const exhausted: UsageReading = {
+            subscription: "chatgpt",
+            account: "acct",
+            accountLabel: null,
+            plan: "pro",
+            windows: [
+              {
+                kind: "weekly",
+                label: "Weekly",
+                model: null,
+                usedPercent: 100,
+                resetsAt: isoAt(
+                  now + (recovery === "its known reset passing" ? 120_000 : 3_600_000),
+                ),
+                reached: true,
+              },
+            ],
+            at: isoAt(now),
+            source: "codex-app-server",
+            problem: null,
+          };
+          const available = {
+            ...exhausted,
+            windows: [{ ...exhausted.windows[0]!, usedPercent: 0, reached: false }],
+          };
+          let machine: UsageReading = { ...available, at: isoAt(now - 60_000) };
+          const result = yield* session(
+            Effect.gen(function* () {
+              const waiting = yield* Effect.forkChild(started("r1"));
+              yield* until(parkedSays("before writing"));
+              expect(harnessesStarted(yield* rig.calls())).toEqual(["codex"]);
+              if (recovery === "its known reset passing") yield* TestClock.adjust("3 minutes");
+              else {
+                machine = {
+                  ...available,
+                  at: isoAt(yield* Clock.currentTimeMillis),
+                  windows: [{ ...available.windows[0]!, resetsAt: isoAt(now + 7_200_000) }],
+                };
+                yield* TestClock.adjust("1 minute");
+              }
+              return yield* Fiber.join(waiting).pipe(Effect.timeoutOption("2 minutes"));
+            }),
+            {
+              harness: "codex",
+              model: "default",
+              fallbacks: Effect.succeed([]),
+              readings: Effect.sync(() => [machine]),
+              ownReading: (agent) => Effect.succeed(agent === agentFor("r1") ? exhausted : null),
+              collectMs: 2_000,
+            },
+          );
+          expect(result._tag).toBe("Some");
+          expect(
+            result._tag === "Some" && result.value._tag === "Success" && result.value.success.note,
+          ).toBe("the subscription has room again");
+          const calls = yield* rig.calls();
+          expect(harnessesStarted(calls)).toEqual(["codex", "codex"]);
+          expect(closedPanes(calls)).toHaveLength(1);
+          expect(yield* (yield* FileSystem.FileSystem).exists(controlPath(dir, PARKED, "r1"))).toBe(
+            false,
+          );
+        }),
+      ),
+    30_000,
+  );
+
+test("a spent subscription stays unavailable without proof that its exhausted window reset", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const reset = isoAt(now + 3_600_000);
+      const spent = [
+        {
+          on: { harness: "codex", model: "default", effort: null },
+          why: "weekly limit reached",
+          resetsAt: reset,
+          exhaustion: {
+            at: now - 60_000,
+            account: "acct",
+            windows: [{ kind: "weekly" as const, model: null, resetsAt: reset }],
+          },
+        },
+      ];
+      const fresh: UsageReading = {
+        subscription: "chatgpt",
+        account: "acct",
+        accountLabel: null,
+        plan: "pro",
+        windows: [
+          {
+            kind: "weekly",
+            label: "Weekly",
+            model: null,
+            usedPercent: 0,
+            resetsAt: isoAt(now + 7_200_000),
+            reached: false,
+          },
+        ],
+        at: isoAt(now),
+        source: "codex-app-server",
+        problem: null,
+      };
+      let readings: ReadonlyArray<UsageReading> = [];
+      yield* session(
+        Effect.gen(function* () {
+          const agents = yield* Agents;
+          for (const candidate of [
+            { ...fresh, windows: [{ ...fresh.windows[0]!, resetsAt: reset }] },
+            { ...fresh, at: isoAt(now - 120_000) },
+            { ...fresh, at: isoAt(now + 3_600_000) },
+            { ...fresh, at: "not a timestamp" },
+            { ...fresh, problem: "The usage source could not be read" },
+            { ...fresh, windows: [] },
+            { ...fresh, account: "another-account" },
+            {
+              ...fresh,
+              windows: [
+                ...fresh.windows,
+                { ...fresh.windows[0]!, kind: "session" as const, usedPercent: 100, reached: true },
+              ],
+            },
+          ]) {
+            readings = [candidate];
+            const chosen = yield* agents.choose([], { runId: "r1", operation: "review" }, spent);
+            expect(chosen.why).toStartWith("nothing has room");
+          }
+          readings = [fresh];
+          const previous = {
+            ...spent[0]!,
+            resetsAt: isoAt(now - 1),
+            exhaustion: {
+              ...spent[0]!.exhaustion,
+              at: now - 120_000,
+              windows: [{ ...spent[0]!.exhaustion.windows[0]!, resetsAt: isoAt(now - 1) }],
+            },
+          };
+          const latest = { ...spent[0]!, exhaustion: { ...spent[0]!.exhaustion, at: now } };
+          const repeated = yield* agents.choose([], { runId: "r1", operation: "review" }, [
+            previous,
+            latest,
+          ]);
+          expect(repeated.why).toStartWith("nothing has room");
+          readings = [{ ...fresh, at: isoAt(now - 10 * 60_000) }];
+          const staleRecovery = yield* agents.choose([], { runId: "r1", operation: "review" }, [
+            {
+              ...spent[0]!,
+              exhaustion: { ...spent[0]!.exhaustion, at: now - 20 * 60_000 },
+            },
+          ]);
+          expect(staleRecovery.why).toStartWith("nothing has room");
+        }),
+        {
+          harness: "codex",
+          model: "default",
+          fallbacks: Effect.succeed([]),
+          readings: Effect.sync(() => readings),
+        },
+      );
+      expect(harnessesStarted(yield* rig.calls())).toEqual([]);
+    }),
+  ));
+
+test("a legacy spent subscription decodes without exhaustion metadata and only recovers after its known reset", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      yield* session(
+        Effect.gen(function* () {
+          const agents = yield* Agents;
+          for (const hasReset of [false, true]) {
+            const legacy = {
+              _tag: "RanOut" as const,
+              why: "weekly limit reached",
+              transcript: null,
+            };
+            const saved = hasReset ? { ...legacy, resetsAt: isoAt(now - 1) } : legacy;
+            expect(flow(Schema.decodeUnknownResult(Collected), Result.getOrThrow)(saved)).toEqual(
+              saved,
+            );
+            const chosen = yield* agents.choose([], { runId: "r1", operation: "review" }, [
+              {
+                ...saved,
+                on: { harness: "codex", model: "default", effort: null },
+              },
+            ]);
+            if (hasReset) expect(chosen.why).toBeUndefined();
+            else expect(chosen.why).toStartWith("nothing has room");
+          }
+        }),
+        {
+          harness: "codex",
+          model: "default",
+          fallbacks: Effect.succeed([]),
+          readings: Effect.succeed([]),
+        },
       );
     }),
   ));
@@ -3589,6 +4777,7 @@ test("a herdr that cannot say what it has parks the work rather than starting an
       const why = yield* parkedOn(`{"agent list":"herdr is not answering"}`);
       expect(why).toContain("herdr cannot say which agents it has");
       expect(why).toContain("herdr is not answering");
+      expect(yield* read(controlPath(dir, PARK_CAUSE, "r1"))).toBe("herdr-unavailable");
       // What uncertainty must never be rounded down to.
       expect(why).toContain("Nothing here says the agent did no work.");
       expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(0);
@@ -5213,12 +6402,12 @@ for (const busy of ["working", "blocked"])
       Effect.gen(function* () {
         const { result, seen } = yield* listedWhile(`idle,${busy},${busy},${busy},idle`);
         expect(result._tag === "Success" && result.success).toBe("01-api:first+02-ui:second");
-        // The first read is the first prompt's own, as it went in.
-        const boundary = seen.slice(seen.indexOf("prompt 01-api") + 2);
-        expect(boundary.slice(0, 5)).toEqual([busy, busy, busy, "idle", "compact"]);
-        expect(Arr.filter(boundary, (one) => pipe(one, Str.startsWith("prompt")))).toEqual([
-          "prompt 02-ui",
-        ]);
+        const boundary = seen.slice(seen.indexOf("prompt 01-api") + 1);
+        expect(boundary).toContain(busy);
+        expect(boundary[boundary.indexOf("compact") - 1]).toBe("idle");
+        expect(
+          Arr.filter(boundary, (one) => one === "compact" || pipe(one, Str.startsWith("prompt"))),
+        ).toEqual(["compact", "prompt 02-ui"]);
         const log = yield* read(`${dir}/agents/r1/agents.log`);
         expect(
           Option.getOrNull(pipe(log, Str.match(/still working; 02-ui waits for its turn to end/g))),

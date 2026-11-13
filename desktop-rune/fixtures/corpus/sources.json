@@ -1,0 +1,242 @@
+[
+  {
+    "file": "pr-27.md",
+    "pr": 27,
+    "url": "https://github.com/cego/collie/pull/27",
+    "title": "Remember a repository's approved checks, so its next Run starts with them"
+  },
+  {
+    "file": "pr-219.md",
+    "pr": 219,
+    "url": "https://github.com/cego/collie/pull/219",
+    "title": "Share one test budget per Machine and cut each test's work"
+  },
+  {
+    "file": "pr-257.md",
+    "pr": 257,
+    "url": "https://github.com/cego/collie/pull/257",
+    "title": "Enforce strict Effect 4.1 across Collie and Desktop"
+  },
+  {
+    "file": "pr-258.md",
+    "pr": 258,
+    "url": "https://github.com/cego/collie/pull/258",
+    "title": "Reduce unused skill description overhead in managed Claude agents"
+  },
+  {
+    "file": "pr-259.md",
+    "pr": 259,
+    "url": "https://github.com/cego/collie/pull/259",
+    "title": "Fix Desktop plan comments for waiting and fallback planners"
+  },
+  {
+    "file": "pr-260.md",
+    "pr": 260,
+    "url": "https://github.com/cego/collie/pull/260",
+    "title": "feat: discover Settings choices, share Connections and post to Slack"
+  },
+  {
+    "file": "pr-268.md",
+    "pr": 268,
+    "url": "https://github.com/cego/collie/pull/268",
+    "title": "Wait on a CI job missing right after its retry"
+  },
+  {
+    "file": "pr-270.md",
+    "pr": 270,
+    "url": "https://github.com/cego/collie/pull/270",
+    "title": "Run an admitted control to its end, and recover only the Runs a resume reaches"
+  },
+  {
+    "file": "pr-271.md",
+    "pr": 271,
+    "url": "https://github.com/cego/collie/pull/271",
+    "title": "perf: reuse Run inputs and streamline host reads"
+  },
+  {
+    "file": "pr-272.md",
+    "pr": 272,
+    "url": "https://github.com/cego/collie/pull/272",
+    "title": "Keep Desktop Settings to one scrollbar"
+  },
+  {
+    "file": "pr-274.md",
+    "pr": 274,
+    "url": "https://github.com/cego/collie/pull/274",
+    "title": "Read GitLab Connections on Collie's own host and say which Machines still lack the login"
+  },
+  {
+    "file": "pr-278.md",
+    "pr": 278,
+    "url": "https://github.com/cego/collie/pull/278",
+    "title": "Register every saved generation before a recovered Run looks one up"
+  },
+  {
+    "file": "pr-279.md",
+    "pr": 279,
+    "url": "https://github.com/cego/collie/pull/279",
+    "title": "Bind a verification to the bytes it ran on, so committing them keeps the proof"
+  },
+  {
+    "file": "pr-280.md",
+    "pr": 280,
+    "url": "https://github.com/cego/collie/pull/280",
+    "title": "Wait for a release's branch to take its target instead of failing when another merge overtakes it"
+  },
+  {
+    "file": "pr-283.md",
+    "pr": 283,
+    "url": "https://github.com/cego/collie/pull/283",
+    "title": "Install Desktop's dependencies from the root install"
+  },
+  {
+    "file": "pr-284.md",
+    "pr": 284,
+    "url": "https://github.com/cego/collie/pull/284",
+    "title": "Answer a recorded command on the same tree instead of running it again"
+  },
+  {
+    "file": "pr-286.md",
+    "pr": 286,
+    "url": "https://github.com/cego/collie/pull/286",
+    "title": "Bind a verification to the dependencies installed in its checkout"
+  },
+  {
+    "file": "pr-287.md",
+    "pr": 287,
+    "url": "https://github.com/cego/collie/pull/287",
+    "title": "Finish a Check from its record, decide a Run's reach in one place, decode a benchmark plan once"
+  },
+  {
+    "file": "pr-288.md",
+    "pr": 288,
+    "url": "https://github.com/cego/collie/pull/288",
+    "title": "Decode a release's checks recorded before 0.110.0 as not conflicting"
+  },
+  {
+    "file": "pr-289.md",
+    "pr": 289,
+    "url": "https://github.com/cego/collie/pull/289",
+    "title": "Run Collie's agents, terminals and Machines on herdr-core"
+  },
+  {
+    "file": "pr-290.md",
+    "pr": 290,
+    "url": "https://github.com/cego/collie/pull/290",
+    "title": "Keep a stopped Run's open question off Needs you"
+  },
+  {
+    "file": "pr-291.md",
+    "pr": 291,
+    "url": "https://github.com/cego/collie/pull/291",
+    "title": "Treat hc's pin as a minimum, never downgrading a newer hc"
+  },
+  {
+    "file": "pr-292.md",
+    "pr": 292,
+    "url": "https://github.com/cego/collie/pull/292",
+    "title": "Run the engine on one shard and record #215/#216 measurements"
+  },
+  {
+    "file": "pr-293.md",
+    "pr": 293,
+    "url": "https://github.com/cego/collie/pull/293",
+    "title": "Keep the Collie directory's CLAUDE.md out of Claude agents working inside it"
+  },
+  {
+    "file": "pr-294.md",
+    "pr": 294,
+    "url": "https://github.com/cego/collie/pull/294",
+    "title": "Keep checks across host upgrades, answer Runs only when they wait, and ask before a tune-up concludes"
+  },
+  {
+    "file": "pr-295.md",
+    "pr": 295,
+    "url": "https://github.com/cego/collie/pull/295",
+    "title": "Post a release's approval request in Slack as the human who asked"
+  },
+  {
+    "file": "pr-296.md",
+    "pr": 296,
+    "url": "https://github.com/cego/collie/pull/296",
+    "title": "Use one Slack connection: the human's own sign-in, with no bot token"
+  },
+  {
+    "file": "pr-297.md",
+    "pr": 297,
+    "url": "https://github.com/cego/collie/pull/297",
+    "title": "Fix #265 and #266, cut #215's fingerprint cost, and keep a replaced checkout's fingerprint honest"
+  },
+  {
+    "file": "pr-298.md",
+    "pr": 298,
+    "url": "https://github.com/cego/collie/pull/298",
+    "title": "Keep the human's Standing direction, and offer to draft it from their own words"
+  },
+  {
+    "file": "pr-299.md",
+    "pr": 299,
+    "url": "https://github.com/cego/collie/pull/299",
+    "title": "Supersede a Run's open question when a human messages its agent"
+  },
+  {
+    "file": "pr-300.md",
+    "pr": 300,
+    "url": "https://github.com/cego/collie/pull/300",
+    "title": "Open a Run's record faster: read records on a door thread, keep them in Desktop, draw only what changed"
+  },
+  {
+    "file": "pr-303.md",
+    "pr": 303,
+    "url": "https://github.com/cego/collie/pull/303",
+    "title": "Keep measurement trees while a Measurement runs on this Machine"
+  },
+  {
+    "file": "pr-304.md",
+    "pr": 304,
+    "url": "https://github.com/cego/collie/pull/304",
+    "title": "Park the Step when an Output is still unusable after its repair"
+  },
+  {
+    "file": "pr-315.md",
+    "pr": 315,
+    "url": "https://github.com/cego/collie/pull/315",
+    "title": "tune-up: judge each metric by its own limits, fail what it cannot prove, and carry an earlier Run with from"
+  },
+  {
+    "file": "pr-321.md",
+    "pr": 321,
+    "url": "https://github.com/cego/collie/pull/321",
+    "title": "Keep Collie's own records in the host's database"
+  },
+  {
+    "file": "pr-322.md",
+    "pr": 322,
+    "url": "https://github.com/cego/collie/pull/322",
+    "title": "Let a Task hold several merge requests, each known by its MR id"
+  },
+  {
+    "file": "pr-329.md",
+    "pr": 329,
+    "url": "https://github.com/cego/collie/pull/329",
+    "title": "Go on without asking when a repository has no Helle project"
+  },
+  {
+    "file": "pr-330.md",
+    "pr": 330,
+    "url": "https://github.com/cego/collie/pull/330",
+    "title": "Give fast-forwarded hosts no Connection deadline on their compressed clock"
+  },
+  {
+    "file": "pr-331.md",
+    "pr": 331,
+    "url": "https://github.com/cego/collie/pull/331",
+    "title": "Park a Run at once when its agent's harness gives up on a turn"
+  },
+  {
+    "file": "pr-333.md",
+    "pr": 333,
+    "url": "https://github.com/cego/collie/pull/333",
+    "title": "Tell a proof that passed only before the tree moved from one that fails"
+  }
+]

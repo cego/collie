@@ -11,6 +11,8 @@
 // merge request merged — the one a Run recorded, else the one opened from the Task's own
 // branch, whoever opened it — and the record says who and when.
 
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { Effect, Path, Schema } from "effect";
 import { Disposition } from "./board-model";
@@ -36,6 +38,16 @@ export const readDispositions = Effect.fn("Disposition.read")(function* (runDir:
 
 /** The words of a ref, any of which may be a Run's id. */
 export const refWords = (ref: string) => Str.split(ref, /[\s;,]+/);
+
+/** The Runs a ref names on `machine`: bare, or `<machine>:<run>` by it or its first label. */
+export const refRuns = (ref: string, machine: string) => {
+  const names = new Set([machine, Str.split(machine, ".")[0]!]);
+  return Arr.flatMap(refWords(ref), (word) => {
+    const colon = Option.getOrElse(Str.indexOf(":")(word), () => -1);
+    if (colon < 0) return [word];
+    return names.has(Str.slice(0, colon)(word)) ? [Str.slice(colon + 1)(word)] : [];
+  });
+};
 
 /**
  * The current answer, which is the last one given. A correction is a new line rather than

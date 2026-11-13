@@ -13,6 +13,7 @@ import {
   FileSystem,
   Logger,
   Option,
+  Queue,
   Schedule,
   Schema,
   Stream,
@@ -253,6 +254,12 @@ test(
           const fs = yield* FileSystem.FileSystem;
           const runId = yield* started(world, ["plain", "--input", "note=hi"]);
           const env = yield* currentEnv.pipe(Effect.orDie);
+          const changes = yield* Queue.unbounded<void>();
+          let notifications = 0;
+          const detailOf = yield* followRunDetail(env, () => {
+            notifications++;
+            Queue.offerUnsafe(changes, undefined);
+          });
           const app = appState(
             {
               herdr: new Herdr(env),
@@ -262,26 +269,37 @@ test(
               paneId: env.paneId,
               pluginRoot: env.pluginRoot,
               tasksOf: () => Effect.succeed({ tasks: [], unreadable: null }),
-              detailOf: yield* followRunDetail(env),
+              detailOf,
             },
             env,
           );
           const looking = focus({ selected: runRowId(runId), tail: true });
           expect((yield* app.load(looking)).detail?.id).toBe(runId);
+          yield* Queue.takeAll(changes);
+          const before = notifications;
           yield* fs.writeFileString(`${runDir(world.state, runId)}/log.txt`, "from the host\n", {
             flag: "a",
           });
-          const after = yield* app.load(focus({ ...looking, nonce: 1 })).pipe(
-            Effect.repeat({
-              until: (state) =>
-                state.detail?.tail?._tag === "Text" &&
-                pipe_(state.detail.tail.text, Str.includes("from the host")),
-              schedule: Schedule.spaced("250 millis"),
-              times: 80,
-            }),
+          // The host may send other parts first. Inspect its latest frame only when it
+          // notifies us, and load the app once the updated log frame has actually arrived.
+          yield* Stream.fromQueue(changes).pipe(
+            Stream.mapEffect(() => detailOf({ runId, tail: true, pages: 1, refreshMr: false })),
+            Stream.filter(
+              (detail) =>
+                detail?.tail?._tag === "Text" &&
+                pipe_(detail.tail.text, Str.includes("from the host")),
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+            Effect.timeout("20 seconds"),
           );
+          expect(notifications).toBeGreaterThan(before);
+          const after = yield* app.load(looking);
           yield* stopHost(world.state);
-          expect(after.detail?.tail?._tag).toBe("Text");
+          expect(after.detail?.tail).toMatchObject({
+            _tag: "Text",
+            text: expect.stringContaining("from the host"),
+          });
         }),
       ["plain.workflow.ts"],
     ),

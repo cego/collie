@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import { parkLine } from "../park-cause";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -536,6 +537,10 @@ const runShow = Command.make(
             human: Arr.join(
               [
                 `${view.runId}\t${statusLine(statusOf(view), disposition)}\t${view.workflow}`,
+                ...(view.park == null ? [] : [`  ${parkLine(view.park)}`]),
+                ...((view.recovery?.length ?? 0) === 0
+                  ? []
+                  : ["  Recovery:", ...Arr.map(view.recovery ?? [], (line) => `    ${line}`)]),
                 ...(branchProgress === null ? [] : [branchProgress]),
                 ...(memory === null ? [] : [`  ${memory}`]),
                 ...(machine === null ? [] : [`  on ${machine}`]),

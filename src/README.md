@@ -57,8 +57,12 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `verify-spec.ts`       | Which commands Collie may run itself for a Run, and where that permission came from                                         |
 | `check-proof.ts`       | A Check's proof on a tree, and which of a Run's Checks it runs itself                                                       |
 | `ci-job.ts`            | A check left to CI: its job read through the forge, a failure settled, waited on, its pass recorded                         |
+| `park-recheck.ts`      | Read-only rechecks of a parked fact, including the CI job and head recorded before parking                                  |
+| `park-recovery.ts`     | Recovery rounds, backoff, durable resume claims, limits, failure News, and starting and judging Heals                       |
+| `heal.ts`              | Whether a park goes to a Heal or straight to you, the healer a project declares, and a Heal's Output                        |
 | `landing.ts`           | A Run's merge at a head: its landing record, and the one rule settling an attempt a restart interrupted                     |
 | `review-wait.ts`       | Where a merge request's review stands for a Release Run, and the wait's parked line                                         |
+| `prerequisites.ts`     | Whether the other Runs' Changes a ticket needs merged have landed, and the wait's awaited line                              |
 | `releasing.ts`         | A Release Run's checkout fast-forward, and its tag, stage and production read from the forge                                |
 | `shipping.ts`          | Shipping Go declarations, the forge freshness window and the host's recorded stage proof                                    |
 | `checks.ts`            | The one reading of a Run's running and finished checks that every door uses                                                 |

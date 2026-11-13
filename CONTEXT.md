@@ -368,6 +368,19 @@ its worktree under guards. It is how new steps start: a Workflow of its own, wit
 Intent and evidence. Telling a finished Run's live agent something is steering, not a
 follow-up (see **Reopened**, ADR-0041).
 
+**Offer** — Something a finished Run's Workflow declares it can start next, such as
+`Release`, `Stage` or a Follow-up Run. Each offer is decided again from the Run's facts when
+it is listed and when it is invoked (ADR-0025). It is invoked on the Run whose work it is
+about, which for a merge request is the Run that carries that merge request. An offer that
+cannot be made is listed with its reason, for example:
+
+- a Run doing the same work is still going: one it started from the same Run, or one of the
+  same Workflow started with the same merge request, whichever Run carries it;
+- the forge reads its merge request merged;
+- a connection it needs is unusable.
+
+It is never hidden (ADR-draft-an-offer-is-made-on-the-run-that-owns-its-work-and-not-twice).
+
 **Intent** — A Run's goal, the Constraints its work must respect, and the Authority delegated to Collie over it. Versioned; v1 is written at start from the workspace's defaults, the work source's own text and what was named at launch, and amended by an explicit request, and, in a Run on a worktree of its own, by its own `plan/SPEC.md` as its constraints change (ADR-0036). Everything Collie says about drift is a comparison against it; what imported Runs recorded stays readable.
 
 **Constraint** — One thing a Run's work must respect. `kind: rule` is checked by Collie itself; `kind: semantic` is judged. `severity: block | warn`. Its `source` says where it came from — `human`, `workspace-default`, `parent` or `plan` — and a `plan` entry carries the file, heading and line it was read from. A `plan` constraint narrows the goal it was cut from: the goal is what was asked, never evidence of drift against it, and a judgement reads the work (ADR-0036, amended 2026-10-19). Text is evidence: no Constraint, wherever it came from, grants Authority.
@@ -454,6 +467,23 @@ answer: an agent is waiting for a human in its own pane — at a dialog of its h
 that Collie could not put on the Run, which herdr reports as a `blocked` agent — or a Run parked because its agent's pane would
 not take a prompt. Either way the work has stopped, so the card says which pane to go to
 rather than what the step was doing.
+
+**Park cause** — Why a Run parked, from one closed list: what the host may do about it.
+A cause either asks the Run's own agent something, or rechecks the fact it parked on, or
+needs you and says why. An unclassified park is `unknown`, never a guess. Counted per cause
+in `collie run report` (ADR-draft-a-run-recovers-where-it-parks).
+
+**Recovery** — What the host does about a park, without being asked: an **Output reminder**
+to an agent whose turn ended without writing its Output, and a resume once a recheck shows the
+cause has cleared. Bounded per Run and cause, recorded with its outcome, and proved only by the
+fact the park waited for, never by inactivity or an acknowledgement. It never answers a
+**Decision**, lifts a **Hold**, undoes a **Stop** or passes a gate.
+
+**Heal** — A Run the host starts for a park its **Recovery** could not clear, before the park
+needs you: its agent may only message the parked Run's own agents and resume it. Judged by
+the parked Run's facts, never its Output, and it always records a finding for everyone who
+runs Collie. One per park, three per Run, one at a time per Machine; never for a Run with a
+**Decision**, **Hold** or **Stop**, or for a Heal (ADR-draft-a-run-recovers-where-it-parks).
 
 **Wait** — What holds a Run up at a moment: a **Decision** on it, **Stalled**, a **Hold**,
 **Short of memory**, or something it awaits that ends by itself. A Check Collie runs for it
@@ -727,7 +757,9 @@ why. It never resolves a thread, because that is the reviewer's call.
 
 **Go** — The answer that lets a Run do what cannot be taken back: start a release (claim,
 stage, merge, tag), and send one to production. It is asked on the Run once the work is
-ready, never at its start. The first holds for one head: a head that moves takes it back.
+ready, never at its start, except that a human's own **Release** that started a Release Run
+is that Run's first Go for the head it read at its start, while nobody's approval is withdrawn.
+The first holds for one head: a head that moves takes it back.
 The second holds for what it sends. Before a merge, that is the head on stage, so the same
 rule applies. After one, it is one tag and the production jobs that tag names. Who answered
 is recorded, never a reason to refuse. A Workflow can declare the Go's action and head
@@ -823,6 +855,8 @@ whole `recheck` (ADR-0034, amended 2026-10-15).
 
 **Wave** — The Change runs a fan-out starts together: those whose tickets are blocked by no ticket of a Change run still going. Ticket order inside a Change is its Change run's; order between Changes, in one repository or several, is the wave's. A plan whose Changes block each other in a cycle has no wave order and is refused, as is one whose "Blocked by" line names something that is not a ticket of the plan, or which numbers two tickets the same so that such a line cannot say which it means.
 
+**Prerequisite** — another Run's Change that a ticket needs merged before it is built. The ticket names it on its `Needs merged:` line, as a Run id and that Run's Change name, with no name for the Run's default Change. It is always in the ticket's own repository. Its Change run builds what it can, then waits until the prerequisite is on the default branch, and merges that branch in before the ticket's build. A ticket of the same plan is named by `Blocked by` instead (ADR-draft-a-change-waits-on-another-runs-change-to-merge).
+
 **Deferred** — Architecture candidates the architect chose not to apply unattended, kept in the summary for the human.
 
 **View** — What the board's nav switches between, one at a time, each a projection of
@@ -842,10 +876,19 @@ refused with the reason rather than asked again. Where the work happens is never
 outside the Home it is the checkout the human is in, and from the Home it is the
 **Projects root** or the checkout the words point at. What it inferred is shown in one line
 before the Run starts. It is the human's front door only: an agent's start is given
-everything explicitly (see **Input**). Nothing about the Run's questions — those
-are asked when the Run reaches them, with the work they decide about in front of the
-human. It is asked inline on the board, for `＋ New run`; a question a Run answers is a
-file in its Run directory instead.
+everything explicitly (see **Input**). The one thing it says about the Run's questions is
+its **Reach**, chosen on the start row; the rest are asked when the Run reaches them, with
+the work they decide about in front of the human. It is asked inline on the board, for
+`＋ New run`; a question a Run answers is a file in its Run directory instead.
+
+**Reach** — How far a Run goes before it asks what next: the Input a Workflow hints with
+`reach`, each value titled for the human (`plan`'s and `implement`'s `then`). The board's
+start row offers each, and a start from the board or a chat remembers the one chosen as the
+default for that Workflow in that project — `projects-root` for a start rooted at the
+Projects root, else its remote, else its directory — as the shared
+setting `launch_reach.<workflow>.<project>`, which Settings does not show. The next launch
+offers it first; with none saved the first is empty, which asks as before. A typed
+`collie run start` gives it with `--input` and neither reads nor saves it.
 
 **Flow** — A Task drawn as the work it took. Each of its Runs is shown on its Machine, as the
 **Steps** it ran and is running, each with its attempts, waits and evidence. Around them are

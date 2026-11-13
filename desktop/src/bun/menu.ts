@@ -1,6 +1,6 @@
 // The application menu a Mac needs: macOS sends Cmd+C, Cmd+V, Cmd+Q and the rest through it.
 
-import type { ApplicationMenuItemConfig } from "electrobun/bun";
+import type { ApplicationMenuItemConfig } from "../../../desktop-rune/core/platform";
 
 const role = (name: string): ApplicationMenuItemConfig => ({ role: name });
 const separator: ApplicationMenuItemConfig = { type: "separator" };

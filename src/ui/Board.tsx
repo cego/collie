@@ -4,7 +4,7 @@
 
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
-import { For, Show, type JSX } from "solid-js";
+import { For, Index, Show, type JSX } from "solid-js";
 import { TextAttributes, type MouseEvent } from "@opentui/core";
 import { agentCount, finishedLabel, whereItIs, workingLabel, waitingLabel } from "../board";
 import {
@@ -23,6 +23,7 @@ import {
 } from "../board-model";
 import type { UsagePhrase } from "../usage-model";
 import { newerLine } from "../workspace";
+import { parkLine } from "../park-cause";
 import { ALL_KEYS, type Command, type MenuItem, type Older, primaryFor } from "./state";
 import { C, cardEdge, sentenceColour, stateGlyph, stepGlyph } from "./sections";
 
@@ -427,7 +428,11 @@ function Section(props: { label: string; fg?: string; children: JSX.Element }) {
   );
 }
 
-/** The cards, `columns` across. A row of them, so every card in it is the same width. */
+/**
+ * The cards, `columns` across. Rows and cells own their native widgets by position;
+ * a fresh Task snapshot updates the cell instead of destroying its text and layout.
+ * Cards keep no Task-local state, and every action reads the cell's current Task.
+ */
 function Grid(props: {
   views: ReadonlyArray<TaskView>;
   columns: number;
@@ -448,27 +453,27 @@ function Grid(props: {
   };
   return (
     <box style={{ flexDirection: "column", flexShrink: 0 }}>
-      <For each={rows()}>
+      <Index each={rows()}>
         {(row) => (
           <box style={{ flexDirection: "row", flexShrink: 0 }}>
-            <For each={row}>
+            <Index each={row()}>
               {(view) => (
                 <Card
-                  view={view}
+                  view={view()}
                   width={props.width - 2 * SIDE}
                   columns={props.columns}
-                  open={props.open === view.id}
-                  onOpen={() => props.onOpen(view)}
+                  open={props.open === view().id}
+                  onOpen={() => props.onOpen(view())}
                   onMenu={props.onMenu}
                   onAct={props.onAct}
                   decide={props.decide}
                   batch={props.batch}
                 />
               )}
-            </For>
+            </Index>
           </box>
         )}
-      </For>
+      </Index>
     </box>
   );
 }
@@ -566,6 +571,13 @@ function Card(props: {
       <Show when={props.view.held !== null}>
         <text fg={C.dim}>{props.view.held}</text>
       </Show>
+
+      <Show when={props.view.park != null}>
+        <text fg={C.dim}>{parkLine(props.view.park!)}</text>
+      </Show>
+      <For each={(props.view.recovery ?? []).slice(-2)}>
+        {(line) => <text fg={C.dim}>{line}</text>}
+      </For>
 
       <Show when={props.batch.stopping(props.view)}>
         <text fg={C.dim}>■ stopping…</text>

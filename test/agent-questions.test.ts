@@ -9,7 +9,7 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Schema, flow, Result } from "effect";
+import { Effect, FileSystem, Option, Schema, flow, Result } from "effect";
 import { connect, ownerOf } from "../src/host";
 import { readEnv } from "../src/env";
 import { resetExecutors } from "../src/executors";
@@ -258,6 +258,70 @@ test(
             (one) => one !== null && isSettled(one),
           );
           expect(view?.status.status).toBe("complete");
+        }).pipe(Effect.provide(recordsAt(world.state)), Effect.ensuring(stopHost(world.state))),
+      ["told.workflow.ts"],
+    ),
+  120_000,
+);
+
+const askedAlone = (id: string, header: string) =>
+  asking(id, [
+    {
+      question: `Which ${header}?`,
+      header,
+      options: [
+        { label: "first (Recommended)", description: "the usual" },
+        { label: "second", description: "the other" },
+        { label: "third", description: "neither" },
+      ],
+      multiSelect: false,
+    },
+  ]);
+
+test(
+  "an answer relayed to an agent sets none of its other open questions aside",
+  () =>
+    proves(
+      "collie-agent-relay-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const { env, client } = yield* hostedOver(world, [null]);
+          const { runId } = yield* client
+            .start({ project: world.project, id: "told", request: "start", input: { work: "it" } })
+            .pipe(Effect.orDie);
+          const launched = (yield* until(
+            () => launchOf(world.state, runId, "build"),
+            (one) => one !== undefined,
+          ))!;
+          const control = yield* controlDir(world.state, launched.agent);
+          // Two calls, as an agent that asks one question at a time makes them.
+          yield* recordClaudeEvent(control, askedAlone("toolu_a", "Database")).pipe(Effect.orDie);
+          yield* recordClaudeEvent(control, askedAlone("toolu_b", "Checks")).pipe(Effect.orDie);
+          yield* until(
+            () => client.run({ runId }).pipe(Effect.orDie),
+            (view) => (view?.waiting.length ?? 0) === 2,
+          );
+
+          const [first] = yield* carryOutAsked(
+            env,
+            [{ kind: "answer", run: runId, choiceId: "ask-build-1", answer: "1" }],
+            { origin: "desktop", requestId: "desktop-1" },
+          );
+          expect(first).toMatchObject({ kind: "answer", state: "applied" });
+          yield* until(
+            () =>
+              fs.readFileString(Bun.env.FAKE_HERDR_LOG ?? "").pipe(Effect.orElseSucceed(() => "")),
+            (all) => pipe_(all, Str.includes("Your question Database is answered: first")),
+          );
+          // A question asked after the relay is recorded on a later pass than the one that sent it.
+          yield* recordClaudeEvent(control, askedAlone("toolu_c", "Region")).pipe(Effect.orDie);
+          const view = yield* until(
+            () => client.run({ runId }).pipe(Effect.orDie),
+            (one) => Arr.some(one?.waiting ?? [], (q) => q.name === "ask-build-3"),
+          );
+          const second = Arr.findFirst(view?.waiting ?? [], (q) => q.name === "ask-build-2");
+          expect(Option.getOrUndefined(Option.map(second, (q) => q.superseded))).toBeNull();
         }).pipe(Effect.provide(recordsAt(world.state)), Effect.ensuring(stopHost(world.state))),
       ["told.workflow.ts"],
     ),

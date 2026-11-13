@@ -227,11 +227,20 @@ test(
             const before = yield* ownerOf(first.world.state);
             yield* first.lists([second]);
             yield* onOlder(["--machine", "second", "board"]);
-            yield* until(
-              () => fs.exists(log),
-              (exists) => exists,
+            // Opening the shell's append redirection creates an empty file before echo
+            // writes. Observe the completed line, and assert that same snapshot.
+            const upgraded = yield* until(
+              () =>
+                fs
+                  .exists(log)
+                  .pipe(
+                    Effect.flatMap((exists) =>
+                      exists ? fs.readFileString(log) : Effect.succeed(""),
+                    ),
+                  ),
+              Str.endsWith("\n"),
             );
-            expect(Str.trim(yield* fs.readFileString(log))).toBe(BUILD);
+            expect(Str.trim(upgraded)).toBe(BUILD);
             yield* until(
               () => ownerOf(first.world.state),
               (owner) => owner !== null && owner.pid !== before?.pid,
@@ -315,6 +324,7 @@ test(
             setSharedDefinitions: ({ definitions }) => Effect.succeed(definitions),
           };
           const link: Link = {
+            reconnected: Effect.void,
             ...own,
             dir: "test",
             userDir: "test",

@@ -1,4 +1,4 @@
-// `install-desktop.sh`, the one line that installs Collie Desktop: it runs Electrobun's
+// `install-desktop.sh`, the one line that installs Collie: it runs Electrobun's
 // installer only once the download verifies against Collie's release key.
 
 import * as Str from "effect/String";
@@ -95,7 +95,7 @@ test("a signed installer is downloaded and run for this user", () =>
       const key = pair();
       yield* release(dir, (bytes) => signReleaseP256(bytes, key.privateKey));
       const done = yield* install(dir, key.publicKey);
-      expect(done.said).toContain("installed Collie Desktop");
+      expect(done.said).toContain("installed Collie");
       expect(done.code).toBe(0);
       expect(done.ran).toBe(true);
     }).pipe(Effect.scoped),
@@ -124,7 +124,7 @@ test("a tampered or unsigned installer is refused and never run", () =>
   ));
 
 /**
- * A macOS release: a DMG holding Collie Desktop's app, signed by `sign` or not at all. The DMG
+ * A macOS release: a DMG holding Collie's app, signed by `sign` or not at all. The DMG
  * is a tar the fake `hdiutil` beside the script unpacks at the mount point it is given, noting
  * each attach and detach in `hdiutil.log`.
  */
@@ -260,7 +260,7 @@ test("an Intel Mac is refused, and told the TUI plugin works there", () =>
       const done = yield* install(dir, pair().publicKey, { os: "Darwin", arch: "x86_64" });
       expect(done.code).not.toBe(0);
       expect(done.said).toContain(
-        "Collie Desktop is released for Apple silicon only; the TUI plugin (setup.sh) works on this Mac.",
+        "Collie is released for Apple silicon only; the TUI plugin (setup.sh) works on this Mac.",
       );
     }).pipe(Effect.scoped),
   ));

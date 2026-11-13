@@ -12,6 +12,7 @@ import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import { IntentSeedSchema } from "./intent-model";
 import { ScheduleChange, ScheduleChanged, ScheduleListing } from "./schedule-model";
+import { Park } from "./park-cause";
 import { VerifyEvent, Pass, VerificationSchema } from "./verify-model";
 import { MeasureEvent } from "./measurement-model";
 
@@ -479,6 +480,9 @@ export const TaskView = Schema.Struct({
   drift: Schema.NullOr(Schema.String),
   /** `⏸ Held until 14:00.`, or null while nothing is holding it. */
   held: Schema.NullOr(Schema.String),
+  /** Why its leading Run parked, as a Park cause and its kind; absent from an older host. */
+  park: Schema.optionalKey(Schema.NullOr(Park)),
+  recovery: Schema.optionalKey(Schema.Array(Schema.String)),
   /** Who asked for the hold and why, which the drawer says and the card does not. */
   heldBy: Schema.NullOr(Schema.Struct({ by: Schema.String, reason: Schema.String })),
   decision: Schema.NullOr(Decision),
@@ -997,6 +1001,8 @@ export type RecordPart = typeof RecordPart.Type;
 export const RunDetail = Schema.Struct({
   branchProgress: Schema.optionalKey(Schema.NullOr(Schema.String)),
   id: Schema.String,
+  park: Schema.optionalKey(Schema.NullOr(Park)),
+  recovery: Schema.optionalKey(Schema.Array(Schema.String)),
   /** The record's revision; absent from a host without the Run model. */
   revision: Schema.optionalKey(RunRevision),
   /** Its parts still to come, each shown as loading until a later frame brings it. */

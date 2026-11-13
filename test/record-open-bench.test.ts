@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem, flow, Result, Schema } from "effect";
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import type { Flow } from "../src/board-model";
 import { processStartTime } from "../src/lock";
 import { filledSinceStart, measuring, refusal } from "../bench/record-open/guards";
@@ -11,7 +12,7 @@ import {
   paintedOf,
 } from "../bench/record-open/compare";
 import { barFailures, summaryOf } from "../bench/record-open/stats";
-import { nativeSummary } from "../bench/record-open/summarize";
+import { desktopSummary, nativeSummary } from "../bench/record-open/summarize";
 import { runEffect } from "./support/effect";
 import { flowNode } from "./support/flow";
 
@@ -196,6 +197,41 @@ describe("the record-open benchmark's guards", () => {
     ));
 });
 
+test("inside a Measurement, on a Machine without /proc, the host's lock is the benchmark's to sample under", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const hidden = (path: string) => path === "/proc" || Str.startsWith("/proc/")(path);
+      const noProc: FileSystem.FileSystem = {
+        ...fs,
+        exists: (path) => (hidden(path) ? Effect.succeed(false) : fs.exists(path)),
+        readFileString: (path, encoding) =>
+          hidden(path) ? fs.readFileString("/nonexistent/proc") : fs.readFileString(path, encoding),
+      };
+      const dir = yield* fs.makeTempDirectoryScoped();
+      const lock = `${dir}/machine.lock`;
+      // The process that started this test stands in for the Measurement's host.
+      yield* fs.writeFileString(
+        lock,
+        encodeClaim({ pid: process.ppid, start: yield* processStartTime(process.ppid) }),
+      );
+      const said: string[] = [];
+      let sampled = false;
+      const sampling = yield* Effect.forkScoped(
+        measuring(
+          lock,
+          (line) => Effect.sync(() => said.push(line)),
+          Effect.sync(() => (sampled = true)),
+        ).pipe(Effect.provideService(FileSystem.FileSystem, noProc)),
+      );
+      yield* Effect.sleep("1500 millis");
+      yield* Fiber.interrupt(sampling);
+      expect(said).toEqual([]);
+      expect(sampled).toBe(true);
+      expect(yield* fs.exists(lock)).toBe(true);
+    }).pipe(Effect.scoped),
+  ));
+
 test("the benchmark waits for the fill of the host it times, not of one it stopped", () => {
   const started = (pid: number) => `message="collie 0.111.2 host started, pid ${pid}"`;
   const filled = (runs: number) => `message="the Run model holds ${runs} Runs, filled in 9 ms"`;
@@ -234,5 +270,22 @@ test("a native timing log is summarised click to usable, and a usable with no cl
         n: 3,
         unmatched: 2,
       });
+    }),
+  ));
+
+test("a native timing log is summarised launch to board, key to echo, chunk to drawn and frame to frame, with each unmatched start or end reported apart", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const log = yield* fs.readFileString(
+        new URL("./fixtures/desktop-timing.log", import.meta.url).pathname,
+      );
+      expect(yield* desktopSummary(log)).toEqual({
+        launch_to_board_usable: { p50: 900, p95: 1200, max: 1200, n: 2, unmatched: 1 },
+        key_to_echo: { p50: 12, p95: 30, max: 30, n: 3, unmatched: 1 },
+        chunk_to_drawn: { p50: 5, p95: 16, max: 16, n: 2, unmatched: 1 },
+        frame_interval: { p50: 17, p95: 50, max: 50, n: 4 },
+      });
+      expect(yield* nativeSummary(log)).toMatchObject({ n: 1, unmatched: 0 });
     }),
   ));

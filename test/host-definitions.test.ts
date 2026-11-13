@@ -14,6 +14,7 @@ import { collie, proves } from "./support/world";
 const SHIPPED = [
   "architecture",
   "general",
+  "heal",
   "implement",
   "investigate",
   "plan",

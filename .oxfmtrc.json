@@ -1,6 +1,12 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
   "ignorePatterns": [
+    // Third-party sources, pinned as submodules and never edited here.
+    "desktop-rune/vendor/**",
+    // Agent messages kept verbatim, as the rendering corpus draws them.
+    "desktop-rune/fixtures/corpus/**",
+    // `bun run tools/rune-fixtures.ts` writes it as one line.
+    "desktop-rune/fixtures/flows.json",
     ".agent/**",
     ".agents/**",
     ".claude/**",

@@ -24,6 +24,7 @@ import {
   FindingSchema,
   FixOutputSchema,
   IntegrationSchema,
+  PrerequisiteStandingSchema,
   Agents,
   Children,
   Host,
@@ -212,9 +213,12 @@ const SliceRecord = Schema.Struct({
   title: Schema.String,
   blockedBy: Schema.Array(Schema.String),
   checks: Schema.Array(Schema.String),
-  // A reading journaled before tickets carried their criteria, or their benchmark, has none.
+  // A reading journaled before tickets carried their criteria, benchmark or prerequisites has none.
   criteria: Schema.optionalKey(Schema.Array(Schema.String)),
   benchmark: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  prerequisites: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ run: Schema.String, change: Schema.NullOr(Schema.String) })),
+  ),
 });
 
 /** A ticket's criteria and after-merge outcomes as one reading of its file found them. */
@@ -270,6 +274,7 @@ const next = step({
   description: "Whether the open merge request is released, staged or left as it is.",
   kind: "question",
 });
+const delivery = [building, reviewRound, gate, mergeRequest];
 const repoRuns = step({
   id: "repo-runs",
   title: "Change runs",
@@ -310,7 +315,11 @@ export default defineWorkflow({
     ),
     // oxlint-disable-next-line unicorn/no-thenable -- The workflow input selects the next step using string values.
     then: Schema.optionalKey(
-      Schema.Literals(["", "finish", "release"]).annotate({
+      Schema.Union([
+        Schema.Literal("").annotate({ title: "Ask at the merge request" }),
+        Schema.Literal("finish").annotate({ title: "End at the merge request" }),
+        Schema.Literal("release").annotate({ title: "Release it" }),
+      ]).annotate({
         description:
           "What follows the merge request: finish to end there, release to release it on a human's go, empty to be asked",
       }),
@@ -318,8 +327,9 @@ export default defineWorkflow({
   }),
   output: Schema.String,
   agents: { roles: { implementer: IMPLEMENTER, reviewer: REVIEWER } },
-  hints: { plan: "work-source" },
-  path: [building, reviewRound, gate, mergeRequest, next],
+  // oxlint-disable-next-line unicorn/no-thenable -- the Input is named `then`
+  hints: { plan: "work-source", then: "reach" },
+  path: [...delivery, next],
   // The branch it builds, on a worktree of its own, so two Runs never share an index.
   checkout: "branch",
   // What kind of result this Run has to prove is the human's to say, and an unclassified
@@ -365,6 +375,7 @@ export default defineWorkflow({
       const runId = (yield* Run).id;
       const place = yield* host.place(runId);
       const cwd = place.cwd;
+      if ((asked.then ?? "") !== "") yield* forecast(delivery);
       const source = yield* Activity.make({
         name: "work-source",
         success: Schema.Struct({ kind: Schema.String, value: Schema.String }),
@@ -439,7 +450,7 @@ export default defineWorkflow({
             yield* fs.writeFileString(marker, "").pipe(Effect.orDie);
             yield* host.record(runId, why);
             yield* stepFailed(why);
-            yield* host.parked(runId, why);
+            yield* host.parked(runId, why, "step-failed");
             return yield* Workflow.suspend(yield* WorkflowInstance);
           }),
         });
@@ -561,6 +572,7 @@ export default defineWorkflow({
           ...one,
           criteria: one.criteria ?? [],
           benchmark: one.benchmark ?? null,
+          prerequisites: one.prerequisites ?? [],
         }));
       });
       let tickets: ReadonlyArray<Slice> = yield* ticketsNow;
@@ -596,12 +608,15 @@ export default defineWorkflow({
       const answeredFor: Answered[] = [];
       let build: typeof Built.Type | null = null;
       let rallied: Rallied | null = null;
+      // An agent's start gives every Input, one it leaves out as "" (docs/cli.md): an empty
+      // `recovery` is new work, as one never given is.
+      const recovers = asked.recovery === "" ? undefined : asked.recovery;
       const recovered = yield* Activity.make({
         name: "recovery-entry",
         success: Recovery,
         error: WorkflowError,
         execute:
-          asked.recovery === undefined
+          recovers === undefined
             ? Effect.succeed({
                 implementation: false,
                 reason: "An ordinary start builds the work.",
@@ -609,14 +624,14 @@ export default defineWorkflow({
                 commits: "",
                 review: null,
               })
-            : host.recovery(runId, asked.recovery, asked.plan),
+            : host.recovery(runId, recovers, asked.plan),
       });
       const recovery = { ...recovered, entry: recoveryEntry(recovered) };
-      if (asked.recovery !== undefined)
+      if (recovers !== undefined)
         yield* host.record(runId, `Follow-up enters at ${recovery.entry}: ${recovery.reason}`);
       let parentDir = "";
       if (recovery.entry !== "Build") {
-        const parent = Str.split(asked.recovery ?? "", "/").at(-1) ?? "";
+        const parent = Str.split(recovers ?? "", "/").at(-1) ?? "";
         parentDir = (yield* host.place(parent)).dir;
         build = yield* Activity.make({
           name: "recovery-build-claims",
@@ -657,15 +672,73 @@ export default defineWorkflow({
             reviewed: recovery.review,
           };
       }
+      const needing = (one: Slice) => ({
+        runId,
+        cwd,
+        ticket: `${source.value}/issues/${one.file}`,
+      });
+      let prerequisiteReads = 0;
+      const landed = (one: Slice) =>
+        Effect.suspend(() => {
+          prerequisiteReads += 1;
+          return Activity.make({
+            name: `prerequisites.${prerequisiteReads}`,
+            success: PrerequisiteStandingSchema,
+            error: WorkflowError,
+            execute: host.prerequisites(needing(one)),
+          });
+        }).pipe(Effect.map((standing) => standing._tag === "Landed"));
+      let prerequisiteWaits = 0;
+      const awaited = (one: Slice) =>
+        Effect.gen(function* () {
+          prerequisiteWaits += 1;
+          const standing = yield* Activity.make({
+            name: `prerequisites-wait.${prerequisiteWaits}`,
+            success: PrerequisiteStandingSchema,
+            error: WorkflowError,
+            // Suspended inside the Activity, so a resume waits again.
+            execute: Effect.gen(function* () {
+              const standing = yield* host.awaitPrerequisites(needing(one));
+              if (standing._tag === "Held") return yield* Workflow.suspend(yield* WorkflowInstance);
+              return standing;
+            }),
+          });
+          if (standing._tag === "Never")
+            yield* unbuilt(
+              `${one.file}.prerequisites-${prerequisiteWaits}`,
+              `${one.file}: ${standing.why}`,
+            );
+        });
+      const pickable = Effect.gen(function* () {
+        for (;;) {
+          const left = Arr.filter(tickets, (one) => !built.has(one.file));
+          if (left.length === 0) return undefined;
+          const unblocked = Arr.filter(left, (one) =>
+            Arr.every(one.blockedBy, (id) => !Arr.some(left, (other) => other.number === id)),
+          );
+          for (const one of unblocked)
+            if (one.prerequisites.length === 0 || (yield* landed(one))) return one;
+          const waiting = unblocked[0];
+          if (waiting === undefined)
+            return yield* new WorkflowError({
+              reason: `these tickets block each other, so none of them can be built first: ${Arr.join(
+                Arr.map(left, (one) => one.file),
+                ", ",
+              )}`,
+            });
+          yield* building(awaited(waiting), {
+            item: waiting.file,
+            items: Arr.map(tickets, (one) => one.file),
+          });
+        }
+      });
       for (; recovery.entry === "Build";) {
         // Identities before work: two tickets nobody can tell apart would share one
         // result, and finding that out after an agent has been paid for is too late.
         const clash = identityProblem(Arr.map(tickets, (ticket) => ticket.file));
         if (clash !== null) return yield* new WorkflowError({ reason: clash });
-        const ticket =
-          whole && built.size === 0
-            ? null
-            : Option.getOrUndefined(Arr.findFirst(tickets, (one) => !built.has(one.file)));
+        const next = yield* pickable;
+        const ticket = whole && built.size === 0 ? null : next;
         if (ticket === undefined) break;
         rallied = null;
         let attempt = 0;
@@ -677,8 +750,9 @@ export default defineWorkflow({
             const before = (yield* host.evidence(runId, cwd)).verifications.length;
             if (ticket !== null) yield* checkpoint(place.dir, ticket, "started", []);
             const merged =
-              ticket !== null && built.size > 0
-                ? yield* integrated(`${ticket.file}.merge`, true)
+              (ticket !== null && built.size > 0) ||
+              Arr.some(ticket === null ? tickets : [ticket], (one) => one.prerequisites.length > 0)
+                ? yield* integrated(`${item}.merge`, true)
                 : null;
             const session = yield* sessionNow;
             // A plan built in one pass answers every ticket's criteria, and words their own.
@@ -806,8 +880,18 @@ export default defineWorkflow({
               if (unmet.length === 0) break;
               if (blockers.length > 0) {
                 stalls += 1;
+                // Answered Hand back 18 of 19 times, so the first is taken without asking.
+                if (stalls === 1) {
+                  yield* host.record(
+                    runId,
+                    `${item}: a criteria hand-back reported a blocker and changed nothing; Collie handed it back without asking, and asks if it does again`,
+                  );
+                  blockers = [];
+                  tries = 1;
+                  continue;
+                }
                 const chosen = yield* ask({
-                  name: `${operation}.criteria-stalled-${stalls}`,
+                  name: `${operation}.criteria-stalled-${stalls - 1}`,
                   prompt: `${item}: a criteria hand-back reported a blocker and changed nothing.\n\nIts blockers:\n${formatFindings(blockers)}\n\nStill unmet:\n${formatFindings(unmet)}\n\nAmend the ticket or clear the blocker, then hand it back, or stop the Run.`,
                   options: CRITERIA_OPTIONS,
                 });
@@ -1053,7 +1137,10 @@ const releasing = (delivered: {
             ),
           ),
       });
-      if (merging !== null) return mr;
+      if (merging !== null) {
+        yield* forecast(delivery);
+        return mr;
+      }
       let stageFailed = "";
       let failedStage = "";
       // Why another Stage would still be refused at the checkout the last one was refused

@@ -10,10 +10,13 @@ import {
   loadDefaults,
   readConfig,
   readSettingsSet,
+  savedReach,
   setSetting,
   takeShared,
   writeConfigValue,
 } from "../src/config";
+import type { SharedSetting } from "../src/board-model";
+import { reachKey } from "../src/reach";
 import { runEffect } from "./support/effect";
 import { connect } from "../src/host";
 import { stopHost } from "./support/host";
@@ -121,6 +124,41 @@ test("a settings file naming a notification kind Collie no longer raises still l
       expect(defaults.model).toBe("sonnet");
       expect(defaults.maxIterations).toBe(7);
       expect(defaults.notifications["run-done"]).toBe(false);
+    }).pipe(Effect.scoped),
+  ));
+
+test("how far a launch went is shared per workflow and project, and so is its removal", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const userDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
+      const project = "github.com/cego/collie";
+      const key = reachKey("implement", project);
+      const held = (settings: ReadonlyArray<SharedSetting>) =>
+        Option.getOrUndefined(Arr.findFirst(settings, (one) => one.key === key));
+
+      const taken = yield* takeShared(
+        userDir,
+        [{ key, value: "release", at: "2026-11-12T10:00:00.000Z" }],
+        "desktop",
+        "2026-11-12T12:00:00.000Z",
+      );
+      expect(held(taken.settings)).toEqual({
+        key,
+        value: "release",
+        at: "2026-11-12T10:00:00.000Z",
+      });
+      expect(yield* savedReach(userDir, "implement", project)).toBe("release");
+      expect(yield* savedReach(userDir, "plan", project)).toBeNull();
+      expect(yield* savedReach(userDir, "implement", "gitlab.example.com/group/app")).toBeNull();
+
+      const cleared = yield* takeShared(
+        userDir,
+        [{ key, value: null, at: "2026-11-12T11:00:00.000Z" }],
+        "desktop",
+        "2026-11-12T12:00:00.000Z",
+      );
+      expect(held(cleared.settings)).toEqual({ key, value: null, at: "2026-11-12T11:00:00.000Z" });
+      expect(yield* savedReach(userDir, "implement", project)).toBeNull();
     }).pipe(Effect.scoped),
   ));
 

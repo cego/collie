@@ -53,6 +53,7 @@ import { readAudit, startedBy } from "./audit";
 import { onPath } from "./doctor-check";
 import { HARNESSES } from "./harness";
 import type { MachineOwn } from "./board-model";
+import { isReachKey } from "./reach";
 import type { Mutable } from "effect/Types";
 
 /** Long enough to answer "what did I do here", short enough to stay one read. */
@@ -628,7 +629,11 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
     diff: parts ? yield* diffOf(run) : null,
     flow: opts.flow ?? undefined,
   };
-  return progress === null ? detail : { ...detail, branchProgress: progress };
+  let shown = detail;
+  if (run.park !== undefined) shown = { ...shown, park: run.park };
+  if (run.recovery !== undefined) shown = { ...shown, recovery: run.recovery };
+  if (progress !== null) shown = { ...shown, branchProgress: progress };
+  return shown;
 });
 
 /** What Settings shows and can write back. No new store: `config.json` and the harness. */
@@ -706,6 +711,7 @@ export const buildMachineOwn = Effect.fn("Views.buildMachineOwn")(function* (env
       ({ key }) =>
         key !== "projects.root" &&
         key !== "chat_harness" &&
+        !isReachKey(key) &&
         !Arr.some(
           SETTINGS,
           (setting) => key === setting.key || pipe(key, Str.startsWith(`${setting.key}.`)),

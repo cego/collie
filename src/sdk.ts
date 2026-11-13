@@ -44,6 +44,7 @@ export type { Report } from "./report";
 export type { Produces, StepKind, StepMeta } from "./steps";
 import type { VerifySpec } from "./verify-spec";
 import type { CiJob } from "./ci-job";
+import type { ParkCause } from "./park-cause";
 import type { PipelineStart } from "./forge/forge";
 import type { ChildProcessSpawner } from "effect/process";
 import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
@@ -86,6 +87,7 @@ import type { Integration } from "./integrate";
 import type { BenchmarkPlan, Measurement } from "./measurement-model";
 import type { MergeOutcome, Takeover } from "./landing";
 import type { ReviewHead, ReviewStanding } from "./review-wait";
+import type { PrerequisiteStanding } from "./prerequisites";
 import type {
   FastForward,
   MergeRequestRead,
@@ -108,6 +110,7 @@ export { SOURCES, SOURCE_NAMES, isSource, type Source } from "./offers";
  * arguments that point a command at its project from anywhere.
  */
 export { targetKind } from "./mr";
+export { ParkCause } from "./park-cause";
 export { repoArgs } from "./forge/gitlab";
 export { mrForgeFacts } from "./forge/forge";
 /** How much of a Subscription is used, as the host reads it (ADR-0049). */
@@ -126,11 +129,16 @@ export {
   type Calibration,
   type Measurement,
 } from "./measurement-model";
+/** The harness commits a tree lacks, decided by content (`carryHarness`, the base tree). */
+export { harnessLacking } from "./harness-held";
 export { MergeOutcomeSchema, TakeoverSchema, type MergeOutcome, type Takeover } from "./landing";
+/** Whether the Changes a ticket needs merged have landed (`HostApi.awaitPrerequisites`). */
+export { PrerequisiteStandingSchema, type PrerequisiteStanding } from "./prerequisites";
 /** Where a merge request's review stands for a Release Run (`HostApi.awaitReview`). */
 export {
   AnswerSchema,
   ReviewHeadSchema,
+  CONFLICTS,
   ReviewStandingSchema,
   SettledAnswersSchema,
   settleAnswers,
@@ -190,6 +198,7 @@ export {
   findingKey,
   formatFindings,
   isBlocking,
+  remainingDisputes,
   renderReview,
   settleFinalFix,
   settleRound,
@@ -615,6 +624,8 @@ export interface Declarations {
    */
   readonly checkout?: "branch" | "roaming";
   readonly closes?: "reported";
+  /** The healer: what the host starts for a park its own recovery could not clear. */
+  readonly heals?: true;
   readonly followUps?: ReadonlyArray<FollowUp>;
   readonly actions?: ReadonlyArray<ActionProvider>;
 }
@@ -836,9 +847,9 @@ export interface HostApi {
   readonly step: (runId: string, note: StepNote) => Effect.Effect<void>;
   /**
    * Why this Run has parked its own work and what picks it up again, shown beside its
-   * status; null says it no longer has.
+   * status; null says it no longer has. A park naming no cause is recorded as `unknown`.
    */
-  readonly parked: (runId: string, why: string | null) => Effect.Effect<void>;
+  readonly parked: (runId: string, why: string | null, cause?: ParkCause) => Effect.Effect<void>;
   /**
    * Records the question this run is waiting on, so the host can say what may answer it.
    * `asker` is the operation whose agent asked it, which the workflow is not woken for.
@@ -1107,7 +1118,31 @@ export interface HostApi {
      * at `proved` once it no longer does, or it is merged or closed, or a Hold or Stop ends it.
      */
     readonly whileConflicting?: boolean;
+    /** Return a confirmed target conflict as `Conflicting` at its current head for repair. */
+    readonly returnConflicts?: boolean;
   }) => Effect.Effect<ReviewStanding, WorkflowError>;
+  /**
+   * One read of whether the Changes the ticket at `ticket` names on its `**Needs merged:**`
+   * line have landed: merged, with the merge commit on origin's default branch as fetched in
+   * `cwd`. `Landed` where every one has, or none is named; `Waiting` with the card's line
+   * otherwise; `Never` where one never can, saying why. Take it inside an Activity.
+   */
+  readonly prerequisites: (options: {
+    readonly runId: string;
+    readonly cwd: string;
+    readonly ticket: string;
+  }) => Effect.Effect<PrerequisiteStanding, WorkflowError>;
+  /**
+   * Reads the ticket's Prerequisites every 5 minutes, spending no model tokens, until they
+   * are `Landed`, one is `Never`, or a Hold or Stop ends the wait (`Held`). Meanwhile the card
+   * reads "Waiting for <run>'s <change> to merge.", with a person's 2-day patience, cleared
+   * when it returns. Take it inside an Activity, and suspend the Run on `Held` there.
+   */
+  readonly awaitPrerequisites: (options: {
+    readonly runId: string;
+    readonly cwd: string;
+    readonly ticket: string;
+  }) => Effect.Effect<PrerequisiteStanding, WorkflowError>;
   /**
    * Replies to the comment with id `comment` on the merge request this Run recorded, posting
    * `body` with a last line naming the Run and its Machine, in the comment's thread where it
@@ -1143,6 +1178,8 @@ export interface HostApi {
     readonly runId: string;
     readonly cwd: string;
     readonly head: string;
+    /** Where supplied, refuse a detached checkout or a different source branch before moving it. */
+    readonly branch?: string;
   }) => Effect.Effect<FastForward>;
   /**
    * Reads `tag` back from origin and the forge, rather than from an Output, against what it
@@ -1303,6 +1340,7 @@ export type ReviewedBranch = { readonly branch: string } | { readonly refused: s
 /** What opening a merge request from here needs, and what it would be filled in with. */
 export interface MrReady {
   readonly ok: boolean;
+  readonly cause?: ParkCause;
   /** The checkout's forge; absent on a host that only supports GitLab. */
   readonly provider?: "gitlab" | "github";
   /** The repository's path on its forge — `owner/repo` or `group/project` — for `--repo`. */
@@ -1703,6 +1741,7 @@ export interface WorkflowMetadata {
    */
   readonly checkout?: typeof DeclaredCheckout.Type;
   readonly closes?: "reported";
+  readonly heals?: true;
   readonly followUps?: ReadonlyArray<FollowUp>;
   readonly actions?: ReadonlyArray<ActionProvider>;
   readonly path?: ReadonlyArray<StepMeta>;
@@ -1829,6 +1868,7 @@ const DeclaredMetadata = Schema.Struct({
   ),
   hints: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   closes: Schema.optionalKey(Schema.Literal("reported")),
+  heals: Schema.optionalKey(Schema.Literal(true)),
   outcome: Schema.optionalKey(
     Schema.Struct({
       fixed: Schema.optionalKey(Schema.String),
