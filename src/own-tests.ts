@@ -52,7 +52,7 @@ export const ownTests = (
   );
 };
 
-const FILE_HEADER = /^(\S+[._](?:test|spec)\.[cm]?[jt]sx?):$/;
+const FILE_HEADER = /^(\S+\.[cm]?[jt]sx?):$/;
 const FAILED = /^\(fail\) (.+?)(?: \[[\d.]+m?s\])?$/;
 
 /** The failed tests in plain bun output; a file is named only where the output has one file. */

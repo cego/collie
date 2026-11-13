@@ -696,6 +696,34 @@ const reruns = (requests: ReadonlyArray<FakeRequest>) =>
   Arr.filter(requests, (one) => pipe_(one.url, Str.endsWith("/rerun-failed-jobs")));
 
 for (const name of ["gitlab", "github"] as const)
+  test(`a ${name} retried pass of an own test in an explicitly selected Bun file proves nothing`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { asked, forge } = yield* waiting(
+          "passed",
+          name === "gitlab" ? MR : PULL,
+          undefined,
+          {
+            jobs: [
+              {
+                name: "nuxi-typecheck",
+                state: "passed",
+                id: 101,
+                attempts: [{ id: 1, state: "failed", trace: "test/smoke.ts:\n(fail) works\n" }],
+              },
+            ],
+          },
+          name,
+          { "test/smoke.ts": 'test("works", () => {});\n' },
+        );
+        const result = yield* read(asked, forge);
+        expect(result).toMatchObject({ state: "failed" });
+        expect("unproved" in result ? result.unproved : "").toContain('own test "works"');
+        expect(yield* journalOf(asked)).toEqual([]);
+      }),
+    ));
+
+for (const name of ["gitlab", "github"] as const)
   test(`a ${name} job passing twice still fails when its earlier attempt named an own test`, () =>
     runEffect(
       Effect.gen(function* () {
