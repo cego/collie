@@ -42,7 +42,7 @@ export type Park = typeof Park.Type;
 
 type Entry =
   | { readonly kind: "asks-agent"; readonly message: string }
-  | { readonly kind: "rechecks" }
+  | { readonly kind: "rechecks"; readonly neverHeals?: true }
   | { readonly kind: "needs-you"; readonly reason: string; readonly neverHeals?: true };
 
 export const PARK_CAUSES: Readonly<Record<ParkCause, Entry>> = {
@@ -55,7 +55,7 @@ export const PARK_CAUSES: Readonly<Record<ParkCause, Entry>> = {
     reason: "its agent went quiet for longer than its idle budget, and nothing says why",
   },
   "ci-job-absent": { kind: "rechecks" },
-  "ci-failed": { kind: "rechecks" },
+  "ci-failed": { kind: "rechecks", neverHeals: true },
   "forge-unavailable": { kind: "rechecks" },
   "herdr-unavailable": { kind: "rechecks" },
   "checkout-dirty-collie": { kind: "rechecks" },

@@ -50,8 +50,10 @@ export const passedOver = (facts: {
   readonly recoveries: ReadonlyArray<Metric>;
 }): string | null => {
   const entry = PARK_CAUSES[facts.cause];
-  if (entry.kind === "needs-you" && entry.neverHeals === true)
-    return "only a person can act on its cause";
+  if (entry.neverHeals === true)
+    return entry.kind === "needs-you"
+      ? "only a person can act on its cause"
+      : "only what its recheck reads can clear its cause";
   if (facts.isHeal) return "it is itself a Heal";
   if (!facts.on) return "recovery.heal is off";
   if (facts.waitsOnYou) return "it already waits on you";

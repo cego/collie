@@ -6,7 +6,8 @@ import { Effect, Fiber, FileSystem, Option, Schedule, Schema, flow, Result } fro
 import { connect, ownerOf } from "../src/host";
 import { holderLives } from "../src/lock";
 import { readAudit } from "../src/audit";
-import { HealOutput } from "../src/heal";
+import { HealOutput, passedOver } from "../src/heal";
+import { parkOf, parkWithRecovery } from "../src/park-cause";
 import { herdOf } from "../src/steering";
 import { newsPath, pending, read as readNews } from "../src/news";
 import { collie, proves, type World } from "./support/world";
@@ -479,6 +480,26 @@ test(
     ),
   120_000,
 );
+
+test("a ci-failed park whose three resumes ran out needs you and is still never healed", () => {
+  const resumed = (park: string) => ({
+    at: `2026-11-13T00:00:0${park}Z`,
+    kind: "recovery" as const,
+    subject: "r",
+    value: 0,
+    note: "",
+    cause: "ci-failed" as const,
+    action: "resumed" as const,
+    outcome: "resumed" as const,
+    park,
+  });
+  const recoveries = Arr.map(["1", "2", "3"], resumed);
+  const park = parkWithRecovery({ ...parkOf("ci-failed"), id: "4" }, recoveries);
+  expect(park.kind).toBe("needs-you");
+  expect(
+    passedOver({ cause: park.cause, isHeal: false, on: true, waitsOnYou: false, recoveries }),
+  ).toBe("only what its recheck reads can clear its cause");
+});
 
 test(
   "a park only a person can act on, or one raised while recovery.heal is off, needs you at once and starts no Heal",

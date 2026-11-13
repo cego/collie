@@ -31,7 +31,6 @@ const FailedCi = Schema.fromJsonString(
 
 const failedCiJournal = (dir: string) => `${dir}/ci-failed.jsonl`;
 
-/** The head whose merge-request pipeline failed, as a `ci-failed` recheck reads it. */
 export const rememberFailedCi = (dir: string, target: typeof FailedCi.Type) =>
   Effect.gen(function* () {
     const last = (yield* readJournal(failedCiJournal(dir), FailedCi).pipe(

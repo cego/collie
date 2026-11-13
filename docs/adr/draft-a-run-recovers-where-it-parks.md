@@ -173,7 +173,9 @@ As of `cego/collie@c3005804` (0.123.1), on vm-mk:
   raises needs you, it starts one Heal for that park.
   - The request id is `heal:<run>:<park>`, so a repeat is the same Heal.
   - A cause can declare that it never heals, because only a person can act on it: a missing
-    login, a force-pushed branch, a human's dirty checkout. Those go straight to you.
+    login, a force-pushed branch, a human's dirty checkout. Those go straight to you. So does
+    `ci-failed` once its recheck budget is spent, since only the forge's next head or pipeline
+    clears it.
 - **What a Heal is:** a Run of a shipped workflow, a module like any other (ADR-0026). It
   runs on the parked Run's Machine and in its Task's workspace.
 - **What it may read:** the parked Run's whole record, its agents' panes and transcripts, its
