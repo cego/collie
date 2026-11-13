@@ -442,7 +442,13 @@ export default defineWorkflow({
             const approved = yield* Activity.make({
               name: `approve-review-${reviews}`,
               success: Posted,
-              execute: host.approveReview({ target: asked.target, cwd: place.cwd, head }),
+              execute: host.approveReview({
+                runId: run.id,
+                round: reviews,
+                target: asked.target,
+                cwd: place.cwd,
+                head,
+              }),
             });
             yield* host.record(run.id, approved.message);
             if (!approved.ok) return yield* new WorkflowError({ reason: approved.message });

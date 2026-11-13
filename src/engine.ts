@@ -1017,8 +1017,10 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly previous: string;
       readonly head: string;
     }) => Effect.Effect<string, WorkflowError>;
-    /** Approves the reviewed head after posting. Take it inside a separate Activity. */
+    /** Approves once per Run and round; an interrupted attempt returns an uncertain outcome. */
     readonly approveReview: (options: {
+      readonly runId: string;
+      readonly round: number;
       readonly target: string;
       readonly cwd: string;
       readonly head: string;
@@ -5635,6 +5637,22 @@ export const hostLayer = (options: {
               const ref = parseMrTarget(asked.target);
               if (ref === null)
                 return { ok: false, message: `${asked.target} is not a merge request` };
+              const claimed = yield* fs
+                .writeFileString(
+                  `${runDir(dir, asked.runId)}/approval-${asked.round}.attempt`,
+                  `${asked.target}\n${asked.head}\n`,
+                  { flag: "wx" },
+                )
+                .pipe(
+                  Effect.as(true),
+                  Effect.catchReason("PlatformError", "AlreadyExists", () => Effect.succeed(false)),
+                  Effect.orDie,
+                );
+              if (!claimed)
+                return {
+                  ok: false,
+                  message: `approval outcome is uncertain for ${asked.target} at ${asked.head}: an earlier attempt exists for round ${asked.round}; approval or dismissal may already have applied; inspect the forge before starting another review`,
+                };
               return yield* forgeOf(ref).approve(ref, asked.head, asked.cwd, runShell);
             }),
           ),

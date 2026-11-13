@@ -2936,6 +2936,9 @@ GitHub cannot atomically guard the head: approval can briefly stand during a rac
 If dismissal fails, stale approval can remain active and satisfy merge requirements despite
 the failed Run. The card names the review to dismiss and reports that it may still be active.
 An approval refusal ends the Run with its reason on the card and is not retried.
+If the host stops during approval, recovery reports an uncertain outcome and sends no
+second approval or dismissal request. Inspect the forge before starting another review:
+the approval may already be active.
 With findings left, **Post** sends only the note. It refuses a merge request assigned to
 you, on either forge: those findings are yours to fix. On GitLab, that comparison uses
 your login on the target's own host.

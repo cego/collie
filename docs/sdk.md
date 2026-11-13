@@ -749,7 +749,7 @@ On success, its `signature` identifies the posted note for the findings ledger.
 reviewed head when the new head descends from it. Otherwise it reads the full diff.
 Journal it in an Activity with `error: WorkflowError`; an unreadable forge fails the read.
 
-`host.approveReview({ target, cwd, head })` requests approval of that reviewed head, independently of posting.
+`host.approveReview({ runId, round, target, cwd, head })` requests approval of that reviewed head, independently of posting.
 Journal it in a separate Activity after the post succeeds. The shipped review offers approval
 explicitly and ends with the forge's reason on its card when the forge refuses it.
 GitLab enforces the reviewed `sha` atomically. GitHub submits the reviewed `commit_id`, with
@@ -757,6 +757,10 @@ head checks before and after. A moved or unreadable head after submission trigge
 dismissal and `ok: false`. GitHub has no atomic head guard: stale approval can stand during
 a racing push and remain active if dismissal fails. The message identifies the review to dismiss
 and reports that risk. Neither approval nor dismissal is blindly retried.
+Before submission, the host exclusively records the attempt for that Run and round.
+If recovery re-enters the call before its Activity recorded an outcome, it returns
+`ok: false` with an uncertain-outcome message and sends no approval or dismissal request.
+Inspect the forge before starting another review; approval may already be active.
 
 `mrForgeFacts(target)` is pure: for an `mr:` target it gives the forge's name and noun and
 the `diff`, `view` and `checkout` command lines a prompt hands a reviewer, written by that

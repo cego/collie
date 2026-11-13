@@ -1318,8 +1318,10 @@ export interface HostApi {
     readonly previous: string;
     readonly head: string;
   }) => Effect.Effect<string, WorkflowError>;
-  /** Approves the reviewed head after posting. Take it inside a separate Activity. */
+  /** Approves once per Run and round; an interrupted attempt returns an uncertain outcome. */
   readonly approveReview: (options: {
+    readonly runId: string;
+    readonly round: number;
     readonly target: string;
     readonly cwd: string;
     readonly head: string;
