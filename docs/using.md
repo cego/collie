@@ -2996,6 +2996,16 @@ maintained disputes. It is off unless you turn it on. There is one such Run per 
 forge login: starting it again, from the CLI, chat or the board, answers that Run and says
 it already follows the merge request.
 
+With the setting on, each merge-watch round also lists your GitLab review requests.
+Each starts a Follow-through, except for merge requests you authored. Starting the same
+merge request by hand returns that Run.
+
+The repository must have one matching checkout under your [Projects root](../CONTEXT.md).
+If none matches, News names the repository to clone there; the next round tries again.
+Exactly one saved workflow in that checkout must declare that it follows this setting.
+If several do, News names them, and you can start the one you want by hand.
+GitHub review requests do not start Runs automatically.
+
 Each round reviews the merge request's head in a detached checkout Collie keeps for the
 Run and resets to that head each round. A stopped Run keeps its checkout so an interrupted
 round can resume. It posts

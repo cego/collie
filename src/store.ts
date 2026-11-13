@@ -349,6 +349,8 @@ export interface StoreApi {
   readonly run: (run: string) => Effect.Effect<RunRow | null>;
   /** The run a request id was already admitted as, or null. */
   readonly requested: (request: string) => Effect.Effect<RunRow | null>;
+  /** The run a request ending in `suffix` was admitted as, or null. */
+  readonly requestedEnding: (suffix: string) => Effect.Effect<RunRow | null>;
   readonly runs: Effect.Effect<ReadonlyArray<RunRow>>;
   /**
    * The rows a Run's record may read, a superset its reader narrows: the Run's Task's, or the
@@ -707,6 +709,13 @@ function makeStore(
       Request: Schema.String,
       Result: Run,
       execute: (request) => sql`SELECT ${columns} FROM collie_runs WHERE request = ${request}`,
+    });
+
+    const byRequestEnding = SqlSchema.findAll({
+      Request: Schema.String,
+      Result: Run,
+      execute: (suffix) =>
+        sql`SELECT ${columns} FROM collie_runs WHERE substr(request, ${-suffix.length}) = ${suffix}`,
     });
 
     const byRun = SqlSchema.findAll({
@@ -1149,6 +1158,11 @@ function makeStore(
         ),
       requested: (request: string) =>
         byRequest(request).pipe(
+          Effect.map((rows) => rows[0] ?? null),
+          Effect.orDie,
+        ),
+      requestedEnding: (suffix: string) =>
+        byRequestEnding(suffix).pipe(
           Effect.map((rows) => rows[0] ?? null),
           Effect.orDie,
         ),

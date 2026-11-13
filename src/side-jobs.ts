@@ -17,6 +17,7 @@ import { SESSIONS_EVERY, liveHerds, type LiveHerd } from "./herds";
 import { landingNow } from "./landing";
 import { settleMerges, type MrPanels } from "./merges";
 import { settleWatches, type Watches } from "./mr-watch";
+import { startRequested, type Requested } from "./review-requests";
 import { shell } from "./mr";
 import { append as appendNews, newsPath, read as readNews, retired, supersede } from "./news";
 import { disputesIn, eventsIn, holding, idleAgain, readSaid, remember } from "./proactive";
@@ -238,13 +239,16 @@ export const mergeWatch = <E, R>(opts: {
   readonly record: (runId: string, url: string) => Effect.Effect<void>;
   readonly stop: (runId: string, reason: string) => Effect.Effect<void>;
   readonly watches: Watches;
+  readonly requested: Requested;
 }) => {
   const checked = new Map<string, number>();
   const states = new Map<string, MrState>();
+  const logins = new Map<string, string>();
   return every(
     MERGES_EVERY,
     Effect.gen(function* () {
       const { runs, views } = yield* opts.board;
+      const gitlabHost = yield* gitlabHostOf(opts.env);
       yield* settleMerges({
         stateDir: opts.env.stateDir,
         cwd: opts.env.cwd,
@@ -253,7 +257,7 @@ export const mergeWatch = <E, R>(opts: {
         runs,
         record: opts.record,
         stop: opts.stop,
-        gitlabHost: yield* gitlabHostOf(opts.env),
+        gitlabHost,
         now: yield* Clock.currentTimeMillis,
         checked,
         states,
@@ -265,6 +269,14 @@ export const mergeWatch = <E, R>(opts: {
         now: yield* Clock.currentTimeMillis,
         watches: opts.watches,
       });
+      yield* startRequested({
+        env: opts.env,
+        gitlabHost,
+        logins,
+        requested: opts.requested,
+      }).pipe(
+        Effect.catchCause((cause) => Effect.logWarning("could not list review requests", cause)),
+      );
     }),
   );
 };
@@ -285,6 +297,7 @@ export const sideJobs = <E, R>(opts: {
   /** The host's audited stop, for what a merge settled. */
   readonly stop: (runId: string, reason: string) => Effect.Effect<void>;
   readonly watches: Watches;
+  readonly requested: Requested;
   readonly sweepers: Effect.Effect<ReadonlyArray<Sweeper>, E, R>;
 }) => {
   const { env, herdr } = opts;

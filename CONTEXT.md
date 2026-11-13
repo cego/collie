@@ -514,6 +514,9 @@ follows it until it merges or closes: one Run per merge request and forge login,
 note per round whose findings changed, a **Watch** between rounds, and a **Decision** to
 approve the reviewed head as the one thing it asks.
 
+With the setting on, a GitLab review request starts it automatically, except on the login's
+own merge request. Automatic and manual starts share the same Run.
+
 **Working** — A Task something is actually doing: a Run the host holds that has not
 settled, or a **Reopened** Run whose agent herdr reports working. A Run whose question a
 human's message superseded is Working while its agent works on that message. The board's fourth

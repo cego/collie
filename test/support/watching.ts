@@ -30,6 +30,7 @@ import { buildBoard } from "../../src/board";
 import { mrId } from "../../src/board-model";
 import { factsOfView } from "../../src/runs";
 import { mergeWatch } from "../../src/side-jobs";
+import { requestedOver } from "../../src/review-requests";
 import { recoverParks } from "../../src/park-recovery";
 import { Woke } from "../../src/mr-watch-model";
 import type { MrPanels } from "../../src/merges";
@@ -148,6 +149,12 @@ export const watching = (rig: Rig) => {
           wake: (run, name, woke) =>
             registry.wake(run, name, woke).pipe(Effect.provideContext(hosted)),
         },
+        requested: requestedOver(
+          (suffix) => Effect.map(store.requestedEnding(suffix), (row) => row !== null),
+          registry,
+          env(),
+          hosted,
+        ),
       }).pipe(Effect.provideContext(platform)),
     );
     return { board };

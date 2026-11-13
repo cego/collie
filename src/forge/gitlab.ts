@@ -37,6 +37,7 @@ import type {
   PipelineStart,
   TagPipelineRead,
   Readiness,
+  ReviewRequest,
 } from "./forge";
 import {
   ForgeHttp,
@@ -352,6 +353,33 @@ export function glabLogin<R>(
     return yield* viewerLogin(glabLoginTo(hostOf(named) ?? "gitlab.com"), cwd);
   });
 }
+
+const ReviewRequested = Schema.Struct({
+  web_url: Schema.String,
+  title: Schema.String,
+  author: Schema.Struct({ username: Schema.String }),
+});
+
+const reviewRequests = (host: string, login: string, cwd: string) =>
+  Effect.map(
+    pagesAs(
+      ReviewRequested,
+      glabLoginTo(host),
+      cwd,
+      `merge_requests?scope=all&state=opened&reviewer_username=${encodeURIComponent(login)}`,
+    ),
+    (listed): Answered<ReadonlyArray<ReviewRequest>> =>
+      listed.ok
+        ? {
+            ok: true,
+            value: Arr.map(listed.value, (one) => ({
+              url: one.web_url,
+              title: one.title,
+              author: one.author.username,
+            })),
+          }
+        : listed,
+  );
 
 const Environments = Schema.Array(Schema.Struct({ name: Schema.String, tier: optionalText }));
 const Deployments = Schema.Array(
@@ -1523,6 +1551,7 @@ export const gitlab: Forge = {
         cwd,
       );
     }),
+  reviewRequests: (host, login, cwd) => reviewRequests(host, login, cwd),
   mine: (named, cwd, run) =>
     Effect.gen(function* () {
       const project = named ?? (yield* projectHere(cwd, run));

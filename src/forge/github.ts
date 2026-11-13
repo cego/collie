@@ -35,6 +35,7 @@ import type {
   PipelineRead,
   TagPipelineRead,
   Readiness,
+  ReviewRequest,
 } from "./forge";
 import {
   ForgeHttp,
@@ -664,6 +665,42 @@ function baseJob(
     return { ok: true, at: found.head_sha, state: stateOf(found), url: found.html_url ?? null };
   });
 }
+
+const Searched = Schema.Struct({
+  items: Schema.Array(
+    Schema.Struct({
+      html_url: Schema.String,
+      title: Schema.String,
+      user: Schema.Struct({ login: Schema.String }),
+    }),
+  ),
+});
+
+const reviewRequests = (login: string, cwd: string) =>
+  Effect.gen(function* (): Effect.fn.Return<
+    Answered<ReadonlyArray<ReviewRequest>>,
+    never,
+    ForgeHttp
+  > {
+    const requests: ReviewRequest[] = [];
+    for (let page = 1; ; page++) {
+      const listed = yield* requestAs(
+        Searched,
+        LOGIN,
+        cwd,
+        `search/issues?q=${encodeURIComponent(`is:pr is:open review-requested:${login}`)}&per_page=100&page=${page}`,
+      );
+      if (!listed.ok) return listed;
+      requests.push(
+        ...Arr.map(listed.value.items, (one) => ({
+          url: one.html_url,
+          title: one.title,
+          author: one.user.login,
+        })),
+      );
+      if (listed.value.items.length < 100) return { ok: true, value: requests };
+    }
+  });
 
 const User = Schema.Struct({ login: Schema.String, type: optionalText });
 const IssueComment = Schema.Struct({
@@ -1469,6 +1506,7 @@ export const github: Forge = {
     ref.project === null
       ? Effect.succeed({ ok: false, message: `${mrWords(ref).label} names no GitHub project` })
       : postReview(LOGIN, ref.project, ref, body, cwd),
+  reviewRequests: (_host, login, cwd) => reviewRequests(login, cwd),
   mine: (project, cwd) =>
     project === null ? Effect.succeed([]) : myMergeRequests(LOGIN, project, cwd),
   open: (ref, cwd, run) => run("gh", ["pr", "view", ref.iid, "--repo", mrPath(ref), "--web"], cwd),

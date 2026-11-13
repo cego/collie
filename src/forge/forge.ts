@@ -152,6 +152,12 @@ export type BaseJobRead =
     }
   | { readonly ok: false; readonly reason: string };
 
+export interface ReviewRequest {
+  readonly url: string;
+  readonly title: string;
+  readonly author: string;
+}
+
 export interface ReviewCommands {
   readonly diff: string;
   readonly view: string;
@@ -418,6 +424,13 @@ export interface Forge {
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<MergeAnswer, never, R | ForgeHttp>;
+  /** The open merge requests on `host` that request `login`'s review, its own among them. */
+  readonly reviewRequests: <R>(
+    host: string,
+    login: string,
+    cwd: string,
+    run: Runner<R>,
+  ) => Effect.Effect<Answered<ReadonlyArray<ReviewRequest>>, never, R | ForgeHttp>;
   /** My open merge requests in `project`, as assignee or author, for a menu. */
   readonly mine: <R>(
     project: string | null,

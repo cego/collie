@@ -945,6 +945,57 @@ for (const name of ["gitlab", "github"] as const) {
         }),
       ));
 
+    test("lists the open merge requests that request a login's review, in one read", () => {
+      const fake = fakeForge(
+        name,
+        model(name, {
+          mrs: [
+            mr(name, { iid: "31", author: "ann", reviewers: ["me"], title: "Guard it" }),
+            mr(name, { iid: "32", author: "me", reviewers: ["bob", "me"], title: "Mine" }),
+            mr(name, { iid: "33", author: "ann", reviewers: ["bob"] }),
+            mr(name, { iid: "34", author: "ann", reviewers: ["me"], state: "merged" }),
+          ],
+        }),
+      );
+      const url = (iid: string) =>
+        name === "github"
+          ? `https://${PROJECT.github}/pull/${iid}`
+          : `https://${PROJECT.gitlab}/-/merge_requests/${iid}`;
+      return runEffect(
+        Effect.gen(function* () {
+          expect(yield* forge.reviewRequests(host, "me", "/w", fake.run)).toEqual({
+            ok: true,
+            value: [
+              { url: url("31"), title: "Guard it", author: "ann" },
+              { url: url("32"), title: "Mine", author: "me" },
+            ],
+          });
+          expect(fake.requests).toHaveLength(1);
+        }).pipe(Effect.provide(fake.layer)),
+      );
+    });
+
+    test("lists review requests beyond the first page", () => {
+      const fake = fakeForge(
+        name,
+        model(name, {
+          mrs: Arr.makeBy(101, (index) =>
+            mr(name, { iid: String(index + 1), author: "ann", reviewers: ["me"] }),
+          ),
+        }),
+      );
+      return runEffect(
+        Effect.gen(function* () {
+          const listed = yield* forge.reviewRequests(host, "me", "/w", fake.run);
+          expect(listed.ok && listed.value.length).toBe(101);
+          expect(listed.ok && listed.value.at(-1)?.url).toContain(
+            name === "github" ? "/pull/101" : "/merge_requests/101",
+          );
+          expect(fake.requests).toHaveLength(2);
+        }).pipe(Effect.provide(fake.layer)),
+      );
+    });
+
     test("opens one in a browser", () =>
       runEffect(
         Effect.gen(function* () {

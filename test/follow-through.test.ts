@@ -16,6 +16,8 @@ import { HOLD, Registry } from "../src/engine";
 import { Store } from "../src/store";
 import { sectionOf } from "../src/board-model";
 import { readMetrics } from "../src/metrics";
+import { newsPath, read as readNews } from "../src/news";
+import { machineHerd } from "../src/steering";
 
 const PROJECT = "gitlab.cego.dk/mk/collie";
 const TARGET = `https://${PROJECT}/-/merge_requests/7`;
@@ -91,8 +93,8 @@ const entryOf = (id: string) =>
   Effect.gen(function* () {
     if (id === "review") return `${ROOT}workflows/review.workflow.ts`;
     const fs = yield* FileSystem.FileSystem;
-    const entry = `${rig.root}/user/workflows/${id}.workflow.ts`;
-    yield* fs.makeDirectory(`${rig.root}/user/workflows`, { recursive: true });
+    const entry = `${rig.userDir}/workflows/${id}.workflow.ts`;
+    yield* fs.makeDirectory(`${rig.userDir}/workflows`, { recursive: true });
     yield* fs.writeFileString(
       entry,
       Arr.join(
@@ -132,6 +134,198 @@ const notesOf = <E>(forge: { readonly model: () => Effect.Effect<ForgeModel, E> 
   Effect.map(forge.model(), (got) => Rec.values(got.notes ?? {}).flat()).pipe(Effect.orDie);
 
 const asked = (runId: string) => Store.pipe(Effect.flatMap((store) => store.asked(runId)));
+
+const configured = (on: boolean) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) =>
+      fs.writeFileString(
+        `${rig.userDir}/config.json`,
+        JSON.stringify({
+          review: { follow_through: on },
+          projects: { root: rig.root },
+          gitlab_host: "gitlab.cego.dk",
+        }),
+      ),
+    ),
+    Effect.orDie,
+  );
+
+const loaded = Effect.gen(function* () {
+  const entry = yield* entryOf("review");
+  return yield* Registry.pipe(Effect.flatMap((registry) => registry.load(entry)));
+}).pipe(Effect.orDie);
+
+const runsHere = Registry.pipe(Effect.flatMap((registry) => registry.views(null)));
+
+const listings = (forge: { readonly requests: () => ReadonlyArray<{ readonly url: string }> }) =>
+  Arr.filter(forge.requests(), (one) => Str.includes("reviewer_username=mk")(one.url));
+
+const requesting = (head: string) =>
+  model(head, {
+    mrs: [
+      mr(head, { reviewers: ["mk"], title: "Guard the input" }),
+      mr(head, { iid: "8", author: "mk", reviewers: ["mk"] }),
+    ],
+  });
+
+test(
+  "a GitLab review request starts one Follow-through, never for the login's own, and a round lists once",
+  () =>
+    host.runEffect(
+      Effect.gen(function* () {
+        yield* repository;
+        yield* git(["remote", "add", "upstream", `https://${PROJECT}.git`]);
+        const head = yield* pushed("review this");
+        const forge = yield* host.gitlab(requesting(head));
+        yield* configured(true);
+        yield* rig.queueOutputs([review([F1])]);
+        yield* host.session(
+          forge,
+          Effect.gen(function* () {
+            yield* loaded;
+            yield* host.mergeWatched;
+            const [started] = yield* until(
+              () => runsHere,
+              (views) => views.length > 0,
+            );
+            const runId = started!.runId;
+            yield* until(
+              () => host.watchOf(runId, TARGET),
+              (row) => row?.name === "follow-1",
+            );
+            const listed = listings(forge).length;
+            yield* until(
+              () => Effect.sync(() => listings(forge).length),
+              (count) => count === listed + 1,
+            );
+            const from = forge.requests().length;
+            yield* until(
+              () => Effect.sync(() => listings(forge).length),
+              (count) => count === listed + 2,
+            );
+            const round = Arr.filter(
+              forge.requests().slice(from),
+              (one) => !/\/merge_requests\/7(?:[/?]|$)/.test(decodeURIComponent(one.url)),
+            );
+            expect(Arr.map(round, (one) => one.url)).toEqual([
+              expect.stringContaining(
+                "/merge_requests?scope=all&state=opened&reviewer_username=mk",
+              ),
+            ]);
+            const views = yield* runsHere;
+            expect(Arr.map(views, (view) => view.runId)).toEqual([runId]);
+            expect(views[0]?.input).toMatchObject({ target: `mr:${KEY}` });
+            const byHand = yield* host.started(yield* entryOf("review"), "by-hand", {
+              target: TARGET,
+            });
+            expect(byHand.runId).toBe(runId);
+          }),
+        );
+      }),
+    ),
+  180_000,
+);
+
+test("an unplaced or ambiguous review request says why once and starts after it is resolved", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      yield* repository;
+      const head = yield* pushed("review this");
+      const forge = yield* host.gitlab(requesting(head));
+      yield* configured(true);
+      yield* rig.queueOutputs([review([F1])]);
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          const news = yield* newsPath(host.dir(), yield* machineHerd(host.env()));
+          const notices = () =>
+            Effect.map(readNews(news), (lines) =>
+              Arr.filter(lines, (line) => line.kind === "item"),
+            );
+          yield* loaded;
+          yield* host.mergeWatched;
+          yield* until(notices, (lines) => lines.length > 0);
+          yield* until(
+            () => Effect.sync(() => listings(forge).length),
+            (count) => count >= 2,
+          );
+          expect(yield* runsHere).toEqual([]);
+          const unplaced = yield* notices();
+          expect(unplaced).toHaveLength(1);
+          expect(unplaced[0]?.text).toContain("clone it there");
+
+          const fork = yield* entryOf("second-look");
+          yield* git(["remote", "add", "upstream", `https://${PROJECT}.git`]);
+          const ambiguous = yield* until(notices, (lines) => lines.length === 2);
+          expect(ambiguous[1]?.text).toContain("review, second-look");
+          expect(yield* runsHere).toEqual([]);
+          yield* Effect.sleep("30 seconds");
+          expect(yield* notices()).toHaveLength(2);
+
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.remove(fork);
+          const [started] = yield* until(
+            () => runsHere,
+            (views) => views.length > 0,
+          );
+          yield* until(
+            () => host.watchOf(started!.runId, TARGET),
+            (row) => row !== null,
+          );
+          expect(yield* runsHere).toHaveLength(1);
+          expect(yield* host.agentStarts).toHaveLength(1);
+        }),
+      );
+    }),
+  ));
+
+test("an empty review-request listing refreshes a changed login on the next round", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      yield* repository;
+      yield* configured(true);
+      const head = yield* pushed("review this");
+      const forge = yield* host.gitlab(model(head));
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          yield* host.mergeWatched;
+          yield* until(
+            () => Effect.sync(() => listings(forge).length),
+            (count) => count > 0,
+          );
+          yield* forge.set(model(head, { login: "bob" }));
+          yield* until(
+            () => Effect.sync(() => forge.requests()),
+            (requests) =>
+              Arr.some(requests, (one) => Str.includes("reviewer_username=bob")(one.url)),
+          ).pipe(Effect.timeout("1 minute"));
+          expect(yield* runsHere).toEqual([]);
+        }),
+      );
+    }),
+  ));
+
+test("with following off, no review request is listed and nothing starts", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      yield* repository;
+      yield* git(["remote", "add", "upstream", `https://${PROJECT}.git`]);
+      const head = yield* pushed("review this");
+      const forge = yield* host.gitlab(requesting(head));
+      yield* configured(false);
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          yield* loaded;
+          yield* host.mergeWatched;
+          yield* Effect.sleep("1 minute");
+          expect(listings(forge)).toEqual([]);
+          expect(yield* runsHere).toEqual([]);
+        }),
+      );
+    }),
+  ));
 
 test(
   "!482: a signed fixed claim without a push reassesses only its finding",
@@ -1057,7 +1251,11 @@ for (const id of ["review", "second-look"])
                       (line) => line.action === "resumed" && line.outcome === "resumed",
                     ),
                 );
-                expect((yield* host.status(runId))?.park).toBeNull();
+                const recovered = yield* until(
+                  () => host.status(runId),
+                  (view) => view?.park === null,
+                );
+                expect(recovered?.park).toBeNull();
                 expect(yield* host.agentStarts).toHaveLength(1);
                 yield* pushedOn(forge, first);
                 yield* until(

@@ -116,6 +116,8 @@ export const FakeMr = Schema.Struct({
   title: Schema.optionalKey(Schema.String),
   author: Schema.optionalKey(Schema.String),
   assignees: Schema.optionalKey(Schema.Array(Schema.String)),
+  /** The logins its review is requested of. */
+  reviewers: Schema.optionalKey(Schema.Array(Schema.String)),
   head: Schema.optionalKey(Schema.String),
   diff: Schema.optionalKey(Schema.String),
   interdiff: Schema.optionalKey(Schema.String),
@@ -1017,6 +1019,28 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
           ),
         ),
       );
+    const reviewing = /^merge_requests\?(.*)$/.exec(route);
+    if (reviewing) {
+      const query = new URLSearchParams(reviewing[1]);
+      return json(
+        pageOf(
+          route,
+          Arr.map(
+            Arr.filter(
+              model.mrs,
+              (one) =>
+                one.state === "open" &&
+                (one.reviewers ?? []).includes(query.get("reviewer_username") ?? ""),
+            ),
+            (one) => ({
+              web_url: `https://${one.project}/-/merge_requests/${one.iid}`,
+              title: one.title ?? "",
+              author: { username: one.author ?? "" },
+            }),
+          ),
+        ),
+      );
+    }
     const byBranch = /^projects\/([^/]+)\/merge_requests\?(.*)$/.exec(route);
     if (byBranch) {
       const path = decodeURIComponent(byBranch[1]!);
@@ -1625,6 +1649,36 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
       ],
       args,
     );
+  }
+  const searched = /^search\/issues\?(.*)$/.exec(route);
+  if (searched) {
+    const words = Str.split(new URLSearchParams(searched[1]).get("q") ?? "", " ");
+    const requested = Option.getOrUndefined(
+      Arr.findFirst(words, (word) => pipe(word, Str.startsWith("review-requested:"))),
+    );
+    return json({
+      items: pageOf(
+        route,
+        Arr.map(
+          Arr.filter(
+            model.mrs,
+            (one) =>
+              one.state === "open" &&
+              words.includes("is:pr") &&
+              words.includes("is:open") &&
+              requested !== undefined &&
+              (one.reviewers ?? []).includes(
+                pipe(requested, Str.slice("review-requested:".length)),
+              ),
+          ),
+          (one) => ({
+            html_url: `https://${one.project}/pull/${one.iid}`,
+            title: one.title ?? "",
+            user: { login: one.author ?? "" },
+          }),
+        ),
+      ),
+    });
   }
   const asked = route === "graphql" ? ghGraphql(model, args) : undefined;
   if (asked !== undefined) return asked;

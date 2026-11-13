@@ -1154,6 +1154,12 @@ checkout of the merge request's own ref at `head` that is the Run's, or `moved` 
 ref is somewhere else. The shipped `review` is the example: each round reads, pins, reviews,
 posts, then watches, or asks for approval while it watches.
 
+The merge watch also lists GitLab review requests while `review.follow_through` is on.
+It starts the sole saved workflow declaring `follows` for that setting in the matching
+Projects-root checkout. Multiple matching workflows or no matching checkout produce News
+instead of a start; later rounds retry. The login's own merge requests are excluded.
+Automatic and manual starts share the same merge-request-and-login claim.
+
 ## A workflow made of other workflows
 
 `child({ invocation, workflow, input })` starts another workflow as part of this one and

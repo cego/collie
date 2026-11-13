@@ -16,6 +16,7 @@ import { Herdr } from "../src/herdr";
 import { connect, frontDoor, socketOf } from "../src/host";
 import { shareBoard } from "../src/board-stream";
 import { sideJobs } from "../src/side-jobs";
+import type { Requested } from "../src/review-requests";
 import { newsPath, pending, read as readNews } from "../src/news";
 import { herdOf } from "../src/steering";
 import { writeTask } from "../src/task";
@@ -58,6 +59,11 @@ const runIdOf = (envelope: { readonly data?: unknown }) =>
     Effect.map(({ runId }) => runId),
     Effect.orDie,
   );
+
+const NO_REQUESTS: Requested = {
+  claimed: () => Effect.succeed(true),
+  start: () => Effect.void,
+};
 
 const NO_WATCHES = {
   list: () => Effect.succeed([]),
@@ -336,6 +342,7 @@ test("News and the merge watch read the host's latest board, and list no Runs of
         record: () => Effect.void,
         stop: () => Effect.void,
         watches: NO_WATCHES,
+        requested: NO_REQUESTS,
         sweepers: Effect.succeed([]),
       }).pipe(Effect.timeout("12 seconds"), Effect.ignore, fastForward);
       // Two merge looks and three News looks at least, on one build.
@@ -357,6 +364,7 @@ test("News reads which herdr sessions there are as often as the host does, not o
         record: () => Effect.void,
         stop: () => Effect.void,
         watches: NO_WATCHES,
+        requested: NO_REQUESTS,
         sweepers: Effect.succeed([]),
       }).pipe(Effect.timeout("12 seconds"), Effect.ignore, fastForward);
       // Three News looks and the Homes' first restating, within one SESSIONS_EVERY.

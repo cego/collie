@@ -77,7 +77,11 @@ export const Catalogue = Schema.Struct({
 });
 
 /** A resolved entry and the revision of the directory a generation of it is staged from. */
-export type Found = typeof Resolved.Type & { readonly revision: string };
+export type Found = typeof Resolved.Type & {
+  readonly revision: string;
+  /** The setting it follows merge requests under, where it declares one. */
+  readonly follows?: string;
+};
 
 export interface Catalogued {
   readonly entries: ReadonlyArray<Found>;
@@ -151,6 +155,9 @@ const claimsIn = Effect.fn("Discovery.claimsIn")(function* (root: Root) {
               inputs: declaredBy(read.success),
               outcome: read.success.metadata?.outcome?.fixed ?? null,
               ...(read.success.metadata?.heals === true && { heals: true as const }),
+              ...(read.success.metadata?.follows !== undefined && {
+                follows: read.success.metadata.follows,
+              }),
               revision,
             },
           },

@@ -8,6 +8,21 @@ import { configValue, readConfig } from "./config";
 import { forgeOf } from "./forge/forge";
 import { shell } from "./mr";
 
+/** Whether the boolean setting a workflow follows under is on. */
+export const followingOn = Effect.fn("FollowThrough.on")(function* (
+  userDir: string,
+  setting: string,
+) {
+  const config = yield* readConfig(userDir).pipe(Effect.orElseSucceed(() => ({})));
+  const on = configValue(config, setting);
+  return (
+    Schema.is(Schema.Union([Schema.Boolean, Schema.String]))(on) && Str.trim(String(on)) === "true"
+  );
+});
+
+/** The suffix of the request a follow claim is made under, after the workflow's id. */
+export const followClaim = (mr: string, login: string) => `-follow:${mr}:${login}`;
+
 /** The request a start of `target` is claimed under, or null where it follows nothing. */
 export const followRequest = Effect.fn("FollowThrough.request")(function* (opts: {
   readonly workflow: string;
@@ -18,17 +33,11 @@ export const followRequest = Effect.fn("FollowThrough.request")(function* (opts:
   readonly cwd: string;
 }) {
   if (opts.setting === undefined || opts.target === null) return null;
-  const config = yield* readConfig(opts.userDir).pipe(Effect.orElseSucceed(() => ({})));
-  const on = configValue(config, opts.setting);
-  if (
-    !Schema.is(Schema.Union([Schema.Boolean, Schema.String]))(on) ||
-    Str.trim(String(on)) !== "true"
-  )
-    return null;
+  if (!(yield* followingOn(opts.userDir, opts.setting))) return null;
   const ref = parseMrTarget(opts.target);
   const mr = mrId(opts.target);
   if (ref === null || mr === null) return null;
   const login = yield* forgeOf(ref).login(opts.cwd, shell, ref.project);
   if (login === null) return null;
-  return { request: `${opts.workflow}-follow:${mr}:${login}`, mr };
+  return { request: `${opts.workflow}${followClaim(mr, login)}`, mr };
 });
