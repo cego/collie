@@ -962,21 +962,18 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
           entry.supervised ? () => Effect.void : store,
           collectedOf(entry),
         );
+        // A supervised check is finished from its supervisor's files, which may not have been written.
+        if (entry.supervised)
+          return Effect.succeed({
+            ...running,
+            pid: commandPid(fs, dir, id, handle),
+            exit: handle.exitCode.pipe(Effect.andThen(exitIn(fs, dir, id))),
+            logged: true,
+          });
         return Effect.acquireRelease(
           Effect.sync(() => kept.set(id, ends)),
           () => Effect.sync(() => kept.delete(id)),
-        ).pipe(
-          Effect.as(
-            entry.supervised
-              ? {
-                  ...running,
-                  pid: commandPid(fs, dir, id, handle),
-                  exit: handle.exitCode.pipe(Effect.andThen(exitIn(fs, dir, id))),
-                  logged: true,
-                }
-              : running,
-          ),
-        );
+        ).pipe(Effect.as(running));
       }),
     );
 

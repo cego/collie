@@ -1683,6 +1683,29 @@ test.skipIf(process.platform !== "linux")(
   30_000,
 );
 
+for (const stream of ["stdout", "stderr"] as const)
+  test.skipIf(process.platform !== "linux")(
+    `a supervised check whose ${stream} tail cannot be written gives no verdict, and nothing is recorded`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const one = yield* supervisedWorld;
+          const refused = yield* collected(
+            one,
+            `mkdir "$0/check-output/$${CHECK_ID}.${stream}.new"`,
+            { cwd: one.notes, argv: [one.state] },
+          ).pipe(Effect.flip);
+
+          expect(refused._tag).toBe("VerifyRefused");
+          expect(refused.state).toBe(true);
+          expect(refused.why).toContain('"streams" gave no verdict');
+          expect(refused.why).toContain("output");
+          expect(yield* evidenceOf(one.root)).toEqual([]);
+        }),
+      ),
+    30_000,
+  );
+
 test("a check whose Verification cannot be appended gives no verdict", () =>
   runEffect(
     Effect.gen(function* () {
