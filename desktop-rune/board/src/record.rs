@@ -322,6 +322,7 @@ impl App {
         tab: Option<&str>,
     ) {
         self.close_record();
+        self.nav.returns_to = None;
         self.opened += 1;
         self.open_run = Some((installation.clone(), run.clone()));
         let mut record = Record::new(installation.clone(), run.clone(), machine, self.opened);
@@ -360,6 +361,9 @@ impl App {
 
     pub fn back(&mut self) {
         self.close_record();
+        if let Some(page) = self.nav.returns_to.take() {
+            self.nav.page = page;
+        }
     }
 
     /// A record the host sent for the `serial`th open Run, or why it stopped.

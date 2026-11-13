@@ -143,6 +143,7 @@ const served = (main: Channel<ToView, ToMain>) =>
         runDetail: () => Stream.die("not asked"),
         runFile: () => Effect.die("not asked"),
         artefacts: () => Effect.die("not asked"),
+        artefactSearch: () => Effect.die("not asked"),
         artefactRead: () => Effect.die("not asked"),
         artefactSeen: () => Effect.die("not asked"),
         artefactRegister: () => Effect.die("not asked"),

@@ -5,7 +5,7 @@ import { Console, Effect, Layer, Schema } from "effect";
 import manifest from "../herdr-plugin.toml";
 import { CliConfig, CliError, Command, GlobalFlag } from "effect/cli";
 import { persona } from "./commands/persona";
-import { run } from "./commands/run";
+import { artefacts, run } from "./commands/run";
 import { task } from "./commands/task";
 import { settings } from "./commands/settings";
 import { cleanup } from "./commands/cleanup";
@@ -35,6 +35,7 @@ export const app = root.pipe(
     workflow,
     persona,
     run,
+    artefacts,
     task,
     settings,
     steer,

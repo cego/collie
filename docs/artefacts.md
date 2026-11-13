@@ -27,6 +27,33 @@ modification time, registration, and revision detection are separate facts. **Re
 observes the source again. Unchanged bytes and date-only changes create no content revision.
 A missing or denied source can still have an available retained copy.
 
+## Finding material across Runs and Machines
+
+Open **Artefacts** in Desktop's navigation to search retained material, including a Task's
+earlier Runs and Runs without current cards. Search titles, descriptions, URLs, and source
+paths. File contents are not searched. Filter by Run, kind, role, or **Unseen only**, and
+use **Load more** for the next page. Enter in a search field submits the filters.
+
+Each result names its Machine, Run, revision, and last observation. **Open** selects the
+exact artefact in its owning Run's record, using the same previews, player, and browser
+actions. **Back** returns to the collection. The record's **Refresh** asks that owning
+host to observe the source again. Seen receipts live there too; Desktop keeps no private
+acknowledgements. A changed revision remains unseen even if an earlier revision was inspected.
+
+Coverage names unreachable Machines, hosts needing an upgrade, and historical Runs still
+being indexed. An empty partial result does not establish that no material exists.
+**Search** asks again with the current filters. If a Machine becomes unreachable, results
+kept from the same earlier search show as saved and stale, with their last observation.
+Their seen controls are disabled until the host answers again.
+
+The CLI offers `collie artefacts`; native chat, Flock chat, herdr routes, and managed agents
+use `collie_artefacts` with search filters. Results include installation ids, a next-page
+cursor, and per-Machine coverage. Use `<installation>:<run>` to keep an address stable
+through Machine renaming. `<machine>:<run>` also works. A bare Run id present on multiple
+installations is refused with candidates; multiple routes to one installation count once.
+These routes inspect and refresh historical results without requiring a current Task card.
+The terminal board has no separate collection page.
+
 ## Registering a file
 
 **Register file…** sends a file from this computer; **Register path** names a file on the
@@ -131,29 +158,35 @@ upgrade is needed when the host does not advertise the capability.
 Catalogue membership does not establish [Evidence](../CONTEXT.md), change an Output,
 or add attachments to prompts. The implementation's promises are checked at these seams:
 
-| Promise                                                                          | Evidence                                                                                                        |
-| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| Approved collections, stable ids, immutable bytes, source loss                   | `test/artefacts.test.ts` through public host operations                                                         |
-| Exact receipts, retry conflicts, concurrent requests, restart, Actor attribution | `test/artefacts.test.ts`                                                                                        |
-| CLI/chat/Desktop use the selected revision without implicit seen                 | `test/artefacts.test.ts`, `test/chat-parity.test.ts`, `test/flock-tools.test.ts`                                |
-| Optional/null dates, unknown kinds, extension metadata, revision and error parts | `test/rune-contract.test.ts`, generated-type drift checks                                                       |
-| Native selection, content presentation, failure states, opening serial fences    | `desktop-rune/board/tests/record_view.rs`                                                                       |
-| Linux decoder frames, timestamps, AAC stream, controls, teardown and failure     | `video::linux::tests` in `desktop-rune/board/src/video/linux.rs`                                                |
-| macOS decoder frames, timestamps, AAC stream, controls and failure               | macOS `video::tests` in `desktop-rune/board/src/video.rs`; execution requires the macOS CI job                  |
-| Linux plugin and library closure, scanner and notices                            | `test/rune-media.test.ts`, clean CI dependency installation                                                     |
-| Registration receipts, duplicate requests and paths, A→B→A tracking              | `test/artefact-registration.test.ts`, `test/artefact-tracking.test.ts`                                          |
-| Copy races, refused sources, pinned multi-part reads                             | `test/artefact-snapshot.test.ts`                                                                                |
-| Coalescing, concurrency, timeout, backoff and rotation                           | `test/artefact-refresh.test.ts`                                                                                 |
-| Multi-part transfer to another Machine, restart, original and upload removed     | `test/artefact-peers.test.ts`                                                                                   |
-| Run and upload cleanup keep each other's copies                                  | `test/artefact-cleanup.test.ts`                                                                                 |
-| CLI, tool and chat registration routes                                           | `test/artefact-frontdoors.test.ts`, `test/flock-tools.test.ts`                                                  |
-| Native picker, path entry, transfer failure, stale labels, unreachable owner     | `desktop-rune/board/tests/record_view.rs`                                                                       |
-| Links, Claude artefacts, Sites, namespaces, versions, exports, refused input     | `test/artefact-links.test.ts`                                                                                   |
-| Provider reader mapping, null dates, failure states, timeout                     | `test/artefact-observation.test.ts`, with fake readers; no live provider is claimed                             |
-| Native link, Open in browser, export presentation, URL entry, plain metadata     | `desktop-rune/board/tests/record_view.rs`                                                                       |
-| Agent guidance on every step, agent Actor, terminal link lines, Flock chat       | `test/agents.test.ts`, `test/artefact-links.test.ts`, `test/artefact-lines.test.ts`, `test/flock-tools.test.ts` |
+| Promise                                                                                          | Evidence                                                                                                        |
+| ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| Approved collections, stable ids, immutable bytes, source loss                                   | `test/artefacts.test.ts` through public host operations                                                         |
+| Exact receipts, retry conflicts, concurrent requests, restart, Actor attribution                 | `test/artefacts.test.ts`                                                                                        |
+| CLI/chat/Desktop use the selected revision without implicit seen                                 | `test/artefacts.test.ts`, `test/chat-parity.test.ts`, `test/flock-tools.test.ts`                                |
+| Optional/null dates, unknown kinds, extension metadata, revision and error parts                 | `test/rune-contract.test.ts`, generated-type drift checks                                                       |
+| Native selection, content presentation, failure states, opening serial fences                    | `desktop-rune/board/tests/record_view.rs`                                                                       |
+| Linux decoder frames, timestamps, AAC stream, controls, teardown and failure                     | `video::linux::tests` in `desktop-rune/board/src/video/linux.rs`                                                |
+| macOS decoder frames, timestamps, AAC stream, controls and failure                               | macOS `video::tests` in `desktop-rune/board/src/video.rs`; execution requires the macOS CI job                  |
+| Linux plugin and library closure, scanner and notices                                            | `test/rune-media.test.ts`, clean CI dependency installation                                                     |
+| Registration receipts, duplicate requests and paths, A→B→A tracking                              | `test/artefact-registration.test.ts`, `test/artefact-tracking.test.ts`                                          |
+| Copy races, refused sources, pinned multi-part reads                                             | `test/artefact-snapshot.test.ts`                                                                                |
+| Coalescing, concurrency, timeout, backoff and rotation                                           | `test/artefact-refresh.test.ts`                                                                                 |
+| Multi-part transfer to another Machine, restart, original and upload removed                     | `test/artefact-peers.test.ts`                                                                                   |
+| Run and upload cleanup keep each other's copies                                                  | `test/artefact-cleanup.test.ts`                                                                                 |
+| CLI, tool and chat registration routes                                                           | `test/artefact-frontdoors.test.ts`, `test/flock-tools.test.ts`                                                  |
+| Native picker, path entry, transfer failure, stale labels, unreachable owner                     | `desktop-rune/board/tests/record_view.rs`                                                                       |
+| Links, Claude artefacts, Sites, namespaces, versions, exports, refused input                     | `test/artefact-links.test.ts`                                                                                   |
+| Provider reader mapping, null dates, failure states, timeout                                     | `test/artefact-observation.test.ts`, with fake readers; no live provider is claimed                             |
+| Native link, Open in browser, export presentation, URL entry, plain metadata                     | `desktop-rune/board/tests/record_view.rs`                                                                       |
+| Agent guidance on every step, agent Actor, terminal link lines, Flock chat                       | `test/agents.test.ts`, `test/artefact-links.test.ts`, `test/artefact-lines.test.ts`, `test/flock-tools.test.ts` |
+| Historical Runs, restart checkpoints, filters, stable pages, bounded indexing and metadata reads | `test/artefact-search.test.ts`                                                                                  |
+| Qualified owner reads, remote refresh, durable receipts across reconnect, omitted Machines       | `test/artefact-peers.test.ts`, `test/flock-tools.test.ts`                                                       |
+| Native collection handlers, keyboard and AccessKit controls, stale results, late replies         | `desktop-rune/board/tests/artefacts_page.rs`                                                                    |
+| Search cursors, coverage, unknown kinds, stale and null states across Rust                       | `test/rune-contract.test.ts`, `test/rune-types.test.ts`                                                         |
 
 Live visual, screen-reader, and audible playback observations on Linux and macOS remain
 **PENDING** until recorded against an implementation revision. Handler and offscreen
 decoder tests do not replace those operator observations. The Run's final `check` proof
 is left to CI job `test`.
+Live collection opening and refresh between two computers also remain **PENDING**;
+the two-host tests establish routing and receipt behavior with controlled hosts.

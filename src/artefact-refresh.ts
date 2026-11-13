@@ -13,7 +13,7 @@ export const refreshJobs = () => {
   const pending = new Map<string, Deferred.Deferred<boolean>>();
   const checked = new Map<string, { at: number; due: number; failures: number }>();
   let cursor = "";
-  const status = <R>(job: RefreshJob<R>, now: number) => ({
+  const status = (job: Pick<RefreshJob<never>, "key" | "observed">, now: number) => ({
     pending: pending.has(job.key),
     stale: now - (checked.get(job.key)?.at ?? job.observed) >= 30_000,
   });

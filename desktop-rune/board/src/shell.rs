@@ -26,16 +26,18 @@ pub enum Page {
     Machines,
     Schedules,
     Usage,
+    Artefacts,
     Settings,
 }
 
 impl Page {
-    pub const ALL: [Page; 6] = [
+    pub const ALL: [Page; 7] = [
         Page::Board,
         Page::Workflows,
         Page::Machines,
         Page::Schedules,
         Page::Usage,
+        Page::Artefacts,
         Page::Settings,
     ];
 
@@ -46,6 +48,7 @@ impl Page {
             Page::Machines => "Machines",
             Page::Schedules => "Schedules",
             Page::Usage => "Usage",
+            Page::Artefacts => "Artefacts",
             Page::Settings => "Settings",
         }
     }
@@ -57,6 +60,7 @@ impl Page {
             Page::Machines => "nav-machines",
             Page::Schedules => "nav-schedules",
             Page::Usage => "nav-usage",
+            Page::Artefacts => "nav-artefacts",
             Page::Settings => "nav-settings",
         }
     }
@@ -68,6 +72,7 @@ impl Page {
             Page::Machines => &icons::MACHINES,
             Page::Schedules => &icons::SCHEDULES,
             Page::Usage => &icons::USAGE,
+            Page::Artefacts => &icons::ARTEFACTS,
             Page::Settings => &icons::SETTINGS,
         }
     }
@@ -91,6 +96,8 @@ pub struct Nav {
     pub usage_asked_of: Vec<String>,
     /// Brings the chat's own window to the front while the chat is popped out of this one.
     pub chat_window: Option<Box<dyn Fn()>>,
+    /// The page Back returns to from a record opened there.
+    pub returns_to: Option<Page>,
 }
 
 impl Default for Nav {
@@ -103,6 +110,7 @@ impl Default for Nav {
             usage_asked: None,
             usage_asked_of: Vec::new(),
             chat_window: None,
+            returns_to: None,
         }
     }
 }
@@ -113,6 +121,7 @@ impl App {
         if page == Page::Board {
             self.back();
         }
+        self.nav.returns_to = None;
         self.nav.page = page;
         match page {
             Page::Board => {}
@@ -120,6 +129,7 @@ impl App {
             Page::Machines => pages::machines::Machines::opened(self),
             Page::Schedules => pages::schedules::Schedules::opened(self),
             Page::Usage => pages::usage::Usage::opened(self),
+            Page::Artefacts => pages::artefacts::Artefacts::opened(self),
             Page::Settings => pages::settings::Settings::opened(self),
         }
     }
@@ -222,6 +232,7 @@ fn page_pane(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         Page::Machines => pages::machines::view(app, k, layer),
         Page::Schedules => pages::schedules::view(app, k, layer),
         Page::Usage => pages::usage::view(app, k, layer),
+        Page::Artefacts => pages::artefacts::view(app, k, layer),
         Page::Settings => pages::settings::view(app, k, layer),
     }
 }

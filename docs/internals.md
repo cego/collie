@@ -2808,3 +2808,19 @@ five-second timeout. None ships, so production registrations stay `untracked`.
 
 See [the material guide](artefacts.md#evidence-by-layer) for the checks at each layer and
 the native operator observations that remain pending.
+
+`artefactSearch` reads cached catalogue metadata with keyset pagination, ordered by
+detection date descending, then Run and id. Coverage counts every retained Run in the
+host's registry, independently of current Task cards. Historical indexing runs outside
+board builds, in side jobs and coalesced search-triggered rounds. A round visits at most
+four unindexed Runs, rotating past unfinished ones, with a five-second attempt per Run.
+Discovery processes at most eight source entries per Run per attempt. Its SQLite cursor
+advances after processing a source, so interruption retries that source after restart.
+Receipts, ids, and provenance remain in the existing catalogue.
+
+`src/artefact-search.ts` merges host pages by installation identity, preserving each
+host's cursor and coverage. Machine requests use four concurrent slots and fifteen-second
+deadlines; failed routes remain named in partial responses. Desktop, CLI, and chat share
+this search. Read and mutation routes resolve the owner before asking that host, including
+Runs outside current cards. The native page fences search and seen responses by request
+generation and opens results through the existing record serial and preview fences.

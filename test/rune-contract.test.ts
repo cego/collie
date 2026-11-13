@@ -267,6 +267,63 @@ describe.skipIf(cargo === null)("DesktopRpcs between the main process and the Ru
             },
           ],
           [
+            "artefactSearch",
+            {
+              query: "notes",
+              run: "inst-1:r1",
+              kind: "other/widget",
+              role: "handoff",
+              unseen: true,
+              cursor: "eyJpbnN0LTEiOiJkb25lIn0",
+              limit: 20,
+            },
+            {
+              items: [
+                { installation: "inst-1", machine: "vm-mk", item },
+                { installation: "inst-1", machine: "vm-mk", item: link },
+              ],
+              next: "eyJpbnN0LTEiOnsiZGV0ZWN0ZWRBdCI6IngiLCJydW4iOiJyMSIsImlkIjoibDEifX0",
+              machines: [
+                {
+                  installation: "inst-1",
+                  machine: "vm-mk",
+                  state: "searched",
+                  reason: null,
+                  runs: 3,
+                  indexed: 2,
+                },
+                {
+                  installation: null,
+                  machine: "laptop",
+                  state: "unreachable",
+                  reason: "Desktop is not connected to it",
+                  runs: 0,
+                  indexed: 0,
+                },
+              ],
+              complete: false,
+            },
+          ],
+          [
+            "artefactSearch",
+            {},
+            {
+              items: [],
+              next: null,
+              complete: false,
+              machines: [
+                {
+                  installation: null,
+                  machine: "old-build",
+                  state: "unsupported",
+                  reason: "Upgrade Collie",
+                  runs: 0,
+                  indexed: 0,
+                },
+              ],
+            },
+          ],
+          [
             "artefactRead",
             { installation: "inst-1", runId: "r1", id: "a1", revision: 1, offset: 0 },
             { ref: "artefact:a1:1", encoding: "base64", size: 7, content: "b2xkIG9uZQ==" },

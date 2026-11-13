@@ -125,6 +125,7 @@ import {
   runFileOn,
   artefactsOn,
   artefactReadOn,
+  searchMachines,
   artefactSeenOn,
   artefactRegisterOn,
   artefactImportOn,
@@ -952,6 +953,12 @@ const main = Effect.gen(function* () {
     helle: keyring
       .lookup("helle-token")
       .pipe(Effect.map((token) => (token === null ? null : { url: helle, token }))),
+    searchArtefacts: (asked) =>
+      searchMachines(
+        doors,
+        Arr.map(everyRoute(), (route) => route.machine),
+        asked,
+      ),
     inSync: (sync) =>
       Effect.gen(function* () {
         const rows = machineRows(shown);
@@ -1509,6 +1516,12 @@ const main = Effect.gen(function* () {
         Effect.flatMap((door) =>
           artefactsOn(door, shown.machines.get(installation)?.artefacts === true, runId, refresh),
         ),
+      ),
+    artefactSearch: (asked) =>
+      searchMachines(
+        doors,
+        Arr.map(everyRoute(), (route) => route.machine),
+        asked,
       ),
     artefactRead: ({ installation, runId, id, revision, offset }) =>
       doorTo(doors, installation).pipe(

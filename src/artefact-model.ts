@@ -109,3 +109,28 @@ export const artefactLines = (run: string, item: Artefact): ReadonlyArray<string
       : `collie run artefact read ${run} ${item.id} --revision ${item.revision}`,
   ];
 };
+
+/** Where a page of a host's search ended, in its order: newest detected first, then Run and id. */
+export const ArtefactKey = Schema.Struct({
+  detectedAt: Schema.String,
+  run: Schema.String,
+  id: Schema.String,
+});
+export type ArtefactKey = typeof ArtefactKey.Type;
+export const ArtefactSearch = Schema.Struct({
+  query: Schema.optional(Schema.String),
+  run: Schema.optional(Schema.String),
+  kind: Schema.optional(Schema.String),
+  role: Schema.optional(Schema.String),
+  unseen: Schema.optional(Schema.Boolean),
+  after: Schema.optional(ArtefactKey),
+  limit: Schema.optional(Schema.Int),
+});
+export type ArtefactSearch = typeof ArtefactSearch.Type;
+/** One host's page, and how many of its retained Runs its catalogue has reached. */
+export const ArtefactMatches = Schema.Struct({
+  items: Schema.Array(Artefact),
+  more: Schema.Boolean,
+  coverage: Schema.Struct({ runs: Schema.Int, indexed: Schema.Int }),
+});
+export type ArtefactMatches = typeof ArtefactMatches.Type;

@@ -7,7 +7,18 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import { uploadArtefact, withArtefacts } from "../../../src/artefact-client";
-import type { RegisterArtefact } from "../../../src/artefact-model";
+import type {
+  ArtefactMatches,
+  ArtefactSearch,
+  RegisterArtefact,
+} from "../../../src/artefact-model";
+import {
+  Away,
+  awayFrom,
+  type FlockSearch,
+  type SearchDoor,
+  searchFlock,
+} from "../../../src/artefact-search";
 import {
   Cause,
   Clock,
@@ -1785,6 +1796,62 @@ export const artefactsOn = (door: Reached, supported: boolean, runId: string, re
             "Upgrade this Machine's Collie host to use Artefacts. Legacy Plan and Evidence remain available.",
         }),
       );
+/** One connected Machine as the Flock's search reaches it; it holds a Run where it has its material. */
+interface Searched {
+  readonly machine: { readonly profile: string; readonly name: string };
+  readonly desktop: {
+    readonly artefactSearch: (
+      asked: ArtefactSearch,
+    ) => Effect.Effect<
+      ArtefactMatches,
+      HostRefused | RpcClientError.RpcClientError | RpcClientError.RpcClientDefect
+    >;
+  };
+}
+
+export const searchDoorOn = (installation: string, door: Searched): SearchDoor => ({
+  installation,
+  search: (asked) => awayFrom(door.desktop.artefactSearch(asked)),
+  has: (run) =>
+    awayFrom(door.desktop.artefactSearch({ run, limit: 1 })).pipe(
+      Effect.map(({ coverage }) => coverage.runs > 0),
+    ),
+});
+
+/**
+ * Retained material across Desktop's Machines. One it knows and is not connected to is
+ * named as unreachable, so a page without it does not read as complete.
+ */
+export const searchMachines = (
+  doors: ReadonlyMap<string, Searched>,
+  known: ReadonlyArray<{ readonly profile: string; readonly name: string }>,
+  asked: FlockSearch,
+) => {
+  const connected = new Set(Arr.map([...doors.values()], (door) => door.machine.profile));
+  return searchFlock(
+    [
+      ...Arr.map([...doors.entries()], ([installation, door]) => ({
+        machine: door.machine.name,
+        reach: Effect.succeed(searchDoorOn(installation, door)),
+      })),
+      ...Arr.map(
+        Arr.filter(known, (machine) => !connected.has(machine.profile)),
+        (machine) => ({
+          machine: machine.name,
+          reach: Effect.fail(
+            new Away({ state: "unreachable", reason: "Desktop is not connected to it" }),
+          ),
+        }),
+      ),
+    ],
+    asked,
+  ).pipe(
+    Effect.mapError(
+      (error) =>
+        new ActionFailed({ reason: error._tag === "AmbiguousRun" ? error.message : error.reason }),
+    ),
+  );
+};
 export const artefactReadOn = (
   door: Reached,
   runId: string,

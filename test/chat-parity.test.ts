@@ -143,6 +143,10 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
     "run artefact refresh",
     { route: "read", tool: "collie_artefacts", input: { run: RUN, refresh: true } },
   ],
+  [
+    "artefacts",
+    { route: "read", tool: "collie_artefacts", input: { query: "notes", unseen: true } },
+  ],
   ["run artefact seen", { route: "write", tool: "collie_do" }],
   ["run artefact unseen", { route: "write", tool: "collie_do" }],
   ["run artefact register", { route: "write", tool: "collie_do" }],

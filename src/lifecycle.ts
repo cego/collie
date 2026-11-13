@@ -53,6 +53,13 @@ import { Herdr, type HerdrError } from "./herdr";
 import { viaCommand } from "./ssh-argv";
 import { terminalBackend } from "./config";
 import { machineName, pairWith, peersOf } from "./peers";
+import {
+  artefactOwner,
+  awayFrom,
+  type FlockSearch,
+  searchDoorOf,
+  searchFlock,
+} from "./artefact-search";
 import { openConnection } from "./ssh-connection";
 import { type HerdrMachine, MachineUnreachable, type RelayHeader } from "./peers-model";
 import {
@@ -787,6 +794,65 @@ export const flockRuns = Effect.fn("Lifecycle.flockRuns")(function* (
   }
   return { ...local, runs, machines };
 });
+
+/**
+ * Retained material across this Machine and its configured routes, or `--machine`'s alone; a
+ * Machine that cannot be searched is named in the answer instead of failing it.
+ */
+export const flockArtefacts = (env: PluginEnv, asked: FlockSearch) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const here = env.machine ?? machineName();
+      const paired =
+        env.machine === undefined ? Arr.map(yield* peersOf(env.stateDir), (peer) => peer.name) : [];
+      const peers =
+        env.machine !== undefined
+          ? []
+          : [
+              ...new Set([
+                ...paired,
+                ...(env.pairs === true
+                  ? Arr.map(yield* herdrMachines(env), (machine) => machine.label)
+                  : []),
+              ]),
+            ];
+      return yield* searchFlock(
+        [
+          {
+            machine: here,
+            reach: awayFrom(reach(env, env.machine ?? null)).pipe(Effect.flatMap(searchDoorOf)),
+          },
+          ...Arr.map(peers, (machine) => ({
+            machine,
+            reach: awayFrom(reach(env, machine)).pipe(Effect.flatMap(searchDoorOf)),
+          })),
+        ],
+        asked,
+      );
+    }),
+  );
+
+export const asksArtefactRun = <A>(
+  env: PluginEnv,
+  named: string,
+  question: (client: HostClient, run: string) => Effect.Effect<A, HostFailure>,
+  door?: Door,
+) =>
+  flockArtefacts(env, { run: named, limit: 1 }).pipe(
+    Effect.flatMap((page) => artefactOwner(page, named)),
+    Effect.flatMap(({ machine, run }) =>
+      asks(
+        { ...env, machine: machine === machineName() ? undefined : machine },
+        (client) => question(client, run),
+        door,
+      ),
+    ),
+    Effect.catch((error) =>
+      Effect.succeed(
+        err("invalid_input", error._tag === "AmbiguousRun" ? error.message : error.reason),
+      ),
+    ),
+  );
 
 /**
  * Every state this Run reaches, until `each` says the caller has what it came for. The

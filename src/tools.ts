@@ -69,6 +69,8 @@ import {
   hostTaskOf,
   hostRunProposals,
   hostTasks,
+  flockArtefacts,
+  asksArtefactRun,
 } from "./lifecycle";
 import { modelsLines } from "./catalogue-model";
 import { connectionsLines } from "./connection-model";
@@ -112,6 +114,7 @@ import {
   isToolName,
   refusedActions,
   RunInput,
+  searchesArtefacts,
   type Settle,
   SETTLE_KINDS,
   TAKES,
@@ -168,16 +171,32 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
     collie_artefacts: (input) =>
       answer(
         Effect.gen(function* () {
+          if (searchesArtefacts(input)) {
+            const {
+              id: _id,
+              revision: _revision,
+              offset: _offset,
+              refresh: _refresh,
+              ...asked
+            } = input;
+            const found = yield* flockArtefacts(env, asked).pipe(Effect.result);
+            return found._tag === "Success"
+              ? asJson(found.success)
+              : found.failure._tag === "AmbiguousRun"
+                ? found.failure.message
+                : found.failure.reason;
+          }
+          const runId = input.run!;
           const door = yield* toolDoor(env);
           if (input.id !== undefined && input.revision !== undefined) {
-            const done = yield* asksRun(
+            const done = yield* asksArtefactRun(
               env,
-              input.run,
-              (client) =>
+              runId,
+              (client, runId) =>
                 withArtefacts(
                   client.board(),
                   client.artefactRead({
-                    runId: input.run,
+                    runId,
                     id: input.id!,
                     revision: input.revision!,
                     offset: input.offset ?? 0,
@@ -187,14 +206,11 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
             );
             return done.ok ? asJson(done.value) : done.error.message;
           }
-          const done = yield* asksRun(
+          const done = yield* asksArtefactRun(
             env,
-            input.run,
-            (client) =>
-              withArtefacts(
-                client.board(),
-                client.artefacts({ runId: input.run, refresh: input.refresh }),
-              ),
+            runId,
+            (client, runId) =>
+              withArtefacts(client.board(), client.artefacts({ runId, refresh: input.refresh })),
             door,
           );
           return done.ok
@@ -395,10 +411,10 @@ const settle = Effect.fn("Tools.settle")(function* (
 ) {
   if (action.kind === "artefact_register") {
     const { kind, run, artefactKind, ...input } = action;
-    const done = yield* asksRun(
+    const done = yield* asksArtefactRun(
       env,
       run,
-      (client) =>
+      (client, run) =>
         withArtefacts(
           client.board(),
           client.artefactRegister({ runId: run, request, ...input, kind: artefactKind }),
@@ -414,14 +430,14 @@ const settle = Effect.fn("Tools.settle")(function* (
       : { kind, state: "failed", note: done.error.message };
   }
   if (action.kind === "artefact_seen" || action.kind === "artefact_unseen") {
-    const done = yield* asksRun(
+    const done = yield* asksArtefactRun(
       env,
       action.run,
-      (client) =>
+      (client, run) =>
         withArtefacts(
           client.board(),
           client.artefactSeen({
-            runId: action.run,
+            runId: run,
             id: action.id,
             revision: action.kind === "artefact_seen" ? action.revision : null,
             request,

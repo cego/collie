@@ -2533,6 +2533,59 @@ pub struct ArtefactCollection {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtefactSearchPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub query: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub run: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub kind: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub role: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub unseen: Option<Option<bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub cursor: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub limit: Option<Option<i64>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FlockArtefacts {
+    pub items: Vec<FoundArtefact>,
+    pub next: Option<String>,
+    pub machines: Vec<MachineSearched>,
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FoundArtefact {
+    pub installation: String,
+    pub machine: String,
+    pub item: Artefact,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MachineSearched {
+    pub installation: Option<String>,
+    pub machine: String,
+    pub state: MachineSearchedState,
+    pub reason: Option<String>,
+    pub runs: i64,
+    pub indexed: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum MachineSearchedState {
+    #[serde(rename = "searched")]
+    Searched,
+    #[serde(rename = "unreachable")]
+    Unreachable,
+    #[serde(rename = "unsupported")]
+    Unsupported,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArtefactReadPayload {
     pub installation: String,
     #[serde(rename = "runId")]

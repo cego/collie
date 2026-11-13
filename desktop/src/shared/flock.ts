@@ -16,6 +16,7 @@ import {
   ArtefactRegistered,
   RegisterArtefact,
 } from "../../../src/artefact-model";
+import { FlockArtefacts, FlockSearch } from "../../../src/artefact-search";
 import { Staged, StagedOrRefused } from "./attachments";
 import { ChatChoices } from "./chat-choices";
 import {
@@ -700,6 +701,12 @@ export const DesktopRpcs = RpcGroup.make(
       refresh: Schema.optional(Schema.Boolean),
     },
     success: ArtefactCollection,
+    error: ActionFailed,
+  }),
+  /** Retained material across every Machine, with each Machine searched or why not. */
+  Rpc.make("artefactSearch", {
+    payload: FlockSearch.fields,
+    success: FlockArtefacts,
     error: ActionFailed,
   }),
   Rpc.make("artefactRead", {

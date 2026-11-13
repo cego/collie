@@ -7,7 +7,10 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { platformLayer } from "../src/platform";
-import { Effect, Fiber, FileSystem, Stream } from "effect";
+import { Effect, Fiber, FileSystem, Schema, Stream } from "effect";
+import type { ArtefactSearch } from "../src/artefact-model";
+import { FlockArtefacts, type FlockSearch } from "../src/artefact-search";
+import { searchMachines } from "../desktop/src/bun/machine";
 import { TestClock } from "effect/testing";
 import { RpcClientDefect, RpcClientError } from "effect/rpc/RpcClientError";
 import { ATTACHMENT_BYTES } from "../src/attachments";
@@ -453,6 +456,112 @@ test("Flock material reads and receipts keep the selected revision on the qualif
         op: "artefactSeen",
         payload: { runId: "r-2", id: "a1", revision: 3, request: expect.any(String) },
       });
+    }),
+  ));
+
+test("Flock chat searches every connected Machine once, by installation, and names one it is not connected to", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const searched: Array<{ installation: string; query: string | undefined }> = [];
+      const item = (installation: string, id: string, detectedAt: string) => ({
+        installation,
+        id,
+        run: "r-1",
+        kind: "file",
+        role: "handoff",
+        title: `${id}.md`,
+        ref: `handoff:${id}.md`,
+        source: `/runs/r-1/handoffs/${id}.md`,
+        mediaType: "text/markdown",
+        size: 4,
+        revision: 1,
+        digest: id,
+        registeredAt: detectedAt,
+        observedAt: detectedAt,
+        detectedAt,
+        seen: null,
+        sourceAvailability: "available",
+        retainedAvailability: "available",
+        reason: null,
+      });
+      const machineOf = (
+        installation: string,
+        profile: string,
+        name: string,
+        id: string,
+        at: string,
+      ) =>
+        [
+          installation,
+          {
+            machine: { profile, name },
+            desktop: {
+              artefactSearch: (query: ArtefactSearch) =>
+                Effect.sync(() => {
+                  searched.push({ installation, query: query.query });
+                  return {
+                    items:
+                      query.run === undefined || query.run === "r-1"
+                        ? [item(installation, id, at)]
+                        : [],
+                    more: false,
+                    coverage: { runs: 1, indexed: 1 },
+                  };
+                }),
+            },
+          },
+        ] as const;
+      const doors = new Map([
+        machineOf("inst-pc", "local", "mk-pc", "notes-pc", "2026-11-01T00:00:01.000Z"),
+        machineOf("inst-vm", "vm", "vm-mk", "notes-vm", "2026-11-01T00:00:02.000Z"),
+      ]);
+      const known = [
+        { profile: "local", name: "mk-pc" },
+        { profile: "vm", name: "vm-mk" },
+        { profile: "laptop", name: "laptop" },
+      ];
+      const flock = {
+        ...flockOf(asked),
+        searchArtefacts: (query: FlockSearch) => searchMachines(doors, known, query),
+      };
+      const said = yield* callFlockTool(flock, "collie_artefacts", { query: "notes" }).pipe(
+        Effect.provide(platformLayer),
+      );
+      const page = yield* Schema.decodeEffect(Schema.fromJsonString(FlockArtefacts))(said);
+      expect(Arr.map(page.items, (one) => [one.installation, one.machine, one.item.id])).toEqual([
+        ["inst-vm", "vm-mk", "notes-vm"],
+        ["inst-pc", "mk-pc", "notes-pc"],
+      ]);
+      expect(page.complete).toBe(false);
+      expect(page.machines).toContainEqual({
+        installation: null,
+        machine: "laptop",
+        state: "unreachable",
+        reason: "Desktop is not connected to it",
+        runs: 0,
+        indexed: 0,
+      });
+      expect(searched).toEqual([
+        { installation: "inst-pc", query: "notes" },
+        { installation: "inst-vm", query: "notes" },
+      ]);
+      expect(asked).toEqual([]);
+      const read = yield* callFlockTool(flock, "collie_artefacts", {
+        run: "inst-vm:r-1",
+        id: "notes-vm",
+      }).pipe(Effect.provide(platformLayer));
+      expect(read).toContain("vm-mk");
+      expect(asked).toContainEqual({
+        machine: "vm-mk",
+        op: "read",
+        payload: { tool: "collie_artefacts", input: { run: "r-1", id: "notes-vm" } },
+      });
+      const ambiguous = yield* callFlockTool(flock, "collie_artefacts", {
+        run: "r-1",
+        kind: "file",
+      }).pipe(Effect.provide(platformLayer));
+      expect(ambiguous).toContain("Run r-1 is on mk-pc (inst-pc) and vm-mk (inst-vm)");
     }),
   ));
 

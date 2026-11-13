@@ -1,5 +1,6 @@
 //! The pages the sidebar opens beside the Board, each with its own state.
 
+pub mod artefacts;
 pub mod cleanup;
 pub mod clock;
 pub mod common;
@@ -19,4 +20,5 @@ pub struct Pages {
     pub workflows: workflows::Workflows,
     pub schedules: schedules::Schedules,
     pub usage: usage::Usage,
+    pub artefacts: artefacts::Artefacts,
 }

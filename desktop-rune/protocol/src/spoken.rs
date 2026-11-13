@@ -35,6 +35,10 @@ pub fn retyped(tag: &str, part: Part, value: Value) -> serde_json::Result<Value>
         ("say", Part::Chunk) => through::<AguiEvent>(value),
         ("artefacts", Part::Payload) => through::<crate::generated::ArtefactsPayload>(value),
         ("artefacts", Part::Done) => through::<crate::generated::ArtefactCollection>(value),
+        ("artefactSearch", Part::Payload) => {
+            through::<crate::generated::ArtefactSearchPayload>(value)
+        }
+        ("artefactSearch", Part::Done) => through::<crate::generated::FlockArtefacts>(value),
         ("artefactRead", Part::Payload) => through::<crate::generated::ArtefactReadPayload>(value),
         ("artefactRead", Part::Done) => through::<crate::generated::RunFile>(value),
         ("artefactSeen", Part::Payload) => through::<crate::generated::ArtefactSeenPayload>(value),
@@ -49,7 +53,8 @@ pub fn retyped(tag: &str, part: Part, value: Value) -> serde_json::Result<Value>
             through::<crate::generated::ArtefactRegistered>(value)
         }
         (
-            "artefacts" | "artefactRead" | "artefactSeen" | "artefactRegister" | "artefactImport",
+            "artefacts" | "artefactSearch" | "artefactRead" | "artefactSeen" | "artefactRegister"
+            | "artefactImport",
             Part::Error,
         ) => through::<ActionFailed>(value),
         _ => Err(serde::de::Error::custom(format!(

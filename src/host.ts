@@ -4024,6 +4024,18 @@ const frontDoorHandlers = (
             ),
             Effect.provideContext(bun),
           ),
+        artefactSearch: (asked) =>
+          Effect.gen(function* () {
+            const latest = yield* Stream.runHead(shared.boards);
+            const runs = latest._tag === "Some" ? latest.value.runs : [];
+            const found = yield* artefacts.search(
+              asked,
+              Arr.map(runs, (run) => run.id),
+            );
+            if (found.coverage.indexed < found.coverage.runs)
+              yield* artefacts.index(runs).pipe(Effect.forkIn(controls));
+            return found;
+          }).pipe(Effect.provideContext(bun)),
         artefactRead: ({ runId, id, revision, offset }) =>
           known(runId).pipe(
             Effect.flatMap((view) =>

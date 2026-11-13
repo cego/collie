@@ -43,6 +43,8 @@ import {
   steerRun,
   moduleFor,
   runViews,
+  flockArtefacts,
+  asksArtefactRun,
   flockRuns,
   isSettled,
   resumeRun,
@@ -81,13 +83,7 @@ import { PROJECTS_ROOT_OPTION, projectsRoot } from "../projects";
 import { currentReports } from "../drift";
 import { newest } from "../cards";
 import { metricsOf } from "../metrics";
-import {
-  HostRefused,
-  requestedByLine,
-  ranOn,
-  type RunAgent,
-  type RunProgress,
-} from "../board-model";
+import { requestedByLine, ranOn, type RunAgent, type RunProgress } from "../board-model";
 import {
   followEvents,
   followLine,
@@ -2055,9 +2051,9 @@ const artefactResult = (read: {
     const global = yield* root;
     yield* attempt(
       Effect.gen(function* () {
-        const resolved = yield* resolveCommandRun(global, read.runId);
-        if (resolved._tag === "RunFailure") return resolved.result;
-        const runId = runFacts(resolved).id;
+        const resolved = yield* context(global, false);
+        if (resolved._tag === "ContextFailure") return resolved.result;
+        const runId = read.runId;
         const door = yield* cliDoor(resolved.env);
         if (read.registration !== undefined) {
           const metadata =
@@ -2073,10 +2069,10 @@ const artefactResult = (read: {
             "artefact-register",
             read.requestId ?? Option.none(),
             (request) =>
-              asksRun(
+              asksArtefactRun(
                 resolved.env,
                 runId,
-                (client) =>
+                (client, runId) =>
                   withArtefacts(
                     client.board(),
                     Effect.gen(function* () {
@@ -2110,10 +2106,10 @@ const artefactResult = (read: {
             "artefact-seen",
             read.requestId ?? Option.none(),
             (request) =>
-              asksRun(
+              asksArtefactRun(
                 resolved.env,
                 runId,
-                (client) =>
+                (client, runId) =>
                   withArtefacts(
                     client.board(),
                     client.artefactSeen({
@@ -2140,10 +2136,10 @@ const artefactResult = (read: {
               ),
           );
         if (read.op === "read") {
-          const answer = yield* asksRun(
+          const answer = yield* asksArtefactRun(
             resolved.env,
             runId,
-            (client) =>
+            (client, runId) =>
               withArtefacts(
                 client.board(),
                 client.artefactRead({
@@ -2166,10 +2162,10 @@ const artefactResult = (read: {
               }
             : answer;
         }
-        const answer = yield* asksRun(
+        const answer = yield* asksArtefactRun(
           resolved.env,
           runId,
-          (client) =>
+          (client, runId) =>
             withArtefacts(
               client.board(),
               client.artefacts({ runId, refresh: read.op === "refresh" }),
@@ -2199,6 +2195,90 @@ const runArtefacts = Command.make("artefacts", { runId: runIdArg }, ({ runId }) 
   artefactResult({ runId, op: "list" }),
 );
 const artefactId = Argument.String("id");
+
+const searchText = (name: string, description: string) =>
+  Flag.String(name).pipe(Flag.withDescription(description), Flag.optional);
+export const artefacts = Command.make(
+  "artefacts",
+  {
+    query: searchText(
+      "query",
+      "Words in a title, description, URL or source path; not file contents",
+    ),
+    run: searchText("run", "One Run: its id, or <installation>:<run> or <machine>:<run>"),
+    kind: searchText("kind", "file, link, claude-artefact, codex-site or a kind of your own"),
+    role: searchText("role", "input, deliverable, plan, evidence or handoff"),
+    unseen: Flag.Boolean("unseen").pipe(
+      Flag.withDescription("Only what has a revision not yet seen"),
+      Flag.withDefault(false),
+    ),
+    cursor: searchText("cursor", "The next page, as the last page's next said"),
+    limit: Flag.Int("limit").pipe(
+      Flag.withDescription("At most this many, up to 200"),
+      Flag.optional,
+    ),
+  },
+  (flags) =>
+    Effect.gen(function* () {
+      const global = yield* root;
+      yield* attempt(
+        Effect.gen(function* () {
+          const resolved = yield* context(global, false);
+          if (resolved._tag === "ContextFailure") return resolved.result;
+          const found = yield* flockArtefacts(resolved.env, {
+            ...Rec.map(
+              {
+                query: flags.query,
+                run: flags.run,
+                kind: flags.kind,
+                role: flags.role,
+                cursor: flags.cursor,
+              },
+              Option.getOrUndefined,
+            ),
+            limit: Option.getOrUndefined(flags.limit),
+            unseen: flags.unseen,
+          }).pipe(Effect.result);
+          if (found._tag === "Failure")
+            return found.failure._tag === "AmbiguousRun"
+              ? err("invalid_input", found.failure.message, {
+                  run: found.failure.run,
+                  candidates: found.failure.candidates,
+                })
+              : err("invalid_input", found.failure.reason);
+          const page = found.success;
+          return {
+            ok: true,
+            data: page,
+            human:
+              Arr.join(
+                [
+                  ...Arr.map(
+                    page.items,
+                    ({ machine, item }) =>
+                      `${item.title}\t${machine}:${item.run}\t${item.kind}\t${item.role}\trevision ${item.revision}\t${item.seen !== null && item.seen.revision >= item.revision ? "seen" : "unseen"}\t${item.id}`,
+                  ),
+                  ...Arr.flatMap(page.machines, (one) =>
+                    one.state !== "searched"
+                      ? [`${one.machine}: not searched, ${one.reason}`]
+                      : one.indexed < one.runs
+                        ? [`${one.machine}: ${one.indexed} of ${one.runs} Runs indexed so far`]
+                        : [],
+                  ),
+                  ...(page.next === null ? [] : [`More: --cursor ${page.next}`]),
+                ],
+                "\n",
+              ) || "No artefacts found.",
+          };
+        }),
+        global.json,
+      );
+    }),
+).pipe(
+  Command.withDescription(
+    "Find retained material across Runs and Machines without marking it seen",
+  ),
+);
 const revisionFlag = Flag.Int("revision");
 const runArtefact = Command.make("artefact").pipe(
   Command.withSubcommands([

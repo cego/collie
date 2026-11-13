@@ -6,7 +6,9 @@ import * as Struct from "effect/Struct";
 import {
   Artefact,
   ArtefactCollection,
+  ArtefactMatches,
   ArtefactRegistered,
+  ArtefactSearch,
   RegisterArtefact,
 } from "./artefact-model";
 import * as Str from "effect/String";
@@ -1734,6 +1736,12 @@ export const FrontDoorRpcs = RpcGroup.make(
   Rpc.make("artefacts", {
     payload: { runId: Schema.String, refresh: Schema.optional(Schema.Boolean) },
     success: ArtefactCollection,
+    error: HostRefused,
+  }),
+  /** A page of this host's catalogue across its retained Runs, from metadata alone. */
+  Rpc.make("artefactSearch", {
+    payload: ArtefactSearch.fields,
+    success: ArtefactMatches,
     error: HostRefused,
   }),
   Rpc.make("artefactRead", {

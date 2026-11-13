@@ -248,6 +248,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   readonly standingDirection: FlockChat["standingDirection"];
   readonly setStandingDirection: FlockChat["setStandingDirection"];
   readonly inSync: FlockChat["inSync"];
+  readonly searchArtefacts?: FlockChat["searchArtefacts"];
   readonly helle?: FlockChat["helle"];
   /** What the chat's session opens on, as Settings have it now, or why it cannot run. */
   readonly choice: () => Effect.Effect<
@@ -307,6 +308,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     standingDirection: opts.standingDirection,
     setStandingDirection: opts.setStandingDirection,
     inSync: opts.inSync,
+    searchArtefacts: opts.searchArtefacts,
     helle: opts.helle,
     chatHarness: opts.chatHarness,
     chatChoices: Effect.suspend(() =>

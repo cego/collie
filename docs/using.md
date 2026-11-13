@@ -4184,6 +4184,13 @@ See [Authoring](authoring.md#skills) for how a workflow refers to one, and
 
 ## Finding a Run's material
 
+Open **Artefacts** in Desktop's navigation to search across retained Runs and Machines,
+including earlier Runs absent from today's board. Filter by Run, kind, role, or unseen
+revision. Coverage shows historical indexing progress and Machines that could not be
+searched. Select **Open** to inspect a result on its owning Run; **Back** returns to search.
+See [Finding material across Runs and Machines](artefacts.md#finding-material-across-runs-and-machines)
+for stale results, owner qualification, and CLI/chat routes.
+
 The record's **Artefacts** tab brings together attachments, plan files, evidence files,
 and handoffs. Select an item to inspect its retained revision, or use **Open** and **Save**.
 Images, Markdown, and text have native previews; supported videos play inside the record.

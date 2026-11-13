@@ -3207,6 +3207,27 @@ Its `--reconcile` write is carried out there through the same host, under its re
 
 ## Artefacts
 
+`collie artefacts` searches retained material through this Machine's configured routes,
+including Runs absent from the board. `--machine <name>` limits it to that Machine.
+
+```sh
+collie artefacts --query notes --kind file --role handoff --unseen --limit 20
+collie artefacts --run <installation>:<run>
+collie artefacts --query notes --cursor <next>
+collie run artefact show <installation>:<run> <id>
+```
+
+`--query` matches titles, descriptions, URLs, and source paths, without reading file
+contents. `--run`, `--kind`, `--role`, and `--unseen` narrow the results. Each JSON page
+has `items`, `next` (null at the end), per-Machine `machines` coverage, and `complete`.
+Keep the filters unchanged when using `next` as `--cursor`. Pages contain at most 200
+entries and keep a stable order while the catalogue is unchanged.
+
+Partial coverage names offline Machines, unsupported hosts, and Runs still being indexed.
+An empty partial page does not prove that no material exists. An ambiguous bare Run id
+is refused with candidates. Qualify it by installation id or Machine name when reading,
+refreshing, registering, or marking an entry. Installation ids survive Machine renaming.
+
 `collie run artefacts <run>` lists retained attachments, plan files, evidence files, and
 handoffs. It does not mark them seen. Each entry carries an id, revision, source dates
 and provenance, host dates, availability, and its receipt.
