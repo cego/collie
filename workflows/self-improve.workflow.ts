@@ -73,8 +73,9 @@ const Window = Schema.Struct({
   machine: Schema.String,
   runs: Schema.Array(Schema.String),
   report: Schema.Unknown,
-  questions: QuestionMeasures,
-  repeated: Schema.Array(Finding),
+  // A completed window predating these measures stays frozen when its Run resumes.
+  questions: Schema.optionalKey(QuestionMeasures),
+  repeated: Schema.optionalKey(Schema.Array(Finding)),
 });
 
 const Scope = Schema.Literals(["checkout", "machine"]).annotate({
@@ -335,7 +336,7 @@ export default defineWorkflow({
             Effect.flatMap((fs) =>
               fs.writeFileString(
                 file,
-                `# Retrospective ${run.id}\n\nNo issues filed: ${issues.refused}\n\n## Questions\n\n${Arr.join(questionLines(window.questions), "\n")}\n\n\`\`\`json\n${asJson({ ...triaged, findings: [...window.repeated, ...triaged.findings] })}\n\`\`\`\n`,
+                `# Retrospective ${run.id}\n\nNo issues filed: ${issues.refused}\n\n## Questions\n\n${Arr.join(questionLines(window.questions), "\n")}\n\n\`\`\`json\n${asJson({ ...triaged, findings: [...(window.repeated ?? []), ...triaged.findings] })}\n\`\`\`\n`,
               ),
             ),
             Effect.mapError((cause) => new WorkflowError({ reason: cause.message })),
@@ -349,7 +350,7 @@ export default defineWorkflow({
       }
 
       const sorted = sortOut(
-        [...window.repeated, ...triaged.findings],
+        [...(window.repeated ?? []), ...triaged.findings],
         new Set(window.runs),
         open,
         input.runs === "machine",

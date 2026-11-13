@@ -140,6 +140,12 @@ Arbitrary edits to a module have no seamless-resume guarantee. Adding an Activit
 one that has already completed changes what replay matches; a run in flight is best
 finished before that kind of edit, and a new one started after it.
 
+A completed Activity's saved result must still decode under its current `success` schema.
+When adding a field, keep it optional for saved results that predate it and handle its
+absence explicitly. Missing historical measurements are unknown, not zero. Keep the
+Activity's name and result: changing its name to bypass a decoding failure repeats its
+effects. Cover such changes by replaying a saved result in the earlier shape.
+
 ## Services
 
 A service of your own is an ordinary `Context.Service`, and your definition's `layer`

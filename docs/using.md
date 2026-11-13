@@ -3782,6 +3782,11 @@ Run numbers it — answered the same at least nine times in ten over at least te
 a `defect` finding, `repeated-answer-<workflow>-<question>`: Collie asks what it already
 knows. Like any `defect`, it is filed only with `runs=machine`.
 
+A Run resumed after an upgrade keeps the window it already recorded. If that window
+predates question measures, its summary says they were not recorded, and it generates
+no repeated-answer findings. It does not read a new window or repeat completed triage,
+issue filing or Improvement starts.
+
 It waits for its Improvements, then writes `summary.md` in its Run directory: those two
 question measures; each issue filed or commented, by category; each Improvement's Run and how it ended; and each finding
 left out, with why. An Improvement that fails is listed there, and the Run still succeeds.
