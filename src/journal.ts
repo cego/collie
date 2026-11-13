@@ -60,9 +60,9 @@ export const findLastJournal = Effect.fn("Journal.findLast")(function* <A>(
   const decode = Schema.decodeUnknownOption(json);
   for (let i = lines.length - 1; i >= 0; i--) {
     const read = yield* Effect.sync(() => decode(lines[i]));
-    if (read._tag === "Some" && matches(read.value)) return read.value;
+    if (read._tag === "Some" && matches(read.value)) return read;
   }
-  return null;
+  return Option.none<A>();
 });
 
 export const appendJournal = Effect.fn("Journal.append")(function* <A>(

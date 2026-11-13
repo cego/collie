@@ -4,7 +4,7 @@
 // its own work look more important by describing it that way.
 
 import * as Arr from "effect/Array";
-import { Effect, FileSystem, Path } from "effect";
+import { Effect, FileSystem, Option, Path } from "effect";
 import { expect, test } from "bun:test";
 import {
   appendCard,
@@ -13,6 +13,7 @@ import {
   inspectFor,
   newest,
   readCards,
+  readFinalCard,
   readCheckpoints,
   readiness,
   significance,
@@ -282,6 +283,9 @@ test("the newest card per slice is what a reader sees, and the journal keeps the
         { flag: "a" },
       );
       expect(yield* finishedOnRecord(dir)).toBe("t4");
+      expect(yield* readFinalCard(dir)).toEqual(
+        Option.some(base({ id: "new-final", kind: "final", at: "t4" })),
+      );
     }),
   ));
 

@@ -12,6 +12,7 @@
 // they are doing; the only thing that still takes focus is a pending question.
 
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { Effect, FileSystem, Path, Schema } from "effect";
@@ -95,15 +96,20 @@ export const readCards = Effect.fn("Cards.read")(function* (runDir: string) {
   return yield* readJournal(yield* cardsPath(runDir), CardJson);
 });
 
+export const readFinalCard = Effect.fn("Cards.final")(function* (runDir: string) {
+  return yield* findLastJournal(
+    yield* cardsPath(runDir),
+    CardJson,
+    (card) => card.kind === "final",
+  );
+});
+
 /**
  * When the Run last finished, from the final card its finish writes: the one ending the
  * host records without the Run's module. Null where it never finished, or was stopped.
  */
 export const finishedOnRecord = Effect.fn("Cards.finishedOnRecord")(function* (runDir: string) {
-  return (
-    (yield* findLastJournal(yield* cardsPath(runDir), CardJson, (card) => card.kind === "final"))
-      ?.at ?? null
-  );
+  return Option.getOrUndefined(yield* readFinalCard(runDir))?.at ?? null;
 });
 
 /** The newest card per slice of work: a re-written card replaces the one it re-writes. */
