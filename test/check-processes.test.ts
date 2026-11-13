@@ -4,7 +4,7 @@
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import {
   Clock,
   Deferred,
@@ -20,7 +20,7 @@ import {
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as PlatformError from "effect/PlatformError";
 import { TestClock } from "effect/testing";
-import { SUPERVISE } from "../src/check-supervisor";
+import { SUPERVISE, supervise } from "../src/check-supervisor";
 import {
   CHECK_ID,
   CHECK_INSTALLATION,
@@ -1346,7 +1346,7 @@ test.skipIf(process.platform !== "linux")(
               Effect.provideService(CheckProcesses, checks),
             );
             const exit = yield* started.exit;
-            return yield* finishCheck(started.id, exit).pipe(
+            return yield* finishCheck(started.id, what.name, exit).pipe(
               Effect.provideService(CheckProcesses, second),
             );
           }),
@@ -1619,5 +1619,106 @@ test("a failing baseline test does not pass because its output could not be stor
       const { kept } = yield* storedOutput("unwritable", true);
       expect(kept.exit).toBe(1);
       expect(kept.result).toBe("fail");
+    }),
+  ));
+
+const fullDisk = PlatformError.systemError({
+  _tag: "Unknown",
+  module: "FileSystem",
+  method: "writeFile",
+  syscall: "write",
+  description: "ENOSPC: no space left on device",
+});
+
+test("a supervisor whose exit status meets a full disk leaves no .new file, writes both tails and says so", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const outputs = yield* fs.makeTempDirectoryScoped({ prefix: "collie-supervisor-" });
+      const full: FileSystem.FileSystem = {
+        ...fs,
+        writeFile: (path, data, options) =>
+          pipe_(path, Str.endsWith(".exit.new"))
+            ? fs.writeFileString(path, "0").pipe(Effect.andThen(Effect.fail(fullDisk)))
+            : fs.writeFile(path, data, options),
+      };
+      const said: string[] = [];
+      const stderr = spyOn(process.stderr, "write").mockImplementation((chunk) => {
+        said.push(Buffer.from(chunk).toString());
+        return true;
+      });
+      yield* supervise([outputs, "full", "", "sh", "-c", "echo out; echo err >&2"]).pipe(
+        Effect.provideService(FileSystem.FileSystem, full),
+        Effect.ensuring(Effect.sync(() => stderr.mockRestore())),
+      );
+
+      expect(Arr.filter(yield* fs.readDirectory(outputs), Str.endsWith(".new"))).toEqual([]);
+      expect(yield* fs.readFileString(`${outputs}/full.stdout`)).toBe("out\n");
+      expect(yield* fs.readFileString(`${outputs}/full.stderr`)).toBe("err\n");
+      expect(Arr.join(said, "")).toContain(`collie: could not write ${outputs}/full.exit:`);
+    }),
+  ));
+
+const evidenceOf = (root: string) =>
+  readVerifications(`${root}/evidence`).pipe(Effect.orElseSucceed(() => []));
+
+test.skipIf(process.platform !== "linux")(
+  "a supervised check whose exit status cannot be written gives no verdict, and nothing is recorded",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const one = yield* supervisedWorld;
+        const refused = yield* collected(one, `mkdir "$0/check-output/$${CHECK_ID}.exit.new"`, {
+          cwd: one.notes,
+          argv: [one.state],
+        }).pipe(Effect.flip);
+
+        expect(refused._tag).toBe("VerifyRefused");
+        expect(refused.state).toBe(true);
+        expect(refused.why).toContain('"streams" gave no verdict');
+        expect(refused.why).toContain("exit status");
+        expect(yield* evidenceOf(one.root)).toEqual([]);
+      }),
+    ),
+  30_000,
+);
+
+for (const stream of ["stdout", "stderr"] as const)
+  test.skipIf(process.platform !== "linux")(
+    `a supervised check whose ${stream} tail cannot be written gives no verdict, and nothing is recorded`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const one = yield* supervisedWorld;
+          const refused = yield* collected(
+            one,
+            `mkdir "$0/check-output/$${CHECK_ID}.${stream}.new"`,
+            { cwd: one.notes, argv: [one.state] },
+          ).pipe(Effect.flip);
+
+          expect(refused._tag).toBe("VerifyRefused");
+          expect(refused.state).toBe(true);
+          expect(refused.why).toContain('"streams" gave no verdict');
+          expect(refused.why).toContain("output");
+          expect(yield* evidenceOf(one.root)).toEqual([]);
+        }),
+      ),
+    30_000,
+  );
+
+test("a check whose Verification cannot be appended gives no verdict", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const one = yield* world;
+      yield* fs.makeDirectory(`${one.root}/evidence/steering/verifications.jsonl`, {
+        recursive: true,
+      });
+      const refused = yield* collected(one, "true", { cwd: one.notes }).pipe(Effect.flip);
+
+      expect(refused._tag).toBe("VerifyRefused");
+      expect(refused.state).toBe(true);
+      expect(refused.why).toContain('"streams" gave no verdict');
+      expect(refused.why).toContain("record");
     }),
   ));

@@ -1807,6 +1807,10 @@ the check and its pid; `collie cleanup --apply` tries to end it again and report
 left. Once the command is spawned, it prints `"<name>" started, pid <pid>`: a wait after
 that line is the command's own. Each of these lines is also written to the Run's log.
 
+A check whose exit status, output or record cannot be written, as on a full disk, gives no
+verdict: `collie verify` is refused with `invalid_state`, naming the check and what could
+not be written, and nothing is recorded for it.
+
 `--expect fail` is how a bug is proved to exist. A regression test that exits non-zero on
 the tree before the fix is the evidence, so that record is a `pass`; the same command
 succeeding is the reproduction failing, not the bug being fixed. Stability comes first
@@ -2320,6 +2324,12 @@ The `measurement-tree` kind is a base tree [`collie measure`](#measure) made, wh
 is its directory. It is kept while its Run has not ended, and, whatever its Run's state,
 while a Measurement is running on this Machine. Once neither holds, a sweep removes it with
 git's record of the worktree.
+
+The `build-cache` kind is a git-ignored directory holding a signed `CACHEDIR.TAG`, such as a
+Cargo `target`, in a worktree Collie made; its target is that directory. It is kept while a
+Run that has not ended works in that worktree, with "<run> still works in this checkout",
+and judged again just before a sweep removes it
+([ADR-draft-a-worktrees-build-cache-goes-once-no-live-run-works-in-it](adr/draft-a-worktrees-build-cache-goes-once-no-live-run-works-in-it.md)).
 
 ## Usage
 
