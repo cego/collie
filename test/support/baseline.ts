@@ -3351,6 +3351,10 @@ const HEALED = {
     root_cause: "A reminder does not repeat the Output path once the agent's context is compacted.",
     fix: "Repeat the Output path in every Output reminder.",
     regression: "A reminder after compaction names the Output path.",
+    title: "A reminder after compaction loses the Output path",
+    observed: "The agent finished its turn without its Output after its context was compacted.",
+    expected: "The reminder names where its Output goes.",
+    issue: null,
   },
 };
 

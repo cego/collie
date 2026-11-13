@@ -398,6 +398,9 @@ export interface Forge {
   readonly review: (ref: MrRef) => ReviewCommands;
 }
 
+/** Where Collie's own defects are filed, whatever project the Run that found one is in. */
+export const COLLIE_REPOSITORY = "github.com/cego/collie";
+
 // The adapters import mr.ts, which imports this registry before they finish initializing.
 export const FORGES: Readonly<Record<MrForge, Forge>> = {
   get gitlab() {

@@ -11,6 +11,8 @@ import { PARK_CAUSES, healInFlight } from "./park-cause";
 import type { Herdr } from "./herdr";
 import type { NotificationKind } from "./notify";
 import { HealOutput, healOn, healerFor } from "./heal";
+import { knownIn, pendingIn, report, type Reported } from "./heal-report";
+import type { HostApi } from "./sdk";
 import manifest from "../herdr-plugin.toml";
 import { currentPid, signalProcess } from "./lock";
 import { machineMemory } from "./memory";
@@ -297,6 +299,8 @@ export const healParks = <E, R, E2, R2>(opts: {
     body: string,
     key: string,
   ) => Effect.Effect<void>;
+  /** Files a judged Heal's Collie defect on Collie's repository. */
+  readonly host: HostApi;
 }) =>
   Effect.gen(function* () {
     const every = yield* Config.Duration("COLLIE_RECOVERY_EVERY").pipe(
@@ -332,7 +336,9 @@ export const healParks = <E, R, E2, R2>(opts: {
               : null,
           );
       });
-    yield* Effect.gen(function* () {
+    // Each Run's Heal and report lines as the judging round last read them.
+    const healLines = new Map<string, ReadonlyArray<Metric>>();
+    const judging = Effect.gen(function* () {
       const views = yield* opts.views;
       const byId = new Map(Arr.map(views, (view) => [view.runId, view] as const));
       const claims: Array<{ view: RunView; claim: Metric }> = [];
@@ -341,7 +347,16 @@ export const healParks = <E, R, E2, R2>(opts: {
       // Only a Heal its claim names: one started before a crash recorded it is taken up again.
       let flying = false;
       for (const view of views) {
-        const lines = recoveriesIn(yield* readMetrics(evidence(view.runId)));
+        const read = yield* readMetrics(evidence(view.runId));
+        healLines.set(
+          view.runId,
+          Arr.filter(
+            read,
+            (line) =>
+              line.kind === "report" || (line.kind === "recovery" && line.action === "healed"),
+          ),
+        );
+        const lines = recoveriesIn(read);
         all.push(...lines);
         for (const claim of Arr.filter(lines, healInFlight)) {
           if (claim.outcome === "claimed") {
@@ -447,4 +462,53 @@ export const healParks = <E, R, E2, R2>(opts: {
       Effect.catchCause((cause) => Effect.logWarning("heal round failed", cause)),
       Effect.repeat(Schedule.spaced(every)),
     );
+    const base = Duration.toMillis(every);
+    const retries = new Map<string, { next: number; delay: number }>();
+    const reporting = Effect.gen(function* () {
+      const runs = [...healLines.entries()];
+      const known = new Map(Arr.flatMap(runs, ([, lines]) => knownIn(lines)));
+      const now = yield* Clock.currentTimeMillis;
+      const due = Arr.filter(
+        Arr.flatMap(runs, ([run, lines]) => pendingIn(run, lines)),
+        (item) => (retries.get(item.heal)?.next ?? 0) <= now,
+      ).slice(0, REPORTS_PER_ROUND);
+      for (const item of due) {
+        const reported = yield* report(opts.host, item, known).pipe(
+          Effect.timeoutOrElse({
+            duration: REPORT_WITHIN,
+            orElse: () =>
+              Effect.succeed<Reported>({
+                publication: "uncertain",
+                note: `no answer from Collie's repository within ${Duration.format(REPORT_WITHIN)}`,
+              }),
+          }),
+        );
+        yield* appendMetric(evidence(item.run), {
+          at: yield* nowIso,
+          kind: "report",
+          subject: item.finding.key,
+          heal: item.heal,
+          build: manifest.version,
+          value: 0,
+          ...reported,
+        });
+        if (reported.issue !== undefined && reported.publication !== "uncertain")
+          known.set(item.finding.key, reported.issue);
+        const delay = Math.min((retries.get(item.heal)?.delay ?? base / 2) * 2, base * 60);
+        retries.set(item.heal, {
+          next:
+            reported.publication === "refused" || reported.publication === "uncertain"
+              ? (yield* Clock.currentTimeMillis) + delay
+              : Number.POSITIVE_INFINITY,
+          delay,
+        });
+      }
+    }).pipe(
+      Effect.catchCause((cause) => Effect.logWarning("heal report round failed", cause)),
+      Effect.repeat(Schedule.spaced(every)),
+    );
+    yield* Effect.all([judging, reporting], { concurrency: 2, discard: true });
   });
+
+const REPORTS_PER_ROUND = 3;
+const REPORT_WITHIN = Duration.minutes(2);

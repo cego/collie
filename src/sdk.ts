@@ -770,22 +770,28 @@ export interface HostApi {
   readonly build: string;
   /** This Machine's Run report, for admissions at or after the ISO moment. */
   readonly report: (since: string) => Effect.Effect<Report, WorkflowError>;
-  /** Open issues on the forge of this Run's checkout, or with `numbers` those issues read one by one. */
+  /**
+   * Open issues on the forge of this Run's checkout, or with `numbers` those issues read one
+   * by one. `on: "collie"` asks Collie's own repository instead, as do filing and commenting.
+   */
   readonly issues: (
     runId: string,
     numbers?: ReadonlyArray<number>,
+    on?: "collie",
   ) => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
   /** Files redacted text on this Run's forge; another checkout's identity is refused. */
   readonly fileIssue: (options: {
     readonly runId: string;
     readonly title: string;
     readonly body: string;
+    readonly on?: "collie";
   }) => Effect.Effect<IssueRef, WorkflowError>;
   /** Comments with the same redaction and checkout safeguards as filing. */
   readonly commentIssue: (options: {
     readonly runId: string;
     readonly number: number;
     readonly body: string;
+    readonly on?: "collie";
   }) => Effect.Effect<void, WorkflowError>;
   /**
    * This Machine's Usage readings, one per Subscription (ADR-0049). Read it inside an

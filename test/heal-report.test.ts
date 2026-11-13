@@ -1,7 +1,14 @@
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { Config, Effect, FileSystem, Schema, flow, Result } from "effect";
+import { Config, ConfigProvider, Effect, FileSystem, Layer, Schema, flow, Result } from "effect";
 import { connect } from "../src/host";
+import { Rig, FakeHerdr } from "./support/recorder";
+import { runEffect } from "./support/effect";
+import { foundationLayer } from "../src/engine";
+import { Host, type HostApi } from "../src/sdk";
+import { knownIn, pendingIn, report, type Pending } from "../src/heal-report";
+import type { HealFinding, Metric } from "../src/metrics";
+import type { HealOutput } from "../src/heal";
 import { collie, proves, type World } from "./support/world";
 import { until } from "./support/host";
 import { FakeBin } from "./support/bin";
@@ -21,7 +28,7 @@ const FINDING = {
 };
 
 /** A parked Run on a GitLab project, healed by `mender` with `output`, and GitHub's fake gh. */
-const healed = (world: World, output: unknown, github: ForgeModel) =>
+const healed = (world: World, output: HealOutput, github: ForgeModel) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     yield* exec(["git", "remote", "add", "origin", "https://gitlab.example.com/mk/project.git"], {
@@ -100,3 +107,290 @@ test(
     ),
   120_000,
 );
+
+/** The host's own Collie issue operations, against a fake gh holding `model`. */
+const onCollie = <A, E>(
+  model: Partial<ForgeModel>,
+  body: (
+    host: HostApi,
+    forge: Effect.Success<ReturnType<typeof forgeOnPath>>,
+  ) => Effect.Effect<A, E>,
+) =>
+  runEffect(
+    Effect.gen(function* () {
+      const rig = yield* Rig.scoped();
+      const bin = yield* Effect.acquireRelease(FakeBin.make(`${rig.root}/bin`), (bin) =>
+        bin.restore(),
+      );
+      const forge = yield* forgeOnPath(bin, "github", {
+        installed: true,
+        loggedIn: ["github.com"],
+        login: "me",
+        mrs: [],
+        issues: [],
+        ...model,
+      });
+      const api = yield* serveForges(forge);
+      const placing = { herdr: new FakeHerdr(rig.pluginEnv()), env: rig.pluginEnv() };
+      return yield* Effect.flatMap(Host, (host) => body(host, forge)).pipe(
+        Effect.provide(
+          foundationLayer({ dir: rig.stateDir, userDir: rig.userDir, placing }).pipe(
+            Layer.provideMerge(
+              ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: api }), {
+                asPrimary: true,
+              }),
+            ),
+          ),
+        ),
+      );
+    }).pipe(Effect.scoped),
+  );
+
+const pending = (
+  finding: Partial<Pending["finding"]> = {},
+  more: Partial<Pending> = {},
+): Pending => ({
+  run: "run-parked",
+  heal: "run-heal",
+  judged: "escalated",
+  cause: "unknown",
+  build: "1.0.11",
+  finding: { ...FINDING, ...finding },
+  commented: null,
+  ...more,
+});
+
+const issue = (number: number, keys: ReadonlyArray<string>, state: "open" | "closed" = "open") => ({
+  project: COLLIE,
+  number,
+  title: `Issue ${number}`,
+  body: `Body.\n\n${Arr.join(
+    Arr.map(keys, (key) => `<!-- collie-finding: ${key} -->`),
+    "\n",
+  )}`,
+  state,
+});
+
+const writes = (forge: Effect.Success<ReturnType<typeof forgeOnPath>>) =>
+  Arr.filter(forge.requests(), (one) => one.method !== "GET");
+
+test("an open issue carrying the key is linked with no comment; a key new to the healer's named issue is commented once", () =>
+  onCollie(
+    { issues: [issue(444, ["retired-agent-parks-unknown", "ran-out-agent-not-quiet"])] },
+    (host, forge) =>
+      Effect.gen(function* () {
+        expect(yield* report(host, pending(), new Map())).toEqual({
+          publication: "linked",
+          issue: `https://${COLLIE}/issues/444`,
+          note: expect.stringContaining("already carries"),
+        });
+        expect(writes(forge)).toEqual([]);
+        const alias = pending(
+          { key: "ran-out-agent-not-stopped", issue: 444 },
+          { heal: "run-heal-2" },
+        );
+        expect(yield* report(host, alias, new Map())).toMatchObject({
+          publication: "linked",
+          issue: `https://${COLLIE}/issues/444`,
+        });
+        const notes = (yield* forge.model()).issueNotes?.[`${COLLIE}#444`] ?? [];
+        expect(notes).toHaveLength(1);
+        expect(notes[0]).toContain("<!-- collie-finding: ran-out-agent-not-stopped -->");
+        expect(notes[0]).toContain("run-heal-2");
+        expect(
+          yield* report(
+            host,
+            alias,
+            new Map([["ran-out-agent-not-stopped", `https://${COLLIE}/issues/444`]]),
+          ),
+        ).toMatchObject({ publication: "linked" });
+        expect((yield* forge.model()).issueNotes?.[`${COLLIE}#444`]).toHaveLength(1);
+        expect((yield* forge.model()).issues).toHaveLength(1);
+      }),
+  ));
+
+test("a new defect is filed once with observation apart from diagnosis; the next report of its key, from another Heal, links it", () =>
+  onCollie({}, (host, forge) =>
+    Effect.gen(function* () {
+      const first = yield* report(
+        host,
+        pending(
+          { observed: "The Run stayed parked for a day.", expected: "A recheck moves it." },
+          { judged: "recovered" },
+        ),
+        new Map(),
+      );
+      expect(first).toMatchObject({ publication: "filed", issue: `https://${COLLIE}/issues/1` });
+      const filed = (yield* forge.model()).issues![0]!;
+      expect(filed.body).toContain("**Observed.** The Run stayed parked for a day.");
+      expect(filed.body).toContain("**Diagnosis**, the healer's, not yet confirmed.");
+      expect(filed.body).toContain("judged the Heal `recovered`");
+      expect(filed.body).not.toContain("gitlab.example.com");
+      // A second Heal reporting at once with no local record of the first.
+      expect(yield* report(host, pending({}, { heal: "run-heal-2" }), new Map())).toMatchObject({
+        publication: "linked",
+        issue: `https://${COLLIE}/issues/1`,
+      });
+      expect((yield* forge.model()).issues).toHaveLength(1);
+    }),
+  ));
+
+test("a non-defect is never pending, and a false recovery or a finding without its fix is not filed", () =>
+  onCollie({}, (host, forge) =>
+    Effect.gen(function* () {
+      const healed = (
+        heal: string,
+        finding: Partial<HealFinding>,
+        outcome: Metric["outcome"],
+      ): Metric => ({
+        at: "2026-11-13T10:00:00Z",
+        kind: "recovery",
+        subject: "run-parked",
+        value: 0,
+        note: "",
+        action: "healed",
+        outcome,
+        heal,
+        recoveryId: `heal:${heal}`,
+        finding: { ...FINDING, ...finding },
+      });
+      expect(
+        Arr.map(
+          pendingIn("run-parked", [
+            healed("run-no", { collie_defect: false }, "recovered"),
+            healed("run-flying", {}, "started"),
+            healed("run-yes", {}, "recovered"),
+          ]),
+          (one) => one.heal,
+        ),
+      ).toEqual(["run-yes"]);
+      expect(
+        yield* report(host, pending({}, { judged: "false-recovery" }), new Map()),
+      ).toMatchObject({
+        publication: "not-filed",
+      });
+      expect(yield* report(host, pending({ fix: " " }), new Map())).toMatchObject({
+        publication: "not-filed",
+        note: "it does not say its fix",
+      });
+      expect(forge.requests()).toEqual([]);
+    }),
+  ));
+
+const reportLine = (publication: Metric["publication"]): Metric => ({
+  at: "2026-11-13T10:00:01Z",
+  kind: "report",
+  subject: FINDING.key,
+  value: 0,
+  note: "",
+  heal: "run-heal",
+  publication,
+});
+const reportedAs = (publication: Metric["publication"], issue: string): Metric => ({
+  ...reportLine(publication),
+  issue,
+});
+const healedLine: Metric = {
+  at: "2026-11-13T10:00:00Z",
+  kind: "recovery",
+  subject: "run-parked",
+  value: 0,
+  note: "",
+  action: "healed",
+  outcome: "escalated",
+  heal: "run-heal",
+  recoveryId: "heal:run-heal",
+  finding: FINDING,
+};
+
+test("a refused or uncertain report stays pending, keeping the issue a lost comment went to, until one settles it", () => {
+  expect(pendingIn("r", [healedLine, reportLine("refused")])).toHaveLength(1);
+  expect(
+    pendingIn("r", [healedLine, reportedAs("uncertain", "https://x/issues/9")])[0]?.commented,
+  ).toBe("https://x/issues/9");
+  expect(
+    pendingIn("r", [healedLine, reportLine("refused"), reportedAs("filed", "https://x/issues/9")]),
+  ).toEqual([]);
+  expect(
+    knownIn([
+      reportedAs("filed", "https://x/issues/9"),
+      reportedAs("uncertain", "https://x/issues/8"),
+    ]),
+  ).toEqual([[FINDING.key, "https://x/issues/9"]]);
+});
+
+test("no login is refused with nothing sent", () =>
+  onCollie({ loggedIn: [] }, (host, forge) =>
+    Effect.gen(function* () {
+      expect(yield* report(host, pending(), new Map())).toMatchObject({ publication: "refused" });
+      expect(writes(forge)).toEqual([]);
+    }),
+  ));
+
+test("an outage is refused with nothing sent", () =>
+  onCollie({ httpFault: { status: 503 } }, (host, forge) =>
+    Effect.gen(function* () {
+      expect(yield* report(host, pending(), new Map())).toMatchObject({ publication: "refused" });
+      expect(writes(forge)).toEqual([]);
+    }),
+  ));
+
+test("a write whose answer was lost is reconciled before it is sent again: a landed filing is found by its marker, a sent comment is not repeated", () =>
+  onCollie({ issues: [issue(7, [FINDING.key]), issue(8, [])] }, (host, forge) =>
+    Effect.gen(function* () {
+      expect(yield* report(host, pending(), new Map())).toMatchObject({
+        publication: "linked",
+        issue: `https://${COLLIE}/issues/7`,
+      });
+      expect(
+        yield* report(
+          host,
+          pending({ key: "another-key", issue: 8 }, { commented: `https://${COLLIE}/issues/8` }),
+          new Map(),
+        ),
+      ).toMatchObject({ publication: "linked", issue: `https://${COLLIE}/issues/8` });
+      expect(writes(forge)).toEqual([]);
+    }),
+  ));
+
+test("a closed issue the healer names for the cause is linked, not filed again", () =>
+  onCollie({ issues: [issue(12, [FINDING.key], "closed")] }, (host, forge) =>
+    Effect.gen(function* () {
+      expect(yield* report(host, pending({ issue: 12 }), new Map())).toMatchObject({
+        publication: "linked",
+        issue: `https://${COLLIE}/issues/12`,
+      });
+      expect((yield* forge.model()).issues).toHaveLength(1);
+      expect(writes(forge)).toEqual([]);
+    }),
+  ));
+
+test("retained findings of earlier Heals link to the issues already filed for their causes, under every key", () =>
+  onCollie(
+    {
+      issues: [
+        issue(444, [
+          "retired-agent-not-stopped-park-unrechecked",
+          "ran-out-agent-not-quiet-parks-unknown",
+          "ran-out-agent-not-stopped-parks-unknown",
+        ]),
+        issue(445, ["taken-delivery-left-unknown-blocks-reminders"]),
+        issue(446, ["compaction-completion-lost-to-write-failure"]),
+      ],
+    },
+    (host, forge) =>
+      Effect.gen(function* () {
+        const historical = [
+          ["run-1d538c61", "retired-agent-not-stopped-park-unrechecked", 444],
+          ["run-f6dfe7a5", "ran-out-agent-not-quiet-parks-unknown", 444],
+          ["run-527aca67", "ran-out-agent-not-stopped-parks-unknown", 444],
+          ["run-750ea061", "taken-delivery-left-unknown-blocks-reminders", 445],
+          ["run-d6af1e3b", "compaction-completion-lost-to-write-failure", 446],
+        ] as const;
+        for (const [heal, key, number] of historical)
+          expect(
+            yield* report(host, pending({ key }, { heal, judged: "recovered" }), new Map()),
+          ).toMatchObject({ publication: "linked", issue: `https://${COLLIE}/issues/${number}` });
+        expect(writes(forge)).toEqual([]);
+      }),
+  ));
