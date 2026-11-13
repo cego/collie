@@ -71,13 +71,18 @@ test(
           yield* fs
             .writeFileString(`${world.project}/test.txt`, "the assertion\n")
             .pipe(Effect.orDie);
+          yield* git("add", "test.txt");
+          yield* git("commit", "-qm", "the regression assertion");
           const red = yield* verify("regression", ["--expect", "fail", "--", ...regression]);
           yield* commit("fix.txt", "the fix");
           yield* fs.writeFileString(fixed, "").pipe(Effect.orDie);
           const green = yield* verify("regression", ["--", ...regression]);
+          yield* commit("notes.md", "notes after the fix");
           yield* fs.remove(fixed).pipe(Effect.orDie);
           const replayed = yield* verify("regression", ["--expect", "fail", "--", ...regression]);
           yield* commit("notes.md", "the notes");
+          yield* fs.writeFileString(fixed, "").pipe(Effect.orDie);
+          const rechecked = yield* verify("regression", ["--", ...regression]);
           yield* client
             .answer({ runId: source, decision: "done", value: "yes", request: "done" })
             .pipe(Effect.orDie);
@@ -115,7 +120,7 @@ test(
             });
           const followUp = (request: string, input: ReadonlyArray<string> = [], from = source) =>
             Effect.flatMap(offered(from, request, input), settled);
-          const proof = [baseline, red, green];
+          const proof = [baseline, red, green, rechecked];
 
           expect(yield* followUp("other", ["--input", "text=other work"])).toEqual([]);
           const carried = yield* offered(source, "carry", []);

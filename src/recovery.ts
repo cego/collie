@@ -357,9 +357,8 @@ export const consumedCard = Effect.fn("Recovery.consumedCard")(function* (
 
 /**
  * The verifications the consumed card listed, unchanged, where that card is unaltered and
- * the follow-up's checkout still carries its work on its branch. A failure is left out
- * where it ran on the card's own head, or where the same command passed on the very tree it
- * failed on: neither shows the work failing before its fix.
+ * the follow-up's checkout still carries its work on its branch. A failure needs the
+ * same work's first verified fix, so later replays cannot stand in for its regression.
  */
 export const sourceEvidence = Effect.fn("Recovery.sourceEvidence")(function* (options: {
   readonly cwd: string;
@@ -397,16 +396,41 @@ export const sourceEvidence = Effect.fn("Recovery.sourceEvidence")(function* (op
         one.expect === "pass" &&
         one.result === "pass" &&
         sameAsked(one, red) &&
-        one.start.head_sha === red.start.head_sha &&
-        one.start.fingerprint === red.start.fingerprint,
+        sameTree(one.start, red.start),
     );
-  return yield* Effect.filter(recorded, (one) =>
-    listed.get(one.id) !== one.name
-      ? Effect.succeed(false)
-      : one.expect !== "fail"
-        ? Effect.succeed(true)
-        : one.start.head_sha === head || passedOn(one)
-          ? Effect.succeed(false)
-          : contains(one.start.head_sha, head),
+  const pending: Verification[] = [];
+  const fixed: Verification[] = [];
+  const beforeFix = new Set<string>();
+  for (const one of recorded) {
+    if (
+      listed.get(one.id) !== one.name ||
+      one.result !== "pass" ||
+      !sameTree(one.start, one.end) ||
+      !(yield* contains(one.start.head_sha, head))
+    )
+      continue;
+    if (one.expect === "fail") {
+      if (
+        one.start.head_sha !== head &&
+        !passedOn(one) &&
+        !Arr.some(fixed, (green) => sameAsked(green, one))
+      )
+        pending.push(one);
+    } else {
+      const reds = yield* Effect.filter(pending, (red) =>
+        sameAsked(red, one) &&
+        red.start.head_sha !== one.start.head_sha &&
+        !sameTree(red.start, one.start)
+          ? contains(red.start.head_sha, one.start.head_sha)
+          : Effect.succeed(false),
+      );
+      if (reds.length === 0) continue;
+      fixed.push(one);
+      for (const red of reds) beforeFix.add(red.id);
+    }
+  }
+  return Arr.filter(
+    recorded,
+    (one) => listed.get(one.id) === one.name && (one.expect !== "fail" || beforeFix.has(one.id)),
   );
 });
