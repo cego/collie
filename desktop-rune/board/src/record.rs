@@ -142,6 +142,7 @@ pub struct Record {
     pub entry: Option<String>,
     /// The record's drawn width, which decides whether the drafts sit beside a tab or under it.
     pub width: f32,
+    pub flow_height: f32,
     /// Whether the Run's active Step is chosen on Flow once its Flow is read.
     pub at_active: bool,
     /// The evidence items opened under their rows: a check's output, a kept log, a note.
@@ -172,6 +173,7 @@ impl Record {
             opening: Vec::new(),
             entry: None,
             width: 0.0,
+            flow_height: 0.0,
             at_active: false,
             expanded: Vec::new(),
         }

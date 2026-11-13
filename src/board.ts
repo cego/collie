@@ -62,7 +62,7 @@ import { Foreground } from "./foreground";
 import { flowInputsFor, taskFlowFor } from "./flow-read";
 import { machineName } from "./peers";
 import { deliveriesOf, SENT_STATES, toldIn } from "./steering";
-import { readCards } from "./cards";
+import { finishedOnRecord } from "./cards";
 import { branchMovement } from "./recovery";
 import { owedLocally } from "./check-proof";
 import {
@@ -133,9 +133,8 @@ const DEPLOYED = { "on-stage": " On stage.", "in-prod": " In production." } as c
 /** When a Run ended: its own record, else the final card its finish wrote. Null for neither. */
 const finishedAt = Effect.fn("Board.finishedAt")(function* (run: RunFacts) {
   if (run.finished !== null) return epochMs(run.finished);
-  const cards = yield* readCards(run.dir).pipe(Effect.orElseSucceed(() => []));
-  const final = Option.getOrUndefined(Arr.findLast(cards, (card) => card.kind === "final"));
-  return final === undefined ? null : epochMs(final.at);
+  const at = yield* finishedOnRecord(run.dir);
+  return at === null ? null : epochMs(at);
 });
 
 /** The first line the Run's log recorded telling `agent` something, the newest such. */
