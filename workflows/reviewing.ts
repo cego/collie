@@ -63,6 +63,7 @@ const change = {
 
 /** How a review whose merge request's head moved under it fails, so a caller can carry on. */
 export const HEAD_MOVED = "reviewed head changed while reviewing";
+export const MR_ENDED = "reviewed merge request ended: ";
 
 /** What a prompt is told of a target that is not a merge request. */
 export const NO_MR = { forge: "", noun: "", diff: "", view: "", checkout: "" };
@@ -225,15 +226,16 @@ export const reviewPass = (ask: ReviewAsk) =>
           name: `${ask.prefix ?? ""}review-head-confirmed-${ask.at}`,
           success: Schema.String,
           error: WorkflowError,
-          execute: host.reviewedHead({ target: ask.target, cwd }).pipe(
-            Effect.filterOrFail(
-              (head) => head === ask.head,
-              () =>
-                new WorkflowError({
-                  reason: `${HEAD_MOVED} ${ask.head}; review again before posting`,
-                }),
-            ),
-          ),
+          execute: Effect.gen(function* () {
+            const reading = yield* host.mrReading({ target: ask.target, cwd });
+            if (reading.state !== "open")
+              return yield* new WorkflowError({ reason: `${MR_ENDED}${reading.state}` });
+            if (reading.head !== ask.head)
+              return yield* new WorkflowError({
+                reason: `${HEAD_MOVED} ${ask.head}; review again before posting`,
+              });
+            return reading.head;
+          }),
         });
     });
     const keepLedger = (report: SynthesisReport) =>

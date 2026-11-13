@@ -57,6 +57,7 @@ import {
   DEFAULT_BASE,
   FIX_PROMPT,
   HEAD_MOVED,
+  MR_ENDED,
   IMPLEMENTER,
   NO_MR,
   REVIEWER,
@@ -425,7 +426,17 @@ export default defineWorkflow({
       });
 
       // The first review; "Fix findings" below rallies from it.
-      const followed = (yield* following(1)) ? yield* followThrough : null;
+      const followed = (yield* following(1))
+        ? yield* followThrough.pipe(
+            Effect.catchIf(
+              (failure) => Str.startsWith(MR_ENDED)(failure.reason),
+              (failure) =>
+                Effect.succeed({
+                  done: `${mrLabel(asked.target)} was ${Str.slice(MR_ENDED.length)(failure.reason)}`,
+                }),
+            ),
+          )
+        : null;
       if (followed?.done !== undefined) return followed.done;
       let synthesis: SynthesisReport =
         followed?.menu ??

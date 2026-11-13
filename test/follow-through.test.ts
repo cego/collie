@@ -250,6 +250,47 @@ for (const id of ["review", "second-look"])
 
 const follows = `${fixtures}/follows-mr.workflow.ts`;
 
+for (const state of ["closed", "merged"] as const)
+  test(
+    `a merge request ${state} during review finishes without posting or asking for approval`,
+    () =>
+      host.runEffect(
+        Effect.gen(function* () {
+          yield* repository;
+          const head = yield* pushed("ready to review");
+          const forge = yield* host.gitlab(model(head));
+          yield* host.settingOn(true);
+          yield* rig.queueOutputs([review([])]);
+          let ended = false;
+          forge.before(async () => {
+            if (ended || (await runLive(host.agentStarts)).length === 0) return;
+            ended = true;
+            await runLive(forge.set(model(head, { mrs: [mr(head, { state })] })));
+          });
+          yield* host.session(
+            forge,
+            Effect.gen(function* () {
+              const { runId } = yield* host.started(yield* entryOf("review"), "cli-1", {
+                target: TARGET,
+              });
+              yield* host.mergeWatched;
+              const done = yield* until(
+                () => host.status(runId),
+                (view) => view?.status.status === "complete",
+              );
+              expect(ended).toBe(true);
+              expect(done?.status.status === "complete" && done.status.value).toBe(
+                `mk/collie!7 was ${state}`,
+              );
+              expect(yield* notesOf(forge)).toEqual([]);
+              expect(yield* asked(runId)).toEqual([]);
+            }),
+          );
+        }),
+      ),
+    180_000,
+  );
+
 test(
   "a second start of a followed merge request by the same login is the first Run, whatever it was given",
   () =>
