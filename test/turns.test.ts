@@ -6,7 +6,9 @@ import { Foreground, makeForeground, servedNow } from "../src/foreground";
 import { timingFirstValues } from "../src/host";
 import { TurnScheduler } from "../src/turns";
 
-test("an automatically resumed fiber receives a fresh turn budget", () => {
+/** Runs 300 steps, each `step` around a counter, and says when the turn's time made the fiber yield. */
+const timeYields = (step: (count: Effect.Effect<void>) => Effect.Effect<unknown>) => {
+  const opsBeforeYield = 2048;
   let time = 0;
   let steps = 0;
   const yielded: Array<{ steps: number; operations: number }> = [];
@@ -18,7 +20,8 @@ test("an automatically resumed fiber receives a fresh turn budget", () => {
     executionMode: "async",
     shouldYield(fiber) {
       const over = turns.shouldYield(fiber);
-      if (over && steps < 300) yielded.push({ steps, operations: fiber.currentOpCount });
+      if (over && steps < 300 && fiber.currentOpCount < opsBeforeYield)
+        yielded.push({ steps, operations: fiber.currentOpCount });
       return over;
     },
     makeDispatcher() {
@@ -33,23 +36,31 @@ test("an automatically resumed fiber receives a fresh turn budget", () => {
       };
     },
   };
+  const count = Effect.sync(() => {
+    steps++;
+    if (steps === 40) time += 20;
+  });
   return Effect.runPromise(
-    Effect.forEach(
-      Arr.range(1, 300),
-      () =>
-        Effect.sync(() => {
-          steps++;
-          if (steps === 40) time += 20;
-        }),
-      { discard: true },
+    Effect.forEach(Arr.range(1, 300), () => step(count), { discard: true }).pipe(
+      Effect.provideService(Scheduler.MaxOpsBeforeYield, opsBeforeYield),
     ),
     { scheduler },
   )
     .then(() => {
       expect(steps).toBe(300);
-      expect(yielded).toHaveLength(1);
+      return yielded;
     })
     .finally(() => clock.mockRestore());
+};
+
+test("an automatically resumed fiber receives a fresh turn budget", () =>
+  timeYields((count) => count).then((yielded) => expect(yielded).toHaveLength(1)));
+
+test("a fiber resumed into a chain of inline continuations receives a fresh turn budget", () => {
+  const mapped = (count: Effect.Effect<unknown>) =>
+    Arr.reduce(Arr.range(1, 20), count, (effect) => Effect.map(effect, (value) => value));
+  // Effect's operation-budget yields resume into the chain.
+  return timeYields(mapped).then((yielded) => expect(yielded).toHaveLength(1));
 });
 
 test("a served fiber's turns come before those of busy background fibers", () => {
