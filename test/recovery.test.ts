@@ -1036,7 +1036,6 @@ test(
 const RED_MR = `https://${PROJECT.gitlab}/-/merge_requests/31`;
 const RED_HEAD = pipe("a", Str.repeat(40));
 
-/** The `ci-failed` recheck of a park whose pipeline failed at `RED_HEAD`, the forge as `now` says. */
 const failedCiRecheck = (now: Partial<FakeMr>, { recorded = true, unreadable = false } = {}) =>
   runEffect(
     Effect.gen(function* () {
