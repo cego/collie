@@ -89,14 +89,18 @@ As of `cego/collie@c3005804` (0.123.1), on vm-mk:
     your Output".
   - **`rechecks`:** a read-only test of the fact that caused the park, such as "is job
     `test` in the pipeline at this head now?", "does the forge answer?" or "is the checkout
-    clean?".
+    clean?". `ci-failed` rechecks a red merge-request pipeline: it clears once the forge shows
+    a head other than the one that failed, a pipeline at that head that is no longer failed,
+    or the merge request merged or closed. A Review wait's own poll and the Run's CI fix round
+    can still clear it, so it never goes to a Heal.
   - **`needs you`:** what the host cannot do about it alone, such as an Output still
     absent after two reminders, a failure that parks its Step for correcting (`step-failed`,
     [ADR-draft-a-fixable-failure-parks-its-step](draft-a-fixable-failure-parks-its-step.md)),
     or an `unknown` cause.
   - **`never heals`:** set on a cause only a person can act on, such as a missing login, a
-    force-push or a human's dirty checkout. That park goes straight to you, without a Heal
-    (D7).
+    force-push, a human's dirty checkout, or a Review wait held by requested changes or a
+    forge that will not merge (`review-blocked`), whose own poll leaves the park once that is
+    repaired. That park goes straight to you, without a Heal (D7).
 - **What it shows:** the cause, each recovery action taken, and that action's outcome. The
   Run's record shows them, and so do the card, `run show` and chat's reads.
 

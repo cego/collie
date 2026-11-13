@@ -38,6 +38,7 @@ import {
   type Finding,
   type JobLink,
   type OpenComment,
+  type ParkCause,
   type ReviewStanding,
 } from "collie";
 import { Effect, Option, Schema } from "effect";
@@ -693,12 +694,12 @@ export default defineWorkflow({
       const host = yield* Host;
       const runId = (yield* Run).id;
       const fail = (reason: string) => new WorkflowError({ reason });
-      const park = (reason: string) =>
+      const park = (reason: string, cause: ParkCause = "release-failed") =>
         Effect.gen(function* () {
           const why = `${reason}. Repair it, then resume ${runId}.`;
           yield* host.record(runId, why);
           yield* stepFailed(why);
-          yield* host.parked(runId, why, "release-failed");
+          yield* host.parked(runId, why, cause);
           return yield* Workflow.suspend(yield* WorkflowInstance);
         });
 
@@ -1200,6 +1201,7 @@ export default defineWorkflow({
                     if (standing.head === ciBefore)
                       return yield* park(
                         `${mr}: ${why}; its remote head did not advance after fix-${fixes}`,
+                        "ci-failed",
                       );
                     if (repairs >= ROUNDS)
                       return yield* park(`${mr}: ${why} after ${ROUNDS} CI repair rounds`);

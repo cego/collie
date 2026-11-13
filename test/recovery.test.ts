@@ -7,13 +7,23 @@ import { collie, proves } from "./support/world";
 import { until } from "./support/host";
 import { readAudit } from "../src/audit";
 import { FakeBin } from "./support/bin";
-import { forgeOnPath, serveForges } from "./support/forge";
+import {
+  FORGE_HOST,
+  PROJECT,
+  fakeForge,
+  forgeOnPath,
+  serveForges,
+  type FakeMr,
+} from "./support/forge";
 import { exec } from "./support/command";
 import { holderLives } from "../src/lock";
 import { herdOf } from "../src/steering";
 import { newsPath, pending, read as readNews } from "../src/news";
 import { epochMs } from "../src/time";
 import { CommandLine } from "effect/process";
+import { pipe } from "effect/Function";
+import { runEffect } from "./support/effect";
+import { recheckPark, rememberFailedCi } from "../src/park-recheck";
 
 const idOf = flow(
   Schema.decodeUnknownEffect(Schema.Struct({ runId: Schema.String })),
@@ -906,3 +916,193 @@ test(
     ),
   120_000,
 );
+
+test(
+  "a red pipeline park is rechecked at the head that failed and resumed by the host once the forge moves on, with no Heal",
+  () =>
+    proves(
+      "collie-recovery-red-",
+      (world) =>
+        Effect.gen(function* () {
+          yield* exec(
+            [
+              "git",
+              "-c",
+              "user.name=t",
+              "-c",
+              "user.email=t@example.test",
+              "commit",
+              "-qm",
+              "initial",
+              "--allow-empty",
+            ],
+            { cwd: world.project },
+          );
+          const head = Str.trim(
+            (yield* exec(["git", "rev-parse", "HEAD"], { cwd: world.project })).stdout,
+          );
+          const bin = yield* Effect.acquireRelease(FakeBin.make(`${world.home}/bin`), (bin) =>
+            bin.restore(),
+          );
+          const red = {
+            project: "gitlab.example.com/mk/project",
+            iid: "7",
+            state: "open" as const,
+            head,
+            checks: [{ name: "test", state: "failed" as const }],
+          };
+          const model = {
+            installed: true,
+            loggedIn: ["gitlab.example.com"],
+            login: "me",
+            mrs: [red],
+          };
+          const forge = yield* forgeOnPath(bin, "gitlab", model);
+          const env = {
+            PATH: `${bin.dir}:/usr/bin:/bin`,
+            COLLIE_FORGE_API: yield* serveForges(forge),
+            COLLIE_RECOVERY_EVERY: "250 millis",
+          };
+          const started = yield* collie(
+            world,
+            [
+              "run",
+              "start",
+              "rechecks",
+              "--input",
+              "cause=ci-failed",
+              "--input",
+              `file=${world.home}/fact`,
+              "--input",
+              "mr=https://gitlab.example.com/mk/project/-/merge_requests/7",
+            ],
+            env,
+          );
+          expect(started.envelope).toMatchObject({ ok: true });
+          const runId = yield* idOf(started.envelope.data);
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const healed = (lines: ReadonlyArray<{ readonly action?: string }>) =>
+            Arr.filter(lines, (line) => line.action === "healed");
+          const rechecked = yield* until(
+            () => client.runMetrics({ runId }).pipe(Effect.orDie),
+            (lines) =>
+              Arr.filter(
+                lines,
+                (line) => line.action === "rechecked" && line.outcome === "uncleared",
+              ).length >= 2,
+          );
+          expect(healed(rechecked)).toEqual([]);
+          expect((yield* client.run({ runId }).pipe(Effect.orDie))?.park?.cause).toBe("ci-failed");
+          yield* forge.set({
+            ...model,
+            mrs: [
+              {
+                ...red,
+                head: pipe("c", Str.repeat(40)),
+                checks: [{ name: "test", state: "passed" }],
+              },
+            ],
+          });
+          const done = yield* until(
+            () => client.run({ runId }).pipe(Effect.orDie),
+            (view) => view?.status.status === "complete",
+          );
+          expect(done?.status).toEqual({ status: "complete", value: "CI no longer failed" });
+          expect(done?.parked).toBeNull();
+          const metrics = yield* until(
+            () => client.runMetrics({ runId }).pipe(Effect.orDie),
+            (lines) =>
+              Arr.some(lines, (line) => line.action === "resumed" && line.outcome === "resumed"),
+          );
+          expect(metrics).toContainEqual(
+            expect.objectContaining({
+              cause: "ci-failed",
+              action: "rechecked",
+              outcome: "cleared",
+            }),
+          );
+          expect(healed(metrics)).toEqual([]);
+          const resumes = Arr.filter(
+            yield* readAudit(`${world.state}/runs/${runId}`).pipe(Effect.orDie),
+            (line) => line.operation === "resume",
+          );
+          expect(Arr.map(resumes, (line) => line.actor.origin)).toEqual(["host"]);
+        }),
+      ["rechecks.workflow.ts"],
+    ),
+  120_000,
+);
+
+const RED_MR = `https://${PROJECT.gitlab}/-/merge_requests/31`;
+const RED_HEAD = pipe("a", Str.repeat(40));
+
+/** The `ci-failed` recheck of a park whose pipeline failed at `RED_HEAD`, the forge as `now` says. */
+const failedCiRecheck = (now: Partial<FakeMr>, { recorded = true, unreadable = false } = {}) =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-ci-failed-" });
+      const forge = fakeForge("gitlab", {
+        installed: true,
+        loggedIn: [FORGE_HOST.gitlab],
+        login: "me",
+        mrs: [{ project: PROJECT.gitlab, iid: "31", state: "open", head: RED_HEAD, ...now }],
+        ...(unreadable && { httpFault: { status: 503 } }),
+      });
+      if (recorded)
+        yield* rememberFailedCi(`${root}/runs/r1`, {
+          head: RED_HEAD,
+          name: "build",
+          mr: RED_MR,
+          cwd: root,
+        });
+      return yield* recheckPark(
+        {
+          runId: "r1",
+          cwd: root,
+          branch: "feature",
+          mr: RED_MR,
+          park: { cause: "ci-failed", kind: "rechecks" },
+        },
+        root,
+        { sessionList: () => Effect.die("CI rechecks must not ask herdr") },
+      ).pipe(Effect.provide(forge.layer));
+    }),
+  );
+
+const RED = [{ name: "build", state: "failed" }] as const;
+const PASSED = [{ name: "build", state: "passed" }] as const;
+
+test("a ci-failed park clears once the forge shows another head", () =>
+  failedCiRecheck({ head: pipe("b", Str.repeat(40)), checks: RED }).then((said) =>
+    expect(said).toMatchObject({ cleared: true, error: false }),
+  ));
+
+test("a ci-failed park clears once the pipeline at its head no longer failed", () =>
+  failedCiRecheck({ checks: PASSED }).then((said) =>
+    expect(said).toMatchObject({ cleared: true, error: false }),
+  ));
+
+test("a ci-failed park clears once its merge request is merged", () =>
+  failedCiRecheck({ state: "merged", checks: RED }).then((said) =>
+    expect(said).toMatchObject({ cleared: true, error: false }),
+  ));
+
+test("a ci-failed park stays while its head's pipeline is still failed", () =>
+  failedCiRecheck({ checks: RED }).then((said) =>
+    expect(said).toMatchObject({ cleared: false, error: false }),
+  ));
+
+test("a ci-failed recheck that cannot read the forge is an error", () =>
+  failedCiRecheck({ checks: RED }, { unreadable: true }).then((said) =>
+    expect(said).toMatchObject({ cleared: false, error: true }),
+  ));
+
+test("a ci-failed park with no failed head recorded stays, saying so", () =>
+  failedCiRecheck({ checks: PASSED }, { recorded: false }).then((said) =>
+    expect(said).toMatchObject({
+      cleared: false,
+      error: false,
+      note: expect.stringContaining("no failed pipeline recorded"),
+    }),
+  ));

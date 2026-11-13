@@ -10,7 +10,11 @@ export default defineWorkflow({
   id: "awaits-review",
   title: "Wait on a review",
   description: "Records its merge request, then waits on its review.",
-  input: Schema.Struct({ mr: Schema.String, cwd: Schema.String }),
+  input: Schema.Struct({
+    mr: Schema.String,
+    cwd: Schema.String,
+    proved: Schema.optional(Schema.String),
+  }),
   output: Schema.String,
   hints: { mr: "goal" },
   run: ({ input }) =>
@@ -18,7 +22,12 @@ export default defineWorkflow({
       const host = yield* Host;
       const runId = (yield* Run).id;
       yield* host.mergeRequest(runId, input.mr);
-      const standing = yield* host.awaitReview({ runId, cwd: input.cwd, proved: "", seen: [] });
+      const standing = yield* host.awaitReview({
+        runId,
+        cwd: input.cwd,
+        proved: input.proved ?? "",
+        seen: [],
+      });
       if (standing._tag === "Held") return yield* Workflow.suspend(yield* WorkflowInstance);
       return standing._tag;
     }),

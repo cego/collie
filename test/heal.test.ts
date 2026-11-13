@@ -508,13 +508,20 @@ test(
                 () => notified(world, runId),
                 (told) => told.includes(`needs-you:parked:${cause}`),
               );
-              return client;
+              return { client, runId };
             });
           yield* passed("login-missing", "only a person can act on its cause");
+          const blocked = yield* passed("review-blocked", "only a person can act on its cause");
+          expect(
+            Arr.filter(
+              yield* notified(world, blocked.runId),
+              (line) => line === "needs-you:parked:review-blocked",
+            ),
+          ).toHaveLength(1);
           expect(
             (yield* collie(world, ["settings", "set", "recovery.heal", "false"])).envelope.ok,
           ).toBe(true);
-          const client = yield* passed("unknown", "recovery.heal is off");
+          const { client } = yield* passed("unknown", "recovery.heal is off");
           const listed = yield* client.runs({ task: null }).pipe(Effect.orDie);
           expect(Arr.filter(listed, (view) => view.heals !== undefined)).toEqual([]);
         }),

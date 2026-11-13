@@ -10,6 +10,7 @@ export const ParkCause = Schema.Literals([
   "output-absent",
   "idle-budget",
   "ci-job-absent",
+  "ci-failed",
   "forge-unavailable",
   "herdr-unavailable",
   "checkout-dirty-collie",
@@ -17,6 +18,7 @@ export const ParkCause = Schema.Literals([
   "login-missing",
   "branch-force-pushed",
   "release-failed",
+  "review-blocked",
   "gate-fix-unproved",
   "step-failed",
   "unknown",
@@ -53,6 +55,7 @@ export const PARK_CAUSES: Readonly<Record<ParkCause, Entry>> = {
     reason: "its agent went quiet for longer than its idle budget, and nothing says why",
   },
   "ci-job-absent": { kind: "rechecks" },
+  "ci-failed": { kind: "rechecks" },
   "forge-unavailable": { kind: "rechecks" },
   "herdr-unavailable": { kind: "rechecks" },
   "checkout-dirty-collie": { kind: "rechecks" },
@@ -72,6 +75,12 @@ export const PARK_CAUSES: Readonly<Record<ParkCause, Entry>> = {
     neverHeals: true,
   },
   "release-failed": { kind: "needs-you", reason: "its release did not complete" },
+  "review-blocked": {
+    kind: "needs-you",
+    reason:
+      "its merge request is held back by a reviewer or the forge, and its Review wait goes on by itself once that is repaired",
+    neverHeals: true,
+  },
   "gate-fix-unproved": {
     kind: "needs-you",
     reason: "its gate fixes ran out without proving the outcome",

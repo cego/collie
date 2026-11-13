@@ -142,6 +142,8 @@ import { deliveriesOf, SENT_STATES } from "../../src/steering";
 import { fixtures, until } from "./host";
 import { BUILD } from "../../src/host";
 import { readMetrics } from "../../src/metrics";
+import { PARK_CAUSES, ParkCause } from "../../src/park-cause";
+import { recheckPark } from "../../src/park-recheck";
 
 const ROOT = new URL("../../", import.meta.url).pathname;
 
@@ -5998,6 +6000,43 @@ const prerequisiteOpen = (runId: string) =>
     };
   });
 
+scenario(
+  "a Review wait blocked on a failed pipeline parks as ci-failed without a Heal, and its poll clears the park once the head moves",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, head, reviewed, changed } = yield* releasable("gitlab", {
+          checks: [{ name: "build", state: "failed" }],
+        });
+        const runId = "r-review-red";
+        const waiting = yield* Effect.forkChild(
+          ran({
+            entry: `${fixtures}/awaits-review.workflow.ts`,
+            runId,
+            input: { mr: RELEASING.gitlab.mr, cwd: reviewed, proved: head },
+          }),
+        );
+        yield* until(
+          () => parkedWhy(runId),
+          (why) => why !== "",
+        );
+        expect(yield* parkedCause(runId)).toBe("ci-failed");
+        expect(
+          Arr.filter(
+            yield* readMetrics(evidenceDir(dir, runId)),
+            (line) => line.action === "healed",
+          ),
+        ).toEqual([]);
+        const moved = yield* pushedBySomebody(head);
+        yield* changed({ head: moved, checks: [{ name: "build", state: "passed" }] });
+        expect(said(yield* Fiber.join(waiting))).toBe("Moved");
+        yield* bin.restore();
+        expect(yield* parkedWhy(runId)).toBe("");
+      }),
+    ),
+  120_000,
+);
+
 const awaitingPrerequisite = (runId: string) =>
   Effect.gen(function* () {
     const prerequisite = yield* prerequisiteOpen(runId);
@@ -11217,6 +11256,27 @@ const parkedCause = (runId: string) =>
     Effect.orElseSucceed(() => ""),
   );
 
+/** Park recovery's recheck of a Run's current park, as the host's recovery makes it. */
+const parkRecheck = (runId: string, mr: string, cwd: string) =>
+  Effect.gen(function* () {
+    const cause = yield* Schema.decodeUnknownEffect(ParkCause)(yield* parkedCause(runId));
+    return yield* recheckPark(
+      { runId, cwd, branch: "feature", mr, park: { cause, kind: PARK_CAUSES[cause].kind } },
+      dir,
+      { sessionList: () => Effect.die("a park recheck here must not ask herdr") },
+    );
+  }).pipe(
+    Effect.provide(
+      forgeHttpLayer.pipe(
+        Layer.provideMerge(platformLayer),
+        Layer.provideMerge(
+          ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: forgeApi })),
+        ),
+      ),
+    ),
+    Effect.orDie,
+  );
+
 const halts = (runId: string) =>
   Effect.map(readMetrics(evidenceDir(dir, runId)), (lines) =>
     Arr.filter(lines, (line) => line.kind === "halt"),
@@ -14563,6 +14623,55 @@ for (const name of ["gitlab", "github"] as const) {
         ),
       120_000,
     );
+
+  scenario(
+    `release on ${name}: failed CI whose fixer cannot move the head parks as ci-failed, cleared by a new head without a Heal`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, reviewed, changed } = yield* releasable(name, {
+            checks: [{ name: "build", state: "failed" }],
+            checksUrl: PIPELINE_OF[name],
+          });
+          const runId = `r-ci-recheck-${name}`;
+          yield* checkedBy(runId, "unit");
+          yield* rig.queueOutputs([
+            PACKAGED,
+            { verdict: "clean", fixed: [{ title: "claimed CI repaired" }] },
+          ]);
+          const healed = Effect.map(readMetrics(evidenceDir(dir, runId)), (lines) =>
+            Arr.filter(lines, (line) => line.action === "healed"),
+          );
+          yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                yield* until(
+                  () => run.status,
+                  (status) => status.status === "suspended" || status.status === "failed",
+                );
+                expect(yield* parkedCause(runId)).toBe("ci-failed");
+                expect(yield* healed).toEqual([]);
+                const recheck = parkRecheck(runId, mr, reviewed);
+                expect(yield* recheck).toMatchObject({ cleared: false, error: false });
+                const moved = yield* pushedBySomebody(head);
+                yield* changed({ head: moved, checks: [{ name: "build", state: "passed" }] });
+                expect(yield* recheck).toMatchObject({ cleared: true, error: false });
+                yield* run.resume;
+                const go = yield* goAsked(run.asked, "go-1");
+                expect(go.prompt).toContain(pipe(moved, Str.slice(0, 8)));
+                expect(yield* wasAsked(runId, "fix-2")).toBe(false);
+                expect(yield* healed).toEqual([]);
+                yield* run.answer("go-1", "Finish");
+                expect(outcomeText(yield* ended(run.status))).toBe(`${mr} was left open`);
+              }),
+          );
+          yield* bin.restore();
+          expect((yield* forge.model()).merges ?? []).toEqual([]);
+        }),
+      ),
+    120_000,
+  );
 
   scenario(
     `release on ${name}: a moved head with failed CI is adopted and proved before its CI fixer`,
