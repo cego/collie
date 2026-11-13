@@ -52,7 +52,7 @@ fn main() {
         .arg("--cache-dir")
         .arg(out.join("zig-cache"))
         .status()
-        .unwrap_or_else(|e| panic!("cannot run {zig:?} (Zig 0.16 required): {e}"));
+        .unwrap_or_else(|e| panic!("cannot run {zig:?} (Zig 0.17 required): {e}"));
     assert!(
         status.success(),
         "zig build of libghostty-vt failed: {status}"
@@ -110,6 +110,8 @@ fn main() {
         .allowlist_type("Ghostty.*")
         .allowlist_var("GHOSTTY_.*")
         .prepend_enum_name(false)
+        // Evaluates the style flag macros, whose casts bindgen cannot parse alone.
+        .clang_macro_fallback()
         .derive_default(true)
         .layout_tests(false)
         .generate()

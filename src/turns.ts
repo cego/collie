@@ -78,12 +78,16 @@ export class TurnScheduler implements Scheduler.Scheduler {
   }
   /** When the running fiber's stretch began: one fiber runs at a time. */
   private since = 0;
+  /** Fibers told to yield, whose next check opens a new stretch whatever their operation count. */
+  private readonly yielded = new WeakSet<object>();
   shouldYield(fiber: Parameters<Scheduler.Scheduler["shouldYield"]>[0]) {
-    if (fiber.currentOpCount === 1) {
-      this.since = now();
-      return false;
-    }
-    if (this.inner.shouldYield(fiber)) return true;
+    if (this.yielded.delete(fiber) || fiber.currentOpCount === 1) this.since = now();
+    if (fiber.currentOpCount === 1) return false;
+    const over = this.inner.shouldYield(fiber) || this.overTurn(fiber);
+    if (over) this.yielded.add(fiber);
+    return over;
+  }
+  private overTurn(fiber: Parameters<Scheduler.Scheduler["shouldYield"]>[0]) {
     if ((fiber.currentOpCount & 63) !== 0) return false;
     // Background work steps aside while a served fiber's task waits.
     return now() - this.since > TURN_MS || (this.dispatcher.front.length > 0 && !this.first());

@@ -114,7 +114,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev mesa-vulkan-drivers libclang-dev fontconfig fonts-noto-cjk libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-alsa gstreamer1.0-libav
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
-          version: 0.16.0
+          version: 0.17.1
       # Installs the toolchain desktop-rune/rust-toolchain.toml pins.
       - run: rustup toolchain install
         working-directory: desktop-rune
