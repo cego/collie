@@ -1,6 +1,3 @@
-// The host's own engine, store, registry and merge watch, in process on a fast clock, over a
-// fake GitLab: what a Run that waits on its merge request is driven through.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import {
@@ -49,7 +46,6 @@ export const watching = (rig: Rig) => {
   const dir = () => env().stateDir;
   const toasts: string[] = [];
 
-  /** glab on PATH and GitLab served, for the whole test, as a host's restart leaves the forge as it was. */
   const gitlab = (model: ForgeModel, name: "gitlab" | "github" = "gitlab") =>
     Effect.gen(function* () {
       const bin = yield* Effect.acquireRelease(FakeBin.make(`${rig.root}/bin`), (made) =>

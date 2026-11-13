@@ -1,6 +1,3 @@
-// A Run that waits on the merge request it was pointed at, from the head it was given, and
-// answers with what woke it.
-
 import { defineWorkflow, watch } from "collie";
 import { Effect, Schema } from "effect";
 

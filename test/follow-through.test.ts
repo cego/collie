@@ -1,8 +1,3 @@
-// A review that follows its merge request through the host's own engine, store and merge
-// watch, on a fast clock, over a fake GitLab and a real git origin: one Run per merge request
-// and login, a signed note per round, no agent while it waits, and approval the human's only
-// answer. Each runs as shipped and under an unrelated id (ADR-0029).
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Rec from "effect/Record";

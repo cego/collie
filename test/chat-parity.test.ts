@@ -879,7 +879,6 @@ test(
           const COLLIE_FORGE_API = yield* serveForges(gitlab);
           yield* bin.restore();
           const target = "https://gitlab.example.com/mk/project/-/merge_requests/7";
-          // The CLI starts the host, and with it the forge it reads.
           const { envelope } = yield* collie(
             world,
             ["run", "start", "follows-mr", "--input", `target=${target}`, "--input", "proves=main"],
@@ -926,7 +925,6 @@ test(
         }),
       [...MODULES, "follows-mr.workflow.ts"],
     ),
-  // A host the CLI starts, and a Run of it that is answered.
   60_000,
 );
 

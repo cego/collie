@@ -2960,7 +2960,8 @@ forge login: starting it again, from the CLI, chat or the board, answers that Ru
 it already follows the merge request.
 
 Each round reviews the merge request's head in a detached checkout Collie keeps for the
-Run, reset to that head each round and removed when the Run ends or is stopped. It posts
+Run and resets to that head each round. A stopped Run keeps its checkout so an interrupted
+round can resume. It posts
 one signed note when the findings changed since the last one posted, then waits on the
 author with no agent running: a new head, a comment that is not Collie's, or the head's
 pipeline ending starts the next round, as a [Watch](../CONTEXT.md) does. If the head moves

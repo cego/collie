@@ -1,5 +1,3 @@
-// What a Run watching a merge request waits for, judged from what the merge watch read: pure.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";

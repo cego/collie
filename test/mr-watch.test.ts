@@ -96,7 +96,6 @@ test(
               (row) => row !== null,
             );
             yield* watchingMerges;
-            // Rounds of the watch on a head that has not moved wake nothing.
             yield* Effect.sleep("6 minutes");
             expect((yield* status(runId))?.status.status).toBe("suspended");
 

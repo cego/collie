@@ -1,6 +1,3 @@
-// A Run that follows the merge request it was pointed at, once that setting is on, and asks
-// whether to approve it.
-
 import { ask, defineWorkflow } from "collie";
 import { Schema } from "effect";
 
