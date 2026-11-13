@@ -68,6 +68,8 @@ pub struct Snapshot {
     pub protocol: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artefacts: Option<bool>,
     pub herds: Vec<Herd>,
     pub tasks: Vec<Task>,
     pub seq: i64,
@@ -94,6 +96,8 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub herd: Option<String>,
     pub state: State,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub narratives: Option<Vec<Narrative>>,
     pub steps: Vec<Step>,
     pub sentence: String,
     pub age: String,
@@ -165,6 +169,57 @@ pub enum State {
     Abandoned,
     #[serde(rename = "done")]
     Done,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Narrative {
+    pub key: String,
+    pub title: String,
+    pub summary: String,
+    pub blocker: Option<String>,
+    #[serde(rename = "nextAction")]
+    pub next_action: Option<String>,
+    pub state: NarrativeState,
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<Address>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
+    pub at: Option<String>,
+    #[serde(rename = "observedAt")]
+    pub observed_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum NarrativeState {
+    #[serde(rename = "preparing")]
+    Preparing,
+    #[serde(rename = "ready")]
+    Ready,
+    #[serde(rename = "failed")]
+    Failed,
+    #[serde(rename = "unavailable")]
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Address {
+    pub installation: String,
+    pub run: String,
+    pub id: String,
+    pub revision: i64,
+    pub step: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Origin {
+    pub installation: String,
+    pub run: String,
+    pub step: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1518,6 +1573,8 @@ pub struct KeptRecord {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Detail {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub narratives: Option<Vec<Narrative>>,
     #[serde(rename = "branchProgress", default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
     pub branch_progress: Option<Option<String>>,
     pub id: String,
@@ -2428,6 +2485,255 @@ pub enum Encoding {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Artefact {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installation: Option<String>,
+    pub id: String,
+    pub run: String,
+    pub kind: String,
+    pub role: String,
+    pub title: String,
+    pub r#ref: String,
+    pub source: String,
+    #[serde(rename = "mediaType")]
+    pub media_type: String,
+    pub size: i64,
+    pub revision: i64,
+    pub digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub created: Option<Option<Created>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub updated: Option<Option<Created>>,
+    #[serde(rename = "registeredAt")]
+    pub registered_at: String,
+    #[serde(rename = "observedAt")]
+    pub observed_at: String,
+    #[serde(rename = "detectedAt")]
+    pub detected_at: String,
+    pub seen: Option<Seen>,
+    #[serde(rename = "sourceAvailability")]
+    pub source_availability: String,
+    #[serde(rename = "retainedAvailability")]
+    pub retained_availability: String,
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracking: Option<Tracking>,
+    #[serde(rename = "registeredBy", default, skip_serializing_if = "Option::is_none")]
+    pub registered_by: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<Provider>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub export: Option<Export>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Created {
+    pub at: String,
+    pub provenance: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Seen {
+    pub revision: i64,
+    pub at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Tracking {
+    #[serde(rename = "local")]
+    Local,
+    #[serde(rename = "snapshot")]
+    Snapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Provider {
+    pub name: String,
+    pub namespace: Option<String>,
+    pub resource: Option<String>,
+    pub version: Option<String>,
+    pub provenance: String,
+    #[serde(rename = "observedAt")]
+    pub observed_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Export {
+    pub source: String,
+    pub availability: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtefactsPayload {
+    pub installation: String,
+    #[serde(rename = "runId")]
+    pub run_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub refresh: Option<Option<bool>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtefactCollection {
+    pub items: Vec<Artefact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtefactSearchPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub query: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub run: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub kind: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub role: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub unseen: Option<Option<bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub cursor: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub limit: Option<Option<i64>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FlockArtefacts {
+    pub items: Vec<FoundArtefact>,
+    pub next: Option<String>,
+    pub machines: Vec<MachineSearched>,
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FoundArtefact {
+    pub installation: String,
+    pub machine: String,
+    pub item: Artefact,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MachineSearched {
+    pub installation: Option<String>,
+    pub machine: String,
+    pub state: MachineSearchedState,
+    pub reason: Option<String>,
+    pub runs: i64,
+    pub indexed: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum MachineSearchedState {
+    #[serde(rename = "searched")]
+    Searched,
+    #[serde(rename = "unreachable")]
+    Unreachable,
+    #[serde(rename = "unsupported")]
+    Unsupported,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtefactReadPayload {
+    pub installation: String,
+    #[serde(rename = "runId")]
+    pub run_id: String,
+    pub id: String,
+    pub revision: i64,
+    pub offset: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtefactSeenPayload {
+    pub installation: String,
+    #[serde(rename = "runId")]
+    pub run_id: String,
+    pub id: String,
+    pub revision: Option<i64>,
+    pub request: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtefactRegisterPayload {
+    pub installation: String,
+    #[serde(rename = "runId")]
+    pub run_id: String,
+    pub request: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub path: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub url: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub id: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub title: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub kind: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub role: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub description: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub snapshot: Option<Option<bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub provider: Option<Option<ArtefactRegisterPayloadProvider>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub metadata: Option<Option<serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub created: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub updated: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtefactRegisterPayloadProvider {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub namespace: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub resource: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub version: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtefactRegistered {
+    pub address: ArtefactRegisteredAddress,
+    pub item: Artefact,
+    pub retained: Retained,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtefactRegisteredAddress {
+    pub installation: String,
+    pub run: String,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Retained {
+    pub revision: i64,
+    pub digest: String,
+    pub size: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtefactImportPayload {
+    pub installation: String,
+    #[serde(rename = "runId")]
+    pub run_id: String,
+    pub path: String,
+    pub request: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StagePathsPayload {
     pub paths: Vec<String>,
 }
@@ -2480,7 +2786,7 @@ pub enum ActPayloadAction {
     Confirm(Confirm),
     Decline(Decline),
     Dispose(Dispose),
-    Seen(Seen),
+    Seen(ActPayloadActionSeen),
     Steer(ActPayloadActionSteer),
     Deliver(Deliver),
     WithdrawNote(WithdrawNote),
@@ -2593,15 +2899,15 @@ pub enum DisposeTag {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Seen {
+pub struct ActPayloadActionSeen {
     #[serde(rename = "_tag")]
-    pub tag: SeenTag,
+    pub tag: ActPayloadActionSeenTag,
     #[serde(rename = "runId")]
     pub run_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum SeenTag {
+pub enum ActPayloadActionSeenTag {
     #[serde(rename = "Seen")]
     Seen,
 }

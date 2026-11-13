@@ -2,6 +2,16 @@
 // and count its cards, decide what each one offers and read what it names. No I/O and no
 // Bun-only import: a browser bundle imports this too.
 
+import * as Struct from "effect/Struct";
+import { NarrativeReport } from "./narrative-model";
+import {
+  Artefact,
+  ArtefactCollection,
+  ArtefactMatches,
+  ArtefactRegistered,
+  ArtefactSearch,
+  RegisterArtefact,
+} from "./artefact-model";
 import * as Str from "effect/String";
 import { flow, pipe } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -473,6 +483,7 @@ export const TaskView = Schema.Struct({
   /** The Herd the Task's workspace is in, where its record says; a `herds` id. */
   herd: Schema.optionalKey(Schema.String),
   state: TaskState,
+  narratives: Schema.optionalKey(Schema.Array(NarrativeReport)),
   steps: Schema.Array(BoardStep),
   sentence: Schema.String,
   age: Schema.String,
@@ -1000,6 +1011,7 @@ export const RecordPart = Schema.Literals(["diff", "tail", "mr", "texts"]);
 export type RecordPart = typeof RecordPart.Type;
 
 export const RunDetail = Schema.Struct({
+  narratives: Schema.optionalKey(Schema.Array(NarrativeReport)),
   branchProgress: Schema.optionalKey(Schema.NullOr(Schema.String)),
   id: Schema.String,
   park: Schema.optionalKey(Schema.NullOr(Park)),
@@ -1210,6 +1222,7 @@ export const BoardSnapshot = Schema.TaggedStruct("Snapshot", {
   protocol: Schema.Int,
   /** Whether this host takes files: its file operations, uploads and attachments. */
   files: Schema.optionalKey(Schema.Boolean),
+  artefacts: Schema.optionalKey(Schema.Boolean),
   herds: Schema.Array(Herd),
   tasks: Schema.Array(TaskView),
   seq: Schema.Int,
@@ -1564,7 +1577,12 @@ export type MachineOwn = typeof MachineOwn.Type;
 export const Attachments = Schema.Array(Schema.String);
 
 /** The Collie tools a Flock chat has a Machine's host answer, all of them reads. */
-export const FLOCK_READS = ["collie_run", "collie_receipts", "collie_workspaces"] as const;
+export const FLOCK_READS = [
+  "collie_run",
+  "collie_receipts",
+  "collie_workspaces",
+  "collie_artefacts",
+] as const;
 
 export const ShellResult = Schema.Struct({
   code: Schema.Int,
@@ -1718,6 +1736,37 @@ export const FrontDoorRpcs = RpcGroup.make(
     success: Schema.NullOr(RunProgress),
   }),
   RunDetailRpc,
+  Rpc.make("artefacts", {
+    payload: { runId: Schema.String, refresh: Schema.optional(Schema.Boolean) },
+    success: ArtefactCollection,
+    error: HostRefused,
+  }),
+  /** A page of this host's catalogue across its retained Runs, from metadata alone. */
+  Rpc.make("artefactSearch", {
+    payload: ArtefactSearch.fields,
+    success: ArtefactMatches,
+    error: HostRefused,
+  }),
+  Rpc.make("artefactRead", {
+    payload: { runId: Schema.String, id: Schema.String, revision: Schema.Int, offset: Schema.Int },
+    success: RunFile,
+    error: HostRefused,
+  }),
+  Rpc.make("artefactRegister", {
+    payload: { runId: Schema.String, request: Schema.String, ...RegisterArtefact.fields },
+    success: ArtefactRegistered,
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
+  Rpc.make("artefactSeen", {
+    payload: {
+      runId: Schema.String,
+      id: Schema.String,
+      revision: Schema.NullOr(Schema.Int),
+      request: Schema.String,
+    },
+    success: Artefact,
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
   /**
    * A large item of a Run's, by reference: `log`, `review`, `diff:<path>`, `evidence:<name>`,
    * `verification:<id>`, `plan:<file>`, read-only from its checkout `file:<path>`, and

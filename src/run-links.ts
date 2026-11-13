@@ -1,8 +1,10 @@
 import { Effect, Schema } from "effect";
 import { FlowState, RequestedBy } from "./board-model";
 import { appendJournal, readJournal } from "./journal";
+import { NarrativeReport } from "./narrative-model";
 
 export const RunLinkNotice = Schema.Struct({
+  narratives: Schema.optionalKey(Schema.Array(NarrativeReport)),
   requestedBy: RequestedBy,
   run: Schema.String,
   workflow: Schema.String,

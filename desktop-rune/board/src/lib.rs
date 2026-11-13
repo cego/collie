@@ -12,6 +12,7 @@ pub mod shell;
 pub mod standing;
 pub mod timing;
 pub mod toasts;
+pub mod video;
 
 pub use shell::view;
 

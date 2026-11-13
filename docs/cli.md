@@ -3204,3 +3204,62 @@ See [agents talking to each other](using.md#agents-talking-to-each-other).
 
 `run deliveries <id>` finds the Machine that holds the Run, as other Run reads do.
 Its `--reconcile` write is carried out there through the same host, under its request id.
+
+## Artefacts
+
+`collie artefacts` searches retained material through this Machine's configured routes,
+including Runs absent from the board. `--machine <name>` limits it to that Machine.
+
+```sh
+collie artefacts --query notes --kind file --role handoff --unseen --limit 20
+collie artefacts --run <installation>:<run>
+collie artefacts --query notes --cursor <next>
+collie run artefact show <installation>:<run> <id>
+```
+
+`--query` matches titles, descriptions, URLs, and source paths, without reading file
+contents. `--run`, `--kind`, `--role`, and `--unseen` narrow the results. Each JSON page
+has `items`, `next` (null at the end), per-Machine `machines` coverage, and `complete`.
+Keep the filters unchanged when using `next` as `--cursor`. Pages contain at most 200
+entries and keep a stable order while the catalogue is unchanged.
+
+Partial coverage names offline Machines, unsupported hosts, and Runs still being indexed.
+An empty partial page does not prove that no material exists. An ambiguous bare Run id
+is refused with candidates. Qualify it by installation id or Machine name when reading,
+refreshing, registering, or marking an entry. Installation ids survive Machine renaming.
+
+`collie run artefacts <run>` lists retained attachments, plan files, evidence files, and
+handoffs. It does not mark them seen. Each entry carries an id, revision, source dates
+and provenance, host dates, availability, and its receipt.
+
+```sh
+collie run artefact show <run> <id>
+collie run artefact refresh <run>
+collie run artefact read <run> <id> --revision 1 --offset 0
+collie run artefact seen <run> <id> --revision 1 --request-id inspected-1
+collie run artefact unseen <run> <id> --request-id clear-1
+collie run artefact register <run> --path /abs/report.md --request-id deliver-1
+collie run artefact register <run> --path ./clip.mp4 --upload
+collie run artefact register <run> --url https://example.com/report --title Report
+collie run artefact register <run> --url https://claude.ai/code/artifact/<id> --kind claude-artefact \
+  --provider claude --namespace <org> --resource <id> --version 3 --path ./export.md
+collie run artefact register <run> --kind codex-site --provider codex-sites \
+  --namespace <workspace> --resource <project-id>
+```
+
+`register` copies a file on the Run's Machine and tracks it; `--upload` sends a file from
+this computer instead, as a retained snapshot. `--url` registers a link without fetching
+it; `--provider`, `--namespace`, `--resource`, and `--version` name the hosted resource it
+is, reported as given. `--title`, `--role`, `--description`, `--kind`, `--metadata` (JSON),
+`--created` and `--updated` (ISO timestamps), and `--snapshot` (copy once, do not track)
+are optional; `--id` retargets an existing artefact and keeps what it does not replace.
+The reply is the address and the retained revision, digest, and size; a link with no
+export has an empty digest.
+
+`read` returns a base64 part of the immutable revision, capped at 4 MiB. Advance the byte
+offset until the reported size is reached. Files are limited to 100 MiB. Inspect metadata
+to verify the assembled size and digest. No read, refresh, or download marks material seen.
+Use the revision actually inspected when acknowledging it. Reusing a request id replays
+its result; changing its arguments conflicts. `--json` uses the normal CLI envelope.
+
+See [Inspecting a Run's material](artefacts.md) for native presentation and tracking limits.

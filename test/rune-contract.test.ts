@@ -8,10 +8,11 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Effect, Exit, Schema } from "effect";
 import * as Rpc from "effect/rpc/Rpc";
-import { ActionFailed, DesktopRpcs, FlockItem } from "../desktop/src/shared/flock";
+import { ActionFailed, DesktopRpcs, FlockItem, KeptRecord } from "../desktop/src/shared/flock";
 import { runEffect } from "./support/effect";
 import { AguiEvent } from "../desktop/src/shared/agui";
-import { FLOCK, SAID } from "./support/rune-fixtures";
+import { FLOCK, SAID, REPORTS } from "./support/rune-fixtures";
+import { runDetail } from "./support/run-detail";
 import { exec } from "./support/command";
 
 const WORKSPACE = new URL("../desktop-rune/", import.meta.url).pathname;
@@ -20,6 +21,7 @@ const cargo = Bun.which("cargo");
 const flock = DesktopRpcs.requests.get("flock")!;
 const syncNow = DesktopRpcs.requests.get("syncNow")!;
 const say = DesktopRpcs.requests.get("say")!;
+const detail = DesktopRpcs.requests.get("runDetail")!;
 /** Each request of the group, typed as all of them. */
 type DesktopRpc = typeof flock;
 
@@ -94,6 +96,28 @@ const frames = Effect.gen(function* () {
       values: yield* Effect.forEach(FLOCK, (item) => encoder(FlockItem)(item)),
     },
     {
+      _tag: "Request",
+      id: 4,
+      tag: "runDetail",
+      payload: yield* encoder(detail.payloadSchema)({
+        installation: "inst-build",
+        runId: "helper-old",
+      }),
+      headers: [],
+    },
+    {
+      _tag: "Chunk",
+      requestId: 4,
+      values: [
+        yield* encoder(KeptRecord)({
+          detail: runDetail({ narratives: REPORTS }),
+          asOf: null,
+          bytes: 4096,
+        }),
+      ],
+    },
+    { _tag: "Exit", requestId: 4, exit: yield* encoder(Rpc.exitSchema(detail))(Exit.void) },
+    {
       _tag: "Chunk",
       requestId: 3,
       values: yield* Effect.forEach(SAID, (event) => encoder(AguiEvent)(event)),
@@ -121,7 +145,9 @@ const typed = (frame: Frame, tags: ReadonlyMap<number, DesktopRpc>) =>
         return {
           ...frame,
           values: yield* Effect.forEach(frame.values, (value) =>
-            decoder(frame.requestId === 3 ? AguiEvent : FlockItem)(value),
+            decoder(
+              frame.requestId === 3 ? AguiEvent : frame.requestId === 4 ? KeptRecord : FlockItem,
+            )(value),
           ),
         };
       case "Exit":
@@ -156,6 +182,235 @@ describe.skipIf(cargo === null)("DesktopRpcs between the main process and the Ru
     expect(new Set(Arr.map(SAID, (event) => event.type)).size).toBe(AguiEvent.members.length);
   });
 
+  test("artefact RPC parts retain revisions, nullable dates, extension metadata and errors", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const item = {
+          id: "a1",
+          run: "r1",
+          kind: "other/widget",
+          role: "handoff",
+          title: "Notes",
+          ref: "handoff:notes.txt",
+          source: "/runs/r1/handoffs/notes.txt",
+          mediaType: "text/plain",
+          size: 7,
+          revision: 2,
+          digest: "abc",
+          created: null,
+          registeredAt: "2026-10-01T00:00:00Z",
+          observedAt: "2026-11-01T00:00:00Z",
+          detectedAt: "2026-11-01T00:00:00Z",
+          seen: { revision: 1, at: "2026-10-02T00:00:00Z" },
+          sourceAvailability: "missing",
+          retainedAvailability: "available",
+          reason: "source removed",
+          metadata: { custom: [false, null, { nested: 2 }] },
+          installation: "inst-1",
+          tracking: "snapshot" as const,
+          registeredBy: { origin: "desktop", requestId: "q-register" },
+          pending: true,
+          stale: true,
+        };
+        const link = {
+          ...item,
+          id: "l1",
+          kind: "acme.dev/diagram",
+          ref: "provider:claude:org-1:0b8c",
+          source: "https://claude.ai/code/artifact/0b8c",
+          url: "https://claude.ai/code/artifact/0b8c",
+          description: "<b>not markup</b>",
+          provider: {
+            name: "claude",
+            namespace: null,
+            resource: "0b8c",
+            version: null,
+            provenance: "caller-reported",
+            observedAt: "2026-11-01T00:00:00Z",
+          },
+          export: { source: "/srv/export.md", availability: "missing" },
+          sourceAvailability: "auth-expired",
+        };
+        const parts = [
+          [
+            "artefactRegister",
+            {
+              installation: "inst-1",
+              runId: "r1",
+              url: "https://claude.ai/code/artifact/0b8c",
+              kind: "acme.dev/diagram",
+              provider: { name: "claude", resource: "0b8c" },
+              metadata: { layers: [{ name: "<script>x</script>" }], zoom: 2.5 },
+              created: "2026-11-01T00:00:00Z",
+              request: "q-link",
+            },
+            {
+              address: { installation: "inst-1", run: "r1", id: "l1" },
+              item: link,
+              retained: { revision: 2, digest: "", size: 0 },
+            },
+          ],
+          [
+            "artefactRegister",
+            {
+              installation: "inst-1",
+              runId: "r1",
+              path: "/source/note.txt",
+              title: "A note",
+              kind: "asset",
+              snapshot: true,
+              request: "q-register",
+            },
+            {
+              address: { installation: "inst-1", run: "r1", id: "a1" },
+              item,
+              retained: { revision: 2, digest: "abc", size: 7 },
+            },
+          ],
+          [
+            "artefactImport",
+            { installation: "inst-1", runId: "r1", path: "/local/note.txt", request: "q-import" },
+            {
+              address: { installation: "inst-1", run: "r1", id: "a1" },
+              item,
+              retained: { revision: 2, digest: "abc", size: 7 },
+            },
+          ],
+          [
+            "artefacts",
+            { installation: "inst-1", runId: "r1", refresh: true },
+            {
+              items: [
+                item,
+                link,
+                {
+                  ...item,
+                  id: "a2",
+                  created: { at: "2025-01-01", provenance: "caller" },
+                  updated: null,
+                },
+              ],
+            },
+          ],
+          [
+            "artefactSearch",
+            {
+              query: "notes",
+              run: "inst-1:r1",
+              kind: "other/widget",
+              role: "handoff",
+              unseen: true,
+              cursor: "eyJpbnN0LTEiOiJkb25lIn0",
+              limit: 20,
+            },
+            {
+              items: [
+                { installation: "inst-1", machine: "vm-mk", item },
+                { installation: "inst-1", machine: "vm-mk", item: link },
+              ],
+              next: "eyJpbnN0LTEiOnsiZGV0ZWN0ZWRBdCI6IngiLCJydW4iOiJyMSIsImlkIjoibDEifX0",
+              machines: [
+                {
+                  installation: "inst-1",
+                  machine: "vm-mk",
+                  state: "searched",
+                  reason: null,
+                  runs: 3,
+                  indexed: 2,
+                },
+                {
+                  installation: null,
+                  machine: "laptop",
+                  state: "unreachable",
+                  reason: "Desktop is not connected to it",
+                  runs: 0,
+                  indexed: 0,
+                },
+              ],
+              complete: false,
+            },
+          ],
+          [
+            "artefactSearch",
+            {},
+            {
+              items: [],
+              next: null,
+              complete: false,
+              machines: [
+                {
+                  installation: null,
+                  machine: "old-build",
+                  state: "unsupported",
+                  reason: "Upgrade Collie",
+                  runs: 0,
+                  indexed: 0,
+                },
+              ],
+            },
+          ],
+          [
+            "artefactRead",
+            { installation: "inst-1", runId: "r1", id: "a1", revision: 1, offset: 0 },
+            { ref: "artefact:a1:1", encoding: "base64", size: 7, content: "b2xkIG9uZQ==" },
+          ],
+          [
+            "artefactSeen",
+            { installation: "inst-1", runId: "r1", id: "a1", revision: null, request: "q1" },
+            item,
+          ],
+        ] as const;
+        const sent: Frame[] = [];
+        const tags = new Map<number, DesktopRpc>();
+        for (const [index, [tag, payload, success]] of parts.entries()) {
+          const rpc = DesktopRpcs.requests.get(tag)!;
+          tags.set(index, rpc);
+          sent.push({
+            _tag: "Request",
+            id: index,
+            tag,
+            payload: yield* encoder(rpc.payloadSchema)(payload),
+            headers: [],
+          });
+          sent.push({
+            _tag: "Exit",
+            requestId: index,
+            exit: yield* encoder(Rpc.exitSchema(rpc))(Exit.succeed(success)),
+          });
+          sent.push({
+            _tag: "Request",
+            id: index + 10,
+            tag,
+            payload: yield* encoder(rpc.payloadSchema)(payload),
+            headers: [],
+          });
+          tags.set(index + 10, rpc);
+          sent.push({
+            _tag: "Exit",
+            requestId: index + 10,
+            exit: yield* encoder(Rpc.exitSchema(rpc))(Exit.fail(REFUSED)),
+          });
+        }
+        const ran = yield* exec([roundtrip], {
+          stdin: Buffer.from(
+            Arr.join(
+              Arr.map(sent, (frame) => JSON.stringify(frame)),
+              "\n",
+            ) + "\n",
+          ),
+        });
+        expect(ran.exitCode).toBe(0);
+        if (ran.exitCode !== 0) throw new Error(ran.stderr);
+        const back: ReadonlyArray<Frame> = yield* Effect.forEach(
+          Str.split(Str.trim(ran.stdout), "\n"),
+          (line) => fromLine(line),
+        );
+        const got = yield* Effect.forEach(back, (frame) => typed(frame, tags));
+        const want = yield* Effect.forEach(sent, (frame) => typed(frame, tags));
+        expect(got).toEqual(want);
+      }),
+    ));
+
   test("Hello, a flock chunk, an answer and a failure come back from Rust as they went", () =>
     runEffect(
       Effect.gen(function* () {
@@ -179,6 +434,7 @@ describe.skipIf(cargo === null)("DesktopRpcs between the main process and the Ru
           [1, syncNow],
           [2, syncNow],
           [3, say],
+          [4, detail],
         ]);
         const want = yield* Effect.forEach(sent, (frame) => typed(frame, tags));
         const got = yield* Effect.forEach(back, (frame) => typed(frame, tags));

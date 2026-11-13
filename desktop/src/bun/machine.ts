@@ -6,6 +6,19 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
+import { uploadArtefact, withArtefacts } from "../../../src/artefact-client";
+import type {
+  ArtefactMatches,
+  ArtefactSearch,
+  RegisterArtefact,
+} from "../../../src/artefact-model";
+import {
+  Away,
+  awayFrom,
+  type FlockSearch,
+  type SearchDoor,
+  searchFlock,
+} from "../../../src/artefact-search";
 import {
   Cause,
   Clock,
@@ -1773,6 +1786,123 @@ export const recordEvents = (
 
 export const runFileOn = (door: Reached, runId: string, ref: string, offset?: number) =>
   over(door, door.desktop.runFile({ runId, ref, offset }));
+
+export const artefactsOn = (door: Reached, supported: boolean, runId: string, refresh?: boolean) =>
+  supported
+    ? over(door, door.desktop.artefacts({ runId, refresh }))
+    : Effect.fail(
+        new ActionFailed({
+          reason:
+            "Upgrade this Machine's Collie host to use Artefacts. Legacy Plan and Evidence remain available.",
+        }),
+      );
+/** One connected Machine as the Flock's search reaches it; it holds a Run where it has its material. */
+interface Searched {
+  readonly machine: { readonly profile: string; readonly name: string };
+  readonly desktop: {
+    readonly artefactSearch: (
+      asked: ArtefactSearch,
+    ) => Effect.Effect<
+      ArtefactMatches,
+      HostRefused | RpcClientError.RpcClientError | RpcClientError.RpcClientDefect
+    >;
+  };
+}
+
+export const searchDoorOn = (installation: string, door: Searched): SearchDoor => ({
+  installation,
+  search: (asked) => awayFrom(door.desktop.artefactSearch(asked)),
+  has: (run) =>
+    awayFrom(door.desktop.artefactSearch({ run, limit: 1 })).pipe(
+      Effect.map(({ coverage }) => coverage.runs > 0),
+    ),
+});
+
+/**
+ * Retained material across Desktop's Machines. One it knows and is not connected to is
+ * named as unreachable, so a page without it does not read as complete.
+ */
+export const searchMachines = (
+  doors: ReadonlyMap<string, Searched>,
+  known: ReadonlyArray<{ readonly profile: string; readonly name: string }>,
+  asked: FlockSearch,
+) => {
+  const connected = new Set(Arr.map([...doors.values()], (door) => door.machine.profile));
+  return searchFlock(
+    [
+      ...Arr.map([...doors.entries()], ([installation, door]) => ({
+        machine: door.machine.name,
+        reach: Effect.succeed(searchDoorOn(installation, door)),
+      })),
+      ...Arr.map(
+        Arr.filter(known, (machine) => !connected.has(machine.profile)),
+        (machine) => ({
+          machine: machine.name,
+          reach: Effect.fail(
+            new Away({ state: "unreachable", reason: "Desktop is not connected to it" }),
+          ),
+        }),
+      ),
+    ],
+    asked,
+  ).pipe(
+    Effect.mapError(
+      (error) =>
+        new ActionFailed({ reason: error._tag === "AmbiguousRun" ? error.message : error.reason }),
+    ),
+  );
+};
+export const artefactReadOn = (
+  door: Reached,
+  runId: string,
+  id: string,
+  revision: number,
+  offset: number,
+) =>
+  over(
+    door,
+    withArtefacts(door.desktop.board(), door.desktop.artefactRead({ runId, id, revision, offset })),
+  );
+export const artefactRegisterOn = (
+  door: Reached,
+  asked: RegisterArtefact & { readonly runId: string; readonly request: string },
+) =>
+  over(
+    door,
+    withArtefacts(door.desktop.board(), door.desktop.artefactRegister(asked)),
+    asked.request,
+  );
+/** A path on this Machine: tracked where the Run is local, else sent as a retained snapshot. */
+export const artefactImportOn = (door: Reached, runId: string, path: string, request: string) =>
+  door.machine.profile === "local"
+    ? artefactRegisterOn(door, { runId, request, path })
+    : over(
+        door,
+        withArtefacts(
+          door.desktop.board(),
+          uploadArtefact(door.desktop, path).pipe(
+            Effect.flatMap((uploaded) =>
+              door.desktop.artefactRegister({ runId, request, path: uploaded, snapshot: true }),
+            ),
+          ),
+        ),
+        request,
+      );
+export const artefactSeenOn = (
+  door: Reached,
+  runId: string,
+  id: string,
+  revision: number | null,
+  request: string,
+) =>
+  over(
+    door,
+    withArtefacts(
+      door.desktop.board(),
+      door.desktop.artefactSeen({ runId, id, revision, request }),
+    ),
+    request,
+  );
 
 /** What a Machine's host read of its Usage; a host too old to have the call asks for an upgrade. */
 export const usageOn = (

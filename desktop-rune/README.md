@@ -558,3 +558,27 @@ Historical spike Sizes on vm-mk (Linux x64):
 On an X11 session the shell loads `libxkbcommon-x11.so` at start (winit through
 `xkbcommon-dl`), and panics where it is missing, as on vm-mk under Xvfb. `install-desktop.sh` would
 need to check for it.
+
+### Retained video
+
+The Artefacts record plays retained MP4/H.264/AAC files through Rune on macOS and
+GStreamer on Linux. Decoder and handler tests are described in
+[the material guide](../docs/artefacts.md#evidence-by-layer). Linux builds need
+`libgstreamer1.0-dev` and `libgstreamer-plugins-base1.0-dev`; runtime packages are
+`gstreamer1.0-plugins-base`, `gstreamer1.0-plugins-good`, `gstreamer1.0-alsa`, and
+`gstreamer1.0-libav`. CI declares them explicitly. The bundle includes its plugin and
+library closure, scanner, and distribution copyright notices. It does not depend on
+the developer's multimedia packages being present on the installed computer.
+
+The decoder fixture is `fixtures/artefact-video.mp4`: two seconds, 64 by 48 pixels,
+four frames per second, H.264 baseline with an AAC audio track. It was generated with:
+
+```sh
+ffmpeg -f lavfi -i 'testsrc2=size=64x48:rate=4:duration=2' \
+  -f lavfi -i 'sine=frequency=440:sample_rate=48000:duration=2' \
+  -c:v libx264 -profile:v baseline -pix_fmt yuv420p -c:a aac \
+  -shortest -movflags +faststart fixtures/artefact-video.mp4
+```
+
+The fixture is generated test material. Live visual, accessibility, and audible playback
+observations on both platforms remain pending until recorded against a revision.

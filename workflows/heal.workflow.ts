@@ -3,6 +3,18 @@ import { Schema } from "effect";
 import markdown from "./heal.md" with { type: "text" };
 
 const said = {
+  summary: Schema.optionalKey(Schema.String),
+  blocker: Schema.optionalKey(Schema.String),
+  next_action: Schema.optionalKey(Schema.String),
+  report: Schema.optionalKey(
+    Schema.Struct({
+      installation: Schema.String,
+      run: Schema.String,
+      id: Schema.String,
+      revision: Schema.Int,
+      step: Schema.String,
+    }),
+  ),
   diagnosis: Schema.String,
   actions: Schema.Array(Schema.String),
   finding: Schema.Struct({

@@ -581,6 +581,25 @@ const migrations = (imports: {
     )`;
     yield* sql`CREATE INDEX collie_runs_reports ON collie_runs (admitted, run) WHERE report_pending = 1`;
   }),
+  "20_artefacts": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE collie_artefacts (run TEXT NOT NULL, id TEXT NOT NULL, origin TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (run, id), UNIQUE (run, origin))`;
+    yield* sql`CREATE TABLE collie_artefact_revisions (run TEXT NOT NULL, id TEXT NOT NULL, revision INTEGER NOT NULL, digest TEXT NOT NULL, size INTEGER NOT NULL, PRIMARY KEY (run, id, revision))`;
+    yield* sql`CREATE TABLE collie_artefact_receipts (run TEXT NOT NULL, request TEXT NOT NULL, asked TEXT NOT NULL, data TEXT NOT NULL, actor TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (run, request))`;
+  }),
+  "21_artefact_registration": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE collie_artefact_registrations (run TEXT NOT NULL, request TEXT NOT NULL, asked TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (run, request))`;
+  }),
+  "22_artefact_index": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE collie_artefact_index (run TEXT PRIMARY KEY, cursor TEXT NOT NULL, done INTEGER NOT NULL)`;
+  }),
+  "23_narrative_reports": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE collie_narratives (run TEXT NOT NULL, key TEXT NOT NULL, ordinal INTEGER NOT NULL, fingerprint TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(run, key))`;
+    yield* sql`CREATE TABLE collie_narrative_work (run TEXT PRIMARY KEY, cursor TEXT NOT NULL)`;
+  }),
 });
 
 /** How often a commit by another connection, another process's, is looked for. */
@@ -1084,6 +1103,19 @@ function makeStore(
                 yield* decide(run);
                 yield* sql`DELETE FROM collie_decisions WHERE run = ${run}`.pipe(Effect.orDie);
                 yield* sql`DELETE FROM collie_launches WHERE run = ${run}`.pipe(Effect.orDie);
+                yield* sql`DELETE FROM collie_artefact_receipts WHERE run = ${run}`.pipe(
+                  Effect.orDie,
+                );
+                yield* sql`DELETE FROM collie_artefact_revisions WHERE run = ${run}`.pipe(
+                  Effect.orDie,
+                );
+                yield* sql`DELETE FROM collie_artefacts WHERE run = ${run}`.pipe(Effect.orDie);
+                yield* sql`DELETE FROM collie_artefact_registrations WHERE run = ${run}`.pipe(
+                  Effect.orDie,
+                );
+                yield* sql`DELETE FROM collie_artefact_index WHERE run = ${run}`.pipe(Effect.orDie);
+                yield* sql`DELETE FROM collie_narratives WHERE run = ${run}`.pipe(Effect.orDie);
+                yield* sql`DELETE FROM collie_narrative_work WHERE run = ${run}`.pipe(Effect.orDie);
                 yield* sql`DELETE FROM collie_runs WHERE run = ${run}`.pipe(Effect.orDie);
                 gone.push(run);
               }

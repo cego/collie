@@ -18,8 +18,12 @@ rune-kit.workspace = true
 rune-theme-opencode.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+gstreamer = "0.24"
+gstreamer-app = "0.24"
+gstreamer-video = "0.24"
 zbus = { version = "6", default-features = false, features = ["tokio", "proxy"] }
 tokio = { version = "1", features = ["rt", "macros", "sync"] }
 futures-util = { version = "0.3", default-features = false }

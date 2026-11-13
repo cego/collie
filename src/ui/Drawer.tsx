@@ -1,6 +1,6 @@
 // The record drawer: one Task's whole record, over the board rather than instead of it.
 //
-// Five tabs over one scrollbox. The division is what each answers: Summary is where the
+// Tabs share one scrollbox. The division is what each answers: Summary is where the
 // work has got to, Review is what was found, Plan is what it was judged against, Cards is
 // the evidence, Log is the end of the runner's own output. One at a time, because the
 // panel this replaced stacked all of them and a review was five screens down.
@@ -51,17 +51,19 @@ import { C, stateGlyph, stepGlyph } from "./sections";
 import { handoffsDir } from "../handoffs";
 import { replyLine } from "../replies";
 import { PARK_CAUSES, parkLine } from "../park-cause";
+import { artefactLines, type ArtefactCollection } from "../artefact-model";
 
 /** How many of a running check's last lines the Summary shows. */
 const DRAWER_LINES = 8;
 
 /** What the record is being read for. One at a time, and Summary is where it opens. */
-export type Tab = "summary" | "review" | "plan" | "cards" | "log";
+export type Tab = "summary" | "review" | "plan" | "cards" | "artefacts" | "log";
 export const TABS: ReadonlyArray<{ tab: Tab; label: string }> = [
   { tab: "summary", label: "Summary" },
   { tab: "review", label: "Review" },
   { tab: "plan", label: "Plan" },
   { tab: "cards", label: "Cards" },
+  { tab: "artefacts", label: "Artefacts" },
   { tab: "log", label: "Log" },
 ];
 
@@ -73,6 +75,8 @@ export interface DrawerProps {
   view: TaskView;
   /** The Run's own record, once it has been read; null while it is being. */
   detail: RunDetail | null;
+  artefacts?: ArtefactCollection | null;
+  artefactsError?: string | null;
   live: Live | null;
   tab: Tab;
   onTab: (tab: Tab) => void;
@@ -443,6 +447,52 @@ export function Drawer(props: DrawerProps) {
 
         <Show when={props.tab === "cards"}>
           <Cards live={props.live} />
+        </Show>
+        <Show when={props.tab === "artefacts"}>
+          <box style={{ flexDirection: "column", gap: 1 }}>
+            <Show when={props.artefactsError}>
+              <text fg={C.amber}>{props.artefactsError}</text>
+            </Show>
+            <Show when={props.artefacts === null && !props.artefactsError}>
+              <text fg={C.dim}>Reading artefacts…</text>
+            </Show>
+            <For each={props.artefacts?.items ?? []}>
+              {(item) => (
+                <box style={{ flexDirection: "column" }}>
+                  <For each={artefactLines(props.view.run, item).slice(0, 3)}>
+                    {(line, index) =>
+                      index() === 0 ? <text>{line}</text> : <text fg={C.dim}>{line}</text>
+                    }
+                  </For>
+                  <box style={{ flexDirection: "row", gap: 1 }}>
+                    <Button
+                      label="Mark seen"
+                      onPress={() =>
+                        props.onAct({
+                          _tag: "SeeArtefact",
+                          runId: props.view.run,
+                          id: item.id,
+                          revision: item.revision,
+                        })
+                      }
+                    />
+                    <Button
+                      label="Mark unseen"
+                      onPress={() =>
+                        props.onAct({
+                          _tag: "SeeArtefact",
+                          runId: props.view.run,
+                          id: item.id,
+                          revision: null,
+                        })
+                      }
+                    />
+                  </box>
+                  <text fg={C.dim}>{artefactLines(props.view.run, item)[3]}</text>
+                </box>
+              )}
+            </For>
+          </box>
         </Show>
 
         <Show when={props.tab === "log"}>

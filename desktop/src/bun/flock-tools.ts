@@ -5,11 +5,24 @@
 // declaration, attached here and never by the model.
 
 import * as Rec from "effect/Record";
+import { withArtefacts } from "../../../src/artefact-client";
+import { RegisterArtefact } from "../../../src/artefact-model";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Num from "effect/Number";
 import { pipe } from "effect/Function";
-import { Cause, Clock, Effect, Exit, FileSystem, Option, Predicate, Result, Schema } from "effect";
+import {
+  Cause,
+  Clock,
+  Effect,
+  Exit,
+  FileSystem,
+  Option,
+  Predicate,
+  Result,
+  Schema,
+  Struct,
+} from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Tool from "effect/ai/Tool";
 import * as Toolkit from "effect/ai/Toolkit";
@@ -47,11 +60,13 @@ import {
   HoldInput,
   refusedActions,
   RunInput,
+  searchesArtefacts,
   TAKES,
 } from "../../../src/toolkit";
+import { artefactOwner, FlockArtefacts, type FlockSearch } from "../../../src/artefact-search";
 import type { Staged } from "../shared/attachments";
 import { type ChatChoices, type Resolved, runsAsOffered } from "../shared/chat-choices";
-import { type ChatBoard, unreadBecause } from "../shared/flock";
+import { type ActionFailed, type ChatBoard, unreadBecause } from "../shared/flock";
 import { moveSchedule, type ScheduleDoor } from "../../../src/schedule-move";
 import { carriedPaths } from "./carried";
 import { type ActionsLog, confirmed, Outlined, reasonOf, unlogged, withheldOf } from "./sent";
@@ -67,6 +82,10 @@ export const chatDoor = (door: Door) => ({
   decline: (asked: Parameters<Door["decline"]>[0]) => door.decline(asked),
   dispose: (asked: Parameters<Door["dispose"]>[0]) => door.dispose(asked),
   seen: (asked: Parameters<Door["seen"]>[0]) => door.seen(asked),
+  artefactSeen: (asked: Parameters<Door["artefactSeen"]>[0]) =>
+    withArtefacts(door.board(), door.artefactSeen(asked)),
+  artefactRegister: (asked: Parameters<Door["artefactRegister"]>[0]) =>
+    withArtefacts(door.board(), door.artefactRegister(asked)),
   news: (asked: Parameters<Door["news"]>[0]) => door.news(asked),
   propose: (asked: Parameters<Door["propose"]>[0]) => door.propose(asked),
   readFile: (asked: Parameters<Door["readFile"]>[0]) => door.readFile(asked),
@@ -125,6 +144,8 @@ export interface FlockChat {
   readonly setStandingDirection: (text: string) => Effect.Effect<string | null>;
   /** Each Machine's In sync standing; with a Machine's name, Sync now on it. */
   readonly inSync: (sync: string | undefined) => Effect.Effect<string>;
+  /** Retained material across Desktop's Machines; none where absent. */
+  readonly searchArtefacts?: (asked: FlockSearch) => Effect.Effect<FlockArtefacts, ActionFailed>;
   /** Helle with the token Desktop holds, or null without one; none where absent. */
   readonly helle?: Effect.Effect<HelleCredentials | null, string>;
   /** The chat's harness, model and effort as set. */
@@ -265,6 +286,7 @@ const HelleTool = Tool.make("collie_helle", {
 export const FlockTools = Toolkit.make(
   CollieTools.tools.collie_herd,
   CollieTools.tools.collie_run,
+  CollieTools.tools.collie_artefacts,
   CollieTools.tools.collie_workspaces,
   CollieTools.tools.collie_receipts,
   CollieTools.tools.collie_news,
@@ -476,6 +498,20 @@ const runOwners = (known: Boards, named: string) => {
   );
 };
 
+const placeArtefact = (flock: FlockChat, known: Boards, named: string) =>
+  flock.searchArtefacts === undefined
+    ? runOwners(known, named).pipe(Effect.map((owners) => place(named, owners, "Run")))
+    : flock.searchArtefacts({ run: named, limit: 1 }).pipe(
+        Effect.flatMap((page) => artefactOwner(page, named)),
+        Effect.map(({ machine: name, run }) => {
+          const machine = Arr.findFirst(flock.machines(), (one) => one.name === name);
+          return Option.isSome(machine)
+            ? Result.succeed({ machine: machine.value, id: run })
+            : Result.fail(`No connected Machine ${name}`);
+        }),
+        Effect.catch(({ reason }) => Effect.succeed(Result.fail(reason))),
+      );
+
 /** Says, before a write, who is asking and what the human said that turn. */
 export const declareVoice = (flock: FlockChat, machine: Reached) => {
   const said = flock.said();
@@ -589,7 +625,10 @@ const onRun = Effect.fn("FlockTools.onRun")(function* (
   if (input.run === undefined)
     return `${tool} takes {"run": "<machine>:<run id>"}; Desktop's chat has no board selection to stand in.`;
   const known = yield* boards(flock);
-  const placed = place(input.run, yield* runOwners(known, input.run), "Run");
+  const placed =
+    tool === "collie_artefacts"
+      ? yield* placeArtefact(flock, known, input.run)
+      : place(input.run, yield* runOwners(known, input.run), "Run");
   return Result.isFailure(placed) ? placed.failure : yield* answer(placed.success);
 });
 
@@ -610,6 +649,30 @@ const readOn = (machine: ChatMachine, tool: (typeof FLOCK_READS)[number], input:
     }),
     Effect.map((text) => `## ${machine.name}\n\n${text}`),
   );
+
+const searchArtefacts = (
+  flock: FlockChat,
+  {
+    id: _id,
+    revision: _revision,
+    offset: _offset,
+    refresh: _refresh,
+    ...asked
+  }: FlockSearch & {
+    readonly id?: string;
+    readonly revision?: number;
+    readonly offset?: number;
+    readonly refresh?: boolean;
+  },
+) =>
+  flock.searchArtefacts === undefined
+    ? Effect.succeed("This Desktop cannot search Artefacts across its Machines.")
+    : flock.searchArtefacts(asked).pipe(
+        Effect.flatMap((page) =>
+          Schema.encodeEffect(Schema.fromJsonString(FlockArtefacts))(page).pipe(Effect.orDie),
+        ),
+        Effect.catch(({ reason }) => Effect.succeed(reason)),
+      );
 
 const run = (flock: FlockChat, input: typeof RunInput.Type) =>
   onRun(flock, input, "collie_run", ({ machine, id }) =>
@@ -973,6 +1036,7 @@ interface Localized {
 const placeOne = Effect.fnUntraced(function* (
   action: JsonObject,
   known: Boards,
+  flock: FlockChat,
 ): Effect.fn.Return<Result.Result<Localized, string>> {
   const kind = textAt(action, "kind");
   if (kind === "cleanup" || kind === "home_cleanup") {
@@ -1018,6 +1082,11 @@ const placeOne = Effect.fnUntraced(function* (
   }
   const about = machineRef(action);
   if (about === null) return Result.succeed({ machine: null, action });
+  if (["artefact_register", "artefact_seen", "artefact_unseen"].includes(kind))
+    return Result.map(yield* placeArtefact(flock, known, about.name), ({ machine, id }) => ({
+      machine,
+      action: { ...action, run: id },
+    }));
   const where =
     about.field === "run"
       ? place(about.name, yield* runOwners(known, about.name), "Run")
@@ -1059,7 +1128,7 @@ const carryOut = Effect.fn("FlockTools.do")(function* (flock: FlockChat, input: 
             action: { ...action, proposal: id },
           }),
         )
-      : yield* placeOne(action, known);
+      : yield* placeOne(action, known, flock);
     if (Result.isFailure(where)) {
       said.push(`${kind}: failed — ${where.failure}`);
       break;
@@ -1103,6 +1172,17 @@ const CARRIES = new Set(["start", "followup", "take_offer", "deliver"]);
 
 /** The action with the files it carries as paths on its Machine. */
 const withFiles = (flock: FlockChat, machine: Reached, action: JsonObject) => {
+  if (textAt(action, "kind") === "artefact_register" && isString(action.path)) {
+    // Only a path on the Run's own Machine stays tracked; any other is sent as a snapshot.
+    const path = action.path;
+    return carriedPaths(flock, machine, [path]).pipe(
+      Effect.map((paths): JsonObject => ({
+        ...action,
+        path: paths?.[0] ?? path,
+        snapshot: action.snapshot === true || !Str.startsWith(`${machine.name}:`)(path),
+      })),
+    );
+  }
   if (!CARRIES.has(textAt(action, "kind"))) return Effect.succeed(action);
   const named = action["attachments"];
   const given = Arr.isArray<typeof named>(named) ? Arr.filter(named, isString) : undefined;
@@ -1117,6 +1197,15 @@ const doOne = (machine: Reached, kind: string, action: JsonObject, request: stri
   const door = machine.door;
   const text = (key: string) => textAt(action, key);
   switch (kind) {
+    case "artefact_register":
+      return Schema.decodeUnknownEffect(RegisterArtefact)({
+        ...Struct.omit(action, ["kind", "run", "artefactKind"]),
+        kind: action.artefactKind,
+      }).pipe(
+        Effect.mapError((error) => new HostRefused({ reason: error.message })),
+        Effect.flatMap((asked) => door.artefactRegister({ ...asked, runId: text("run"), request })),
+        Effect.map((done) => ({ state: "applied", note: JSON.stringify(done) })),
+      );
     case "confirm":
       return door.confirm({ proposal: text("proposal"), hash: text("hash"), request }).pipe(
         Effect.map(({ results }) => ({
@@ -1161,6 +1250,21 @@ const doOne = (machine: Reached, kind: string, action: JsonObject, request: stri
           note: `seen by ${done.by}`,
         })),
       );
+    case "artefact_seen":
+    case "artefact_unseen":
+      return door
+        .artefactSeen({
+          runId: text("run"),
+          id: text("id"),
+          revision: kind === "artefact_unseen" ? null : Number(action.revision),
+          request,
+        })
+        .pipe(
+          Effect.map((done) => ({
+            state: "applied",
+            note: `artefact ${done.id}: revision ${done.seen?.revision ?? "unseen"}`,
+          })),
+        );
     default:
       return door.act({ actions: [action], request }).pipe(
         Effect.map((results) => results[0] ?? { state: "failed", note: "the host said nothing" }),
@@ -1186,7 +1290,7 @@ const propose = Effect.fn("FlockTools.propose")(
     const known = yield* boards(flock);
     const placed: Localized[] = [];
     for (const action of actions) {
-      const one = yield* placeOne(action, known);
+      const one = yield* placeOne(action, known, flock);
       if (Result.isFailure(one)) return one.failure;
       placed.push(one.success);
     }
@@ -1482,6 +1586,14 @@ const handlersFor = (flock: FlockChat, sent: JsonObject) =>
     return FlockTools.of({
       collie_herd: () => answer(herd(flock)),
       collie_run: (input) => answer(run(flock, input)),
+      collie_artefacts: (input) =>
+        answer(
+          searchesArtefacts(input)
+            ? searchArtefacts(flock, input)
+            : onRun(flock, input, "collie_artefacts", ({ machine, id }) =>
+                readOn(machine, "collie_artefacts", { ...input, run: id }),
+              ),
+        ),
       collie_workspaces: () => answer(workspaces(flock)),
       collie_schedules: () => answer(schedules(flock)),
       collie_receipts: (input) => answer(receipts(flock, input)),

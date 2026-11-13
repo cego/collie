@@ -2772,3 +2772,86 @@ Running that file with `TMPDIR` under `.scratch/` reproduced both failures. The 
 now detaches the manifest before editing it and asserts a hardlinked copy stays unchanged;
 the unsupported backend configuration was removed. All 15 authoring tests passed with a
 fresh cache and the fixture directories on the cache's filesystem after that correction.
+
+## Retained Run material
+
+The catalogue and exact-revision receipts live in `host.db`, migrated by `src/store.ts`.
+`src/artefacts.ts` discovers only approved Run collections and keeps immutable SHA-256
+blobs under each Run's `.artefacts/`. It checks source stability before committing a
+revision. Original readers keep their references; catalogue operations do not alter proof.
+
+Receipt requests and results commit in the same transaction as the receipt. Retried
+requests return their saved result without overwriting later choices. The existing
+Actor audit records the front door and requesting agent. Catalogue writes notify
+StoreWrites for that Run; unchanged observations produce no notification or audit.
+Content revisions are durable integers, independent of the Run model's epoch and sequence.
+
+The native record reads bounded revision parts, verifies their digest, and fences worker
+and RPC completions by opening serial and selection generation. Video owns one bounded
+frame queue. Linux decoding, seeking, and audio synchronization run through GStreamer
+away from the UI thread. macOS uses the pinned Rune player. Linux's existing bundle step
+copies the required plugins, dependency closure, scanner, and copyright notices into the
+bundle. Its private plugin path is installed before threads start.
+
+Registered files are rows of the same catalogue, keyed by their normalized path. A
+registration request's result is kept beside it, so a retry replays it. Tracking runs
+in the host's side jobs through `src/artefact-refresh.ts`, which coalesces one refresh
+per source, holds two permits, times a check out after five seconds, and backs a failing
+source off. Desktop's `artefactImport` registers a local path directly where the Run is
+on this computer, and otherwise sends it through the host's upload store first.
+
+A link, Claude artefact, or Site is a row keyed by its provider resource and namespace,
+or else by its URL; it has no revision bytes unless an export was registered beside it.
+`refreshCopy` follows that export and leaves the provider observation alone, and
+`observe` asks a `ProviderReaders` entry for the provider, if one is provided, under a
+four-second timeout, leaving time to record its failure before the batch deadline.
+None ships, so production registrations stay `untracked`.
+
+See [the material guide](artefacts.md#evidence-by-layer) for the checks at each layer and
+the native operator observations that remain pending.
+
+`artefactSearch` reads cached catalogue metadata with keyset pagination, ordered by
+detection date descending, then Run and id. Coverage counts every retained Run in the
+host's registry, independently of current Task cards. Historical indexing runs outside
+board builds, in side jobs and coalesced search-triggered rounds. A round visits at most
+four unindexed Runs, rotating past unfinished ones, with a five-second attempt per Run.
+Discovery processes at most eight source entries per Run per attempt. Its SQLite cursor
+advances after processing a source, so interruption retries that source after restart.
+Receipts, ids, and provenance remain in the existing catalogue.
+Cold catalogue reads return cached metadata immediately and schedule discovery through the existing bounded refresh jobs.
+Explicit refresh has a five-second deadline, including the catalogue permit wait, and returns retained metadata if it expires.
+Each attempt prepares at most eight narratives, checks eight registered sources, and discovers eight collection entries.
+Registered-source checks rotate between attempts; discovery keeps its durable cursor for both explicit and background work.
+
+`src/artefact-search.ts` merges host pages by installation identity, preserving each
+host's cursor and coverage. Machine requests use four concurrent slots and fifteen-second
+deadlines; failed routes remain named in partial responses. Desktop, CLI, and chat share
+this search. Read and mutation routes resolve the owner before asking that host, including
+Runs outside current cards. The native page fences search and seen responses by request
+generation and opens results through the existing record serial and preview fences.
+
+`src/narrative-reports.ts` derives reports from the full known card and recovery journals.
+It groups recovery events by episode and keeps their original order in Markdown under
+the Run's `.reports/`. Registration retains those bytes in the existing catalogue.
+The additional SQLite rows cache preparation state, source fingerprints, and report
+references; they contain no report bodies or second catalogue. Original journals and
+Outputs are never rewritten. Unknown source dates and Steps remain unknown.
+
+Automatic preparation handles at most eight changed sources per Run attempt, through
+the existing coalesced side jobs. It gives the latest source a place and rotates older
+work using a durable cursor. A failed source cannot hold the front after restart.
+Board reads query only the cached projection. An unchanged source produces no report
+write or invalidation. Deterministic source paths and registration requests recover
+interruption after file persistence or catalogue registration without duplicating ids.
+
+The accepted agent Output path records the complete supported narrative in its existing
+card journal. The healer and investigator accept additive report/summary fields; older
+Outputs still work. A Heal may register only a Markdown report from its own handoffs,
+including a real-path check. Its recovery control remains deliver/resume for the Run it
+heals, and the host still judges recovery from facts.
+
+Remote helpers send their registered references in the existing authenticated Run-link
+notice. The receiver checks that addresses belong to that sender's Run and installation,
+then projects the links on the parent Task. Reads and seen receipts go to the owner
+through the existing artefact routes. Native **Open report** uses the formatted Markdown
+reader and its record/selection fences, with a legacy detail route until registration succeeds.

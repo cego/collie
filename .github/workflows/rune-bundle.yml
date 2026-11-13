@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: true
-      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libclang-dev
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libclang-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-alsa gstreamer1.0-libav
       # libghostty-vt builds with the Zig desktop-rune/README.md pins.
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
@@ -49,6 +49,8 @@ jobs:
         with:
           bun-version: "1.4"
       - run: bun install --frozen-lockfile
+      - run: cargo test -p collie-desktop-board --lib video::tests
+        working-directory: desktop-rune
       - run: |
           [ -n "$CERTIFICATE" ] || exit 0
           echo "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"

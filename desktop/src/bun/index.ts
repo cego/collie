@@ -123,6 +123,12 @@ import {
   changeScheduleOn,
   moveScheduleOn,
   runFileOn,
+  artefactsOn,
+  artefactReadOn,
+  searchMachines,
+  artefactSeenOn,
+  artefactRegisterOn,
+  artefactImportOn,
   definitionsIn,
   endChildren,
   flockStream,
@@ -947,6 +953,12 @@ const main = Effect.gen(function* () {
     helle: keyring
       .lookup("helle-token")
       .pipe(Effect.map((token) => (token === null ? null : { url: helle, token }))),
+    searchArtefacts: (asked) =>
+      searchMachines(
+        doors,
+        Arr.map(everyRoute(), (route) => route.machine),
+        asked,
+      ),
     inSync: (sync) =>
       Effect.gen(function* () {
         const rows = machineRows(shown);
@@ -1498,6 +1510,32 @@ const main = Effect.gen(function* () {
     runFile: ({ installation, runId, ref, offset }) =>
       doorTo(doors, installation).pipe(
         Effect.flatMap((door) => runFileOn(door, runId, ref, offset)),
+      ),
+    artefacts: ({ installation, runId, refresh }) =>
+      doorTo(doors, installation).pipe(
+        Effect.flatMap((door) =>
+          artefactsOn(door, shown.machines.get(installation)?.artefacts === true, runId, refresh),
+        ),
+      ),
+    artefactSearch: (asked) =>
+      searchMachines(
+        doors,
+        Arr.map(everyRoute(), (route) => route.machine),
+        asked,
+      ),
+    artefactRead: ({ installation, runId, id, revision, offset }) =>
+      doorTo(doors, installation).pipe(
+        Effect.flatMap((door) => artefactReadOn(door, runId, id, revision, offset)),
+      ),
+    artefactRegister: ({ installation, ...asked }) =>
+      doorTo(doors, installation).pipe(Effect.flatMap((door) => artefactRegisterOn(door, asked))),
+    artefactImport: ({ installation, runId, path, request }) =>
+      doorTo(doors, installation).pipe(
+        Effect.flatMap((door) => artefactImportOn(door, runId, path, request)),
+      ),
+    artefactSeen: ({ installation, runId, id, revision, request }) =>
+      doorTo(doors, installation).pipe(
+        Effect.flatMap((door) => artefactSeenOn(door, runId, id, revision, request)),
       ),
     stage: (part) =>
       stageAttachment(own, part).pipe(

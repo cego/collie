@@ -1,3 +1,5 @@
+import { Artefacts } from "./artefacts";
+import { Artefact } from "./artefact-model";
 // The one local host per state directory: who owns it, how a client reaches it, and what
 // it answers.
 //
@@ -706,6 +708,9 @@ const HEALER_READS = new Set([
   "toasts",
   "progress",
   "runFile",
+  "artefacts",
+  "artefactSearch",
+  "artefactRead",
   "offers",
   "workflows",
   "definitions",
@@ -753,6 +758,14 @@ const HEALER_READS = new Set([
   "agentRun",
 ]);
 const TargetsOne = Schema.Struct({ runId: Schema.String });
+const RegistersReport = Schema.Struct({
+  runId: Schema.String,
+  path: Schema.String,
+  role: Schema.String,
+  url: Schema.optional(Schema.String),
+  id: Schema.optional(Schema.String),
+  provider: Schema.optional(Schema.Json),
+});
 const ActsOn = Schema.Struct({
   actions: Schema.Array(
     Schema.Struct({ kind: Schema.String, run: Schema.optional(Schema.String) }),
@@ -760,12 +773,10 @@ const ActsOn = Schema.Struct({
 });
 
 /**
- * Holds an agent of a Heal to the two things a Heal does: deliver to the healed Run's agents
- * and resume it. What it prevents is an agent nobody asked answering for a person, lifting
- * their Hold or undoing their Stop (ADR-draft-a-run-recovers-where-it-parks D7).
+ * A Heal cannot answer decisions, lift Holds, undo Stops, or control other Runs.
  */
 const healerBound =
-  (declared: Declared) =>
+  (declared: Declared, stateDir: string) =>
   <H extends Record<string, (...args: ReadonlyArray<never>) => object>>(handlers: H) =>
     Effect.map(
       Registry,
@@ -783,6 +794,30 @@ const healerBound =
                     .view(who.from.run)
                     .pipe(Effect.orElseSucceed(() => null)))?.heals;
                   if (heals === undefined) return;
+                  if (name === "artefactRegister") {
+                    const asked = Schema.decodeOption(RegistersReport)(payload);
+                    if (
+                      Option.isSome(asked) &&
+                      asked.value.runId === who.from.run &&
+                      asked.value.role === "report" &&
+                      asked.value.url === undefined &&
+                      asked.value.id === undefined &&
+                      asked.value.provider === undefined
+                    ) {
+                      const fs = yield* FileSystem.FileSystem;
+                      const path = yield* Path.Path;
+                      const files = yield* Effect.all([
+                        fs.realPath(`${runDir(stateDir, who.from.run)}/handoffs`),
+                        fs.realPath(asked.value.path),
+                      ]).pipe(Effect.option);
+                      if (
+                        Option.isSome(files) &&
+                        Str.startsWith(`${files.value[0]}${path.sep}`)(files.value[1]) &&
+                        Str.endsWith(".md")(Str.toLowerCase(files.value[1]))
+                      )
+                        return;
+                    }
+                  }
                   const targets =
                     name === "act"
                       ? Option.map(Schema.decodeOption(ActsOn)(payload), (asked) =>
@@ -796,7 +831,7 @@ const healerBound =
                   if (Option.isSome(targets) && Arr.every(targets.value, (run) => run === heals))
                     return;
                   return yield* new HostRefused({
-                    reason: `${who.from.run} is a Heal of ${heals}: its agents may only deliver to ${heals}'s agents and resume it`,
+                    reason: `${who.from.run} is a Heal of ${heals}: its agents may only deliver to ${heals}'s agents, resume it, or register Markdown reports in their own Run's handoffs`,
                   });
                 });
                 const answer = handler(payload, options);
@@ -885,6 +920,19 @@ const handlers = (
               return yield* new HostRefused({
                 reason: "the requesting Run belongs to another Machine",
               });
+            if (
+              notice.narratives !== undefined &&
+              Arr.some(
+                notice.narratives,
+                (one) =>
+                  one.address !== undefined &&
+                  (one.address.installation !== notice.machine.installation ||
+                    one.address.run !== notice.run),
+              )
+            )
+              return yield* new HostRefused({
+                reason: "a Run link can report only its own registered material",
+              });
             const runId = notice.requestedBy.run;
             if ((yield* registry.view(runId)) === null)
               return yield* new HostRefused({ reason: `No Run "${runId}".` });
@@ -922,6 +970,9 @@ const handlers = (
                     machine: { ...notice.machine, name: peer.name },
                     step: prior?.step ?? launch.step?.step ?? null,
                   }).pipe(Effect.orDie);
+                  const catalogue = yield* Artefacts;
+                  const parent = yield* registry.view(runId);
+                  if (parent !== null) yield* catalogue.prepareReports(factsOfView(dir, parent));
                   return true;
                 }),
               ),
@@ -1212,7 +1263,7 @@ const handlers = (
           );
         },
       });
-    }).pipe(Effect.map(timingFirstValues), Effect.flatMap(healerBound(declared))),
+    }).pipe(Effect.map(timingFirstValues), Effect.flatMap(healerBound(declared, dir))),
   );
 
 /** What a steer's request has to ask again, as `AskedFor` is a start's. */
@@ -1910,6 +1961,7 @@ const frontDoorHandlers = (
       const usage = yield* Usage;
       const harnesses = yield* HarnessCatalogues;
       const schedules = yield* Schedules;
+      const artefacts = yield* Artefacts;
       // Trimming rewrites the trail through one temporary file, so one read records at a time.
       const recordingUsage = yield* Semaphore.make(1);
       const recordingShell = yield* Semaphore.make(1);
@@ -4002,6 +4054,92 @@ const frontDoorHandlers = (
           }).pipe(Effect.provideContext(bun));
           return followDetail(detail, Stream.merge(changed, own)).pipe(Stream.orDie);
         },
+        artefacts: ({ runId, refresh }) =>
+          known(runId).pipe(
+            Effect.flatMap((view) =>
+              refresh === true
+                ? artefacts.reconcile(factsOfView(env.stateDir, view))
+                : artefacts
+                    .cached(factsOfView(env.stateDir, view))
+                    .pipe(
+                      Effect.tap(() =>
+                        artefacts
+                          .schedule(factsOfView(env.stateDir, view))
+                          .pipe(Effect.forkIn(controls)),
+                      ),
+                    ),
+            ),
+            Effect.provideContext(bun),
+          ),
+        artefactSearch: (asked) =>
+          Effect.gen(function* () {
+            const latest = yield* Stream.runHead(shared.boards);
+            const runs = latest._tag === "Some" ? latest.value.runs : [];
+            const found = yield* artefacts.search(
+              asked,
+              Arr.map(runs, (run) => run.id),
+            );
+            if (found.coverage.indexed < found.coverage.runs)
+              yield* artefacts.index(runs).pipe(Effect.forkIn(controls));
+            return found;
+          }).pipe(Effect.provideContext(bun)),
+        artefactRead: ({ runId, id, revision, offset }) =>
+          known(runId).pipe(
+            Effect.flatMap((view) =>
+              artefacts.read(factsOfView(env.stateDir, view), id, revision, offset),
+            ),
+            Effect.provideContext(bun),
+          ),
+        artefactRegister: ({ runId, request, ...input }, { client }) =>
+          known(runId).pipe(
+            Effect.flatMap((view) =>
+              artefacts.register(
+                factsOfView(env.stateDir, view),
+                installation,
+                input,
+                request,
+                actorOf(whoOf(client), request),
+              ),
+            ),
+            Effect.tap((answer) =>
+              answer.fresh
+                ? recordAudit(trail(runId), {
+                    operation: "artefact-register",
+                    request,
+                    ...whoOf(client),
+                    asked: JSON.parse(JSON.stringify(input)),
+                    result: Artefact,
+                    value: answer.item,
+                  }).pipe(Effect.orDie)
+                : Effect.void,
+            ),
+            Effect.map(({ item }) => ({
+              address: { installation, run: runId, id: item.id },
+              item,
+              retained: { revision: item.revision, digest: item.digest, size: item.size },
+            })),
+            Effect.provideContext(bun),
+          ),
+        artefactSeen: ({ runId, id, revision, request }, { client }) =>
+          known(runId).pipe(
+            Effect.andThen(
+              artefacts.seen(runId, id, revision, request, actorOf(whoOf(client), request)),
+            ),
+            Effect.tap((answer) =>
+              answer.fresh
+                ? recordAudit(trail(runId), {
+                    operation: "artefact-seen",
+                    request,
+                    ...whoOf(client),
+                    asked: { id, revision },
+                    result: Artefact,
+                    value: answer.item,
+                  }).pipe(Effect.orDie)
+                : Effect.void,
+            ),
+            Effect.map((answer) => answer.item),
+            Effect.provideContext(bun),
+          ),
         runFile: ({ runId, ref, offset, length }) =>
           registry.view(runId).pipe(
             Effect.flatMap((view) =>
@@ -4029,6 +4167,7 @@ const frontDoorHandlers = (
                     ...development,
                     protocol: PROTOCOL,
                     files: true,
+                    artefacts: true,
                     herds: Arr.flatMap(sessions, ({ herd, name }) =>
                       herd === null ? [] : [name === undefined ? { id: herd } : { id: herd, name }],
                     ),
@@ -4040,7 +4179,7 @@ const frontDoorHandlers = (
             ),
           ).pipe(Stream.orDie),
       });
-    }).pipe(Effect.map(timingFirstValues), Effect.flatMap(healerBound(declared))),
+    }).pipe(Effect.map(timingFirstValues), Effect.flatMap(healerBound(declared, dir))),
   );
 
 /** The state directory's own id, made the first time a host owns it and kept from then on. */

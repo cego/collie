@@ -1,4 +1,6 @@
 import * as Arr from "effect/Array";
+import { withArtefacts, uploadArtefact } from "../artefact-client";
+import type { RegisterArtefact } from "../artefact-model";
 import { parkLine } from "../park-cause";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -7,6 +9,7 @@ import {
   Cause,
   Duration,
   Effect,
+  FileSystem,
   Exit,
   Option,
   Path,
@@ -40,6 +43,8 @@ import {
   steerRun,
   moduleFor,
   runViews,
+  flockArtefacts,
+  asksArtefactRun,
   flockRuns,
   isSettled,
   resumeRun,
@@ -2031,6 +2036,374 @@ const runIntent = Command.make("intent").pipe(
   ]),
 );
 
+const artefactResult = (read: {
+  readonly runId: string;
+  readonly id?: string;
+  readonly revision?: number;
+  readonly offset?: number;
+  readonly op: string;
+  readonly requestId?: Option.Option<string>;
+  readonly registration?: RegisterArtefact;
+  readonly metadata?: string;
+  readonly upload?: boolean;
+}) =>
+  Effect.gen(function* () {
+    const global = yield* root;
+    yield* attempt(
+      Effect.gen(function* () {
+        const resolved = yield* context(global, false);
+        if (resolved._tag === "ContextFailure") return resolved.result;
+        const runId = read.runId;
+        const door = yield* cliDoor(resolved.env);
+        if (read.registration !== undefined) {
+          const metadata =
+            read.metadata === undefined
+              ? Option.some(undefined)
+              : Schema.decodeOption(Schema.fromJsonString(Schema.Json))(read.metadata);
+          if (Option.isNone(metadata)) return err("invalid_input", "--metadata is not JSON");
+          const input = { ...read.registration, metadata: metadata.value };
+          const path = input.path;
+          const files = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
+          return yield* mutation(
+            resolved.env,
+            "artefact-register",
+            read.requestId ?? Option.none(),
+            (request) =>
+              asksArtefactRun(
+                resolved.env,
+                runId,
+                (client, runId) =>
+                  withArtefacts(
+                    client.board(),
+                    Effect.gen(function* () {
+                      const sent =
+                        read.upload === true && path !== undefined
+                          ? { path: yield* uploadArtefact(client, path), snapshot: true }
+                          : {};
+                      return yield* client.artefactRegister({ runId, request, ...input, ...sent });
+                    }).pipe(Effect.provideContext(files)),
+                  ),
+                door,
+              ).pipe(
+                Effect.map((answer) =>
+                  answer.ok
+                    ? {
+                        ok: true as const,
+                        data: answer.value,
+                        human: Schemaflow(
+                          Schema.encodeResult(PrettyUnknownJson),
+                          SchemaResult.getOrThrow,
+                        )(answer.value),
+                      }
+                    : answer,
+                ),
+              ),
+          );
+        }
+        if (read.op === "seen" || read.op === "unseen")
+          return yield* mutation(
+            resolved.env,
+            "artefact-seen",
+            read.requestId ?? Option.none(),
+            (request) =>
+              asksArtefactRun(
+                resolved.env,
+                runId,
+                (client, runId) =>
+                  withArtefacts(
+                    client.board(),
+                    client.artefactSeen({
+                      runId,
+                      id: read.id!,
+                      revision: read.op === "unseen" ? null : read.revision!,
+                      request,
+                    }),
+                  ),
+                door,
+              ).pipe(
+                Effect.map((answer) =>
+                  answer.ok
+                    ? {
+                        ok: true as const,
+                        data: answer.value,
+                        human: Schemaflow(
+                          Schema.encodeResult(PrettyUnknownJson),
+                          SchemaResult.getOrThrow,
+                        )(answer.value),
+                      }
+                    : answer,
+                ),
+              ),
+          );
+        if (read.op === "read") {
+          const answer = yield* asksArtefactRun(
+            resolved.env,
+            runId,
+            (client, runId) =>
+              withArtefacts(
+                client.board(),
+                client.artefactRead({
+                  runId,
+                  id: read.id!,
+                  revision: read.revision!,
+                  offset: read.offset ?? 0,
+                }),
+              ),
+            door,
+          );
+          return answer.ok
+            ? {
+                ok: true as const,
+                data: answer.value,
+                human: Schemaflow(
+                  Schema.encodeResult(PrettyUnknownJson),
+                  SchemaResult.getOrThrow,
+                )(answer.value),
+              }
+            : answer;
+        }
+        const answer = yield* asksArtefactRun(
+          resolved.env,
+          runId,
+          (client, runId) =>
+            withArtefacts(
+              client.board(),
+              client.artefacts({ runId, refresh: read.op === "refresh" }),
+            ),
+          door,
+        );
+        if (!answer.ok) return answer;
+        const item =
+          read.id === undefined
+            ? answer.value
+            : Option.getOrUndefined(Arr.findFirst(answer.value.items, (one) => one.id === read.id));
+        return item === undefined
+          ? err("invalid_input", "No such artefact")
+          : {
+              ok: true as const,
+              data: item,
+              human: Schemaflow(
+                Schema.encodeResult(PrettyUnknownJson),
+                SchemaResult.getOrThrow,
+              )(item),
+            };
+      }),
+      global.json,
+    );
+  });
+const runArtefacts = Command.make("artefacts", { runId: runIdArg }, ({ runId }) =>
+  artefactResult({ runId, op: "list" }),
+);
+const artefactId = Argument.String("id");
+
+const searchText = (name: string, description: string) =>
+  Flag.String(name).pipe(Flag.withDescription(description), Flag.optional);
+export const artefacts = Command.make(
+  "artefacts",
+  {
+    query: searchText(
+      "query",
+      "Words in a title, description, URL or source path; not file contents",
+    ),
+    run: searchText("run", "One Run: its id, or <installation>:<run> or <machine>:<run>"),
+    kind: searchText("kind", "file, link, claude-artefact, codex-site or a kind of your own"),
+    role: searchText("role", "input, deliverable, plan, evidence or handoff"),
+    unseen: Flag.Boolean("unseen").pipe(
+      Flag.withDescription("Only what has a revision not yet seen"),
+      Flag.withDefault(false),
+    ),
+    cursor: searchText("cursor", "The next page, as the last page's next said"),
+    limit: Flag.Int("limit").pipe(
+      Flag.withDescription("At most this many, up to 200"),
+      Flag.optional,
+    ),
+  },
+  (flags) =>
+    Effect.gen(function* () {
+      const global = yield* root;
+      yield* attempt(
+        Effect.gen(function* () {
+          const resolved = yield* context(global, false);
+          if (resolved._tag === "ContextFailure") return resolved.result;
+          const found = yield* flockArtefacts(resolved.env, {
+            ...Rec.map(
+              {
+                query: flags.query,
+                run: flags.run,
+                kind: flags.kind,
+                role: flags.role,
+                cursor: flags.cursor,
+              },
+              Option.getOrUndefined,
+            ),
+            limit: Option.getOrUndefined(flags.limit),
+            unseen: flags.unseen,
+          }).pipe(Effect.result);
+          if (found._tag === "Failure")
+            return found.failure._tag === "AmbiguousRun"
+              ? err("invalid_input", found.failure.message, {
+                  run: found.failure.run,
+                  candidates: found.failure.candidates,
+                })
+              : err("invalid_input", found.failure.reason);
+          const page = found.success;
+          return {
+            ok: true,
+            data: page,
+            human:
+              Arr.join(
+                [
+                  ...Arr.map(
+                    page.items,
+                    ({ machine, item }) =>
+                      `${item.title}\t${machine}:${item.run}\t${item.kind}\t${item.role}\trevision ${item.revision}\t${item.seen !== null && item.seen.revision >= item.revision ? "seen" : "unseen"}\t${item.id}`,
+                  ),
+                  ...Arr.flatMap(page.machines, (one) =>
+                    one.state !== "searched"
+                      ? [`${one.machine}: not searched, ${one.reason}`]
+                      : one.indexed < one.runs
+                        ? [`${one.machine}: ${one.indexed} of ${one.runs} Runs indexed so far`]
+                        : [],
+                  ),
+                  ...(page.next === null ? [] : [`More: --cursor ${page.next}`]),
+                ],
+                "\n",
+              ) || "No artefacts found.",
+          };
+        }),
+        global.json,
+      );
+    }),
+).pipe(
+  Command.withDescription(
+    "Find retained material across Runs and Machines without marking it seen",
+  ),
+);
+const revisionFlag = Flag.Int("revision");
+const runArtefact = Command.make("artefact").pipe(
+  Command.withSubcommands([
+    Command.make(
+      "register",
+      {
+        runId: runIdArg,
+        path: Flag.String("path").pipe(
+          Flag.withDescription(
+            "The file, on the Machine running this command with --upload, else on the Run's Machine; with --url, its retained export",
+          ),
+          Flag.optional,
+        ),
+        url: Flag.String("url").pipe(
+          Flag.withDescription("An http or https destination: a link, Claude artefact or Site"),
+          Flag.optional,
+        ),
+        id: Flag.String("id").pipe(
+          Flag.withDescription("Retarget this artefact instead of registering a new one"),
+          Flag.optional,
+        ),
+        title: Flag.String("title").pipe(Flag.optional),
+        kind: Flag.String("kind").pipe(
+          Flag.withDescription(
+            "file, asset, link, claude-artefact, codex-site or a namespaced kind of your own",
+          ),
+          Flag.optional,
+        ),
+        role: Flag.String("role").pipe(Flag.optional),
+        description: Flag.String("description").pipe(Flag.optional),
+        provider: Flag.String("provider").pipe(
+          Flag.withDescription("Who hosts the resource, such as claude or codex-sites"),
+          Flag.optional,
+        ),
+        namespace: Flag.String("namespace").pipe(
+          Flag.withDescription("The provider account or workspace the resource belongs to"),
+          Flag.optional,
+        ),
+        resource: Flag.String("resource").pipe(
+          Flag.withDescription(
+            "The provider's id for it, such as an artefact id or Site project id",
+          ),
+          Flag.optional,
+        ),
+        version: Flag.String("version").pipe(
+          Flag.withDescription("The version the provider returned, reported as such"),
+          Flag.optional,
+        ),
+        metadata: Flag.String("metadata").pipe(
+          Flag.withDescription("Up to 16 KiB of JSON kept with the artefact as data"),
+          Flag.optional,
+        ),
+        created: Flag.String("created").pipe(Flag.optional),
+        updated: Flag.String("updated").pipe(Flag.optional),
+        snapshot: Flag.Boolean("snapshot").pipe(
+          Flag.withDescription("Retain this copy only; do not track later changes to the source"),
+          Flag.optional,
+        ),
+        upload: Flag.Boolean("upload").pipe(
+          Flag.withDescription(
+            "Send the file from this Machine to the Run's, as a retained snapshot",
+          ),
+          Flag.withDefault(false),
+        ),
+        requestId: requestIdFlag,
+      },
+      ({
+        runId,
+        requestId,
+        upload,
+        snapshot,
+        metadata,
+        provider,
+        namespace,
+        resource,
+        version,
+        ...given
+      }) =>
+        artefactResult({
+          runId,
+          requestId,
+          upload,
+          op: "register",
+          metadata: Option.getOrUndefined(metadata),
+          registration: {
+            ...Rec.map(given, Option.getOrUndefined),
+            snapshot: Option.getOrUndefined(snapshot),
+            provider: Option.getOrUndefined(
+              Option.map(provider, (name) => ({
+                name,
+                namespace: Option.getOrUndefined(namespace),
+                resource: Option.getOrUndefined(resource),
+                version: Option.getOrUndefined(version),
+              })),
+            ),
+          },
+        }),
+    ),
+    Command.make("show", { runId: runIdArg, id: artefactId }, (args) =>
+      artefactResult({ ...args, op: "show" }),
+    ),
+    Command.make(
+      "read",
+      {
+        runId: runIdArg,
+        id: artefactId,
+        revision: revisionFlag,
+        offset: Flag.Int("offset").pipe(Flag.withDefault(0)),
+      },
+      (args) => artefactResult({ ...args, op: "read" }),
+    ),
+    Command.make("refresh", { runId: runIdArg }, (args) =>
+      artefactResult({ ...args, op: "refresh" }),
+    ),
+    Command.make(
+      "seen",
+      { runId: runIdArg, id: artefactId, revision: revisionFlag, requestId: requestIdFlag },
+      (args) => artefactResult({ ...args, op: "seen" }),
+    ),
+    Command.make("unseen", { runId: runIdArg, id: artefactId, requestId: requestIdFlag }, (args) =>
+      artefactResult({ ...args, op: "unseen" }),
+    ),
+  ]),
+);
+
 export const run = Command.make("run").pipe(
   Command.withDescription("Start Runs and follow, answer, stop or resume them"),
   Command.withSubcommands([
@@ -2058,5 +2431,7 @@ export const run = Command.make("run").pipe(
     runAction,
     runIntent,
     runOutput,
+    runArtefacts,
+    runArtefact,
   ]),
 );

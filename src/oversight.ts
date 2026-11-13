@@ -10,6 +10,7 @@ import * as Option from "effect/Option";
 import type { PlatformServices } from "./platform";
 import { Clock, Context, Effect, FileSystem, Path, Schema } from "effect";
 import { appendLogLine } from "./run-log";
+import { reportFields } from "./narrative-model";
 import type { ChildProcessSpawner } from "effect/process";
 import { appendCard, buildCard, inspectFor, readCards, readCheckpoints, type Card } from "./cards";
 import {
@@ -148,6 +149,11 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
     readonly kind: Card["kind"];
     readonly step: string;
     readonly claims: ReadonlyArray<string>;
+    readonly narrative?: string;
+    readonly summary?: string;
+    readonly blocker?: string;
+    readonly next_action?: string;
+    readonly report?: Card["report"];
   },
 ): Effect.fn.Return<Card, never, Services> {
   // Every read of the checkout at once: only the two that name the base wait for it.
@@ -230,7 +236,8 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
         ) ?? false,
       ended: null,
     },
-    narrative: null,
+    narrative: what.narrative ?? null,
+    ...reportFields(what),
   });
   yield* appendCard(at.runDir, card).pipe(Effect.ignore({ log: "Unhandled" }));
   return card;
@@ -1049,6 +1056,11 @@ export class Oversight extends Context.Service<
         readonly kind: Card["kind"];
         readonly step: string;
         readonly claims: ReadonlyArray<string>;
+        readonly narrative?: string;
+        readonly summary?: string;
+        readonly blocker?: string;
+        readonly next_action?: string;
+        readonly report?: Card["report"];
       },
     ) => Effect.Effect<void>;
     /** Cards for the tickets an agent has said it finished since the last look. */

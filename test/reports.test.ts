@@ -487,6 +487,42 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
             expect(report).toContain(mode === "failed" ? "failed" : "complete");
           }
           const door = yield* frontDoor(socketOf(first.world.state));
+          if (mode === "delivered") {
+            const source = Option.getOrUndefined(
+              Arr.findFirst(
+                (yield* door.artefacts({ runId, refresh: true })).items,
+                (one) => one.role === "report",
+              ),
+            );
+            expect(source).toBeDefined();
+            const parent = yield* secondHost.run({ runId: requesterRun });
+            const linked = Option.getOrUndefined(
+              Arr.findFirst(parent?.narratives ?? [], (one) => one.address?.run === runId),
+            );
+            expect(linked?.address).toMatchObject({
+              installation: source!.installation,
+              run: runId,
+              id: source!.id,
+              revision: 1,
+              step: "investigate",
+            });
+            const read = yield* door.artefactRead({
+              runId,
+              id: source!.id,
+              revision: 1,
+              offset: 0,
+            });
+            expect(Buffer.from(read.content, "base64").toString()).toContain(
+              "The cached build is stale",
+            );
+            const parentDoor = yield* frontDoor(socketOf(second.world.state));
+            expect(
+              Arr.filter(
+                (yield* parentDoor.artefacts({ runId: requesterRun, refresh: true })).items,
+                (one) => one.role === "report",
+              ),
+            ).toEqual([]);
+          }
           const detail = yield* door
             .runDetail({ runId, tail: false, pages: 1, refreshMr: false })
             .pipe(Stream.map(recordIn), Stream.runHead);

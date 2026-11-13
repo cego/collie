@@ -228,6 +228,7 @@ fn marks(client: &Client) -> impl FnMut(&rune::Runtime<App>) + 'static {
         }
     });
     move |drawn| {
+        collie_desktop_board::record::artefacts::frame_drawn(drawn);
         for mark in frame_drawn(drawn, epoch_ms()) {
             let _ = marked.send(mark);
         }
@@ -329,6 +330,25 @@ fn start(app: &mut App, _: rune::Waker) {
 }
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    if let Some(bundle) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent()?.parent().map(std::path::Path::to_path_buf))
+        && bundle.join("Resources/version.json").is_file()
+    {
+        // Before threads start, keep codecs confined to the runtime this bundle carries.
+        unsafe {
+            std::env::set_var(
+                "GST_PLUGIN_SYSTEM_PATH_1_0",
+                bundle.join("lib/gstreamer-1.0"),
+            );
+            std::env::set_var("GST_PLUGIN_PATH_1_0", "");
+            std::env::set_var(
+                "GST_PLUGIN_SCANNER_1_0",
+                bundle.join("libexec/gst-plugin-scanner"),
+            );
+        }
+    }
     collie_desktop_protocol::log::start();
     let staging = update_at_launch();
     let env: Vec<(&str, &std::ffi::OsStr)> = staging

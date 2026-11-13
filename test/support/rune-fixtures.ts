@@ -4,6 +4,64 @@
 import type { AguiEvent } from "../../desktop/src/shared/agui";
 import type { FlockItem } from "../../desktop/src/shared/flock";
 import { task } from "./task";
+import type { NarrativeReport } from "../../src/narrative-model";
+
+export const REPORTS: ReadonlyArray<NarrativeReport> = [
+  {
+    key: "helper:investigation",
+    title: "Socket diagnosis",
+    summary: "The socket is blocked.",
+    blocker: "Login missing",
+    nextAction: "Restore the login on Build box.",
+    state: "ready",
+    reason: null,
+    address: {
+      installation: "inst-build",
+      run: "helper-old",
+      id: "report-1",
+      revision: 7,
+      digest: "retained-report-digest",
+      size: 4096,
+      step: "investigate",
+    },
+    origin: { installation: "inst-build", run: "helper-old", step: "investigate" },
+    at: null,
+    observedAt: "2026-11-13T12:00:00Z",
+  },
+  {
+    key: "recovery:p1",
+    title: "Recovery report",
+    summary: "Recovery escalated.",
+    blocker: "Owner offline",
+    nextAction: "Reconnect Build box.",
+    state: "unavailable",
+    reason: "The report owner is offline",
+    at: null,
+    observedAt: "2026-11-13T12:01:00Z",
+  },
+  {
+    key: "recovery:p2",
+    title: "Preparing report",
+    summary: "Recovery is recorded.",
+    blocker: null,
+    nextAction: null,
+    state: "preparing",
+    reason: null,
+    at: null,
+    observedAt: "2026-11-13T12:02:00Z",
+  },
+  {
+    key: "recovery:p3",
+    title: "Failed report",
+    summary: "Recovery is recorded.",
+    blocker: "Retained copy denied",
+    nextAction: "Retry preparation.",
+    state: "failed",
+    reason: "Permission denied",
+    at: "2026-11-13T12:00:00Z",
+    observedAt: "2026-11-13T12:03:00Z",
+  },
+];
 
 const local = { installation: "inst-local", profile: "local", name: "Local" };
 const build = {
@@ -40,6 +98,7 @@ export const FLOCK: ReadonlyArray<FlockItem> = [
       id: "t2",
       name: "Fix the login redirect",
       state: "blocked",
+      narratives: REPORTS,
       decision: {
         kind: "question",
         run: "r2",

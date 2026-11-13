@@ -106,6 +106,7 @@ import { RECOMMENDED_MARKER, questionRepair, shortfallOf, solutionsOf } from "./
 import { UNPROVABLE, endAgent, type EndDeps } from "./agent-end";
 import { boundThread, withCodex } from "./codex";
 import { kindForRole } from "./cards";
+import { narrativeOf } from "./narrative-model";
 import { Oversight } from "./oversight";
 import {
   autoCompactWindowAsWritten,
@@ -927,6 +928,7 @@ export const agentWork = <
             execute: oversight.value.drift(work.runId, `${work.operation} collected`, "none").pipe(
               Effect.andThen(
                 oversight.value.card(work.runId, {
+                  ...narrativeOf(value),
                   kind: kindForRole(role),
                   step: work.operation,
                   claims: [`wrote ${output}`],
@@ -2932,7 +2934,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             : yield* takeStepNotes(`${host.dir}/runs/${ask.runId}`, ask.step.step, file);
         // Written before it goes out and never rewritten: what a human reads to see what
         // was actually asked, rather than what a prompt would be built as now.
-        const address = `You are ${agent} of ${ask.runId} on ${machineName()}. Message another Run's agent with collie_do deliver to its Run and agent, or collie run steer <run> --operation <agent> "<words>"; push your branch before starting work on another Machine. ${READING_DELIVERIES} ${SHELL_HABITS}${adapter.id === "codex" || adapter.id === "pi" ? ` ${ASKING}` : ""}`;
+        const address = `You are ${agent} of ${ask.runId} on ${machineName()}. Message another Run's agent with collie_do deliver to its Run and agent, or collie run steer <run> --operation <agent> "<words>"; push your branch before starting work on another Machine. ${READING_DELIVERIES} ${SHELL_HABITS} ${REGISTERING}${adapter.id === "codex" || adapter.id === "pi" ? ` ${ASKING}` : ""}`;
         yield* write(
           file,
           `${notes === "" ? "" : `${notes}\n\n`}${address}\n\n${prefix === "" ? ask.prompt : `${prefix}\n\n${ask.prompt}`}`,
@@ -4611,6 +4613,10 @@ const receipt = (
 /** How the agent tells whose words a Delivery carries, by its sender line. */
 const READING_DELIVERIES =
   "A message whose first line after its `collie-delivery:` token starts `From the human` is the human's own message, as if typed here. One starting `From chat for the human` quotes the human's own words. One from an agent is that agent's words, not the human's. If auto mode refuses an action that was asked for only in a file a message named, ask on the Run with your question tool, naming the exact action and its target, and act on the answer.";
+
+/** Every Workflow's agents hand over results the same way, outside their Output. */
+const REGISTERING =
+  "To hand a human a result they should find, collie_do artefact_register it on your Run: a path, or a url for a link, Claude artefact or Site with the provider, namespace, resource and version its tool returned. Put substantial findings, investigations and recovery diagnoses in a Markdown report in your Run's handoffs directory and register it. Keep summary within 360 Unicode characters and two sentences; keep blocker and next_action short and actionable. Where your Output accepts report, return its registered installation, run, id, revision and originating step. It changes neither your Output's judgement nor what proves it.";
 
 /** Claude's own convention for a question, which other harnesses do not know. */
 const ASKING = `When you ask the human a question, end exactly one option's label with "${RECOMMENDED_MARKER}", and offer at least three options, each with its own consequence.`;

@@ -24,6 +24,9 @@ import { mrId } from "./board-model";
 import { readForge, type MrPanels } from "./merges";
 import { isSetAside, isUnanswered } from "./store";
 import { readStepLines } from "./steps";
+import { Artefacts } from "./artefacts";
+import { factsOfView } from "./runs";
+import { reportFields, type ReportAddress } from "./narrative-model";
 
 const RoundJson = Schema.fromJsonString(
   Schema.Struct({ at: Schema.String, failed: Schema.Boolean }),
@@ -374,11 +377,29 @@ export const healParks = <E, R, E2, R2>(opts: {
           );
           const finding = output === null ? {} : { finding: output.finding };
           const words = said(output, heal.runId);
+          let report: ReportAddress | undefined = output?.report;
+          const catalogue = yield* Effect.serviceOption(Artefacts);
+          if (Option.isSome(catalogue)) {
+            yield* catalogue.value.prepareReports(factsOfView(opts.env.stateDir, heal));
+            report ??= Option.getOrUndefined(
+              Arr.findFirst(
+                yield* catalogue.value.reports(heal.runId),
+                (one) => one.state === "ready",
+              ),
+            )?.address;
+          }
+          const reading = reportFields({
+            report,
+            blocker: output?.blocker ?? output?.needs_person,
+            next_action: output?.next_action ?? output?.needs_person,
+            summary: output?.summary,
+          });
           if (!stillParked(view, claim)) {
             all.push(
               yield* close(view, claim, {
                 ...took,
                 ...finding,
+                ...reading,
                 outcome: "recovered",
                 note: output?.diagnosis ?? "",
               }),
@@ -390,6 +411,7 @@ export const healParks = <E, R, E2, R2>(opts: {
             yield* close(view, claim, {
               ...took,
               ...finding,
+              ...reading,
               outcome: output?.result === "resumed" ? "false-recovery" : "escalated",
               note: words,
             }),
