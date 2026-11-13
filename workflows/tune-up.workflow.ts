@@ -883,6 +883,10 @@ const bodyOf = (got: {
           "",
           "```sh",
           `git checkout ${final.candidate.head_sha}`,
+          ...Arr.map(
+            final.candidate.harness_applied ?? [],
+            (commit) => `git cherry-pick --no-commit ${commit}`,
+          ),
           ...(plan.prepare === null ? [] : [commandLine(plan.prepare)]),
           ...Arr.map(plan.commands, commandLine),
           "```",

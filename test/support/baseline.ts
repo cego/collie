@@ -22146,6 +22146,26 @@ scenario(
         expect(body).not.toContain(archive);
         expect(body).toContain("measured with it applied in a scratch tree");
         expect(body).not.toContain("Accepted tradeoffs");
+        const reproduction = pipe(
+          body,
+          Str.match(/#### Reproduce\s+```sh\n([\s\S]*?)\n```/),
+          Option.map((match) => match[1]),
+          Option.getOrUndefined,
+        );
+        expect(reproduction).toBeDefined();
+        const checkout = `${rig.root}/reproduce`;
+        expect(
+          (yield* exec(["git", "worktree", "add", "--detach", checkout, "HEAD"], {
+            cwd: rig.projectDir,
+          })).exitCode,
+        ).toBe(0);
+        try {
+          const replayed = yield* exec(["sh", "-ec", reproduction!], { cwd: checkout });
+          expect(replayed.exitCode).toBe(0);
+          expect(replayed.stdout).toMatch(/"count":\s*3/);
+        } finally {
+          yield* exec(["git", "worktree", "remove", "--force", checkout], { cwd: rig.projectDir });
+        }
       }),
     ),
   180_000,
