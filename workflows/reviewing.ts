@@ -241,7 +241,9 @@ export const reviewPass = (ask: ReviewAsk) =>
         const before = ask.ledger;
         const findings: Finding[] = [];
         const ids = new Set<string>();
-        for (const [index, finding] of report.findings.entries()) {
+        const reserved = new Set(Arr.map([...before, ...report.findings], (one) => one.id));
+        let next = 1;
+        for (const finding of report.findings) {
           const earlier = Option.getOrUndefined(
             Arr.findFirst(before, (one) =>
               finding.id === undefined
@@ -249,10 +251,15 @@ export const reviewPass = (ask: ReviewAsk) =>
                 : one.id === finding.id,
             ),
           );
-          const identity = finding.id ?? earlier?.id ?? `${id}-F${index + 1}`;
+          let identity = finding.id ?? earlier?.id;
+          if (identity === undefined) {
+            while (reserved.has(`${id}-F${next}`)) next += 1;
+            identity = `${id}-F${next}`;
+          }
           if (ids.has(identity))
             return yield* new WorkflowError({ reason: `duplicate finding id ${identity}` });
           ids.add(identity);
+          reserved.add(identity);
           const status = finding.status ?? "open";
           findings.push({
             ...finding,

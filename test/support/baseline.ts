@@ -2698,6 +2698,67 @@ for (const name of ["gitlab", "github"] as const) {
     120_000,
   );
 
+  for (const resolution of ["fixed list", "retained finding"] as const)
+    scenario(
+      `review ledger on ${name}: new identities preserve earlier resolutions via ${resolution}`,
+      () =>
+        runEffect(
+          Effect.gen(function* () {
+            yield* reviewedBranch();
+            yield* exec(["git", "remote", "set-url", "upstream", `https://${PROJECT[name]}.git`], {
+              cwd: rig.projectDir,
+            });
+            const { bin, forge } = yield* reviewing();
+            const model = yield* forge.model();
+            yield* forge.set({
+              ...model,
+              mrs: Arr.map(model.mrs, (one) => ({ ...one, sourceBranch: "feature" })),
+            });
+            const runId = `r-ledger-ids-${name}`;
+            const earlier = { severity: "major", file: "src/old.ts", title: "guard input" };
+            yield* rig.queueOutputs([
+              { ...SYNTHESIS, findings: [earlier] },
+              { verdict: "clean", fixed: [earlier], disputed: [], checks: [] },
+              {
+                ...SYNTHESIS,
+                findings: [
+                  { severity: "minor", file: "src/new.ts", title: "close handle" },
+                  { id: `${runId}-F2`, severity: "minor", title: "check response" },
+                  ...(resolution === "retained finding"
+                    ? [{ ...earlier, id: `${runId}-F1`, status: "fixed" }]
+                    : []),
+                ],
+                fixed: resolution === "fixed list" ? [earlier] : [],
+              },
+            ]);
+            yield* driven({ entry: shipped("review"), runId, input: { target } }, (run) =>
+              Effect.gen(function* () {
+                yield* until(
+                  () => run.asked,
+                  (rows) => Arr.some(rows, (row) => row.decision === "post-1"),
+                );
+                yield* run.answer("post-1", "Fix findings");
+                const [status, rows] = yield* until(
+                  () => Effect.all([run.status, run.asked]),
+                  ([status, rows]) =>
+                    status.status === "failed" ||
+                    Arr.some(rows, (row) => row.decision === "post-2"),
+                );
+                expect(status.status).not.toBe("failed");
+                expect(optionsOf(rows, "post-2")).toContain("Post");
+                expect(yield* findingsIn(runDir(dir, runId))).toMatchObject([
+                  { id: `${runId}-F3`, title: "close handle", status: "open" },
+                  { id: `${runId}-F2`, title: "check response", status: "open" },
+                  { id: `${runId}-F1`, title: "guard input", status: "fixed" },
+                ]);
+              }),
+            );
+            yield* bin.restore();
+          }),
+        ),
+      120_000,
+    );
+
   for (const mode of [
     "partial",
     "force push",
