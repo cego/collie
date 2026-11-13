@@ -49,6 +49,22 @@ export const journalOf = <A>(
 export const readJournal = <A>(file: string, json: Schema.Codec<A, string, never, never>) =>
   readJournalWhole(file, json).pipe(Effect.map((journal) => journal.lines));
 
+/** The last matching record, without decoding the history before it. */
+export const findLastJournal = Effect.fn("Journal.findLast")(function* <A>(
+  file: string,
+  json: Schema.Codec<A, string, never, never>,
+  matches: (record: A) => boolean,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const lines = textsOf(yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => "")));
+  const decode = Schema.decodeUnknownOption(json);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const read = yield* Effect.sync(() => decode(lines[i]));
+    if (read._tag === "Some" && matches(read.value)) return read.value;
+  }
+  return null;
+});
+
 export const appendJournal = Effect.fn("Journal.append")(function* <A>(
   file: string,
   json: Schema.Codec<A, string, never, never>,
