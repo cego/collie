@@ -238,19 +238,20 @@ export default defineWorkflow({
               .readFileString(`${earlierPlace.dir}/review-head`)
               .pipe(Effect.orElseSucceed(() => ledger?.[0]?.head ?? ""));
       const improving = requested.improving === true;
-      const fixContext = improving
-        ? yield* Activity.make({
-            name: "improve-eligibility",
-            success: Schema.Struct({
-              owned: Schema.Boolean,
-              head: Schema.String,
-              reviewed: Schema.String,
-              lineage: Schema.Array(Schema.String),
-              following: Schema.Boolean,
-            }),
-            execute: host.reviewFix(previous, asked.target),
-          })
-        : null;
+      const fixContext =
+        kind === "mr"
+          ? yield* Activity.make({
+              name: improving ? "improve-eligibility" : "fix-ownership",
+              success: Schema.Struct({
+                owned: Schema.Boolean,
+                head: Schema.String,
+                reviewed: Schema.String,
+                lineage: Schema.Array(Schema.String),
+                following: Schema.Boolean,
+              }),
+              execute: host.reviewFix(improving ? previous : run.id, asked.target),
+            })
+          : null;
       if (
         improving &&
         (fixContext?.owned !== true ||
@@ -731,9 +732,14 @@ export default defineWorkflow({
           ),
         ),
       });
-      let unfixable = "refused" in fixable ? fixable.refused : "";
+      const owned = kind !== "mr" || fixContext?.owned === true;
+      let unfixable = !owned
+        ? "Collie never pushes to someone else's branch"
+        : "refused" in fixable
+          ? fixable.refused
+          : "";
       // A hand-off needs no checkout, so a live implementer in the lineage may still take one.
-      let handOff = place.lineage.length > 1;
+      let handOff = owned && place.lineage.length > 1;
 
       let handed = false;
       // Reviews are numbered by how many there have been, not by how often the menu came.
@@ -903,7 +909,7 @@ export default defineWorkflow({
           operation,
           role: "implementer",
           text: handOffText(place.dir),
-          lineage: fixContext?.lineage,
+          lineage: improving ? fixContext?.lineage : undefined,
         });
         if (to !== null) {
           yield* host.record(run.id, `${operation}: handed the findings to ${to}`);

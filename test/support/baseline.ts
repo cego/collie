@@ -2486,6 +2486,7 @@ scenario(
               project: "gitlab.example.com/group/project",
               iid: "42",
               state: "open",
+              author: "tester",
               sourceBranch: "fix-the-guard",
             },
           ],
@@ -2646,7 +2647,7 @@ for (const name of ["gitlab", "github"] as const) {
   );
 
   scenario(
-    `review ledger on ${name}: resolving a renamed dispute by id permits an approval request`,
+    `review on ${name} offers neither fix path on another author's branch`,
     () =>
       runEffect(
         Effect.gen(function* () {
@@ -2659,6 +2660,43 @@ for (const name of ["gitlab", "github"] as const) {
           yield* forge.set({
             ...model,
             mrs: Arr.map(model.mrs, (one) => ({ ...one, sourceBranch: "feature" })),
+          });
+          yield* rig.queueOutputs([SYNTHESIS]);
+          const rows = yield* parked({
+            entry: shipped("review"),
+            runId: `r-unowned-review-${name}`,
+            input: { target },
+            decision: "post-1",
+          });
+          expect(optionsOf(rows, "post-1")).toEqual(["Post", "Don't post"]);
+          expect(
+            Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === "post-1"))?.prompt,
+          ).toContain("Collie never pushes to someone else's branch");
+          expect(yield* prompts()).toHaveLength(1);
+          yield* bin.restore();
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `review ledger on ${name}: resolving a renamed dispute by id permits an approval request`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          yield* reviewedBranch();
+          yield* exec(["git", "remote", "set-url", "upstream", `https://${PROJECT[name]}.git`], {
+            cwd: rig.projectDir,
+          });
+          const { bin, forge } = yield* reviewing();
+          const model = yield* forge.model();
+          yield* forge.set({
+            ...model,
+            mrs: Arr.map(model.mrs, (one) => ({
+              ...one,
+              author: "tester",
+              sourceBranch: "feature",
+            })),
           });
           const finding = { id: "F1", severity: "major", file: "src/old.ts", title: "guard input" };
           yield* rig.queueOutputs([
@@ -2678,6 +2716,7 @@ for (const name of ["gitlab", "github"] as const) {
           };
           const first = yield* parked({ ...run, decision: "post-1" });
           expect(optionsOf(first, "post-1")).toContain("Fix findings");
+          expect(optionsOf(first, "post-1")).toContain("Fix findings in a full implement run");
           const next = yield* answeredThen({
             ...run,
             decision: "post-1",
@@ -3322,6 +3361,7 @@ scenario(
               project: "gitlab.example.com/group/project",
               iid: "42",
               state: "open",
+              author: "tester",
               sourceBranch: "fix-the-guard",
             },
           ],

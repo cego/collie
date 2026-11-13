@@ -2907,6 +2907,9 @@ is never the one asked or handed work.
 
 **A review, to whoever can act on it.** After the synthesis, `review` asks **What next?**:
 
+For an MR, both fix choices require that you authored it or an open Task worked on its source branch.
+Otherwise, the menu explains: **Collie never pushes to someone else's branch**.
+
 - **Fix findings** — the live implementer of a Run this review was started from is handed
   them, where there is one; otherwise an implementer on this review's own run applies them
   as a fix round, `disputed` and all, and the fix is reviewed again at once. It works in the
