@@ -52,6 +52,11 @@ export interface Report {
     readonly status: RunView["status"]["status"];
     /** The issues its input says `Closes #n` for. */
     readonly closes: ReadonlyArray<number>;
+    readonly mr: string | null;
+    /** Its merge request's disposition was recorded as merged. */
+    readonly merged: boolean;
+    /** The questions it asked that were not set aside, with what answered each. */
+    readonly questions: ReadonlyArray<{ readonly name: string; readonly answer: string | null }>;
   }>;
   readonly workflows: ReadonlyArray<WorkflowTally>;
   readonly failed: ReadonlyArray<{ runId: string; workflow: string; reason: string }>;
@@ -152,14 +157,20 @@ export function reportOf(
     (value) => value,
     (a, b) => Num.sign(b.total - a.total || pipe(a.workflow, Str.localeCompare(b.workflow))),
   );
-  const runs = Arr.map(kept, ({ runId, workflow, parent, project, created, status, input }) => ({
-    runId,
-    workflow,
-    parent,
-    project,
-    created,
-    status: status.status,
-    closes: [...new Set(closesIn(input))],
+  const runs = Arr.map(kept, (view) => ({
+    runId: view.runId,
+    workflow: view.workflow,
+    parent: view.parent,
+    project: view.project,
+    created: view.created,
+    status: view.status.status,
+    closes: [...new Set(closesIn(view.input))],
+    mr: view.mr,
+    merged: recorded.get(view.runId)?.records?.disposition === "merged",
+    questions: Arr.map(
+      Arr.filter(view.waiting, (decision) => !isSuperseded(decision)),
+      ({ name, answer }) => ({ name, answer }),
+    ),
   }));
   const measures = measuresOf(
     Arr.map(kept, ({ runId }) => ({

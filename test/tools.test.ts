@@ -29,6 +29,7 @@ import { expect, setDefaultTimeout, test } from "bun:test";
 import { hostname } from "node:os";
 import { readEnv, type PluginEnv } from "../src/env";
 import { setSetting } from "../src/config";
+import { reachKey } from "../src/reach";
 import { amend, readIntent, writeIntentHeld } from "../src/intent";
 import { ensureLockDir, withLock } from "../src/lock";
 import { nowIso } from "../src/time";
@@ -213,6 +214,24 @@ test("the Tasks a Run can be started into are something chat can read", () =>
       const said = yield* call("collie_workspaces");
       expect(said).toContain(task.id);
       expect(said).toContain("picker");
+    }),
+  ));
+
+test("chat reads how far each workflow can go, and what the last launch in a project chose", () =>
+  inWorld(
+    Effect.gen(function* () {
+      yield* save(world.user, ["reached.workflow.ts"]);
+      const unsaid = Str.split(yield* call("collie_workspaces"), "\n");
+      expect(unsaid).toContain('  then, how far it goes: "" Ask at the end · "ship" Ship it');
+      yield* setSetting(
+        world.config,
+        reachKey("reached", project),
+        "ship",
+        "2026-11-12T10:00:00.000Z",
+      );
+      expect(Str.split(yield* call("collie_workspaces"), "\n")).toContain(
+        `  then, how far it goes: "" Ask at the end · "ship" Ship it; last launched with "ship" in ${project}`,
+      );
     }),
   ));
 

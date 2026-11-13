@@ -593,6 +593,7 @@ export const workspace = Effect.fn("HostTest.workspace")(function* (prefix: stri
     "release.workflow.ts",
     "release.gitlab.md",
     "release.github.md",
+    "release-go.ts",
     "stage.workflow.ts",
     "stage.gitlab.md",
     "stage.github.md",

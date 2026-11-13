@@ -59,11 +59,18 @@ here are in [`src/README.md`](src/README.md).
   `src/lifecycle.ts`, `test/machines-core.test.ts`.
 - **Desktop**, its Flock chat, record and Diff tab → [`desktop/README.md`](desktop/README.md),
   [`docs/using.md`](docs/using.md#collie-desktop), `test/desktop-*.test.ts`, `test/flock-*.test.ts`.
+- **Native desktop, bundle and update cutover** → [`desktop-rune/README.md`](desktop-rune/README.md),
+  [cutover ADR](docs/adr/0067-collie-replaces-the-webview-desktop-in-place.md),
+  `desktop-rune/scripts/bundle.ts`, `desktop-rune/update/`, `tools/rune-types.ts`,
+  `tools/rune-fixtures.ts`, `test/rune-types.test.ts`, `test/rune-contract.test.ts`.
 - **Agent launch profile** → [ADR-0060](docs/adr/0060-a-managed-agent-runs-with-the-operators-profile.md),
   [`docs/using.md`](docs/using.md#what-collies-agents-get), `src/profile.ts`, `src/agents.ts`,
   `test/profile.test.ts`, `test/agents.test.ts`.
 - **Attachments** → [ADR-0046](docs/adr/0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md),
-  `src/attachments.ts`, `src/uploads.ts`, `src/host-files.ts`, `test/attachments.test.ts`, `test/host-files.test.ts`.
+  `src/attachments.ts`, `src/uploads.ts`, `src/host-files.ts`, `test/attachments.test.ts`, `test/host-files.test.ts`;
+  a file pasted or dropped on a pane: [ADR-0065](docs/adr/0065-a-file-given-to-a-pane-is-placed-on-its-machine.md),
+  `placeStaged` in `desktop/src/bun/carried.ts`, `desktop-rune/board/src/shell/files.rs`,
+  `test/desktop-place-files.test.ts`, `desktop-rune/board/tests/pane_files.rs`.
 - **Usage, fallbacks** → [ADR-0049](docs/adr/0049-work-goes-to-an-agent-with-usage-left.md),
   [`docs/using.md`](docs/using.md#usage), `src/usage-model.ts`, `src/usage.ts`, `src/commands/usage.ts`,
   `resolveWithRoom` in `src/harness.ts`, `choose` in `src/agents.ts`, `test/usage-model.test.ts`,

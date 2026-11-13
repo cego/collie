@@ -41,6 +41,7 @@ import {
   sameFinding,
   forecast,
   panelOf,
+  remainingDisputes,
   settleRound,
   splitDisputed,
   step,
@@ -353,7 +354,7 @@ export default defineWorkflow({
           yield* Activity.make({
             name: `follow-close-${round}`,
             execute: Agents.pipe(
-              Effect.flatMap((agents) => agents.halt(run.id, "its round of review is done")),
+              Effect.flatMap((agents) => agents.halt(run.id)),
               Effect.asVoid,
             ),
           });
@@ -420,7 +421,6 @@ export default defineWorkflow({
       if (followed?.done !== undefined) return followed.done;
       let synthesis: SynthesisReport =
         followed?.menu ??
-        null ??
         (yield* reviewRound(
           reviewPass({
             target: asked.target,
@@ -532,6 +532,7 @@ export default defineWorkflow({
           disputed,
           (one) => !Arr.some(resolved, (old) => sameFinding(old, one)),
         );
+        disputed = remainingDisputes(disputed, synthesis);
         const split = splitDisputed(synthesis.findings, disputed);
         const round = settleRound({
           live: split.live,

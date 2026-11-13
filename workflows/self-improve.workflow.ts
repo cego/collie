@@ -19,17 +19,21 @@ import { DateTime, Duration, Effect, FileSystem, Option, Result, Schema, flow } 
 import * as Activity from "effect/workflow/Activity";
 import markdown from "./self-improve.md" with { type: "text" };
 import {
-  type Finding,
   type Outcome,
   type Starting,
   Ended,
   FAILED_TO_START,
+  Finding,
   MAX_FINDINGS,
+  QuestionMeasures,
   Triage,
   chosen,
   goalOf,
   keysIn,
   markerOf,
+  questionLines,
+  questionMeasures,
+  repeatedAnswers,
   restartsOf,
   sortOut,
   summaryOf,
@@ -69,6 +73,9 @@ const Window = Schema.Struct({
   machine: Schema.String,
   runs: Schema.Array(Schema.String),
   report: Schema.Unknown,
+  // A completed window predating these measures stays frozen when its Run resumes.
+  questions: Schema.optionalKey(QuestionMeasures),
+  repeated: Schema.optionalKey(Schema.Array(Finding)),
 });
 
 const Scope = Schema.Literals(["checkout", "machine"]).annotate({
@@ -190,6 +197,8 @@ export default defineWorkflow({
               since,
               machine: hostname(),
               runs: [...ids],
+              questions: questionMeasures(kept),
+              repeated: repeatedAnswers(kept),
               // Another project's tallies and measures are not this one's to read.
               report:
                 input.runs === "machine"
@@ -327,7 +336,7 @@ export default defineWorkflow({
             Effect.flatMap((fs) =>
               fs.writeFileString(
                 file,
-                `# Retrospective ${run.id}\n\nNo issues filed: ${issues.refused}\n\n\`\`\`json\n${asJson(triaged)}\n\`\`\`\n`,
+                `# Retrospective ${run.id}\n\nNo issues filed: ${issues.refused}\n\n## Questions\n\n${Arr.join(questionLines(window.questions), "\n")}\n\n\`\`\`json\n${asJson({ ...triaged, findings: [...(window.repeated ?? []), ...triaged.findings] })}\n\`\`\`\n`,
               ),
             ),
             Effect.mapError((cause) => new WorkflowError({ reason: cause.message })),
@@ -341,7 +350,7 @@ export default defineWorkflow({
       }
 
       const sorted = sortOut(
-        triaged.findings,
+        [...(window.repeated ?? []), ...triaged.findings],
         new Set(window.runs),
         open,
         input.runs === "machine",
@@ -492,6 +501,7 @@ export default defineWorkflow({
                 summaryOf({
                   runId: run.id,
                   since: window.since,
+                  questions: window.questions,
                   acted,
                   improvements,
                   leftOut: [...triaged.left_out, ...sorted.leftOut],

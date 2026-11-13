@@ -274,6 +274,7 @@ const next = step({
   description: "Whether the open merge request is released, staged or left as it is.",
   kind: "question",
 });
+const delivery = [building, reviewRound, gate, mergeRequest];
 const repoRuns = step({
   id: "repo-runs",
   title: "Change runs",
@@ -314,7 +315,11 @@ export default defineWorkflow({
     ),
     // oxlint-disable-next-line unicorn/no-thenable -- The workflow input selects the next step using string values.
     then: Schema.optionalKey(
-      Schema.Literals(["", "finish", "release"]).annotate({
+      Schema.Union([
+        Schema.Literal("").annotate({ title: "Ask at the merge request" }),
+        Schema.Literal("finish").annotate({ title: "End at the merge request" }),
+        Schema.Literal("release").annotate({ title: "Release it" }),
+      ]).annotate({
         description:
           "What follows the merge request: finish to end there, release to release it on a human's go, empty to be asked",
       }),
@@ -322,8 +327,9 @@ export default defineWorkflow({
   }),
   output: Schema.String,
   agents: { roles: { implementer: IMPLEMENTER, reviewer: REVIEWER } },
-  hints: { plan: "work-source" },
-  path: [building, reviewRound, gate, mergeRequest, next],
+  // oxlint-disable-next-line unicorn/no-thenable -- the Input is named `then`
+  hints: { plan: "work-source", then: "reach" },
+  path: [...delivery, next],
   // The branch it builds, on a worktree of its own, so two Runs never share an index.
   checkout: "branch",
   // What kind of result this Run has to prove is the human's to say, and an unclassified
@@ -369,6 +375,7 @@ export default defineWorkflow({
       const runId = (yield* Run).id;
       const place = yield* host.place(runId);
       const cwd = place.cwd;
+      if ((asked.then ?? "") !== "") yield* forecast(delivery);
       const source = yield* Activity.make({
         name: "work-source",
         success: Schema.Struct({ kind: Schema.String, value: Schema.String }),
@@ -601,12 +608,15 @@ export default defineWorkflow({
       const answeredFor: Answered[] = [];
       let build: typeof Built.Type | null = null;
       let rallied: Rallied | null = null;
+      // An agent's start gives every Input, one it leaves out as "" (docs/cli.md): an empty
+      // `recovery` is new work, as one never given is.
+      const recovers = asked.recovery === "" ? undefined : asked.recovery;
       const recovered = yield* Activity.make({
         name: "recovery-entry",
         success: Recovery,
         error: WorkflowError,
         execute:
-          asked.recovery === undefined
+          recovers === undefined
             ? Effect.succeed({
                 implementation: false,
                 reason: "An ordinary start builds the work.",
@@ -614,14 +624,14 @@ export default defineWorkflow({
                 commits: "",
                 review: null,
               })
-            : host.recovery(runId, asked.recovery, asked.plan),
+            : host.recovery(runId, recovers, asked.plan),
       });
       const recovery = { ...recovered, entry: recoveryEntry(recovered) };
-      if (asked.recovery !== undefined)
+      if (recovers !== undefined)
         yield* host.record(runId, `Follow-up enters at ${recovery.entry}: ${recovery.reason}`);
       let parentDir = "";
       if (recovery.entry !== "Build") {
-        const parent = Str.split(asked.recovery ?? "", "/").at(-1) ?? "";
+        const parent = Str.split(recovers ?? "", "/").at(-1) ?? "";
         parentDir = (yield* host.place(parent)).dir;
         build = yield* Activity.make({
           name: "recovery-build-claims",
@@ -870,8 +880,18 @@ export default defineWorkflow({
               if (unmet.length === 0) break;
               if (blockers.length > 0) {
                 stalls += 1;
+                // Answered Hand back 18 of 19 times, so the first is taken without asking.
+                if (stalls === 1) {
+                  yield* host.record(
+                    runId,
+                    `${item}: a criteria hand-back reported a blocker and changed nothing; Collie handed it back without asking, and asks if it does again`,
+                  );
+                  blockers = [];
+                  tries = 1;
+                  continue;
+                }
                 const chosen = yield* ask({
-                  name: `${operation}.criteria-stalled-${stalls}`,
+                  name: `${operation}.criteria-stalled-${stalls - 1}`,
                   prompt: `${item}: a criteria hand-back reported a blocker and changed nothing.\n\nIts blockers:\n${formatFindings(blockers)}\n\nStill unmet:\n${formatFindings(unmet)}\n\nAmend the ticket or clear the blocker, then hand it back, or stop the Run.`,
                   options: CRITERIA_OPTIONS,
                 });
@@ -1117,7 +1137,10 @@ const releasing = (delivered: {
             ),
           ),
       });
-      if (merging !== null) return mr;
+      if (merging !== null) {
+        yield* forecast(delivery);
+        return mr;
+      }
       let stageFailed = "";
       let failedStage = "";
       // Why another Stage would still be refused at the checkout the last one was refused

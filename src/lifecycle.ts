@@ -36,6 +36,7 @@ import type { ChildProcessSpawner } from "effect/process";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
 import type { PluginEnv } from "./env";
 import { savedModules, type Fault, type Found } from "./discovery";
+import { LAUNCH_DOORS, reachKey, reachOf } from "./reach";
 import {
   connect,
   connectPeer,
@@ -92,7 +93,16 @@ import {
   type RunView,
 } from "./engine";
 import type { OfferView } from "./board-model";
-import { err, ExpectedError, HostUnread, taskFor, type Failure, type OpResult } from "./operations";
+import {
+  err,
+  ExpectedError,
+  HostUnread,
+  newRequestId,
+  taskFor,
+  type Failure,
+  type OpResult,
+} from "./operations";
+import { nowIso } from "./time";
 import { voiceOf, type Asker, type ProposalLine } from "./proposals";
 import type { TaskChoice, TaskRecord } from "./task";
 import { encodeApprovedFile, rememberedFile, renderApproved, type VerifySpec } from "./verify-spec";
@@ -606,7 +616,7 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
     options.options?.workspace === PROJECTS_ROOT_OPTION && !elsewhere
       ? (yield* projectsRoot(env)).path
       : undefined;
-  return yield* asks(
+  const started = yield* asks(
     env,
     (client) =>
       client.start({
@@ -641,6 +651,41 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
         : answered,
     ),
   );
+  if (started.ok && !elsewhere)
+    yield* rememberReach(env, options.door, options.id, options.input.text, options.options);
+  return started;
+});
+
+/** The project a launch's reach is remembered for: `projects-root` for a start rooted there, else its remote, else its directory. */
+export const launchProject = (cwd: string, workspace: string | undefined) =>
+  workspace === PROJECTS_ROOT_OPTION
+    ? Effect.succeed(PROJECTS_ROOT_OPTION)
+    : projectHere(cwd, shell).pipe(
+        Effect.map((project) => project ?? cwd),
+        Effect.orElseSucceed(() => cwd),
+      );
+
+/** A launch door's choice of how far the Run goes, saved as what its next launch offers first. */
+const rememberReach = Effect.fn("Lifecycle.rememberReach")(function* (
+  env: PluginEnv,
+  door: Door,
+  workflow: string,
+  text: Readonly<Record<string, string>>,
+  launch: Readonly<Record<string, string>> | undefined,
+) {
+  if (!LAUNCH_DOORS.includes(isFrontDoor(door) ? door : door.origin)) return;
+  const module = yield* moduleFor(env, workflow);
+  const reach = module === null || !("inputs" in module) ? null : reachOf(module.inputs);
+  const value = reach === null ? undefined : text[reach.name];
+  if (reach === null || value === undefined) return;
+  if (!Arr.some(reach.choices, (choice) => choice.value === value)) return;
+  yield* setSharedSetting(env, {
+    door,
+    key: reachKey(workflow, yield* launchProject(env.cwd, launch?.workspace)),
+    value: value === "" ? null : value,
+    at: yield* nowIso,
+    request: yield* newRequestId(),
+  });
 });
 
 /** Every Run a listing can show, and why the rest could not be read. */
@@ -810,13 +855,18 @@ const FIRST_BOARD_WAIT = "10 seconds";
  * The board the host serves, followed for as long as the caller's scope: each read is the
  * latest the stream has said. A dropped stream reconnects and starts from a fresh snapshot.
  */
-export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (env: PluginEnv) {
+export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (
+  env: PluginEnv,
+  /** The latest read changed, including connection state. Does not perform a read. */
+  changed?: () => void,
+) {
   const tasks = new Map<string, TaskView>();
   const first = yield* Deferred.make<void>();
   let waited = false;
   /** False between a dropped stream and the fresh snapshot after it. */
   let live = false;
   let lost: string | null = null;
+  const notice = Effect.sync(() => changed?.());
   const apply = (message: BoardMessage) =>
     Effect.suspend(() => {
       switch (message._tag) {
@@ -825,13 +875,13 @@ export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (env: Pl
           for (const task of message.tasks) tasks.set(task.id, task);
           live = true;
           lost = null;
-          return Deferred.succeed(first, undefined);
+          return Deferred.succeed(first, undefined).pipe(Effect.andThen(notice));
         case "Upsert":
           tasks.set(message.task.id, message.task);
-          return Effect.void;
+          return notice;
         case "Remove":
           tasks.delete(message.id);
-          return Effect.void;
+          return notice;
         default:
           return Effect.void;
       }
@@ -841,14 +891,21 @@ export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (env: Pl
   ).pipe(
     Effect.catchCause((cause) =>
       Effect.sync(() => {
-        lost = Cause.hasInterruptsOnly(cause)
+        const next = Cause.hasInterruptsOnly(cause)
           ? null
           : Str.split(reason(Cause.squash(cause)), "\n")[0]!;
+        if (lost !== next) {
+          lost = next;
+          changed?.();
+        }
       }),
     ),
     Effect.ensuring(
       Effect.sync(() => {
-        live = false;
+        if (live) {
+          live = false;
+          changed?.();
+        }
       }),
     ),
   );
@@ -911,7 +968,11 @@ const FIRST_DETAIL_WAIT = "5 seconds";
  * The open drawer's details, followed for as long as the caller's scope. A read for
  * another Run, or the same one shown differently, follows that instead.
  */
-export const followRunDetail = Effect.fn("Lifecycle.followRunDetail")(function* (env: PluginEnv) {
+export const followRunDetail = Effect.fn("Lifecycle.followRunDetail")(function* (
+  env: PluginEnv,
+  /** A frame for the selected Run arrived; the reader now has that frame. */
+  changed?: () => void,
+) {
   const scope = yield* Effect.scope;
   const services = yield* Effect.context<Client>();
   let open: {
@@ -939,7 +1000,10 @@ export const followRunDetail = Effect.fn("Lifecycle.followRunDetail")(function* 
               Stream.runForEach(stream, (detail) =>
                 Effect.sync(() => {
                   refreshMr = false;
-                  if (open?.key === showingKey) open.latest = detail;
+                  if (open?.key === showingKey) {
+                    open.latest = detail;
+                    changed?.();
+                  }
                 }).pipe(Effect.andThen(Deferred.succeed(first, undefined))),
               ),
           ),

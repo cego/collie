@@ -8,6 +8,7 @@ export interface LogTail {
 const Index = Schema.fromJsonString(
   Schema.Struct({ bytes: Schema.Finite, lines: Schema.Finite, ended: Schema.Boolean }),
 );
+export const LOG_INDEX = "log-index.json";
 const writing = Semaphore.makeUnsafe(1);
 const indexOf = Effect.fn("RunLog.index")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -16,7 +17,7 @@ const indexOf = Effect.fn("RunLog.index")(function* (dir: string) {
     Effect.orElseSucceed(() => 0),
   );
   const known = yield* fs
-    .readFileString(`${dir}/log-index.json`)
+    .readFileString(`${dir}/${LOG_INDEX}`)
     .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Index)), Effect.option);
   if (Option.isSome(known) && known.value.bytes === size) return known.value;
   const counted =
@@ -33,7 +34,7 @@ const indexOf = Effect.fn("RunLog.index")(function* (dir: string) {
         );
   const index = { bytes: size, ...counted };
   yield* fs.writeFileString(
-    `${dir}/log-index.json`,
+    `${dir}/${LOG_INDEX}`,
     yield* Schema.encodeEffect(Index)(index).pipe(Effect.orDie),
   );
   return index;
@@ -48,7 +49,7 @@ export const appendLogLine = Effect.fn("RunLog.append")(function* (dir: string, 
   const first = before.lines + (before.ended ? 1 : 2);
   yield* fs.writeFileString(`${dir}/log.txt`, text, { flag: "a" });
   yield* fs.writeFileString(
-    `${dir}/log-index.json`,
+    `${dir}/${LOG_INDEX}`,
     yield* Schema.encodeEffect(Index)({
       bytes: before.bytes + Buffer.byteLength(text),
       lines: before.lines + Str.split(text, "\n").length - 1,
