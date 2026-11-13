@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
-import { withArtefacts } from "../artefact-client";
+import { withArtefacts, uploadArtefact } from "../artefact-client";
+import type { RegisterFile } from "../artefact-model";
 import { parkLine } from "../park-cause";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -8,6 +9,7 @@ import {
   Cause,
   Duration,
   Effect,
+  FileSystem,
   Exit,
   Option,
   Path,
@@ -79,7 +81,13 @@ import { PROJECTS_ROOT_OPTION, projectsRoot } from "../projects";
 import { currentReports } from "../drift";
 import { newest } from "../cards";
 import { metricsOf } from "../metrics";
-import { requestedByLine, ranOn, type RunAgent, type RunProgress } from "../board-model";
+import {
+  HostRefused,
+  requestedByLine,
+  ranOn,
+  type RunAgent,
+  type RunProgress,
+} from "../board-model";
 import {
   followEvents,
   followLine,
@@ -2039,6 +2047,8 @@ const artefactResult = (read: {
   readonly offset?: number;
   readonly op: string;
   readonly requestId?: Option.Option<string>;
+  readonly registration?: RegisterFile;
+  readonly upload?: boolean;
 }) =>
   Effect.gen(function* () {
     const global = yield* root;
@@ -2048,6 +2058,45 @@ const artefactResult = (read: {
         if (resolved._tag === "RunFailure") return resolved.result;
         const runId = runFacts(resolved).id;
         const door = yield* cliDoor(resolved.env);
+        if (read.registration !== undefined) {
+          const input = read.registration;
+          const files = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
+          return yield* mutation(
+            resolved.env,
+            "artefact-register",
+            read.requestId ?? Option.none(),
+            (request) =>
+              asksRun(
+                resolved.env,
+                runId,
+                (client) =>
+                  withArtefacts(
+                    client.board(),
+                    Effect.gen(function* () {
+                      const sent =
+                        read.upload === true
+                          ? { path: yield* uploadArtefact(client, input.path), snapshot: true }
+                          : {};
+                      return yield* client.artefactRegister({ runId, request, ...input, ...sent });
+                    }).pipe(Effect.provideContext(files)),
+                  ),
+                door,
+              ).pipe(
+                Effect.map((answer) =>
+                  answer.ok
+                    ? {
+                        ok: true as const,
+                        data: answer.value,
+                        human: Schemaflow(
+                          Schema.encodeResult(PrettyUnknownJson),
+                          SchemaResult.getOrThrow,
+                        )(answer.value),
+                      }
+                    : answer,
+                ),
+              ),
+          );
+        }
         if (read.op === "seen" || read.op === "unseen")
           return yield* mutation(
             resolved.env,
@@ -2146,6 +2195,47 @@ const artefactId = Argument.String("id");
 const revisionFlag = Flag.Int("revision");
 const runArtefact = Command.make("artefact").pipe(
   Command.withSubcommands([
+    Command.make(
+      "register",
+      {
+        runId: runIdArg,
+        path: Flag.String("path").pipe(
+          Flag.withDescription(
+            "The file, on the Machine running this command with --upload, else on the Run's Machine",
+          ),
+        ),
+        id: Flag.String("id").pipe(
+          Flag.withDescription("Retarget this artefact instead of registering a new one"),
+          Flag.optional,
+        ),
+        title: Flag.String("title").pipe(Flag.optional),
+        kind: Flag.Literals("kind", ["file", "asset"]).pipe(Flag.withDefault("file")),
+        role: Flag.String("role").pipe(Flag.withDefault("deliverable")),
+        snapshot: Flag.Boolean("snapshot").pipe(
+          Flag.withDescription("Retain this copy only; do not track later changes to the source"),
+          Flag.withDefault(false),
+        ),
+        upload: Flag.Boolean("upload").pipe(
+          Flag.withDescription(
+            "Send the file from this Machine to the Run's, as a retained snapshot",
+          ),
+          Flag.withDefault(false),
+        ),
+        requestId: requestIdFlag,
+      },
+      ({ runId, requestId, id, title, upload, ...input }) =>
+        artefactResult({
+          runId,
+          requestId,
+          upload,
+          op: "register",
+          registration: {
+            ...input,
+            id: Option.getOrUndefined(id),
+            title: Option.getOrUndefined(title),
+          },
+        }),
+    ),
     Command.make("show", { runId: runIdArg, id: artefactId }, (args) =>
       artefactResult({ ...args, op: "show" }),
     ),

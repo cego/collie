@@ -1,25 +1,127 @@
-import { Context, Effect, FileSystem, Layer, Option, Path, Schema, Semaphore } from "effect";
+import {
+  Cause,
+  Clock,
+  Context,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Schema,
+  Semaphore,
+  Schedule,
+} from "effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import { Artefact, type ArtefactCollection } from "./artefact-model";
+import { Artefact, type ArtefactCollection, type RegisterFile } from "./artefact-model";
 import { ATTACHMENT_BYTES, mediaTypeOf, sha256Hex } from "./attachments";
 import { HostRefused, PART_BYTES, RequestConflict, type RunFile } from "./board-model";
 import { AuditLine } from "./audit";
 import type { RunFacts } from "./runs";
-import { nowIso } from "./time";
+import { epochMs, nowIso } from "./time";
+import type { PlatformError } from "effect/PlatformError";
 import { StoreWrites } from "./store-writes";
+import { refreshJobs } from "./artefact-refresh";
 
 const json = Schema.fromJsonString(Artefact);
 const decode = (data: string) => Schema.decodeEffect(json)(data).pipe(Effect.orDie);
 const encode = (item: Artefact) => Schema.encodeEffect(json)(item).pipe(Effect.orDie);
 const refused = (reason: string) => new HostRefused({ reason });
+type CopyFailure = HostRefused | PlatformError | Cause.TimeoutError;
+const reasonOf = (error: CopyFailure) =>
+  error._tag === "HostRefused" ? error.reason : error.message;
+const availabilityOf = (error: CopyFailure) =>
+  error._tag !== "PlatformError"
+    ? "refresh-failed"
+    : error.reason._tag === "NotFound"
+      ? "missing"
+      : error.reason._tag === "PermissionDenied"
+        ? "denied"
+        : "refresh-failed";
+const ASKED = Schema.fromJsonString(
+  Schema.Tuple([
+    Schema.String,
+    Schema.NullOr(Schema.String),
+    Schema.NullOr(Schema.String),
+    Schema.NullOr(Schema.String),
+    Schema.NullOr(Schema.String),
+    Schema.Boolean,
+  ]),
+);
 const blob = (run: RunFacts, digest: string) => `${run.dir}/.artefacts/${digest}`;
+
+const retain = Effect.fn("Artefacts.retain")(function* (
+  run: RunFacts,
+  source: string,
+  root: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const random = yield* SecureRandom.SecureRandom;
+  const [base, real] = yield* Effect.all([fs.realPath(root), fs.realPath(source)]);
+  if (!Str.startsWith(`${base}${path.sep}`)(real))
+    return yield* refused("The source leaves its source directory");
+  yield* fs.access(real, { readable: true });
+  const before = yield* fs.stat(real);
+  if (before.type !== "File") return yield* refused("The source is not a regular file");
+  if (Number(before.size) > ATTACHMENT_BYTES)
+    return yield* refused("The source exceeds the 100 MiB file limit");
+  const bytes = yield* fs.readFile(real);
+  const other = yield* fs.readFile(real);
+  const after = yield* fs.stat(real);
+  const date = (value: typeof before.mtime) => Option.getOrUndefined(value)?.getTime();
+  if (
+    bytes.length > ATTACHMENT_BYTES ||
+    bytes.length !== Number(before.size) ||
+    before.size !== after.size ||
+    date(before.mtime) !== date(after.mtime) ||
+    date(before.birthtime) !== date(after.birthtime) ||
+    before.dev !== after.dev ||
+    Option.getOrUndefined(before.ino) !== Option.getOrUndefined(after.ino) ||
+    sha256Hex(bytes) !== sha256Hex(other)
+  )
+    return yield* refused("The source changed while copying; refresh to retry");
+  const digest = sha256Hex(bytes);
+  const target = blob(run, digest);
+  if (!(yield* fs.exists(target))) {
+    yield* fs.makeDirectory(`${run.dir}/.artefacts`, { recursive: true });
+    const temp = `${target}.${yield* random.uuidV4()}.tmp`;
+    yield* fs.writeFile(temp, bytes);
+    yield* fs.rename(temp, target);
+  }
+  return {
+    digest,
+    size: bytes.length,
+    created:
+      Option.isSome(before.birthtime) && before.birthtime.value.getTime() > 0
+        ? { at: before.birthtime.value.toISOString(), provenance: "filesystem-birthtime" }
+        : null,
+    updated: Option.isSome(before.mtime)
+      ? { at: before.mtime.value.toISOString(), provenance: "filesystem-mtime" }
+      : null,
+  };
+});
+
+/** A stable copy of `source`, retried while it changes under the copy, within a bound. */
+const copied = Effect.fn("Artefacts.copied")(function* (run: RunFacts, source: string) {
+  const path = yield* Path.Path;
+  return yield* retain(run, source, path.dirname(source)).pipe(
+    Effect.retry({
+      schedule: Schedule.recurs(2),
+      while: (error) =>
+        error._tag === "HostRefused" && Str.startsWith("The source changed")(error.reason),
+    }),
+    Effect.timeout("4 seconds"),
+  );
+});
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const reconciling = yield* Semaphore.make(1);
+  const refreshing = refreshJobs();
+  const discoveryCursor = new Map<string, string>();
   const writes = Option.getOrUndefined(yield* Effect.serviceOption(StoreWrites));
   const list = (run: string) =>
     sql<{
@@ -34,7 +136,150 @@ const make = Effect.gen(function* () {
       yield* sql`UPDATE collie_artefacts SET data = ${data} WHERE run = ${item.run} AND id = ${item.id}`;
     });
   const notify = (run: string) => Effect.sync(() => writes?.([run]));
-  const reconcile = Effect.fn("Artefacts.reconcile")(function* (run: RunFacts) {
+  const save = (item: Artefact) =>
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const data = yield* encode(item);
+          yield* sql`INSERT INTO collie_artefacts (run, id, origin, data) VALUES (${item.run}, ${item.id}, ${item.ref}, ${data}) ON CONFLICT(run, id) DO UPDATE SET origin = excluded.origin, data = excluded.data`;
+          yield* sql`INSERT OR IGNORE INTO collie_artefact_revisions (run, id, revision, digest, size) VALUES (${item.run}, ${item.id}, ${item.revision}, ${item.digest}, ${item.size})`;
+        }),
+      )
+      .pipe(Effect.orDie);
+  const failed = (prior: Artefact, error: CopyFailure) =>
+    Effect.gen(function* () {
+      const reason = reasonOf(error);
+      const availability = availabilityOf(error);
+      const item = {
+        ...prior,
+        observedAt: yield* nowIso,
+        sourceAvailability: availability,
+        reason,
+      };
+      yield* put(item).pipe(Effect.orDie);
+      if (prior.sourceAvailability !== availability || prior.reason !== reason)
+        yield* notify(prior.run);
+      return item;
+    });
+  const refreshRegistered = Effect.fn("Artefacts.refreshRegistered")(function* (
+    run: RunFacts,
+    prior: Artefact,
+  ) {
+    if (prior.tracking !== "local") return prior;
+    const result = yield* copied(run, prior.source).pipe(Effect.result);
+    if (result._tag === "Failure") return yield* failed(prior, result.failure);
+    const at = yield* nowIso;
+    const changed = result.success.digest !== prior.digest;
+    const item = {
+      ...prior,
+      ...result.success,
+      revision: prior.revision + (changed ? 1 : 0),
+      detectedAt: changed ? at : prior.detectedAt,
+      observedAt: at,
+      sourceAvailability: "available",
+      reason: null,
+    };
+    yield* save(item);
+    if (changed || prior.sourceAvailability !== "available") yield* notify(run.id);
+    return item;
+  });
+  const register = Effect.fn("Artefacts.register")(function* (
+    run: RunFacts,
+    installation: string,
+    input: RegisterFile,
+    request: string,
+    actor: AuditLine["actor"],
+  ) {
+    const path = yield* Path.Path;
+    if (
+      !path.isAbsolute(input.path) ||
+      input.path.length > 8192 ||
+      Arr.contains(Str.split(input.path, /[\\/]/), "..") ||
+      /[\x00-\x1f]/.test(input.path)
+    )
+      return yield* refused(
+        "Registration needs an absolute file path without traversal or control characters",
+      );
+    if ((input.title?.length ?? 0) > 512 || (input.role?.length ?? 0) > 128)
+      return yield* refused("The title or role is too long");
+    const asked = yield* Schema.encodeEffect(ASKED)([
+      input.path,
+      input.id ?? null,
+      input.title ?? null,
+      input.kind ?? null,
+      input.role ?? null,
+      input.snapshot ?? false,
+    ]).pipe(Effect.orDie);
+    const receipt = (yield* sql<{
+      asked: string;
+      data: string;
+    }>`SELECT asked, data FROM collie_artefact_registrations WHERE run = ${run.id} AND request = ${request}`.pipe(
+      Effect.orDie,
+    ))[0];
+    if (receipt !== undefined) {
+      if (receipt.asked !== asked)
+        return yield* new RequestConflict({
+          request,
+          reason: "This request registered different material",
+        });
+      return { item: yield* decode(receipt.data), fresh: false };
+    }
+    const source = path.normalize(input.path);
+    const ref = `registered:${source}`;
+    const items = yield* list(run.id);
+    const prior = Option.getOrUndefined(
+      Arr.findFirst(items, (one) =>
+        input.id === undefined ? one.ref === ref : one.id === input.id,
+      ),
+    );
+    if (input.id !== undefined && prior === undefined) return yield* refused("No such artefact");
+    if (Arr.some(items, (one) => one.ref === ref && prior !== undefined && one.id !== prior.id))
+      return yield* refused("This source already belongs to another artefact");
+    const observed = yield* copied(run, source).pipe(
+      Effect.tapError((error) => (prior === undefined ? Effect.void : failed(prior, error))),
+      Effect.mapError((error) => refused(reasonOf(error))),
+    );
+    const at = yield* nowIso;
+    const revision =
+      prior === undefined
+        ? 1
+        : prior.revision + (prior.digest === observed.digest && prior.source === source ? 0 : 1);
+    const item: Artefact = {
+      ...prior,
+      ...observed,
+      installation,
+      id: prior?.id ?? (yield* (yield* SecureRandom.SecureRandom).uuidV4()),
+      run: run.id,
+      ref,
+      source,
+      kind: input.kind ?? prior?.kind ?? "file",
+      role: input.role ?? prior?.role ?? "deliverable",
+      title: input.title ?? prior?.title ?? path.basename(source),
+      mediaType: mediaTypeOf(source),
+      revision,
+      registeredAt: prior?.registeredAt ?? at,
+      observedAt: at,
+      detectedAt: prior?.revision === revision ? prior.detectedAt : at,
+      seen: prior?.seen ?? null,
+      sourceAvailability: "available",
+      retainedAvailability: "available",
+      reason: null,
+      tracking: input.snapshot === true ? "snapshot" : "local",
+      registeredBy: prior?.registeredBy ?? actor,
+    };
+    yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          yield* save(item);
+          const data = yield* encode(item);
+          yield* sql`INSERT INTO collie_artefact_registrations (run, request, asked, data) VALUES (${run.id}, ${request}, ${asked}, ${data})`;
+        }),
+      )
+      .pipe(Effect.orDie);
+    yield* notify(run.id);
+    return { item, fresh: true };
+  });
+  const reconcile = Effect.fn("Artefacts.reconcile")(function* (run: RunFacts, background = false) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const random = yield* SecureRandom.SecureRandom;
@@ -42,11 +287,17 @@ const make = Effect.gen(function* () {
     const observedAt = yield* nowIso;
     const existing = yield* list(run.id);
     const origins = new Map(Arr.map(existing, (item) => [item.ref, item]));
+    if (!background)
+      for (const item of existing)
+        if (item.tracking === "local") yield* refreshRegistered(run, item);
+    let remaining = background ? 8 : Number.POSITIVE_INFINITY;
+    const cursor = discoveryCursor.get(run.id) ?? "";
     for (const [prefix, root, role] of [
+      // Sorted by prefix: the background cursor compares whole refs.
       ["attachment", `${run.dir}/attachments`, "input"],
-      ["plan", `${run.dir}/plan`, "plan"],
       ["evidence", run.evidence, "evidence"],
       ["handoff", `${run.dir}/handoffs`, "handoff"],
+      ["plan", `${run.dir}/plan`, "plan"],
     ] as const) {
       const names = yield* fs
         .readDirectory(root, { recursive: true })
@@ -57,6 +308,9 @@ const make = Effect.gen(function* () {
       );
       for (const name of [...new Set([...names, ...known])].sort()) {
         const ref = `${prefix}:${name}`;
+        if (background && ref <= cursor) continue;
+        if (remaining-- <= 0) return { items: yield* list(run.id) } satisfies ArtefactCollection;
+        if (background) discoveryCursor.set(run.id, ref);
         const prior = origins.get(ref);
         if (
           Arr.some(
@@ -183,8 +437,60 @@ const make = Effect.gen(function* () {
       }
     }
     if (changed) yield* notify(run.id);
+    if (background) discoveryCursor.delete(run.id);
     return { items: yield* list(run.id) } satisfies ArtefactCollection;
   });
+  const job = (run: RunFacts, item: Artefact) => ({
+    key: `${run.id}:${item.id}`,
+    observed: epochMs(item.observedAt),
+    check: reconciling.withPermit(
+      Effect.gen(function* () {
+        const current = Option.getOrUndefined(
+          Arr.findFirst(yield* list(run.id), (one) => one.id === item.id),
+        );
+        if (current === undefined) return true;
+        return (yield* refreshRegistered(run, current)).sourceAvailability === "available";
+      }),
+    ),
+  });
+  const cached = (run: RunFacts) =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      return {
+        items: Arr.map(yield* list(run.id), (item) =>
+          item.tracking === "local" ? { ...item, ...refreshing.status(job(run, item), now) } : item,
+        ),
+      };
+    });
+  const schedule = (run: RunFacts) =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const jobs = Arr.take(
+        Arr.filter(
+          Arr.map(
+            Arr.filter(yield* list(run.id), (item) => item.tracking === "local"),
+            (item) => job(run, item),
+          ),
+          (one) => refreshing.due(one, now),
+        ),
+        8,
+      );
+      yield* Effect.forEach(jobs, refreshing.refresh, { concurrency: 2, discard: true });
+    });
+  const pass = (runs: ReadonlyArray<RunFacts>) =>
+    Effect.gen(function* () {
+      const jobs = [];
+      for (const run of runs) {
+        jobs.push({
+          key: `${run.id}:~discovery`,
+          observed: 0,
+          check: reconciling.withPermit(reconcile(run, true)).pipe(Effect.as(true)),
+        });
+        for (const item of yield* list(run.id))
+          if (item.tracking === "local") jobs.push(job(run, item));
+      }
+      yield* refreshing.pass(jobs);
+    });
   const read = Effect.fn("Artefacts.read")(function* (
     run: RunFacts,
     id: string,
@@ -281,9 +587,13 @@ const make = Effect.gen(function* () {
   });
   return {
     list,
+    cached,
+    schedule,
+    pass,
     reconcile: (run: RunFacts) => reconciling.withPermit(reconcile(run)),
     read,
     seen: (...args: Parameters<typeof seen>) => reconciling.withPermit(seen(...args)),
+    register: (...args: Parameters<typeof register>) => reconciling.withPermit(register(...args)),
   };
 });
 

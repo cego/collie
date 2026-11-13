@@ -2788,5 +2788,12 @@ away from the UI thread. macOS uses the pinned Rune player. Linux's existing bun
 copies the required plugins, dependency closure, scanner, and copyright notices into the
 bundle. Its private plugin path is installed before threads start.
 
+Registered files are rows of the same catalogue, keyed by their normalized path. A
+registration request's result is kept beside it, so a retry replays it. Tracking runs
+in the host's side jobs through `src/artefact-refresh.ts`, which coalesces one refresh
+per source, holds two permits, times a check out after five seconds, and backs a failing
+source off. Desktop's `artefactImport` registers a local path directly where the Run is
+on this computer, and otherwise sends it through the host's upload store first.
+
 See [the material guide](artefacts.md#evidence-by-layer) for the checks at each layer and
 the native operator observations that remain pending.

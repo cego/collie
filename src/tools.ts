@@ -392,6 +392,26 @@ const settle = Effect.fn("Tools.settle")(function* (
   action: Settle,
   request: string,
 ) {
+  if (action.kind === "artefact_register") {
+    const { kind, run, artefactKind, ...input } = action;
+    const done = yield* asksRun(
+      env,
+      run,
+      (client) =>
+        withArtefacts(
+          client.board(),
+          client.artefactRegister({ runId: run, request, ...input, kind: artefactKind }),
+        ),
+      door,
+    );
+    return done.ok
+      ? {
+          kind,
+          state: "applied",
+          note: `artefact ${done.value.address.id}: revision ${done.value.retained.revision} retained (${done.value.retained.digest})`,
+        }
+      : { kind, state: "failed", note: done.error.message };
+  }
   if (action.kind === "artefact_seen" || action.kind === "artefact_unseen") {
     const done = yield* asksRun(
       env,

@@ -70,6 +70,8 @@ export const chatDoor = (door: Door) => ({
   seen: (asked: Parameters<Door["seen"]>[0]) => door.seen(asked),
   artefactSeen: (asked: Parameters<Door["artefactSeen"]>[0]) =>
     withArtefacts(door.board(), door.artefactSeen(asked)),
+  artefactRegister: (asked: Parameters<Door["artefactRegister"]>[0]) =>
+    withArtefacts(door.board(), door.artefactRegister(asked)),
   news: (asked: Parameters<Door["news"]>[0]) => door.news(asked),
   propose: (asked: Parameters<Door["propose"]>[0]) => door.propose(asked),
   readFile: (asked: Parameters<Door["readFile"]>[0]) => door.readFile(asked),
@@ -1110,6 +1112,17 @@ const CARRIES = new Set(["start", "followup", "take_offer", "deliver"]);
 
 /** The action with the files it carries as paths on its Machine. */
 const withFiles = (flock: FlockChat, machine: Reached, action: JsonObject) => {
+  if (textAt(action, "kind") === "artefact_register") {
+    // Only a path on the Run's own Machine stays tracked; any other is sent as a snapshot.
+    const path = textAt(action, "path");
+    return carriedPaths(flock, machine, [path]).pipe(
+      Effect.map((paths): JsonObject => ({
+        ...action,
+        path: paths?.[0] ?? path,
+        snapshot: action.snapshot === true || !Str.startsWith(`${machine.name}:`)(path),
+      })),
+    );
+  }
   if (!CARRIES.has(textAt(action, "kind"))) return Effect.succeed(action);
   const named = action["attachments"];
   const given = Arr.isArray<typeof named>(named) ? Arr.filter(named, isString) : undefined;
@@ -1124,6 +1137,19 @@ const doOne = (machine: Reached, kind: string, action: JsonObject, request: stri
   const door = machine.door;
   const text = (key: string) => textAt(action, key);
   switch (kind) {
+    case "artefact_register":
+      return door
+        .artefactRegister({
+          runId: text("run"),
+          request,
+          path: text("path"),
+          id: isString(action.id) ? action.id : undefined,
+          title: isString(action.title) ? action.title : undefined,
+          kind: action.artefactKind === "asset" ? "asset" : "file",
+          role: isString(action.role) ? action.role : undefined,
+          snapshot: action.snapshot === true,
+        })
+        .pipe(Effect.map((done) => ({ state: "applied", note: JSON.stringify(done) })));
     case "confirm":
       return door.confirm({ proposal: text("proposal"), hash: text("hash"), request }).pipe(
         Effect.map(({ results }) => ({

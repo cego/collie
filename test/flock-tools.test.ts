@@ -77,6 +77,34 @@ const machine = (
           reason: null,
         };
       }),
+    artefactRegister: (payload) =>
+      Effect.sync(() => {
+        note("artefactRegister", payload);
+        return {
+          address: { installation: `inst-${name}`, run: payload.runId, id: "a9" },
+          item: {
+            id: "a9",
+            run: payload.runId,
+            kind: payload.kind ?? "file",
+            role: "deliverable",
+            title: "report.md",
+            ref: `registered:${payload.path}`,
+            source: payload.path,
+            mediaType: "text/markdown",
+            size: 5,
+            revision: 1,
+            digest: "abc",
+            registeredAt: "2026-11-01",
+            observedAt: "2026-11-01",
+            detectedAt: "2026-11-01",
+            seen: null,
+            sourceAvailability: "available",
+            retainedAvailability: "available",
+            reason: null,
+          },
+          retained: { revision: 1, digest: "abc", size: 5 },
+        };
+      }),
     declare: (payload: Declaration) =>
       Effect.sync(() => {
         note("declare", payload);
@@ -425,6 +453,39 @@ test("Flock material reads and receipts keep the selected revision on the qualif
         payload: { runId: "r-2", id: "a1", revision: 3, request: expect.any(String) },
       });
     }),
+  ));
+
+test("chat registers a path on the Run's Machine as tracked and one from this computer as a sent snapshot", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const here = `${yield* fs.makeTempDirectoryScoped()}/local.md`;
+      yield* fs.writeFileString(here, "# Here");
+      const asked: Asked[] = [];
+      const said = yield* call(asked, "collie_do", {
+        actions: [
+          { kind: "artefact_register", run: "vm-mk:r-2", path: "vm-mk:/srv/report.md" },
+          { kind: "artefact_register", run: "vm-mk:r-2", path: here, title: "Local" },
+        ],
+      });
+      expect(said).toContain("artefact_register: applied");
+      const registered = Arr.filter(asked, (one) => one.op === "artefactRegister");
+      expect(Arr.map(registered, (one) => one.payload)).toEqual([
+        expect.objectContaining({ runId: "r-2", path: "/srv/report.md", snapshot: false }),
+        expect.objectContaining({
+          runId: "r-2",
+          path: expect.stringMatching(/^\/state\/uploads\/[0-9a-f]{64}\/local\.md$/),
+          title: "Local",
+          snapshot: true,
+        }),
+      ]);
+      expect(
+        Arr.map(
+          Arr.filter(asked, (one) => one.op === "upload"),
+          (one) => one.machine,
+        ),
+      ).toEqual(["vm-mk"]);
+    }).pipe(Effect.scoped, Effect.provide(platformLayer)),
   ));
 
 test("a bare id only one Machine has acts there, under its own id, in the human's words", () =>

@@ -5,6 +5,7 @@ export const ArtefactDate = Schema.Struct({
   provenance: Schema.String,
 });
 export const Artefact = Schema.Struct({
+  installation: Schema.optionalKey(Schema.String),
   id: Schema.String,
   run: Schema.String,
   kind: Schema.String,
@@ -26,7 +27,26 @@ export const Artefact = Schema.Struct({
   retainedAvailability: Schema.String,
   reason: Schema.NullOr(Schema.String),
   metadata: Schema.optionalKey(Schema.Json),
+  tracking: Schema.optionalKey(Schema.Literals(["local", "snapshot"])),
+  registeredBy: Schema.optionalKey(Schema.Json),
+  pending: Schema.optionalKey(Schema.Boolean),
+  stale: Schema.optionalKey(Schema.Boolean),
 });
 export type Artefact = typeof Artefact.Type;
 export const ArtefactCollection = Schema.Struct({ items: Schema.Array(Artefact) });
 export type ArtefactCollection = typeof ArtefactCollection.Type;
+
+export const RegisterFile = Schema.Struct({
+  path: Schema.String,
+  id: Schema.optional(Schema.String),
+  title: Schema.optional(Schema.String),
+  kind: Schema.optional(Schema.Literals(["file", "asset"])),
+  role: Schema.optional(Schema.String),
+  snapshot: Schema.optional(Schema.Boolean),
+});
+export type RegisterFile = typeof RegisterFile.Type;
+export const ArtefactRegistered = Schema.Struct({
+  address: Schema.Struct({ installation: Schema.String, run: Schema.String, id: Schema.String }),
+  item: Artefact,
+  retained: Schema.Struct({ revision: Schema.Int, digest: Schema.String, size: Schema.Int }),
+});

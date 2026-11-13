@@ -11,6 +11,7 @@ import * as AiError from "effect/ai/AiError";
 import * as Tool from "effect/ai/Tool";
 import * as Toolkit from "effect/ai/Toolkit";
 import { ActionSchema } from "./actions";
+import { RegisterFile } from "./artefact-model";
 import {
   ASKED_KINDS,
   headerSentence,
@@ -72,6 +73,12 @@ export const ProposeInput = Schema.Struct({
  */
 const SettleSchema = Schema.Union([
   Schema.Struct({
+    ...RegisterFile.fields,
+    kind: Schema.Literal("artefact_register"),
+    run: Schema.String,
+    artefactKind: RegisterFile.fields.kind,
+  }),
+  Schema.Struct({
     kind: Schema.Literal("confirm"),
     proposal: Schema.String,
     /** The hash of exactly those actions, as `collie_receipts` lists it beside the id. */
@@ -97,6 +104,7 @@ const SettleSchema = Schema.Union([
 ]);
 export type Settle = Schema.Schema.Type<typeof SettleSchema>;
 export const SETTLE_KINDS = [
+  "artefact_register",
   "confirm",
   "decline",
   "disposition",
@@ -215,7 +223,7 @@ export const CollieTools = Toolkit.make(
     readOnly: true,
     title: "A Run's retained material",
     description:
-      "List a Run's attachments, plan, evidence and handoffs without marking them seen. Give id to inspect metadata; give id and revision to read an immutable part as base64. refresh reconciles source files. Use collie_do artefact_seen with the inspected revision or artefact_unseen to change the receipt.",
+      "List a Run's attachments, plan, evidence and handoffs without marking them seen. Give id to inspect metadata; give id and revision to read an immutable part as base64. refresh reconciles source files. Use collie_do artefact_seen with the inspected revision or artefact_unseen to change the receipt. To hand over a file you made, collie_do artefact_register with run and an absolute path: the host keeps a copy and follows later changes; a retry with the same path returns the same artefact.",
     parameters: Schema.Struct({
       run: Schema.String,
       id: Schema.optionalKey(Schema.String),

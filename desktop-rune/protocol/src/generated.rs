@@ -2427,6 +2427,8 @@ pub enum Encoding {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Artefact {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installation: Option<String>,
     pub id: String,
     pub run: String,
     pub kind: String,
@@ -2457,6 +2459,14 @@ pub struct Artefact {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracking: Option<Tracking>,
+    #[serde(rename = "registeredBy", default, skip_serializing_if = "Option::is_none")]
+    pub registered_by: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2469,6 +2479,14 @@ pub struct Created {
 pub struct Seen {
     pub revision: i64,
     pub at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Tracking {
+    #[serde(rename = "local")]
+    Local,
+    #[serde(rename = "snapshot")]
+    Snapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2502,6 +2520,63 @@ pub struct ArtefactSeenPayload {
     pub run_id: String,
     pub id: String,
     pub revision: Option<i64>,
+    pub request: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtefactRegisterPayload {
+    pub installation: String,
+    #[serde(rename = "runId")]
+    pub run_id: String,
+    pub request: String,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub id: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub title: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub kind: Option<Option<ArtefactRegisterPayloadKind>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub role: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub snapshot: Option<Option<bool>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ArtefactRegisterPayloadKind {
+    #[serde(rename = "file")]
+    File,
+    #[serde(rename = "asset")]
+    Asset,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtefactRegistered {
+    pub address: Address,
+    pub item: Artefact,
+    pub retained: Retained,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Address {
+    pub installation: String,
+    pub run: String,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Retained {
+    pub revision: i64,
+    pub digest: String,
+    pub size: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtefactImportPayload {
+    pub installation: String,
+    #[serde(rename = "runId")]
+    pub run_id: String,
+    pub path: String,
     pub request: String,
 }
 

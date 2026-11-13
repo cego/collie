@@ -504,6 +504,106 @@ fn an_older_host_keeps_legacy_record_tabs_and_explains_the_catalogue_upgrade() {
     assert!(harness.fake.asked_of("artefactSeen").is_empty());
 }
 
+#[test]
+fn picker_import_is_fenced_by_the_record_opening_and_transfer_failure_never_marks_seen() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    collection(&mut runtime, &harness, vec![]);
+    runtime.update(|app, tx| app.pick_artefact(tx));
+    runtime.resolve_file_dialog(Some(std::path::PathBuf::from("/local/report.md"))).unwrap();
+    runtime.frame(250.0);
+    let asked = &harness.fake.asked_of("artefactImport")[0];
+    assert_eq!(asked["installation"], "inst-build");
+    assert_eq!(asked["runId"], "r1");
+    assert_eq!(asked["path"], "/local/report.md");
+    harness.fake.answer("artefactImport", Err(CallError("Transfer failed".into())));
+    settle(&mut runtime, &harness, 300.0);
+    assert!(runtime.accessibility_json().to_string().contains("Transfer failed"));
+    assert!(harness.fake.asked_of("artefactSeen").is_empty());
+    runtime.update(|app, tx| app.pick_artefact(tx));
+    runtime.update(|app, _| {
+        app.back();
+        app.open_record("inst-build".into(), "r1".into(), "Build box".into(), Some("artefacts"));
+    });
+    let before = harness.fake.asked_of("artefactImport").len();
+    runtime.resolve_file_dialog(Some(std::path::PathBuf::from("/local/stale.md"))).unwrap();
+    runtime.frame(400.0);
+    assert_eq!(harness.fake.asked_of("artefactImport").len(), before);
+}
+
+#[test]
+fn a_machine_path_registers_on_the_runs_machine_and_rereads_the_collection() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    collection(&mut runtime, &harness, vec![]);
+    let reads = harness.fake.asked_of("artefacts").len();
+    runtime.update(|app, _| {
+        app.record.open.as_mut().unwrap().artefacts.path = TextEdit::new("  /srv/out/report.md ");
+        app.register_artefact_path();
+    });
+    settle(&mut runtime, &harness, 300.0);
+    let asked = &harness.fake.asked_of("artefactRegister")[0];
+    assert_eq!(asked["installation"], "inst-build");
+    assert_eq!(asked["runId"], "r1");
+    assert_eq!(asked["path"], "/srv/out/report.md");
+    let item = artefact("a9", "report.md", "text/markdown", b"# Out", 1);
+    harness.fake.answer(
+        "artefactRegister",
+        Ok(json!({"address":{"installation":"inst-build","run":"r1","id":"a9"},"item":item,"retained":{"revision":1,"digest":"d","size":5}})),
+    );
+    settle(&mut runtime, &harness, 400.0);
+    assert_eq!(harness.fake.asked_of("artefacts").len(), reads + 1);
+    assert!(runtime.state.record.open.as_ref().unwrap().artefacts.path.text.is_empty());
+    assert!(harness.fake.asked_of("artefactSeen").is_empty());
+}
+
+#[test]
+fn an_overdue_tracked_source_reads_as_stale_and_pending_not_current() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    let mut item = artefact("a1", "tracked.txt", "text/plain", b"AAA", 2);
+    item["tracking"] = json!("local");
+    item["stale"] = json!(true);
+    item["pending"] = json!(true);
+    let mut copy = artefact("a2", "copy.txt", "text/plain", b"BBB", 1);
+    copy["tracking"] = json!("snapshot");
+    collection(&mut runtime, &harness, vec![item, copy]);
+    let tree = runtime.accessibility_json().to_string();
+    assert!(tree.contains("tracked.txt · handoff · Unseen · stale, refresh pending"));
+    assert!(tree.contains("copy.txt · handoff · Unseen · retained snapshot"));
+}
+
+#[test]
+fn transferred_bytes_that_do_not_match_the_revision_digest_are_refused_and_never_seen() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    collection(&mut runtime, &harness, vec![artefact("a1", "note.txt", "text/plain", b"good", 1)]);
+    selected_bytes(&mut runtime, &harness, "a1", b"evil");
+    let tree = runtime.accessibility_json().to_string();
+    assert!(tree.contains("does not match this revision"));
+    assert!(!tree.contains("evil"));
+    runtime.frame(600.0);
+    assert!(harness.fake.asked_of("artefactSeen").is_empty());
+}
+
+#[test]
+fn an_unreachable_owner_keeps_the_cached_collection_and_says_why() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    collection(&mut runtime, &harness, vec![artefact("a1", "note.txt", "text/plain", b"good", 1)]);
+    runtime.update(|app, _| app.read_artefacts(true));
+    settle(&mut runtime, &harness, 300.0);
+    let asked = harness.fake.asked_of("artefacts");
+    assert_eq!(asked.last().unwrap()["installation"], "inst-build");
+    harness.fake.answer("artefacts", Err(CallError("Build box is unreachable".into())));
+    settle(&mut runtime, &harness, 400.0);
+    let tree = runtime.accessibility_json().to_string();
+    assert!(tree.contains("Build box is unreachable"));
+    assert!(tree.contains("note.txt · handoff · Unseen"));
+    assert!(harness.fake.asked_of("artefactImport").is_empty());
+    assert!(harness.fake.asked_of("artefactRegister").is_empty());
+}
+
 fn within(node: &Value) -> Vec<&Value> {
     let mut found = vec![node];
     for child in node["children"].as_array().into_iter().flatten() {

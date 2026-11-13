@@ -563,6 +563,10 @@ const migrations = (imports: {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`ALTER TABLE collie_decisions ADD COLUMN shipping TEXT`;
   }),
+  "20_artefact_registration": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE collie_artefact_registrations (run TEXT NOT NULL, request TEXT NOT NULL, asked TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (run, request))`;
+  }),
   "19_artefacts": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`CREATE TABLE collie_artefacts (run TEXT NOT NULL, id TEXT NOT NULL, origin TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (run, id), UNIQUE (run, origin))`;
@@ -1067,6 +1071,9 @@ function makeStore(
                   Effect.orDie,
                 );
                 yield* sql`DELETE FROM collie_artefacts WHERE run = ${run}`.pipe(Effect.orDie);
+                yield* sql`DELETE FROM collie_artefact_registrations WHERE run = ${run}`.pipe(
+                  Effect.orDie,
+                );
                 yield* sql`DELETE FROM collie_runs WHERE run = ${run}`.pipe(Effect.orDie);
                 gone.push(run);
               }

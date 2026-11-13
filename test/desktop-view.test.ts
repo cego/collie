@@ -145,6 +145,8 @@ const served = (main: Channel<ToView, ToMain>) =>
         artefacts: () => Effect.die("not asked"),
         artefactRead: () => Effect.die("not asked"),
         artefactSeen: () => Effect.die("not asked"),
+        artefactRegister: () => Effect.die("not asked"),
+        artefactImport: () => Effect.die("not asked"),
         usage: () => Effect.die("not asked"),
         catalogues: () => Effect.die("not asked"),
         connectionReadings: () => Effect.die("not asked"),

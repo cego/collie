@@ -5,11 +5,13 @@ use super::{
 use crate::App;
 use base64::Engine;
 use collie_desktop_protocol::generated::{
-    Artefact, ArtefactCollection, ArtefactReadPayload, ArtefactSeenPayload, ArtefactsPayload,
-    RunFile,
+    Artefact, ArtefactCollection, ArtefactImportPayload, ArtefactReadPayload,
+    ArtefactRegisterPayload, ArtefactRegistered, ArtefactSeenPayload, ArtefactsPayload, RunFile,
+    Tracking,
 };
+use rune::edit::TextEdit;
 use rune::{El, SurfaceFit, Tx, col, row, text};
-use rune_kit::{Button, Kit};
+use rune_kit::{Button, Kit, TextInput};
 use sha2::{Digest, Sha256};
 use std::sync::{
     Arc,
@@ -30,6 +32,8 @@ pub struct Collection {
     pub preview: Option<Preview>,
     pub bytes: Option<Arc<Vec<u8>>>,
     pub attempted: AtomicBool,
+    /// A path on the Run's own Machine to register.
+    pub path: TextEdit,
 }
 
 pub enum Preview {
@@ -200,6 +204,94 @@ impl App {
                 }
             },
         );
+    }
+
+    /// A file on this computer, sent to the Run's Machine where that is another.
+    pub fn pick_artefact(&mut self, tx: &mut Tx) {
+        let Some(record) = &self.record.open else {
+            return;
+        };
+        let serial = record.serial;
+        let options = rune::FileDialogOptions {
+            title: "Register a file".into(),
+            ..Default::default()
+        };
+        tx.open_file(options, move |app: &mut App, chosen, _| {
+            if app.record.open.as_ref().is_none_or(|r| r.serial != serial) {
+                return;
+            }
+            match chosen {
+                Ok(Some(path)) => app.register_artefact(false, path.display().to_string()),
+                Ok(None) => {}
+                Err(why) => {
+                    app.record.open.as_mut().unwrap().artefacts.failed =
+                        Some(format!("Register failed: {why}"))
+                }
+            }
+        });
+    }
+
+    pub fn register_artefact_path(&mut self) {
+        let Some(record) = &mut self.record.open else {
+            return;
+        };
+        let path = record.artefacts.path.text.trim().to_string();
+        if path.is_empty() {
+            return;
+        }
+        record.artefacts.path = TextEdit::default();
+        self.register_artefact(true, path);
+    }
+
+    /// `on_machine` names a path on the Run's Machine; otherwise it is on this computer.
+    fn register_artefact(&mut self, on_machine: bool, path: String) {
+        let (Some(core), Some(record)) = (self.core.clone(), &mut self.record.open) else {
+            return;
+        };
+        record.artefacts.failed = None;
+        let serial = record.serial;
+        let (installation, run_id, request) =
+            (record.installation.clone(), record.run.clone(), act::new_request());
+        let done = move |app: &mut App, answer: Result<ArtefactRegistered, _>| {
+            let Some(record) = app.record.open.as_mut().filter(|r| r.serial == serial) else {
+                return;
+            };
+            match answer {
+                Ok(_) => {
+                    record.artefacts.dirty = true;
+                    app.read_artefacts(false);
+                }
+                Err(why) => record.artefacts.failed = Some(format!("Register failed: {why}")),
+            }
+        };
+        if on_machine {
+            core.request(
+                "artefactRegister",
+                ArtefactRegisterPayload {
+                    installation,
+                    run_id,
+                    request,
+                    path,
+                    id: None,
+                    title: None,
+                    kind: None,
+                    role: None,
+                    snapshot: None,
+                },
+                done,
+            )
+        } else {
+            core.request(
+                "artefactImport",
+                ArtefactImportPayload {
+                    installation,
+                    run_id,
+                    path,
+                    request,
+                },
+                done,
+            )
+        }
     }
 
     pub fn hide_artefact(&mut self) {
@@ -518,14 +610,48 @@ pub fn frame_drawn(runtime: &rune::Runtime<App>) {
     }
 }
 
+fn path_of(app: &mut App) -> &mut TextEdit {
+    &mut app.record.open.as_mut().unwrap().artefacts.path
+}
+
 pub fn view(record: &Record, k: &Kit) -> El {
     let state = &record.artefacts;
-    let mut body = col().key("artefacts").gap(12.0).w_full().child(
-        Button::new("Refresh")
-            .on_press(|app: &mut App| app.read_artefacts(true))
-            .build(k)
-            .key("artefacts-refresh"),
-    );
+    let register = row()
+        .gap(8.0)
+        .center_y()
+        .w_full()
+        .child(
+            Button::new("Refresh")
+                .on_press(|app: &mut App| app.read_artefacts(true))
+                .build(k)
+                .key("artefacts-refresh"),
+        )
+        .child(
+            Button::new("Register file…")
+                .build(k)
+                .key("artefact-pick")
+                .on_press_tx(App::pick_artefact),
+        )
+        .child(
+            TextInput::new(&state.path)
+                .width(None)
+                .placeholder("Path on the Run's Machine")
+                .label("Path on the Run's Machine to register")
+                .on_edit(path_of)
+                .on_submit(|app: &mut App, _: &mut Tx| app.register_artefact_path())
+                .build(k)
+                .key("artefact-path")
+                .grow(1.0)
+                .min_w(0.0),
+        )
+        .child(
+            Button::new("Register path")
+                .disabled(state.path.text.trim().is_empty())
+                .on_press(App::register_artefact_path)
+                .build(k)
+                .key("artefact-register"),
+        );
+    let mut body = col().key("artefacts").gap(12.0).w_full().child(register);
     if state.loading {
         body = body.child(quiet("Reading artefacts…", k).role("status"));
     }
@@ -549,8 +675,15 @@ pub fn view(record: &Record, k: &Kit) -> El {
             } else {
                 "Unseen"
             };
+            let tracking = match (&item.tracking, item.stale, item.pending) {
+                (Some(Tracking::Snapshot), ..) => " · retained snapshot",
+                (_, Some(true), Some(true)) => " · stale, refresh pending",
+                (_, Some(true), _) => " · stale",
+                (_, _, Some(true)) => " · refresh pending",
+                _ => "",
+            };
             body = body.child(
-                Button::new(format!("{} · {} · {status}", item.title, item.role))
+                Button::new(format!("{} · {} · {status}{tracking}", item.title, item.role))
                     .on_press(move |app: &mut App| app.select_artefact(&id))
                     .build(k)
                     .key(format!("artefact-{}", item.id)),

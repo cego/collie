@@ -3,7 +3,7 @@
 // Bun-only import: a browser bundle imports this too.
 
 import * as Struct from "effect/Struct";
-import { Artefact, ArtefactCollection } from "./artefact-model";
+import { Artefact, ArtefactCollection, ArtefactRegistered, RegisterFile } from "./artefact-model";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -1729,6 +1729,11 @@ export const FrontDoorRpcs = RpcGroup.make(
     payload: { runId: Schema.String, id: Schema.String, revision: Schema.Int, offset: Schema.Int },
     success: RunFile,
     error: HostRefused,
+  }),
+  Rpc.make("artefactRegister", {
+    payload: { runId: Schema.String, request: Schema.String, ...RegisterFile.fields },
+    success: ArtefactRegistered,
+    error: Schema.Union([HostRefused, RequestConflict]),
   }),
   Rpc.make("artefactSeen", {
     payload: {

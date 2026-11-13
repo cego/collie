@@ -6,7 +6,8 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
-import { withArtefacts } from "../../../src/artefact-client";
+import { uploadArtefact, withArtefacts } from "../../../src/artefact-client";
+import type { RegisterFile } from "../../../src/artefact-model";
 import {
   Cause,
   Clock,
@@ -1667,6 +1668,31 @@ export const artefactReadOn = (
     door,
     withArtefacts(door.desktop.board(), door.desktop.artefactRead({ runId, id, revision, offset })),
   );
+export const artefactRegisterOn = (
+  door: Reached,
+  asked: RegisterFile & { readonly runId: string; readonly request: string },
+) =>
+  over(
+    door,
+    withArtefacts(door.desktop.board(), door.desktop.artefactRegister(asked)),
+    asked.request,
+  );
+/** A path on this Machine: tracked where the Run is local, else sent as a retained snapshot. */
+export const artefactImportOn = (door: Reached, runId: string, path: string, request: string) =>
+  door.machine.profile === "local"
+    ? artefactRegisterOn(door, { runId, request, path })
+    : over(
+        door,
+        withArtefacts(
+          door.desktop.board(),
+          uploadArtefact(door.desktop, path).pipe(
+            Effect.flatMap((uploaded) =>
+              door.desktop.artefactRegister({ runId, request, path: uploaded, snapshot: true }),
+            ),
+          ),
+        ),
+        request,
+      );
 export const artefactSeenOn = (
   door: Reached,
   runId: string,

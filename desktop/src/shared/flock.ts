@@ -10,7 +10,12 @@ import { DateTime, Schema, Stream, Struct } from "effect";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import { AguiEvent } from "./agui";
-import { Artefact, ArtefactCollection } from "../../../src/artefact-model";
+import {
+  Artefact,
+  ArtefactCollection,
+  ArtefactRegistered,
+  RegisterFile,
+} from "../../../src/artefact-model";
 import { Staged, StagedOrRefused } from "./attachments";
 import { ChatChoices } from "./chat-choices";
 import {
@@ -706,6 +711,27 @@ export const DesktopRpcs = RpcGroup.make(
       offset: Schema.Int,
     },
     success: RunFile,
+    error: ActionFailed,
+  }),
+  Rpc.make("artefactRegister", {
+    payload: {
+      installation: Schema.String,
+      runId: Schema.String,
+      request: Schema.String,
+      ...RegisterFile.fields,
+    },
+    success: ArtefactRegistered,
+    error: ActionFailed,
+  }),
+  /** A file on Desktop's own Machine, sent to the Run's when that is another. */
+  Rpc.make("artefactImport", {
+    payload: {
+      installation: Schema.String,
+      runId: Schema.String,
+      path: Schema.String,
+      request: Schema.String,
+    },
+    success: ArtefactRegistered,
     error: ActionFailed,
   }),
   Rpc.make("artefactSeen", {

@@ -180,8 +180,39 @@ describe.skipIf(cargo === null)("DesktopRpcs between the main process and the Ru
           retainedAvailability: "available",
           reason: "source removed",
           metadata: { custom: [false, null, { nested: 2 }] },
+          installation: "inst-1",
+          tracking: "snapshot" as const,
+          registeredBy: { origin: "desktop", requestId: "q-register" },
+          pending: true,
+          stale: true,
         };
         const parts = [
+          [
+            "artefactRegister",
+            {
+              installation: "inst-1",
+              runId: "r1",
+              path: "/source/note.txt",
+              title: "A note",
+              kind: "asset",
+              snapshot: true,
+              request: "q-register",
+            },
+            {
+              address: { installation: "inst-1", run: "r1", id: "a1" },
+              item,
+              retained: { revision: 2, digest: "abc", size: 7 },
+            },
+          ],
+          [
+            "artefactImport",
+            { installation: "inst-1", runId: "r1", path: "/local/note.txt", request: "q-import" },
+            {
+              address: { installation: "inst-1", run: "r1", id: "a1" },
+              item,
+              retained: { revision: 2, digest: "abc", size: 7 },
+            },
+          ],
           [
             "artefacts",
             { installation: "inst-1", runId: "r1", refresh: true },

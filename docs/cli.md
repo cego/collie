@@ -3211,7 +3211,14 @@ collie run artefact refresh <run>
 collie run artefact read <run> <id> --revision 1 --offset 0
 collie run artefact seen <run> <id> --revision 1 --request-id inspected-1
 collie run artefact unseen <run> <id> --request-id clear-1
+collie run artefact register <run> --path /abs/report.md --request-id deliver-1
+collie run artefact register <run> --path ./clip.mp4 --upload
 ```
+
+`register` copies a file on the Run's Machine and tracks it; `--upload` sends a file from
+this computer instead, as a retained snapshot. `--title`, `--role`, `--kind file|asset`,
+and `--snapshot` (copy once, do not track) are optional; `--id` retargets an existing
+artefact. The reply is the address and the retained revision, digest, and size.
 
 `read` returns a base64 part of the immutable revision, capped at 4 MiB. Advance the byte
 offset until the reported size is reached. Files are limited to 100 MiB. Inspect metadata

@@ -4011,15 +4011,17 @@ const frontDoorHandlers = (
             Effect.flatMap((view) =>
               refresh === true
                 ? artefacts.reconcile(factsOfView(env.stateDir, view))
-                : artefacts
-                    .list(runId)
-                    .pipe(
-                      Effect.flatMap((items) =>
-                        items.length === 0
-                          ? artefacts.reconcile(factsOfView(env.stateDir, view))
-                          : Effect.succeed({ items }),
-                      ),
+                : artefacts.cached(factsOfView(env.stateDir, view)).pipe(
+                    Effect.tap(() =>
+                      artefacts
+                        .schedule(factsOfView(env.stateDir, view))
+                        .pipe(Effect.forkIn(controls)),
                     ),
+                    Effect.filterOrElse(
+                      (collection) => collection.items.length > 0,
+                      () => artefacts.reconcile(factsOfView(env.stateDir, view)),
+                    ),
+                  ),
             ),
             Effect.provideContext(bun),
           ),
@@ -4028,6 +4030,36 @@ const frontDoorHandlers = (
             Effect.flatMap((view) =>
               artefacts.read(factsOfView(env.stateDir, view), id, revision, offset),
             ),
+            Effect.provideContext(bun),
+          ),
+        artefactRegister: ({ runId, request, ...input }, { client }) =>
+          known(runId).pipe(
+            Effect.flatMap((view) =>
+              artefacts.register(
+                factsOfView(env.stateDir, view),
+                installation,
+                input,
+                request,
+                actorOf(whoOf(client), request),
+              ),
+            ),
+            Effect.tap((answer) =>
+              answer.fresh
+                ? recordAudit(trail(runId), {
+                    operation: "artefact-register",
+                    request,
+                    ...whoOf(client),
+                    asked: JSON.parse(JSON.stringify(input)),
+                    result: Artefact,
+                    value: answer.item,
+                  }).pipe(Effect.orDie)
+                : Effect.void,
+            ),
+            Effect.map(({ item }) => ({
+              address: { installation, run: runId, id: item.id },
+              item,
+              retained: { revision: item.revision, digest: item.digest, size: item.size },
+            })),
             Effect.provideContext(bun),
           ),
         artefactSeen: ({ runId, id, revision, request }, { client }) =>

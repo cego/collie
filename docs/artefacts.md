@@ -27,14 +27,49 @@ modification time, registration, and revision detection are separate facts. **Re
 observes the source again. Unchanged bytes and date-only changes create no content revision.
 A missing or denied source can still have an available retained copy.
 
-Hosts reconcile eight retained Runs per background round, every 30 seconds. This is a
-scheduling target; large collections take longer. Material is retained on its owning
-Machine, survives source deletion, and is removed with the Run. It is not replicated backup.
+## Registering a file
+
+**Register file…** sends a file from this computer; **Register path** names a file on the
+Run's own Machine. Agents use `collie_do` `artefact_register`, and the CLI
+`collie run artefact register`. Each returns the artefact's address — the owning
+installation id, Run, and artefact id — once the host holds a durable copy. A Machine's
+label or route is not part of the address, so relabelling it keeps the address valid.
+
+A file on the Run's Machine is **tracked**: its host checks it again about every 30
+seconds, with no Desktop open, and keeps a new revision whenever its bytes change, even
+when size and modification time do not. Unchanged bytes keep the revision. A file sent
+from another computer is a **retained snapshot**: it is copied once, never followed.
+
+The same source path registers one artefact, so a retry or a second request finds it.
+Different paths stay different artefacts, even with equal names or bytes. Registration
+refuses directories, devices, files over 100 MiB, paths with `..`, and symlinks that
+leave their directory. A copy is committed only when two reads and the file's metadata
+agree; a file still changing after three tries is refused, and the last retained
+revision stays readable with the failure shown.
+
+A tracked source that disappears, loses permission, or grows past the limit keeps its
+last revision and shows why under **Source**. An item is **stale** once its last check
+is more than 30 seconds old, and **refresh pending** while a check runs. A failing
+source is checked less often, up to every five minutes.
+
+Each changed revision is kept for the Run's lifetime, so storage grows with every edit
+of a frequently changing file; identical bytes in one Run are stored once. There is no
+revision history view yet.
+
+## Retention and refresh
+
+Each background round, every 30 seconds, checks at most eight due sources, two at a
+time, continuing after the last one it checked. Explicit **Refresh** waits for its own
+bounded attempt. This is a scheduling target; large collections take longer. Finished
+Runs keep being tracked. Material is retained on its owning Machine, survives source
+deletion, upload cleanup and host restarts, and is removed with its own Run. It is not
+replicated backup: losing that Machine's disk loses it.
 
 Native chat, Flock chat, and managed agents can use `collie_artefacts` to list or read
 material. Reading never acknowledges it. `collie_do` accepts `artefact_seen` with `run`,
-`id`, and the inspected `revision`, and `artefact_unseen` with `run` and `id`.
-Flock chat uses Machine-qualified Run ids. CLI commands are in [the CLI reference](cli.md#artefacts).
+`id`, and the inspected `revision`, `artefact_unseen` with `run` and `id`, and
+`artefact_register` with `run` and `path`. Flock chat uses Machine-qualified Run ids; a
+`<machine>:<path>` on the Run's Machine is tracked, any other path is sent as a snapshot. CLI commands are in [the CLI reference](cli.md#artefacts).
 The terminal board also exposes the catalogue and explicit receipt actions.
 
 Older hosts retain their legacy record views. Catalogue operations explain that an
@@ -55,6 +90,13 @@ or add attachments to prompts. The implementation's promises are checked at thes
 | Linux decoder frames, timestamps, AAC stream, controls, teardown and failure     | `video::linux::tests` in `desktop-rune/board/src/video/linux.rs`                               |
 | macOS decoder frames, timestamps, AAC stream, controls and failure               | macOS `video::tests` in `desktop-rune/board/src/video.rs`; execution requires the macOS CI job |
 | Linux plugin and library closure, scanner and notices                            | `test/rune-media.test.ts`, clean CI dependency installation                                    |
+| Registration receipts, duplicate requests and paths, A→B→A tracking              | `test/artefact-registration.test.ts`, `test/artefact-tracking.test.ts`                         |
+| Copy races, refused sources, pinned multi-part reads                             | `test/artefact-snapshot.test.ts`                                                               |
+| Coalescing, concurrency, timeout, backoff and rotation                           | `test/artefact-refresh.test.ts`                                                                |
+| Multi-part transfer to another Machine, restart, original and upload removed     | `test/artefact-peers.test.ts`                                                                  |
+| Run and upload cleanup keep each other's copies                                  | `test/artefact-cleanup.test.ts`                                                                |
+| CLI, tool and chat registration routes                                           | `test/artefact-frontdoors.test.ts`, `test/flock-tools.test.ts`                                 |
+| Native picker, path entry, transfer failure, stale labels, unreachable owner     | `desktop-rune/board/tests/record_view.rs`                                                      |
 
 Live visual, screen-reader, and audible playback observations on Linux and macOS remain
 **PENDING** until recorded against an implementation revision. Handler and offscreen

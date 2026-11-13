@@ -126,6 +126,8 @@ import {
   artefactsOn,
   artefactReadOn,
   artefactSeenOn,
+  artefactRegisterOn,
+  artefactImportOn,
   definitionsIn,
   endChildren,
   flockStream,
@@ -1508,6 +1510,12 @@ const main = Effect.gen(function* () {
     artefactRead: ({ installation, runId, id, revision, offset }) =>
       doorTo(doors, installation).pipe(
         Effect.flatMap((door) => artefactReadOn(door, runId, id, revision, offset)),
+      ),
+    artefactRegister: ({ installation, ...asked }) =>
+      doorTo(doors, installation).pipe(Effect.flatMap((door) => artefactRegisterOn(door, asked))),
+    artefactImport: ({ installation, runId, path, request }) =>
+      doorTo(doors, installation).pipe(
+        Effect.flatMap((door) => artefactImportOn(door, runId, path, request)),
       ),
     artefactSeen: ({ installation, runId, id, revision, request }) =>
       doorTo(doors, installation).pipe(
