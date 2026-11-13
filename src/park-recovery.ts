@@ -11,7 +11,7 @@ import { PARK_CAUSES, healInFlight } from "./park-cause";
 import type { Herdr } from "./herdr";
 import type { NotificationKind } from "./notify";
 import { HealOutput, healOn, healerFor } from "./heal";
-import { knownIn, pendingIn, report, type Reported } from "./heal-report";
+import { knownIn, pendingIn, report } from "./heal-report";
 import type { HostApi } from "./sdk";
 import manifest from "../herdr-plugin.toml";
 import { currentPid, signalProcess } from "./lock";
@@ -473,25 +473,18 @@ export const healParks = <E, R, E2, R2>(opts: {
         (item) => (retries.get(item.heal)?.next ?? 0) <= now,
       ).slice(0, REPORTS_PER_ROUND);
       for (const item of due) {
-        const reported = yield* report(opts.host, item, known).pipe(
-          Effect.timeoutOrElse({
-            duration: REPORT_WITHIN,
-            orElse: () =>
-              Effect.succeed<Reported>({
-                publication: "uncertain",
-                note: `no answer from Collie's repository within ${Duration.format(REPORT_WITHIN)}`,
-              }),
-          }),
-        );
-        yield* appendMetric(evidence(item.run), {
-          at: yield* nowIso,
-          kind: "report",
-          subject: item.finding.key,
-          heal: item.heal,
-          build: manifest.version,
-          value: 0,
-          ...reported,
-        });
+        const reported = yield* report(opts.host, item, known);
+        // A retry that changes nothing is not recorded again, so a lasting refusal is one line.
+        if (item.last?.publication !== reported.publication || item.last.note !== reported.note)
+          yield* appendMetric(evidence(item.run), {
+            at: yield* nowIso,
+            kind: "report",
+            subject: item.finding.key,
+            heal: item.heal,
+            build: manifest.version,
+            value: 0,
+            ...reported,
+          });
         if (reported.issue !== undefined && reported.publication !== "uncertain")
           known.set(item.finding.key, reported.issue);
         const delay = Math.min((retries.get(item.heal)?.delay ?? base / 2) * 2, base * 60);
@@ -511,4 +504,3 @@ export const healParks = <E, R, E2, R2>(opts: {
   });
 
 const REPORTS_PER_ROUND = 3;
-const REPORT_WITHIN = Duration.minutes(2);

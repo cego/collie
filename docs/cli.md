@@ -1057,10 +1057,12 @@ regression, Collie's judgement, the build and the Run ids. Issue text is redacte
 checked like any Run's. A `false-recovery` Heal's finding, or one without its key, root
 cause, fix or regression, is not filed. Each attempt is a `report` line in the parked Run's
 `collie run metrics`, with its `publication` and the `issue` URL: `filed`, `linked`,
-`not-filed` with why, `refused` (no login, an outage: nothing was sent) or `uncertain` (a
-write whose answer was lost). `refused` and `uncertain` are tried again, from a minute
-apart up to an hour, and on a host's restart; every attempt lists the open issues first, so
-a filing that did land is linked rather than filed twice. Reporting runs beside recovery,
+`not-filed` with why, `refused` (no login, an outage, a write the forge refused: nothing
+was applied) or `uncertain` (a write with no answer, or a forge error, within two minutes;
+a comment so sent is not sent again). `refused` and `uncertain` are tried again, from a
+minute apart up to an hour, and on a host's restart, and an attempt that ends as the last
+one did adds no line; every attempt lists the open issues first, so a filing that did land
+is linked rather than filed twice. Reporting runs beside recovery,
 three a round, and never holds it up. Findings kept from before a host could report them
 are reported the same way, and their Outputs are left as they were.
 

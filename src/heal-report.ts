@@ -5,8 +5,8 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import { pipe } from "effect/Function";
-import { Effect, Result } from "effect";
-import type { HostApi } from "./sdk";
+import { Duration, Effect, Result } from "effect";
+import { WorkflowError, type HostApi } from "./sdk";
 import { recoveriesIn, type HealFinding, type Metric, type Publication } from "./metrics";
 
 const KEY = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -28,6 +28,8 @@ export interface Pending {
   readonly finding: HealFinding;
   /** The issue a comment was sent to whose answer was lost, or null. */
   readonly commented: string | null;
+  /** The report last recorded for this Heal, or null. */
+  readonly last: Pick<Reported, "publication" | "note"> | null;
 }
 
 /** Each of this Run's judged Heals whose Collie defect is not yet filed, linked or set aside. */
@@ -54,6 +56,10 @@ export const pendingIn = (run: string, lines: ReadonlyArray<Metric>): ReadonlyAr
         build: line.build ?? "unknown",
         finding: line.finding,
         commented: last?.publication === "uncertain" ? (last.issue ?? null) : null,
+        last:
+          last?.publication === undefined
+            ? null
+            : { publication: last.publication, note: last.note },
       },
     ];
   });
@@ -120,6 +126,21 @@ const commentOf = (item: Pending) =>
 // The forge's own words for a write whose answer was lost (src/forge/threads.ts).
 const sent = (reason: string) => pipe(reason, Str.endsWith("before retrying"));
 
+const ANSWER_WITHIN = Duration.minutes(2);
+/** `call`, failing as unanswered after ANSWER_WITHIN; a write's may have landed. */
+const bounded = <A>(call: Effect.Effect<A, WorkflowError>, write: boolean) =>
+  call.pipe(
+    Effect.timeoutOrElse({
+      duration: ANSWER_WITHIN,
+      orElse: () =>
+        Effect.fail(
+          new WorkflowError({
+            reason: `no answer from Collie's repository within ${Duration.format(ANSWER_WITHIN)}${write ? "; inspect its issues before retrying" : ""}`,
+          }),
+        ),
+    }),
+  );
+
 export interface Reported {
   readonly publication: Publication;
   readonly note: string;
@@ -140,7 +161,7 @@ export const report = (
     const why = setAside(item);
     if (why !== null) return { publication: "not-filed", note: why } satisfies Reported;
     const { heal, finding } = item;
-    const listed = yield* Effect.result(host.issues(heal, undefined, "collie"));
+    const listed = yield* Effect.result(bounded(host.issues(heal, undefined, "collie"), false));
     if (Result.isFailure(listed))
       return { publication: "refused", note: listed.failure.reason } satisfies Reported;
     const open = listed.success;
@@ -148,7 +169,7 @@ export const report = (
       finding.issue === undefined || finding.issue === null
         ? undefined
         : (Option.getOrUndefined(Arr.findFirst(open, (one) => one.number === finding.issue)) ??
-          (yield* host.issues(heal, [finding.issue], "collie").pipe(
+          (yield* bounded(host.issues(heal, [finding.issue], "collie"), false).pipe(
             Effect.map((read) => read[0]),
             Effect.orElseSucceed(() => undefined),
           )));
@@ -170,12 +191,15 @@ export const report = (
           note: `linked to #${target.number}, which already carries ${finding.key}`,
         } satisfies Reported;
       const commented = yield* Effect.result(
-        host.commentIssue({
-          runId: heal,
-          number: target.number,
-          body: commentOf(item),
-          on: "collie",
-        }),
+        bounded(
+          host.commentIssue({
+            runId: heal,
+            number: target.number,
+            body: commentOf(item),
+            on: "collie",
+          }),
+          true,
+        ),
       );
       if (Result.isSuccess(commented))
         return {
@@ -192,7 +216,10 @@ export const report = (
         : ({ publication: "refused", note: commented.failure.reason } satisfies Reported);
     }
     const filed = yield* Effect.result(
-      host.fileIssue({ runId: heal, title: titleOf(finding), body: bodyOf(item), on: "collie" }),
+      bounded(
+        host.fileIssue({ runId: heal, title: titleOf(finding), body: bodyOf(item), on: "collie" }),
+        true,
+      ),
     );
     if (Result.isSuccess(filed))
       return {

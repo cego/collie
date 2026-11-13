@@ -141,7 +141,8 @@ test(
           );
           yield* until(
             () => forge.calls(),
-            (calls) => Arr.filter(calls, (one) => pipe(one, Str.startsWith("auth token"))).length >= 3,
+            (calls) =>
+              Arr.filter(calls, (one) => pipe(one, Str.includes("auth status"))).length >= 4,
           );
           const lines = yield* client.runMetrics({ runId }).pipe(Effect.orDie);
           expect(reportsOf(lines)).toEqual([expect.objectContaining({ publication: "refused" })]);
@@ -200,6 +201,7 @@ const pending = (
   build: "1.0.11",
   finding: { ...FINDING, ...finding },
   commented: null,
+  last: null,
   ...more,
 });
 
@@ -409,9 +411,7 @@ test("a comment with no answer in time is uncertain and keeps its issue, so it i
         issues: () => Effect.succeed([{ number: 444, title: "Issue 444", body: "", url }]),
         commentIssue: () => Effect.never,
       };
-      const reporting = yield* Effect.forkChild(
-        report(silent, pending({ issue: 444 }), new Map()),
-      );
+      const reporting = yield* Effect.forkChild(report(silent, pending({ issue: 444 }), new Map()));
       yield* Effect.yieldNow;
       yield* TestClock.adjust("10 minutes");
       expect(yield* Fiber.join(reporting)).toMatchObject({ publication: "uncertain", issue: url });
