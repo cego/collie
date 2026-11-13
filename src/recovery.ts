@@ -5,9 +5,9 @@ import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { defaultBase, classifyWorkSource } from "./inputs";
 import { readIntent } from "./intent";
 import { isBlocking, SynthesisSchema, FindingSchema } from "./output";
-import { sameTree, treeOf } from "./verify";
+import { readVerifications, sameTree, treeOf } from "./verify";
 import { appendJournal, readJournalWhole } from "./journal";
-import { readFinalCard } from "./cards";
+import { readCards, readFinalCard } from "./cards";
 import { shell } from "./mr";
 import { nowIso } from "./time";
 
@@ -325,4 +325,44 @@ export const branchMovement = Effect.fn("Recovery.branchMovement")(function* (ru
   if (count.code !== 0) return `Pushed branch history unavailable at ${head}.`;
   const n = Str.trim(count.stdout);
   return `Pushed branch: ${n} commit${n === "1" ? "" : "s"} past ${finished}, now ${head}.${run.state === "failed" ? " The failed record is stale." : " The succeeded record describes the earlier head."}`;
+});
+
+/**
+ * The verifications a follow-up's source listed on its last final card before the
+ * follow-up was admitted, unchanged, where the follow-up's checkout still carries that
+ * card's work on its branch. A failure recorded on the card's own head is left out: it ran
+ * after that work, so it cannot show the failure before it.
+ */
+export const sourceEvidence = Effect.fn("Recovery.sourceEvidence")(function* (options: {
+  readonly cwd: string;
+  readonly admitted: string;
+  readonly sourceDir: string;
+  readonly sourceEvidence: string;
+}) {
+  const card = Arr.findLast(
+    yield* readCards(options.sourceDir).pipe(Effect.orElseSucceed(() => [])),
+    (one) => one.kind === "final" && one.at <= options.admitted,
+  );
+  if (card._tag === "None") return [];
+  const head = card.value.revision.head_sha;
+  const contains = (ancestor: string, of: string) =>
+    Effect.map(
+      shell("git", ["merge-base", "--is-ancestor", ancestor, of], options.cwd),
+      (ran) => ran.code === 0,
+    );
+  const tree = yield* treeOf(options.cwd);
+  if (tree.branch !== card.value.revision.branch || !(yield* contains(head, tree.head_sha)))
+    return [];
+  const listed = new Map(Arr.map(card.value.verifications, (one) => [one.id, one.name]));
+  return yield* Effect.filter(
+    yield* readVerifications(options.sourceEvidence).pipe(Effect.orElseSucceed(() => [])),
+    (one) =>
+      listed.get(one.id) !== one.name
+        ? Effect.succeed(false)
+        : one.expect !== "fail"
+          ? Effect.succeed(true)
+          : one.start.head_sha === head
+            ? Effect.succeed(false)
+            : contains(one.start.head_sha, head),
+  );
 });

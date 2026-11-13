@@ -75,7 +75,7 @@ import { HOLD, STOP, controlPath, controlSet } from "./controls";
 import manifest from "../herdr-plugin.toml";
 import { Agents } from "./agents";
 import * as Sdk from "./sdk";
-import { recoveryFrom, reviewScope, recordReview, takePushed } from "./recovery";
+import { recoveryFrom, reviewScope, recordReview, sourceEvidence, takePushed } from "./recovery";
 import {
   Children,
   Host,
@@ -4885,16 +4885,28 @@ export const hostLayer = (options: {
         evidence: (runId, cwd) =>
           under(
             Effect.gen(function* () {
-              const own = yield* treeOf(yield* store.run(runId), runId, dir);
+              const row = yield* store.run(runId);
+              const own = yield* treeOf(row, runId, dir);
               const parent = yield* fs
                 .readFileString(`${runDir(dir, runId)}/recovery-parent`)
                 .pipe(Effect.orElseSucceed(() => ""));
+              const source = row?.parent == null ? null : yield* store.run(row.parent);
               const prior =
-                parent === ""
-                  ? []
-                  : yield* readVerifications(evidenceDir(dir, parent)).pipe(
+                parent !== ""
+                  ? yield* readVerifications(evidenceDir(dir, parent)).pipe(
                       Effect.orElseSucceed((): ReadonlyArray<Verification> => []),
-                    );
+                    )
+                  : row !== null &&
+                      source !== null &&
+                      source.workflow === row.workflow &&
+                      source.task === row.task
+                    ? yield* sourceEvidence({
+                        cwd,
+                        admitted: row.admitted,
+                        sourceDir: runDir(dir, source.run),
+                        sourceEvidence: evidenceDir(dir, source.run),
+                      })
+                    : [];
               return yield* Effect.all({
                 verifications: readVerifications(evidenceDir(dir, runId)).pipe(
                   Effect.orElseSucceed((): ReadonlyArray<Verification> => []),
