@@ -287,9 +287,14 @@ pub fn card_actions(task: &Task) -> Vec<CardAction> {
     } else if let Some(mr) = mr_ref_of(task) {
         actions.push(CardAction::OpenMr { mr, named: None });
     }
-    if let Some(offer) = &task.offer {
-        actions.push(CardAction::Offer(offer.clone()));
-    }
+    actions.extend(
+        task.offers
+            .as_deref()
+            .unwrap_or(task.offer.as_slice())
+            .iter()
+            .cloned()
+            .map(CardAction::Offer),
+    );
     if matches!(task.check, Some(Some(_))) {
         actions.push(CardAction::CheckOutput);
     }

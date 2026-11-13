@@ -1044,7 +1044,11 @@ export function releaseRow(facts: {
 }
 
 /** The strip a card draws: the leading Run's Steps, then the Release row, and where it is. */
-export function stripOf(flow: Flow, leader: string): FlowStrip {
+export function stripOf(
+  flow: Flow,
+  leader: string,
+  shipping: { readonly id: string; readonly title: string } | null = null,
+): FlowStrip {
   const lane = Option.getOrUndefined(Arr.findFirst(flow.lanes, (one) => one.run === leader));
   const release = flow.release ?? [];
   const at =
@@ -1060,11 +1064,18 @@ export function stripOf(flow: Flow, leader: string): FlowStrip {
           ),
         );
   return {
-    glyphs: Arr.map([...(lane?.nodes ?? []), ...release], (node) => ({
-      title: node.title,
-      state: node.state,
-    })),
-    release: release.length,
+    glyphs: Arr.map(
+      [
+        ...Arr.filter(lane?.nodes ?? [], (node) => shipping === null || node.kind !== "offer"),
+        ...release,
+        ...(shipping === null ? [] : [offerNode(shipping)]),
+      ],
+      (node) => ({
+        title: node.title,
+        state: node.state,
+      }),
+    ),
+    release: release.length + (shipping === null ? 0 : 1),
     current: at === undefined ? null : { title: at.title, said: at.said },
   };
 }

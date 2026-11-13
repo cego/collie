@@ -6297,7 +6297,6 @@ const PlacingJson = Schema.fromJsonString(Placing);
 const decodePlacing = Schema.decodeUnknownOption(PlacingJson);
 const encodePlacing = flow(Schema.encodeResult(PlacingJson), Result.getOrThrow);
 
-/** The reports sweep asks of every row each second; a row read again unchanged is the same object. */
 const owing = new WeakMap<RunRow, boolean>();
 
 /** Whether a Run's report is owed: an agent started it, or its Task closes once it is reported. */
@@ -8214,11 +8213,7 @@ const makeRegistry: (
     const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
     const placing = Option.getOrUndefined(decodePlacing(row.placing ?? ""));
     const report = Option.getOrUndefined(
-      Schema.decodeOption(Schema.fromJsonString(RunReport))(
-        yield* fs
-          .readFileString(`${runDir(dir, row.run)}/report.json`)
-          .pipe(Effect.orElseSucceed(() => "")),
-      ),
+      Schema.decodeOption(Schema.fromJsonString(RunReport))(row.report ?? ""),
     );
     const linkNotices = yield* readLinkDeliveries(runDir(dir, row.run)).pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
