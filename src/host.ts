@@ -95,6 +95,7 @@ import {
   REFUSED_INPUT,
   Registrations,
   RunStatus,
+  terminalStatus,
   RunView,
   Steered,
   foundationLayer,
@@ -2313,11 +2314,7 @@ const frontDoorHandlers = (
           const id = mr === null ? null : yield* mrIdIn(mr, view.cwd, shell);
           const forged = id === null ? undefined : (yield* readForge(env.stateDir)).get(id);
           return {
-            ready: readinessOfRun(
-              runId,
-              card,
-              view.status.status === "complete" || view.status.status === "failed",
-            ),
+            ready: readinessOfRun(runId, card, terminalStatus(view.status)),
             ci: forged?.checks ?? null,
             steps: yield* operationsOf(runId),
             mrs: card?.mrs,
@@ -3570,10 +3567,7 @@ const frontDoorHandlers = (
                 if (spread && next !== null)
                   for (const child of Arr.filter(
                     yield* registry.views(null),
-                    (view) =>
-                      view.parent === runId &&
-                      view.status.status !== "complete" &&
-                      view.status.status !== "failed",
+                    (view) => view.parent === runId && !terminalStatus(view.status),
                   )) {
                     const note = yield* withDirLock(
                       runDir(env.stateDir, child.runId),

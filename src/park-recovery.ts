@@ -255,6 +255,7 @@ export const recoverParks = <E, R>(opts: {
 /** Whether a park, as its Run reads now, is still the one a Heal was asked about. */
 const stillParked = (view: RunView, claim: Metric) =>
   view.status.status !== "complete" &&
+  view.status.status !== "ended" &&
   view.park != null &&
   (view.park.id === claim.park || view.park.cause === claim.cause);
 

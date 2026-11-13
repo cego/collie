@@ -5922,6 +5922,7 @@ export const answerDecision = (
  */
 export const RunStatus = Schema.Union([
   Schema.Struct({ status: Schema.Literals(["pending", "suspended"]) }),
+  Schema.Struct({ status: Schema.Literal("ended"), at: Schema.String }),
   /** The result as the workflow's own success schema encodes it. */
   Schema.Struct({ status: Schema.Literal("complete"), value: Schema.Json }),
   Schema.Struct({
@@ -5932,6 +5933,9 @@ export const RunStatus = Schema.Union([
     error: Schema.optionalKey(Schema.Json),
   }),
 ]);
+
+export const terminalStatus = (status: typeof RunStatus.Type): boolean =>
+  status.status === "complete" || status.status === "failed" || status.status === "ended";
 
 export const pollStatus = (
   result: Option.Option<Workflow.Result<unknown, unknown>>,
@@ -8297,6 +8301,10 @@ const makeRegistry: (
         Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(RunStatus))),
         Effect.orElseSucceed(() => null),
       );
+      const finished = yield* finishedOnRecord(runDir(dir, row.run)).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideContext(bun),
+      );
       return {
         ...about,
         status:
@@ -8304,7 +8312,9 @@ const makeRegistry: (
             ? { ...recorded, entry: admitted.entry || recorded.entry }
             : recorded?.status === "complete"
               ? recorded
-              : { status: "pending" as const },
+              : finished !== null
+                ? { status: "ended" as const, at: finished }
+                : { status: "pending" as const },
         diagnostic:
           unavailable.get(row.generation) ?? `${row.generation} is not registered in this host`,
       };
@@ -8605,7 +8615,7 @@ const makeRegistry: (
       entry.said = said;
       changed = true;
       // A run the engine has finished with cannot change again, so nothing asks after.
-      if (view.status.status === "complete" || view.status.status === "failed") {
+      if (terminalStatus(view.status)) {
         watched.delete(runId);
       }
     }
@@ -8657,11 +8667,7 @@ const makeRegistry: (
     // With its module gone the engine cannot be asked, and the finish's record answers.
     if (Option.isNone(found)) {
       const current = yield* view(runId);
-      return (
-        current?.status.status === "complete" ||
-        current?.status.status === "failed" ||
-        (yield* finishedOnRecord(runDir(dir, runId))) !== null
-      );
+      return current !== null && terminalStatus(current.status);
     }
     const { generation, execution } = found.value;
     const workflow = generation.registration.workflow;

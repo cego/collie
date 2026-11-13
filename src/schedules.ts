@@ -192,7 +192,10 @@ export const schedulesLayer = (options: {
           if (outcome.kind === "started") {
             const status = yield* statusOf(outcome.run);
             said = {
-              kind: status === "complete" || status === "failed" ? "run" : "waiting-for-run",
+              kind:
+                status === "complete" || status === "failed" || status === "ended"
+                  ? "run"
+                  : "waiting-for-run",
               run: outcome.run,
               status,
             };

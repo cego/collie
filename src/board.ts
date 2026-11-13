@@ -598,6 +598,7 @@ const STEP_STATE: Readonly<Record<RunState, StepState>> = {
   running: "active",
   waiting: "blocked",
   succeeded: "done",
+  ended: "done",
   failed: "failed",
   stopped: "failed",
 };
@@ -624,7 +625,7 @@ function stateOf(
   if (checking) return "active";
   if (status === "stopped") return "stopped";
   if (status === "failed") return "failed";
-  if (status === "succeeded") return "done";
+  if (status === "succeeded" || status === "ended") return "done";
   // Under the endings, because only a Run still going can be waiting for anyone: a Run
   // someone stopped while its agent sat at a prompt was stopped, and says so.
   if (stalled) return "blocked";

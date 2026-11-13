@@ -1363,6 +1363,9 @@ collie --json run disposition <run-id> --as superseded --ref <other-run-id> --no
 A run's status says how its execution ended, and it is never rewritten. When the work it
 was for lands by some other route — a person finishes it by hand and merges — that is a
 different fact, recorded beside the status rather than over it, with what backs it up.
+When a historical Run has a final card but no terminal result or available definition,
+its status is `ended`, with the final card's `at` timestamp and its outcome unavailable.
+That evidence ends the execution without asserting success or recreating its definition.
 This is not a [Delivery](../CONTEXT.md), which is one message to one agent; `run
 deliveries` is that.
 
