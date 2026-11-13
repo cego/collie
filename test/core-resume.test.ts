@@ -7,6 +7,7 @@ import { launchesAt } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
+import * as Struct from "effect/Struct";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Deferred, Effect, Fiber, FileSystem, Layer, Result, Schema, flow } from "effect";
 import type * as MessageStorage from "effect/cluster/MessageStorage";
@@ -19,7 +20,7 @@ import { TestClock } from "effect/testing";
 import { Agents, agentsLayer, type AgentHost, type RunNow } from "../src/agents";
 import { endAgent } from "../src/agent-end";
 import type { Backend } from "../src/herdr";
-import { launchDir, readLaunches, stemOf } from "../src/launches";
+import { launchDir, readLaunches, recordLaunch, startedDir, stemOf } from "../src/launches";
 import {
   PARK_CAUSE,
   Registry,
@@ -495,6 +496,125 @@ const runningNow: RunNow = {
   authority: Effect.succeed({ created: null, roaming: false, started: null }),
   questions: { ask: () => Effect.void, asked: Effect.succeed([]), close: () => Effect.void },
 };
+
+for (const [hasSession, sessionOnlyAnchor, outcome] of [
+  [true, false, "resumes only the latest session"],
+  [false, false, "never borrows an earlier generation's session"],
+  [true, true, "follows later work from a session-only anchor"],
+] as const)
+  test(
+    `core recovery of collided legacy generations ${outcome}`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const core = yield* rig.startCore();
+          yield* rig.queueOutputs([null, null, null, null]);
+          yield* Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const agents = yield* Agents;
+            const runId = "r-collided-generations";
+            const ask = {
+              runId,
+              operation: "review",
+              agent: "review",
+              role: "reviewer",
+              workflow: "agent-work",
+              harness: "claude",
+              model: "opus",
+              effort: null,
+              permissions: "auto",
+              task: null,
+              cwd: rig.projectDir,
+              prompt: "Review this work.",
+              output: `${launchDir(dir(), runId)}/review.json`,
+              skill: null,
+            };
+            const earlier = yield* agents.launch(ask);
+            yield* core.lose;
+            const latest = yield* agents.launch({ ...ask, sequence: 2 });
+            const reused = yield* agents.launch({
+              ...ask,
+              sequence: 2,
+              operation: "review-followup",
+              output: `${launchDir(dir(), runId)}/review-followup.json`,
+            });
+            expect(earlier.terminalId).not.toBe(latest.terminalId);
+            expect(earlier.agentSession?.kind).toBe("claude");
+            expect(latest.agentSession?.kind).toBe("claude");
+            expect(earlier.agentSession?.value).not.toBe(latest.agentSession?.value);
+            expect(reused.reused).toBe(true);
+            expect(reused.terminalId).toBe(latest.terminalId);
+
+            // Older naming truncated the generation suffix. Keep those persisted names
+            // literal so this recovery fixture also works after naming is corrected.
+            const collided = "w01-public-text-is-chec-5hhdvh-r";
+            const historical = { ...earlier, agent: collided };
+            yield* recordLaunch(historical);
+            for (const one of [latest, reused]) {
+              const recorded = sessionOnlyAnchor
+                ? one === latest
+                  ? Struct.omit(one, ["terminalId"])
+                  : {
+                      ...one,
+                      agentSession: Option.getOrThrow(Option.fromNullishOr(latest.agentSession)),
+                    }
+                : one;
+              yield* recordLaunch({
+                ...(hasSession ? recorded : Struct.omit(recorded, ["agentSession"])),
+                agent: collided,
+              });
+            }
+            const starts = startedDir(dir(), runId);
+            // The original start was saved before its terminal could be recorded. Later
+            // work established the terminal of that same session, without another start.
+            if (sessionOnlyAnchor)
+              yield* fs.writeFileString(
+                `${starts}/${latest.agent}.json`,
+                asJson({ ...Struct.omit(ask, ["prompt"]), sequence: 2 }),
+              );
+            yield* fs.rename(`${starts}/${latest.agent}.json`, `${starts}/${collided}.json`);
+            yield* fs.remove(`${starts}/${earlier.agent}.json`);
+            yield* core.lose;
+            const before = coreCalls(yield* rig.calls()).length;
+
+            yield* agents.resumeLost(runId, runningNow);
+            const resumed = yield* launchesSince(yield* rig.calls(), before);
+            expect(Arr.map(resumed, (one) => one.name)).toEqual([collided]);
+            expect(after(resumed[0]!.argv, "--resume")).not.toBe(earlier.agentSession?.value);
+            if (hasSession)
+              expect(after(resumed[0]!.argv, "--resume")).toBe(latest.agentSession?.value);
+            else {
+              expect(resumed[0]!.argv).not.toContain("--resume");
+              expect(resumed[0]!.argv).toContain("--session-id");
+            }
+            if (sessionOnlyAnchor) {
+              const sent = sendsSince(yield* rig.calls(), before);
+              expect(sent).toHaveLength(1);
+              expect(sent[0]!.text).toContain("review-followup.r2.prompt.md");
+              expect(sent[0]!.text).not.toContain("/review.r2.prompt.md");
+            }
+            const records = yield* readLaunches(runId);
+            expect(Arr.findFirst(records, (one) => (one.sequence ?? 1) === 1)).toEqual(
+              Option.some(historical),
+            );
+            const current = Arr.filter(records, (one) => one.sequence === 2);
+            expect(current).toHaveLength(2);
+            expect(current[0]!.terminalId).not.toBe(latest.terminalId);
+            expect(current[1]!.terminalId).toBe(current[0]!.terminalId);
+            yield* agents.resumeLost(runId, runningNow);
+            expect(yield* launchesSince(yield* rig.calls(), before)).toHaveLength(1);
+          }).pipe(
+            Effect.provide(
+              agentsLayer(hostOf()).pipe(
+                Layer.provideMerge(foundationLayer({ dir: dir(), userDir: rig.userDir })),
+              ),
+            ),
+            Effect.scoped,
+          );
+        }),
+      ),
+    30_000,
+  );
 
 test("quota incident publication waits for an admitted core recovery", () =>
   runEffect(
