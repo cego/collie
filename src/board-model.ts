@@ -2356,6 +2356,8 @@ export const givenOfferInput = (
   return Rec.fromEntries(
     Arr.map(Rec.toEntries(given), ([name, text]) => {
       const field = fields.get(name);
+      if (field?.control.kind === "list")
+        return [name, Option.getOrElse(parseJson(text), () => text)] as const;
       const read = field === undefined ? null : readEntry(field, text);
       return [name, read?._tag === "Read" ? read.value : text] as const;
     }),
