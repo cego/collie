@@ -1045,6 +1045,22 @@ test("collie_do carries out what the human asked for, and says what happened", (
     }),
   ));
 
+test("collie_do reuses a supplied request id for an explicit retry", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const run = yield* aRun("retry the same decision");
+      const input = {
+        request_id: "retry-decision",
+        actions: [{ kind: "disposition", run: run.id, became: "abandoned", ref: "retry-fixture" }],
+      };
+      const first = yield* call("collie_do", input);
+      expect(first).toContain("applied");
+      expect(yield* call("collie_do", input)).toBe(first);
+      const lines = yield* readDispositions(run.dir);
+      expect(Arr.filter(lines, (line) => line.ref === "retry-fixture")).toHaveLength(1);
+    }),
+  ));
+
 test("collie_do resumes a Run, which the host picks up where it is", () =>
   inWorld(
     Effect.gen(function* () {

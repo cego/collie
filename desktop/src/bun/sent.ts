@@ -177,6 +177,22 @@ export const confirmed = <A, E extends { readonly _tag: string; readonly message
             ),
         }),
       ),
+      Effect.catchCause((cause) => {
+        const error = Cause.findErrorOption(cause);
+        const lost = Cause.hasInterruptsOnly(cause)
+          ? "the connection was renewed before its reply"
+          : Option.isSome(error) && error.value._tag === "RpcClientError"
+            ? reasonOf(error.value)
+            : undefined;
+        return lost === undefined
+          ? Effect.failCause(cause)
+          : Effect.fail(
+              new Unconfirmed({
+                request: sending.request,
+                reason: `${sending.machine} did not confirm ${what}: ${lost}. Its outcome is unknown; it may have been applied. Inspect its result before retrying with the same request (${sending.request}).`,
+              }),
+            );
+      }),
     );
   return tried(1);
 };
