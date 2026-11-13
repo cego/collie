@@ -7,11 +7,14 @@ import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Scope, Exit } from "effect";
-import { BRIDGE_READY } from "../src/board-model";
 import { riderArgv } from "../src/ssh-argv";
 import { bridgeCommand, linkRoute, remoteRoute, type ShellRoute } from "../desktop/src/bun/machine";
 import { runEffect } from "./support/effect";
 import { freePort, silentMaster, writeFakeSsh, socketDir } from "./support/fake-ssh";
+
+const identityBridge = new URL("./fixtures/identity-bridge.ts", import.meta.url).pathname;
+const bridging = (dir: string, as: string) =>
+  `exec '${process.execPath}' '${identityBridge}' ok '${dir}/bridge.log' ${as}`;
 
 const vm = { id: "vm", label: "vm-mk", target: "mk@vm-mk", session: "default", enabled: true };
 
@@ -26,9 +29,9 @@ const rig = Effect.gen(function* () {
   });
   const path = `${dir}/ctl`;
   const scripts = {
-    // The far Machine's collie: a bridge that is ready at once, or the words it was given.
+    // The far Machine's collie: a bridge to a host that identifies itself, or the words it was given.
     "far/collie": `#!/bin/sh
-if [ "$1" = bridge ]; then echo '${BRIDGE_READY}'; exec cat >/dev/null; fi
+if [ "$1" = bridge ]; then ${bridging(dir, "far")}; fi
 echo "far $*"
 `,
     // This computer's collie: `machine connect` opens the shared connection, as Collie's does.
@@ -141,7 +144,7 @@ test("a link whose bridge names SSO before it is ready shows the banner", () =>
       const { dir } = yield* rig;
       yield* fs.writeFileString(
         `${dir}/bridging`,
-        `#!/bin/sh\necho 'Waiting for SSO login for mk@vm-mk' >&2\nsleep 0.2\necho '${BRIDGE_READY}'\nexec cat >/dev/null\n`,
+        `#!/bin/sh\necho 'Waiting for SSO login for mk@vm-mk' >&2\nsleep 0.2\n${bridging(dir, "link")}\n`,
         { mode: 0o755 },
       );
       const fallback: ShellRoute = {
