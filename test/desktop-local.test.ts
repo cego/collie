@@ -500,6 +500,10 @@ test("a bridge waiting on an SSO login is not held to the readiness deadline, an
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const go = `${yield* fs.makeTempDirectoryScoped({ prefix: "collie-sso-" })}/go`;
+      // The deadline starts at a moment the test cannot see, so the clock passes it again and again.
+      const pastDeadline = TestClock.adjust("121 seconds").pipe(
+        Effect.andThen(TestClock.withLive(Effect.sleep("25 millis"))),
+      );
       const heard = yield* Deferred.make<string>();
       const signingIn = yield* openBridge(
         [
@@ -511,7 +515,7 @@ test("a bridge waiting on an SSO login is not held to the readiness deadline, an
         (said) => Deferred.succeed(heard, said).pipe(Effect.asVoid),
       ).pipe(Effect.forkScoped);
       yield* Deferred.await(heard);
-      yield* TestClock.adjust("121 seconds");
+      yield* pastDeadline.pipe(Effect.repeat({ times: 40 }));
       yield* fs.writeFileString(go, "");
       yield* Fiber.join(signingIn);
 
@@ -520,12 +524,7 @@ test("a bridge waiting on an SSO login is not held to the readiness deadline, an
         Effect.forkScoped,
       );
       const failed = yield* Fiber.join(silent).pipe(
-        Effect.raceFirst(
-          TestClock.adjust("121 seconds").pipe(
-            Effect.andThen(TestClock.withLive(Effect.sleep("50 millis"))),
-            Effect.forever,
-          ),
-        ),
+        Effect.raceFirst(pastDeadline.pipe(Effect.forever)),
       );
       expect(failed).toEqual({
         state: "unreachable",
