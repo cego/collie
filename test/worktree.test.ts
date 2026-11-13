@@ -4124,11 +4124,6 @@ test("the worktree sweep keeps the tab of a finished Run's agent that is not Qui
 
 const CACHE_TAG = "Signature: 8a477f597d28d172789f06886806bc55\n# a Cargo target\n";
 
-/**
- * A real checkout of a repository that ignores `target/` and `node_modules/`, holding a
- * tagged `crate/target` and a `node_modules` whose tag lacks the signature, and the Run
- * record that says Collie made it.
- */
 const cachedCheckout = Effect.fn("worktreeTest.cachedCheckout")(function* (
   name: string,
   over: Partial<RunFacts> = {},

@@ -671,10 +671,6 @@ test.skipIf(process.platform !== "linux")(
   60_000,
 );
 
-/**
- * A project whose base ignores `target/` and `node_modules/`, and a Run of `workflow` started
- * on a checkout of its own, once `ready` holds for it.
- */
 const runInCheckout = (
   world: World,
   args: ReadonlyArray<string>,

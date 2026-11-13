@@ -1602,7 +1602,6 @@ export const buildCachesSweeper = (
   runs: Effect.Effect<ReadonlyArray<RunFacts>, never, PlatformServices>,
 ): Sweeper => {
   const kind = "build-cache";
-  /** Each checkout Collie made that is still on disk, and the live Run working in it, if any. */
   const checkouts = Effect.gen(function* () {
     const all = yield* runs;
     const liveIn = new Map<string, string>();
