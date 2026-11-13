@@ -24,7 +24,7 @@ import {
   type Generation,
   type HostServices,
 } from "../src/engine";
-import type { RunReport, RequestedBy } from "../src/board-model";
+import { HostRefused, type RunReport, type RequestedBy } from "../src/board-model";
 import { Store } from "../src/store";
 import { writeTask } from "../src/task";
 import { socketOf } from "../src/host";
@@ -382,9 +382,11 @@ test(
 
 /** Each view the reports sweep builds: a Run's id, or the Task a listing was asked for. */
 let built: Array<string | null>;
+let examined: Array<string>;
 
 const sweeping = Effect.gen(function* () {
   built = [];
+  examined = [];
   const registry = yield* Registry;
   yield* write(socketOf(dir()), "");
   yield* Layer.build(
@@ -398,6 +400,8 @@ const sweeping = Effect.gen(function* () {
       Layer.provide(
         Layer.succeed(Registry)({
           ...registry,
+          status: (runId) =>
+            Effect.sync(() => examined.push(runId)).pipe(Effect.andThen(registry.status(runId))),
           view: (runId) =>
             Effect.sync(() => built.push(runId)).pipe(Effect.andThen(registry.view(runId))),
           views: (task) =>
@@ -415,7 +419,7 @@ const asker: RequestedBy = {
 };
 
 test(
-  "the reports sweep builds a view only for the Run an agent started, and never delivers its closed report again",
+  "the reports sweep reads no full view while a requested Run is unfinished or already reported",
   () =>
     runEffect(
       hosted(
@@ -438,17 +442,41 @@ test(
 
           yield* sweeping;
           yield* until(
-            () => Effect.succeed(built),
-            (views) => Arr.filter(views, (run) => run === waiting.runId).length >= 2,
+            () => Effect.succeed(built.length + examined.length),
+            (reads) => reads >= 2,
           );
 
-          expect(new Set(built)).toEqual(new Set([waiting.runId]));
+          expect(built).toEqual([]);
+          expect(new Set(examined)).toEqual(new Set([waiting.runId]));
           expect((yield* (yield* Registry).view(asked.runId))?.report).toEqual(REPORT);
         }),
       ),
     ),
   120_000,
 );
+
+test("a refused status probe still lets a finished Run close its report", () =>
+  runEffect(
+    hosted(
+      Effect.gen(function* () {
+        const run = yield* started(yield* loaded("reported"), "r1", {});
+        yield* settled(run.runId, "complete");
+        yield* (yield* Store).reported(run.runId, { ...REPORT, closed: false });
+        const registry = yield* Registry;
+        yield* sweeping.pipe(
+          Effect.provideService(Registry, {
+            ...registry,
+            status: () => Effect.fail(new HostRefused({ reason: "module unavailable" })),
+          }),
+        );
+        yield* until(
+          () => registry.view(run.runId),
+          (view) => view?.report?.closed === true,
+        );
+        expect(built).toContain(run.runId);
+      }),
+    ),
+  ));
 
 test(
   "the reports sweep closing a Task lists that Task's Runs only",

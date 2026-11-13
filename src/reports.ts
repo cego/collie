@@ -184,7 +184,17 @@ export const reportsLayer = (opts: {
         if (!(yield* fs.exists(socketOf(env.stateDir)))) return;
         const views = yield* Effect.forEach(
           Arr.filter(yield* store.reportsPending, owesReport),
-          (row) => registry.view(row.run),
+          (row) =>
+            Effect.gen(function* () {
+              const status = yield* registry.status(row.run).pipe(Effect.option);
+              if (
+                Option.isSome(status) &&
+                (status.value.status === "pending" || status.value.status === "suspended")
+              )
+                return null;
+              // An unloaded module can still have a terminal record for the full view to read.
+              return yield* registry.view(row.run);
+            }),
           { concurrency: 4 },
         );
         yield* Effect.forEach(
