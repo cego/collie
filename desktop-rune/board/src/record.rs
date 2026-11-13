@@ -6,6 +6,7 @@ pub mod agents;
 pub mod artefacts;
 pub mod diff;
 pub mod evidence;
+pub mod reports;
 pub mod review;
 pub mod tabs;
 mod view;

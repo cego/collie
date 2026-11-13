@@ -33,6 +33,7 @@ import { epochMs, isoAt, nowIso } from "./time";
 import type { PlatformError } from "effect/PlatformError";
 import { StoreWrites } from "./store-writes";
 import { refreshJobs } from "./artefact-refresh";
+import { narrativeReports } from "./narrative-reports";
 
 const json = Schema.fromJsonString(Artefact);
 const decode = (data: string) => Schema.decodeEffect(json)(data).pipe(Effect.orDie);
@@ -505,7 +506,25 @@ const make = Effect.gen(function* () {
     yield* notify(run.id);
     return { item, fresh: true };
   });
+  const narratives = yield* narrativeReports(
+    (run, installation, input, request, actor, original) =>
+      register(run, installation, input, request, actor).pipe(
+        Effect.flatMap((receipt) =>
+          Effect.gen(function* () {
+            const item = {
+              ...receipt.item,
+              created: original === null ? null : { at: original, provenance: "source-event" },
+              updated: null,
+            };
+            yield* save(item);
+            return { ...receipt, item };
+          }),
+        ),
+      ),
+    notify,
+  );
   const reconcile = Effect.fn("Artefacts.reconcile")(function* (run: RunFacts, background = false) {
+    yield* narratives.reconcile(run, background ? 8 : Number.POSITIVE_INFINITY);
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const random = yield* SecureRandom.SecureRandom;
@@ -937,6 +956,8 @@ const make = Effect.gen(function* () {
       );
     });
   return {
+    reports: narratives.reports,
+    prepareReports: (run: RunFacts) => reconciling.withPermit(narratives.reconcile(run, 8)),
     list,
     cached,
     index,

@@ -21,6 +21,7 @@ import { forgeOf } from "./forge/forge";
 import { appendJournal, findLastJournal, readJournal } from "./journal";
 import { redact } from "./redact";
 import { sameTree, type Verification } from "./verify";
+import { ProducerReport, reportFields } from "./narrative-model";
 
 const RevisionSchema = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
@@ -30,6 +31,7 @@ const RevisionSchema = Schema.Struct({
 });
 
 export const CardSchema = Schema.Struct({
+  ...ProducerReport.fields,
   id: Schema.String,
   run: Schema.String,
   kind: Schema.Literals(["slice", "review", "fix-round", "mr", "final", "followup", "hold"]),
@@ -244,6 +246,10 @@ export function clean(card: Card): Card {
  * anything it says that nothing else recorded would be a claim nobody can check.
  */
 export interface CardSources {
+  readonly summary?: string;
+  readonly blocker?: string;
+  readonly next_action?: string;
+  readonly report?: Card["report"];
   readonly run: string;
   readonly kind: Card["kind"];
   readonly step: string;
@@ -281,6 +287,7 @@ export function buildCard(sources: CardSources): Card {
     verifiedHere: Arr.some(verifications, (entry) => entry.result === "pass"),
   });
   return clean({
+    ...reportFields(sources),
     id: `card-${Bun.hash(`${sources.run}${sources.step}${sources.iteration}${sources.kind}${sources.at}`).toString(16)}`,
     run: sources.run,
     kind: sources.kind,

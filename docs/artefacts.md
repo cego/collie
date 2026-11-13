@@ -7,6 +7,7 @@ keep their specialized views and existing references.
 Select an item to load its retained revision. Images fit without distortion. Markdown
 renders headings, lists, code, and links. Plain text remains selectable and preserves
 whitespace. Text previews stop at 256 KiB; **Open** and **Save** provide the complete file.
+Registered reports use the complete retained Markdown in the same reader.
 PDFs, archives, SVG, and other unsupported binary formats have open/save actions.
 Loading, empty text, decode failure, and unsupported preview have distinct messages.
 
@@ -53,6 +54,33 @@ through Machine renaming. `<machine>:<run>` also works. A bare Run id present on
 installations is refused with candidates; multiple routes to one installation count once.
 These routes inspect and refresh historical results without requiring a current Task card.
 The terminal board has no separate collection page.
+
+## Reading an agent's report
+
+Cards keep a narrative within 360 Unicode characters and two sentences, with the current
+state, blocker, and next action separate. **Open report** opens the registered Markdown
+in the record reader. It supports headings, code, links, text selection, and scrolling.
+**Back** returns to the Task. A helper's report opens on its originating Machine, Run,
+and Step; the parent keeps a reference rather than another copy.
+
+The healer and investigator can return a registered `report` address alongside `summary`,
+`blocker`, and `next_action`. Accepted older Outputs also become reports through the
+host's cards journal. Recovery reports preserve every recorded event in an episode,
+including earlier attempts. The host still judges recovery from the Run's facts.
+
+Historical preparation reaches retained Runs outside the current board. It reads known
+card and recovery journals, leaving original Outputs and evidence unchanged. Source
+keys retain report identity across restart; a changed report uses the existing revision
+and unseen rules. Unknown original dates remain unknown beside the host observation.
+
+Preparation failures keep **Read recovery detail** available and show the failure with
+**Retry report preparation**. A missing or offline owner shows its actual read failure.
+**Retry report** retries a failed read; **Retry report owner** reloads its catalogue.
+Listing, prefetch, and failed loads never mark a report seen. Only the selected revision
+successfully displayed by the native reader records the existing receipt.
+
+CLI, herdr, chat, and agents read reports through the same artefact addresses and operations
+as other files. A report uses role `report`, so collection filters can find it.
 
 ## Registering a file
 
@@ -184,6 +212,19 @@ or add attachments to prompts. The implementation's promises are checked at thes
 | Native collection handlers, keyboard and AccessKit controls, stale results, late replies         | `desktop-rune/board/tests/artefacts_page.rs`                                                                    |
 | Search cursors, coverage, unknown kinds, stale and null states across Rust                       | `test/rune-contract.test.ts`, `test/rune-types.test.ts`                                                         |
 
+Report evidence also covers these boundaries:
+
+| Behavior                                                                                                                               | Evidence                                                                                                                                                    |
+| -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Accepted healer Output, parent reference, actual host bytes, concise card, and Markdown reader                                         | `test/heal.test.ts` supplies its public-host fixture to `accepted_producer_fixture` when `COLLIE_REPORT_READER` names the compiled native unit-test binary. |
+| Older card narratives, more than 20 recovery episodes, retained Runs, interruption, dates, failed references, and bounded fair retries | `test/narrative-reports.test.ts`                                                                                                                            |
+| Investigator reports linked to a parent on another Machine without copying their content                                               | `test/reports.test.ts`                                                                                                                                      |
+| Named card controls, full Markdown, back navigation, failure states, and retry                                                         | `desktop-rune/board/tests/narrative_reports.rs`                                                                                                             |
+| Exact revision receipts, hidden previews, reopened records, and late callbacks                                                         | `desktop-rune/board/tests/record_view.rs`                                                                                                                   |
+| Additive summaries, addresses, helper ownership, and unavailable states                                                                | `test/rune-contract.test.ts`, `test/rune-types.test.ts`                                                                                                     |
+
+Live report readability, keyboard/screen-reader use, and remote-owner opening on Linux
+and macOS remain **PENDING** until recorded against the implementation revision.
 Live visual, screen-reader, and audible playback observations on Linux and macOS remain
 **PENDING** until recorded against an implementation revision. Handler and offscreen
 decoder tests do not replace those operator observations. The Run's final `check` proof

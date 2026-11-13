@@ -106,6 +106,7 @@ import { RECOMMENDED_MARKER, questionRepair, shortfallOf, solutionsOf } from "./
 import { UNPROVABLE, endAgent, type EndDeps } from "./agent-end";
 import { boundThread, withCodex } from "./codex";
 import { kindForRole } from "./cards";
+import { narrativeOf } from "./narrative-model";
 import { Oversight } from "./oversight";
 import {
   autoCompactWindowAsWritten,
@@ -927,6 +928,7 @@ export const agentWork = <
             execute: oversight.value.drift(work.runId, `${work.operation} collected`, "none").pipe(
               Effect.andThen(
                 oversight.value.card(work.runId, {
+                  ...narrativeOf(value),
                   kind: kindForRole(role),
                   step: work.operation,
                   claims: [`wrote ${output}`],
@@ -4614,7 +4616,7 @@ const READING_DELIVERIES =
 
 /** Every Workflow's agents hand over results the same way, outside their Output. */
 const REGISTERING =
-  "To hand a human a result they should find, collie_do artefact_register it on your Run: a path, or a url for a link, Claude artefact or Site with the provider, namespace, resource and version its tool returned. It changes neither your Output nor what proves it.";
+  "To hand a human a result they should find, collie_do artefact_register it on your Run: a path, or a url for a link, Claude artefact or Site with the provider, namespace, resource and version its tool returned. Put substantial findings, investigations and recovery diagnoses in a Markdown report in your Run's handoffs directory and register it. Keep summary within 360 Unicode characters and two sentences; keep blocker and next_action short and actionable. Where your Output accepts report, return its registered installation, run, id, revision and originating step. It changes neither your Output's judgement nor what proves it.";
 
 /** Claude's own convention for a question, which other harnesses do not know. */
 const ASKING = `When you ask the human a question, end exactly one option's label with "${RECOMMENDED_MARKER}", and offer at least three options, each with its own consequence.`;

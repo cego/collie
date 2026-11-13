@@ -595,6 +595,11 @@ const migrations = (imports: {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`CREATE TABLE collie_artefact_index (run TEXT PRIMARY KEY, cursor TEXT NOT NULL, done INTEGER NOT NULL)`;
   }),
+  "23_narrative_reports": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE collie_narratives (run TEXT NOT NULL, key TEXT NOT NULL, ordinal INTEGER NOT NULL, fingerprint TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(run, key))`;
+    yield* sql`CREATE TABLE collie_narrative_work (run TEXT PRIMARY KEY, cursor TEXT NOT NULL)`;
+  }),
 });
 
 /** How often a commit by another connection, another process's, is looked for. */
@@ -1109,6 +1114,8 @@ function makeStore(
                   Effect.orDie,
                 );
                 yield* sql`DELETE FROM collie_artefact_index WHERE run = ${run}`.pipe(Effect.orDie);
+                yield* sql`DELETE FROM collie_narratives WHERE run = ${run}`.pipe(Effect.orDie);
+                yield* sql`DELETE FROM collie_narrative_work WHERE run = ${run}`.pipe(Effect.orDie);
                 yield* sql`DELETE FROM collie_runs WHERE run = ${run}`.pipe(Effect.orDie);
                 gone.push(run);
               }

@@ -8,10 +8,11 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Effect, Exit, Schema } from "effect";
 import * as Rpc from "effect/rpc/Rpc";
-import { ActionFailed, DesktopRpcs, FlockItem } from "../desktop/src/shared/flock";
+import { ActionFailed, DesktopRpcs, FlockItem, KeptRecord } from "../desktop/src/shared/flock";
 import { runEffect } from "./support/effect";
 import { AguiEvent } from "../desktop/src/shared/agui";
-import { FLOCK, SAID } from "./support/rune-fixtures";
+import { FLOCK, SAID, REPORTS } from "./support/rune-fixtures";
+import { runDetail } from "./support/run-detail";
 import { exec } from "./support/command";
 
 const WORKSPACE = new URL("../desktop-rune/", import.meta.url).pathname;
@@ -20,6 +21,7 @@ const cargo = Bun.which("cargo");
 const flock = DesktopRpcs.requests.get("flock")!;
 const syncNow = DesktopRpcs.requests.get("syncNow")!;
 const say = DesktopRpcs.requests.get("say")!;
+const detail = DesktopRpcs.requests.get("runDetail")!;
 /** Each request of the group, typed as all of them. */
 type DesktopRpc = typeof flock;
 
@@ -94,6 +96,28 @@ const frames = Effect.gen(function* () {
       values: yield* Effect.forEach(FLOCK, (item) => encoder(FlockItem)(item)),
     },
     {
+      _tag: "Request",
+      id: 4,
+      tag: "runDetail",
+      payload: yield* encoder(detail.payloadSchema)({
+        installation: "inst-build",
+        runId: "helper-old",
+      }),
+      headers: [],
+    },
+    {
+      _tag: "Chunk",
+      requestId: 4,
+      values: [
+        yield* encoder(KeptRecord)({
+          detail: runDetail({ narratives: REPORTS }),
+          asOf: null,
+          bytes: 4096,
+        }),
+      ],
+    },
+    { _tag: "Exit", requestId: 4, exit: yield* encoder(Rpc.exitSchema(detail))(Exit.void) },
+    {
       _tag: "Chunk",
       requestId: 3,
       values: yield* Effect.forEach(SAID, (event) => encoder(AguiEvent)(event)),
@@ -121,7 +145,9 @@ const typed = (frame: Frame, tags: ReadonlyMap<number, DesktopRpc>) =>
         return {
           ...frame,
           values: yield* Effect.forEach(frame.values, (value) =>
-            decoder(frame.requestId === 3 ? AguiEvent : FlockItem)(value),
+            decoder(
+              frame.requestId === 3 ? AguiEvent : frame.requestId === 4 ? KeptRecord : FlockItem,
+            )(value),
           ),
         };
       case "Exit":
@@ -408,6 +434,7 @@ describe.skipIf(cargo === null)("DesktopRpcs between the main process and the Ru
           [1, syncNow],
           [2, syncNow],
           [3, say],
+          [4, detail],
         ]);
         const want = yield* Effect.forEach(sent, (frame) => typed(frame, tags));
         const got = yield* Effect.forEach(back, (frame) => typed(frame, tags));

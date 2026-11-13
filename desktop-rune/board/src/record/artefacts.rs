@@ -23,6 +23,8 @@ const TEXT_LIMIT: usize = 256 * 1024;
 
 #[derive(Default)]
 pub struct Collection {
+    pub report_only: bool,
+    pub expected_report: Option<collie_desktop_protocol::generated::Address>,
     pub items: Option<Vec<Artefact>>,
     pub loading: bool,
     pub dirty: bool,
@@ -127,7 +129,11 @@ fn prepare(item: &Artefact, bytes: &[u8]) -> Result<Preview, String> {
     {
         let source = std::str::from_utf8(bytes)
             .map_err(|_| "This file is not valid UTF-8 text; use Open or Save.")?;
-        let mut end = source.len().min(TEXT_LIMIT);
+        let mut end = if item.role == "report" {
+            source.len()
+        } else {
+            source.len().min(TEXT_LIMIT)
+        };
         while !source.is_char_boundary(end) {
             end -= 1;
         }
@@ -180,8 +186,24 @@ impl App {
                 };
                 record.artefacts.loading = false;
                 match answer {
-                    Ok(collection) => {
+                    Ok(mut collection) => {
                         let previous = record.artefacts.selected.clone();
+                        if let Some(expected) = record.artefacts.expected_report.take()
+                            && let Some(item) = collection.items.iter_mut().find(|item| item.id == expected.id)
+                            && item.revision != expected.revision
+                        {
+                            let (Some(digest), Some(size)) = (&expected.digest, expected.size) else {
+                                record.artefacts.failed = Some("The owner has no metadata for this selected report revision. Retry its owner or read its legacy detail.".into());
+                                record.artefacts.items = Some(collection.items);
+                                record.artefacts.expected_report = Some(expected);
+                                return;
+                            };
+                            item.revision = expected.revision;
+                            item.digest = digest.clone();
+                            item.size = size;
+                            item.media_type = "text/markdown".into();
+                            item.role = "report".into();
+                        }
                         record.artefacts.items = Some(collection.items);
                         let next = previous.as_ref().and_then(|(id, _)| {
                             record
@@ -365,6 +387,18 @@ impl App {
         record.artefacts.preview = Some(Preview::Loading);
         let key = selection(record).unwrap();
         self.read_artefact_part(key, item, Vec::new());
+    }
+
+    pub fn retry_artefact(&mut self) {
+        let id = self
+            .record
+            .open
+            .as_ref()
+            .and_then(|record| record.artefacts.selected.as_ref().map(|(id, _)| id.clone()));
+        self.hide_artefact();
+        if let Some(id) = id {
+            self.select_artefact(&id);
+        }
     }
 
     fn read_artefact_part(&mut self, key: Selection, item: Artefact, bytes: Vec<u8>) {
@@ -724,8 +758,16 @@ pub fn view(record: &Record, k: &Kit) -> El {
         .key("artefacts")
         .gap(12.0)
         .w_full()
-        .child(register)
-        .child(link);
+        .children((!state.report_only).then_some(register))
+        .children((!state.report_only).then_some(link));
+    if state.report_only {
+        body = body.child(
+            Button::new("Retry report owner")
+                .on_press(|app: &mut App| app.read_artefacts(true))
+                .build(k)
+                .key("report-refresh"),
+        );
+    }
     if state.loading {
         body = body.child(quiet("Reading artefacts…", k).role("status"));
     }
@@ -737,6 +779,9 @@ pub fn view(record: &Record, k: &Kit) -> El {
             body = body.child(quiet("This Run has no retained material.", k));
         }
         for item in items {
+            if state.report_only {
+                continue;
+            }
             let id = item.id.clone();
             let status = if item
                 .seen
@@ -768,6 +813,15 @@ pub fn view(record: &Record, k: &Kit) -> El {
         }
     }
     let Some(item) = selected(record) else {
+        if state.report_only && state.items.is_some() && !state.loading {
+            body = body.child(
+                quiet(
+                    "Report unavailable: its owner has no retained copy of this selected revision.",
+                    k,
+                )
+                .role("alert"),
+            );
+        }
         return body;
     };
     let date = item
@@ -886,7 +940,9 @@ pub fn view(record: &Record, k: &Kit) -> El {
         Some(Preview::Image(image)) => rune::el().pixels_fit(image.pixels(), SurfaceFit::Fit).w_full().h(320.0).role("img").label(item.title.clone()),
         Some(Preview::Text { text, markdown: md, truncated }) => col().w_full().child(if text.is_empty() { quiet("This file is empty.", k) } else if *md { markdown(text, k) } else { mono(text, "artefact-text", k) }).children(truncated.then(|| quiet("Preview truncated at 256 KiB. Open or Save provides the complete retained file.", k))),
         Some(Preview::Unsupported) => quiet("Inline preview is unavailable for this type. Use Open or Save.", k),
-        Some(Preview::Failed(why)) => quiet(format!("Preview failed: {why}"), k).role("alert"),
+        Some(Preview::Failed(why)) => col().w_full().gap(8.0)
+            .child(quiet(format!("Preview failed: {why}"), k).role("alert"))
+            .child(Button::new("Retry report").on_press(App::retry_artefact).build(k).key("report-read-retry")),
         Some(Preview::Video(player)) => {
             let state = player.state();
             let (w, h) = state.size.unwrap_or((16, 9));

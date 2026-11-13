@@ -2,8 +2,20 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
-import { Effect, Fiber, FileSystem, Option, Schedule, Schema, flow, Result } from "effect";
-import { connect, ownerOf } from "../src/host";
+import {
+  Config,
+  Effect,
+  Fiber,
+  FileSystem,
+  Option,
+  Schedule,
+  Schema,
+  Stream,
+  flow,
+  Result,
+} from "effect";
+import { exec } from "./support/command";
+import { connect, ownerOf, frontDoor, socketOf } from "../src/host";
 import { holderLives } from "../src/lock";
 import { readAudit } from "../src/audit";
 import { HealOutput } from "../src/heal";
@@ -13,6 +25,9 @@ import { collie, proves, type World } from "./support/world";
 import { until } from "./support/host";
 
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
+const reportReader = Option.getOrUndefined(
+  Effect.runSync(Config.option(Config.String("COLLIE_REPORT_READER"))),
+);
 
 const FINDING = {
   collie_defect: true,
@@ -83,8 +98,9 @@ test(
         Effect.gen(function* () {
           const outputs = yield* queued(world, [
             {
-              diagnosis: "The Run waits on nothing I can see.",
-              actions: ["read its record"],
+              diagnosis:
+                "# Diagnosis\n\nThe Run waits on a missing socket.\n\nThe restart succeeded, but the login still fails.\n\n```text\nECONNREFUSED\n```",
+              actions: ["read its record", "retried the socket", "checked the login"],
               result: "resumed",
               needs_person: "Only you know what it parked on.",
               finding: FINDING,
@@ -106,6 +122,90 @@ test(
           );
           const heals = yield* healsOf(client, runId);
           expect(heals).toHaveLength(1);
+          const door = yield* frontDoor(socketOf(world.state));
+          const registeredReports = Arr.filter(
+            (yield* door.artefacts({
+              runId: heals[0]!.runId,
+              refresh: true,
+            })).items,
+            (item) => item.role === "report",
+          );
+          expect(registeredReports).toHaveLength(1);
+          const retainedReport = registeredReports[0]!;
+          const content = Buffer.from(
+            (yield* door.artefactRead({
+              runId: heals[0]!.runId,
+              id: retainedReport.id,
+              revision: retainedReport.revision,
+              offset: 0,
+            })).content,
+            "base64",
+          ).toString();
+          expect(content).toContain("The restart succeeded, but the login still fails.");
+          expect(content).toContain("checked the login");
+          expect(content).toContain("An agent's turn can end with its verdict only in chat.");
+          expect(content).toContain("Only you know what it parked on.");
+          const concluded = Option.getOrThrow(
+            Arr.findFirst(lines, (line) => line.outcome === "false-recovery"),
+          );
+          expect(concluded.report).toMatchObject({
+            run: heals[0]!.runId,
+            id: retainedReport.id,
+            revision: retainedReport.revision,
+            step: "mend",
+          });
+          expect(concluded.blocker).toBe("Only you know what it parked on.");
+          yield* door.artefacts({ runId, refresh: true });
+          const projected = yield* client.run({ runId });
+          expect(
+            Option.getOrUndefined(
+              Arr.findFirst(
+                projected?.narratives ?? [],
+                (one) => one.address?.run === heals[0]!.runId,
+              ),
+            ),
+          ).toMatchObject({
+            state: "ready",
+            blocker: "Only you know what it parked on.",
+            nextAction: "Only you know what it parked on.",
+          });
+          const reader = reportReader;
+          if (reader !== undefined) {
+            const fs = yield* FileSystem.FileSystem;
+            const snapshot = yield* door.board().pipe(
+              Stream.filter((message) => message._tag === "Snapshot"),
+              Stream.runHead,
+            );
+            const fixture = `${world.home}/accepted-report.json`;
+            const nativeDetail = yield* door
+              .runDetail({ runId: heals[0]!.runId, tail: false, pages: 1, refreshMr: false })
+              .pipe(Stream.runHead);
+            yield* fs.writeFileString(
+              fixture,
+              asJson({
+                snapshot: Option.getOrThrow(snapshot),
+                parent: runId,
+                detail: {
+                  detail: Option.getOrThrow(nativeDetail),
+                  asOf: null,
+                  bytes: content.length,
+                },
+                item: retainedReport,
+                body: content,
+                diagnosis: "The restart succeeded, but the login still fails.",
+                action: "checked the login",
+                next: "Only you know what it parked on.",
+              }),
+            );
+            const native = yield* exec(
+              [reader, "accepted_producer_fixture", "--ignored", "--exact"],
+              {
+                cwd: new URL("../desktop-rune/", import.meta.url).pathname,
+                env: { ...process.env, COLLIE_REPORT_FIXTURE: fixture },
+              },
+            );
+            expect(native.exitCode, native.stderr + native.stdout).toBe(0);
+          }
           const park = Arr.findFirst(lines, (line) => line.kind === "halt");
           expect(park._tag).toBe("Some");
           const healStart = Arr.findFirst(
@@ -125,7 +225,7 @@ test(
           );
           expect(told).toEqual([`needs-you:heal:${park._tag === "Some" ? park.value.park : ""}`]);
           expect(Arr.join(view?.park?.history ?? [], "\n")).toContain(
-            "The Run waits on nothing I can see.",
+            "The Run waits on a missing socket.",
           );
           const report = yield* collie(world, ["run", "report"]);
           expect(report.envelope.data).toMatchObject({
@@ -336,7 +436,27 @@ test(
             (heals) => heals.length > 0,
           );
           const healer = { ...(yield* launchOf(client, heals[0]!.runId)), runId: heals[0]!.runId };
+          const ownReport = `${world.state}/runs/${healer.runId}/handoffs/diagnosis.md`;
+          yield* fs.makeDirectory(`${world.state}/runs/${healer.runId}/handoffs`, {
+            recursive: true,
+          });
+          yield* fs.writeFileString(
+            ownReport,
+            "# Diagnosis\n\nOnly a person can restore the login.\n",
+          );
+          expect(
+            yield* asHealer(world, healer, [
+              { kind: "artefact_register", run: healer.runId, path: ownReport, role: "report" },
+            ]),
+          ).toContain("artefact_register: applied");
           const refused = [
+            { kind: "artefact_register", run: runId, path: ownReport, role: "report" },
+            {
+              kind: "artefact_register",
+              run: healer.runId,
+              path: `${world.project}/foreign.md`,
+              role: "report",
+            },
             { kind: "answer", run: other.runId, choiceId: "q1", answer: "yes" },
             { kind: "release", run: other.runId },
             { kind: "stop", run: runId },

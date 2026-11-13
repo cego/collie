@@ -3,6 +3,7 @@
 // Bun-only import: a browser bundle imports this too.
 
 import * as Struct from "effect/Struct";
+import { NarrativeReport } from "./narrative-model";
 import {
   Artefact,
   ArtefactCollection,
@@ -482,6 +483,7 @@ export const TaskView = Schema.Struct({
   /** The Herd the Task's workspace is in, where its record says; a `herds` id. */
   herd: Schema.optionalKey(Schema.String),
   state: TaskState,
+  narratives: Schema.optionalKey(Schema.Array(NarrativeReport)),
   steps: Schema.Array(BoardStep),
   sentence: Schema.String,
   age: Schema.String,
@@ -1009,6 +1011,7 @@ export const RecordPart = Schema.Literals(["diff", "tail", "mr", "texts"]);
 export type RecordPart = typeof RecordPart.Type;
 
 export const RunDetail = Schema.Struct({
+  narratives: Schema.optionalKey(Schema.Array(NarrativeReport)),
   branchProgress: Schema.optionalKey(Schema.NullOr(Schema.String)),
   id: Schema.String,
   park: Schema.optionalKey(Schema.NullOr(Park)),

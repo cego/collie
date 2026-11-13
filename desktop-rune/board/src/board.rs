@@ -611,6 +611,10 @@ impl App {
         }
     }
 
+    pub(crate) fn warn(&mut self, title: String) {
+        self.notify(title, false, None);
+    }
+
     fn notify(&mut self, title: String, ok: bool, again: Option<Again>) {
         // What went well is said once; the next news takes its place.
         self.board.notices.retain(|n| !n.ok);

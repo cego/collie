@@ -793,6 +793,11 @@ it, however old: it does not go behind `older…` until it is seen. Its sentence
 button, records it seen once for the whole Flock, on every board and Desktop, and it goes back
 behind the line.
 
+Substantial agent findings and recovery diagnoses have **Open report** on the native
+card. It opens the complete retained Markdown while the card keeps a concise summary,
+blocker, and next action. See [reading an agent's report](artefacts.md#reading-an-agents-report)
+for preparation, helper ownership, retry, and exact revision receipts.
+
 A Task whose Runs opened or were given several merge requests — a fan-out across
 repositories, or a Follow-up Run that opened its own — lists each on its card, by wave, with
 its own state, checks and head. Each is judged Ready to release at its own head, and the

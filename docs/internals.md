@@ -2824,3 +2824,29 @@ deadlines; failed routes remain named in partial responses. Desktop, CLI, and ch
 this search. Read and mutation routes resolve the owner before asking that host, including
 Runs outside current cards. The native page fences search and seen responses by request
 generation and opens results through the existing record serial and preview fences.
+
+`src/narrative-reports.ts` derives reports from the full known card and recovery journals.
+It groups recovery events by episode and keeps their original order in Markdown under
+the Run's `.reports/`. Registration retains those bytes in the existing catalogue.
+The additional SQLite rows cache preparation state, source fingerprints, and report
+references; they contain no report bodies or second catalogue. Original journals and
+Outputs are never rewritten. Unknown source dates and Steps remain unknown.
+
+Automatic preparation handles at most eight changed sources per Run attempt, through
+the existing coalesced side jobs. It gives the latest source a place and rotates older
+work using a durable cursor. A failed source cannot hold the front after restart.
+Board reads query only the cached projection. An unchanged source produces no report
+write or invalidation. Deterministic source paths and registration requests recover
+interruption after file persistence or catalogue registration without duplicating ids.
+
+The accepted agent Output path records the complete supported narrative in its existing
+card journal. The healer and investigator accept additive report/summary fields; older
+Outputs still work. A Heal may register only a Markdown report from its own handoffs,
+including a real-path check. Its recovery control remains deliver/resume for the Run it
+heals, and the host still judges recovery from facts.
+
+Remote helpers send their registered references in the existing authenticated Run-link
+notice. The receiver checks that addresses belong to that sender's Run and installation,
+then projects the links on the parent Task. Reads and seen receipts go to the owner
+through the existing artefact routes. Native **Open report** uses the formatted Markdown
+reader and its record/selection fences, with a legacy detail route until registration succeeds.

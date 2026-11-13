@@ -10,6 +10,8 @@
 // pieces below is upstream's rather than Collie's.
 
 import { ShippingGo, writeStageProof } from "./shipping";
+import { Artefacts } from "./artefacts";
+import { NarrativeReport } from "./narrative-model";
 import * as Struct from "effect/Struct";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
@@ -6564,6 +6566,7 @@ const SupersedeRecord = Schema.Struct({ decision: Schema.String, agent: Schema.S
 export { Steered };
 
 export const RunView = Schema.Struct({
+  narratives: Schema.optionalKey(Schema.Array(NarrativeReport)),
   requestedBy: Schema.optional(RequestedBy),
   /** The parked Run this one is a Heal of; absent for every other Run. */
   heals: Schema.optionalKey(Schema.String),
@@ -8272,7 +8275,11 @@ const makeRegistry: (
             id: lastPark?.park ?? lastPark?.at ?? row.admitted,
             since: lastPark?.at ?? row.admitted,
           });
+    const catalogue = yield* Effect.serviceOption(Artefacts);
+    const reading: Types.Mutable<Pick<RunView, "narratives">> = {};
+    if (Option.isSome(catalogue)) reading.narratives = yield* catalogue.value.reports(row.run);
     const about = {
+      ...reading,
       ...admitted,
       strategies: generation?.hints ?? {},
       cwd,

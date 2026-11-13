@@ -96,6 +96,8 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub herd: Option<String>,
     pub state: State,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub narratives: Option<Vec<Narrative>>,
     pub steps: Vec<Step>,
     pub sentence: String,
     pub age: String,
@@ -167,6 +169,57 @@ pub enum State {
     Abandoned,
     #[serde(rename = "done")]
     Done,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Narrative {
+    pub key: String,
+    pub title: String,
+    pub summary: String,
+    pub blocker: Option<String>,
+    #[serde(rename = "nextAction")]
+    pub next_action: Option<String>,
+    pub state: NarrativeState,
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<Address>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
+    pub at: Option<String>,
+    #[serde(rename = "observedAt")]
+    pub observed_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum NarrativeState {
+    #[serde(rename = "preparing")]
+    Preparing,
+    #[serde(rename = "ready")]
+    Ready,
+    #[serde(rename = "failed")]
+    Failed,
+    #[serde(rename = "unavailable")]
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Address {
+    pub installation: String,
+    pub run: String,
+    pub id: String,
+    pub revision: i64,
+    pub step: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Origin {
+    pub installation: String,
+    pub run: String,
+    pub step: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1520,6 +1573,8 @@ pub struct KeptRecord {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Detail {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub narratives: Option<Vec<Narrative>>,
     #[serde(rename = "branchProgress", default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
     pub branch_progress: Option<Option<String>>,
     pub id: String,
@@ -2650,13 +2705,13 @@ pub struct ArtefactRegisterPayloadProvider {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArtefactRegistered {
-    pub address: Address,
+    pub address: ArtefactRegisteredAddress,
     pub item: Artefact,
     pub retained: Retained,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Address {
+pub struct ArtefactRegisteredAddress {
     pub installation: String,
     pub run: String,
     pub id: String,

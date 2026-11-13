@@ -331,6 +331,8 @@ fn long_text_exposes_its_limit_and_failed_open_and_save_leave_binary_material_un
     let harness = Harness::<App>::new();
     let mut runtime = opened(&harness);
     let long = vec![b'x'; 300 * 1024];
+    let mut report = artefact("long-report", "diagnosis.md", "text/markdown", &long, 1);
+    report["role"] = json!("report");
     let bytes = b"\x00\xff\x80";
     collection(
         &mut runtime,
@@ -338,6 +340,7 @@ fn long_text_exposes_its_limit_and_failed_open_and_save_leave_binary_material_un
         vec![
             artefact("long", "output.log", "text/plain", &long, 1),
             artefact("binary", "file.bin", "application/octet-stream", bytes, 1),
+            report,
         ],
     );
     selected_bytes(&mut runtime, &harness, "long", &long);
@@ -351,6 +354,11 @@ fn long_text_exposes_its_limit_and_failed_open_and_save_leave_binary_material_un
             .accessibility_json()
             .to_string()
             .contains("Preview truncated")
+    );
+    selected_bytes(&mut runtime, &harness, "long-report", &long);
+    assert!(
+        matches!(&runtime.state.record.open.as_ref().unwrap().artefacts.preview,
+        Some(Preview::Text {text, markdown:true, truncated:false}) if text.len() == long.len())
     );
     selected_bytes(&mut runtime, &harness, "binary", bytes);
     harness

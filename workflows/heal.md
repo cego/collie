@@ -24,3 +24,14 @@ Write your Output only after you have seen the Run leave its park (`result: resu
 decided only a person can move it (`result: escalate`, with `needs_person` saying why and
 what you tried). Collie judges the Run's facts, not your `result`: saying `resumed` while
 the Run is still parked is recorded as a false recovery.
+
+Keep the complete diagnosis, attempted actions, escalation reason, and human next action
+in a Markdown report in your own Run's handoffs directory. Register it on your own Run
+through `collie_do artefact_register` with `role: report`, or
+`collie run artefact register --role report`. Return its
+registered address as `report`, including `installation`, `run`, `id`, `revision`, and
+your originating `step`. Keep `summary` within 360 Unicode characters and two sentences.
+Use short `blocker` and `next_action` fields so the current obstacle and action stay visible
+on the card. Preserve the structured finding and recovery result in your Output.
+Registration is limited to Markdown in your own Run's handoffs. It grants no additional
+control over the healed Run.
