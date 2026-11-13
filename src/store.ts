@@ -38,13 +38,14 @@ import * as SqlSchema from "effect/sql/SqlSchema";
 import { AuditLine, whoActed } from "./audit";
 import {
   importLaunches,
+  importReports,
   importLedgers,
   importProposals,
   importRegisters,
   importTasks,
 } from "./records-import";
 import { StoreWrites } from "./store-writes";
-import { RequestConflict, type Solution } from "./board-model";
+import { RequestConflict, RunReport, type Solution } from "./board-model";
 import { nowIso } from "./time";
 import { ShippingGo } from "./shipping";
 
@@ -70,6 +71,7 @@ const Run = Schema.Struct({
   asked: Schema.NullOr(Schema.String),
   /** What placing it starts from, so a placement a crash cut short is made again. */
   placing: Schema.NullOr(Schema.String),
+  report: Schema.NullOr(Schema.String),
   /** When this work was claimed, which is when the Run began. */
   admitted: Schema.String,
   /** When the engine took this work, or null while it is still a host's to hand over. */
@@ -328,6 +330,8 @@ export interface StoreApi {
   /** The engine has this work: the receipt a crash before it is what recovery looks for. */
   readonly accepted: (run: string) => Effect.Effect<void>;
   readonly pending: Effect.Effect<ReadonlyArray<RunRow>>;
+  readonly reportsPending: Effect.Effect<ReadonlyArray<RunRow>>;
+  readonly reported: (run: string, report: RunReport) => Effect.Effect<void>;
   readonly run: (run: string) => Effect.Effect<RunRow | null>;
   /** The run a request id was already admitted as, or null. */
   readonly requested: (request: string) => Effect.Effect<RunRow | null>;
@@ -372,6 +376,7 @@ type ImportError = Effect.Error<
     | typeof importRegisters
     | typeof importProposals
     | typeof importLaunches
+    | typeof importReports
   >
 >;
 
@@ -381,6 +386,7 @@ const migrations = (imports: {
   readonly registers: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
   readonly proposals: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
   readonly launches: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
+  readonly reports: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
 }) => ({
   "1_runs": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -563,6 +569,18 @@ const migrations = (imports: {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`ALTER TABLE collie_decisions ADD COLUMN shipping TEXT`;
   }),
+  "19_reports": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`ALTER TABLE collie_runs ADD COLUMN report TEXT`;
+    yield* imports.reports;
+    yield* sql`ALTER TABLE collie_runs ADD COLUMN report_pending INTEGER AS (
+      CASE WHEN json_valid(placing) THEN
+        (json_extract(placing, '$.requestedBy') IS NOT NULL OR json_extract(placing, '$.closes') = 'reported')
+        AND (report IS NULL OR (json_extract(placing, '$.closes') = 'reported' AND json_extract(report, '$.closed') = 0))
+      ELSE 0 END
+    )`;
+    yield* sql`CREATE INDEX collie_runs_reports ON collie_runs (admitted, run) WHERE report_pending = 1`;
+  }),
 });
 
 /** How often a commit by another connection, another process's, is looked for. */
@@ -598,6 +616,7 @@ function makeStore(
           registers: imported(importRegisters),
           proposals: imported(importProposals),
           launches: imported(importLaunches),
+          reports: imported(importReports),
         }),
       ),
       table: "collie_migrations",
@@ -641,7 +660,7 @@ function makeStore(
       }).pipe(Effect.repeat(Schedule.spaced(ELSEWHERE_EVERY))),
     );
 
-    const columns = sql`run, request, workflow, project, input, generation, execution, task, parent, provenance, options, checkout, asked, placing, admitted, accepted`;
+    const columns = sql`run, request, workflow, project, input, generation, execution, task, parent, provenance, options, checkout, asked, placing, report, admitted, accepted`;
 
     const byRequest = SqlSchema.findAll({
       Request: Schema.String,
@@ -667,6 +686,17 @@ function makeStore(
       execute: () =>
         sql`SELECT ${columns} FROM collie_runs WHERE accepted IS NULL ORDER BY admitted, run`,
     });
+
+    const reportsPending = SqlSchema.findAll({
+      Request: Schema.Void,
+      Result: Run,
+      execute: () =>
+        sql`SELECT ${columns} FROM collie_runs WHERE report_pending = 1 ORDER BY admitted, run`,
+    });
+    const encodeReport = flow(
+      Schema.encodeResult(Schema.fromJsonString(RunReport)),
+      Result.getOrThrow,
+    );
 
     const decisionColumns = sql`run, decision, prompt, options, answer, request, asker, answerer, asked, answered, superseded, cause, superseder, messaged, revises, reached, shortfall, shipping`;
 
@@ -1062,6 +1092,12 @@ function makeStore(
           ),
         ).pipe(Effect.catchTag("SqlError", Effect.die)),
       pending: unaccepted().pipe(Effect.orDie),
+      reportsPending: reportsPending().pipe(Effect.orDie),
+      reported: (run, report) =>
+        mutation(
+          [run],
+          sql`UPDATE collie_runs SET report = ${encodeReport(report)} WHERE run = ${run}`,
+        ).pipe(Effect.asVoid, Effect.orDie),
       runs: all,
       near: (run: string) => Effect.map(all, (rows) => nearOf(rows, run)),
       run: (run: string) =>

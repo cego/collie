@@ -10,6 +10,14 @@ and serves `DesktopRpcs` over stdin/stdout through `desktop-rune/core/platform.t
 A release compiles it to `collie-core`; users need no separate Bun installation.
 Effect and the host schemas come from the repository root.
 
+The connection is ready for read-only Flock tools once its bridges and host identity
+answer; it does not wait for the host's initial board build. Workspaces, explicitly
+Machine-qualified Run reads, and remote file reads remain available while that board
+loads. The board stays labelled as connecting, and writes and board actions still
+require its complete live snapshot. An opening bridge must become ready within two
+minutes, and the host must then identify itself within five seconds. Failed openings
+close their scopes before a fallback or retry; the first board must match that identity.
+
 Run the scripts in `package.json` for core typechecking and the native bundle build.
 Core behavior is covered by `test/desktop-*.test.ts` and `test/flock-*.test.ts` at the
 root. `desktop/test/` retains tests of shared logic; native interaction tests live
