@@ -7,15 +7,15 @@ import * as Arr from "effect/Array";
 import { Effect, Layer, Stream } from "effect";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
-import { BRIDGE_READY, FrontDoorRpcs } from "../../src/board-model";
+import { BRIDGE_READY, FrontDoorRpcs, IdentityRpc, PROTOCOL } from "../../src/board-model";
 
-const served = ["board", "toasts", "runDetail"];
+const served = ["identity", "board", "toasts", "runDetail"];
 const Rpcs = FrontDoorRpcs.omit(
   // SAFETY: every other tag of the group, whatever it holds today.
   ...(Arr.filter([...FrontDoorRpcs.requests.keys()], (tag) => !served.includes(tag)) as [
     "refresh",
   ]),
-);
+).add(IdentityRpc);
 
 let sent = 0;
 /** Once the board's count of sent changes holds still, its reader has stopped taking them. */
@@ -30,6 +30,14 @@ const boardStalled = Effect.gen(function* () {
 const handlers = Rpcs.toLayer(
   // SAFETY: the client asks only what `served` names.
   {
+    identity: () =>
+      Effect.succeed({
+        build: "1.0.5",
+        pid: process.pid,
+        dir: "/fixture",
+        installation: "i-1",
+        protocol: PROTOCOL,
+      }),
     board: () =>
       Stream.iterate(0, (seq) => seq + 1).pipe(
         Stream.map((seq) => ({ _tag: "Remove" as const, seq, id: `t-${seq}` })),

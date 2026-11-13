@@ -17,7 +17,7 @@ jobs:
       # libghostty-vt builds with the Zig desktop-rune/README.md pins.
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
-          version: 0.16.0
+          version: 0.17.1
       - run: rustup toolchain install
         working-directory: desktop-rune
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -42,7 +42,7 @@ jobs:
           submodules: true
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
-          version: 0.16.0
+          version: 0.17.1
       - run: rustup toolchain install
         working-directory: desktop-rune
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -61,6 +61,8 @@ jobs:
         env:
           CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_ID_P12 }}
           CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+      - run: cargo test --locked -p collie-desktop-terminal --test vt
+        working-directory: desktop-rune
       - run: |
           [ -n "$API_KEY" ] || exit 0
           printf '%s\n' "$API_KEY" > "$RUNNER_TEMP/AuthKey.p8"
