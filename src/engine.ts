@@ -263,7 +263,7 @@ import {
   type PrerequisiteStanding,
   type RunDetail,
 } from "./prerequisites";
-import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
+import { SELF, argumentsWithout, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
 import { isOutcome, REQUESTABLE } from "./outcome";
 import { Foreground } from "./foreground";
 import {
@@ -1888,7 +1888,15 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly inputs?: Readonly<Record<string, Source>>;
     /** A further condition on the facts, where how it ended is not the whole of it. */
     readonly eligible?: (facts: ActionFacts) => boolean;
+    readonly given?: OfferGiven;
+    readonly ships?: Ships;
+    readonly confirm?: string;
   }
+
+  /** Inputs an offer always starts its workflow with; never asked for, and never the caller's. */
+  export type OfferGiven = Readonly<Record<string, Schema.Json>>;
+  /** What taking an offer ships: \`merge\` only merges, \`release\` also tags and deploys. */
+  export type Ships = "merge" | "release";
 
   /** What an action decides eligibility from: facts, never a workflow's name. */
   export interface ActionFacts {
@@ -1919,6 +1927,10 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly eligible: (facts: ActionFacts) => boolean;
     /** What Collie fills in from the Run itself; the rest is the caller's to give. */
     readonly inputs?: Readonly<Record<string, Source>>;
+    readonly given?: OfferGiven;
+    readonly ships?: Ships;
+    /** What taking it does, which a front door shows and asks about before taking it. */
+    readonly confirm?: string;
   }
 
   /** Names the host supplies at launch; an input of one of these is refused. */
@@ -2554,6 +2566,9 @@ export function declaredByModule(metadata: WorkflowMetadata | undefined): Declar
     arguments: jsonSchemaFor(Schema.Struct(action.arguments)).document,
     kind: "action" as const,
     inputs: action.inputs ?? {},
+    given: action.given,
+    ships: action.ships,
+    confirm: action.confirm,
     connections: action.connections,
     eligible: action.eligible,
   }));
@@ -2565,6 +2580,9 @@ export function declaredByModule(metadata: WorkflowMetadata | undefined): Declar
     kind: "follow-up" as const,
     entry: offer.entry,
     inputs: offer.inputs ?? {},
+    given: offer.given,
+    ships: offer.ships,
+    confirm: offer.confirm,
     connections: offer.connections,
     eligible: (facts: ActionFacts) =>
       (offer.when === "always" || (offer.when === "succeeded") === facts.succeeded) &&
@@ -9024,19 +9042,16 @@ const makeRegistry: (
     );
   });
 
-  /**
-   * A Run, the module it would be offered from now, and the facts those offers are
-   * decided on. The generation is resolved in the Run's own project rather than taken
-   * from the row: what is offered is the current code's to say, and a module that has
-   * been edited away leaves the Run readable and its offers refused with the reason.
-   */
   /** A follow-up takes what its workflow needs and the offer does not fill, so a front door asks for it. */
   const unfilled = (offer: Offer, project: string, filled: Readonly<Record<string, Schema.Json>>) =>
     resolve({ project, id: offer.workflow }).pipe(
       Effect.map((target) => {
         const field = fieldWith(target.hints, "work-source");
         if (field !== undefined) offer = { ...offer, textField: field };
-        const rest = Arr.filter(Rec.toEntries(target.fields), ([name]) => !(name in filled));
+        const rest = Arr.filter(
+          Rec.toEntries(target.fields),
+          ([name]) => !(name in filled) && target.hints[name] !== "internal",
+        );
         if (rest.length === 0) return offer;
         return {
           ...offer,
@@ -9046,6 +9061,21 @@ const makeRegistry: (
       Effect.orElseSucceed(() => offer),
     );
 
+  /** An action draws neither what its offer gives nor what its target only lets its orchestration set. */
+  const unbound = (offer: Offer, project: string) =>
+    resolve({ project, id: offer.workflow }).pipe(
+      Effect.map((target) => Rec.keys(Rec.filter(target.hints, (hint) => hint === "internal"))),
+      Effect.orElseSucceed((): ReadonlyArray<string> => []),
+      Effect.map((internal) => ({
+        ...offer,
+        arguments: argumentsWithout(
+          offer.arguments,
+          new Set([...Rec.keys(offer.given ?? {}), ...internal]),
+        ),
+      })),
+    );
+
+  /** Resolve offers from current project code; removed modules leave the Run readable but refuse its offers. */
   const offeredBy = Effect.fn("Engine.Registry.offeredBy")(function* (
     runId: string,
     request?: string,
@@ -9675,7 +9705,7 @@ const makeRegistry: (
             (offer) =>
               offer.kind === "follow-up"
                 ? unfilled(offer, row.project, inputsFor(offer, { runDir: where, facts, input }))
-                : Effect.succeed(offer),
+                : unbound(offer, row.project),
           ),
         ),
       ),
@@ -9711,6 +9741,14 @@ const makeRegistry: (
         });
       }
       const starting = yield* resolve({ project: row.project, id: offer.workflow });
+      const bound = Arr.findFirst(
+        Rec.keys(options.input),
+        (name) => name in (offer.given ?? {}) || starting.hints[name] === "internal",
+      );
+      if (Option.isSome(bound))
+        return yield* new HostRefused({
+          reason: `"${bound.value}" is Collie's to set when "${options.offer}" starts ${offer.workflow}, so it cannot be given`,
+        });
       // What the offer said Collie fills in, filled from the Run it is about. The
       // caller's own values win: an offer names where a value comes from, and a caller
       // that has a better one for the same field is not overruled by a default.

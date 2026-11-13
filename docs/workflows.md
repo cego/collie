@@ -235,9 +235,13 @@ request is open and its checks left to CI are settled, the Run asks **What next?
 `then=finish` ends at the merge request and `then=release` starts the release, without
 asking. A merge request set to merge itself once green is not asked about: the Run ends at
 it. `then` has no `stage` value: an unattended Run never starts a Stage child.
-A succeeded Run with a merge request also offers **Release** and **Stage** on its card,
-through `collie run action` and in chat, so it can be released or staged later; once its
-merge request has merged, or anybody recorded what became of the work, neither is offered.
+A succeeded Run with a merge request also offers **Release**, **Merge** and **Stage** on its
+card, through `collie run action` and in chat, so it can be released, merged or staged
+later; once its merge request has merged, or anybody recorded what became of the work, none
+is offered. **Release** and **Merge** both start a [`release`](#release) Run, with `ship`
+`release` or `merge`, and each says before it starts what it will do: Release merges, tags
+and deploys on the human's go, and Merge only merges. A ready card's primary is
+**Release**.
 
 A Run whose gate passed with nothing to land completes without a merge request: its branch
 has no commits over where it leaves the default branch, the same base the gate's baseline
@@ -623,7 +627,8 @@ merge or from its tag after it, and to production on your go.
 
 **Inputs:** `mr`, the merge request or pull request, picked from the same target menu
 `review` offers ([Reviewing someone else's merge request](using.md#reviewing-someone-elses-merge-request)),
-or a set of them.
+or a set of them; and `ship`, optional: `release`, the default, or `merge` to merge it and
+stop.
 
 **A set:** `mr` takes several references, separated by spaces or commas: URLs, `mr:`
 targets, `owner/repo#n`, or `!n` in the project the start is made from. Each is resolved to
@@ -652,9 +657,16 @@ one merge request; the set's Run never offers the whole set again. Picking sever
 one question is not yet offered: each child asks its own.
 
 The set fills `merge_only=true` on its children. Each repository's tag Run starts with
-`together` naming the merged merge requests its tag must carry. These inputs are available through
-every front door; a normal start needs neither. A set's application needs stage deploy
+`together` naming the merged merge requests its tag must carry. Both are hinted `internal`:
+no offer or start form asks for them, and an offer refuses a value for either. `collie run
+start` still takes them; a normal start needs neither. A set's application needs stage deploy
 jobs on its tags. Without them, its merge child refuses to merge.
+
+`ship: merge` merges one merge request and stops: the same checkout, head proof, review
+wait, Go (**Merge**, whose question says nothing is tagged or deployed) and Helle claim as a
+release, and no tag, stage or production. Unlike a set's child it needs no stage deploy on
+its tags, and nothing tags it afterwards. It is refused with several merge requests, with
+`merge_only` or `together`, and for a merge request that has already merged.
 
 **Checkout:** its own, of the merge request's source branch (the pull request's head
 branch on GitHub): the one git already has for it, which is the implement Run's worktree

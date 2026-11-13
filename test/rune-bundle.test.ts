@@ -11,6 +11,7 @@ import {
   compileCore,
   macSignings,
   notarizeArgs,
+  packageInstaller,
   type Os,
 } from "../desktop-rune/scripts/bundle";
 import { exec } from "./support/command";
@@ -225,6 +226,20 @@ test("a Linux bundle is the shell, the compiled main process, its icon, launcher
       const tarred = yield* tarList(`${out}/artifacts/stable-linux-x64-collie-desktop.tar.zst`);
       expect(Arr.every(tarred, Str.startsWith("collie-desktop/"))).toBe(true);
       expect(tarred).toContain("collie-desktop/bin/launcher");
+      const tar = Bun.zstdDecompressSync(
+        yield* fs.readFile(`${out}/artifacts/stable-linux-x64-collie-desktop.tar.zst`),
+      );
+      const uid = Number.parseInt(new TextDecoder().decode(tar.subarray(108, 116)), 8);
+      const gid = Number.parseInt(new TextDecoder().decode(tar.subarray(116, 124)), 8);
+      expect({ uid, gid }).toEqual({ uid: 0, gid: 0 });
+      yield* packageInstaller(out, "linux", "x64");
+      const installer = yield* exec([
+        "tar",
+        "-tzf",
+        `${out}/artifacts/linux-x64-collie-desktop-Setup.tar.gz`,
+      ]);
+      expect(installer.stdout).toContain("./installer\n");
+      expect(installer.stdout).toContain("./collie-desktop/bin/launcher\n");
     }),
   ));
 

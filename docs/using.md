@@ -668,10 +668,13 @@ split by whether the work **landed**. The order is the board model's own, and th
 board and chat's `collie_herd` list the sections the same way.
 
 **Ready to ship** holds work whose next shipping action has every gate satisfied at its
-current head, on forge answers read within two merge-watch rounds. A merge is the
-existing Release offer, named by its own title and invoked on the Run that owns it, whose
-Run still asks its own Go; otherwise the card names **Stage** or **Deploy**. A declared Go
-uses the existing answer buttons. The host checks
+current head, on forge answers read within two merge-watch rounds. A ready merge
+request's button is the offer that ships it, under its own title and invoked on the Run
+that owns it, chosen by what the offer declares: one that releases before one that only
+merges, so a finished implement Run reads **Release** — merge, tag and deploy — and
+**Merge**, which merges and stops, is in its menu. Either one says what it will do and
+asks before it starts, and its Run still asks its own Go. Otherwise the card names
+**Stage** or **Deploy**. A declared Go uses the existing answer buttons. The host checks
 Merge and Stage from an MR against Ready to release, and Deploy against its recorded
 stage proof for that head or tag. A stale answer, moved head or failed gate takes it out;
 a Go that no longer holds appears in Needs you and says why. A Stage Run asks no Go.
@@ -754,7 +757,7 @@ forge's last answer is more than two merge-watch rounds old, the card adds when 
 read; it last answered 6 minutes ago.` A `merged` recorded by hand is outranked by the forge
 reading the merge request open after it, and the card is owed again. Where
 every gate holds on fresh evidence at its head, it is **Ready to release** and moves
-to **Ready to ship** with its Release offer. Its sentence says: `Ready to
+to **Ready to ship** with the offer that ships it. Its sentence says: `Ready to
 release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: Release, or tell
 builder to.` The agent is named only while it is alive. A GitHub pull request reads as
 `owner/repo#30`, a GitLab merge request as `group/project!42`. A Run that ended with
@@ -972,6 +975,12 @@ each per merge request, `Mark merged app!12`, and `Open MR app!12`, with no key 
 own. A finished delivery's card menu lists **Release** and **Stage** for each merge request,
 on the Run that owns it: **Release app!12**, for example. Available offers come first;
 an unavailable offer shows its reason. **What it offers…** lists the same owning Runs' offers.
+An offer that takes anything asks for it with a control drawn from what its workflow
+declares: a checkbox or a Yes / No / Not set choice for a flag, a choice of the declared
+values, a number, one item per line for a list, and the field's own description beside it.
+An entry the field cannot take is refused at the field before anything is sent, and an
+optional field left alone is not sent. What an offer's workflow sets for itself, or the
+offer binds, is never asked for.
 Its first button is about the first one waiting on you: one closed with nobody saying why,
 then one ready to release. Nothing on the card acts on all of them at once. A Task with a
 decision open shows **Answer above** instead, which closes the drawer to the card whose
