@@ -5,7 +5,8 @@ import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
-import { Effect, Fiber, FileSystem, Schedule } from "effect";
+import * as Rec from "effect/Record";
+import { Effect, Fiber, FileSystem, Path, Schedule } from "effect";
 import { ciJob } from "../src/ci-job";
 import { recheckPark, rememberCiTarget } from "../src/park-recheck";
 import type { MrForge } from "../src/board-model";
@@ -34,13 +35,17 @@ const NUXI: VerifySpec = {
 };
 const MR = `https://${PROJECT.gitlab}/-/merge_requests/31`;
 
-/** A Run's directories, a checkout at one commit, and a forge whose merge request is on `head`. */
+/**
+ * A Run's directories, a checkout at one commit, and a forge whose merge request is on `head`.
+ * Where `adds` names files, a commit adds them over `origin/main`, as the branch's own.
+ */
 const waiting = Effect.fn("ciJob.waiting")(function* (
   state: FakeJob["state"],
   mr: string | null = MR,
   head?: string,
   over: Partial<FakeMr> = {},
   name: MrForge = "gitlab",
+  adds: Record<string, string> = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-ci-job-" });
@@ -60,6 +65,19 @@ const waiting = Effect.fn("ciJob.waiting")(function* (
     ],
   ])
     yield* exec(["git", ...args], { cwd });
+  if (!Rec.isEmptyRecord(adds)) {
+    const path = yield* Path.Path;
+    yield* exec(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], { cwd });
+    for (const [file, text] of Rec.toEntries(adds)) {
+      yield* fs.makeDirectory(path.dirname(`${cwd}/${file}`), { recursive: true });
+      yield* fs.writeFileString(`${cwd}/${file}`, text);
+    }
+    yield* exec(["git", "add", "-A"], { cwd });
+    yield* exec(
+      ["git", "-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", "branch"],
+      { cwd },
+    );
+  }
   const at = Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd })).stdout);
   const forge = forgeOn(name, head ?? at, { jobs: [{ name: "nuxi-typecheck", state }], ...over });
   const run: Runner = (cmd, args, where) =>
@@ -376,6 +394,140 @@ test("a failed job that fails its retry, or with no base to compare, is the Run'
     }),
   ));
 
+/** A GitLab trace of bun's output, its section markers and colours left in. */
+const trace = (...files: ReadonlyArray<readonly [string, string]>) =>
+  Arr.join(
+    [
+      "\u001b[0Ksection_start:1700000000:step_script\r\u001b[0K\u001b[36;1mExecuting step_script\u001b[0;m",
+      "bun test v1.4.4",
+      ...Arr.flatMap(files, ([file, failed]) => [
+        "",
+        `${file}:`,
+        "\u001b[0m\u001b[32m(pass)\u001b[0m a test beside it \u001b[0m\u001b[2m[0.20ms]\u001b[0m",
+        `\u001b[0m\u001b[31m(fail)\u001b[0m ${failed} \u001b[0m\u001b[2m[1.00ms]\u001b[0m`,
+      ]),
+      "\u001b[0Ksection_end:1700000001:step_script\r\u001b[0K",
+    ],
+    "\r\n",
+  );
+const OWN_FILE = "test/new-thing.test.ts";
+const SCENARIO = "a retried pass of the branch's own scenario is a failed job";
+const BRANCH = {
+  [OWN_FILE]: "export {};\n",
+  "test/support/scenarios.ts": `scenario("${SCENARIO}", () => {});\n`,
+};
+const journalOf = (asked: { readonly journal: string }) =>
+  readVerifications(asked.journal).pipe(Effect.orElseSucceed(() => []));
+
+test("a job that passes its retry, after a failed attempt naming a test in a file the branch adds, is failed and proves nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, at, forge } = yield* waiting(
+        "failed",
+        MR,
+        undefined,
+        {
+          jobs: [
+            {
+              name: "nuxi-typecheck",
+              state: "failed",
+              retried: "passed",
+              trace: trace([OWN_FILE, "a new thing works"]),
+            },
+          ],
+          base: { at: BASE, jobs: [{ name: "nuxi-typecheck", state: "passed" }] },
+        },
+        "gitlab",
+        BRANCH,
+      );
+      expect(yield* read({ ...asked, settle: true }, forge)).toEqual({
+        unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${pipe_(at, Str.slice(0, 12))} failed in this branch's own test "a new thing works", and passed only when retried`,
+        state: "failed",
+        url: `https://${PROJECT.gitlab}/-/jobs/1`,
+        log: LOG,
+      });
+      expect(retries(forge.requests)).toHaveLength(1);
+      expect(yield* journalOf(asked)).toEqual([]);
+    }),
+  ));
+
+test("a job the forge says passed on a retry this Run never made, after a failed attempt naming a scenario the branch adds, is failed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, forge } = yield* waiting(
+        "passed",
+        MR,
+        undefined,
+        {
+          jobs: [
+            {
+              name: "nuxi-typecheck",
+              state: "passed",
+              id: 101,
+              attempts: [
+                {
+                  id: 1,
+                  state: "failed",
+                  trace: trace(
+                    ["test/baseline-03.test.ts", `${SCENARIO} [unrelated 4]`],
+                    ["test/baseline-07.test.ts", "an older scenario nobody touched"],
+                  ),
+                },
+              ],
+            },
+          ],
+        },
+        "gitlab",
+        BRANCH,
+      );
+      const result = yield* read({ ...asked, settle: true }, forge);
+      expect(result).toMatchObject({
+        state: "failed",
+        url: `https://${PROJECT.gitlab}/-/jobs/1`,
+        log: LOG,
+      });
+      expect("unproved" in result ? result.unproved : "").toContain(
+        `this branch's own test "${SCENARIO} [unrelated 4]", and passed only when retried`,
+      );
+      expect(retries(forge.requests)).toEqual([]);
+      expect(yield* journalOf(asked)).toEqual([]);
+    }),
+  ));
+
+test("a retried pass whose failed attempt names only a test the branch does not touch proves the check, marked retried", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, forge } = yield* waiting(
+        "passed",
+        MR,
+        undefined,
+        {
+          jobs: [
+            {
+              name: "nuxi-typecheck",
+              state: "passed",
+              id: 101,
+              attempts: [
+                {
+                  id: 1,
+                  state: "failed",
+                  trace: trace(["test/old-thing.test.ts", "an old thing works"]),
+                },
+              ],
+            },
+          ],
+        },
+        "gitlab",
+        BRANCH,
+      );
+      expect(yield* read(asked, forge)).toMatchObject({
+        proved: { pass: "ci", name: "nuxi" },
+        retried: true,
+      });
+      expect(yield* journalOf(asked)).toHaveLength(1);
+    }),
+  ));
+
 const PULL = `https://${PROJECT.github}/pull/31`;
 const GATE: VerifySpec = { ...NUXI, ci: "test" };
 
@@ -514,6 +666,273 @@ test("a GitHub job missing right after its retry is waited on, and its pass is a
       }),
       1_000,
     ),
+  ));
+
+/** A GitHub job log of bun's output: each line stamped, files grouped and interleaved across workers. */
+const githubLog = (columns: string, ...failed: ReadonlyArray<string>) =>
+  Arr.join(
+    Arr.map(
+      [
+        "##[group]Run bun test --parallel=4",
+        "bun test v1.4.4",
+        "##[group]test/old-thing.test.ts:",
+        "##[group]test/new-thing.test.ts:",
+        "\u001b[0m\u001b[32m(pass)\u001b[0m an old thing works \u001b[0m\u001b[2m[0.20ms]\u001b[0m",
+        ...Arr.flatMap(failed, (name) => [
+          `\u001b[0m\u001b[31m(fail)\u001b[0m ${name} \u001b[0m\u001b[2m[1.00ms]\u001b[0m`,
+          "##[error]error: expect(received).toBe(expected)",
+        ]),
+        "##[endgroup]",
+      ],
+      (line, n) => `${columns}2026-11-11T10:00:${10 + n}.1234567Z ${line}`,
+    ),
+    "\r\n",
+  );
+const NEW_TEST = "a new thing settles on its first try";
+const GITHUB_BRANCH = { ...BRANCH, [OWN_FILE]: `test("${NEW_TEST}", () => {});\n` };
+const ATTEMPT = `https://${PROJECT.github}/actions/runs/4031/job/2`;
+const GH_LOG = "gh run view 4031 --log-failed --repo owner/repo";
+const reruns = (requests: ReadonlyArray<FakeRequest>) =>
+  Arr.filter(requests, (one) => pipe_(one.url, Str.endsWith("/rerun-failed-jobs")));
+
+for (const name of ["gitlab", "github"] as const)
+  test(`a ${name} retried pass of an own test in an explicitly selected Bun file proves nothing`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { asked, forge } = yield* waiting(
+          "passed",
+          name === "gitlab" ? MR : PULL,
+          undefined,
+          {
+            jobs: [
+              {
+                name: "nuxi-typecheck",
+                state: "passed",
+                id: 101,
+                attempts: [{ id: 1, state: "failed", trace: "test/smoke.ts:\n(fail) works\n" }],
+              },
+            ],
+          },
+          name,
+          { "test/smoke.ts": 'test("works", () => {});\n' },
+        );
+        const result = yield* read(asked, forge);
+        expect(result).toMatchObject({ state: "failed" });
+        expect("unproved" in result ? result.unproved : "").toContain('own test "works"');
+        expect(yield* journalOf(asked)).toEqual([]);
+      }),
+    ));
+
+for (const name of ["gitlab", "github"] as const)
+  test(`a ${name} job passing twice still fails when its earlier attempt named an own test`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { asked, forge } = yield* waiting(
+          "passed",
+          name === "gitlab" ? MR : PULL,
+          undefined,
+          {
+            jobs: [
+              {
+                name: "nuxi-typecheck",
+                state: "passed",
+                id: 201,
+                attempts: [
+                  { id: 1, state: "failed", trace: `${OWN_FILE}:\n(fail) works\n` },
+                  { id: 101, state: "passed" },
+                ],
+              },
+            ],
+          },
+          name,
+          BRANCH,
+        );
+        const result = yield* read({ ...asked, settle: true }, forge);
+        expect(result).toMatchObject({ state: "failed" });
+        expect("unproved" in result ? result.unproved : "").toContain('own test "works"');
+        expect(yield* journalOf(asked)).toEqual([]);
+      }),
+    ));
+
+test("a GitHub infrastructure failure between an own-test failure and a pass cannot prove the check", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, forge } = yield* waiting(
+        "passed",
+        PULL,
+        undefined,
+        {
+          jobs: [
+            {
+              name: "test",
+              state: "passed",
+              id: 201,
+              attempts: [
+                { id: 1, state: "failed" },
+                { id: 101, state: "failed", trace: "runner could not start" },
+              ],
+            },
+            {
+              name: "suite (1)",
+              state: "passed",
+              id: 202,
+              attempts: [
+                { id: 2, state: "failed", trace: `${OWN_FILE}:\n(fail) works\n` },
+                { id: 102, state: "failed", trace: "runner could not start" },
+              ],
+            },
+          ],
+        },
+        "github",
+        BRANCH,
+      );
+      const result = yield* read({ ...asked, spec: GATE, settle: true }, forge);
+      expect(result).toMatchObject({
+        state: "failed",
+        url: `https://${PROJECT.github}/actions/runs/4031/job/1`,
+        log: GH_LOG,
+      });
+      expect("unproved" in result ? result.unproved : "").toContain('own test "works"');
+      expect(yield* journalOf(asked)).toEqual([]);
+      expect(reruns(forge.requests)).toEqual([]);
+    }),
+  ));
+
+for (const name of ["gitlab", "github"] as const)
+  test(`a ${name} failed own test keeps its file when another job names an untouched test the same`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { asked, forge } = yield* waiting(
+          "passed",
+          name === "gitlab" ? MR : PULL,
+          undefined,
+          {
+            jobs: [
+              {
+                name: "nuxi-typecheck",
+                state: "passed",
+                id: 201,
+                attempts: [{ id: 1, state: "failed" }],
+              },
+              {
+                name: "suite (old)",
+                state: "passed",
+                id: 203,
+                attempts: [
+                  { id: 3, state: "failed", trace: "test/old-thing.test.ts:\n(fail) works\n" },
+                ],
+              },
+              {
+                name: "suite (new)",
+                state: "passed",
+                id: 202,
+                attempts: [{ id: 2, state: "failed", trace: `${OWN_FILE}:\n(fail) works\n` }],
+              },
+            ],
+          },
+          name,
+          BRANCH,
+        );
+        const result = yield* read({ ...asked, settle: true }, forge);
+        expect(result).toMatchObject({ state: "failed" });
+        expect("unproved" in result ? result.unproved : "").toContain('own test "works"');
+        expect(yield* journalOf(asked)).toEqual([]);
+      }),
+    ));
+
+test("a GitHub job that passes its rerun, after a failed suite job named a test the branch adds, is failed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, at, forge } = yield* waiting(
+        "failed",
+        PULL,
+        undefined,
+        {
+          jobs: [
+            { name: "static", state: "passed" },
+            { name: "test", state: "failed", retried: "passed", trace: githubLog("") },
+            {
+              name: "suite (2)",
+              state: "failed",
+              retried: "passed",
+              trace: githubLog("", NEW_TEST),
+            },
+          ],
+          base: { at: BASE, jobs: [{ name: "test", state: "passed" }] },
+        },
+        "github",
+        GITHUB_BRANCH,
+      );
+      expect(yield* read({ ...asked, spec: GATE, settle: true }, forge)).toEqual({
+        unproved: `nuxi is left to CI and unproved: job test on ${pipe_(at, Str.slice(0, 12))} failed in this branch's own test "${NEW_TEST}", and passed only when retried`,
+        state: "failed",
+        url: ATTEMPT,
+        log: GH_LOG,
+      });
+      expect(reruns(forge.requests)).toHaveLength(1);
+      expect(yield* journalOf(asked)).toEqual([]);
+    }),
+  ));
+
+test("a GitHub job whose newest check run passed after an older one failed, in a scenario the branch adds, is failed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, forge } = yield* waiting(
+        "passed",
+        PULL,
+        undefined,
+        {
+          jobs: [
+            { name: "static", state: "passed" },
+            { name: "test", state: "passed", id: 102, attempts: [{ id: 2, state: "failed" }] },
+            {
+              name: "suite (2)",
+              state: "passed",
+              id: 103,
+              attempts: [
+                {
+                  id: 3,
+                  state: "failed",
+                  trace: githubLog("suite (2)\tRun bun test\t", `${SCENARIO} [unrelated 4]`),
+                },
+              ],
+            },
+          ],
+        },
+        "github",
+        GITHUB_BRANCH,
+      );
+      const result = yield* read({ ...asked, spec: GATE, settle: true }, forge);
+      expect(result).toMatchObject({ state: "failed", url: ATTEMPT, log: GH_LOG });
+      expect("unproved" in result ? result.unproved : "").toContain(
+        `this branch's own test "${SCENARIO} [unrelated 4]", and passed only when retried`,
+      );
+      expect(reruns(forge.requests)).toEqual([]);
+      expect(yield* journalOf(asked)).toEqual([]);
+    }),
+  ));
+
+test("a GitHub retried pass whose failed attempt's job logs cannot be read proves the check, marked retried", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, forge } = yield* waiting(
+        "passed",
+        PULL,
+        undefined,
+        {
+          jobs: [
+            { name: "test", state: "passed", id: 102, attempts: [{ id: 2, state: "failed" }] },
+          ],
+        },
+        "github",
+        GITHUB_BRANCH,
+      );
+      expect(yield* read({ ...asked, spec: GATE }, forge)).toMatchObject({
+        proved: { pass: "ci", name: "nuxi", job: { name: "test" } },
+        retried: true,
+      });
+      expect(yield* journalOf(asked)).toHaveLength(1);
+    }),
   ));
 
 const CONFLICT = (at: string) =>

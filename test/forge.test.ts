@@ -1770,7 +1770,10 @@ for (const name of ["gitlab", "github"] as const) {
     runEffect(
       Effect.gen(function* () {
         const read = (over: Partial<FakeMr>, rest: Partial<ForgeModel> = {}) => {
-          const fake = fakeForge(name, model(name, { mrs: [mr(name, over)], ...rest }));
+          const fake = fakeForge(
+            name,
+            model(name, { mrs: [mr(name, { targetBranch: "main", ...over })], ...rest }),
+          );
           return forge
             .job(ref(name), "nuxi-typecheck", "/w", fake.run)
             .pipe(Effect.provide(fake.layer));
@@ -1794,7 +1797,16 @@ for (const name of ["gitlab", "github"] as const) {
                 { name: "nuxi-typecheck", state },
               ],
             }),
-          ).toEqual({ ok: true, head: HEAD, state, url, id: jobId(name, 2), merge: null });
+          ).toEqual({
+            ok: true,
+            head: HEAD,
+            state,
+            url,
+            id: jobId(name, 2),
+            merge: null,
+            retryOf: [],
+            target: "main",
+          });
         expect(yield* read({ jobs: [{ name: "lint", state: "passed" }] })).toEqual({
           ok: true,
           head: HEAD,
@@ -1802,6 +1814,8 @@ for (const name of ["gitlab", "github"] as const) {
           url: null,
           id: null,
           merge: null,
+          retryOf: [],
+          target: "main",
         });
         for (const rest of [{ installed: false }, { loggedIn: [] }])
           expect((yield* read({ jobs: [] }, rest)).ok).toBe(false);
@@ -2072,6 +2086,8 @@ test("a GitLab merged-results pipeline counts for the head it was built from, an
         url: "https://gitlab.example.com/group/app/-/jobs/1",
         id: "1",
         merge: MERGE,
+        retryOf: [],
+        target: null,
       });
       // A pipeline of an older head: this head's has not started.
       expect(
@@ -3403,6 +3419,64 @@ describe("GitLab's OAuth login over HTTP", () => {
       }).pipe(Effect.provide(fake.layer)),
     );
   });
+});
+
+test("GitLab identifies a retry from job IDs without a retried response field", () => {
+  const fake = fakeForge(
+    "gitlab",
+    model("gitlab", {
+      mrs: [
+        mr("gitlab", {
+          jobs: [
+            { name: "test", state: "passed", id: 101, attempts: [{ id: 1, state: "failed" }] },
+          ],
+        }),
+      ],
+    }),
+  );
+  return runEffect(
+    Effect.gen(function* () {
+      expect(yield* gitlab.job(ref("gitlab"), "test", "/w", fake.run)).toMatchObject({
+        ok: true,
+        state: "passed",
+        id: "101",
+        retryOf: ["1"],
+      });
+    }).pipe(Effect.provide(fake.layer)),
+  );
+});
+
+test("GitHub finds a failed attempt beyond a page of passing reruns", () => {
+  const fake = fakeForge(
+    "github",
+    model("github", {
+      mrs: [
+        mr("github", {
+          jobs: [
+            {
+              name: "test",
+              state: "passed",
+              id: 201,
+              attempts: [
+                { id: 1, state: "failed" },
+                ...Arr.makeBy(100, (n) => ({ id: n + 2, state: "passed" as const })),
+              ],
+            },
+          ],
+        }),
+      ],
+    }),
+  );
+  return runEffect(
+    Effect.gen(function* () {
+      expect(yield* FORGES.github.job(ref("github"), "test", "/w", fake.run)).toMatchObject({
+        ok: true,
+        state: "passed",
+        id: "4030/201",
+        retryOf: ["4030/1"],
+      });
+    }).pipe(Effect.provide(fake.layer)),
+  );
 });
 
 const gated = () =>
