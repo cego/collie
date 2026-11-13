@@ -157,7 +157,7 @@ test("a provider reader's answers map to versions, dates and source states by na
         const fiber = yield* observe.pipe(Effect.forkScoped);
         yield* Deferred.await(entered);
         yield* Effect.yieldNow;
-        yield* clock.adjust(6000);
+        yield* clock.adjust(4001);
         return yield* Fiber.join(fiber);
       }).pipe(Effect.provideService(Clock.Clock, clock));
       const late = Arr.findFirst(timedOut.items, (one) => one.id === a.item.id);

@@ -2804,7 +2804,8 @@ A link, Claude artefact, or Site is a row keyed by its provider resource and nam
 or else by its URL; it has no revision bytes unless an export was registered beside it.
 `refreshCopy` follows that export and leaves the provider observation alone, and
 `observe` asks a `ProviderReaders` entry for the provider, if one is provided, under a
-five-second timeout. None ships, so production registrations stay `untracked`.
+four-second timeout, leaving time to record its failure before the batch deadline.
+None ships, so production registrations stay `untracked`.
 
 See [the material guide](artefacts.md#evidence-by-layer) for the checks at each layer and
 the native operator observations that remain pending.
@@ -2817,6 +2818,10 @@ four unindexed Runs, rotating past unfinished ones, with a five-second attempt p
 Discovery processes at most eight source entries per Run per attempt. Its SQLite cursor
 advances after processing a source, so interruption retries that source after restart.
 Receipts, ids, and provenance remain in the existing catalogue.
+Cold catalogue reads return cached metadata immediately and schedule discovery through the existing bounded refresh jobs.
+Explicit refresh has a five-second deadline, including the catalogue permit wait, and returns retained metadata if it expires.
+Each attempt prepares at most eight narratives, checks eight registered sources, and discovers eight collection entries.
+Registered-source checks rotate between attempts; discovery keeps its durable cursor for both explicit and background work.
 
 `src/artefact-search.ts` merges host pages by installation identity, preserving each
 host's cursor and coverage. Machine requests use four concurrent slots and fifteen-second

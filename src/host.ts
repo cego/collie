@@ -4059,17 +4059,15 @@ const frontDoorHandlers = (
             Effect.flatMap((view) =>
               refresh === true
                 ? artefacts.reconcile(factsOfView(env.stateDir, view))
-                : artefacts.cached(factsOfView(env.stateDir, view)).pipe(
-                    Effect.tap(() =>
-                      artefacts
-                        .schedule(factsOfView(env.stateDir, view))
-                        .pipe(Effect.forkIn(controls)),
+                : artefacts
+                    .cached(factsOfView(env.stateDir, view))
+                    .pipe(
+                      Effect.tap(() =>
+                        artefacts
+                          .schedule(factsOfView(env.stateDir, view))
+                          .pipe(Effect.forkIn(controls)),
+                      ),
                     ),
-                    Effect.filterOrElse(
-                      (collection) => collection.items.length > 0,
-                      () => artefacts.reconcile(factsOfView(env.stateDir, view)),
-                    ),
-                  ),
             ),
             Effect.provideContext(bun),
           ),

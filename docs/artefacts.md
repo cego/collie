@@ -25,7 +25,8 @@ If a newer revision arrives during a read, acknowledging the older one leaves th
 
 Legacy creation dates display **Unknown** beside the known observation date. Source
 modification time, registration, and revision detection are separate facts. **Refresh**
-observes the source again. Unchanged bytes and date-only changes create no content revision.
+observes another bounded batch of sources. Large collections fill over successive refreshes and background attempts.
+Unchanged bytes and date-only changes create no content revision.
 A missing or denied source can still have an available retained copy.
 
 ## Finding material across Runs and Machines
@@ -94,6 +95,7 @@ A file on the Run's Machine is **tracked**: its host checks it again about every
 seconds, with no Desktop open, and keeps a new revision whenever its bytes change, even
 when size and modification time do not. Unchanged bytes keep the revision. A file sent
 from another computer is a **retained snapshot**: it is copied once, never followed.
+Changing its title or description preserves the retained content and tracking choice, even if the source disappears.
 Its original source dates remain unknown unless supplied as caller-reported observations.
 The temporary upload's filesystem dates describe the transfer, not the original file.
 

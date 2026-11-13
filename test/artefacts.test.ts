@@ -45,7 +45,10 @@ test(
             yield* fs.writeFileString(file!, bytes!);
           }
           const door = yield* frontDoor(socketOf(world.state));
-          const found = yield* door.artefacts({ runId, refresh: true });
+          const found = yield* until(
+            () => door.artefacts({ runId, refresh: true }),
+            (collection) => collection.items.length === 5,
+          );
           expect(Arr.map(found.items, (one) => one.ref).sort()).toEqual([
             "attachment:manual.pdf",
             "attachment:shot.png",

@@ -75,7 +75,7 @@ export class ProviderReaders extends Context.Service<
   ProviderReaders,
   ReadonlyMap<string, ProviderReader>
 >()("collie/ProviderReaders") {}
-const OBSERVATION_TIMEOUT = "5 seconds";
+const OBSERVATION_TIMEOUT = "4 seconds";
 
 const KIND = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -552,27 +552,41 @@ const make = Effect.gen(function* () {
       ),
     notify,
   );
+  const refreshedThrough = new Map<string, string>();
   const reconcile = Effect.fn("Artefacts.reconcile")(function* (run: RunFacts, background = false) {
-    yield* narratives.reconcile(run, background ? 8 : Number.POSITIVE_INFINITY);
+    yield* narratives.reconcile(run, 8);
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const random = yield* SecureRandom.SecureRandom;
     const observedAt = yield* nowIso;
     const existing = yield* list(run.id);
     const origins = new Map(Arr.map(existing, (item) => [item.ref, item]));
-    if (!background)
-      for (const item of existing)
-        if (item.tracking === "local" || item.provider !== undefined)
-          yield* refreshRegistered(run, item);
-    let remaining = background ? 8 : Number.POSITIVE_INFINITY;
-    const cursor = background
-      ? ((yield* sql<{
-          cursor: string;
-        }>`SELECT cursor FROM collie_artefact_index WHERE run = ${run.id}`.pipe(Effect.orDie))[0]
-          ?.cursor ?? "")
-      : "";
+    if (!background) {
+      const through = refreshedThrough.get(run.id) ?? "";
+      const tracked = Arr.filter(
+        existing,
+        (item) => item.tracking === "local" || item.provider !== undefined,
+      ).sort((a, b) => Str.localeCompare(b.id)(a.id));
+      const round = Arr.take(
+        [
+          ...Arr.filter(tracked, (item) => item.id > through),
+          ...Arr.filter(tracked, (item) => item.id <= through),
+        ],
+        8,
+      );
+      for (const item of round) {
+        yield* refreshRegistered(run, item);
+        refreshedThrough.set(run.id, item.id);
+      }
+    }
+    let remaining = 8;
+    const cursor =
+      (yield* sql<{
+        cursor: string;
+      }>`SELECT cursor FROM collie_artefact_index WHERE run = ${run.id}`.pipe(Effect.orDie))[0]
+        ?.cursor ?? "";
     for (const [prefix, root, role] of [
-      // Sorted by prefix: the background cursor compares whole refs.
+      // Sorted by prefix: the cursor compares whole refs.
       ["attachment", `${run.dir}/attachments`, "input"],
       ["evidence", run.evidence, "evidence"],
       ["handoff", `${run.dir}/handoffs`, "handoff"],
@@ -588,7 +602,7 @@ const make = Effect.gen(function* () {
       );
       for (const name of [...new Set([...names, ...known])].sort()) {
         const ref = `${prefix}:${name}`;
-        if (background && ref <= cursor) continue;
+        if (ref <= cursor) continue;
         if (remaining-- <= 0) {
           return { items: yield* list(run.id) } satisfies ArtefactCollection;
         }
@@ -723,10 +737,9 @@ const make = Effect.gen(function* () {
           )
             yield* notify(run.id);
         });
-        if (background)
-          yield* sql`INSERT INTO collie_artefact_index (run, cursor, done) VALUES (${run.id}, ${ref}, 0) ON CONFLICT(run) DO UPDATE SET cursor = excluded.cursor`.pipe(
-            Effect.orDie,
-          );
+        yield* sql`INSERT INTO collie_artefact_index (run, cursor, done) VALUES (${run.id}, ${ref}, 0) ON CONFLICT(run) DO UPDATE SET cursor = excluded.cursor`.pipe(
+          Effect.orDie,
+        );
       }
     }
     yield* sql`INSERT INTO collie_artefact_index (run, cursor, done) VALUES (${run.id}, '', 1) ON CONFLICT(run) DO UPDATE SET cursor = '', done = 1`.pipe(
@@ -757,21 +770,6 @@ const make = Effect.gen(function* () {
         ),
       };
     });
-  const schedule = (run: RunFacts) =>
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      const jobs = Arr.take(
-        Arr.filter(
-          Arr.map(
-            Arr.filter(yield* list(run.id), (item) => item.tracking === "local"),
-            (item) => job(run, item),
-          ),
-          (one) => refreshing.due(one, now),
-        ),
-        8,
-      );
-      yield* Effect.forEach(jobs, refreshing.refresh, { concurrency: 2, discard: true });
-    });
   const pass = (runs: ReadonlyArray<RunFacts>) =>
     Effect.gen(function* () {
       const jobs = [];
@@ -782,10 +780,11 @@ const make = Effect.gen(function* () {
           check: reconciling.withPermit(reconcile(run, true)).pipe(Effect.as(true)),
         });
         for (const item of yield* list(run.id))
-          if (item.tracking === "local") jobs.push(job(run, item));
+          if (item.tracking === "local" || item.provider !== undefined) jobs.push(job(run, item));
       }
       yield* refreshing.pass(jobs);
     });
+  const schedule = (run: RunFacts) => pass([run]);
   /** A page of this host's catalogue, from its metadata alone; no file is read. */
   const search = Effect.fn("Artefacts.search")(function* (
     asked: ArtefactSearch,
@@ -994,7 +993,13 @@ const make = Effect.gen(function* () {
     schedule,
     pass,
     search,
-    reconcile: (run: RunFacts) => reconciling.withPermit(reconcile(run)),
+    reconcile: (run: RunFacts) =>
+      reconciling
+        .withPermit(reconcile(run))
+        .pipe(
+          Effect.timeoutOption("5 seconds"),
+          Effect.flatMap(Option.match({ onNone: () => cached(run), onSome: Effect.succeed })),
+        ),
     read,
     seen: (...args: Parameters<typeof seen>) => reconciling.withPermit(seen(...args)),
     register: (...args: Parameters<typeof register>) => reconciling.withPermit(register(...args)),
