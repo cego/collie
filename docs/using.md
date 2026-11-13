@@ -417,6 +417,12 @@ reason and keeps the terminal and control record for recovery. A process that ex
 being inspected is ignored only when the operating system proves its PID is absent;
 an unreadable live process still prevents recovery.
 
+Uncertain server health parks within the readiness budget, while collection keeps
+watching for late usable Output. Existing delivery receipts retain their uncertainty;
+a server exit does not establish whether an earlier message was received.
+
+See [ADR-draft-an-owned-server-is-checked-apart-from-its-terminal](adr/draft-an-owned-server-is-checked-apart-from-its-terminal.md).
+
 ### What a task workspace is called
 
 The name is worked out, not asked for: `<Project or theme> | <what this work is>`, for
@@ -668,10 +674,13 @@ split by whether the work **landed**. The order is the board model's own, and th
 board and chat's `collie_herd` list the sections the same way.
 
 **Ready to ship** holds work whose next shipping action has every gate satisfied at its
-current head, on forge answers read within two merge-watch rounds. A merge is the
-existing Release offer, named by its own title and invoked on the Run that owns it, whose
-Run still asks its own Go; otherwise the card names **Stage** or **Deploy**. A declared Go
-uses the existing answer buttons. The host checks
+current head, on forge answers read within two merge-watch rounds. A ready merge
+request's button is the offer that ships it, under its own title and invoked on the Run
+that owns it, chosen by what the offer declares: one that releases before one that only
+merges, so a finished implement Run reads **Release** — merge, tag and deploy — and
+**Merge**, which merges and stops, is in its menu. Either one says what it will do and
+asks before it starts, and its Run still asks its own Go. Otherwise the card names
+**Stage** or **Deploy**. A declared Go uses the existing answer buttons. The host checks
 Merge and Stage from an MR against Ready to release, and Deploy against its recorded
 stage proof for that head or tag. A stale answer, moved head or failed gate takes it out;
 a Go that no longer holds appears in Needs you and says why. A Stage Run asks no Go.
@@ -754,7 +763,7 @@ forge's last answer is more than two merge-watch rounds old, the card adds when 
 read; it last answered 6 minutes ago.` A `merged` recorded by hand is outranked by the forge
 reading the merge request open after it, and the card is owed again. Where
 every gate holds on fresh evidence at its head, it is **Ready to release** and moves
-to **Ready to ship** with its Release offer. Its sentence says: `Ready to
+to **Ready to ship** with the offer that ships it. Its sentence says: `Ready to
 release: cego/collie#30 is open and its checks passed at 1a2b3c4. Next: Release, or tell
 builder to.` The agent is named only while it is alive. A GitHub pull request reads as
 `owner/repo#30`, a GitLab merge request as `group/project!42`. A Run that ended with
@@ -972,6 +981,12 @@ each per merge request, `Mark merged app!12`, and `Open MR app!12`, with no key 
 own. A finished delivery's card menu lists **Release** and **Stage** for each merge request,
 on the Run that owns it: **Release app!12**, for example. Available offers come first;
 an unavailable offer shows its reason. **What it offers…** lists the same owning Runs' offers.
+An offer that takes anything asks for it with a control drawn from what its workflow
+declares: a checkbox or a Yes / No / Not set choice for a flag, a choice of the declared
+values, a number, one item per line for a list, and the field's own description beside it.
+An entry the field cannot take is refused at the field before anything is sent, and an
+optional field left alone is not sent. What an offer's workflow sets for itself, or the
+offer binds, is never asked for.
 Its first button is about the first one waiting on you: one closed with nobody saying why,
 then one ready to release. Nothing on the card acts on all of them at once. A Task with a
 decision open shows **Answer above** instead, which closes the drawer to the card whose
@@ -1627,7 +1642,9 @@ none of is no Machine's to lack: the summary says "Desktop has no GitLab token t
 instead. **Sync now** on a Machine behind on its version, settings, definitions or credentials does what
 connecting would: behind on its version, it reopens the Machine's connection, which asks the
 upgrade again and then syncs and gives on the new one; otherwise it syncs its settings and
-its definitions and gives it what it lacks. Desktop keeps the Flock's definitions in
+its definitions, gives it what it lacks, and renews all three channels even at the same version.
+This also recovers a broken chat or record connection while the board is readable.
+Desktop keeps the Flock's definitions in
 `flock-definitions.json` beside its settings, each with its edit's time and the Machine it
 came from, syncs each Machine's whenever it connects, and passes an edit taken from one
 Machine on to every other connected one. A toast says what it did, red where a part of it failed. The Flock
@@ -2035,14 +2052,19 @@ rather than scrolling sideways. The record's back button
 returns to the board, which was never taken down: it comes back scrolled where you left it,
 its sections open or closed as they were, and the card still selected.
 
-A record outlives its Machine's connection. When that connection is renewed — it dropped,
+A record outlives its Machine's connection. Desktop renews all three channels when any bridge
+exits or its socket or RPC transport fails, even while the board is readable, with reconnect
+backoff capped at 60 seconds. When that connection is renewed — it dropped,
 **Sync now** reopened it, or Desktop upgraded the Machine — the record keeps what it showed,
 says above it what the board says of that Machine ("vm-mk is out of reach; showing what it
 last said", with the reason, or "vm-mk is reconnecting"), and carries on by itself once the
 Machine is back. A record opened before its Machine connects fills in once it does. An
-action, the offers, the workflows, a Run's file or Go to pane cut off by a renewed
-connection says "vm-mk's connection was renewed before this finished", and **Try again**
-sends the action under the same request, so it is done once.
+action cut off before its reply reports an unknown outcome: it may already have been applied.
+It is not automatically replayed on the next connection. **Try again** sends the action under
+the same request, so it is done once. In Flock chat, an unconfirmed `collie_do` returns
+`Request: <batch id>`; inspect the result and reuse that id as `request_id` with the same actions
+for an explicit retry. Read failures name the connection problem; upgrade advice requires
+an incompatible protocol or an unknown operation response.
 
 Nothing in the window needs a restart. The board, a record, Settings, the credentials
 warning, update news and the chat's turn indicator each keep what they last showed when the
@@ -2997,6 +3019,18 @@ the actual target branch into the source, preserves both branches' work, and pla
 the repair. Collie then proves the pushed head before asking a fresh release go. Four
 unsuccessful conflict repairs, or a repair that leaves the remote head unchanged, park
 the Run with the reason; repair it and resume to have Collie read the forge again.
+
+Failed CI during Review wait also goes to that agent, with the failed head, pipeline or
+check name, and available forge URL. Local Checks passing, or having none, does not clear
+a remote failure. Proof fixes and CI repairs share four rounds until the merge request
+is ready, including returns through Review wait. No remote progress or four unsuccessful
+repairs parks the Run with the failing head and pipeline. Repair the branch or recover CI,
+then resume: Collie reads and proves the current head without repeating completed repairs.
+Approval alone, running or unknown CI, and other forge blocks keep their normal waits.
+Target conflicts are repaired first; moved heads are adopted and proved before CI repair.
+A repaired head needs a fresh go after proof, green CI, approval, and answered comments.
+A failure after a go returns its claim and rolls pre-merge stage back where required.
+Hold and Stop still prevent further work; recovery after merge is unchanged.
 
 To have it ask before it shares the merge request with your team, turn on
 `release.share_for_approval` and name your Slack channel in `release.approval_channel`

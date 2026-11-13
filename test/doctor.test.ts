@@ -670,7 +670,7 @@ test("a herdr older than the manifest's minimum is the reported problem", () =>
     }),
   ));
 
-test("the shipped manifest calls a herdr older than the pinned 0.9.3 stale, and 0.9.3 current", () =>
+test("the shipped manifest calls a herdr older than the pinned 0.9.5 stale, and 0.9.5 current", () =>
   runEffect(
     Effect.gen(function* () {
       yield* healthy();
@@ -678,12 +678,12 @@ test("the shipped manifest calls a herdr older than the pinned 0.9.3 stale, and 
       const shipped = yield* fs.readFileString(`${import.meta.dir}/../herdr-plugin.toml`);
       yield* fs.writeFileString(`${rig.baselineDir}/herdr-plugin.toml`, shipped);
 
-      const older = check(yield* report({ FAKE_HERDR_VERSION: "herdr 0.9.2" }), "herdr");
+      const older = check(yield* report({ FAKE_HERDR_VERSION: "herdr 0.9.4" }), "herdr");
       expect(older.ok).toBe(false);
-      expect(older.detail).toContain("0.9.3");
+      expect(older.detail).toContain("0.9.5");
 
-      const pinned = check(yield* report({ FAKE_HERDR_VERSION: "herdr 0.9.3" }), "herdr");
-      expect(pinned).toMatchObject({ ok: true, detail: "0.9.3" });
+      const pinned = check(yield* report({ FAKE_HERDR_VERSION: "herdr 0.9.5" }), "herdr");
+      expect(pinned).toMatchObject({ ok: true, detail: "0.9.5" });
     }),
   ));
 
