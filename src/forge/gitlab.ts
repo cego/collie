@@ -4,6 +4,7 @@
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
+import { stripVTControlCharacters } from "node:util";
 import { DateTime, Effect, FileSystem, Option, Path, Redacted, Result, Schema } from "effect";
 import { CommandLine } from "effect/process";
 import {
@@ -17,6 +18,7 @@ import {
   type MrUnavailable,
 } from "../board-model";
 import { epochMs } from "../time";
+import { failedTestsIn } from "../own-tests";
 import { keepCredentialHelper, projectHere, whatItSaid, type Runner } from "../mr";
 import type {
   DeployTier,
@@ -28,6 +30,7 @@ import type {
   FromBranch,
   FromBranchList,
   BaseJobRead,
+  FailedAttempt,
   JobRead,
   JobState,
   PipelineRead,
@@ -41,6 +44,7 @@ import {
   pagesAs,
   request,
   requestAs,
+  requestText,
   type Answered,
   type ForgeLogin,
 } from "./http";
@@ -599,19 +603,23 @@ function fromBranch(
 
 const MrHead = Schema.Struct({
   sha: optionalText,
+  target_branch: optionalText,
   head_pipeline: Schema.optionalKey(
     Schema.NullOr(Schema.Struct({ id: Schema.Finite, sha: optionalText })),
   ),
 });
 const Commit = Schema.Struct({ parent_ids: Schema.Array(Schema.String) });
-const Jobs = Schema.Array(
-  Schema.Struct({
-    id: Schema.Finite,
-    name: Schema.String,
-    status: Schema.String,
-    web_url: optionalText,
-  }),
-);
+const Job = Schema.Struct({
+  id: Schema.Finite,
+  name: Schema.String,
+  status: Schema.String,
+  web_url: optionalText,
+});
+const Jobs = Schema.Array(Job);
+const AttemptJob = Schema.Struct({
+  web_url: optionalText,
+  pipeline: Schema.Struct({ id: Schema.Finite }),
+});
 const Pipelines = Schema.Array(Schema.Struct({ id: Schema.Finite, sha: Schema.String }));
 const MrBase = Schema.Struct({
   target_branch: optionalText,
@@ -642,8 +650,18 @@ function job(ref: MrRef, name: string, cwd: string): Effect.Effect<JobRead, neve
     const mr = yield* rest(MrHead, `merge_requests/${ref.iid}`);
     if (!mr.ok) return { ok: false, reason: `could not read ${where}: ${mr.reason}` };
     const head = mr.value.sha ?? "";
+    const target = mr.value.target_branch ?? null;
     const pipeline = mr.value.head_pipeline ?? null;
-    const waiting = { ok: true, head, state: "pending", url: null, id: null, merge: null } as const;
+    const waiting = {
+      ok: true,
+      head,
+      state: "pending",
+      url: null,
+      id: null,
+      merge: null,
+      retryOf: [],
+      target,
+    } as const;
     if (pipeline === null) return waiting;
     let merge: string | null = null;
     if (pipeline.sha && pipeline.sha !== head) {
@@ -657,13 +675,13 @@ function job(ref: MrRef, name: string, cwd: string): Effect.Effect<JobRead, neve
       if (!commit.value.parent_ids.includes(head)) return waiting;
       merge = pipeline.sha;
     }
-    const found = yield* jobIn(rest, pipeline.id, name);
+    const found = yield* jobIn(reached, cwd, pipeline.id, name);
     if (!found.ok)
       return {
         ok: false,
         reason: `could not list the jobs of ${where}'s pipeline ${pipeline.id}: ${found.reason}`,
       };
-    return { ok: true, head, ...found.value, merge };
+    return { ok: true, head, ...found.value, merge, target };
   });
 }
 
@@ -763,24 +781,61 @@ const projectRest = (ref: MrRef, cwd: string) => {
   return { ok: true, login, project, rest } as const;
 };
 
-const jobIn = (rest: Rest, id: number, name: string) =>
-  Effect.gen(function* () {
-    let found: (typeof Jobs.Type)[number] | undefined;
-    for (let page = 1; found === undefined; page++) {
-      const jobs = yield* rest(Jobs, `pipelines/${id}/jobs?per_page=100&page=${page}`);
-      if (!jobs.ok) return jobs;
-      found = Option.getOrUndefined(Arr.findFirst(jobs.value, (one) => one.name === name));
-      if (jobs.value.length < 100) break;
-    }
+type Reached = Extract<ReturnType<typeof projectRest>, { ok: true }>;
+
+/** Every job of pipeline `id`, the attempts a retry left behind too. */
+const pipelineJobs = (reached: Reached, cwd: string, id: number) =>
+  pagesAs(Job, reached.login, cwd, `${reached.project}/pipelines/${id}/jobs?include_retried=true`);
+
+/** The job named `name` in pipeline `id`, and the failed attempt it retried, if it did. */
+const jobIn = (reached: Reached, cwd: string, id: number, name: string) =>
+  Effect.map(pipelineJobs(reached, cwd, id), (listed) => {
+    if (!listed.ok) return listed;
+    const [found, ...before] = Arr.filter(listed.value, (one) => one.name === name);
+    const failed = Arr.filter(before, (one) => one.status === "failed");
     return {
       ok: true,
       value: {
         state: found === undefined ? "missing" : (JOB_STATES.get(found.status) ?? "pending"),
         url: found?.web_url ?? null,
         id: found === undefined ? null : String(found.id),
+        retryOf: Arr.map(failed, (one) => String(one.id)),
       },
     } as const;
   });
+
+/** A trace as bun printed it: GitLab's section markers, colours and carriage returns gone. */
+const plainTrace = (trace: string) =>
+  pipe(
+    stripVTControlCharacters(pipe(trace, Str.replace(/section_(?:start|end):\d+:[^\r\n]*\r/g, ""))),
+    Str.replaceAll("\r", ""),
+  );
+
+/** Job `id`'s failed attempt, with the failed tests its pipeline's failed jobs' traces name. */
+function failedAttempt(
+  ref: MrRef,
+  id: string,
+  cwd: string,
+): Effect.Effect<FailedAttempt, never, ForgeHttp> {
+  return Effect.gen(function* () {
+    const unread: FailedAttempt = { url: null, tests: [] };
+    const reached = projectRest(ref, cwd);
+    if (!reached.ok) return unread;
+    const attempt = yield* reached.rest(AttemptJob, `jobs/${id}`);
+    if (!attempt.ok) return unread;
+    const url = attempt.value.web_url ?? null;
+    const jobs = yield* pipelineJobs(reached, cwd, attempt.value.pipeline.id);
+    if (!jobs.ok) return { url, tests: [] };
+    const traces = yield* Effect.forEach(
+      Arr.filter(jobs.value, (one) => one.status === "failed"),
+      (one) => requestText(reached.login, cwd, `${reached.project}/jobs/${one.id}/trace`),
+    );
+    const tests = Arr.flatMap(traces, (trace) =>
+      trace.ok ? failedTestsIn(plainTrace(trace.value)) : [],
+    );
+    return { url, tests: Arr.dedupeWith(tests, (a, b) => a.name === b.name && a.file === b.file) };
+  });
+}
 
 /** The job at the merge request's merge-base pipeline, else on its target branch's latest. */
 function baseJob(
@@ -821,7 +876,7 @@ function baseJob(
         ok: false,
         reason: `no pipeline at ${pipe(base, Str.slice(0, 12))} or on ${target}`,
       };
-    const found = yield* jobIn(rest, pipeline.id, name);
+    const found = yield* jobIn(reached, cwd, pipeline.id, name);
     if (!found.ok)
       return {
         ok: false,
@@ -1321,6 +1376,7 @@ export const gitlab: Forge = {
   job,
   baseJob,
   retryJob,
+  failedAttempt,
   startPipeline,
   jobLog,
   template,
