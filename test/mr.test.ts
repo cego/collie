@@ -174,7 +174,7 @@ for (const name of ["gitlab", "github"] as const) {
     );
   };
 
-  test(`a merge request from a ${name} checkout is that forge's, with its login, template and commands`, () =>
+  test(`a merge request from a ${name} checkout is that forge's, with its login and template`, () =>
     runEffect(
       Effect.gen(function* () {
         // The other forge's configured assignee never answers for this one.
@@ -196,9 +196,6 @@ for (const name of ["gitlab", "github"] as const) {
               ? "https://gitlab.example.com/group/app"
               : "https://github.com/owner/repo",
         });
-        expect(ready.commands?.create).toContain(`${CLI[name]} `);
-        expect(ready.commands?.create).toContain("--assignee me ");
-        expect(ready.commands?.comment).toBe("");
         expect((yield* prepare(checkout(), { [name]: "lander" })).assignee).toBe("lander");
       }),
     ));
@@ -215,8 +212,6 @@ for (const name of ["gitlab", "github"] as const) {
         const ready = yield* prepare(checkout({ mrs: [{ ...open, autoMerge: true }] }));
         expect(ready.existing).toContain("31");
         expect(ready.autoMerge).toBe(true);
-        expect(ready.commands?.comment).toContain(`${CLI[name]} `);
-        expect(ready.commands?.comment).toContain("31");
       }),
     ));
 

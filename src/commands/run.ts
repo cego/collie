@@ -43,6 +43,7 @@ import {
   flockRuns,
   isSettled,
   resumeRun,
+  publishRun,
   startRun,
   statusOf,
   watchRun,
@@ -1162,6 +1163,27 @@ const mutationFlags = {
   requestId: requestIdFlag,
 };
 
+const runPublish = Command.make(
+  "publish",
+  {
+    runId: runIdArg,
+    title: Flag.String("title").pipe(Flag.withDefault("")),
+    file: Flag.String("file"),
+    onto: Flag.String("onto").pipe(Flag.optional),
+    requestId: requestIdFlag,
+  },
+  ({ runId, title, file, onto, requestId }) =>
+    runMutationCommand("run-publish", runId, requestId, (env, request) =>
+      Effect.flatMap(cliDoor(env), (door) =>
+        publishRun(env, { door, runId, title, file, onto: Option.getOrUndefined(onto), request }),
+      ),
+    ),
+).pipe(
+  Command.withDescription(
+    "Check public text, push the branch, and open or update its merge request",
+  ),
+);
+
 const runWithdrawNote = Command.make(
   "withdraw-note",
   {
@@ -2035,6 +2057,7 @@ export const run = Command.make("run").pipe(
   Command.withDescription("Start Runs and follow, answer, stop or resume them"),
   Command.withSubcommands([
     runStart,
+    runPublish,
     runList,
     runShow,
     runWait,

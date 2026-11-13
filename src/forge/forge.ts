@@ -146,20 +146,25 @@ export interface ReviewCommands {
   readonly checkout: string;
 }
 
-/** The command lines an agent is told to run, written for the forge they run on. */
-export interface Commands {
-  /**
-   * Opens one, with `<title>` and `<file>` (the description) left for the agent, and on
-   * GitLab `<iid>`, the number the first line printed. No line substitutes a command.
-   */
-  readonly create: string;
-  /** Posts `<file>` as a note on the existing one; empty where there is none. */
-  readonly comment: string;
-}
-
 /** What Collie asks a forge. Every answer is a value: a forge that cannot be asked says why. */
 export interface Forge {
   readonly name: MrForge;
+  readonly create: <R>(
+    options: {
+      readonly project: string;
+      readonly branch: string;
+      readonly title: string;
+      readonly body: string;
+      readonly assignee: string;
+      readonly onto?: string | undefined;
+    },
+    cwd: string,
+    run: Runner<R>,
+  ) => Effect.Effect<
+    { readonly ok: true; readonly url: string } | { readonly ok: false; readonly reason: string },
+    never,
+    R
+  >;
   /** The open issues, or with `numbers` those issues read one by one: a listing can lag a filing. */
   readonly issues: <R>(
     project: string,
@@ -282,15 +287,6 @@ export interface Forge {
   readonly template: (
     cwd: string,
   ) => Effect.Effect<string | null, PlatformError, FileSystem.FileSystem | Path.Path>;
-  /** What an agent runs to open one, or to note on `existing`. */
-  readonly commands: (options: {
-    readonly project: string;
-    readonly branch: string;
-    readonly assignee: string;
-    readonly existing: string | null;
-    /** The branch a new one targets, where it is not the default branch. */
-    readonly onto?: string | undefined;
-  }) => Commands;
   /** How a pipeline or Actions run at `url` went, or null where the forge does not say. */
   readonly runStatus: <R>(
     url: string,

@@ -11,6 +11,21 @@ there is a command for it.
 For the vocabulary, see [`CONTEXT.md`](../CONTEXT.md). For what each workflow is for, see
 [Workflows](workflows.md).
 
+## Publish a Run's merge request
+
+`collie run publish <run> --title "<title>" --file <path> --request-id <request>` asks the
+host to check, push, and open the branch's merge request. Use `--onto <branch>` for a
+target other than the default branch. The file must be on the Run's Machine.
+
+The host checks the title, file, and full commit messages before pushing. A refusal names
+the leaked phrase and its location, including the commit's short SHA. Reword locally and
+retry with a new request id. Collie's own repository keeps its internal vocabulary.
+
+When the branch already has an open merge request, the file becomes a note and `--title`
+is optional. The host adds a hidden marker and records the returned URL on the Run.
+Repeating a successful request id returns its result without publishing again.
+`--json` returns `mr_url` and `pushed`. Auto-merge must be off before publishing.
+
 ## Global flags
 
 Put these before the subcommand:

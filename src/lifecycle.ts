@@ -1149,6 +1149,37 @@ export const controlled = (
   };
 };
 
+export const publishRun = (
+  env: PluginEnv,
+  options: {
+    readonly door: Door;
+    readonly runId: string;
+    readonly title: string;
+    readonly file: string;
+    readonly onto?: string | undefined;
+    readonly request: string;
+  },
+) =>
+  asksRun(
+    env,
+    options.runId,
+    (client) =>
+      client.publish({
+        runId: options.runId,
+        title: options.title,
+        file: options.file,
+        onto: options.onto,
+        request: options.request,
+      }),
+    options.door,
+  ).pipe(
+    Effect.map((answer): OpResult =>
+      answer.ok
+        ? { ok: true, data: { mr_url: answer.value.url, pushed: true }, human: answer.value.url }
+        : answer,
+    ),
+  );
+
 /** Picks a Run up again from any door: recovered first, then its stop cleared, so what wakes can run. */
 export const resumeRun = (
   env: PluginEnv,

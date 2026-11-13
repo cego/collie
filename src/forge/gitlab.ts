@@ -7,7 +7,6 @@ import * as Arr from "effect/Array";
 import { DateTime, Effect, FileSystem, Option, Path, Redacted, Result, Schema } from "effect";
 import { CommandLine } from "effect/process";
 import {
-  mrPath,
   mrWords,
   type ForgeChecks,
   type Mergeability,
@@ -1324,34 +1323,36 @@ export const gitlab: Forge = {
   startPipeline,
   jobLog,
   template,
-  // `glab mr create` and `glab mr note` take text only, so a file goes through the API,
-  // which reads `@<file>` itself: no command substitution (CrowdStrike flags it).
-  commands: ({ project, assignee, existing, onto }) => {
-    const api = (method: string, path: string) =>
-      Result.getOrThrow(
-        CommandLine.join([
-          "glab",
-          "api",
-          "--hostname",
-          hostOf(project) ?? "",
-          "--method",
-          method,
-          path,
-        ]),
-      );
-    const route = `projects/${encodeURIComponent(mrPath({ project, iid: "" }))}/merge_requests`;
-    return {
-      create: Arr.join(
+  create: (options, cwd, run) =>
+    Effect.gen(function* () {
+      const made = yield* run(
+        "glab",
         [
-          `${Result.getOrThrow(CommandLine.join(["glab", "mr", "create", "--assignee", assignee, ...(onto ? ["--target-branch", onto] : [])]))} --title "<title>" --description "<title>" --yes`,
-          `${api("PUT", `${route}/<iid>`)} -F description=@<file>`,
+          "mr",
+          "create",
+          "--repo",
+          options.project,
+          "--source-branch",
+          options.branch,
+          "--assignee",
+          options.assignee,
+          ...(options.onto ? ["--target-branch", options.onto] : []),
+          "--title",
+          options.title,
+          "--description",
+          options.body,
+          "--yes",
         ],
-        "\n",
-      ),
-      comment:
-        existing === null ? "" : `${api("POST", `${route}/${existing}/notes`)} -F body=@<file>`,
-    };
-  },
+        cwd,
+      );
+      const url = /https?:\/\/[^\s]+\/-\/merge_requests\/\d+/.exec(made.stdout)?.[0];
+      return made.code === 0 && url !== undefined
+        ? { ok: true as const, url }
+        : {
+            ok: false as const,
+            reason: whatItSaid(made) || "glab did not return a merge request URL",
+          };
+    }),
   ready: gitlabForProject,
   login: glabLogin,
   details: mrDetails,

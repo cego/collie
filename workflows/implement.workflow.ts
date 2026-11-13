@@ -155,8 +155,7 @@ const prompts = {
       template: text,
       issues: text,
       existing: text,
-      create: text,
-      comment: text,
+      publish: text,
     }),
     target_repo: text,
   }),
@@ -967,16 +966,23 @@ export default defineWorkflow({
               return null;
             }
             handed.push(done);
-            answeredFor.push({ item, criteria, answers, assumptions });
-            for (const one of assumptions) assumed.push(`assumed in ${item}: ${one}`);
+            answeredFor.push({
+              item:
+                ticket === null && read.length > 0
+                  ? Arr.join(
+                      Arr.map(read, (one) => one.file),
+                      ", ",
+                    )
+                  : item,
+              criteria,
+              answers,
+              assumptions,
+            });
+            for (const one of assumptions) assumed.push(one);
             for (const one of read)
-              afterMerged.push(
-                ...Arr.map(one.afterMerge, (line) => `${one.file}: after merge: ${line}`),
-              );
+              afterMerged.push(...Arr.map(one.afterMerge, (line) => `after merge: ${line}`));
             for (const { criterion, met } of afterMergeAnswers(criteria, answers))
-              afterMerged.push(
-                `${Option.getOrUndefined(Arr.findFirst(read, (one) => one.criteria.includes(criterion)))?.file ?? item}: ${criterion} — ${met}`,
-              );
+              afterMerged.push(`${criterion} — ${met}`);
             built.add(done.item);
             if (ticket === null) for (const one of tickets) built.add(one.file);
             if (ticket !== null)
@@ -1063,6 +1069,11 @@ export default defineWorkflow({
               change: place.options.change,
               stacked: place.options.stacked,
             });
+      if (Arr.some(answeredFor, showsAnything))
+        yield* Activity.make({
+          name: "builder-answers",
+          execute: host.record(runId, renderAnswered(answeredFor)),
+        });
       const delivered = yield* deliver({
         cwd,
         source: { value: source.value, kind: source.kind },

@@ -1321,16 +1321,35 @@ export const github: Forge = {
     Effect.succeed({ _tag: "Unneeded", why: "GitHub's Actions run on every push" } as const),
   jobLog,
   template,
-  commands: ({ project, branch, assignee, existing, onto }) => {
-    const repo = mrPath({ project, iid: "" });
-    return {
-      create: `${Result.getOrThrow(CommandLine.join(["gh", "pr", "create", "--repo", repo, "--head", branch, ...(onto ? ["--base", onto] : []), "--assignee", assignee]))} --title "<title>" --body-file <file>`,
-      comment:
-        existing === null
-          ? ""
-          : `${Result.getOrThrow(CommandLine.join(["gh", "pr", "comment", existing, "--repo", repo]))} --body-file <file>`,
-    };
-  },
+  create: (options, cwd, run) =>
+    Effect.gen(function* () {
+      const made = yield* run(
+        "gh",
+        [
+          "pr",
+          "create",
+          "--repo",
+          mrPath({ project: options.project, iid: "" }),
+          "--head",
+          options.branch,
+          "--assignee",
+          options.assignee,
+          ...(options.onto ? ["--base", options.onto] : []),
+          "--title",
+          options.title,
+          "--body",
+          options.body,
+        ],
+        cwd,
+      );
+      const url = /https?:\/\/[^\s]+\/pull\/\d+/.exec(made.stdout)?.[0];
+      return made.code === 0 && url !== undefined
+        ? { ok: true as const, url }
+        : {
+            ok: false as const,
+            reason: whatItSaid(made) || "gh did not return a pull request URL",
+          };
+    }),
   ready,
   login,
   details,

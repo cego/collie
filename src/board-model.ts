@@ -1702,6 +1702,17 @@ export const FrontDoorRpcs = RpcGroup.make(
     success: Schema.Boolean,
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
+  Rpc.make("publish", {
+    payload: {
+      runId: Schema.String,
+      title: Schema.String,
+      file: Schema.String,
+      onto: Schema.optional(Schema.String),
+      request: Schema.String,
+    },
+    success: Schema.Struct({ url: Schema.String }),
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
   Rpc.make("resume", {
     payload: { runId: Schema.String, request: Schema.String },
     success: Controlled,

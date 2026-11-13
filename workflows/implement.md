@@ -278,13 +278,10 @@ What was actually verified, and by whom — `by collie` is a command Collie ran 
 
 {{evidence}}
 
-Say that in the description, in one line: which verifications passed on the branch as it
-stands, and the outcome this run was held to — the one at the top of this prompt, or
-unclassified where it is empty. Where the evidence names a `final` Measurement, put its id and
-each metric's verdict in the description. An Output that says the tests pass is a claim; these are not. Then list each
-verification this run is held to with its command, exactly as written at the top of this
-prompt: a model may have chosen them, and the human reading the merge request is who
-checks that they prove the work.
+Describe the evidence using the repository's own commands and results. Include which
+commands passed and which checks still await their pipeline jobs. Do not copy verification
+names, Run ids, outcome labels, "by collie", "by agent" or "left to CI" wording.
+For measurements, report the measured results and metric verdicts in ordinary terms.
 
 {{unreviewed}}
 
@@ -294,10 +291,8 @@ what that fix changed. Where findings were left open as non-blocking, list them 
 
 {{unsettled}}
 
-Where the list above is not empty, the Run could not settle these, and the human reads
-them before the merge request lands. Open the merge request anyway, and put each one, as
-written, in the description under this heading:
-**Not settled by the run**
+Where the list above is not empty, put each question in the description under
+**Open questions**. Use plain wording without ticket file names or internal process terms.
 
 - Forge: {{mr.forge}}
 - Assignee: `{{mr.assignee}}`
@@ -314,11 +309,10 @@ A `collie verify` you started in the background is reported to you when it ends,
 so you may end your turn waiting on it. Never end a turn waiting on any other
 background job.
 
-Push anything the earlier steps have not pushed yet, this time **without** `ci.skip`:
-yours is the push that runs the pipeline, and the state a human will look at.
-Where your push sends nothing, because an earlier push with `ci.skip` already carried this
-head, Collie starts the head's pipeline once you are done. Never start one yourself, and
-never report a missing or skipped pipeline as a finding.
+The host checks the title, description or note, and every commit message before it pushes.
+If it refuses, reword the named text locally, amending only your own unpushed commits,
+and retry with a new request id. Do not bypass the command. It pushes without `ci.skip`;
+Collie starts a missing head pipeline once you are done.
 Merge only when a message of its own asks you to merge this merge request: the human typing
 in this pane, or a Delivery from the human, from chat for the human, or from another agent
 writing as itself. Who sent it is recorded, never a reason to refuse. Every request gets the
@@ -331,24 +325,16 @@ update a merge request.
 Collie has already looked at this branch's open {{mr.noun}} above, and at whether it merges
 itself once green: a push is only asked of you where it does not.
 
-**When this branch already has an open {{mr.noun}}** (the line above is not empty), that
-one is being fixed: push, and post the final change and evidence on it as a note, written
-to a file in `{{run.dir}}` first:
+Write the description, or a note when the branch already has an open {{mr.noun}}, to a
+file in `{{run.dir}}`. Publish with this command, filling in the title for a new request
+and the file path:
 
 ```
-{{mr.comment}}
+{{mr.publish}} --title "<title>" --file <file> --request-id <request>
 ```
 
-Do **not** open a second {{mr.noun}} for the same branch. Report its URL as `mr_url`
-exactly as if you had opened it.
-
-**Otherwise**, write the description to a file in `{{run.dir}}` and open the {{mr.noun}}
-with this command, filling in a title and that file, and where a second line asks for
-`<iid>`, the number at the end of the URL the first one printed:
-
-```
-{{mr.create}}
-```
+An existing {{mr.noun}} gets the note; no second one is opened. Report the returned URL
+as `mr_url`, and `pushed: true` after success.
 
 Fill the repository's template yourself before sending the description.
 

@@ -148,6 +148,13 @@ prove the current revision, and delivery updates the branch's existing merge req
 The parent keeps its terminal status and finishing revision
 ([ADR-draft-a-finished-delivery-names-the-way-back-to-work](adr/draft-a-finished-delivery-names-the-way-back-to-work.md)).
 
+The merge request step calls [`collie run publish`](cli.md#publish-a-runs-merge-request).
+The host checks the title, description or note, and commit messages before pushing.
+It opens a merge request or notes the existing one and records its URL.
+Descriptions name repository commands and results; open questions omit internal ticket names.
+The Run's record retains the ticket names and assumptions.
+Tune-up uses the same publishing command after its measurements and checks finish.
+
 **What happens:** one implementer agent builds, a commit per ticket. It reviews what it
 built with the same pass `review` runs — one complete review — and loops on the findings for
 at most four review and fix rounds. Every commit is pushed, so the reviewers read the change
@@ -164,9 +171,9 @@ names the blockers too. **Hand back** reads the ticket again, goes on with no bu
 nothing is unmet any more, and otherwise hands it back with two tries fresh. **Stop** parks
 the Run with that reason, before any review. A resume asks the builder again under a new
 operation and reads its new Output. An unattended Run waits on either question. A ticket's `## After merge` outcomes are not criteria:
-the merge request names them under **Not settled by the run**. A criterion only CI, a merge
+the merge request names them under **Open questions**. A criterion only CI, a merge
 or a deploy can show may be answered `after merge: <reason>`: it does not end the Run, the
-reviewer blocks one the Run could have shown, and the merge request names the ticket, the
+reviewer blocks one the Run could have shown, and the merge request names the
 criterion and the reason under the same heading
 ([ADR-draft-a-criterion-is-what-the-run-can-show-before-its-merge-request](adr/draft-a-criterion-is-what-the-run-can-show-before-its-merge-request.md)).
 The builder records each new test failing before the code that makes it pass, never offers a
@@ -256,8 +263,8 @@ them go onto the merge request as one note from Collie. Nobody is asked along
 the way: the human verifies the work in the merge request, before it lands. Where a failed check's
 output names the tests that failed (bun test's does), the gate reruns each of those tests
 once, alone, on the same tree. A test that then passes is a **Flake**: it is not handed to a
-fix and never counts as a pass, and the merge request names it under **Not settled by the
-run**. A failed check whose output names no tests is re-run whole once instead, since a check
+fix and never counts as a pass, and the merge request names it under **Open questions**.
+A failed check whose output names no tests is re-run whole once instead, since a check
 that fails and then passes is a flake. The gate then hands
 what a check could still prove to the implementer for up to four fixes; a reviewer's
 judgement or an Output's claim is not handed over, since no fix moves it. Before any fix, each

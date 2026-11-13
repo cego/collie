@@ -102,6 +102,7 @@ export const FakeMr = Schema.Struct({
   state: Schema.Literals(["open", "merged", "closed"]),
   draft: Schema.optionalKey(Schema.Boolean),
   title: Schema.optionalKey(Schema.String),
+  body: Schema.optionalKey(Schema.String),
   author: Schema.optionalKey(Schema.String),
   assignees: Schema.optionalKey(Schema.Array(Schema.String)),
   head: Schema.optionalKey(Schema.String),
@@ -1931,6 +1932,26 @@ export function answer(
     return { ran: said === undefined ? no().ran : ok(`${said}\n`).ran, model };
   }
   if (cmd !== CLI[forge]) return { ran: no(127).ran, model };
+  if (model.installed && args[0] === (forge === "github" ? "pr" : "mr") && args[1] === "create") {
+    const project =
+      forge === "github" ? `github.com/${flag(args, "--repo")}` : (flag(args, "--repo") ?? "");
+    const iid = String(Math.max(0, ...Arr.map(model.mrs, (one) => Number(one.iid))) + 1);
+    const made: FakeMr = {
+      project,
+      iid,
+      state: "open",
+      title: flag(args, "--title") ?? "",
+      body: flag(args, forge === "github" ? "--body" : "--description") ?? "",
+      assignees: [flag(args, "--assignee") ?? ""],
+      sourceBranch: flag(args, forge === "github" ? "--head" : "--source-branch") ?? "",
+      targetBranch: flag(args, forge === "github" ? "--base" : "--target-branch") ?? "main",
+    };
+    return {
+      ran: ok(`https://${project}/${forge === "github" ? "pull" : "-/merge_requests"}/${iid}\n`)
+        .ran,
+      model: { ...model, mrs: [...model.mrs, made] },
+    };
+  }
   const said = forge === "gitlab" ? glab(model, args, under) : gh(model, args);
   let after = model;
   if (said.oauth !== undefined) after = { ...after, oauth: said.oauth };

@@ -454,13 +454,6 @@ export function prepareMergeRequest<R>(
       branch: branch === "HEAD" ? "" : branch,
       existing: found.open?.url ?? "",
       autoMerge: found.open?.autoMerge ?? false,
-      commands: forge.commands({
-        project,
-        branch,
-        assignee: assignee ?? "",
-        existing: found.open?.iid ?? null,
-        onto: opts.onto,
-      }),
     };
   });
 }

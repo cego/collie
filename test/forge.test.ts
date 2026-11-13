@@ -80,6 +80,41 @@ for (const name of ["gitlab", "github"] as const) {
   const host = FORGE_HOST[name];
 
   describe(`the ${name} forge`, () => {
+    test("opens a merge request with its complete description and destination", () =>
+      runEffect(
+        Effect.gen(function* () {
+          const fake = fakeForge(name, model(name, { mrs: [] }));
+          const opened = yield* forge.create(
+            {
+              project: PROJECT[name],
+              branch: "fix/cache",
+              title: "Keep cached results",
+              body: "Retain results across reconnects.\n\nTests: bun test passed.",
+              assignee: "mk",
+              onto: "stable",
+            },
+            "/w",
+            fake.run,
+          );
+          expect(opened).toEqual({
+            ok: true,
+            url:
+              name === "github"
+                ? `https://${PROJECT[name]}/pull/1`
+                : `https://${PROJECT[name]}/-/merge_requests/1`,
+          });
+          expect(fake.model().mrs).toMatchObject([
+            {
+              title: "Keep cached results",
+              body: "Retain results across reconnects.\n\nTests: bun test passed.",
+              assignees: ["mk"],
+              sourceBranch: "fix/cache",
+              targetBranch: "stable",
+            },
+          ]);
+        }),
+      ));
+
     test("lists only issues over HTTP from a cold login", () => {
       const fake = fakeForge(
         name,
@@ -684,93 +719,42 @@ for (const name of ["gitlab", "github"] as const) {
       }
     });
 
-    test("keeps shell characters in delivery arguments literal", () =>
+    test("passes shell characters in creation arguments literally", () =>
       runEffect(
         Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "forge-delivery-" });
-          const bin = yield* FakeBin.make(`${cwd}/bin`);
-          try {
-            yield* bin.add(CLI[name], `printf '%s\\n' "$@"`);
-            yield* fs.writeFileString(`${cwd}/body.txt`, "description");
-            const branch = `feature/${SHELL_WORD}`;
-            const assignee = `account${SHELL_WORD}`;
-            const existing = `https://${PROJECT[name]}/30?query=${SHELL_WORD}`;
-            const commands = forge.commands({ project: PROJECT[name], branch, assignee, existing });
-            const lines = Str.split(commands.create, "\n");
-            const created = yield* shell(
-              "sh",
-              [
-                "-c",
-                pipe(
-                  lines[0]!,
-                  Str.replaceAll("<title>", "Change"),
-                  Str.replace("<file>", "body.txt"),
-                  Str.replace("<iid>", "7"),
-                ),
-              ],
-              cwd,
-            );
-            expect(created.code).toBe(0);
-            const args = Str.split(Str.trimEnd(created.stdout), "\n");
-            expect(args[args.indexOf("--assignee") + 1]).toBe(assignee);
-            if (name === "github") {
-              expect(lines).toHaveLength(1);
-              expect(args[args.indexOf("--head") + 1]).toBe(branch);
-              expect(args[args.indexOf("--body-file") + 1]).toBe("body.txt");
-            } else {
-              const described = yield* shell(
-                "sh",
-                [
-                  "-c",
-                  pipe(lines[1]!, Str.replace("<file>", "body.txt"), Str.replace("<iid>", "7")),
-                ],
-                cwd,
-              );
-              expect(Str.split(Str.trimEnd(described.stdout), "\n")).toEqual([
-                "api",
-                "--hostname",
-                "gitlab.example.com",
-                "--method",
-                "PUT",
-                "projects/group%2Fapp/merge_requests/7",
-                "-F",
-                "description=@body.txt",
-              ]);
-            }
-            const noted = yield* shell(
-              "sh",
-              ["-c", pipe(commands.comment, Str.replace("<file>", "body.txt"))],
-              cwd,
-            );
-            expect(noted.code).toBe(0);
-            const said = Str.split(Str.trimEnd(noted.stdout), "\n");
-            if (name === "github") expect(said[2]).toBe(existing);
-            else
-              expect(said.slice(-3)).toEqual([
-                `projects/group%2Fapp/merge_requests/${existing}/notes`,
-                "-F",
-                "body=@body.txt",
-              ]);
-          } finally {
-            yield* bin.restore();
-          }
+          const calls: string[][] = [];
+          const run: Runner = (_cmd, args) => {
+            calls.push(args);
+            return Effect.succeed({
+              code: 0,
+              stdout:
+                name === "github"
+                  ? "https://github.com/owner/repo/pull/9"
+                  : "https://gitlab.example.com/group/app/-/merge_requests/9",
+            });
+          };
+          yield* forge.create(
+            {
+              project: PROJECT[name],
+              branch: `feature/${SHELL_WORD}`,
+              assignee: `account${SHELL_WORD}`,
+              title: SHELL_WORD,
+              body: SHELL_WORD,
+            },
+            "/w",
+            run,
+          );
+          const args = calls[0]!;
+          expect(args[args.indexOf("--assignee") + 1]).toBe(`account${SHELL_WORD}`);
+          expect(args[args.indexOf(name === "github" ? "--head" : "--source-branch") + 1]).toBe(
+            `feature/${SHELL_WORD}`,
+          );
+          expect(args[args.indexOf(name === "github" ? "--body" : "--description") + 1]).toBe(
+            SHELL_WORD,
+          );
+          expect(args[args.indexOf("--title") + 1]).toBe(SHELL_WORD);
         }),
       ));
-
-    test("writes its delivery commands without command substitution", () => {
-      const commands = forge.commands({
-        project: PROJECT[name],
-        branch: "feature/one",
-        assignee: "tester",
-        existing: "31",
-      });
-      for (const line of [commands.create, commands.comment]) {
-        expect(line).not.toContain("$(");
-        expect(line).not.toContain("`");
-        expect(pipe(line, Str.startsWith(`${CLI[name]} `))).toBe(true);
-      }
-    });
 
     test("keeps shell characters in a review target literal", () =>
       runEffect(

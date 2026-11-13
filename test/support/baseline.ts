@@ -47,7 +47,6 @@ import { exec } from "./command";
 import { fastForward, runEffect } from "./effect";
 import { FakeBin } from "./bin";
 import {
-  CLI,
   FORGE_HOST,
   PROJECT,
   forgeOnPath as modelOnPath,
@@ -5002,7 +5001,11 @@ scenario(
           },
         ]);
         yield* approve("r-after-merge", ["unit"]);
-        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs([
+          { ...BUILT, assumptions: ["Should empty registries be counted?"] },
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
         const result = yield* ran({
           entry: shipped("implement"),
           runId: "r-after-merge",
@@ -5015,10 +5018,11 @@ scenario(
           false,
         );
         const opening = yield* asked("r-after-merge", "mr");
-        expect(opening).toContain(
-          "- 01-first.md: after merge: The nightly deploy counts each registry once.",
-        );
-        expect(opening).toContain("- 01-first.md: after merge: The dashboard shows it.");
+        expect(opening).toContain("- after merge: The nightly deploy counts each registry once.");
+        expect(opening).toContain("- after merge: The dashboard shows it.");
+        expect(opening).toContain("Should empty registries be counted?");
+        expect(opening).not.toContain("01-first.md");
+        expect(yield* runLog("r-after-merge")).toContain("01-first.md");
       }),
     ),
   120_000,
@@ -6473,7 +6477,7 @@ const changeRunOpening = (runId: string, options: Readonly<Record<string, string
     });
     yield* bin.restore();
     return Arr.filter(Str.split(yield* asked(runId, "mr"), "\n"), (line) =>
-      pipe(line, Str.includes("glab mr create")),
+      pipe(line, Str.includes(`collie run publish ${runId}`)),
     );
   });
 
@@ -6483,7 +6487,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         expect(yield* changeRunOpening("r-impl-stacked", { stacked: "." })).toEqual([
-          'glab mr create --assignee tester --target-branch mk/one-registry --title "<title>" --description "<title>" --yes',
+          'collie run publish r-impl-stacked --onto mk/one-registry --title "<title>" --file <file> --request-id <request>',
         ]);
       }),
     ),
@@ -6496,7 +6500,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         expect(yield* changeRunOpening("r-impl-unstacked", {})).toEqual([
-          'glab mr create --assignee tester --title "<title>" --description "<title>" --yes',
+          'collie run publish r-impl-unstacked --title "<title>" --file <file> --request-id <request>',
         ]);
       }),
     ),
@@ -10016,7 +10020,7 @@ for (const name of ["gitlab", "github"] as const) {
   );
 
   scenario(
-    `implement opens a ${noun} on a ${name} checkout with that forge's own command`,
+    `implement opens a ${noun} on a ${name} checkout through the host`,
     () =>
       runEffect(
         Effect.gen(function* () {
@@ -10035,8 +10039,9 @@ for (const name of ["gitlab", "github"] as const) {
           yield* bin.restore();
           expect(said(result)).toBe(OPENED.mr_url);
           const prompt = yield* asked(runId, "mr");
-          expect(prompt).toContain(`${CLI[name]} ${name === "gitlab" ? "mr" : "pr"} create`);
-          expect(prompt).toContain("--assignee tester");
+          expect(prompt).toContain(`collie run publish ${runId}`);
+          expect(prompt).toContain("- Assignee: `tester`");
+          expect(prompt).not.toMatch(/glab mr create|gh pr create/);
           expect(prompt).not.toMatch(new RegExp(`\\b${DELIVERY[name].other}\\b`));
           // Branch naming and readiness asked this forge alone.
           expect(yield* other.calls()).toEqual([]);
@@ -10067,17 +10072,14 @@ for (const name of ["gitlab", "github"] as const) {
           });
           yield* bin.restore();
           const prompt = yield* asked(runId, "mr");
-          expect(prompt).toContain(
-            name === "gitlab"
-              ? "glab api --hostname gitlab.example.com --method POST 'projects/group%2Fapp/merge_requests/31/notes' -F body=@<file>"
-              : "gh pr comment 31 --repo owner/repo --body-file <file>",
-          );
+          expect(prompt).toContain(`collie run publish ${runId}`);
+          expect(prompt).not.toMatch(/glab api|gh pr comment/);
           expect(prompt).toContain(
             name === "gitlab"
               ? "https://gitlab.example.com/group/app/-/merge_requests/31"
               : "https://github.com/owner/repo/pull/31",
           );
-          expect(prompt).toContain(`Do **not** open a second ${noun}`);
+          expect(prompt).toContain(`An existing ${noun} gets the note; no second one is opened.`);
         }),
       ),
     120_000,

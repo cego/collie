@@ -174,6 +174,7 @@ import { nothingToLandFile } from "./standing";
 import { AwaitingJson, AwaitingSchema, overdueLine } from "./awaiting";
 import {
   autoMergingHere,
+  whatItSaid,
   forgeHere,
   mrIdIn,
   prepareMergeRequest,
@@ -919,8 +920,6 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly existing?: string;
     /** Whether \`existing\` merges itself once green, so a push to it is a merge. */
     readonly autoMerge?: boolean;
-    /** The command lines an agent runs, written by the forge's adapter. */
-    readonly commands?: { readonly create: string; readonly comment: string };
   }
 
   /** What the host lends a workflow. Hold and stop are read fresh on every replay. */
@@ -1025,6 +1024,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       /** The branch a new merge request targets, where it is not the default branch. */
       readonly onto?: string | undefined;
     }) => Effect.Effect<MrReady>;
+    readonly publish: (options: { readonly runId: string; readonly title: string; readonly file: string; readonly onto?: string | undefined }) => Effect.Effect<{ readonly url: string }, WorkflowError>;
     /**
      * The checkout's branch's open merge request where it merges itself once green, else null.
      * Fails, saying why, where the forge cannot be read: not knowing is not a no.
@@ -5100,6 +5100,115 @@ export const hostLayer = (options: {
               return yield* forgeOf(ref).startPipeline(ref, head, asked.cwd, runShell);
             }),
           ).pipe(Effect.orDie),
+        publish: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const place = yield* host.place(asked.runId);
+              const cwd = place.cwd;
+              const ready = yield* host.mr({ cwd, onto: asked.onto });
+              const fail = (reason: string) => new WorkflowError({ reason });
+              if (!ready.ok) return yield* fail(ready.reason);
+              if (!ready.branch) return yield* fail("a detached checkout cannot be published");
+              if (ready.autoMerge)
+                return yield* fail(
+                  "this branch's merge request merges automatically; turn off auto-merge before publishing",
+                );
+              const here = yield* forgeHere(
+                cwd,
+                runShell,
+                (yield* loadDefaults(options.userDir ?? dir)).gitlabHost,
+              );
+              if (!here.ok) return yield* fail(here.reason);
+              const path = yield* Path.Path;
+              const file = yield* fs
+                .readFileString(path.resolve(cwd, asked.file))
+                .pipe(Effect.mapError(() => fail(`there is no ${asked.file} to publish`)));
+              const title = redact(asked.title);
+              const body = redact(file);
+              const existing = ready.existing ? mrRefOf(ready.existing) : null;
+              const panel =
+                existing === null ? null : yield* here.forge.details(existing, cwd, runShell);
+              if (
+                ready.existing &&
+                (panel === null || panel._tag !== "Details" || !panel.targetBranch)
+              )
+                return yield* fail("the existing merge request's target branch could not be read");
+              const target =
+                (panel?._tag === "Details" ? panel.targetBranch : asked.onto) ??
+                Str.trim(
+                  (yield* runShell(
+                    "git",
+                    ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+                    cwd,
+                  )).stdout,
+                );
+              if (!target)
+                return yield* fail("origin's default branch could not be read; name --onto");
+              const remote = `refs/remotes/origin/${target}`;
+              const tracked = yield* runShell("git", ["rev-parse", "--verify", remote], cwd);
+              const base = yield* runShell(
+                "git",
+                ["merge-base", "--", tracked.code === 0 ? remote : target, "HEAD"],
+                cwd,
+              );
+              if (base.code !== 0 || !Str.trim(base.stdout))
+                return yield* fail(whatItSaid(base) || `cannot find the merge base with ${target}`);
+              const commits = yield* runShell(
+                "git",
+                ["log", "--format=%h%x00%s%x00%B%x00", `${Str.trim(base.stdout)}..HEAD`],
+                cwd,
+              );
+              if (commits.code !== 0) return yield* fail(whatItSaid(commits));
+              const texts = [
+                { where: "title", text: title },
+                { where: ready.existing ? "note" : "description", text: body },
+              ];
+              const parts = Str.split(commits.stdout, "\0");
+              for (let i = 0; i + 2 < parts.length; i += 3)
+                texts.push({
+                  where: `commit ${Str.trim(parts[i]!)} ${parts[i + 1]}`,
+                  text: parts[i + 2]!,
+                });
+              const refused: string[] = [];
+              for (const one of texts) {
+                const reason = yield* publicRefusal(one.text, Effect.succeed(here.project));
+                if (reason !== null) refused.push(`${one.where}: ${reason}`);
+              }
+              if (refused.length) return yield* fail(Arr.join(refused, "\n"));
+              if (!ready.existing && !Str.trim(title))
+                return yield* fail("a new merge request needs --title");
+              const pushed = yield* runShell("git", ["push", "-u", "origin", "HEAD"], cwd);
+              if (pushed.code !== 0) return yield* fail(whatItSaid(pushed));
+              const marked = `${body}\n\n${marker(asked.runId)}`;
+              if (ready.existing) {
+                const ref = mrRefOf(ready.existing);
+                if (ref === null) return yield* fail(`cannot read ${ready.existing}`);
+                const posted = yield* here.forge.post(ref, marked, false, cwd, runShell);
+                if (!posted.ok) return yield* fail(posted.message);
+                return { url: ready.existing };
+              }
+              const opened = yield* here.forge.create(
+                {
+                  project: here.project,
+                  branch: ready.branch,
+                  title,
+                  body: marked,
+                  assignee: ready.assignee,
+                  onto: asked.onto,
+                },
+                cwd,
+                runShell,
+              );
+              if (!opened.ok) return yield* fail(opened.reason);
+              return { url: opened.url };
+            }).pipe(
+              Effect.mapError((error) =>
+                Schema.is(WorkflowError)(error)
+                  ? error
+                  : new WorkflowError({ reason: String(error) }),
+              ),
+            ),
+          ),
         note: (asked) =>
           under(
             Effect.gen(function* () {
