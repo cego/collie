@@ -1373,7 +1373,17 @@ test.each([false, true])(
         const fs = yield* FileSystem.FileSystem;
         const managed = yield* managedCodex;
         yield* rig.queueOutputs([null]);
-        const herdr = new StaleWorkingTerminal(rig.pluginEnv());
+        const steerText = "Keep the recovery in this checkout.";
+        class UnobservedSteer extends StaleWorkingTerminal {
+          override agentPrompt(target: string, text: string) {
+            return super
+              .agentPrompt(target, text)
+              .pipe(
+                Effect.map((sent) => (pipe(text, Str.includes(steerText)) ? "unobserved" : sent)),
+              );
+          }
+        }
+        const herdr = new UnobservedSteer(rig.pluginEnv());
         const over = { herdr, harness: "codex", model: "default", ports: managed.ports };
         const acknowledged = steps("r1").pipe(
           Effect.provideService(Path.Path, yield* Path.Path),
@@ -1387,17 +1397,15 @@ test.each([false, true])(
           expect(Arr.some(yield* herdr.agentList(), (one) => one.name === agentFor("r1"))).toBe(
             true,
           );
-          const [step] = yield* steps("r1");
-          yield* appendLine({
-            ...step!,
-            id: "human-unobserved",
-            request_id: "human-unobserved",
-            cause: { kind: "steer", ref: "human-unobserved" },
-            causal_key: "r1:steer:human-unobserved:0",
-            state: "submitted",
-            note: "unobserved",
-            human: { origin: "cli" },
-          }).pipe(Effect.provide(recordsAt(dir)));
+          expect(
+            yield* (yield* Agents).steer({
+              runId: "r1",
+              text: steerText,
+              request: "human-unobserved",
+              actor: { origin: "cli" },
+            }),
+          ).toMatchObject({ delivered: true, observed: false });
+          expect(sent(yield* rig.calls(), steerText)).toBe(1);
           herdr.stale = true;
           expect(yield* herdr.agentStatus(agentFor("r1"))).toBe("working");
           managed.state.reachable = false;
@@ -1422,9 +1430,12 @@ test.each([false, true])(
         expect(result._tag === "Success" && result.success.note).toBe("recovered");
         expect(managed.children).toHaveLength(2);
         expect(
-          Arr.filter(yield* deliveredTo(dir, "r1"), (one) => one.id === "human-unobserved"),
+          Arr.filter(
+            yield* deliveredTo(dir, "r1"),
+            (one) => one.cause.kind === "steer" && one.cause.ref === "human-unobserved",
+          ),
         ).toMatchObject([{ state: "submitted", note: "unobserved", cause: { kind: "steer" } }]);
-        expect(sent(yield* rig.calls(), "human-unobserved")).toBe(0);
+        expect(sent(yield* rig.calls(), steerText)).toBe(1);
         expect(sent(yield* rig.calls(), "Your task for this step")).toBe(2);
         expect(everyLaunch(yield* rig.calls())).toHaveLength(2);
       }).pipe(Effect.scoped),
