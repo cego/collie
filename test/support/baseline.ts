@@ -11256,7 +11256,6 @@ const parkedCause = (runId: string) =>
     Effect.orElseSucceed(() => ""),
   );
 
-/** Park recovery's recheck of a Run's current park, as the host's recovery makes it. */
 const parkRecheck = (runId: string, mr: string, cwd: string) =>
   Effect.gen(function* () {
     const cause = yield* Schema.decodeUnknownEffect(ParkCause)(yield* parkedCause(runId));
@@ -14668,6 +14667,48 @@ for (const name of ["gitlab", "github"] as const) {
           );
           yield* bin.restore();
           expect((yield* forge.model()).merges ?? []).toEqual([]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: failed CI whose last allowed repair cannot move the head parks as release-failed for a Heal`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, reviewed, changed } = yield* releasable(name, {
+            checks: [{ name: "build", state: "failed" }],
+            checksUrl: PIPELINE_OF[name],
+          });
+          const runId = `r-ci-spent-${name}`;
+          yield* checkedBy(runId, "unit");
+          yield* rig.queueOutputs([
+            PACKAGED,
+            ...Arr.replicate(ciRepair(forge, yield* forge.model(), reviewed, "failed"), 3),
+            { verdict: "clean", fixed: [{ title: "claimed CI repaired" }] },
+          ]);
+          yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                yield* until(
+                  () => run.status,
+                  (status) => status.status === "suspended" || status.status === "failed",
+                );
+                expect(yield* wasAsked(runId, "fix-4")).toBe(true);
+                expect(yield* wasAsked(runId, "fix-5")).toBe(false);
+                expect(yield* parkedWhy(runId)).toContain("remote head did not advance after fix-4");
+                expect(yield* parkedCause(runId)).toBe("release-failed");
+                const repaired = yield* pushedBySomebody((yield* forge.model()).mrs[0]!.head!);
+                yield* changed({ head: repaired, checks: [{ name: "build", state: "passed" }] });
+                yield* run.resume;
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Finish");
+                expect(outcomeText(yield* ended(run.status))).toBe(`${mr} was left open`);
+              }),
+          );
+          yield* bin.restore();
         }),
       ),
     120_000,

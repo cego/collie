@@ -1201,7 +1201,7 @@ export default defineWorkflow({
                     if (standing.head === ciBefore)
                       return yield* park(
                         `${mr}: ${why}; its remote head did not advance after fix-${fixes}`,
-                        "ci-failed",
+                        repairs >= ROUNDS ? "release-failed" : "ci-failed",
                       );
                     if (repairs >= ROUNDS)
                       return yield* park(`${mr}: ${why} after ${ROUNDS} CI repair rounds`);
