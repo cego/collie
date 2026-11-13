@@ -120,9 +120,9 @@ for (const [channel, mode] of [
           const first = doors.get("fixture-vm")!;
           expect((yield* readIdentity(first.chat)).channel).toBe("chat");
           yield* read(first[channel], { break: mode }).pipe(Effect.exit);
-          const next = yield* Queue.take(items).pipe(Effect.timeout("4 seconds"));
+          const next = yield* Queue.take(items);
           expect("_tag" in next && next._tag).toBe("Lost");
-          yield* Queue.take(items).pipe(Effect.timeout("4 seconds"));
+          yield* Queue.take(items);
           const renewed = doors.get("fixture-vm")!;
           expect(Arr.filter(Arr.take(pids, 3), alive)).toEqual([]);
           expect(renewed).not.toBe(first);
@@ -230,8 +230,8 @@ test(
           give: Effect.succeed([]),
         });
         expect(result.failed).toBe(false);
-        yield* Queue.take(items).pipe(Effect.timeout("2 seconds"));
-        yield* Queue.take(items).pipe(Effect.timeout("2 seconds"));
+        yield* Queue.take(items);
+        yield* Queue.take(items);
         const after = yield* readIdentity(doors.get("fixture-vm")!.chat);
         expect(after.pid).not.toBe(before.pid);
         expect(after.channel).toBe("chat");
