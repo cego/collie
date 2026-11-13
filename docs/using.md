@@ -4132,3 +4132,14 @@ without starting a run, and names the file.
 the skill and the command that installs it, and `collie upgrade` reinstalls the whole set.
 See [Authoring](authoring.md#skills) for how a workflow refers to one, and
 [the skills](#the-skills) for where they come from.
+
+## Finding a Run's material
+
+The record's **Artefacts** tab brings together attachments, plan files, evidence files,
+and handoffs. Select an item to inspect its retained revision, or use **Open** and **Save**.
+Images, Markdown, and text have native previews; supported videos play inside the record.
+
+The tab distinguishes unseen material from updates to previously seen material. Old
+creation dates remain unknown where no trustworthy record exists. Missing sources can
+still have retained content. See [Inspecting a Run's material](artefacts.md) for receipt
+semantics, codec support, refresh limits, and the implementation's evidence mapping.

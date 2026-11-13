@@ -10,6 +10,7 @@ import { DateTime, Schema, Stream, Struct } from "effect";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import { AguiEvent } from "./agui";
+import { Artefact, ArtefactCollection } from "../../../src/artefact-model";
 import { Staged, StagedOrRefused } from "./attachments";
 import { ChatChoices } from "./chat-choices";
 import {
@@ -687,6 +688,37 @@ export const DesktopRpcs = RpcGroup.make(
     success: RunFile,
     error: ActionFailed,
   }),
+  Rpc.make("artefacts", {
+    payload: {
+      installation: Schema.String,
+      runId: Schema.String,
+      refresh: Schema.optional(Schema.Boolean),
+    },
+    success: ArtefactCollection,
+    error: ActionFailed,
+  }),
+  Rpc.make("artefactRead", {
+    payload: {
+      installation: Schema.String,
+      runId: Schema.String,
+      id: Schema.String,
+      revision: Schema.Int,
+      offset: Schema.Int,
+    },
+    success: RunFile,
+    error: ActionFailed,
+  }),
+  Rpc.make("artefactSeen", {
+    payload: {
+      installation: Schema.String,
+      runId: Schema.String,
+      id: Schema.String,
+      revision: Schema.NullOr(Schema.Int),
+      request: Schema.String,
+    },
+    success: Artefact,
+    error: ActionFailed,
+  }),
   /** One message from the human to the Flock chat, and the turn it starts as it streams. */
   /** `now` interrupts the turn under way rather than waiting behind it. */
   Rpc.make("say", {
@@ -814,6 +846,7 @@ export interface FlockMachine {
   readonly protocol: number | null;
   /** Whether its host takes files, as its latest Snapshot said. */
   readonly files: boolean;
+  readonly artefacts?: boolean;
 }
 
 /** Each Machine keyed by installation id, and each route not live by its herdr profile. */
@@ -986,6 +1019,8 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
     message._tag === "Snapshot" ? (message.development ?? null) : (known?.development ?? null);
   const protocol = message._tag === "Snapshot" ? message.protocol : (known?.protocol ?? null);
   const files = message._tag === "Snapshot" ? message.files === true : (known?.files ?? false);
+  const artefacts =
+    message._tag === "Snapshot" ? message.artefacts === true : (known?.artefacts ?? false);
   lost.delete(machine.profile);
   return {
     ...flock,
@@ -998,6 +1033,7 @@ export const applyItem = (flock: Flock, item: FlockItem): Flock => {
       development,
       protocol,
       files,
+      artefacts,
     }),
     lost,
   };

@@ -156,6 +156,109 @@ describe.skipIf(cargo === null)("DesktopRpcs between the main process and the Ru
     expect(new Set(Arr.map(SAID, (event) => event.type)).size).toBe(AguiEvent.members.length);
   });
 
+  test("artefact RPC parts retain revisions, nullable dates, extension metadata and errors", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const item = {
+          id: "a1",
+          run: "r1",
+          kind: "other/widget",
+          role: "handoff",
+          title: "Notes",
+          ref: "handoff:notes.txt",
+          source: "/runs/r1/handoffs/notes.txt",
+          mediaType: "text/plain",
+          size: 7,
+          revision: 2,
+          digest: "abc",
+          created: null,
+          registeredAt: "2026-10-01T00:00:00Z",
+          observedAt: "2026-11-01T00:00:00Z",
+          detectedAt: "2026-11-01T00:00:00Z",
+          seen: { revision: 1, at: "2026-10-02T00:00:00Z" },
+          sourceAvailability: "missing",
+          retainedAvailability: "available",
+          reason: "source removed",
+          metadata: { custom: [false, null, { nested: 2 }] },
+        };
+        const parts = [
+          [
+            "artefacts",
+            { installation: "inst-1", runId: "r1", refresh: true },
+            {
+              items: [
+                item,
+                {
+                  ...item,
+                  id: "a2",
+                  created: { at: "2025-01-01", provenance: "caller" },
+                  updated: null,
+                },
+              ],
+            },
+          ],
+          [
+            "artefactRead",
+            { installation: "inst-1", runId: "r1", id: "a1", revision: 1, offset: 0 },
+            { ref: "artefact:a1:1", encoding: "base64", size: 7, content: "b2xkIG9uZQ==" },
+          ],
+          [
+            "artefactSeen",
+            { installation: "inst-1", runId: "r1", id: "a1", revision: null, request: "q1" },
+            item,
+          ],
+        ] as const;
+        const sent: Frame[] = [];
+        const tags = new Map<number, DesktopRpc>();
+        for (const [index, [tag, payload, success]] of parts.entries()) {
+          const rpc = DesktopRpcs.requests.get(tag)!;
+          tags.set(index, rpc);
+          sent.push({
+            _tag: "Request",
+            id: index,
+            tag,
+            payload: yield* encoder(rpc.payloadSchema)(payload),
+            headers: [],
+          });
+          sent.push({
+            _tag: "Exit",
+            requestId: index,
+            exit: yield* encoder(Rpc.exitSchema(rpc))(Exit.succeed(success)),
+          });
+          sent.push({
+            _tag: "Request",
+            id: index + 10,
+            tag,
+            payload: yield* encoder(rpc.payloadSchema)(payload),
+            headers: [],
+          });
+          tags.set(index + 10, rpc);
+          sent.push({
+            _tag: "Exit",
+            requestId: index + 10,
+            exit: yield* encoder(Rpc.exitSchema(rpc))(Exit.fail(REFUSED)),
+          });
+        }
+        const ran = yield* exec([roundtrip], {
+          stdin: Buffer.from(
+            Arr.join(
+              Arr.map(sent, (frame) => JSON.stringify(frame)),
+              "\n",
+            ) + "\n",
+          ),
+        });
+        expect(ran.exitCode).toBe(0);
+        if (ran.exitCode !== 0) throw new Error(ran.stderr);
+        const back: ReadonlyArray<Frame> = yield* Effect.forEach(
+          Str.split(Str.trim(ran.stdout), "\n"),
+          (line) => fromLine(line),
+        );
+        const got = yield* Effect.forEach(back, (frame) => typed(frame, tags));
+        const want = yield* Effect.forEach(sent, (frame) => typed(frame, tags));
+        expect(got).toEqual(want);
+      }),
+    ));
+
   test("Hello, a flock chunk, an answer and a failure come back from Rust as they went", () =>
     runEffect(
       Effect.gen(function* () {

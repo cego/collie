@@ -123,6 +123,9 @@ import {
   changeScheduleOn,
   moveScheduleOn,
   runFileOn,
+  artefactsOn,
+  artefactReadOn,
+  artefactSeenOn,
   definitionsIn,
   endChildren,
   flockStream,
@@ -1495,6 +1498,20 @@ const main = Effect.gen(function* () {
     runFile: ({ installation, runId, ref, offset }) =>
       doorTo(doors, installation).pipe(
         Effect.flatMap((door) => runFileOn(door, runId, ref, offset)),
+      ),
+    artefacts: ({ installation, runId, refresh }) =>
+      doorTo(doors, installation).pipe(
+        Effect.flatMap((door) =>
+          artefactsOn(door, shown.machines.get(installation)?.artefacts === true, runId, refresh),
+        ),
+      ),
+    artefactRead: ({ installation, runId, id, revision, offset }) =>
+      doorTo(doors, installation).pipe(
+        Effect.flatMap((door) => artefactReadOn(door, runId, id, revision, offset)),
+      ),
+    artefactSeen: ({ installation, runId, id, revision, request }) =>
+      doorTo(doors, installation).pipe(
+        Effect.flatMap((door) => artefactSeenOn(door, runId, id, revision, request)),
       ),
     stage: (part) =>
       stageAttachment(own, part).pipe(

@@ -33,6 +33,15 @@ pub fn retyped(tag: &str, part: Part, value: Value) -> serde_json::Result<Value>
         ("syncNow", Part::Error) => through::<ActionFailed>(value),
         ("say", Part::Payload) => through::<SayPayload>(value),
         ("say", Part::Chunk) => through::<AguiEvent>(value),
+        ("artefacts", Part::Payload) => through::<crate::generated::ArtefactsPayload>(value),
+        ("artefacts", Part::Done) => through::<crate::generated::ArtefactCollection>(value),
+        ("artefactRead", Part::Payload) => through::<crate::generated::ArtefactReadPayload>(value),
+        ("artefactRead", Part::Done) => through::<crate::generated::RunFile>(value),
+        ("artefactSeen", Part::Payload) => through::<crate::generated::ArtefactSeenPayload>(value),
+        ("artefactSeen", Part::Done) => through::<crate::generated::Artefact>(value),
+        ("artefacts" | "artefactRead" | "artefactSeen", Part::Error) => {
+            through::<ActionFailed>(value)
+        }
         _ => Err(serde::de::Error::custom(format!(
             "{tag}'s {part:?} has no Rust type"
         ))),

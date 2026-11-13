@@ -53,6 +53,30 @@ const machine = (
   const door: ChatDoor & { readonly board: () => Stream.Stream<never> } = {
     // The chat reads the board Desktop follows, never one of its own.
     board: () => Stream.die("the chat subscribed to a host's board"),
+    artefactSeen: (payload) =>
+      Effect.sync(() => {
+        note("artefactSeen", payload);
+        return {
+          id: payload.id,
+          run: payload.runId,
+          kind: "file",
+          role: "handoff",
+          title: "note.txt",
+          ref: "handoff:note.txt",
+          source: "/note.txt",
+          mediaType: "text/plain",
+          size: 4,
+          revision: 3,
+          digest: "abc",
+          registeredAt: "2026-01-01",
+          observedAt: "2026-11-01",
+          detectedAt: "2026-11-01",
+          seen: payload.revision === null ? null : { revision: payload.revision, at: "2026-11-01" },
+          sourceAvailability: "available",
+          retainedAvailability: "available",
+          reason: null,
+        };
+      }),
     declare: (payload: Declaration) =>
       Effect.sync(() => {
         note("declare", payload);
@@ -369,6 +393,37 @@ test("collie_herd is every Machine's board, each Run named by its Machine", () =
       expect(said).toContain("run mk-pc:r-1:");
       expect(said).toContain("run vm-mk:r-2: Fix board bugs");
       expect(said).toContain("run vm-mk:r-1:");
+    }),
+  ));
+
+test("Flock material reads and receipts keep the selected revision on the qualified Run", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const read = yield* call(asked, "collie_artefacts", {
+        run: "vm-mk:r-2",
+        id: "a1",
+        revision: 3,
+        offset: 9,
+      });
+      expect(read).toContain("vm-mk");
+      expect(asked).toContainEqual({
+        machine: "vm-mk",
+        op: "read",
+        payload: {
+          tool: "collie_artefacts",
+          input: { run: "r-2", id: "a1", revision: 3, offset: 9 },
+        },
+      });
+      const marked = yield* call(asked, "collie_do", {
+        actions: [{ kind: "artefact_seen", run: "vm-mk:r-2", id: "a1", revision: 3 }],
+      });
+      expect(marked).toContain("applied");
+      expect(asked).toContainEqual({
+        machine: "vm-mk",
+        op: "artefactSeen",
+        payload: { runId: "r-2", id: "a1", revision: 3, request: expect.any(String) },
+      });
     }),
   ));
 

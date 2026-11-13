@@ -3,6 +3,7 @@
 
 pub mod act;
 pub mod agents;
+pub mod artefacts;
 pub mod diff;
 pub mod evidence;
 pub mod review;
@@ -108,6 +109,7 @@ pub struct Asked {
 }
 
 pub struct Record {
+    pub artefacts: artefacts::Collection,
     pub installation: String,
     pub run: String,
     pub machine: String,
@@ -151,6 +153,7 @@ pub struct Record {
 impl Record {
     fn new(installation: String, run: String, machine: String, serial: u64) -> Record {
         Record {
+            artefacts: artefacts::Collection::default(),
             installation,
             run,
             machine,
@@ -364,6 +367,7 @@ impl App {
         };
         match heard {
             Ok(kept) => {
+                record.artefacts.dirty = true;
                 let flow = kept.detail.as_ref().and_then(|d| d.flow.clone().flatten());
                 record.kept = Some(kept);
                 if let Some(flow) = flow {
@@ -465,6 +469,7 @@ impl App {
     /// Shows `tab`; a comment box or a draft's edit open on the tab left closes, saving nothing.
     pub fn show_tab(&mut self, tab: &str) {
         if self.record_tab() != tab {
+            self.hide_artefact();
             self.close_comment();
             self.close_diff_comment();
         }
@@ -493,6 +498,7 @@ impl App {
             "diff" => self.read_diff(),
             "plan" => self.read_plan_file(),
             "evidence" => self.read_shots(),
+            "artefacts" => self.read_artefacts(false),
             _ => {}
         }
     }
@@ -696,8 +702,12 @@ impl App {
             return;
         }
         record.items.insert(item.into(), Item::Reading);
-        let (installation, run) = (record.installation.clone(), record.run.clone());
-        self.read_part(installation, run, item.to_string(), Vec::new());
+        let (installation, run, serial) = (
+            record.installation.clone(),
+            record.run.clone(),
+            record.serial,
+        );
+        self.read_part(installation, run, serial, item.to_string(), Vec::new());
     }
 
     /// Opens `item` under its Evidence row, read the first time, or closes it.
@@ -726,7 +736,14 @@ impl App {
         self.read_item(item);
     }
 
-    fn read_part(&mut self, installation: String, run: String, item: String, bytes: Vec<u8>) {
+    fn read_part(
+        &mut self,
+        installation: String,
+        run: String,
+        serial: u64,
+        item: String,
+        bytes: Vec<u8>,
+    ) {
         let Some(core) = self.core.clone() else {
             return;
         };
@@ -740,17 +757,14 @@ impl App {
             "runFile",
             payload,
             move |app: &mut App, part: Result<RunFile, _>| {
-                if app
-                    .record
-                    .open
-                    .as_ref()
-                    .is_none_or(|r| r.run != run || r.installation != installation)
-                {
+                if app.record.open.as_ref().is_none_or(|r| {
+                    r.serial != serial || r.run != run || r.installation != installation
+                }) {
                     return;
                 }
                 match part_read(bytes, part.map_err(|e| e.to_string())) {
                     Part::Whole(whole) => app.item_read(&item, whole),
-                    Part::More(bytes) => app.read_part(installation, run, item, bytes),
+                    Part::More(bytes) => app.read_part(installation, run, serial, item, bytes),
                 }
             },
         );

@@ -27,6 +27,7 @@ import { listTasks } from "./task";
 import { nowIso } from "./time";
 import { sweep, sweeping, type Sweeper } from "./cleanup";
 import { keepDiffs } from "./run-detail";
+import { Artefacts } from "./artefacts";
 
 /** The Runs still going whose drift was escalated to the human, by constraint. */
 const escalatedDrift = Effect.fn("SideJobs.escalatedDrift")(function* (
@@ -243,6 +244,7 @@ export const sideJobs = <E, R>(opts: {
   const checked = new Map<string, number>();
   const kept = new Set<string>();
   const states = new Map<string, MrState>();
+  let lastArtefactRun = "";
   /** Steers to Reopened Runs seen being worked on. */
   const workedOn = new Set<string>();
   /** Reopened Runs whose agent has since finished; the said journal keeps each to one item. */
@@ -250,6 +252,23 @@ export const sideJobs = <E, R>(opts: {
   return Effect.flatMap(Effect.cachedWithTTL(liveHerds(herdr, env), SESSIONS_EVERY), (herds) =>
     Effect.all(
       [
+        every(
+          "30 seconds",
+          Effect.gen(function* () {
+            const catalogue = yield* Artefacts;
+            const { runs } = yield* opts.board;
+            const sorted = [...runs].sort((a, b) => Str.localeCompare(b.id)(a.id));
+            const following = Arr.filter(sorted, (run) => run.id > lastArtefactRun);
+            const batch = [
+              ...following,
+              ...Arr.filter(sorted, (run) => run.id <= lastArtefactRun),
+            ].slice(0, 8);
+            for (const run of batch) {
+              yield* catalogue.reconcile(run);
+              lastArtefactRun = run.id;
+            }
+          }),
+        ),
         every(
           MERGES_EVERY,
           Effect.gen(function* () {

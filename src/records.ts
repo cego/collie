@@ -10,15 +10,23 @@ import { storeLayer } from "./store";
 import { proposalsLayer, type Proposals } from "./proposals";
 import { registeredLayer, type Registered } from "./registry";
 import { tasksLayer, type Tasks } from "./task";
+import { artefactsLayer, type Artefacts } from "./artefacts";
 
-export type Records = Deliveries | Launches | Proposals | Registered | Tasks;
+export type Records = Deliveries | Launches | Proposals | Registered | Tasks | Artefacts;
 
 /**
  * Over the host's own connection, which the Store has migrated. Fresh, or a layer provided
  * inside another would reuse the outer one's connection.
  */
 export const recordsLayer = Layer.fresh(
-  Layer.mergeAll(deliveriesLayer, launchesLayer, proposalsLayer, registeredLayer, tasksLayer),
+  Layer.mergeAll(
+    deliveriesLayer,
+    launchesLayer,
+    proposalsLayer,
+    registeredLayer,
+    tasksLayer,
+    artefactsLayer,
+  ),
 );
 
 /**

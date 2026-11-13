@@ -6,6 +6,7 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
+import { withArtefacts } from "../../../src/artefact-client";
 import {
   Cause,
   Clock,
@@ -1645,6 +1646,42 @@ export const recordEvents = (
 
 export const runFileOn = (door: Reached, runId: string, ref: string, offset?: number) =>
   over(door, door.desktop.runFile({ runId, ref, offset }));
+
+export const artefactsOn = (door: Reached, supported: boolean, runId: string, refresh?: boolean) =>
+  supported
+    ? over(door, door.desktop.artefacts({ runId, refresh }))
+    : Effect.fail(
+        new ActionFailed({
+          reason:
+            "Upgrade this Machine's Collie host to use Artefacts. Legacy Plan and Evidence remain available.",
+        }),
+      );
+export const artefactReadOn = (
+  door: Reached,
+  runId: string,
+  id: string,
+  revision: number,
+  offset: number,
+) =>
+  over(
+    door,
+    withArtefacts(door.desktop.board(), door.desktop.artefactRead({ runId, id, revision, offset })),
+  );
+export const artefactSeenOn = (
+  door: Reached,
+  runId: string,
+  id: string,
+  revision: number | null,
+  request: string,
+) =>
+  over(
+    door,
+    withArtefacts(
+      door.desktop.board(),
+      door.desktop.artefactSeen({ runId, id, revision, request }),
+    ),
+    request,
+  );
 
 /** What a Machine's host read of its Usage; a host too old to have the call asks for an upgrade. */
 export const usageOn = (

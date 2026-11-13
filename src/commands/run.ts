@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import { withArtefacts } from "../artefact-client";
 import { parkLine } from "../park-cause";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -2031,6 +2032,147 @@ const runIntent = Command.make("intent").pipe(
   ]),
 );
 
+const artefactResult = (read: {
+  readonly runId: string;
+  readonly id?: string;
+  readonly revision?: number;
+  readonly offset?: number;
+  readonly op: string;
+  readonly requestId?: Option.Option<string>;
+}) =>
+  Effect.gen(function* () {
+    const global = yield* root;
+    yield* attempt(
+      Effect.gen(function* () {
+        const resolved = yield* resolveCommandRun(global, read.runId);
+        if (resolved._tag === "RunFailure") return resolved.result;
+        const runId = runFacts(resolved).id;
+        const door = yield* cliDoor(resolved.env);
+        if (read.op === "seen" || read.op === "unseen")
+          return yield* mutation(
+            resolved.env,
+            "artefact-seen",
+            read.requestId ?? Option.none(),
+            (request) =>
+              asksRun(
+                resolved.env,
+                runId,
+                (client) =>
+                  withArtefacts(
+                    client.board(),
+                    client.artefactSeen({
+                      runId,
+                      id: read.id!,
+                      revision: read.op === "unseen" ? null : read.revision!,
+                      request,
+                    }),
+                  ),
+                door,
+              ).pipe(
+                Effect.map((answer) =>
+                  answer.ok
+                    ? {
+                        ok: true as const,
+                        data: answer.value,
+                        human: Schemaflow(
+                          Schema.encodeResult(PrettyUnknownJson),
+                          SchemaResult.getOrThrow,
+                        )(answer.value),
+                      }
+                    : answer,
+                ),
+              ),
+          );
+        if (read.op === "read") {
+          const answer = yield* asksRun(
+            resolved.env,
+            runId,
+            (client) =>
+              withArtefacts(
+                client.board(),
+                client.artefactRead({
+                  runId,
+                  id: read.id!,
+                  revision: read.revision!,
+                  offset: read.offset ?? 0,
+                }),
+              ),
+            door,
+          );
+          return answer.ok
+            ? {
+                ok: true as const,
+                data: answer.value,
+                human: Schemaflow(
+                  Schema.encodeResult(PrettyUnknownJson),
+                  SchemaResult.getOrThrow,
+                )(answer.value),
+              }
+            : answer;
+        }
+        const answer = yield* asksRun(
+          resolved.env,
+          runId,
+          (client) =>
+            withArtefacts(
+              client.board(),
+              client.artefacts({ runId, refresh: read.op === "refresh" }),
+            ),
+          door,
+        );
+        if (!answer.ok) return answer;
+        const item =
+          read.id === undefined
+            ? answer.value
+            : Option.getOrUndefined(Arr.findFirst(answer.value.items, (one) => one.id === read.id));
+        return item === undefined
+          ? err("invalid_input", "No such artefact")
+          : {
+              ok: true as const,
+              data: item,
+              human: Schemaflow(
+                Schema.encodeResult(PrettyUnknownJson),
+                SchemaResult.getOrThrow,
+              )(item),
+            };
+      }),
+      global.json,
+    );
+  });
+const runArtefacts = Command.make("artefacts", { runId: runIdArg }, ({ runId }) =>
+  artefactResult({ runId, op: "list" }),
+);
+const artefactId = Argument.String("id");
+const revisionFlag = Flag.Int("revision");
+const runArtefact = Command.make("artefact").pipe(
+  Command.withSubcommands([
+    Command.make("show", { runId: runIdArg, id: artefactId }, (args) =>
+      artefactResult({ ...args, op: "show" }),
+    ),
+    Command.make(
+      "read",
+      {
+        runId: runIdArg,
+        id: artefactId,
+        revision: revisionFlag,
+        offset: Flag.Int("offset").pipe(Flag.withDefault(0)),
+      },
+      (args) => artefactResult({ ...args, op: "read" }),
+    ),
+    Command.make("refresh", { runId: runIdArg }, (args) =>
+      artefactResult({ ...args, op: "refresh" }),
+    ),
+    Command.make(
+      "seen",
+      { runId: runIdArg, id: artefactId, revision: revisionFlag, requestId: requestIdFlag },
+      (args) => artefactResult({ ...args, op: "seen" }),
+    ),
+    Command.make("unseen", { runId: runIdArg, id: artefactId, requestId: requestIdFlag }, (args) =>
+      artefactResult({ ...args, op: "unseen" }),
+    ),
+  ]),
+);
+
 export const run = Command.make("run").pipe(
   Command.withDescription("Start Runs and follow, answer, stop or resume them"),
   Command.withSubcommands([
@@ -2058,5 +2200,7 @@ export const run = Command.make("run").pipe(
     runAction,
     runIntent,
     runOutput,
+    runArtefacts,
+    runArtefact,
   ]),
 );

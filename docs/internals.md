@@ -2727,3 +2727,26 @@ Running that file with `TMPDIR` under `.scratch/` reproduced both failures. The 
 now detaches the manifest before editing it and asserts a hardlinked copy stays unchanged;
 the unsupported backend configuration was removed. All 15 authoring tests passed with a
 fresh cache and the fixture directories on the cache's filesystem after that correction.
+
+## Retained Run material
+
+The catalogue and exact-revision receipts live in `host.db`, migrated by `src/store.ts`.
+`src/artefacts.ts` discovers only approved Run collections and keeps immutable SHA-256
+blobs under each Run's `.artefacts/`. It checks source stability before committing a
+revision. Original readers keep their references; catalogue operations do not alter proof.
+
+Receipt requests and results commit in the same transaction as the receipt. Retried
+requests return their saved result without overwriting later choices. The existing
+Actor audit records the front door and requesting agent. Catalogue writes notify
+StoreWrites for that Run; unchanged observations produce no notification or audit.
+Content revisions are durable integers, independent of the Run model's epoch and sequence.
+
+The native record reads bounded revision parts, verifies their digest, and fences worker
+and RPC completions by opening serial and selection generation. Video owns one bounded
+frame queue. Linux decoding, seeking, and audio synchronization run through GStreamer
+away from the UI thread. macOS uses the pinned Rune player. Linux's existing bundle step
+copies the required plugins, dependency closure, scanner, and copyright notices into the
+bundle. Its private plugin path is installed before threads start.
+
+See [the material guide](artefacts.md#evidence-by-layer) for the checks at each layer and
+the native operator observations that remain pending.

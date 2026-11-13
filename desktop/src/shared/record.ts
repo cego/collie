@@ -52,6 +52,7 @@ export const recordTabs = (facts: TabFacts): Array<Tab> => {
     ],
     [loaded && facts.diff, { label: "Diff", value: "diff" }, "diff"],
     [loaded, { label: "Evidence", value: "evidence" }],
+    [loaded, { label: "Artefacts", value: "artefacts" }],
     [true, { label: "Log", value: "log" }, "tail"],
     [facts.terminal, { label: "Terminal", value: "terminal" }],
     ...(facts.mrs !== undefined && facts.mrs.length > 0
@@ -100,8 +101,8 @@ export const scrollToRestore = (memory: ScrollMemory, tab: string): number | nul
 export const tabsKept = (kept: ReadonlySet<string>, shown: string): ReadonlySet<string> =>
   shown === UNSCROLLED || shown === "log" || kept.has(shown) ? kept : new Set(kept).add(shown);
 
-/** An Evidence video plays only where it can be seen. */
-export const videoPlays = (tab: string | undefined): boolean => tab === "evidence";
+export const videoPlays = (tab: string | undefined): boolean =>
+  tab === "evidence" || tab === "artefacts";
 
 /** Where the Log's own lines are scrolled, kept while the record is open. */
 export interface LogPlace {

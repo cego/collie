@@ -21,6 +21,7 @@
 // means a person" shortcut would read it as human. Attribution, never a gate.
 
 import * as Rec from "effect/Record";
+import { withArtefacts } from "./artefact-client";
 import * as Arr from "effect/Array";
 import { branchMovement } from "./recovery";
 import * as Str from "effect/String";
@@ -163,6 +164,49 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
     effect: Effect.Effect<string, E, PlatformServices | ChildProcessSpawner.ChildProcessSpawner>,
   ) => said(effect).pipe(Effect.provideContext(services));
   return CollieTools.of({
+    collie_artefacts: (input) =>
+      answer(
+        Effect.gen(function* () {
+          const door = yield* toolDoor(env);
+          if (input.id !== undefined && input.revision !== undefined) {
+            const done = yield* asksRun(
+              env,
+              input.run,
+              (client) =>
+                withArtefacts(
+                  client.board(),
+                  client.artefactRead({
+                    runId: input.run,
+                    id: input.id!,
+                    revision: input.revision!,
+                    offset: input.offset ?? 0,
+                  }),
+                ),
+              door,
+            );
+            return done.ok ? asJson(done.value) : done.error.message;
+          }
+          const done = yield* asksRun(
+            env,
+            input.run,
+            (client) =>
+              withArtefacts(
+                client.board(),
+                client.artefacts({ runId: input.run, refresh: input.refresh }),
+              ),
+            door,
+          );
+          return done.ok
+            ? asJson(
+                input.id === undefined
+                  ? done.value
+                  : (Option.getOrUndefined(
+                      Arr.findFirst(done.value.items, (one) => one.id === input.id),
+                    ) ?? { error: "No such artefact" }),
+              )
+            : done.error.message;
+        }),
+      ),
     collie_herd: (input) =>
       answer(boardFacts(input.machine === undefined ? env : { ...env, machine: input.machine })),
     collie_run: (input) =>
@@ -347,6 +391,30 @@ const settle = Effect.fn("Tools.settle")(function* (
   action: Settle,
   request: string,
 ) {
+  if (action.kind === "artefact_seen" || action.kind === "artefact_unseen") {
+    const done = yield* asksRun(
+      env,
+      action.run,
+      (client) =>
+        withArtefacts(
+          client.board(),
+          client.artefactSeen({
+            runId: action.run,
+            id: action.id,
+            revision: action.kind === "artefact_seen" ? action.revision : null,
+            request,
+          }),
+        ),
+      door,
+    );
+    return done.ok
+      ? {
+          kind: action.kind,
+          state: "applied",
+          note: `artefact ${action.id}: revision ${done.value.seen?.revision ?? "unseen"}`,
+        }
+      : { kind: action.kind, state: "failed", note: done.error.message };
+  }
   if (action.kind === "seen") {
     const done = yield* seeRun(env, { door, runId: action.run, request });
     return done.ok

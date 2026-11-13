@@ -20,6 +20,8 @@ import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import { MAC_ENTITLEMENTS, macSigning } from "../../desktop/scripts/mac-signing";
 import { appliedSignatureOf, RELEASE_PUBLIC_KEY, verifyRelease } from "../../src/signing";
 import manifest from "../../herdr-plugin.toml";
+import { bundleLinuxMedia } from "./linux-media";
+import { shell } from "../../src/mr";
 
 export type Os = "linux" | "macos";
 type Env = Record<string, string | undefined>;
@@ -219,7 +221,7 @@ export interface AssembleOptions {
   ) => Effect.Effect<
     void,
     PlatformError | Cause.UnknownError,
-    ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
+    ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
   >;
 }
 
@@ -415,7 +417,32 @@ const program = Effect.gen(function* () {
     manager: yield* compatibilityManager(os, process.arch, work),
     version: manifest.version,
     baseUrl: BASE_URL,
-    prepare: os === "macos" ? signMac(env, work) : undefined,
+    prepare:
+      os === "macos"
+        ? signMac(env, work)
+        : (bundle) =>
+            Effect.gen(function* () {
+              const libDir = yield* shell(
+                "pkg-config",
+                ["--variable=libdir", "gstreamer-1.0"],
+                ROOT,
+              );
+              const scannerDir = yield* shell(
+                "pkg-config",
+                ["--variable=pluginscannerdir", "gstreamer-1.0"],
+                ROOT,
+              );
+              if (libDir.code !== 0 || scannerDir.code !== 0)
+                return yield* new Cause.UnknownError(
+                  null,
+                  "Install the declared GStreamer build and runtime packages before bundling Linux Desktop",
+                );
+              yield* bundleLinuxMedia(
+                bundle,
+                Str.trim(libDir.stdout),
+                `${Str.trim(scannerDir.stdout)}/gst-plugin-scanner`,
+              );
+            }),
   });
   yield* packageInstaller(out, os, process.arch);
   yield* fs.remove(work, { recursive: true });

@@ -70,6 +70,7 @@ fn a_run_with_everything_starts_with_summary_and_ends_with_facts() {
         ("Review", "review"),
         ("Diff", "diff"),
         ("Evidence", "evidence"),
+        ("Artefacts", "artefacts"),
         ("Log", "log"),
         ("Terminal", "terminal"),
         ("MR !12", "mr"),
@@ -83,7 +84,14 @@ fn a_run_with_everything_starts_with_summary_and_ends_with_facts() {
             ..everything()
         }),
         [
-            "summary", "review", "evidence", "log", "terminal", "mr", "facts"
+            "summary",
+            "review",
+            "evidence",
+            "artefacts",
+            "log",
+            "terminal",
+            "mr",
+            "facts"
         ]
     );
 }
@@ -133,7 +141,15 @@ fn a_part_still_coming_is_a_loading_tab_and_goes_once_it_came_empty() {
     assert!(came.iter().all(|t| !t.loading));
     assert_eq!(
         came.iter().map(|t| t.value.as_str()).collect::<Vec<_>>(),
-        ["summary", "evidence", "log", "terminal", "mr", "facts"]
+        [
+            "summary",
+            "evidence",
+            "artefacts",
+            "log",
+            "terminal",
+            "mr",
+            "facts"
+        ]
     );
 }
 
@@ -148,8 +164,9 @@ fn several_merge_requests_each_get_a_tab_in_place_of_the_one() {
         mrs: mr_tabs_of(Some(&mrs)),
         ..everything()
     });
-    let tail: Vec<(String, String)> = tabs[7..]
+    let tail: Vec<(String, String)> = tabs
         .iter()
+        .skip_while(|tab| !tab.value.starts_with("mr:"))
         .map(|t| (t.label.clone(), t.value.clone()))
         .collect();
     assert_eq!(

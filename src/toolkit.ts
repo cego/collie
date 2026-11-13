@@ -87,9 +87,23 @@ const SettleSchema = Schema.Union([
   }),
   /** A finished Run's report acknowledged, for every board in the Flock. */
   Schema.Struct({ kind: Schema.Literal("seen"), run: Schema.String }),
+  Schema.Struct({
+    kind: Schema.Literal("artefact_seen"),
+    run: Schema.String,
+    id: Schema.String,
+    revision: Schema.Int,
+  }),
+  Schema.Struct({ kind: Schema.Literal("artefact_unseen"), run: Schema.String, id: Schema.String }),
 ]);
 export type Settle = Schema.Schema.Type<typeof SettleSchema>;
-export const SETTLE_KINDS = ["confirm", "decline", "disposition", "seen"] as const;
+export const SETTLE_KINDS = [
+  "confirm",
+  "decline",
+  "disposition",
+  "seen",
+  "artefact_seen",
+  "artefact_unseen",
+] as const;
 
 const AskedInput = Schema.Struct({
   actions: Schema.Array(Schema.Union([ActionSchema, SettleSchema])),
@@ -197,6 +211,19 @@ const collieTool = <const Name extends string, P extends Schema.Constraint>(
     .annotate(Tool.Readonly, options.readOnly);
 
 export const CollieTools = Toolkit.make(
+  collieTool("collie_artefacts", {
+    readOnly: true,
+    title: "A Run's retained material",
+    description:
+      "List a Run's attachments, plan, evidence and handoffs without marking them seen. Give id to inspect metadata; give id and revision to read an immutable part as base64. refresh reconciles source files. Use collie_do artefact_seen with the inspected revision or artefact_unseen to change the receipt.",
+    parameters: Schema.Struct({
+      run: Schema.String,
+      id: Schema.optionalKey(Schema.String),
+      revision: Schema.optionalKey(Schema.Int),
+      offset: Schema.optionalKey(Schema.Int),
+      refresh: Schema.optionalKey(Schema.Boolean),
+    }),
+  }),
   collieTool("collie_herd", {
     readOnly: true,
     title: "The Herd",
@@ -399,6 +426,8 @@ export type ToolName = keyof typeof CollieTools.tools;
 
 /** What each tool says it takes when it refuses what it was given. */
 export const TAKES: Record<ToolName, string> = {
+  collie_artefacts:
+    'It takes {"run":"<run id>","id":"<optional artefact id>","revision":1,"offset":0,"refresh":false}.',
   collie_herd: 'It takes nothing, or {"machine": "<name>"}.',
   collie_run: `It takes {"run": "<run id>"}, or nothing at all for the board's selection.`,
   collie_workspaces: "It takes nothing.",

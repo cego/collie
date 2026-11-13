@@ -563,6 +563,12 @@ const migrations = (imports: {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`ALTER TABLE collie_decisions ADD COLUMN shipping TEXT`;
   }),
+  "19_artefacts": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE collie_artefacts (run TEXT NOT NULL, id TEXT NOT NULL, origin TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (run, id), UNIQUE (run, origin))`;
+    yield* sql`CREATE TABLE collie_artefact_revisions (run TEXT NOT NULL, id TEXT NOT NULL, revision INTEGER NOT NULL, digest TEXT NOT NULL, size INTEGER NOT NULL, PRIMARY KEY (run, id, revision))`;
+    yield* sql`CREATE TABLE collie_artefact_receipts (run TEXT NOT NULL, request TEXT NOT NULL, asked TEXT NOT NULL, data TEXT NOT NULL, actor TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (run, request))`;
+  }),
 });
 
 /** How often a commit by another connection, another process's, is looked for. */
@@ -1054,6 +1060,13 @@ function makeStore(
                 yield* decide(run);
                 yield* sql`DELETE FROM collie_decisions WHERE run = ${run}`.pipe(Effect.orDie);
                 yield* sql`DELETE FROM collie_launches WHERE run = ${run}`.pipe(Effect.orDie);
+                yield* sql`DELETE FROM collie_artefact_receipts WHERE run = ${run}`.pipe(
+                  Effect.orDie,
+                );
+                yield* sql`DELETE FROM collie_artefact_revisions WHERE run = ${run}`.pipe(
+                  Effect.orDie,
+                );
+                yield* sql`DELETE FROM collie_artefacts WHERE run = ${run}`.pipe(Effect.orDie);
                 yield* sql`DELETE FROM collie_runs WHERE run = ${run}`.pipe(Effect.orDie);
                 gone.push(run);
               }

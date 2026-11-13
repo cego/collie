@@ -1,3 +1,5 @@
+import { Artefacts } from "./artefacts";
+import { Artefact } from "./artefact-model";
 // The one local host per state directory: who owns it, how a client reaches it, and what
 // it answers.
 //
@@ -1875,6 +1877,7 @@ const frontDoorHandlers = (
       const usage = yield* Usage;
       const harnesses = yield* HarnessCatalogues;
       const schedules = yield* Schedules;
+      const artefacts = yield* Artefacts;
       // Trimming rewrites the trail through one temporary file, so one read records at a time.
       const recordingUsage = yield* Semaphore.make(1);
       const recordingShell = yield* Semaphore.make(1);
@@ -3965,6 +3968,50 @@ const frontDoorHandlers = (
           }).pipe(Effect.provideContext(bun));
           return followDetail(detail, Stream.merge(changed, own)).pipe(Stream.orDie);
         },
+        artefacts: ({ runId, refresh }) =>
+          known(runId).pipe(
+            Effect.flatMap((view) =>
+              refresh === true
+                ? artefacts.reconcile(factsOfView(env.stateDir, view))
+                : artefacts
+                    .list(runId)
+                    .pipe(
+                      Effect.flatMap((items) =>
+                        items.length === 0
+                          ? artefacts.reconcile(factsOfView(env.stateDir, view))
+                          : Effect.succeed({ items }),
+                      ),
+                    ),
+            ),
+            Effect.provideContext(bun),
+          ),
+        artefactRead: ({ runId, id, revision, offset }) =>
+          known(runId).pipe(
+            Effect.flatMap((view) =>
+              artefacts.read(factsOfView(env.stateDir, view), id, revision, offset),
+            ),
+            Effect.provideContext(bun),
+          ),
+        artefactSeen: ({ runId, id, revision, request }, { client }) =>
+          known(runId).pipe(
+            Effect.andThen(
+              artefacts.seen(runId, id, revision, request, actorOf(whoOf(client), request)),
+            ),
+            Effect.tap((answer) =>
+              answer.fresh
+                ? recordAudit(trail(runId), {
+                    operation: "artefact-seen",
+                    request,
+                    ...whoOf(client),
+                    asked: { id, revision },
+                    result: Artefact,
+                    value: answer.item,
+                  }).pipe(Effect.orDie)
+                : Effect.void,
+            ),
+            Effect.map((answer) => answer.item),
+            Effect.provideContext(bun),
+          ),
         runFile: ({ runId, ref, offset, length }) =>
           registry.view(runId).pipe(
             Effect.flatMap((view) =>
@@ -3992,6 +4039,7 @@ const frontDoorHandlers = (
                     ...development,
                     protocol: PROTOCOL,
                     files: true,
+                    artefacts: true,
                     herds: Arr.flatMap(sessions, ({ herd, name }) =>
                       herd === null ? [] : [name === undefined ? { id: herd } : { id: herd, name }],
                     ),

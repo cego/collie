@@ -194,3 +194,10 @@ shares, keeping replaced text under `replaced/`. `channel.ts` declares and pipes
 Dispatcher, and closes a `closes: "reported"` Run's own agents and eligible Task workspace.
 Repository placement is resolved by `projects.ts` and fetched by `agent-start.ts`; the
 engine carries the fetched revision through admission and placement.
+
+### Retained material
+
+`artefact-model.ts` owns the shared catalogue and revision receipt wire values.
+`artefacts.ts` owns discovery, stable snapshots, and transactional receipts in the host's
+records database. `artefact-client.ts` checks the additive capability before front-door
+operations. See [Inspecting a Run's material](../docs/artefacts.md).

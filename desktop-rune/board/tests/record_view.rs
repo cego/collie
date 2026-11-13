@@ -16,6 +16,494 @@ use serde_json::{Value, json};
 
 const FLOCK: &str = include_str!("../../fixtures/flock.ndjson");
 
+#[test]
+fn artefacts_are_a_native_record_tab_with_a_named_refresh_control() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    runtime.update(|app, _| app.open_card("inst-build:b2"));
+    harness.fake.push("runDetail", Ok(detail(json!({}))));
+    settle(&mut runtime, &harness, 100.0);
+    assert!(keys(&runtime).contains(&"tab-artefacts".to_string()));
+    runtime.update(|app, _| app.show_tab("artefacts"));
+    harness.fake.answer("artefacts", Ok(json!({"items": []})));
+    settle(&mut runtime, &harness, 200.0);
+    assert!(keys(&runtime).contains(&"artefacts-refresh".to_string()));
+}
+
+#[test]
+fn a_file_callback_from_a_closed_record_cannot_fill_the_same_runs_reopened_record() {
+    let harness = Harness::<App>::new();
+    let mut app = App::default();
+    app.core = Some(harness.core.clone());
+    app.open_record("i1".into(), "r1".into(), "Local".into(), Some("evidence"));
+    app.read_item("handoff:note.txt");
+    app.back();
+    app.open_record("i1".into(), "r1".into(), "Local".into(), Some("evidence"));
+    app.read_item("handoff:note.txt");
+    harness.fake.answer(
+        "runFile",
+        Ok(json!({"ref":"handoff:note.txt", "encoding":"utf8", "content":"stale", "size":5})),
+    );
+    harness.settle(&mut app);
+    assert!(matches!(
+        app.record
+            .open
+            .as_ref()
+            .unwrap()
+            .items
+            .get("handoff:note.txt"),
+        Some(collie_desktop_board::record::Item::Reading)
+    ));
+    harness.fake.answer(
+        "runFile",
+        Ok(json!({"ref":"handoff:note.txt", "encoding":"utf8", "content":"fresh", "size":5})),
+    );
+    harness.settle(&mut app);
+    assert_eq!(
+        app.record
+            .open
+            .as_ref()
+            .unwrap()
+            .items
+            .get("handoff:note.txt")
+            .unwrap()
+            .text()
+            .as_deref(),
+        Some("fresh")
+    );
+}
+
+fn artefact(id: &str, title: &str, media: &str, bytes: &[u8], revision: i64) -> Value {
+    use sha2::Digest;
+    json!({"id":id, "run":"r1", "kind":"file", "role":"handoff", "title":title,
+        "ref":format!("handoff:{title}"), "source":format!("/runs/r1/handoffs/{title}"),
+        "mediaType":media, "size":bytes.len(), "revision":revision, "digest":format!("{:x}", sha2::Sha256::digest(bytes)),
+        "created":null, "updated":null, "registeredAt":"2026-01-01T00:00:00Z", "observedAt":"2026-11-01T00:00:00Z",
+        "detectedAt":"2026-11-01T00:00:00Z", "seen":null, "sourceAvailability":"available", "retainedAvailability":"available", "reason":null})
+}
+
+fn collection(runtime: &mut Runtime<App>, harness: &Harness<App>, items: Vec<Value>) {
+    runtime.update(|app, _| {
+        app.open_record(
+            "inst-build".into(),
+            "r1".into(),
+            "Build box".into(),
+            Some("artefacts"),
+        )
+    });
+    harness.fake.push("runDetail", Ok(detail(json!({}))));
+    settle(runtime, harness, 100.0);
+    harness.fake.answer("artefacts", Ok(json!({"items":items})));
+    settle(runtime, harness, 200.0);
+}
+
+fn selected_bytes(runtime: &mut Runtime<App>, harness: &Harness<App>, id: &str, bytes: &[u8]) {
+    runtime.update(|app, _| app.select_artefact(id));
+    harness.fake.answer("artefactRead", Ok(json!({"ref":format!("artefact:{id}:1"),"encoding":"base64","size":bytes.len(),"content":base64::engine::general_purpose::STANDARD.encode(bytes)})));
+    harness.settle(&mut runtime.state);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        harness.settle(&mut runtime.state);
+        if !matches!(
+            runtime
+                .state
+                .record
+                .open
+                .as_ref()
+                .unwrap()
+                .artefacts
+                .preview,
+            Some(collie_desktop_board::record::artefacts::Preview::Loading)
+        ) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "preview worker did not finish"
+        );
+        std::thread::park_timeout(std::time::Duration::from_millis(1));
+    }
+    runtime.update(|_, _| {});
+    runtime.frame(300.0);
+}
+
+#[test]
+fn returning_to_the_artefacts_tab_reloads_paused_and_drops_the_hidden_preview_callback() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    collection(
+        &mut runtime,
+        &harness,
+        vec![artefact("a1", "note.txt", "text/plain", b"note", 1)],
+    );
+    runtime.update(|app, _| app.select_artefact("a1"));
+    runtime.update(|app, _| app.show_tab("evidence"));
+    harness.fake.answer(
+        "artefactRead",
+        Ok(json!({"ref":"artefact:a1:1","encoding":"base64","size":4,"content":"bm90ZQ=="})),
+    );
+    harness.settle(&mut runtime.state);
+    assert!(
+        runtime
+            .state
+            .record
+            .open
+            .as_ref()
+            .unwrap()
+            .artefacts
+            .preview
+            .is_none()
+    );
+    assert!(harness.fake.asked_of("artefactSeen").is_empty());
+    runtime.update(|app, _| app.show_tab("artefacts"));
+    assert_eq!(harness.fake.asked_of("artefactRead").len(), 2);
+}
+
+#[test]
+fn selected_native_previews_render_their_content_and_refuse_unverified_bytes() {
+    use collie_desktop_board::record::artefacts::{Preview, frame_drawn};
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    let md = b"# Ticket\n\n- First item\n\n[Guide](https://example.com/guide)\n";
+    let plain = b"first\n  second\n";
+    let image = include_bytes!("../../../assets/brand/logos/collie-tile-256.png");
+    let corrupt = b"not an image";
+    let binary = b"\x00\xff\x80";
+    collection(
+        &mut runtime,
+        &harness,
+        vec![
+            artefact("md", "ticket.md", "text/markdown", md, 1),
+            artefact("text", "note.txt", "text/plain", plain, 1),
+            artefact("image", "shot.png", "image/png", image, 1),
+            artefact("corrupt", "bad.png", "image/png", corrupt, 1),
+            artefact(
+                "binary",
+                "archive.bin",
+                "application/octet-stream",
+                binary,
+                1,
+            ),
+            artefact("empty", "empty.txt", "text/plain", b"", 1),
+            artefact("wrong", "changed.txt", "text/plain", b"right", 1),
+        ],
+    );
+    assert!(harness.fake.asked_of("artefactSeen").is_empty());
+    selected_bytes(&mut runtime, &harness, "md", md);
+    let tree = runtime.accessibility_json();
+    assert!(within(&tree).iter().any(|n| n["name"] == "Ticket"));
+    assert!(within(&tree).iter().any(|n| n["name"] == "Guide"));
+    frame_drawn(&runtime);
+    assert_eq!(harness.fake.asked_of("artefactSeen")[0]["revision"], 1);
+    selected_bytes(&mut runtime, &harness, "text", plain);
+    assert!(
+        within(&runtime.accessibility_json())
+            .iter()
+            .any(|n| n["name"] == "first\n  second\n")
+    );
+    selected_bytes(&mut runtime, &harness, "image", image);
+    assert!(matches!(
+        runtime
+            .state
+            .record
+            .open
+            .as_ref()
+            .unwrap()
+            .artefacts
+            .preview,
+        Some(Preview::Image(_))
+    ));
+    selected_bytes(&mut runtime, &harness, "corrupt", corrupt);
+    assert!(matches!(
+        runtime
+            .state
+            .record
+            .open
+            .as_ref()
+            .unwrap()
+            .artefacts
+            .preview,
+        Some(Preview::Failed(_))
+    ));
+    let seen = harness.fake.asked_of("artefactSeen").len();
+    frame_drawn(&runtime);
+    assert_eq!(harness.fake.asked_of("artefactSeen").len(), seen);
+    selected_bytes(&mut runtime, &harness, "binary", binary);
+    assert!(matches!(
+        runtime
+            .state
+            .record
+            .open
+            .as_ref()
+            .unwrap()
+            .artefacts
+            .preview,
+        Some(Preview::Unsupported)
+    ));
+    selected_bytes(&mut runtime, &harness, "empty", b"");
+    assert!(
+        runtime
+            .accessibility_json()
+            .to_string()
+            .contains("This file is empty.")
+    );
+    selected_bytes(&mut runtime, &harness, "wrong", b"wrong");
+    assert!(
+        runtime
+            .state
+            .record
+            .open
+            .as_ref()
+            .unwrap()
+            .artefacts
+            .bytes
+            .is_none(),
+        "unverified bytes must not be offered to Open or Save"
+    );
+}
+
+#[test]
+fn an_updated_selection_and_a_reopened_record_drop_old_artefact_reads() {
+    use collie_desktop_board::record::artefacts::Preview;
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    collection(
+        &mut runtime,
+        &harness,
+        vec![artefact("a1", "note.txt", "text/plain", b"old", 1)],
+    );
+    runtime.update(|app, _| app.select_artefact("a1"));
+    runtime.update(|app, _| app.read_artefacts(true));
+    harness.fake.answer(
+        "artefacts",
+        Ok(json!({"items":[artefact("a1", "note.txt", "text/plain", b"new", 2)]})),
+    );
+    harness.settle(&mut runtime.state);
+    assert_eq!(
+        harness.fake.asked_of("artefactRead").last().unwrap()["revision"],
+        2
+    );
+    harness.fake.answer(
+        "artefactRead",
+        Ok(json!({"ref":"artefact:a1:1", "encoding":"base64", "size":3, "content":"b2xk"})),
+    );
+    harness.settle(&mut runtime.state);
+    assert!(matches!(
+        runtime
+            .state
+            .record
+            .open
+            .as_ref()
+            .unwrap()
+            .artefacts
+            .preview,
+        Some(Preview::Loading)
+    ));
+    runtime.update(|app, _| app.back());
+    collection(
+        &mut runtime,
+        &harness,
+        vec![artefact("a1", "note.txt", "text/plain", b"newer", 3)],
+    );
+    runtime.update(|app, _| app.select_artefact("a1"));
+    harness.fake.answer(
+        "artefactRead",
+        Ok(json!({"ref":"artefact:a1:2", "encoding":"base64", "size":3, "content":"bmV3"})),
+    );
+    harness.settle(&mut runtime.state);
+    assert!(matches!(
+        runtime
+            .state
+            .record
+            .open
+            .as_ref()
+            .unwrap()
+            .artefacts
+            .preview,
+        Some(Preview::Loading)
+    ));
+    assert!(harness.fake.asked_of("artefactSeen").is_empty());
+}
+
+#[test]
+fn long_text_exposes_its_limit_and_failed_open_and_save_leave_binary_material_unseen() {
+    use collie_desktop_board::record::artefacts::{Preview, frame_drawn};
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    let long = vec![b'x'; 300 * 1024];
+    let bytes = b"\x00\xff\x80";
+    collection(
+        &mut runtime,
+        &harness,
+        vec![
+            artefact("long", "output.log", "text/plain", &long, 1),
+            artefact("binary", "file.bin", "application/octet-stream", bytes, 1),
+        ],
+    );
+    selected_bytes(&mut runtime, &harness, "long", &long);
+    let record = runtime.state.record.open.as_ref().unwrap();
+    assert!(
+        matches!(&record.artefacts.preview, Some(Preview::Text { text, truncated: true, .. }) if text.len() == 256 * 1024)
+    );
+    assert_eq!(record.artefacts.bytes.as_ref().unwrap().len(), long.len());
+    assert!(
+        runtime
+            .accessibility_json()
+            .to_string()
+            .contains("Preview truncated")
+    );
+    selected_bytes(&mut runtime, &harness, "binary", bytes);
+    harness
+        .fake
+        .will_answer("openLink", Err(CallError("the opener was refused".into())));
+    runtime.update(|app, _| app.open_artefact());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !runtime
+        .state
+        .record
+        .notice
+        .as_ref()
+        .is_some_and(|n| n.failed)
+    {
+        harness.settle(&mut runtime.state);
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::park_timeout(std::time::Duration::from_millis(1));
+    }
+    assert!(
+        runtime
+            .state
+            .record
+            .notice
+            .as_ref()
+            .unwrap()
+            .said
+            .contains("opener was refused")
+    );
+    runtime.update(|app, tx| app.save_artefact(tx));
+    runtime
+        .resolve_file_dialog(Some(std::env::temp_dir()))
+        .unwrap();
+    runtime.frame(400.0);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while runtime
+        .state
+        .record
+        .open
+        .as_ref()
+        .unwrap()
+        .artefacts
+        .failed
+        .is_none()
+    {
+        harness.settle(&mut runtime.state);
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::park_timeout(std::time::Duration::from_millis(1));
+    }
+    assert!(
+        runtime
+            .state
+            .record
+            .open
+            .as_ref()
+            .unwrap()
+            .artefacts
+            .failed
+            .as_ref()
+            .unwrap()
+            .contains("Save failed")
+    );
+    runtime.update(|_, _| {});
+    runtime.frame(500.0);
+    assert!(
+        runtime
+            .accessibility_json()
+            .to_string()
+            .contains("Save failed")
+    );
+    frame_drawn(&runtime);
+    assert!(harness.fake.asked_of("artefactSeen").is_empty());
+}
+
+#[test]
+fn native_video_controls_name_their_actions_and_loading_a_decoder_does_not_acknowledge_a_revision()
+{
+    use collie_desktop_board::record::artefacts::{Preview, frame_drawn};
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    let clip = include_bytes!("../../fixtures/artefact-video.mp4");
+    collection(
+        &mut runtime,
+        &harness,
+        vec![artefact("clip", "record.mp4", "video/mp4", clip, 1)],
+    );
+    selected_bytes(&mut runtime, &harness, "clip", clip);
+    for (key, label) in [
+        ("artefact-play", "Play"),
+        ("artefact-seek-back", "Seek back 5 seconds"),
+        ("artefact-seek-forward", "Seek forward 5 seconds"),
+        ("artefact-mute", "Mute"),
+    ] {
+        let control = named(&runtime, key);
+        assert_eq!(control["role"], "button");
+        assert_eq!(control["name"], label);
+    }
+    assert_eq!(named(&runtime, "artefact-time")["role"], "status");
+    assert!(
+        matches!(&runtime.state.record.open.as_ref().unwrap().artefacts.preview, Some(Preview::Video(player)) if !player.state().playing)
+    );
+    frame_drawn(&runtime);
+    assert!(
+        harness.fake.asked_of("artefactSeen").is_empty(),
+        "metadata and layout alone present no decoded frame"
+    );
+    runtime.update(|app, _| app.show_tab("summary"));
+    assert!(
+        runtime
+            .state
+            .record
+            .open
+            .as_ref()
+            .unwrap()
+            .artefacts
+            .preview
+            .is_none()
+    );
+}
+
+#[test]
+fn an_older_host_keeps_legacy_record_tabs_and_explains_the_catalogue_upgrade() {
+    let harness = Harness::<App>::new();
+    let mut runtime = opened(&harness);
+    runtime.update(|app, _| {
+        app.open_record(
+            "inst-build".into(),
+            "r1".into(),
+            "Build box".into(),
+            Some("artefacts"),
+        )
+    });
+    harness.fake.push("runDetail", Ok(detail(json!({}))));
+    settle(&mut runtime, &harness, 100.0);
+    harness.fake.answer(
+        "artefacts",
+        Err(CallError(
+            "Upgrade this Machine's Collie host to use Artefacts".into(),
+        )),
+    );
+    settle(&mut runtime, &harness, 200.0);
+    assert!(
+        runtime
+            .accessibility_json()
+            .to_string()
+            .contains("Upgrade this Machine")
+    );
+    runtime.update(|app, _| app.show_tab("summary"));
+    runtime.frame(300.0);
+    assert!(keys(&runtime).contains(&"tab-summary".into()));
+    assert!(keys(&runtime).contains(&"tab-evidence".into()));
+    assert!(harness.fake.asked_of("artefactSeen").is_empty());
+}
+
 fn within(node: &Value) -> Vec<&Value> {
     let mut found = vec![node];
     for child in node["children"].as_array().into_iter().flatten() {
@@ -144,6 +632,7 @@ fn a_card_opens_its_runs_record_on_its_first_tab_never_its_terminal_streaming_un
             "tab-summary",
             "tab-diff",
             "tab-evidence",
+            "tab-artefacts",
             "tab-log",
             "tab-terminal",
             "tab-facts"

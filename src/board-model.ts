@@ -3,6 +3,7 @@
 // Bun-only import: a browser bundle imports this too.
 
 import * as Struct from "effect/Struct";
+import { Artefact, ArtefactCollection } from "./artefact-model";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -1205,6 +1206,7 @@ export const BoardSnapshot = Schema.TaggedStruct("Snapshot", {
   protocol: Schema.Int,
   /** Whether this host takes files: its file operations, uploads and attachments. */
   files: Schema.optionalKey(Schema.Boolean),
+  artefacts: Schema.optionalKey(Schema.Boolean),
   herds: Schema.Array(Herd),
   tasks: Schema.Array(TaskView),
   seq: Schema.Int,
@@ -1559,7 +1561,12 @@ export type MachineOwn = typeof MachineOwn.Type;
 export const Attachments = Schema.Array(Schema.String);
 
 /** The Collie tools a Flock chat has a Machine's host answer, all of them reads. */
-export const FLOCK_READS = ["collie_run", "collie_receipts", "collie_workspaces"] as const;
+export const FLOCK_READS = [
+  "collie_run",
+  "collie_receipts",
+  "collie_workspaces",
+  "collie_artefacts",
+] as const;
 
 export const ShellResult = Schema.Struct({
   code: Schema.Int,
@@ -1713,6 +1720,26 @@ export const FrontDoorRpcs = RpcGroup.make(
     success: Schema.NullOr(RunProgress),
   }),
   RunDetailRpc,
+  Rpc.make("artefacts", {
+    payload: { runId: Schema.String, refresh: Schema.optional(Schema.Boolean) },
+    success: ArtefactCollection,
+    error: HostRefused,
+  }),
+  Rpc.make("artefactRead", {
+    payload: { runId: Schema.String, id: Schema.String, revision: Schema.Int, offset: Schema.Int },
+    success: RunFile,
+    error: HostRefused,
+  }),
+  Rpc.make("artefactSeen", {
+    payload: {
+      runId: Schema.String,
+      id: Schema.String,
+      revision: Schema.NullOr(Schema.Int),
+      request: Schema.String,
+    },
+    success: Artefact,
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
   /**
    * A large item of a Run's, by reference: `log`, `review`, `diff:<path>`, `evidence:<name>`,
    * `verification:<id>`, `plan:<file>`, read-only from its checkout `file:<path>`, and

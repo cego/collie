@@ -5,6 +5,7 @@
 // declaration, attached here and never by the model.
 
 import * as Rec from "effect/Record";
+import { withArtefacts } from "../../../src/artefact-client";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Num from "effect/Number";
@@ -67,6 +68,8 @@ export const chatDoor = (door: Door) => ({
   decline: (asked: Parameters<Door["decline"]>[0]) => door.decline(asked),
   dispose: (asked: Parameters<Door["dispose"]>[0]) => door.dispose(asked),
   seen: (asked: Parameters<Door["seen"]>[0]) => door.seen(asked),
+  artefactSeen: (asked: Parameters<Door["artefactSeen"]>[0]) =>
+    withArtefacts(door.board(), door.artefactSeen(asked)),
   news: (asked: Parameters<Door["news"]>[0]) => door.news(asked),
   propose: (asked: Parameters<Door["propose"]>[0]) => door.propose(asked),
   readFile: (asked: Parameters<Door["readFile"]>[0]) => door.readFile(asked),
@@ -264,6 +267,7 @@ const HelleTool = Tool.make("collie_helle", {
 export const FlockTools = Toolkit.make(
   CollieTools.tools.collie_herd,
   CollieTools.tools.collie_run,
+  CollieTools.tools.collie_artefacts,
   CollieTools.tools.collie_workspaces,
   CollieTools.tools.collie_receipts,
   CollieTools.tools.collie_news,
@@ -1164,6 +1168,21 @@ const doOne = (machine: Reached, kind: string, action: JsonObject, request: stri
           note: `seen by ${done.by}`,
         })),
       );
+    case "artefact_seen":
+    case "artefact_unseen":
+      return door
+        .artefactSeen({
+          runId: text("run"),
+          id: text("id"),
+          revision: kind === "artefact_unseen" ? null : Number(action.revision),
+          request,
+        })
+        .pipe(
+          Effect.map((done) => ({
+            state: "applied",
+            note: `artefact ${done.id}: revision ${done.seen?.revision ?? "unseen"}`,
+          })),
+        );
     default:
       return door.act({ actions: [action], request }).pipe(
         Effect.map((results) => results[0] ?? { state: "failed", note: "the host said nothing" }),
@@ -1487,6 +1506,12 @@ const handlersFor = (flock: FlockChat, sent: JsonObject) =>
     return FlockTools.of({
       collie_herd: () => answer(herd(flock)),
       collie_run: (input) => answer(run(flock, input)),
+      collie_artefacts: (input) =>
+        answer(
+          onRun(flock, input, "collie_artefacts", ({ machine, id }) =>
+            readOn(machine, "collie_artefacts", { ...input, run: id }),
+          ),
+        ),
       collie_workspaces: () => answer(workspaces(flock)),
       collie_schedules: () => answer(schedules(flock)),
       collie_receipts: (input) => answer(receipts(flock, input)),

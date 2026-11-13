@@ -68,6 +68,8 @@ pub struct Snapshot {
     pub protocol: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artefacts: Option<bool>,
     pub herds: Vec<Herd>,
     pub tasks: Vec<Task>,
     pub seq: i64,
@@ -2424,6 +2426,86 @@ pub enum Encoding {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Artefact {
+    pub id: String,
+    pub run: String,
+    pub kind: String,
+    pub role: String,
+    pub title: String,
+    pub r#ref: String,
+    pub source: String,
+    #[serde(rename = "mediaType")]
+    pub media_type: String,
+    pub size: i64,
+    pub revision: i64,
+    pub digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub created: Option<Option<Created>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub updated: Option<Option<Created>>,
+    #[serde(rename = "registeredAt")]
+    pub registered_at: String,
+    #[serde(rename = "observedAt")]
+    pub observed_at: String,
+    #[serde(rename = "detectedAt")]
+    pub detected_at: String,
+    pub seen: Option<Seen>,
+    #[serde(rename = "sourceAvailability")]
+    pub source_availability: String,
+    #[serde(rename = "retainedAvailability")]
+    pub retained_availability: String,
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Created {
+    pub at: String,
+    pub provenance: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Seen {
+    pub revision: i64,
+    pub at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtefactsPayload {
+    pub installation: String,
+    #[serde(rename = "runId")]
+    pub run_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub refresh: Option<Option<bool>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtefactCollection {
+    pub items: Vec<Artefact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtefactReadPayload {
+    pub installation: String,
+    #[serde(rename = "runId")]
+    pub run_id: String,
+    pub id: String,
+    pub revision: i64,
+    pub offset: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtefactSeenPayload {
+    pub installation: String,
+    #[serde(rename = "runId")]
+    pub run_id: String,
+    pub id: String,
+    pub revision: Option<i64>,
+    pub request: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StagePathsPayload {
     pub paths: Vec<String>,
 }
@@ -2476,7 +2558,7 @@ pub enum ActPayloadAction {
     Confirm(Confirm),
     Decline(Decline),
     Dispose(Dispose),
-    Seen(Seen),
+    Seen(ActPayloadActionSeen),
     Steer(ActPayloadActionSteer),
     Deliver(Deliver),
     WithdrawNote(WithdrawNote),
@@ -2589,15 +2671,15 @@ pub enum DisposeTag {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Seen {
+pub struct ActPayloadActionSeen {
     #[serde(rename = "_tag")]
-    pub tag: SeenTag,
+    pub tag: ActPayloadActionSeenTag,
     #[serde(rename = "runId")]
     pub run_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum SeenTag {
+pub enum ActPayloadActionSeenTag {
     #[serde(rename = "Seen")]
     Seen,
 }

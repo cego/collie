@@ -3193,3 +3193,25 @@ See [agents talking to each other](using.md#agents-talking-to-each-other).
 
 `run deliveries <id>` finds the Machine that holds the Run, as other Run reads do.
 Its `--reconcile` write is carried out there through the same host, under its request id.
+
+## Artefacts
+
+`collie run artefacts <run>` lists retained attachments, plan files, evidence files, and
+handoffs. It does not mark them seen. Each entry carries an id, revision, source dates
+and provenance, host dates, availability, and its receipt.
+
+```sh
+collie run artefact show <run> <id>
+collie run artefact refresh <run>
+collie run artefact read <run> <id> --revision 1 --offset 0
+collie run artefact seen <run> <id> --revision 1 --request-id inspected-1
+collie run artefact unseen <run> <id> --request-id clear-1
+```
+
+`read` returns a base64 part of the immutable revision, capped at 4 MiB. Advance the byte
+offset until the reported size is reached. Files are limited to 100 MiB. Inspect metadata
+to verify the assembled size and digest. No read, refresh, or download marks material seen.
+Use the revision actually inspected when acknowledging it. Reusing a request id replays
+its result; changing its arguments conflicts. `--json` uses the normal CLI envelope.
+
+See [Inspecting a Run's material](artefacts.md) for native presentation and tracking limits.
