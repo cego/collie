@@ -3712,7 +3712,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           .pipe(Effect.orElseSucceed(() => "")),
         authority: yield* run.authority,
       };
-      yield* uncertainStep(ask, agent);
+      yield* uncertainStep(
+        { ...ask, operation: latest.operation, sequence: latest.sequence },
+        agent,
+      );
       const session: StartSession | null =
         had !== null
           ? { id: had, resumed: true }

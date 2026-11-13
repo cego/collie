@@ -395,6 +395,55 @@ test.each([
     ),
 );
 
+test("core recovery of a reused agent checks the receipts of its latest Step", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const core = yield* rig.startCore();
+      yield* rig.queueOutputs([{ verdict: "first" }, null]);
+      yield* hosted(
+        Effect.gen(function* () {
+          const registry = yield* Registry;
+          const { runId } = yield* registry.start({
+            generation: yield* registry.load(`${fixtures}/reuses.workflow.ts`),
+            request: "reused-repair",
+            project: rig.projectDir,
+            input: {},
+            text: { work: "it" },
+            task: null,
+          });
+          const agent = agentName(runId, "build", null, 1);
+          const second = yield* until(
+            () => deliveredTo(dir(), runId).pipe(Effect.orElseSucceed(() => [])),
+            (receipts) => Arr.some(receipts, (one) => one.cause.ref === "second-step"),
+          ).pipe(
+            Effect.map((receipts) =>
+              Option.getOrThrow(Arr.findFirst(receipts, (one) => one.cause.ref === "second-step")),
+            ),
+          );
+          yield* idleAfterItsStep(agent);
+          yield* appendLine({
+            ...second,
+            id: "second-step-repair",
+            request_id: "second-step-repair",
+            cause: { kind: "repair", ref: "second-step.2" },
+            causal_key: `${runId}:repair:second-step.2:0`,
+            state: "unknown",
+            note: "repair outcome was lost",
+          }).pipe(Effect.provide(recordsAt(dir())));
+          const before = coreCalls(yield* rig.calls()).length;
+          yield* core.lose;
+          yield* (yield* Agents).resumeLost(runId, runningNow);
+          expect(yield* launchesSince(yield* rig.calls(), before)).toHaveLength(0);
+          expect(
+            yield* FileSystem.FileSystem.pipe(
+              Effect.flatMap((fs) => fs.readFileString(`${dir()}/agents/${runId}/agents.log`)),
+            ),
+          ).toContain("--reconcile second-step-repair --as sent|not-sent");
+        }),
+      );
+    }),
+  ));
+
 test(
   "a core holder loss mid-Run starts each agent of the Run again in its own session, tells the one whose work is out to carry on, and the Run completes",
   () =>
