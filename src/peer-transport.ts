@@ -166,7 +166,7 @@ export const openPeer = (
         }),
       ),
       Scope.provide(tunnel),
-      Effect.onExit((exit) => (Exit.isFailure(exit) ? Scope.close(tunnel, exit) : Effect.void)),
+      Effect.onError((cause) => Scope.close(tunnel, Exit.failCause(cause))),
       Effect.mapError((ssh) => unreachable(ssh)),
     );
     return { ...opened, way: "ssh", direct: directSaw } satisfies Opened;

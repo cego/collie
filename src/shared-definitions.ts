@@ -44,9 +44,7 @@ const shareable = (path: string) => {
 
 const isLink = Effect.fn("SharedDefinitions.isLink")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
-  return yield* fs
-    .readLink(file)
-    .pipe(Effect.match({ onFailure: () => false, onSuccess: () => true }));
+  return yield* Effect.isSuccess(fs.readLink(file));
 });
 
 /** Whether a part of `path` in the user directory is a link, which could reach outside it. */

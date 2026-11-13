@@ -19,7 +19,7 @@
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "1.8.0",
-    "@types/bun": "1.4.2",
-    "tsrs": "0.23.0-ts7.1.0-beta"
+    "@types/bun": "1.4.4",
+    "tsrs": "0.25.0-ts7.1.0-beta"
   }
 }

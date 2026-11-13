@@ -309,14 +309,7 @@ const main = Effect.gen(function* () {
       return local.desktop.models().pipe(
         Effect.map((catalogues) => listedIn(catalogues, harness)),
         Effect.catchCause(() => Effect.succeed(null)),
-        Effect.flatMap((read) =>
-          read === null
-            ? own
-            : Result.match(read, {
-                onSuccess: (models) => Effect.succeed(models),
-                onFailure: (why) => Effect.fail(why),
-              }),
-        ),
+        Effect.flatMap((read) => (read === null ? own : Effect.fromResult(read))),
       );
     });
   const lists = yield* harnessLists({
