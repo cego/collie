@@ -832,11 +832,17 @@ id. While it runs, the card and chat say the check, the pass, how long it has ru
 how long it usually takes, and where its output is being written (ADR-0042).
 
 **Flake** — A test of one of a Run's **Checks** that failed, then passed when Collie ran it
-again alone on the same tree. Collie reads which tests failed from the check's own output,
+again alone on the same tree. A test the branch adds or changes is never a Flake: one that
+fails, then passes alone, is still the Run's own and goes to the gate fixes. Collie reads which tests failed from the check's own output,
 for a runner whose output it knows (bun test first), and reruns only those, once. A flake is
 not a gap the gate fixes are handed, and never a pass: the merge request names it under
 **Not settled by the run**. A check whose failures name no tests has no flakes, only its
-whole `recheck` (ADR-0034, amended 2026-10-15).
+whole `recheck`. A check left to CI whose job failed and then passed when retried is a Flake
+only where the failed attempt names no test of the branch's own: one whose file the branch
+adds or changes, or whose name holds a string a line the branch adds holds. One that does is
+a failed job: it goes to a fix round, at implement and at Release alike, and never proves the
+check (ADR-0034, amended 2026-10-15, amended 2026-11-11;
+[ADR-draft-a-check-left-to-ci-is-proved-by-its-pipeline-job](docs/adr/draft-a-check-left-to-ci-is-proved-by-its-pipeline-job.md)).
 
 **Obstacle** — What is identifiably in a Run's way, in one sentence: a command failing several times in a row the same way. It is shown to the human and given to the next prompt so the approach can change. It stops nothing.
 
