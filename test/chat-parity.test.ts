@@ -45,12 +45,14 @@ import { task } from "./support/task";
 import { runEffect } from "./support/effect";
 import { epochMs } from "../src/time";
 import { connect, frontDoor, socketOf } from "../src/host";
-import { hosted, hostedRun } from "./support/hosted";
+import { hosted, hostedRun, settledRun } from "./support/hosted";
+import { readDispositions } from "../src/disposition";
 import { until } from "./support/host";
-import { save } from "./support/world";
+import { collie, save } from "./support/world";
 import { Rig } from "./support/recorder";
 import { chatContextFor } from "../src/statusline";
 import { takeShared } from "../src/config";
+import { machineName } from "../src/peers";
 import { sessionOptions } from "../desktop/src/bun/session";
 import {
   editSettings,
@@ -538,6 +540,37 @@ test(
   60_000,
 );
 
+test(
+  "chat taking an offer whose work is still going gets the refusal run action gets",
+  () =>
+    hosted("hw-parity-twice-", ({ world, env }) =>
+      Effect.gen(function* () {
+        yield* save(world.user, ["delivers.workflow.ts", "ships.workflow.ts"]);
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const mr = "https://gitlab.cego.dk/cego/app/-/merge_requests/12";
+        const { runId } = yield* client
+          .start({ project: world.project, id: "delivers", request: "req-d", input: { mr } })
+          .pipe(Effect.orDie);
+        yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (view) => view?.status.status === "complete",
+        );
+        const first = yield* client
+          .invoke({ runId, offer: "ship", input: {}, request: "ship-1" })
+          .pipe(Effect.orDie);
+
+        const typed = yield* collie(world, ["run", "action", runId, "ship"]);
+        const refused = typed.envelope.error?.message ?? "run action started a second Ship";
+        expect(refused).toContain(`is still going: ${first.runId}`);
+        const chat = yield* toolNamed("collie_do")!.call(env, {
+          actions: [{ kind: "take_offer", run: runId, offer: "ship" }],
+        });
+        expect(chat).toContain(refused);
+      }),
+    ),
+  60_000,
+);
+
 test("nothing this build cannot carry out is offered as something to ask for", () =>
   runEffect(
     Effect.gen(function* () {
@@ -577,6 +610,15 @@ test("chat and the text board list the sections in the board's one order", () =>
   const views = sortBoard([
     task({ id: "done", name: "Landed", state: "done" }),
     task({ id: "working", name: "Building" }),
+    task({
+      id: "ready",
+      name: "Shipping",
+      state: "done",
+      landed: false,
+      shipping: "merge",
+      shippingMr: "mr:gitlab.cego.dk/mk/collie!65",
+      sentence: "Ready to release: mk/collie!65 is open.",
+    }),
     task({ id: "waiting", name: "Shippable", state: "done", landed: false }),
     task({ id: "blocked", name: "Asking", state: "blocked" }),
   ]);
@@ -587,6 +629,10 @@ test("chat and the text board list the sections in the board's one order", () =>
     );
   expect(titled(Str.split(herdLines(views, 0), "\n"))).toEqual(order);
   expect(titled(boardLines(views))).toEqual(order);
+  expect(herdLines(views, 0)).toContain("Merge: Ready to release: mk/collie!65 is open.");
+  expect(Arr.join(boardLines(views), "\n")).toContain(
+    "Merge: Ready to release: mk/collie!65 is open.",
+  );
 });
 
 test("collie_run and collie_herd say what a running check's card says", () =>
@@ -780,3 +826,44 @@ test("a Machine's Native chat and Desktop's Flock chat are given the same Standi
       expect(yield* desktopContext()).toContain(native);
     }).pipe(Effect.scoped),
   ));
+
+test(
+  "chat's disposition is refused a superseded line naming its own Run, as the CLI's is",
+  () =>
+    hosted("collie-parity-self-", ({ world, env }) =>
+      Effect.gen(function* () {
+        const run = yield* settledRun(world, "retains");
+        const said = yield* toolNamed("collie_do")!.call(env, {
+          actions: [{ kind: "disposition", run: run.id, became: "superseded", ref: run.id }],
+        });
+        expect(said).toContain("disposition: failed");
+        expect(said).toContain(`cannot name ${run.id}, the Run it is recorded on`);
+        expect(yield* readDispositions(run.dir)).toEqual([]);
+      }),
+    ),
+  // A host, and a Run of it that finishes.
+  60_000,
+);
+
+test(
+  "a superseded line naming its own Run as <this machine>:<run> is refused as the bare id is",
+  () =>
+    hosted("collie-parity-self-qualified-", ({ world, env }) =>
+      Effect.gen(function* () {
+        const run = yield* settledRun(world, "retains");
+        const said = yield* toolNamed("collie_do")!.call(env, {
+          actions: [
+            {
+              kind: "disposition",
+              run: run.id,
+              became: "superseded",
+              ref: `${machineName()}:${run.id}`,
+            },
+          ],
+        });
+        expect(said).toContain(`cannot name ${run.id}, the Run it is recorded on`);
+        expect(yield* readDispositions(run.dir)).toEqual([]);
+      }),
+    ),
+  60_000,
+);

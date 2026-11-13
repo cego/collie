@@ -24,10 +24,12 @@ import {
   FindingSchema,
   FixOutputSchema,
   IntegrationSchema,
+  PrerequisiteStandingSchema,
   Agents,
   Children,
   Host,
   Run,
+  Recovery,
   WorkflowError,
   afterMergeAnswers,
   afterMergeIn,
@@ -53,6 +55,7 @@ import {
   sameTree,
   stackedBranch,
   step,
+  stepFailed,
   unmetCriteria,
   type Criterion,
   type Finding,
@@ -76,6 +79,7 @@ import * as Workflow from "effect/workflow/Workflow";
 import * as Activity from "effect/workflow/Activity";
 import { connection } from "./connections.ts";
 import markdown from "./implement.md" with { type: "text" };
+import { measuredBy } from "./measuring.ts";
 import {
   IMPLEMENTER,
   REVIEWER,
@@ -89,6 +93,8 @@ import { Tree, deliver, gate, mergeRequest } from "./delivering.ts";
 
 const content = contentOf(markdown);
 const text = Schema.String;
+const recoveryEntry = (facts: Recovery | undefined) =>
+  facts?.review != null ? "Checks" : facts?.implementation === true ? "Review" : "Build";
 
 /** What every implement prompt is told: the plan, what it proves, and what may prove it. */
 const Implementing = Schema.Struct({
@@ -207,9 +213,12 @@ const SliceRecord = Schema.Struct({
   title: Schema.String,
   blockedBy: Schema.Array(Schema.String),
   checks: Schema.Array(Schema.String),
-  // A reading journaled before tickets carried their criteria, or their benchmark, has none.
+  // A reading journaled before tickets carried their criteria, benchmark or prerequisites has none.
   criteria: Schema.optionalKey(Schema.Array(Schema.String)),
   benchmark: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  prerequisites: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ run: Schema.String, change: Schema.NullOr(Schema.String) })),
+  ),
 });
 
 /** A ticket's criteria and after-merge outcomes as one reading of its file found them. */
@@ -265,6 +274,7 @@ const next = step({
   description: "Whether the open merge request is released, staged or left as it is.",
   kind: "question",
 });
+const delivery = [building, reviewRound, gate, mergeRequest];
 const repoRuns = step({
   id: "repo-runs",
   title: "Change runs",
@@ -298,9 +308,18 @@ export default defineWorkflow({
       description:
         "Where the work is written down: a plan, a review, an issue, a follow-up, or words",
     }),
+    recovery: Schema.optionalKey(
+      Schema.String.annotate({
+        description: "The finished Run whose existing work this explicit follow-up recovers",
+      }),
+    ),
     // oxlint-disable-next-line unicorn/no-thenable -- The workflow input selects the next step using string values.
     then: Schema.optionalKey(
-      Schema.Literals(["", "finish", "release"]).annotate({
+      Schema.Union([
+        Schema.Literal("").annotate({ title: "Ask at the merge request" }),
+        Schema.Literal("finish").annotate({ title: "End at the merge request" }),
+        Schema.Literal("release").annotate({ title: "Release it" }),
+      ]).annotate({
         description:
           "What follows the merge request: finish to end there, release to release it on a human's go, empty to be asked",
       }),
@@ -308,8 +327,9 @@ export default defineWorkflow({
   }),
   output: Schema.String,
   agents: { roles: { implementer: IMPLEMENTER, reviewer: REVIEWER } },
-  hints: { plan: "work-source" },
-  path: [building, reviewRound, gate, mergeRequest, next],
+  // oxlint-disable-next-line unicorn/no-thenable -- the Input is named `then`
+  hints: { plan: "work-source", then: "reach" },
+  path: [...delivery, next],
   // The branch it builds, on a worktree of its own, so two Runs never share an index.
   checkout: "branch",
   // What kind of result this Run has to prove is the human's to say, and an unclassified
@@ -343,6 +363,8 @@ export default defineWorkflow({
       title: "Keep going on this",
       workflow: "self",
       when: "always",
+      inputs: { plan: "started-with", recovery: "run-dir" },
+      entry: (facts) => recoveryEntry(facts.recovery),
       eligible: (facts) => facts.branch !== null && facts.nothingToLand !== true,
     },
   ],
@@ -353,9 +375,14 @@ export default defineWorkflow({
       const runId = (yield* Run).id;
       const place = yield* host.place(runId);
       const cwd = place.cwd;
-      const source = yield* classifyWorkSource(asked.plan).pipe(
-        Effect.orElseSucceed(() => ({ kind: "text", value: asked.plan })),
-      );
+      if ((asked.then ?? "") !== "") yield* forecast(delivery);
+      const source = yield* Activity.make({
+        name: "work-source",
+        success: Schema.Struct({ kind: Schema.String, value: Schema.String }),
+        execute: classifyWorkSource(asked.plan).pipe(
+          Effect.orElseSucceed(() => ({ kind: "text", value: asked.plan })),
+        ),
+      });
       const share = place.options.repo ?? "";
       if (source.kind === "linear") {
         const linear = yield* connection("linear");
@@ -412,17 +439,21 @@ export default defineWorkflow({
           });
         }
       }
-      // A Run that stops short of its merge request fails, so no wave waits on work that is
-      // not there and its card is not told as done.
-      const unbuilt = (reason: string) =>
-        Effect.fail(
-          new WorkflowError({
-            reason:
-              share === ""
-                ? `${reason}. Continue with a follow-up Run to finish delivery.`
-                : reason,
+      const unbuilt = (name: string, reason: string) =>
+        Activity.make({
+          name: `${name}.park`,
+          execute: Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const marker = `${place.dir}/${name}.parked`;
+            if (yield* fs.exists(marker).pipe(Effect.orDie)) return yield* host.parked(runId, null);
+            const why = `${reason}. Correct it, then resume ${runId}.`;
+            yield* fs.writeFileString(marker, "").pipe(Effect.orDie);
+            yield* host.record(runId, why);
+            yield* stepFailed(why);
+            yield* host.parked(runId, why, "step-failed");
+            return yield* Workflow.suspend(yield* WorkflowInstance);
           }),
-        );
+        });
       const checksNow = Effect.map(host.approved(runId), renderApproved);
 
       let input: typeof Implementing.Type = {
@@ -541,23 +572,31 @@ export default defineWorkflow({
           ...one,
           criteria: one.criteria ?? [],
           benchmark: one.benchmark ?? null,
+          prerequisites: one.prerequisites ?? [],
         }));
       });
       let tickets: ReadonlyArray<Slice> = yield* ticketsNow;
       // Read only after the build, which is what writes SPEC.md for any source but a plan.
       let specReadings = 0;
       const specNow = Effect.gen(function* () {
-        if (source.kind === "plan-dir") return source.value;
-        specReadings += 1;
-        return yield* Activity.make({
-          name: `spec.${specReadings}`,
-          success: Schema.String,
-          execute: FileSystem.FileSystem.pipe(
-            Effect.flatMap((fs) => fs.exists(`${place.dir}/plan/SPEC.md`)),
-            Effect.map((written) => (written ? `${place.dir}/plan` : "")),
-            Effect.orElseSucceed(() => ""),
-          ),
-        });
+        const plan = source.kind === "plan-dir" ? source.value : `${place.dir}/plan`;
+        for (;;) {
+          specReadings += 1;
+          const readable = yield* Activity.make({
+            name: `spec-readable.${specReadings}`,
+            success: Schema.Boolean,
+            execute: FileSystem.FileSystem.pipe(
+              Effect.flatMap((fs) => fs.readFileString(`${plan}/SPEC.md`)),
+              Effect.as(true),
+              Effect.orElseSucceed(() => false),
+            ),
+          });
+          if (readable) return plan;
+          if (source.kind !== "plan-dir") return "";
+          yield* building(
+            unbuilt(`spec-${specReadings}`, `${plan}/SPEC.md cannot be read, so no review starts`),
+          );
+        }
       });
       // One ticket is not a plan to slice: one pass builds all of it, and only tickets
       // added after that pass are built one at a time.
@@ -569,24 +608,151 @@ export default defineWorkflow({
       const answeredFor: Answered[] = [];
       let build: typeof Built.Type | null = null;
       let rallied: Rallied | null = null;
-      for (;;) {
+      // An agent's start gives every Input, one it leaves out as "" (docs/cli.md): an empty
+      // `recovery` is new work, as one never given is.
+      const recovers = asked.recovery === "" ? undefined : asked.recovery;
+      const recovered = yield* Activity.make({
+        name: "recovery-entry",
+        success: Recovery,
+        error: WorkflowError,
+        execute:
+          recovers === undefined
+            ? Effect.succeed({
+                implementation: false,
+                reason: "An ordinary start builds the work.",
+                previous: "",
+                commits: "",
+                review: null,
+              })
+            : host.recovery(runId, recovers, asked.plan),
+      });
+      const recovery = { ...recovered, entry: recoveryEntry(recovered) };
+      if (recovers !== undefined)
+        yield* host.record(runId, `Follow-up enters at ${recovery.entry}: ${recovery.reason}`);
+      let parentDir = "";
+      if (recovery.entry !== "Build") {
+        const parent = Str.split(recovers ?? "", "/").at(-1) ?? "";
+        parentDir = (yield* host.place(parent)).dir;
+        build = yield* Activity.make({
+          name: "recovery-build-claims",
+          success: Schema.NullOr(Built),
+          execute: Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const outputs = yield* Effect.forEach(
+              ["build", ...Arr.map(tickets, (one) => one.file)],
+              (operation) =>
+                fs.readFileString(agents.outputFor(parent, operation)).pipe(
+                  Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Built))),
+                  Effect.orElseSucceed(() => null),
+                ),
+            );
+            const found = Arr.filter(outputs, Predicate.isNotNull);
+            const last = found.at(-1);
+            return last === undefined
+              ? null
+              : {
+                  ...last,
+                  tickets_done: Arr.flatMap(found, (one) => one.tickets_done ?? []),
+                  criteria: Arr.flatMap(found, (one) => one.criteria ?? []),
+                };
+          }),
+        });
+        yield* forecast([
+          ...(recovery.entry === "Review" ? [reviewRound] : []),
+          gate,
+          mergeRequest,
+          next,
+        ]);
+        if (recovery.entry === "Checks" && recovery.review !== null)
+          rallied = {
+            halted: null,
+            unreviewed: "",
+            unsettled: [],
+            disputes: [],
+            reviewed: recovery.review,
+          };
+      }
+      const needing = (one: Slice) => ({
+        runId,
+        cwd,
+        ticket: `${source.value}/issues/${one.file}`,
+      });
+      let prerequisiteReads = 0;
+      const landed = (one: Slice) =>
+        Effect.suspend(() => {
+          prerequisiteReads += 1;
+          return Activity.make({
+            name: `prerequisites.${prerequisiteReads}`,
+            success: PrerequisiteStandingSchema,
+            error: WorkflowError,
+            execute: host.prerequisites(needing(one)),
+          });
+        }).pipe(Effect.map((standing) => standing._tag === "Landed"));
+      let prerequisiteWaits = 0;
+      const awaited = (one: Slice) =>
+        Effect.gen(function* () {
+          prerequisiteWaits += 1;
+          const standing = yield* Activity.make({
+            name: `prerequisites-wait.${prerequisiteWaits}`,
+            success: PrerequisiteStandingSchema,
+            error: WorkflowError,
+            // Suspended inside the Activity, so a resume waits again.
+            execute: Effect.gen(function* () {
+              const standing = yield* host.awaitPrerequisites(needing(one));
+              if (standing._tag === "Held") return yield* Workflow.suspend(yield* WorkflowInstance);
+              return standing;
+            }),
+          });
+          if (standing._tag === "Never")
+            yield* unbuilt(
+              `${one.file}.prerequisites-${prerequisiteWaits}`,
+              `${one.file}: ${standing.why}`,
+            );
+        });
+      const pickable = Effect.gen(function* () {
+        for (;;) {
+          const left = Arr.filter(tickets, (one) => !built.has(one.file));
+          if (left.length === 0) return undefined;
+          const unblocked = Arr.filter(left, (one) =>
+            Arr.every(one.blockedBy, (id) => !Arr.some(left, (other) => other.number === id)),
+          );
+          for (const one of unblocked)
+            if (one.prerequisites.length === 0 || (yield* landed(one))) return one;
+          const waiting = unblocked[0];
+          if (waiting === undefined)
+            return yield* new WorkflowError({
+              reason: `these tickets block each other, so none of them can be built first: ${Arr.join(
+                Arr.map(left, (one) => one.file),
+                ", ",
+              )}`,
+            });
+          yield* building(awaited(waiting), {
+            item: waiting.file,
+            items: Arr.map(tickets, (one) => one.file),
+          });
+        }
+      });
+      for (; recovery.entry === "Build";) {
         // Identities before work: two tickets nobody can tell apart would share one
         // result, and finding that out after an agent has been paid for is too late.
         const clash = identityProblem(Arr.map(tickets, (ticket) => ticket.file));
         if (clash !== null) return yield* new WorkflowError({ reason: clash });
-        const ticket =
-          whole && built.size === 0
-            ? null
-            : Option.getOrUndefined(Arr.findFirst(tickets, (one) => !built.has(one.file)));
+        const next = yield* pickable;
+        const ticket = whole && built.size === 0 ? null : next;
         if (ticket === undefined) break;
         rallied = null;
-        const { done, blocking } = yield* building(
+        let attempt = 0;
+        const nextBuild = building(
           Effect.gen(function* () {
+            attempt += 1;
+            const item = ticket?.file ?? "build";
+            const operation = attempt === 1 ? item : `${item}-${attempt}`;
             const before = (yield* host.evidence(runId, cwd)).verifications.length;
             if (ticket !== null) yield* checkpoint(place.dir, ticket, "started", []);
             const merged =
-              ticket !== null && built.size > 0
-                ? yield* integrated(`${ticket.file}.merge`, true)
+              (ticket !== null && built.size > 0) ||
+              Arr.some(ticket === null ? tickets : [ticket], (one) => one.prerequisites.length > 0)
+                ? yield* integrated(`${item}.merge`, true)
                 : null;
             const session = yield* sessionNow;
             // A plan built in one pass answers every ticket's criteria, and words their own.
@@ -597,7 +763,7 @@ export default defineWorkflow({
                 : Arr.flatMap(tickets, (one) => one.criteria));
             yield* restateKind;
             build = yield* agentWork({
-              operation: ticket?.file ?? "build",
+              operation,
               agent: BUILDER,
               role: "implementer",
               pushes: true,
@@ -632,24 +798,26 @@ export default defineWorkflow({
               },
               output: Built,
             });
-            const item = ticket?.file ?? "build";
             // A Linear issue's criteria are read from its description as the builder copied it.
-            const spec =
-              ticket === null && source.kind === "linear"
-                ? yield* Activity.make({
-                    name: "criteria.spec",
-                    success: Schema.NullOr(Schema.Array(Schema.String)),
-                    execute: FileSystem.FileSystem.pipe(
-                      Effect.flatMap((fs) => fs.readFileString(`${place.dir}/plan/SPEC.md`)),
-                      Effect.map(criteriaIn),
-                      Effect.orElseSucceed(() => null),
-                    ),
-                  })
-                : given;
-            if (spec === null) {
-              const why = `${item}: ${place.dir}/plan/SPEC.md cannot be read, so the issue's acceptance criteria cannot be checked and no review starts`;
-              yield* host.record(runId, why);
-              return yield* unbuilt(why);
+            let spec: ReadonlyArray<string> | null = given;
+            for (let reading = 1; ; reading++) {
+              spec =
+                ticket === null && source.kind === "linear"
+                  ? yield* Activity.make({
+                      name: `${operation}.criteria.spec-${reading}`,
+                      success: Schema.NullOr(Schema.Array(Schema.String)),
+                      execute: FileSystem.FileSystem.pipe(
+                        Effect.flatMap((fs) => fs.readFileString(`${place.dir}/plan/SPEC.md`)),
+                        Effect.map(criteriaIn),
+                        Effect.orElseSucceed(() => null),
+                      ),
+                    })
+                  : given;
+              if (spec !== null) break;
+              yield* unbuilt(
+                `${operation}.spec-${reading}`,
+                `${item}: ${place.dir}/plan/SPEC.md cannot be read, so the issue's acceptance criteria cannot be checked and no review starts`,
+              );
             }
             // A plan's tickets are read again before each judgement, so an amended one is judged
             // and handed back as it reads now; one that cannot be read keeps its last reading.
@@ -666,7 +834,7 @@ export default defineWorkflow({
               if (read.length === 0) return spec;
               reads += 1;
               const now = yield* Activity.make({
-                name: `${item}.criteria.read-${reads}`,
+                name: `${operation}.criteria.read-${reads}`,
                 success: Schema.Array(Schema.NullOr(TicketReading)),
                 execute: FileSystem.FileSystem.pipe(
                   Effect.flatMap((fs) =>
@@ -712,8 +880,18 @@ export default defineWorkflow({
               if (unmet.length === 0) break;
               if (blockers.length > 0) {
                 stalls += 1;
+                // Answered Hand back 18 of 19 times, so the first is taken without asking.
+                if (stalls === 1) {
+                  yield* host.record(
+                    runId,
+                    `${item}: a criteria hand-back reported a blocker and changed nothing; Collie handed it back without asking, and asks if it does again`,
+                  );
+                  blockers = [];
+                  tries = 1;
+                  continue;
+                }
                 const chosen = yield* ask({
-                  name: `${item}.criteria-stalled-${stalls}`,
+                  name: `${operation}.criteria-stalled-${stalls - 1}`,
                   prompt: `${item}: a criteria hand-back reported a blocker and changed nothing.\n\nIts blockers:\n${formatFindings(blockers)}\n\nStill unmet:\n${formatFindings(unmet)}\n\nAmend the ticket or clear the blocker, then hand it back, or stop the Run.`,
                   options: CRITERIA_OPTIONS,
                 });
@@ -730,7 +908,7 @@ export default defineWorkflow({
               }
               if (tries > CRITERIA_TRIES) {
                 unmetAsks += 1;
-                const name = `${item}.criteria-unmet-${unmetAsks}`;
+                const name = `${operation}.criteria-unmet-${unmetAsks}`;
                 const still = `${item}: acceptance criteria still unanswered or unmet after ${CRITERIA_TRIES} hand-backs`;
                 const chosen = yield* ask({
                   name,
@@ -747,10 +925,10 @@ export default defineWorkflow({
                 tries = 1;
                 continue;
               }
-              const before = yield* treeAt(`${item}.criteria-${turn}.before`);
+              const before = yield* treeAt(`${operation}.criteria-${turn}.before`);
               yield* restateKind;
               const answered = yield* agentWork({
-                operation: `${item}.criteria-${turn}`,
+                operation: `${operation}.criteria-${turn}`,
                 agent: BUILDER,
                 role: "implementer",
                 pushes: true,
@@ -765,7 +943,7 @@ export default defineWorkflow({
                 },
                 output: Built,
               });
-              const after = yield* treeAt(`${item}.criteria-${turn}.after`);
+              const after = yield* treeAt(`${operation}.criteria-${turn}.after`);
               answers = [...answers, ...boundTo(criteria, answered.criteria ?? [])];
               assumptions.push(...(answered.assumptions ?? []));
               commits.push(...(answered.commits ?? []));
@@ -784,11 +962,11 @@ export default defineWorkflow({
                 (one) => `${one.name}: ${one.result}`,
               ),
             };
-            handed.push(done);
             if (stopped !== null) {
-              yield* host.record(runId, stopped);
-              return yield* unbuilt(stopped);
+              yield* unbuilt(`${operation}.stopped`, stopped);
+              return null;
             }
+            handed.push(done);
             answeredFor.push({ item, criteria, answers, assumptions });
             for (const one of assumptions) assumed.push(`assumed in ${item}: ${one}`);
             for (const one of read)
@@ -809,6 +987,9 @@ export default defineWorkflow({
             ? undefined
             : { item: ticket.file, items: Arr.map(tickets, (one) => one.file) },
         );
+        let completed = yield* nextBuild;
+        while (completed === null) completed = yield* nextBuild;
+        const { done, blocking } = completed;
         if (blocking.length > 0) {
           rallied = yield* builderRally({
             ...rallyAsk,
@@ -821,12 +1002,31 @@ export default defineWorkflow({
               findings: blocking,
             },
           });
-          const unresolved = rallied.halted ?? Arr.join(rallied.unsettled, "; ");
-          if (unresolved !== "") return yield* unbuilt(`${done.item}: ${unresolved}`);
+          for (let attempt = 1; ; attempt++) {
+            const unresolved = rallied.halted ?? Arr.join(rallied.unsettled, "; ");
+            if (unresolved === "") break;
+            yield* reviewRound(
+              unbuilt(`${done.item}.rally-${attempt}`, `${done.item}: ${unresolved}`),
+              { round: rallyAsk.rounds.n },
+            );
+            rallied = yield* builderRally({
+              ...rallyAsk,
+              plan: yield* specNow,
+              criteria: reviewerCriteria(answeredFor),
+              input,
+              build: {
+                item: done.item,
+                completed: Arr.map(handed, (one) => one.item),
+                findings: blocking,
+              },
+              resume: { attempt, previous: rallied },
+            });
+          }
         }
         tickets = yield* ticketsNow;
       }
-      if (build === null) return yield* new WorkflowError({ reason: "nothing was built" });
+      if (build === null && recovery.entry === "Build")
+        return yield* new WorkflowError({ reason: "nothing was built" });
       // The builder may have named the checks, and every prompt from here shows them.
       input = { ...input, verify: yield* checksNow };
 
@@ -836,11 +1036,23 @@ export default defineWorkflow({
           plan: yield* specNow,
           criteria: reviewerCriteria(answeredFor),
           input,
+          obstacle:
+            recovery.entry === "Review"
+              ? `Recover the existing implementation. Review the whole requested outcome, including the current work source ${asked.plan} and any added requirements; an unbuilt requirement is a blocking finding for the builder. Previous head: ${recovery.previous || "unrecorded"}. Commits since that head:\n${recovery.commits || "(none or unavailable)"}\nThe parent's original requirements and review associations are in ${parentDir}/reviews.jsonl. Read its open findings at ${parentDir}/findings.json, and its spec at ${parentDir}/plan where present.`
+              : "",
         });
       }
-      if (rallied.halted !== null) {
-        yield* host.record(runId, rallied.halted);
-        return yield* unbuilt(rallied.halted);
+      for (let attempt = 1; ; attempt++) {
+        const unresolved = rallied.halted ?? Arr.join(rallied.unsettled, "; ");
+        if (unresolved === "") break;
+        yield* reviewRound(unbuilt(`rally-${attempt}`, unresolved), { round: rallyAsk.rounds.n });
+        rallied = yield* builderRally({
+          ...rallyAsk,
+          plan: yield* specNow,
+          criteria: reviewerCriteria(answeredFor),
+          input,
+          resume: { attempt, previous: rallied },
+        });
       }
 
       const onto =
@@ -925,7 +1137,10 @@ const releasing = (delivered: {
             ),
           ),
       });
-      if (merging !== null) return mr;
+      if (merging !== null) {
+        yield* forecast(delivery);
+        return mr;
+      }
       let stageFailed = "";
       let failedStage = "";
       // Why another Stage would still be refused at the checkout the last one was refused
@@ -1109,12 +1324,6 @@ const asCheckpoint = flow(
   Result.getOrThrow,
 );
 
-const measuredBy = (lead: string, benchmark: string) =>
-  `\n\n${pipe_(
-    `${Str.trim(content.sections.get(lead) ?? "")}\n${Str.trim(content.sections.get("measure.steps") ?? "")}`,
-    Str.replaceAll("{{benchmark}}", benchmark),
-  )}`;
-
 /** A ticket's criteria as its builder is given them. */
 const renderCriteria = (criteria: ReadonlyArray<string>) =>
   criteria.length === 0
@@ -1203,6 +1412,8 @@ const builderRally = (ask: {
   readonly input: typeof Implementing.Type;
   readonly build?: PartialBuild;
   readonly criteria: string;
+  readonly obstacle?: string;
+  readonly resume?: { readonly attempt: number; readonly previous: Rallied };
   readonly integrate: (
     operation: string,
   ) => Effect.Effect<
@@ -1216,10 +1427,18 @@ const builderRally = (ask: {
     const runId = (yield* Run).id;
     return yield* rally({
       ...ask,
-      prefix: ask.build === undefined ? "" : `${ask.build.item}.`,
+      source: ask.build === undefined ? ask.input.inputs.plan : null,
+      prefix: `${ask.build === undefined ? "" : `${ask.build.item}.`}${ask.resume === undefined ? "" : `retry-${ask.resume.attempt}.`}`,
+      resume:
+        ask.resume === undefined
+          ? undefined
+          : {
+              previous: ask.resume.previous,
+              reviewers: ask.build === undefined ? "" : `${ask.build.item}.`,
+            },
       obstacle:
         ask.build === undefined
-          ? ""
+          ? (ask.obstacle ?? "")
           : `Review the built part of this plan: ${Arr.join(ask.build.completed, ", ")}. Later tickets have not started and are outside this review, including its scope judgement. Check these findings reported by the implementer:\n${formatFindings(ask.build.findings)}`,
       fix: ({ operation, at, proves, findings }) =>
         Effect.gen(function* () {
@@ -1234,7 +1453,7 @@ const builderRally = (ask: {
               inputs: { ...ask.input.inputs, outcome: proves },
               verify: renderApproved(yield* host.approved(runId)),
               iteration: String(at),
-              max_iterations: String(ROUNDS),
+              max_iterations: String(ask.resume === undefined ? ROUNDS : 1),
               findings,
             },
             output: FixOutputSchema,

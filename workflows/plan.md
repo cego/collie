@@ -110,6 +110,13 @@ Change with a short plain word, like `schema`: it becomes part of a branch name,
 no `..`, and none of `~ ^ : ? * [ \`. Leave the line out unless the split is worth a second
 review.
 
+A ticket that needs another plan's Run to land a Change first carries
+`**Needs merged:** <run id> [<change name>], …` beside its `Blocked by` line. Name the other
+Run's id, then the Change name from that Run's ticket's `**Change:**` line, left out when it
+has none. The Change must be in this ticket's own repository. Write it only for another
+plan's Run, never for a ticket of this plan, which goes on `**Blocked by:**`. A line that
+cannot be read stops the hand-off.
+
 Number every ticket of a plan once: a "Blocked by" line names a number, so two tickets
 wearing one cannot say which an edge points at.
 

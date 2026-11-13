@@ -12,6 +12,7 @@ import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import { IntentSeedSchema } from "./intent-model";
 import { ScheduleChange, ScheduleChanged, ScheduleListing } from "./schedule-model";
+import { Park } from "./park-cause";
 import { VerifyEvent, Pass, VerificationSchema } from "./verify-model";
 import { MeasureEvent } from "./measurement-model";
 
@@ -23,6 +24,7 @@ import { ConnectionLogin, HostConnections } from "./connection-model";
 import { HostDefinitions, SharedDefinition } from "./definitions-model";
 import { VerifySpecSchema } from "./verify-spec";
 import { OwnInventory, OwnWords } from "./own-words-model";
+import { MERGE_POLL_MS, ShippingAction, ShippingGo } from "./shipping";
 
 /** A workspace a start keeps its Run in, as the front door it was started from saw it. */
 export const KeptHere = Schema.Struct({
@@ -174,6 +176,7 @@ export const holdPath = (
 
 /** A question a Run's Driver is holding open, with the options to answer it with. */
 export const Question = Schema.Struct({
+  shipping: Schema.optionalKey(ShippingGo),
   kind: Schema.Literal("question"),
   run: Schema.String,
   /** The Choice id an answer names, so a question replaced meanwhile is not answered. */
@@ -243,7 +246,11 @@ export const BoardChild = Schema.Struct({
 export type BoardChild = typeof BoardChild.Type;
 
 /** An offer a card can invoke by id, under the title its workflow gave it. */
-export const BoardOffer = Schema.Struct({ id: Schema.String, title: Schema.String });
+export const BoardOffer = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  run: Schema.optionalKey(Schema.String),
+});
 export type BoardOffer = typeof BoardOffer.Type;
 
 /** `on-stage` and `in-prod` are merged too: the furthest its deploy jobs have taken it. */
@@ -310,6 +317,11 @@ export type ReadyToRelease = typeof ReadyToRelease.Type;
 
 /** What Ready to release is decided from. */
 export interface ReleaseFacts {
+  readonly now: number;
+  readonly read: number | null;
+  readonly head: string | null;
+  readonly readHead: string | null;
+  readonly unreadable?: boolean;
   readonly succeeded: boolean;
   readonly mr: string | null;
   /** What the forge last said; null where it has not been asked. */
@@ -351,7 +363,17 @@ export function readyToRelease(facts: ReleaseFacts): ReadyToRelease {
     else if (facts.ci.state === "failed") lack("ci", `${facts.ci.name} failed in CI`);
     else if (facts.ci.state === "running") lack("ci", "CI is still running", true);
     else if (facts.ci.state === "unknown") lack("ci", "its pipeline has not passed at its head");
-    if (facts.mergeable === null)
+    if (
+      facts.unreadable ||
+      facts.read === null ||
+      !Number.isFinite(facts.read) ||
+      facts.read > facts.now ||
+      facts.now - facts.read > 2 * MERGE_POLL_MS ||
+      facts.head === null ||
+      facts.head !== facts.readHead
+    )
+      lack("mergeable", "the forge answer is stale, unreadable or not at the current head", true);
+    else if (facts.mergeable === null)
       lack("mergeable", "the forge has not said whether it can merge", true);
     else if (facts.mergeable.state === "blocked")
       lack("mergeable", `the forge says it cannot merge: ${facts.mergeable.said}`);
@@ -418,6 +440,10 @@ export const TaskMr = Schema.Struct({
   ready: Schema.Boolean,
   /** Its latest Disposition, as `kind` or `kind ref`. */
   disposition: Schema.NullOr(Schema.String),
+  /** What settled it, or null while its Task owes it; absent from an older host. */
+  settled: Schema.optionalKey(
+    Schema.NullOr(Schema.Literals(["merged", "abandoned", "superseded"])),
+  ),
   /** The MR ids of the Task's merge requests whose source branch it targets. */
   waitsOn: Schema.Array(Schema.String),
 });
@@ -454,6 +480,9 @@ export const TaskView = Schema.Struct({
   drift: Schema.NullOr(Schema.String),
   /** `⏸ Held until 14:00.`, or null while nothing is holding it. */
   held: Schema.NullOr(Schema.String),
+  /** Why its leading Run parked, as a Park cause and its kind; absent from an older host. */
+  park: Schema.optionalKey(Schema.NullOr(Park)),
+  recovery: Schema.optionalKey(Schema.Array(Schema.String)),
   /** Who asked for the hold and why, which the drawer says and the card does not. */
   heldBy: Schema.NullOr(Schema.Struct({ by: Schema.String, reason: Schema.String })),
   decision: Schema.NullOr(Decision),
@@ -469,8 +498,7 @@ export const TaskView = Schema.Struct({
   /** What became of the work, where someone recorded it. */
   disposition: Schema.NullOr(Schema.String),
   /**
-   * Whether the work needs nothing more from anyone: a disposition was recorded, or the
-   * Run succeeded at a Workflow that produces nothing to land. Places the card in
+   * Whether everything the Task owes is settled and none of its Runs is still going. Places the card in
    * Finished rather than Waiting on you.
    */
   landed: Schema.Boolean,
@@ -484,6 +512,8 @@ export const TaskView = Schema.Struct({
   checks: Schema.optionalKey(Schema.NullOr(Checks)),
   /** Ready to release: whether the work is mergeable now (`readyToRelease`). */
   ready: Schema.optionalKey(Schema.Boolean),
+  shipping: Schema.optionalKey(Schema.NullOr(ShippingAction)),
+  shippingMr: Schema.optionalKey(Schema.NullOr(Schema.String)),
   /** What Ready to release still lacks; absent from a host older than the field. */
   readiness: Schema.optionalKey(ReadyToRelease),
   /** The check Collie is running for the leading Run now, or null for none. */
@@ -760,10 +790,17 @@ export type RequestedBy = typeof RequestedBy.Type;
 export const requestedByLine = (who: RequestedBy) =>
   `Started by ${who.agent} of ${who.run} on ${who.machine.name}`;
 
-export const RunReport = Schema.Struct({
+const ReportTry = Schema.Struct({
   state: Schema.Literals(["delivered", "undelivered"]),
   at: Schema.String,
   note: Schema.String,
+});
+export const RunReport = Schema.Struct({
+  ...ReportTry.fields,
+  /** Undelivered because the requesting Machine could not be reached, so sent again once it is. */
+  unreached: Schema.optionalKey(Schema.Boolean),
+  /** The tries before this one, oldest first. */
+  tries: Schema.optionalKey(Schema.Array(ReportTry)),
   closed: Schema.Boolean,
   closure: Schema.optionalKey(Schema.String),
 });
@@ -962,7 +999,10 @@ export const RecordPart = Schema.Literals(["diff", "tail", "mr", "texts"]);
 export type RecordPart = typeof RecordPart.Type;
 
 export const RunDetail = Schema.Struct({
+  branchProgress: Schema.optionalKey(Schema.NullOr(Schema.String)),
   id: Schema.String,
+  park: Schema.optionalKey(Schema.NullOr(Park)),
+  recovery: Schema.optionalKey(Schema.Array(Schema.String)),
   /** The record's revision; absent from a host without the Run model. */
   revision: Schema.optionalKey(RunRevision),
   /** Its parts still to come, each shown as loading until a later frame brings it. */
@@ -1067,6 +1107,7 @@ export const recordIn = (value: RunDetail | RecordUnchanged | null): RunDetail |
 
 /** One offer as a front door shows it, over the wire. */
 export const OfferView = Schema.Struct({
+  textField: Schema.optionalKey(Schema.String),
   id: Schema.String,
   title: Schema.String,
   /** The workflow it starts, by public id. */
@@ -2321,7 +2362,8 @@ export function flowActions(
       if (node.link.run !== null) primary = "open";
       if (node.link.canResume === true && node.link.machine === lane.machine) actions.push("retry");
     } else if (node.kind === "offer") {
-      if (node.id === `offer:${view.offer?.id}` && lane.run === view.run) primary = "start";
+      if (node.id === `offer:${view.offer?.id}` && lane.run === (view.offer?.run ?? view.run))
+        primary = "start";
     } else if (
       Arr.some(node.questions, (one) => one.id !== undefined && (one.open ?? one.answered === null))
     ) {
@@ -2549,6 +2591,7 @@ export function primaryAction(view: TaskView): CardAction | null {
   if (view.state === "active" || view.state === "quiet") return { kind: "go-to-tab" };
   if (view.unseen === true) return { kind: "acknowledge" };
   if (view.landed) return null;
+  if (view.shipping === "merge" && view.offer !== null) return { kind: "offer", offer: view.offer };
   // Whatever the plan's module offers first, under its own title; none, no button.
   if (view.planReady) return view.offer === null ? null : { kind: "offer", offer: view.offer };
   if (canResume(view.state)) return { kind: "resume" };
@@ -2593,23 +2636,24 @@ export function dispositionActions(view: TaskView): DisposeAction[] {
 }
 
 /**
- * Which of the board's four sections a Task belongs in. A decision beats liveness,
+ * Which of the board's five sections a Task belongs in. A decision beats liveness,
  * liveness beats history, and history is split by whether the work landed.
  */
-export type Section = "needs-you" | "working" | "waiting" | "finished";
+export type Section = "needs-you" | "ready-to-ship" | "working" | "waiting" | "finished";
 
-export function sectionOf(view: Pick<TaskView, "state" | "landed">): Section {
+export function sectionOf(view: Pick<TaskView, "state" | "landed" | "shipping">): Section {
   // Read off the state alone, because a Decision is not the only way to stop for a
   // human: an agent at its harness's own dialog is one too, and a section derived from
   // the Decision could not see it. `stateOf` is where the two become one word.
-  if (view.state === "blocked") return "needs-you";
+  if (view.state === "blocked") return view.shipping == null ? "needs-you" : "ready-to-ship";
   if (view.state === "active" || view.state === "quiet") return "working";
-  return view.landed ? "finished" : "waiting";
+  return view.landed ? "finished" : view.shipping == null ? "waiting" : "ready-to-ship";
 }
 
 /** The order every board draws its sections in, and what each is called. */
 export const SECTIONS: ReadonlyArray<readonly [Section, string]> = [
   ["needs-you", "Needs you"],
+  ["ready-to-ship", "Ready to ship"],
   ["waiting", "Waiting on you"],
   ["working", "Working"],
   ["finished", "Finished"],
@@ -2618,8 +2662,8 @@ const SECTION_ORDER = new Map(Arr.map(SECTIONS, ([section], at) => [section, at]
 const STATE_RANK = new Map<TaskState, number>(Arr.map(STATE_ORDER, (state, at) => [state, at]));
 
 /**
- * The board's order: the sections, then the state order inside Needs you and what is
- * ready to release inside Waiting on you, then whatever changed last. Nothing else is
+ * The board's order: the sections, then the state order inside Needs you,
+ * then whatever changed last. Nothing else is
  * ranked — a board that reordered itself on every tick is one a human cannot point at.
  */
 export function sortBoard(views: ReadonlyArray<TaskView>): TaskView[] {
@@ -2627,7 +2671,7 @@ export function sortBoard(views: ReadonlyArray<TaskView>): TaskView[] {
     (a, b) =>
       SECTION_ORDER.get(sectionOf(a))! - SECTION_ORDER.get(sectionOf(b))! ||
       (sectionOf(a) === "needs-you" ? STATE_RANK.get(a.state)! - STATE_RANK.get(b.state)! : 0) ||
-      Number(b.ready ?? false) - Number(a.ready ?? false) ||
+      (sectionOf(a) === "ready-to-ship" ? b.at - a.at : 0) ||
       // What moved last is at the top: in Working what is doing something, in Waiting on
       // you what you were just doing.
       (b.ended ?? b.at) - (a.ended ?? a.at),
@@ -2639,6 +2683,7 @@ export const WAIT_FOLD_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface Sections {
   needs: TaskView[];
+  ready: TaskView[];
   working: TaskView[];
   waiting: TaskView[];
   finished: TaskView[];
@@ -2682,7 +2727,7 @@ export function matchesTask(view: TaskView, query: string): boolean {
 }
 
 /**
- * The four sections, in the order the board draws them, from a list already in the
+ * The five sections, in the order the board draws them, from a list already in the
  * board's own order. The search narrows them all the same way: a Task hidden from one
  * section must not be visible in another.
  */
@@ -2690,6 +2735,7 @@ export function sectionsOf(views: ReadonlyArray<TaskView>, query: string): Secti
   const found = Arr.filter(views, (view) => matchesTask(view, query));
   return {
     needs: Arr.filter(found, (view) => sectionOf(view) === "needs-you"),
+    ready: Arr.filter(found, (view) => sectionOf(view) === "ready-to-ship"),
     working: Arr.filter(found, (view) => sectionOf(view) === "working"),
     waiting: Arr.filter(found, (view) => sectionOf(view) === "waiting"),
     finished: Arr.filter(found, (view) => sectionOf(view) === "finished"),
@@ -2720,10 +2766,10 @@ export function headerSentence(views: ReadonlyArray<TaskView>, now?: number): He
   const gone = quiet === 0 ? "" : `, ${quiet} gone quiet`;
   const waitingAll = Arr.filter(views, (view) => sectionOf(view) === "waiting");
   const waiting = now === undefined ? waitingAll : foldWaiting(waitingAll, now).recent;
-  const ready = Arr.filter(waiting, (view) => Boolean(view.ready)).length;
+  const ready = Arr.filter(views, (view) => sectionOf(view) === "ready-to-ship").length;
   const held = [
-    ...(ready === 0 ? [] : [`${ready} ready to release`]),
-    ...(waiting.length === ready ? [] : [`${waiting.length - ready} waiting on you`]),
+    ...(ready === 0 ? [] : [`${ready} ready to ship`]),
+    ...(waiting.length === 0 ? [] : [`${waiting.length} waiting on you`]),
   ];
   const inHand = held.length === 0 ? "" : ` ${Arr.join(held, ", ")}.`;
   return { text: `${opening}${inHand} ${working.length} working${gone}.`, urgent: needs > 0 };

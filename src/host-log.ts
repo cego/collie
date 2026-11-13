@@ -6,6 +6,9 @@ import { Effect, FileSystem, Logger } from "effect";
 /** The log is never larger than this; what came before is kept once, as `<file>.1`. */
 const MAX_BYTES = 1024 * 1024;
 
+/** These diagnostics do not contribute to any board or Run view. Path is state-relative. */
+export const isHostLog = (path: string): boolean => /^host\.(log|out)(\.\d+)?$/.test(path);
+
 /** A logger appending to `file`, which starts again from empty once it would pass `maxBytes`. */
 export const hostLogger = (file: string, maxBytes: number = MAX_BYTES) =>
   Effect.gen(function* () {

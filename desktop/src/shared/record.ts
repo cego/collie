@@ -6,6 +6,12 @@ import * as Option from "effect/Option";
 import { mrWords, readMrRef, type RecordPart, type RunDetail } from "../../../src/board-model";
 import { mrTab } from "./links";
 import type { Target } from "./board-clicks";
+import { parkLine } from "../../../src/park-cause";
+
+export const recoveryOf = (facts: Pick<RunDetail, "park" | "recovery">, limit = 20) => ({
+  park: facts.park == null ? null : parkLine(facts.park),
+  history: (facts.recovery ?? []).slice(-limit),
+});
 
 export interface TabFacts {
   readonly flow?: boolean;
@@ -253,5 +259,84 @@ export const recordTiming = (mark: (name: RecordMark, at: number, card: string) 
     mounted: after("record:click", "record:mounted"),
     frame: after("record:mounted", "record:frame"),
     usable: after("record:frame", "record:usable"),
+  };
+};
+
+export type DesktopMark =
+  | "launch"
+  | "board-usable"
+  | "terminal-key"
+  | "terminal-drawn"
+  | "chat-chunk"
+  | "chat-drawn"
+  | "frame";
+
+/** The line a mark adds to record-timing.log, or null while Record timing is off. */
+export const timingLine = (
+  settings: { readonly recordTiming?: boolean | undefined },
+  mark: { readonly name: string; readonly at: number; readonly card: string },
+) => (settings.recordTiming === true ? `${JSON.stringify(mark)}\n` : null);
+
+/** A scroll with no other this long after it has ended. */
+const SCROLL_SETTLED_MS = 150;
+
+/** Runs `then` once the change just made is painted; a frame's callbacks run before its paint. */
+export const afterPaint = (frame: (callback: () => void) => void, then: () => void) =>
+  frame(() => frame(then));
+
+/**
+ * Marks the board's first draw; a key or chat chunk and the first draw after it, with no
+ * other start marked before that draw; and each frame of a scroll, named once per scroll.
+ */
+export const desktopTiming = (mark: (name: DesktopMark, at: number, card: string) => void) => {
+  const answered = (start: DesktopMark, end: DesktopMark) => {
+    let waiting: string | null = null;
+    return {
+      start: (card: string, at: number) => {
+        if (waiting !== null) return;
+        waiting = card;
+        mark(start, at, card);
+      },
+      end: (at: number) => {
+        if (waiting === null) return;
+        mark(end, at, waiting);
+        waiting = null;
+      },
+    };
+  };
+  const terminal = answered("terminal-key", "terminal-drawn");
+  const chat = answered("chat-chunk", "chat-drawn");
+  let boardDrawn = false;
+  let scroll: { readonly card: string; last: number } | null = null;
+  let scrolls = 0;
+  return {
+    boardUsable: (at: number) => {
+      if (boardDrawn) return;
+      boardDrawn = true;
+      mark("board-usable", at, "");
+    },
+    key: terminal.start,
+    echoed: terminal.end,
+    chunk: chat.start,
+    chatDrawn: chat.end,
+    /** Whether this starts a scroll, whose frames are then to be watched. */
+    scrolled: (view: string, at: number) => {
+      if (scroll !== null) {
+        scroll.last = at;
+        return false;
+      }
+      scroll = { card: `${view}:${++scrolls}`, last: at };
+      return true;
+    },
+    /** Whether the scroll goes on, so the next frame is watched too. */
+    frame: (at: number) => {
+      if (scroll === null) return false;
+      if (at - scroll.last > SCROLL_SETTLED_MS) {
+        scroll = null;
+        return false;
+      }
+      mark("frame", at, scroll.card);
+      return true;
+    },
   };
 };

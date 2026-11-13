@@ -330,8 +330,10 @@ for (const name of ["gitlab", "github"] as const) {
     test("is ready only with its CLI installed and logged in to the host", () =>
       runEffect(
         Effect.gen(function* () {
-          const ask = (over: Partial<ForgeModel>) =>
-            forge.ready(PROJECT[name], "/w", fakeForge(name, model(name, over)).run);
+          const ask = (over: Partial<ForgeModel>) => {
+            const fake = fakeForge(name, model(name, over));
+            return forge.ready(PROJECT[name], "/w", fake.run).pipe(Effect.provide(fake.layer));
+          };
           expect(yield* ask({})).toEqual({ ok: true, reason: "" });
           expect(yield* ask({ installed: false })).toEqual({
             ok: false,
@@ -340,7 +342,39 @@ for (const name of ["gitlab", "github"] as const) {
           expect(yield* ask({ loggedIn: [] })).toEqual({
             ok: false,
             reason: `${CLI[name]} is not logged in to ${host}`,
+            cause: "login-missing",
           });
+        }),
+      ));
+
+    test("needs login repair when the forge refuses the token its CLI holds", () =>
+      runEffect(
+        Effect.gen(function* () {
+          for (const over of [
+            { revoked: true },
+            { httpFault: { status: 403, message: "Bad credentials" } },
+          ]) {
+            const fake = fakeForge(name, model(name, over));
+            expect(
+              yield* forge.ready(PROJECT[name], "/w", fake.run).pipe(Effect.provide(fake.layer)),
+            ).toEqual({
+              ok: false,
+              reason: `${CLI[name]} is not logged in to ${host}`,
+              cause: "login-missing",
+            });
+          }
+        }),
+      ));
+
+    test("stays recoverable when the forge cannot be reached or fails to answer", () =>
+      runEffect(
+        Effect.gen(function* () {
+          for (const httpFault of ["network", { status: 503 }, { status: 403 }] as const) {
+            const fake = fakeForge(name, model(name, { httpFault }));
+            expect(
+              yield* forge.ready(PROJECT[name], "/w", fake.run).pipe(Effect.provide(fake.layer)),
+            ).toMatchObject({ ok: false, cause: "forge-unavailable" });
+          }
         }),
       ));
 
@@ -2529,6 +2563,63 @@ const approval = (review: ReviewRead) => {
   if (!review.ok) throw new Error(review.reason);
   return { approved: review.approved, approvers: review.approvers };
 };
+
+for (const snapshot of [
+  { change: "new approval", earlier: [], current: ["dave"], approved: true, names: ["dave"] },
+  {
+    change: "replacement approval",
+    earlier: ["alice"],
+    current: ["dave"],
+    approved: true,
+    names: ["dave"],
+  },
+  {
+    change: "non-contributing optional approval",
+    earlier: ["alice", "dave"],
+    current: ["dave"],
+    approved: true,
+    names: ["dave"],
+  },
+  { change: "removed approval", earlier: ["alice"], current: [], approved: false, names: [] },
+  { change: "self-only approval", earlier: ["alice"], current: ["me"], approved: false, names: [] },
+])
+  test(`GitLab approval snapshot: a ${snapshot.change} supplies both rule readiness and current human names`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        // The global /approvals list and /approval_state disagree on current rule contributors.
+        const review = yield* reviewOn("gitlab", {
+          required: 1,
+          approvers: snapshot.earlier,
+          rules: [{ name: "Maintainers", required: 1, approvers: snapshot.current }],
+        });
+        expect(approval(review)).toEqual({
+          approved: snapshot.approved,
+          approvers: snapshot.names,
+        });
+      }),
+    ));
+
+test("GitLab approval snapshot: optional human approvals remain visible when there are no rules", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const review = yield* reviewOn("gitlab", { approvers: ["alice", "me"], rules: [] });
+      expect(approval(review)).toEqual({ approved: true, approvers: ["alice"] });
+    }),
+  ));
+
+test("GitLab approval snapshot: one human satisfying several rules is reported once", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const review = yield* reviewOn("gitlab", {
+        approvers: ["dave", "me"],
+        rules: [
+          { name: "Maintainers", required: 1, approvers: ["dave", "me"] },
+          { name: "Security", required: 1, approvers: ["dave"] },
+        ],
+      });
+      expect(approval(review)).toEqual({ approved: true, approvers: ["dave"] });
+    }),
+  ));
 
 test("GitLab counts each approval rule again without Collie's approval, on every tier", () =>
   runEffect(

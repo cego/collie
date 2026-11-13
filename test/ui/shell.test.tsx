@@ -10,25 +10,7 @@ import { runEffect } from "../support/effect";
 import { App } from "../../src/ui/App";
 import { StoppedDrawing } from "../../src/ui/bridge";
 import type { AppState, Command } from "../../src/ui/state";
-import type { WorkspaceView } from "../../src/workspace";
 import { epochMs } from "../../src/time";
-
-const NOW = epochMs("2026-09-16T12:00:00.000Z");
-
-function board(over: Partial<WorkspaceView> = {}): WorkspaceView {
-  return {
-    repo: "collie",
-    cwd: "/w/collie",
-    worktrees: [],
-    behind: null,
-    now: NOW,
-    agents: [],
-    extraAgents: 0,
-    active: [],
-    recent: [],
-    ...over,
-  };
-}
 
 function appState(over: Partial<AppState> = {}): AppState {
   return {
@@ -37,14 +19,11 @@ function appState(over: Partial<AppState> = {}): AppState {
     tasks: [],
     now: epochMs("2026-09-16T12:00:00.000Z"),
     density: "comfortable",
-    board: board(),
-    wide: null,
     note: null,
     history: null,
     definitions: null,
     settings: null,
     detail: null,
-    marks: {},
     live: null,
     previewing: null,
     stopping: [],

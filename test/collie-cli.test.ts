@@ -294,7 +294,7 @@ test(
           );
         expect(inputsOf((yield* cli(["--json", "workflow", "show", "plan"])).stdout)).toEqual([
           ["goal", "goal"],
-          ["then", null],
+          ["then", "reach"],
         ]);
         expect(
           inputsOf((yield* cli(["--json", "workflow", "show", "architecture"])).stdout),
@@ -720,7 +720,7 @@ test(
         const described = (yield* Schema.decodeEffect(ShownModule)(shown.stdout).pipe(Effect.orDie))
           .data.workflow;
         expect(described.layer).toBe("project");
-        expect(Arr.map(described.inputs, (one) => one.name)).toEqual(["plan", "then"]);
+        expect(Arr.map(described.inputs, (one) => one.name)).toEqual(["plan", "recovery", "then"]);
 
         // There is nothing to merge in a module, so the flags that merged steps say so.
         const merged = yield* cli(

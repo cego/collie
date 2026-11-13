@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
-import { ConfigProvider, Effect, Schedule } from "effect";
+import { ConfigProvider, Effect, Queue } from "effect";
 import { recordDisposition } from "../../src/disposition";
 import { currentEnv } from "../../src/env";
 import { appState, workspaceFlow } from "../../src/flows";
@@ -132,6 +132,8 @@ test(
           yield* Effect.scoped(
             Effect.gen(function* () {
               const env = yield* currentEnv.pipe(Effect.orDie);
+              const changes = yield* Queue.unbounded<void>();
+              let notifications = 0;
               const app = appState(
                 {
                   herdr: new Herdr(env),
@@ -140,12 +142,23 @@ test(
                   userDir: env.userDir,
                   paneId: env.paneId,
                   pluginRoot: env.pluginRoot,
-                  tasksOf: yield* followBoard(env),
+                  tasksOf: yield* followBoard(env, () => {
+                    notifications++;
+                    Queue.offerUnsafe(changes, undefined);
+                  }),
                 },
                 env,
               );
               const before = yield* app.load(focus());
               expect(Arr.map(before.tasks, (task) => task.name)).toEqual(["Plain"]);
+              // Reading a subscription's latest value is not what drives it. Each next
+              // read below happens only after the host follower says something changed.
+              const changed = Effect.gen(function* () {
+                yield* Queue.take(changes);
+                return yield* app.load(focus());
+              }).pipe(Effect.timeout("10 seconds"));
+              yield* changed;
+              const beforeChange = notifications;
 
               yield* recordDisposition(`${world.state}/runs/${before.tasks[0]!.run}`, {
                 kind: "merged",
@@ -154,34 +167,36 @@ test(
                 by: "human",
                 note: null,
               }).pipe(Effect.orDie);
-              const after = yield* app.load(focus()).pipe(
+              const after = yield* changed.pipe(
                 Effect.repeat({
                   until: (state) => state.tasks[0]?.disposition === "merged",
-                  schedule: Schedule.spaced("200 millis"),
                   times: 50,
                 }),
               );
               expect(after.tasks[0]?.disposition).toBe("merged");
+              expect(notifications).toBeGreaterThan(beforeChange);
 
               // A host gone away is said, and the cards it last sent are not passed off as live.
+              const beforeDisconnect = notifications;
               yield* stopHost(world.state);
-              const away = yield* app.load(focus()).pipe(
+              const away = yield* changed.pipe(
                 Effect.repeat({
                   until: (state) => state.note !== null,
-                  schedule: Schedule.spaced("50 millis"),
                   times: 100,
                 }),
               );
               expect(away.note).toContain("reconnecting to the workflow host");
               expect(away.tasks[0]?.disposition).toBe("merged");
+              expect(notifications).toBeGreaterThan(beforeDisconnect);
               // Moving the cursor reads nothing, and says what the last read said.
               const moved = yield* app.load(focus({ selected: away.tasks[0]!.id }));
               expect(moved.note).toBe(away.note);
-              const reconnected = yield* until(
-                () => app.load(focus()),
-                (state) => state.note === null,
+              const beforeReconnect = notifications;
+              const reconnected = yield* changed.pipe(
+                Effect.repeat({ until: (state) => state.note === null, times: 100 }),
               );
               expect(reconnected.tasks[0]?.disposition).toBe("merged");
+              expect(notifications).toBeGreaterThan(beforeReconnect);
             }),
           );
           yield* stopHost(world.state);

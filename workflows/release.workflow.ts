@@ -2,8 +2,10 @@
 
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import {
   AnswerSchema,
+  CONFLICTS,
   FindingSchema,
   FixOutputSchema,
   Host,
@@ -38,12 +40,14 @@ import {
   type OpenComment,
   type ReviewStanding,
 } from "collie";
-import { Deferred, Effect, Option, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
+import * as DurableDeferred from "effect/workflow/DurableDeferred";
 import { connection } from "./connections.ts";
 import * as Workflow from "effect/workflow/Workflow";
 import { WorkflowInstance } from "effect/workflow/WorkflowEngine";
 import { IMPLEMENTER } from "./reviewing.ts";
+import { GivenGo, givenAt, holdsFor } from "./release-go.ts";
 import {
   Assessed,
   RolledBack,
@@ -239,6 +243,7 @@ export const Checked = Schema.Struct({
 export const RELEASER = "release";
 
 const GO = {
+  merge: "Merge",
   release: "Release",
   test: "Stage the merge request",
   stage: "Merge, tag and stage",
@@ -385,6 +390,14 @@ type SetEnd =
   | { readonly _tag: "Released" | "LeftOpen" | "Failed"; readonly said: string }
   | { readonly _tag: "NotStarted"; readonly on: SetMember; readonly blocker: SetEnd };
 
+const SetEndSchema: Schema.Codec<SetEnd> = Schema.Union([
+  Schema.Struct({ _tag: Schema.Literals(["Released", "LeftOpen", "Failed"]), said: text }),
+  Schema.TaggedStruct("NotStarted", {
+    on: Schema.Struct({ id: text, target: text, url: text, checkout: Schema.optionalKey(text) }),
+    blocker: Schema.suspend(() => SetEndSchema),
+  }),
+]);
+
 const endLine = (member: SetMember, end: SetEnd) => {
   switch (end._tag) {
     case "Released":
@@ -418,17 +431,21 @@ const releaseEach = (members: ReadonlyArray<SetMember>) =>
       Activity.make({
         name,
         success: MergeRequestReadSchema,
-        execute: host.readMergeRequest({ cwd, mr: member.target }),
+        execute: host.readMergeRequest({ cwd, mr: member.target, checkout: true }),
       });
     const branches = [];
+    const byId = new Map<string, SetMember>();
     for (const member of members) {
       const now = yield* read(`read-${invocationFor("release", member)}`, member);
       if (now._tag === "Unreadable")
         return yield* fail(`${member.url} could not be read: ${now.why}, so nothing was released`);
       branches.push({ id: member.id, source: now.source, target: now.target, wave: now.wave });
+      byId.set(
+        member.id,
+        now.checkout === undefined ? member : { ...member, checkout: now.checkout },
+      );
     }
     const stacked = stackOrder(branches);
-    const byId = new Map(Arr.map(members, (member) => [member.id, member] as const));
     if (stacked._tag === "Cycle")
       return yield* fail(
         `${Arr.join(
@@ -439,11 +456,20 @@ const releaseEach = (members: ReadonlyArray<SetMember>) =>
     yield* forecast([releaseRuns]);
     const items = Arr.map(stacked.order, (one) => invocationFor("release", byId.get(one.id)!));
     const ends = new Map(
-      Arr.map(stacked.order, (one) => [one.id, Deferred.makeUnsafe<SetEnd>()] as const),
+      Arr.map(
+        stacked.order,
+        (one) =>
+          [
+            one.id,
+            DurableDeferred.make(`${invocationFor("release", byId.get(one.id)!)}.end`, {
+              success: SetEndSchema,
+            }),
+          ] as const,
+      ),
     );
     const releaseOne = (member: SetMember) =>
       Effect.gen(function* () {
-        const ran = yield* runOn("release", member);
+        const ran = yield* runOn("release", member, "merge");
         if (!ran.ok) return { _tag: "Failed", said: ran.said } satisfies SetEnd;
         // A Run that ended without merging, as on Finish, leaves nothing to stack on.
         const now = yield* read(`${invocationFor("release", member)}.merged`, member);
@@ -452,25 +478,79 @@ const releaseEach = (members: ReadonlyArray<SetMember>) =>
           said: ran.said,
         } satisfies SetEnd;
       });
-    const ended = yield* Effect.forEach(
+    const repositories = Arr.groupBy(
       stacked.order,
-      (one) =>
-        Effect.gen(function* () {
-          const member = byId.get(one.id)!;
-          const before = yield* Effect.forEach(one.waitsOn, (id) =>
-            Effect.map(Deferred.await(ends.get(id)!), (end) => ({ on: byId.get(id)!, end })),
-          );
-          const blocked = Arr.findFirst(before, ({ end }) => end._tag !== "Released");
-          const end: SetEnd = Option.isSome(blocked)
-            ? { _tag: "NotStarted", on: blocked.value.on, blocker: blocked.value.end }
-            : yield* releaseRuns(releaseOne(member), {
-                item: invocationFor("release", member),
-                items,
-              });
-          yield* Deferred.succeed(ends.get(one.id)!, end);
-          yield* host.record(runId, endLine(member, end));
-          return { member, end };
-        }),
+      (one) => readMrRef(byId.get(one.id)!.target)!.project!,
+    );
+    const { ended, tags } = yield* Effect.all(
+      {
+        ended: Effect.forEach(
+          stacked.order,
+          (one) =>
+            Effect.gen(function* () {
+              const member = byId.get(one.id)!;
+              const end = yield* DurableDeferred.into(
+                Effect.gen(function* () {
+                  const before = yield* Effect.forEach(one.waitsOn, (id) =>
+                    Effect.map(DurableDeferred.await(ends.get(id)!), (end) => ({
+                      on: byId.get(id)!,
+                      end,
+                    })),
+                  );
+                  const blocked = Arr.findFirst(before, ({ end }) => end._tag !== "Released");
+                  const end: SetEnd = Option.isSome(blocked)
+                    ? { _tag: "NotStarted", on: blocked.value.on, blocker: blocked.value.end }
+                    : yield* releaseRuns(releaseOne(member), {
+                        item: invocationFor("release", member),
+                        items,
+                      });
+                  yield* host.record(runId, endLine(member, end));
+                  return end;
+                }),
+                ends.get(one.id)!,
+              );
+              return { member, end };
+            }),
+          { concurrency: "unbounded" },
+        ),
+        tags: Effect.forEach(
+          Rec.values(repositories),
+          (repository) =>
+            DurableDeferred.into(
+              Effect.gen(function* () {
+                const settled = yield* Effect.forEach(repository, (one) =>
+                  Effect.map(DurableDeferred.await(ends.get(one.id)!), (end) => ({
+                    member: byId.get(one.id)!,
+                    end,
+                  })),
+                );
+                const merged = Arr.map(
+                  Arr.filter(settled, ({ end }) => end._tag === "Released"),
+                  ({ member }) => member,
+                );
+                const last = merged.at(-1);
+                if (last === undefined) return null;
+                const item = invocationFor("tag", last);
+                const tagged = yield* releaseRuns(
+                  runOn(
+                    "release",
+                    last,
+                    "tag",
+                    Arr.map(merged, (one) => one.target),
+                  ),
+                  { item, items: [item] },
+                );
+                const said = `${readMrRef(last.target)!.project} ${tagged.ok ? "released" : "tag failed"}: ${tagged.said}`;
+                yield* host.record(runId, said);
+                return { ...tagged, said };
+              }),
+              DurableDeferred.make(`${repository[0]!.id}.tag-end`, {
+                success: Schema.NullOr(Schema.Struct({ ok: Schema.Boolean, said: text })),
+              }),
+            ),
+          { concurrency: "unbounded" },
+        ),
+      },
       { concurrency: "unbounded" },
     );
     const count = (tag: SetEnd["_tag"]) => Arr.filter(ended, ({ end }) => end._tag === tag).length;
@@ -480,8 +560,16 @@ const releaseEach = (members: ReadonlyArray<SetMember>) =>
     }: ${Arr.join(
       Arr.map(ended, ({ member, end }) => endLine(member, end)),
       "; ",
-    )}`;
-    if (count("Failed") > 0) return yield* fail(said);
+    )}${
+      Arr.every(tags, (one) => one === null)
+        ? ""
+        : `; ${Arr.join(
+            Arr.flatMap(tags, (one) => (one === null ? [] : [one.said])),
+            "; ",
+          )}`
+    }`;
+    if (count("Failed") > 0 || Arr.some(tags, (one) => one !== null && !one.ok))
+      return yield* fail(said);
     return said;
   });
 
@@ -493,6 +581,33 @@ interface Landed {
   readonly production: ProductionGo | null;
 }
 
+/** A front door a human types into, or chat carrying the human's own words. */
+const humanVoice = (by: { readonly origin: string; readonly said?: string }) =>
+  ["board", "desktop", "cli-tty"].includes(by.origin) ||
+  (by.origin === "chat" && by.said !== undefined);
+
+/**
+ * Whether a human's Release started this Run: their own start of it from its parent's offer,
+ * which the host records only for a human, or their answer to the parent's question.
+ */
+const releasedByHuman = (place: {
+  readonly lineage: ReadonlyArray<string>;
+  readonly authority: { readonly started: unknown };
+}) =>
+  Effect.gen(function* () {
+    const parent = place.lineage[1];
+    if (parent === undefined) return false;
+    if (place.authority.started !== null) return true;
+    const answered = Arr.findLast(
+      yield* (yield* Host).asked(parent),
+      (one) => one.answer === GO.release,
+    );
+    return Option.match(answered, {
+      onNone: () => false,
+      onSome: (one) => one.by !== undefined && humanVoice(one.by),
+    });
+  });
+
 /** Why a standing is not the ready one a go was given for. */
 const notReady = (standing: ReviewStanding) => {
   switch (standing._tag) {
@@ -500,6 +615,8 @@ const notReady = (standing: ReviewStanding) => {
       return Arr.join(standing.why, "; ");
     case "Moved":
       return `its head moved to ${short(standing.head)}`;
+    case "Conflicting":
+      return CONFLICTS;
     case "Unanswered":
       return `${standing.comments.length} unanswered comment(s)`;
     case "Unreadable":
@@ -531,6 +648,12 @@ export default defineWorkflow({
       description:
         "The merge request or pull request to release, or several, separated by spaces or commas",
     }),
+    merge_only: Schema.optionalKey(Schema.Boolean).annotate({
+      description: "A set child ends after its merge, leaving tagging to the set",
+    }),
+    together: Schema.optionalKey(Schema.Array(Schema.String)).annotate({
+      description: "The merged merge requests this repository's tag must carry",
+    }),
   }),
   output: Schema.String,
   agents: { roles: { implementer: IMPLEMENTER } },
@@ -555,7 +678,7 @@ export default defineWorkflow({
       title: "Release again",
       workflow: "self",
       when: "failed",
-      inputs: { mr: "started-with" },
+      inputs: { mr: "started-with", together: "started-with" },
       eligible: startedWithOne,
     },
   ],
@@ -569,17 +692,24 @@ export default defineWorkflow({
           const why = `${reason}. Repair it, then resume ${runId}.`;
           yield* host.record(runId, why);
           yield* stepFailed(why);
-          yield* host.parked(runId, why);
+          yield* host.parked(runId, why, "release-failed");
           return yield* Workflow.suspend(yield* WorkflowInstance);
         });
 
+      const tagOnly = asked.together !== undefined;
+      if (tagOnly && (asked.merge_only === true || asked.together!.length === 0))
+        return yield* fail("A tag Run needs merged merge requests and cannot also be merge-only");
       const set = mrSet(asked.mr);
       if (set !== null && "unresolved" in set)
         return yield* fail(
           `${set.unresolved} is not a merge request this Run can find, so nothing was released`,
         );
-      if (set !== null && set.mrs.length > 1) return yield* releaseEach(set.mrs);
-      const said = set === null ? asked.mr : set.mrs[0]!.target;
+      if (tagOnly && set !== null && set.mrs.length > 1)
+        return yield* fail(
+          "A tag Run takes one merge request as mr and its repository's merges as together",
+        );
+      if (!tagOnly && set !== null && set.mrs.length > 1) return yield* releaseEach(set.mrs);
+      const said = set === null ? asked.mr : set.mrs.at(-1)!.target;
       const ref = readMrRef(said);
       const mr = ref === null ? null : mrUrlOf(ref);
       if (ref === null || mr === null)
@@ -638,8 +768,43 @@ export default defineWorkflow({
       if (start._tag === "Unreadable")
         return yield* fail(`${mr} could not be read: ${start.reason}`);
       if (start._tag === "Closed") return yield* fail(`${mr} is closed, so nothing was released`);
+      if (tagOnly && start._tag !== "Merged")
+        return yield* fail(`${mr} is not merged, so nothing was tagged`);
+      const given =
+        tagOnly || start._tag !== "Moved"
+          ? null
+          : yield* Activity.make({
+              name: "given-go",
+              success: Schema.NullOr(GivenGo),
+              execute: Effect.gen(function* () {
+                if (!(yield* releasedByHuman(place))) return null;
+                const at = yield* host
+                  .review({ runId, cwd, proved: start.head, seen: [] })
+                  .pipe(Effect.orElseSucceed(() => null));
+                return givenAt(start.head, at);
+              }),
+            });
+      const tagMerges: string[] = [];
+      if (tagOnly) {
+        for (const target of asked.together ?? [mr]) {
+          const other = readMrRef(target);
+          if (other === null || other.project !== ref.project || forgeOfRef(other) !== forge)
+            return yield* fail(`${target} is not a merge request of ${url}, so nothing was tagged`);
+          const now = yield* Activity.make({
+            name: `tag-merge-${tagMerges.length}`,
+            success: MergeRequestReadSchema,
+            execute: host.readMergeRequest({ cwd, mr: target }),
+          });
+          if (now._tag !== "Read" || now.state !== "merged" || !now.merged)
+            return yield* fail(
+              `${target} has no merged commit on the forge, so nothing was tagged`,
+            );
+          tagMerges.push(now.merged);
+        }
+        if (start._tag === "Merged" && !tagMerges.includes(start.sha)) tagMerges.push(start.sha);
+      }
       const recovering =
-        start._tag !== "Merged"
+        start._tag !== "Merged" || tagOnly
           ? null
           : yield* Activity.make({
               name: "take-over",
@@ -648,7 +813,7 @@ export default defineWorkflow({
               execute: host.takeOverLanding({ runId, cwd }),
             });
       if (recovering?._tag === "Refused") return yield* fail(recovering.why);
-      if (recovering === null) {
+      if (recovering === null && !tagOnly) {
         const merging = yield* Activity.make({
           name: "auto-merging",
           success: Schema.NullOr(Schema.String),
@@ -676,31 +841,49 @@ export default defineWorkflow({
         return yield* fail(
           `${mr} is an application with no stage deploy that Collie can prove, on its merge request's pipeline or its tags', so nothing was released${assessed.kind_evidence ? `: ${assessed.kind_evidence}` : ""}`,
         );
-      const finishing = assessed.is_package ? [tag] : [stage, productionGo, playProduction];
+      if ((tagOnly || asked.merge_only === true) && !assessed.is_package && stageJobs.length === 0)
+        return yield* fail(
+          `${mr} has no stage deploy on its tags, so the set cannot release it to stage`,
+        );
+      const finishing =
+        asked.merge_only === true
+          ? []
+          : assessed.is_package
+            ? [tag]
+            : [stage, productionGo, playProduction];
       yield* forecast(
-        recovering === null
+        recovering === null && !tagOnly
           ? [assess, proveHead, reviewWait, mergeGo, claim, merge, ...finishing]
           : [assess, claim, ...finishing],
       );
-      const goes = assessed.is_package
-        ? [GO.release]
-        : [...(testJobs.length > 0 ? [GO.test] : []), ...(stageJobs.length > 0 ? [GO.stage] : [])];
-      const offered = assessed.is_package
-        ? `${GO.release} merges it at that head and tags it;`
-        : Arr.join(
-            Arr.filter(
-              [
-                testJobs.length > 0
-                  ? `${GO.test} deploys that head to stage for you to test, unmerged, and asks for production before it merges.`
-                  : "",
-                stageJobs.length > 0
-                  ? `${GO.stage} merges it at that head and tags it, and stage gets the tag; production waits for a second go.`
-                  : "",
-              ],
-              (line) => line !== "",
-            ),
-            " ",
-          );
+      const goes =
+        asked.merge_only === true
+          ? [GO.merge]
+          : assessed.is_package
+            ? [GO.release]
+            : [
+                ...(testJobs.length > 0 ? [GO.test] : []),
+                ...(stageJobs.length > 0 ? [GO.stage] : []),
+              ];
+      const offered =
+        asked.merge_only === true
+          ? `${GO.merge} merges it at that head; the set tags this repository once its children have ended.`
+          : assessed.is_package
+            ? `${GO.release} merges it at that head and tags it;`
+            : Arr.join(
+                Arr.filter(
+                  [
+                    testJobs.length > 0
+                      ? `${GO.test} deploys that head to stage for you to test, unmerged, and asks for production before it merges.`
+                      : "",
+                    stageJobs.length > 0
+                      ? `${GO.stage} merges it at that head and tags it, and stage gets the tag; production waits for a second go.`
+                      : "",
+                  ],
+                  (line) => line !== "",
+                ),
+                " ",
+              );
 
       const deploys = {
         applications: assessed.applications ?? [],
@@ -723,7 +906,19 @@ export default defineWorkflow({
       });
 
       let landed: Landed;
-      if (recovering !== null) {
+      if (tagOnly && start._tag === "Merged") {
+        const slugs = yield* claim(
+          claimed("claim").pipe(Effect.map((held) => held?.slugs ?? null)),
+        );
+        if (slugs === null)
+          return yield* fail(`${mr} was merged, but tagging stopped without its Helle claims`);
+        landed = {
+          sha: start.sha,
+          slugs,
+          recovery: `This is the set's tag Run. Release all these merged commits together: ${Arr.join(tagMerges, ", ")}. Use the merged commit in this list that carries every other one, instead of the single merged commit named below. If none carries them all, report a finding. Where a tag already carries them all, finish its release instead of creating another.`,
+          production: null,
+        };
+      } else if (recovering !== null) {
         // That go was given and spent: no wait, no go and no merge, only what is left.
         const slugs = yield* claim(
           claimed("claim").pipe(Effect.map((held) => held?.slugs ?? null)),
@@ -739,12 +934,12 @@ export default defineWorkflow({
           production: null,
         };
       } else {
-        const moveTo = (name: string, head: string) =>
+        const moveTo = (name: string, head: string, branch?: string) =>
           Activity.make({
             name,
             success: Schema.String,
             execute: Effect.gen(function* () {
-              const moved = yield* host.fastForward({ runId, cwd, head });
+              const moved = yield* host.fastForward({ runId, cwd, head, branch });
               if (moved._tag === "Refused") return yield* park(moved.why);
               return moved.head;
             }),
@@ -857,36 +1052,99 @@ export default defineWorkflow({
         const unconflicted = () =>
           Effect.gen(function* () {
             const n = conflicts++;
-            const { at, standing } = yield* Activity.make({
-              name: `conflict-${n}`,
-              success: Schema.Struct({ at: Schema.String, standing: ReviewStandingSchema }),
-              error: WorkflowError,
-              execute: Effect.gen(function* () {
-                const at = (yield* host.evidence(runId, cwd)).final.head_sha;
-                const standing = yield* host.awaitReview({
-                  runId,
-                  cwd,
-                  proved: at,
-                  seen: [],
-                  whileConflicting: true,
-                });
-                if (standing._tag === "Held")
-                  return yield* Workflow.suspend(yield* WorkflowInstance);
-                return { at, standing };
-              }),
-            });
-            yield* gone(standing);
-            // Taken even where the head is the checkout's own, which refuses changes it does not carry.
-            yield* moveTo(
-              `conflict-${n}.fast-forward`,
-              standing._tag === "Moved" ? standing.head : at,
-            );
-            return n;
+            let previous: string | null = null;
+            for (let round = 0; ; round++) {
+              const name = `conflict-${n}${round === 0 ? "" : `.repair-${round}`}`;
+              const { at, standing } = yield* Activity.make({
+                name,
+                success: Schema.Struct({ at: Schema.String, standing: ReviewStandingSchema }),
+                error: WorkflowError,
+                execute: Effect.gen(function* () {
+                  const at = (yield* host.evidence(runId, cwd)).final.head_sha;
+                  const read = host.awaitReview({
+                    runId,
+                    cwd,
+                    proved: at,
+                    seen: [],
+                    whileConflicting: true,
+                    returnConflicts: true,
+                  });
+                  let standing = yield* read;
+                  // A plain push can reach git before the forge's head and mergeability read.
+                  // Give an advanced local head a short visibility window before parking or fixing again.
+                  for (
+                    let poll = 0;
+                    previous !== null &&
+                    at !== previous &&
+                    standing._tag === "Conflicting" &&
+                    poll < 3;
+                    poll++
+                  ) {
+                    yield* Effect.sleep("2 seconds");
+                    standing = yield* read;
+                  }
+                  if (standing._tag === "Held")
+                    return yield* Workflow.suspend(yield* WorkflowInstance);
+                  // Leave this read unfinished when parking: resume must read the forge again.
+                  if (standing._tag === "Conflicting") {
+                    if (standing.head === previous)
+                      return yield* park(
+                        `${mr} still conflicts with its target after fix-${fixes}; its remote head did not advance from ${short(standing.head)}`,
+                      );
+                    if (round >= ROUNDS)
+                      return yield* park(
+                        `${mr} still conflicts with its target after ${ROUNDS} repair rounds at ${short(standing.head)}`,
+                      );
+                  }
+                  return { at, standing };
+                }),
+              });
+              yield* gone(standing);
+              if (standing._tag !== "Conflicting") {
+                yield* moveTo(
+                  `${name}.fast-forward`,
+                  standing._tag === "Moved" ? standing.head : at,
+                );
+                return n;
+              }
+              const branches = yield* Activity.make({
+                name: `${name}.target`,
+                success: Schema.Struct({ source: Schema.String, target: Schema.String }),
+                error: WorkflowError,
+                execute: Effect.gen(function* () {
+                  const read = yield* host.readMergeRequest({ cwd, mr });
+                  if (read._tag === "Unreadable")
+                    return yield* park(`Cannot read ${mr}'s conflict target: ${read.why}`);
+                  if (
+                    !["open", "opened", "draft"].includes(read.state) ||
+                    read.source === "" ||
+                    read.target === ""
+                  )
+                    return yield* park(
+                      `Cannot repair ${mr}'s conflict: its open source and target branches could not be confirmed`,
+                    );
+                  return { source: read.source, target: read.target };
+                }),
+              });
+              // Validate the owned checkout before giving any current source head to the fixer.
+              yield* moveTo(`${name}.fast-forward`, standing.head, branches.source);
+              previous = standing.head;
+              yield* fixRound(
+                [
+                  {
+                    severity: "blocker",
+                    title: "The merge request conflicts with its target branch",
+                    detail: `The forge confirms a target conflict at ${standing.head}. Its source branch is ${branches.source}; its actual target branch is ${branches.target}. Fetch and merge the current target into this source branch, resolve the conflict preserving both branches' work, and commit and plain-push the repair. Confirm the target on the forge before working; do not assume the repository's default branch. Collie must read the pushed head and prove its checks before a new release go.`,
+                  },
+                ],
+                round + 1,
+              );
+            }
           });
         /**
          * The head proved by the checks, after as many fix rounds as it takes, up to ROUNDS.
-         * A merge request conflicting with its target has no pipeline to prove, so no head is
-         * taken or checked while it conflicts.
+         * A confirmed target conflict goes to the fixer before any checks; only the repaired,
+         * pushed head is proved. An unchanged remote head or exhausted repair bound parks.
          */
         const proving = (
           name: string,
@@ -925,6 +1183,7 @@ export default defineWorkflow({
               proved,
               seen: [],
               untilBlocked,
+              returnConflicts: true,
             });
             if (standing._tag === "Held") return yield* Workflow.suspend(yield* WorkflowInstance);
             return standing;
@@ -1032,7 +1291,7 @@ export default defineWorkflow({
           if (!shared && askedAt !== proved) yield* offerShare(waits);
           const standing = yield* reviewWait(awaited(waits, proved));
           yield* gone(standing);
-          if (standing._tag === "Moved") {
+          if (standing._tag === "Moved" || standing._tag === "Conflicting") {
             proved = yield* proveHead(proving(`checks.${waits}`, null));
             continue;
           }
@@ -1110,11 +1369,26 @@ export default defineWorkflow({
           const head = standing.head;
           const approvers = Arr.join(standing.approvers, ", ") || "nobody the forge names";
           const answer = yield* mergeGo(
-            ask({
-              name: `go-${gos}`,
-              prompt: `Release ${mr} at ${short(head)}, approved by ${approvers}? ${offered} Finish leaves it open.`,
-              options: Arr.map([...goes, GO.finish], (id, at) => ({ id, recommended: at === 0 })),
-            }),
+            given !== null && holdsFor(given, standing)
+              ? Activity.make({
+                  name: `go-${gos}.given`,
+                  success: Schema.String,
+                  execute: host
+                    .record(
+                      runId,
+                      `go ${gos}: the human's Release at ${short(head)} is the go, so nobody was asked`,
+                    )
+                    .pipe(Effect.as(goes[0] ?? GO.finish)),
+                })
+              : ask({
+                  name: `go-${gos}`,
+                  shipping: { action: goes[0] === GO.test ? "stage" : "merge", head },
+                  prompt: `Release ${mr} at ${short(head)}, approved by ${approvers}? ${offered} Finish leaves it open.`,
+                  options: Arr.map([...goes, GO.finish], (id, at) => ({
+                    id,
+                    recommended: at === 0,
+                  })),
+                }),
             { round: gos },
           );
           if (answer === GO.finish) {
@@ -1236,6 +1510,7 @@ export default defineWorkflow({
               Effect.gen(function* () {
                 const go = yield* ask({
                   name: nth("production", n),
+                  shipping: { action: "deploy", head },
                   prompt: `Stage carries ${mr} at \`${short(head)}\` for testing, unmerged: ${plays(tested.jobs)}. Test it there, then: ${PRODUCTION.send} merges it at that head, tags it and plays production with no further question; ${PRODUCTION.leave} merges and tags it, and waits until production carries it, whoever plays it; ${GO.finish} merges nothing and rolls stage back.`,
                   options: [
                     { id: PRODUCTION.send, recommended: true },
@@ -1324,6 +1599,22 @@ export default defineWorkflow({
 
       const released = `${mr} merged at ${landed.sha}`;
       const giveBack = landed.slugs.length === 0 ? Effect.void : host.release(runId);
+      if (asked.merge_only === true) {
+        yield* giveBack;
+        return released;
+      }
+      const readTag = (options: Parameters<typeof host.readTag>[0]) =>
+        Effect.gen(function* () {
+          let read = yield* host.readTag(options);
+          if (read._tag === "Unproved" || read._tag === "StageFailed") return read;
+          for (const merged of tagMerges) {
+            if (merged === options.merged) continue;
+            const included = yield* host.readTag({ ...options, merged });
+            if (included._tag === "Unproved" || included._tag === "StageFailed") return included;
+            if (included._tag === "Proved") read = included;
+          }
+          return read;
+        });
       if (assessed.is_package) {
         const tagged = yield* tag(
           Effect.gen(function* () {
@@ -1339,7 +1630,7 @@ export default defineWorkflow({
             const read = yield* Activity.make({
               name: "read-tag",
               success: TagReadSchema,
-              execute: host.readTag({
+              execute: readTag({
                 runId,
                 cwd,
                 tag: tagged.tag,
@@ -1377,7 +1668,7 @@ export default defineWorkflow({
           const read = yield* Activity.make({
             name: "read-tag",
             success: TagReadSchema,
-            execute: host.readTag({
+            execute: readTag({
               runId,
               cwd,
               tag: staged.tag,
@@ -1427,6 +1718,7 @@ export default defineWorkflow({
             (yield* productionGo(
               ask({
                 name: "production",
+                shipping: { action: "deploy", tag: staged.tag },
                 prompt: `${staged.tag} of ${mr} is on stage: stage carries \`${short(landed.sha)}\`. Verify stage, then: ${PRODUCTION.send} plays ${plays(jobs)}; ${PRODUCTION.leave} waits until production carries it, whoever plays it.`,
                 options: [{ id: PRODUCTION.send, recommended: true }, PRODUCTION.leave],
               }),
@@ -1439,14 +1731,22 @@ export default defineWorkflow({
             const now = yield* Activity.make({
               name: "production.read",
               success: ProductionReadSchema,
-              execute: host.readProduction({
-                runId,
-                cwd,
-                tag: staged.tag,
-                at: read.at,
-                merged: landed.sha,
-                pipeline: pipeline ?? "",
-                jobs: Arr.map(jobs, (job) => job.name),
+              execute: Effect.gen(function* () {
+                let pending: typeof ProductionReadSchema.Type = { _tag: "Carried" };
+                for (const merged of tagOnly ? tagMerges : [landed.sha]) {
+                  const now = yield* host.readProduction({
+                    runId,
+                    cwd,
+                    tag: staged.tag,
+                    at: read.at,
+                    merged,
+                    pipeline: pipeline ?? "",
+                    jobs: Arr.map(jobs, (job) => job.name),
+                  });
+                  if (now._tag === "Unproved") return now;
+                  if (now._tag === "Play") pending = now;
+                }
+                return pending;
               }),
             });
             if (now._tag === "Unproved")
@@ -1470,16 +1770,18 @@ export default defineWorkflow({
               );
           }
           // The forge decides when production carries the merge, never an Output.
-          const carried = yield* host.awaitProduction({
-            runId,
-            cwd,
-            sha: landed.sha,
-            jobs,
-            played,
-            url,
-            slug: landed.slugs.length === 0 ? undefined : Arr.join(landed.slugs, ", "),
-          });
-          if (!carried) return yield* Workflow.suspend(yield* WorkflowInstance);
+          for (const sha of tagOnly ? tagMerges : [landed.sha]) {
+            const carried = yield* host.awaitProduction({
+              runId,
+              cwd,
+              sha,
+              jobs,
+              played,
+              url,
+              slug: landed.slugs.length === 0 ? undefined : Arr.join(landed.slugs, ", "),
+            });
+            if (!carried) return yield* Workflow.suspend(yield* WorkflowInstance);
+          }
         }),
       );
       yield* giveBack;

@@ -19,6 +19,8 @@ If you changed code in a repository and no checks are named for this run, name t
 that prove the change: `collie run intent verification {{run.id}} --name <name> -- <command>`,
 once per check. Collie runs them when the run ends and shows what they said.
 
+{{measure}}
+
 Then write your Output: a `summary` of what you did or found, and `blocked` only where
 something stopped you from finishing.
 

@@ -13,7 +13,7 @@ import { Rig, type RigError } from "../support/recorder";
 import { installBaseline } from "../support/engine";
 import { runEffect } from "../support/effect";
 import { FakeBin } from "../support/bin";
-import { forgeHttpOnPath, forgeHttpOver } from "../support/forge";
+import { forgeHttpOnPath, forgeHttpOver, storedAnswers } from "../support/forge";
 import { appState, type ControlSession } from "../../src/flows";
 import { shell } from "../../src/mr";
 import { mrDetails } from "../../src/forge/gitlab";
@@ -22,8 +22,11 @@ import { scopeFor } from "../../src/registry";
 import type { RunFacts } from "../../src/runs";
 import { madeRun } from "../support/records";
 import { recordDisposition } from "../../src/disposition";
-import { MERGE_POLL_MS, mrOf, watchedMr, writeMrStates, type MrPanels } from "../../src/merges";
+import { MERGE_POLL_MS, mrOf, watchedMr, type MrPanels } from "../../src/merges";
 import { focus } from "../support/focus";
+import { runDetail } from "../support/run-detail";
+import { task } from "../support/task";
+import { appendDrift } from "../../src/drift";
 
 let rig: Rig;
 /** The Runs the host would list, newest first. */
@@ -162,7 +165,7 @@ const seedMany = Effect.fn("fetching.seedMany")(function* (count: number) {
   }
   // And in production, as far as a merge can go: the watch that follows a merged card to
   // its deploy jobs has nothing left to ask about these either.
-  yield* writeMrStates(
+  yield* storedAnswers(
     env.stateDir,
     new Map(Arr.map(ids, (_, at) => [`g/p!${at + 1}`, "in-prod"])),
   );
@@ -257,12 +260,29 @@ effectTest("a card outside the legacy lists still fills its own record", functio
   // list holds, and its record used to come back as the whole Herd's evidence.
   const ids = yield* seedMany(8);
   const oldest = ids[0]!;
-  const state = yield* app().load(focus({ selected: `run:${oldest}` }));
+  const run = Option.getOrThrow(Arr.findFirst(runs, (one) => one.id === oldest));
+  yield* appendDrift(run.dir, {
+    id: "oldest-drift",
+    run: oldest,
+    at: run.created,
+    intent_version: 1,
+    constraint: "keep this older Run's evidence visible",
+    kind: "rule",
+    severity: "warn",
+    evidence: [],
+    evidence_truncated: false,
+    resolution: "open",
+  });
+  const detail = runDetail({ id: oldest, dir: run.dir, title: "The oldest Run's record" });
+  const source = session();
+  source.tasksOf = () =>
+    Effect.succeed({ tasks: [task({ run: oldest, runs: [oldest] })], unreadable: null });
+  source.detailOf = (key) => Effect.succeed(key?.runId === oldest ? detail : null);
+  const state = yield* appState(source, rig.pluginEnv()).load(focus({ selected: `run:${oldest}` }));
 
-  expect(Arr.map([...state.board.active, ...state.board.recent], (r) => r.id)).not.toContain(
-    oldest,
-  );
+  expect(state.detail).toEqual(detail);
   expect(state.live?.run).toBe(oldest);
+  expect(Arr.map(state.live?.drift ?? [], (one) => one.id)).toEqual(["oldest-drift"]);
 });
 
 effectTest("the merge request a Run opened is the one its record details", function* () {

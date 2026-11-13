@@ -59,11 +59,18 @@ here are in [`src/README.md`](src/README.md).
   `src/lifecycle.ts`, `test/machines-core.test.ts`.
 - **Desktop**, its Flock chat, record and Diff tab → [`desktop/README.md`](desktop/README.md),
   [`docs/using.md`](docs/using.md#collie-desktop), `test/desktop-*.test.ts`, `test/flock-*.test.ts`.
+- **Native desktop, bundle and update cutover** → [`desktop-rune/README.md`](desktop-rune/README.md),
+  [cutover ADR](docs/adr/0067-collie-replaces-the-webview-desktop-in-place.md),
+  `desktop-rune/scripts/bundle.ts`, `desktop-rune/update/`, `tools/rune-types.ts`,
+  `tools/rune-fixtures.ts`, `test/rune-types.test.ts`, `test/rune-contract.test.ts`.
 - **Agent launch profile** → [ADR-0060](docs/adr/0060-a-managed-agent-runs-with-the-operators-profile.md),
   [`docs/using.md`](docs/using.md#what-collies-agents-get), `src/profile.ts`, `src/agents.ts`,
   `test/profile.test.ts`, `test/agents.test.ts`.
 - **Attachments** → [ADR-0046](docs/adr/0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md),
-  `src/attachments.ts`, `src/uploads.ts`, `src/host-files.ts`, `test/attachments.test.ts`, `test/host-files.test.ts`.
+  `src/attachments.ts`, `src/uploads.ts`, `src/host-files.ts`, `test/attachments.test.ts`, `test/host-files.test.ts`;
+  a file pasted or dropped on a pane: [ADR-0065](docs/adr/0065-a-file-given-to-a-pane-is-placed-on-its-machine.md),
+  `placeStaged` in `desktop/src/bun/carried.ts`, `desktop-rune/board/src/shell/files.rs`,
+  `test/desktop-place-files.test.ts`, `desktop-rune/board/tests/pane_files.rs`.
 - **Usage, fallbacks** → [ADR-0049](docs/adr/0049-work-goes-to-an-agent-with-usage-left.md),
   [`docs/using.md`](docs/using.md#usage), `src/usage-model.ts`, `src/usage.ts`, `src/commands/usage.ts`,
   `resolveWithRoom` in `src/harness.ts`, `choose` in `src/agents.ts`, `test/usage-model.test.ts`,
@@ -82,6 +89,10 @@ here are in [`src/README.md`](src/README.md).
   [`docs/using.md`](docs/using.md#self-improve), `workflows/self-improve.workflow.ts`,
   `workflows/retrospective.ts`, `personas/retrospective.md`, `test/support/baseline.ts`.
   Its triage uses the installed `retro` skill.
+- **Parks, recovery, the Heal** → [ADR-draft-a-run-recovers-where-it-parks](docs/adr/draft-a-run-recovers-where-it-parks.md),
+  [`docs/cli.md`](docs/cli.md#stop-and-resume), `src/park-cause.ts`, `src/park-recovery.ts`,
+  `src/heal.ts`, `healerBound` in `src/host.ts`, `workflows/heal.workflow.ts`,
+  `test/recovery.test.ts`, `test/heal.test.ts`.
 - **Settings** → [ADR-0043](docs/adr/0043-a-shared-setting-is-its-latest-edit.md), `src/settings.ts`,
   `setSetting` and `takeShared` in `src/config.ts`. The user Layer's files are shared by the same rule:
   [ADR-0061](docs/adr/0061-a-users-definitions-are-the-flocks.md),
@@ -164,6 +175,7 @@ here are in [`src/README.md`](src/README.md).
   [ADR-0055](docs/adr/0055-a-run-never-asks-to-run-its-checks.md),
   [`docs/sdk.md`](docs/sdk.md#reviewing-and-fixing-until-it-converges), `settleRound`, `test/rally.test.ts`.
 - **Lists of work, slices, fan-out** → [ADR-0024](docs/adr/0024-a-list-of-work-is-known-by-its-names.md),
+  waiting on another Run's Change: [ADR-draft-a-change-waits-on-another-runs-change-to-merge](docs/adr/draft-a-change-waits-on-another-runs-change-to-merge.md),
   [`docs/sdk.md`](docs/sdk.md#a-list-of-work-one-item-at-a-time), `src/slices.ts`, `src/plan.ts`, `test/listing.test.ts`.
 - **Cards, offers** → [ADR-0025](docs/adr/0025-a-card-is-facts-and-an-offer-is-a-declaration.md),
   [`docs/sdk.md`](docs/sdk.md#what-a-definition-declares), `src/standing.ts`, `src/offers.ts`, `src/cards.ts`,

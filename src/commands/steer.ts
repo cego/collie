@@ -156,7 +156,12 @@ export const runDeliveries = Command.make(
             human:
               Arr.join(
                 Arr.map(mine, (e) =>
-                  Str.trimEnd(Arr.join([e.id, e.state, e.cause.kind, e.note ?? ""], "\t")),
+                  Str.trimEnd(
+                    Arr.join(
+                      [e.id, e.state, e.cause.kind, e.note ?? "", e.workflowNotice ?? ""],
+                      "\t",
+                    ),
+                  ),
                 ),
                 "\n",
               ) || "Nothing has been sent to this Run's agents.",

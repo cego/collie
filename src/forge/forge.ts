@@ -19,6 +19,7 @@ import type { ForgeComment, MergeAnswer, ReviewRead } from "./review";
 
 export interface Readiness {
   readonly ok: boolean;
+  readonly cause?: "login-missing" | "forge-unavailable";
   /** Why not, phrased for the runner's skip note. */
   readonly reason: string;
 }
@@ -185,7 +186,7 @@ export interface Forge {
     project: string | null,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<Readiness, never, R>;
+  ) => Effect.Effect<Readiness, never, R | ForgeHttp>;
   /** Who the CLI is logged in as, or null where it will not say. */
   readonly login: <R>(
     cwd: string,

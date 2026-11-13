@@ -47,8 +47,13 @@ A Run whose tree is back to its base tree, every change reverted, ends without a
 with its findings, not failed.
 
 **D4. Base and candidate share a Machine and a harness.** The base tree is a detached
-worktree Collie makes at the base commit, with the Run's harness-only commits applied on
-top. It is Collie's to clean up ([ADR-0045](0045-collie-removes-what-it-made-once-nothing-needs-it.md)).
+worktree Collie makes at the base commit, with the Run's harness-only commits it lacks
+applied on top. Content decides what it lacks, not ancestry: the commits after the longest
+run of them whose files the base holds exactly as they left them. So a base that holds the
+harness, as a Cycle's starting head does, is measured as it is, whether it holds the
+original commits or copies under other SHAs (a `from` follow-up's carried harness, a rebase,
+a squash). A base whose harness files differ from every such state gets every commit, and is
+refused where they do not apply, rather than measured with a harness the plan never wrote. It is Collie's to clean up ([ADR-0045](0045-collie-removes-what-it-made-once-nothing-needs-it.md)).
 Measurements on different Machines are never compared. Only one Measurement runs on a
 Machine at a time. Others wait, and say so, while no other work does. A Measurement waits
 while its Machine is **Short of memory**, like a Check.
@@ -66,7 +71,8 @@ The host decides from the candidate's checkout:
 - **Every harness path exists:** the candidate carries the harness and is sampled in its
   own checkout, as before.
 - **None exists:** the host samples it in a scratch worktree at the candidate's head with
-  the harness commits cherry-picked onto it, exactly as it makes the base tree. The checkout
+  every harness commit cherry-picked onto it, although its history contains them, because
+  cleanup removed their content in commits of its own. The checkout
   is left as it was.
 - **Some but not all exist:** the candidate is refused, naming the missing paths.
 - **The candidate has uncommitted work and no harness:** it is refused, because a scratch
