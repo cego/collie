@@ -403,17 +403,22 @@ const make = Effect.gen(function* () {
           };
     const external = url !== undefined || provider !== undefined;
     const ref =
-      provider?.resource != null
-        ? `provider:${Arr.join(
-            Arr.map(
-              [provider.name, provider.namespace ?? "", provider.resource],
-              encodeURIComponent,
-            ),
-            ":",
-          )}`
-        : url !== undefined
-          ? `url:${url}`
-          : `registered:${source}`;
+      named !== undefined &&
+      source === (named.export?.source ?? named.source) &&
+      url === named.url &&
+      provider === named.provider
+        ? named.ref
+        : provider?.resource != null
+          ? `provider:${Arr.join(
+              Arr.map(
+                [provider.name, provider.namespace ?? "", provider.resource],
+                encodeURIComponent,
+              ),
+              ":",
+            )}`
+          : url !== undefined
+            ? `url:${url}`
+            : `registered:${source}`;
     const prior = named ?? Option.getOrUndefined(Arr.findFirst(items, (one) => one.ref === ref));
     if (Arr.some(items, (one) => one.ref === ref && prior !== undefined && one.id !== prior.id))
       return yield* refused("This source already belongs to another artefact");
@@ -655,11 +660,12 @@ const make = Effect.gen(function* () {
           const revision =
             prior === undefined ? 1 : prior.revision + (prior.digest === digest ? 0 : 1);
           const item: Artefact = {
+            ...prior,
             id: prior?.id ?? (yield* random.uuidV4()),
             run: run.id,
-            kind: "file",
-            role,
-            title: name,
+            kind: prior?.kind ?? "file",
+            role: prior?.role ?? role,
+            title: prior?.title ?? name,
             ref,
             source,
             mediaType: mediaTypeOf(name),
