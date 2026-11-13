@@ -1408,8 +1408,13 @@ anything on another Run. Its resume applies only while the Run is still at the p
 Heal was started for and neither it nor a Run under it has a Stop, checked as one change with any Stop. It returns `{ diagnosis, actions, result, needs_person, finding }`,
 where `result` is `resumed` or `escalate`, `needs_person` says why only a person can move
 the Run and is required with `escalate`, and `finding` is required: `collie_defect`, `key`,
-`root_cause`, `fix` and `regression`, stated for everyone who runs Collie. An Output without
-a finding, or an escalation without `needs_person`, is sent back for repair. The host judges the parked Run's facts, never `result`.
+`root_cause`, `fix`, `regression`, `title`, `observed`, `expected` and `issue`, stated for
+everyone who runs Collie. Before it starts, its healer is given Collie's open issues on
+github.com/cego/collie, and `issue` names the one, open or closed, about the same cause
+whatever its key, or is `null`. An Output without a finding, or an escalation without
+`needs_person`, is sent back for repair. The host judges the parked Run's facts, never
+`result`, and files the finding on Collie's repository
+([Stop and resume](cli.md#stop-and-resume)).
 
 The host finds it by its declaration, `heals: true`, never by its id; a project's fork that
 declares it replaces the shipped one.

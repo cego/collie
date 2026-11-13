@@ -1047,6 +1047,23 @@ row raise the same `recovery-failing:<machine>` News. The claim, start and judge
 `healed` recovery lines under one `recoveryId`, so a restarted host neither starts a second
 Heal for the park nor loses one.
 
+A judged Heal whose finding says `collie_defect` is reported on Collie's own repository,
+github.com/cego/collie, whatever project the parked Run is in, by the host with its
+GitHub login. The issue the healer named, else an open issue carrying the key's
+`<!-- collie-finding: <key> -->` marker, else the issue this Machine already reported the
+key to, is linked; a key new to that issue adds one comment with its marker. Otherwise a new
+issue is filed with the healer's observation apart from its diagnosis, proposed fix and
+regression, Collie's judgement, the build and the Run ids. Issue text is redacted and
+checked like any Run's. A `false-recovery` Heal's finding, or one without its key, root
+cause, fix or regression, is not filed. Each attempt is a `report` line in the parked Run's
+`collie run metrics`, with its `publication` and the `issue` URL: `filed`, `linked`,
+`not-filed` with why, `refused` (no login, an outage: nothing was sent) or `uncertain` (a
+write whose answer was lost). `refused` and `uncertain` are tried again, from a minute
+apart up to an hour, and on a host's restart; every attempt lists the open issues first, so
+a filing that did land is linked rather than filed twice. Reporting runs beside recovery,
+three a round, and never holds it up. Findings kept from before a host could report them
+are reported the same way, and their Outputs are left as they were.
+
 A finished execution keeps its recorded result; `resume` does not reopen its steps. Use
 the Run's follow-up action to continue unfinished work on the same Task and branch.
 
