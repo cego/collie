@@ -154,6 +154,8 @@ const retain = Effect.fn("Artefacts.retain")(function* (
   const path = yield* Path.Path;
   const random = yield* SecureRandom.SecureRandom;
   const [base, real] = yield* Effect.all([fs.realPath(root), fs.realPath(source)]);
+  const state = yield* fs.realPath(path.resolve(run.dir, "../.."));
+  const uploaded = Str.startsWith(`${path.join(state, "uploads")}${path.sep}`)(real);
   if (!Str.startsWith(`${base}${path.sep}`)(real))
     return yield* refused("The source leaves its source directory");
   yield* fs.access(real, { readable: true });
@@ -188,12 +190,13 @@ const retain = Effect.fn("Artefacts.retain")(function* (
     digest,
     size: bytes.length,
     created:
-      Option.isSome(before.birthtime) && before.birthtime.value.getTime() > 0
+      !uploaded && Option.isSome(before.birthtime) && before.birthtime.value.getTime() > 0
         ? { at: before.birthtime.value.toISOString(), provenance: "filesystem-birthtime" }
         : null,
-    updated: Option.isSome(before.mtime)
-      ? { at: before.mtime.value.toISOString(), provenance: "filesystem-mtime" }
-      : null,
+    updated:
+      !uploaded && Option.isSome(before.mtime)
+        ? { at: before.mtime.value.toISOString(), provenance: "filesystem-mtime" }
+        : null,
   };
 });
 

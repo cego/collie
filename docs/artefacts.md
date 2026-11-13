@@ -94,6 +94,8 @@ A file on the Run's Machine is **tracked**: its host checks it again about every
 seconds, with no Desktop open, and keeps a new revision whenever its bytes change, even
 when size and modification time do not. Unchanged bytes keep the revision. A file sent
 from another computer is a **retained snapshot**: it is copied once, never followed.
+Its original source dates remain unknown unless supplied as caller-reported observations.
+The temporary upload's filesystem dates describe the transfer, not the original file.
 
 The same source path registers one artefact, so a retry or a second request finds it.
 Different paths stay different artefacts, even with equal names or bytes. Registration

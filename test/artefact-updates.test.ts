@@ -2,6 +2,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import * as Arr from "effect/Array";
 import { Artefacts } from "../src/artefacts";
+import { sha256Hex } from "../src/attachments";
+import { receive } from "../src/uploads";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
 import { madeRun } from "./support/records";
@@ -16,6 +18,53 @@ beforeEach(() =>
 );
 afterEach(() => runEffect(rig.close()));
 const actor = { origin: "cli", requestId: "update" } as const;
+
+test("transferred files and assets have unknown source dates unless the caller reports them", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const catalogue = yield* Artefacts;
+      const run = yield* madeRun(rig.stateDir);
+      for (const name of ["old.txt", "old.png"]) {
+        const original = `${rig.stateDir}/${name}`;
+        yield* fs.writeFileString(original, `old content of ${name}`);
+        yield* fs.utimes(original, 1_577_836_800, 1_577_836_800);
+        const bytes = yield* fs.readFile(original);
+        const sent = yield* receive(rig.stateDir, {
+          name,
+          size: bytes.length,
+          sha256: sha256Hex(bytes),
+          offset: 0,
+          content: Buffer.from(bytes).toString("base64"),
+        });
+        const first = yield* catalogue.register(
+          run,
+          "inst",
+          { path: sent.path!, snapshot: true },
+          name,
+          actor,
+        );
+        expect(first.item.created).toBeNull();
+        expect(first.item.updated).toBeNull();
+        expect(first.item.registeredAt).toBeTruthy();
+        const reported = yield* catalogue.register(
+          run,
+          "inst",
+          { id: first.item.id, created: "2019-01-01T00:00:00Z", updated: "2020-01-01T00:00:00Z" },
+          `dates-${name}`,
+          actor,
+        );
+        expect(reported.item.created).toEqual({
+          at: "2019-01-01T00:00:00.000Z",
+          provenance: "caller-reported",
+        });
+        expect(reported.item.updated).toEqual({
+          at: "2020-01-01T00:00:00.000Z",
+          provenance: "caller-reported",
+        });
+      }
+    }),
+  ));
 
 test("metadata updates keep snapshot bytes and tracking even after the source changes or disappears", () =>
   runEffect(
