@@ -50,7 +50,7 @@ export const passedOver = (facts: {
   readonly recoveries: ReadonlyArray<Metric>;
 }): string | null => {
   const entry = PARK_CAUSES[facts.cause];
-  if (entry.neverHeals === true)
+  if (entry.kind !== "asks-agent" && entry.neverHeals === true)
     return entry.kind === "needs-you"
       ? "only a person can act on its cause"
       : "only what its recheck reads can clear its cause";
