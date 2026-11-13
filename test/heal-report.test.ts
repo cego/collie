@@ -6,6 +6,7 @@ import { expect, test } from "bun:test";
 import {
   Config,
   ConfigProvider,
+  Deferred,
   Effect,
   Fiber,
   FileSystem,
@@ -17,10 +18,12 @@ import {
 import { connect } from "../src/host";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { runEffect } from "./support/effect";
-import { foundationLayer } from "../src/engine";
+import { foundationLayer, type RunView } from "../src/engine";
+import type { PlatformServices } from "../src/platform";
+import { healParks } from "../src/park-recovery";
 import { Host, type HostApi } from "../src/sdk";
 import { knownIn, pendingIn, report, type Pending } from "../src/heal-report";
-import type { HealFinding, Metric } from "../src/metrics";
+import { appendMetric, readMetrics, type HealFinding, type Metric } from "../src/metrics";
 import type { HealOutput } from "../src/heal";
 import { collie, proves, type World } from "./support/world";
 import { until } from "./support/host";
@@ -158,7 +161,8 @@ const onCollie = <A, E>(
   body: (
     host: HostApi,
     forge: Effect.Success<ReturnType<typeof forgeOnPath>>,
-  ) => Effect.Effect<A, E>,
+    rig: Rig,
+  ) => Effect.Effect<A, E, PlatformServices>,
 ) =>
   runEffect(
     Effect.gen(function* () {
@@ -176,7 +180,7 @@ const onCollie = <A, E>(
       });
       const api = yield* serveForges(forge);
       const placing = { herdr: new FakeHerdr(rig.pluginEnv()), env: rig.pluginEnv() };
-      return yield* Effect.flatMap(Host, (host) => body(host, forge)).pipe(
+      return yield* Effect.flatMap(Host, (host) => body(host, forge, rig)).pipe(
         Effect.provide(
           foundationLayer({ dir: rig.stateDir, userDir: rig.userDir, placing }).pipe(
             Layer.provideMerge(
@@ -347,6 +351,96 @@ const healedLine: Metric = {
   recoveryId: "heal:run-heal",
   finding: FINDING,
 };
+
+test("report retries keep distinct Heals without repeating refusals while judging is paused", () =>
+  onCollie({ loggedIn: [] }, (host, forge, rig) =>
+    Effect.gen(function* () {
+      const env = rig.pluginEnv();
+      const evidence = `${env.stateDir}/evidence/run-parked`;
+      for (const heal of ["run-heal", "run-heal-2"])
+        yield* appendMetric(evidence, { ...healedLine, heal, recoveryId: `heal:${heal}` });
+      const view: RunView = {
+        runId: "run-parked",
+        workflow: "any",
+        project: rig.projectDir,
+        task: null,
+        parent: null,
+        registration: "any@1",
+        entry: "any.workflow.ts",
+        input: {},
+        provenance: {},
+        strategies: {},
+        options: {},
+        cwd: rig.projectDir,
+        branch: null,
+        workspace: null,
+        worktree: null,
+        outcome: "feature",
+        created: healedLine.at,
+        status: { status: "suspended" },
+        waiting: [],
+        controls: [],
+        diagnostic: null,
+        parked: "unknown",
+        awaiting: null,
+        mr: null,
+        landing: null,
+      };
+      const paused = yield* Deferred.make<void>();
+      let snapshots = 0;
+      yield* Effect.forkScoped(
+        healParks({
+          env,
+          host,
+          herdr: new FakeHerdr(env),
+          views: Effect.suspend(() =>
+            snapshots++ === 0
+              ? Effect.succeed([view])
+              : Deferred.succeed(paused, undefined).pipe(Effect.andThen(Effect.never)),
+          ),
+          start: () => Effect.die("these Heals are already judged"),
+          notify: () => Effect.void,
+        }).pipe(
+          Effect.provide(
+            ConfigProvider.layerAdd(
+              ConfigProvider.fromUnknown({ COLLIE_RECOVERY_EVERY: "1 millis" }),
+            ),
+          ),
+        ),
+      );
+      yield* Deferred.await(paused);
+      yield* until(
+        () => forge.calls(),
+        (calls) => Arr.filter(calls, (one) => pipe(one, Str.includes("auth status"))).length >= 6,
+      );
+      expect(reportsOf(yield* readMetrics(evidence))).toEqual([
+        expect.objectContaining({ heal: "run-heal", publication: "refused" }),
+        expect.objectContaining({ heal: "run-heal-2", publication: "refused" }),
+      ]);
+      yield* forge.set({ ...(yield* forge.model()), loggedIn: ["github.com"] });
+      const settled = yield* until(
+        () => readMetrics(evidence),
+        (lines) =>
+          Arr.filter(lines, (line) => line.publication === "filed" || line.publication === "linked")
+            .length === 2,
+      );
+      const published = Arr.filter(
+        settled,
+        (line) => line.publication === "filed" || line.publication === "linked",
+      );
+      expect(reportsOf(settled)).toHaveLength(4);
+      expect(published).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ heal: "run-heal" }),
+          expect.objectContaining({ heal: "run-heal-2" }),
+        ]),
+      );
+      expect(Arr.map(published, (line) => line.publication)).toEqual(
+        expect.arrayContaining(["filed", "linked"]),
+      );
+      expect((yield* forge.model()).issues).toHaveLength(1);
+    }).pipe(Effect.scoped),
+  ));
 
 test("a refused or uncertain report stays pending, keeping the issue a lost comment went to, until one settles it", () => {
   expect(pendingIn("r", [healedLine, reportLine("refused")])).toHaveLength(1);
