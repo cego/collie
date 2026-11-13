@@ -32,10 +32,18 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
   readonly runDir: string;
   readonly cwd: string;
   readonly head: string;
+  readonly branch?: string;
   readonly run: Runner<R>;
 }) {
   const git = (args: string[]) => opts.run("git", args, opts.cwd);
   const refused = (why: string): FastForward => ({ _tag: "Refused", why });
+  if (opts.branch !== undefined) {
+    const branch = yield* git(["symbolic-ref", "--quiet", "--short", "HEAD"]);
+    if (branch.code !== 0 || Str.trim(branch.stdout) !== opts.branch)
+      return refused(
+        `the checkout at ${opts.cwd} is not on source branch ${opts.branch}; restore that branch before repairing its conflict`,
+      );
+  }
   const status = yield* git(["status", "--porcelain"]);
   const from = Str.trim((yield* git(["rev-parse", "HEAD"])).stdout);
   if (status.code !== 0 || from === "")
@@ -171,6 +179,8 @@ export const MergeRequestReadSchema = Schema.Union([
     state: Schema.String,
     source: Schema.String,
     target: Schema.String,
+    merged: Schema.optionalKey(Schema.String),
+    checkout: Schema.optionalKey(Schema.String),
     wave: Schema.optionalKey(PlanWaveSchema),
   }),
   Schema.TaggedStruct("Unreadable", { why: Schema.String }),
@@ -190,6 +200,7 @@ export const readMergeRequest = Effect.fn("Releasing.readMergeRequest")(function
     state: panel.state,
     source: panel.sourceBranch,
     target: panel.targetBranch,
+    merged: panel.mergedSha,
   } satisfies MergeRequestRead;
 });
 

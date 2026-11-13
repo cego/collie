@@ -35,6 +35,7 @@ import {
   sameFinding,
   forecast,
   panelOf,
+  remainingDisputes,
   settleRound,
   splitDisputed,
   step,
@@ -333,6 +334,7 @@ export default defineWorkflow({
           disputed,
           (one) => !Arr.some(resolved, (old) => sameFinding(old, one)),
         );
+        disputed = remainingDisputes(disputed, synthesis);
         const split = splitDisputed(synthesis.findings, disputed);
         const round = settleRound({
           live: split.live,

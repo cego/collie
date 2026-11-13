@@ -26,6 +26,7 @@ export const INPUT_STRATEGIES = [
   "diff-target",
   "flag",
   "optional",
+  "reach",
   "repository",
   // What `repository` was called; still read, as `repository` (ADR-0050 D9).
   "gitlab-repository",

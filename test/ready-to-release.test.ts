@@ -5,6 +5,7 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, Schema } from "effect";
+import { readyToRelease } from "../src/board-model";
 import { stopHost } from "./support/host";
 import { collie, proves } from "./support/world";
 
@@ -27,6 +28,32 @@ const Payload = Schema.Struct({
 });
 const payloadOf = (envelope: { readonly data?: unknown }) =>
   Schema.decodeUnknownEffect(Payload)(envelope.data).pipe(Effect.orDie);
+
+test("a stale approval refusal is settling until the forge answers again", () => {
+  const ready = readyToRelease({
+    now: 1_000_000,
+    read: 0,
+    head: "current-head",
+    readHead: "current-head",
+    succeeded: true,
+    mr: "https://gitlab.cego.dk/mk/support/-/merge_requests/279",
+    mrState: "open",
+    draft: false,
+    checks: { state: "passed", at: "current-head" },
+    ci: { state: "passed" },
+    blocking: 0,
+    mergeable: { state: "blocked", said: "not approved" },
+  });
+
+  expect(ready.ready).toBe(false);
+  expect(ready.missing).toEqual([
+    {
+      fact: "mergeable",
+      said: "the forge answer is stale, unreadable or not at the current head",
+      settling: true,
+    },
+  ]);
+});
 
 test(
   "a park whose status is still pending stops attention and needs-human, and show says it is not ready",

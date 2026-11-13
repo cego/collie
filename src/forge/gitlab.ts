@@ -35,7 +35,15 @@ import type {
   TagPipelineRead,
   Readiness,
 } from "./forge";
-import { ForgeHttp, pagesAs, request, requestAs, type Answered, type ForgeLogin } from "./http";
+import {
+  ForgeHttp,
+  loginReadiness,
+  pagesAs,
+  request,
+  requestAs,
+  type Answered,
+  type ForgeLogin,
+} from "./http";
 import {
   listIssues,
   createIssue,
@@ -287,17 +295,14 @@ export function gitlabForProject<R>(
   project: string | null,
   cwd: string,
   run: Runner<R>,
-): Effect.Effect<Readiness, never, R> {
+): Effect.Effect<Readiness, never, R | ForgeHttp> {
   return Effect.gen(function* () {
     const glab = yield* run("glab", ["--version"], cwd);
     if (glab.code !== 0) return { ok: false, reason: "glab is not installed" };
 
     const host = hostOf(project);
     if (!host) return { ok: true, reason: "" };
-    const auth = yield* run("glab", ["auth", "status", "--hostname", host], cwd);
-    return auth.code === 0
-      ? { ok: true, reason: "" }
-      : { ok: false, reason: `glab is not logged in to ${host}` };
+    return yield* loginReadiness(glabLoginTo(host), cwd, run);
   });
 }
 
@@ -930,7 +935,7 @@ function readReview(ref: MrRef, cwd: string): Effect.Effect<ReviewRead, never, F
     if (!mr.ok) return mr;
     const approved = yield* rest(ReviewApprovals, `${route}/approvals`);
     if (!approved.ok) return approved;
-    const approvers = Arr.map(approved.value.approved_by ?? [], (one) => one.user.username);
+    const listed = Arr.map(approved.value.approved_by ?? [], (one) => one.user.username);
     // Approval state is Premium's and Ultimate's; elsewhere the approvals read is one rule.
     const state = yield* rest(ApprovalState, `${route}/approval_state`);
     const rules = !state.ok
@@ -938,7 +943,7 @@ function readReview(ref: MrRef, cwd: string): Effect.Effect<ReviewRead, never, F
           {
             name: "the merge request",
             required: approved.value.approvals_required ?? 0,
-            by: approvers,
+            by: listed,
           },
         ]
       : Arr.map(state.value.rules, (rule) => ({
@@ -946,6 +951,9 @@ function readReview(ref: MrRef, cwd: string): Effect.Effect<ReviewRead, never, F
           required: rule.approvals_required,
           by: Arr.map(rule.approved_by ?? [], (one) => one.username),
         }));
+    // Names bound to a release go must come from the same snapshot as its required approvals.
+    const approvers =
+      state.ok && rules.length > 0 ? Arr.dedupe(Arr.flatMap(rules, (rule) => rule.by)) : listed;
     const comments: ForgeComment[] = [];
     const resolved = new Set<string>();
     const web = mr.value.web_url ?? mrWords(ref).url ?? "";

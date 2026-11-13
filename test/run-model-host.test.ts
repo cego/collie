@@ -199,7 +199,7 @@ test(
               Effect.catchDefect((defect) =>
                 Effect.die(
                   new Error(
-                    `${String(defect)}\nthe board: ${encodeJson(
+                    `${String(defect)}\nwaiting for: ${String(wanted)}\nthe board: ${encodeJson(
                       Arr.map([...board.values()], ({ runs, state, sentence, agents, checks }) => ({
                         runs,
                         state,
@@ -290,8 +290,13 @@ test(
           // A second connection, in another process, changes a Run's row.
           let mark = seen.length;
           let changed = changedFrom(store);
-          yield* elsewhere(world, "UPDATE collie_runs SET generation = ? WHERE run = ?", [
-            "unregistered",
+          yield* elsewhere(world, "UPDATE collie_runs SET checkout = ? WHERE run = ?", [
+            encodeJson({
+              cwd: world.project,
+              branch: "mk/from-store",
+              workspace: null,
+              worktree: null,
+            }),
             store,
           ]);
           yield* arrival(mark, changed);

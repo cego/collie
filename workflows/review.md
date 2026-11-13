@@ -76,7 +76,8 @@ worth raising; name the file it is about and say why the change puts it wrong.
 
 You may be the only reviewer of this change, in which case your review is the review the
 human reads: write `summary` — two sentences, what this change does and what is wrong with
-it — `dropped: []`, and, without a ledger, `fixed`: each finding of the review above that is gone, as
+it — `dropped`: findings you withdraw with a `reason`, or `[]` where there are none, and
+without a ledger, `fixed`: each finding of the review above that you verified was corrected, as
 `{"file": "path", "title": "its title", "note": "how it was fixed"}`, alongside the fields
 below. Write them whether or not anyone else is reviewing; they cost a line and they are
 what makes your review readable on its own.
@@ -85,10 +86,15 @@ Already disputed — the implementer looked at these and did not apply them, wit
 
 {{disputed}}
 
-Do not raise one of those again unless you can answer the reason it was disputed. If you
-can, raise it with a `"rebuttal"` saying why that reason does not hold; that puts it back
-in front of the implementer. If you cannot, leave it alone — it is the human's call now,
-not another round's.
+Check the disputed reason against the code, requirements and recorded decisions. If it
+holds, withdraw the finding under `dropped` with its exact file and title and a `reason`
+explaining why you accept it. If the finding has since been corrected, record it under
+`fixed`. If the reason does not hold, raise the finding with a `rebuttal` that answers it;
+that puts it back in front of the implementer. If you cannot decide, keep it under
+`disputed` for the human. An omitted finding or a clean verdict alone does not settle a
+dispute. A finding still in `findings` or `disputed` remains unresolved even if you also
+list it as dropped or fixed, unless its ledger status is `fixed` or `obsolete`.
+With a ledger, retain withdrawals as `obsolete` with their reason and verified corrections as `fixed`.
 
 The checks already recorded for this Run, the latest of each — `by collie` is one Collie
 ran itself, `by agent` one an agent ran through the collector:
@@ -163,6 +169,16 @@ gets — the review a careful colleague would leave on it.
 When a ledger is supplied, reconcile every earlier id into `findings` with its current
 `status` (`open`, `fixed`, `disputed`, or `obsolete`), plus any new findings. Keep resolved
 findings in the ledger. Code made irrelevant by a force push is `obsolete`, not `fixed`.
+Retain withdrawals as `obsolete` with their reason and verified corrections as `fixed`.
+
+The implementer's carried disputes are:
+
+{{disputed}}
+
+Account for each: keep it unresolved, verify a correction under `fixed`, or accept the
+reason under `dropped` with the same file and title and your reason. Read the reviewers'
+withdrawals and the target before accepting one. A clean verdict or omission alone does
+not settle a dispute; do not list an accepted dispute under `disputed` as well.
 
 Where a review of this target appears above without a ledger, every finding it raised is accounted for:
 carried with its own words if it is still there, or listed under `fixed` if it is not.
@@ -216,7 +232,7 @@ This is fix round {{iteration}} of at most {{max_iterations}}. The findings to a
 
 {{findings}}
 
-Already disputed, and the human's to settle rather than yours to redo:
+Already disputed, for the next review to reconsider against your reason:
 
 {{disputed}}
 

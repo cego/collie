@@ -159,7 +159,10 @@ test(
             () => client.run({ runId: absent.runId }),
             (one) => one?.status.status === "complete" || one?.status.status === "failed",
           );
-          expect(skipped?.status).toEqual({ status: "complete", value: "continued:absent" });
+          expect(skipped?.status).toEqual({
+            status: "complete",
+            value: "continued:absent",
+          });
           expect(calls).toEqual([]);
           yield* fs.writeFileString(
             `${world.project}/.mcp.json`,
@@ -170,7 +173,10 @@ test(
             () => client.run({ runId: connected.runId }),
             (one) => one?.status.status === "complete",
           );
-          expect(filed?.status).toEqual({ status: "complete", value: "continued:ok" });
+          expect(filed?.status).toEqual({
+            status: "complete",
+            value: "continued:ok",
+          });
           expect(calls).toEqual(["filed"]);
         }),
       ["connection-step.workflow.ts"],
@@ -220,7 +226,10 @@ test(
             () => recovered.run({ runId: started.runId }),
             (one) => one?.status.status === "complete" || one?.status.status === "failed",
           );
-          expect(done?.status).toEqual({ status: "complete", value: "continued:absent" });
+          expect(done?.status).toEqual({
+            status: "complete",
+            value: "continued:absent",
+          });
         }),
       ["connection-step.workflow.ts"],
     ),
@@ -308,7 +317,7 @@ test(
 );
 
 test(
-  "an offer is hidden while its provider's used Connection is absent and checked again at invocation",
+  "an offer is listed with the reason its provider's used Connection is absent, and refused with it at invocation",
   () =>
     hosted(
       "connections-offers-",
@@ -326,16 +335,32 @@ test(
             () => client.run({ runId: started.runId }),
             (one) => one?.status.status === "complete",
           );
-          expect(Arr.map(yield* client.offers({ runId: started.runId }), (one) => one.id)).toEqual([
-            "local",
-          ]);
+          const listed = yield* client.offers({ runId: started.runId });
+          expect(Arr.map(listed, (one) => one.id)).toEqual(["file", "local"]);
+          const absent = listed[0]?.unavailable ?? "";
+          expect(absent).toStartWith("needs linear: ");
+          expect(absent).toContain("Fix: ");
+          const refused = yield* client
+            .invoke({
+              runId: started.runId,
+              offer: "file",
+              input: {},
+              request: "absent",
+            })
+            .pipe(Effect.flip);
+          expect(refused.reason).toContain(absent);
           yield* fs.writeFileString(
             `${world.project}/.mcp.json`,
             '{"mcpServers":{"linear":{"url":"https://mcp.linear.app/mcp"}}}',
           );
-          expect(Arr.map(yield* client.offers({ runId: started.runId }), (one) => one.id)).toEqual([
-            "file",
-            "local",
+          expect(
+            Arr.map(yield* client.offers({ runId: started.runId }), (one) => [
+              one.id,
+              one.unavailable,
+            ]),
+          ).toEqual([
+            ["file", null],
+            ["local", null],
           ]);
           yield* fs.remove(`${world.project}/.mcp.json`);
           const invoked = yield* client
@@ -348,7 +373,12 @@ test(
             .pipe(Effect.result);
           expect(invoked._tag).toBe("Failure");
           const required = yield* client
-            .invoke({ runId: started.runId, offer: "local", input: {}, request: "needs-helle" })
+            .invoke({
+              runId: started.runId,
+              offer: "local",
+              input: {},
+              request: "needs-helle",
+            })
             .pipe(Effect.result);
           expect(required._tag).toBe("Failure");
           if (required._tag === "Failure")

@@ -959,6 +959,15 @@ const machineField = (
     : Result.succeed(found.machine);
 };
 
+/** `ref` with `<machine>:<run>` words bare: herdr names a Machine as its host may not. */
+const refOn = (ref: string, machine: string) =>
+  Arr.join(
+    Arr.map(Str.split(ref, /([\s;,]+)/), (part) =>
+      pipe(part, Str.startsWith(`${machine}:`)) ? pipe(part, Str.slice(machine.length + 1)) : part,
+    ),
+    "",
+  );
+
 interface Localized {
   /** Null for an action that names no Machine. */
   readonly machine: ChatMachine | null;
@@ -1024,7 +1033,10 @@ const placeOne = Effect.fnUntraced(function* (
         );
   return Result.map(where, ({ machine, id }) => ({
     machine,
-    action: { ...action, [about.field]: id },
+    action:
+      kind === "disposition" && isString(action.ref)
+        ? { ...action, [about.field]: id, ref: refOn(action.ref, machine.name) }
+        : { ...action, [about.field]: id },
   }));
 });
 

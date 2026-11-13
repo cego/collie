@@ -420,6 +420,28 @@ test("a Run named with its Machine goes to that Machine", () =>
     }),
   ));
 
+test("a disposition's ref naming a Run on the Machine it goes to reaches that host by the bare id", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      yield* call(asked, "collie_do", {
+        actions: [
+          {
+            kind: "disposition",
+            run: "vm-mk:r-1",
+            became: "superseded",
+            ref: "vm-mk:r-2; mk-pc:r-1, https://x/vm-mk:r-2",
+          },
+        ],
+      });
+      expect(asked.at(-1)).toMatchObject({
+        machine: "vm-mk",
+        op: "dispose",
+        payload: { runId: "r-1", kind: "superseded", ref: "r-2; mk-pc:r-1, https://x/vm-mk:r-2" },
+      });
+    }),
+  ));
+
 test("a proposal's actions go to the one Machine they name, with their own ids", () =>
   Effect.runPromise(
     Effect.gen(function* () {

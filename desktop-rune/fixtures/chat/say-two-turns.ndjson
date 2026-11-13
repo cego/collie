@@ -1,0 +1,12 @@
+{"said":{"about":null,"text":"Use no tools. Remember the number 7 and reply only: noted."}}
+{"event":{"runId":"0957b074-2398-47ba-b4fa-8cf8b3a1c38b:1","threadId":"0957b074-2398-47ba-b4fa-8cf8b3a1c38b","type":"RUN_STARTED"}}
+{"event":{"messageId":"msg_011CgsWZPHzdpfx2FrRgfrbK:0","role":"assistant","type":"TEXT_MESSAGE_START"}}
+{"event":{"delta":"noted","messageId":"msg_011CgsWZPHzdpfx2FrRgfrbK:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"messageId":"msg_011CgsWZPHzdpfx2FrRgfrbK:0","type":"TEXT_MESSAGE_END"}}
+{"event":{"runId":"0957b074-2398-47ba-b4fa-8cf8b3a1c38b:1","threadId":"0957b074-2398-47ba-b4fa-8cf8b3a1c38b","type":"RUN_FINISHED"}}
+{"said":{"about":null,"text":"Use no tools. Which number did I ask you to remember? Reply with the digit only."}}
+{"event":{"runId":"0957b074-2398-47ba-b4fa-8cf8b3a1c38b:2","threadId":"0957b074-2398-47ba-b4fa-8cf8b3a1c38b","type":"RUN_STARTED"}}
+{"event":{"messageId":"msg_011CgsWZUcxwT322owvMNvb5:0","role":"assistant","type":"TEXT_MESSAGE_START"}}
+{"event":{"delta":"7","messageId":"msg_011CgsWZUcxwT322owvMNvb5:0","type":"TEXT_MESSAGE_CONTENT"}}
+{"event":{"messageId":"msg_011CgsWZUcxwT322owvMNvb5:0","type":"TEXT_MESSAGE_END"}}
+{"event":{"runId":"0957b074-2398-47ba-b4fa-8cf8b3a1c38b:2","threadId":"0957b074-2398-47ba-b4fa-8cf8b3a1c38b","type":"RUN_FINISHED"}}

@@ -150,6 +150,40 @@ test("a correction is a new line, so what people believed before is still there"
     }),
   ));
 
+test(
+  "a superseded line naming the Run it would be recorded on is refused, and a free-text one is not",
+  () =>
+    hosted("hw-disposition-self-", ({ world }) =>
+      Effect.gen(function* () {
+        const env = {
+          HERDR_PLUGIN_ROOT: world.install,
+          HERDR_PLUGIN_STATE_DIR: world.state,
+          COLLIE_USER_DIR: world.config,
+          HOME: world.home,
+        };
+        const run = yield* settledRun(world, "retains");
+        const supersede = (ref: string) =>
+          cli(["--json", "run", "disposition", run.id, "--as", "superseded", "--ref", ref], env);
+
+        const refused = yield* supersede(`${run.id}; restarted clean`);
+        expect(refused.exit).toBe(2);
+        expect(yield* parseEnvelope(refused.stdout)).toMatchObject({
+          ok: false,
+          error: { code: "invalid_input" },
+        });
+        expect(yield* readDispositions(run.dir)).toEqual([]);
+
+        const taken = yield* supersede("restarted clean");
+        expect(taken.exit).toBe(0);
+        expect(Arr.map(yield* readDispositions(run.dir), (one) => one.ref)).toEqual([
+          "restarted clean",
+        ]);
+      }),
+    ),
+  // Two CLI spawns of a TypeScript entrypoint.
+  60_000,
+);
+
 test("a Run nobody recorded a disposition for reads exactly as it always did", () =>
   runEffect(
     Effect.gen(function* () {

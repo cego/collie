@@ -29,6 +29,7 @@ import { expect, setDefaultTimeout, test } from "bun:test";
 import { hostname } from "node:os";
 import { readEnv, type PluginEnv } from "../src/env";
 import { setSetting } from "../src/config";
+import { reachKey } from "../src/reach";
 import { amend, readIntent, writeIntentHeld } from "../src/intent";
 import { ensureLockDir, withLock } from "../src/lock";
 import { nowIso } from "../src/time";
@@ -71,7 +72,7 @@ import { runDir, type RunView } from "../src/engine";
 import { isSettled } from "../src/lifecycle";
 import { appendLog } from "../src/oversight";
 import { readAudit, trimAudit } from "../src/audit";
-import { writeMrStates } from "../src/merges";
+import { storedAnswers } from "./support/forge";
 import { Flow, FrontDoorRpcs, type Declaration, type FLOCK_READS } from "../src/board-model";
 
 const encodeJson = Schemaflow(
@@ -213,6 +214,24 @@ test("the Tasks a Run can be started into are something chat can read", () =>
       const said = yield* call("collie_workspaces");
       expect(said).toContain(task.id);
       expect(said).toContain("picker");
+    }),
+  ));
+
+test("chat reads how far each workflow can go, and what the last launch in a project chose", () =>
+  inWorld(
+    Effect.gen(function* () {
+      yield* save(world.user, ["reached.workflow.ts"]);
+      const unsaid = Str.split(yield* call("collie_workspaces"), "\n");
+      expect(unsaid).toContain('  then, how far it goes: "" Ask at the end · "ship" Ship it');
+      yield* setSetting(
+        world.config,
+        reachKey("reached", project),
+        "ship",
+        "2026-11-12T10:00:00.000Z",
+      );
+      expect(Str.split(yield* call("collie_workspaces"), "\n")).toContain(
+        `  then, how far it goes: "" Ask at the end · "ship" Ship it; last launched with "ship" in ${project}`,
+      );
     }),
   ));
 
@@ -1830,7 +1849,7 @@ test("a Run's row for a Run it started shows that Run's merge request as the mer
         `- run ${child.id}: hello, succeeded; mk/api!4 not watched`,
       );
 
-      yield* writeMrStates(
+      yield* storedAnswers(
         stateDir,
         new Map([["gitlab.cego.dk/mk/api!4", "open"]]),
         new Map([["gitlab.cego.dk/mk/api!4", { checks: { state: "passed" }, head: null }]]),
@@ -1853,7 +1872,7 @@ test("a Run's own merge request is shown as recorded, with what the merge watch 
       );
 
       const id = "github.com/cego/collie#61";
-      yield* writeMrStates(
+      yield* storedAnswers(
         stateDir,
         new Map([[id, "open"]]),
         new Map([[id, { checks: { state: "failed", name: "test" }, head: null }]]),

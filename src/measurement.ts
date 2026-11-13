@@ -35,6 +35,7 @@ import {
   type Measurement,
   type Sample,
 } from "./measurement-model";
+import { harnessLacking } from "./harness-held";
 import { machineMemory } from "./memory";
 import { waitForMemory } from "./memory-wait";
 import { shell } from "./mr";
@@ -360,6 +361,7 @@ const recordedFor = (
     Arr.findFirst(
       records,
       (one) =>
+        one.result._tag === "Judged" &&
         sameTree({ fingerprint: key.print }, one.candidate) &&
         one.base.commit === key.commit &&
         one.plan_digest === key.digest &&
@@ -578,13 +580,12 @@ const taking = Effect.fn("Measurement.taking")(function* (
           yield* baseTree(opts.stateDir, ask.runId, opts.repository, own.head_sha, opts.applied),
           path.relative(opts.repository, ask.cwd),
         );
-  const baseRoot = yield* baseTree(
-    opts.stateDir,
-    ask.runId,
-    opts.repository,
-    opts.commit,
-    opts.harness,
-  );
+  const lacking = yield* harnessLacking(opts.repository, opts.commit, opts.harness);
+  const baseRoot = yield* baseTree(opts.stateDir, ask.runId, opts.repository, opts.commit, lacking);
+  if ((yield* harnessLacking(baseRoot, "HEAD", opts.harness)).length > 0)
+    return yield* new MeasureRefused({
+      why: `the harness commits do not apply on ${opts.commit}: its harness files then differ from theirs`,
+    });
   const base = {
     commit: opts.commit,
     ...(yield* treeAt(path.join(baseRoot, path.relative(opts.repository, ask.cwd)))),

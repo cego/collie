@@ -727,6 +727,16 @@ export const DesktopRpcs = RpcGroup.make(
   Rpc.make("pickFiles", { success: Schema.Array(StagedOrRefused) }),
   /** The files on the system clipboard, for a paste the view was handed no files in. */
   Rpc.make("clipboardFiles", { success: Schema.Array(StagedOrRefused) }),
+  /**
+   * Desktop's copies, by id, placed on the Machine of a pane they were pasted or dropped on,
+   * through its host's `upload`; their paths there, in order. Nothing is placed past the
+   * first that cannot be, and the refusal names it.
+   */
+  Rpc.make("placeFiles", {
+    payload: { installation: Schema.String, ids: Schema.Array(Schema.String) },
+    success: Schema.Array(Schema.String),
+    error: ActionFailed,
+  }),
   /** Part of Desktop's copy of an attachment, for a thumbnail drawn again. */
   Rpc.make("attachmentFile", {
     payload: { id: Schema.String, offset: Schema.optionalKey(Schema.Int) },

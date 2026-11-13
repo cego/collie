@@ -2,9 +2,9 @@
 
 import { Effect, FileSystem, Option, Schema } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
-import * as HttpClient from "effect/http/HttpClient";
 import { PreparedRecord, preparedRecordOf, releaseOf } from "../../../src/desktop";
 import type { UpdaterPort } from "./updates";
+import { downloadRelease } from "./release-download";
 
 const promised = <A>(evaluate: () => Promise<A>) =>
   Effect.tryPromise({ try: evaluate, catch: (cause) => String(cause) });
@@ -88,10 +88,8 @@ export const electrobunUpdater = (updater: ElectrobunUpdaterApi) =>
         yield* fs.remove(preparedRecordOf(folder), { force: true });
       }).pipe(Effect.ignore),
       signatureOf: (name, version) =>
-        HttpClient.get(`${releaseOf(info.baseUrl, version)}/${encodeURIComponent(name)}`).pipe(
-          Effect.flatMap((response) =>
-            response.status === 200 ? response.text : Effect.succeed(null),
-          ),
+        downloadRelease(`${releaseOf(info.baseUrl, version)}/${encodeURIComponent(name)}`).pipe(
+          Effect.flatMap((response) => response.text),
           Effect.orElseSucceed(() => null),
           Effect.provide(FetchHttpClient.layer),
         ),
