@@ -199,7 +199,7 @@ const openingScope = <A, E, R>(effect: Effect.Effect<A, E, R | Scope.Scope>) =>
     const scope = yield* Scope.fork(yield* Effect.scope);
     return yield* effect.pipe(
       Scope.provide(scope),
-      Effect.onExit((exit) => (Exit.isFailure(exit) ? Scope.close(scope, exit) : Effect.void)),
+      Effect.onError((cause) => Scope.close(scope, Exit.failCause(cause))),
     );
   });
 
