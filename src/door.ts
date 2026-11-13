@@ -83,7 +83,8 @@ export type ToDoor =
       readonly gone: ReadonlyArray<string>;
       /** Every Run's id in the engine's order, where that order moved. */
       readonly order: ReadonlyArray<string> | null;
-      readonly alive: ReadonlyArray<AgentInfo>;
+      /** Only a new agent reading replaces it; a completed board may have an older one. */
+      readonly alive?: ReadonlyArray<AgentInfo>;
       /** What the engine's board read of a Run's offers since the last listing. */
       readonly offers: ReadonlyArray<readonly [string, ReadonlyArray<OfferView>]>;
     }
@@ -400,7 +401,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
             if (message.order !== null) order = message.order;
             if (order.length > 0) Deferred.doneUnsafe(firstListed, Effect.succeed(order));
             Deferred.doneUnsafe(migrated, Effect.void);
-            alive = message.alive;
+            if (message.alive !== undefined) alive = message.alive;
             return PubSub.publish(writes, undefined);
           });
         case "Wrote":
