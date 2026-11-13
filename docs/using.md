@@ -417,6 +417,12 @@ reason and keeps the terminal and control record for recovery. A process that ex
 being inspected is ignored only when the operating system proves its PID is absent;
 an unreadable live process still prevents recovery.
 
+Uncertain server health parks within the readiness budget, while collection keeps
+watching for late usable Output. Existing delivery receipts retain their uncertainty;
+a server exit does not establish whether an earlier message was received.
+
+See [ADR-draft-an-owned-server-is-checked-apart-from-its-terminal](adr/draft-an-owned-server-is-checked-apart-from-its-terminal.md).
+
 ### What a task workspace is called
 
 The name is worked out, not asked for: `<Project or theme> | <what this work is>`, for

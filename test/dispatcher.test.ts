@@ -26,7 +26,7 @@ import {
   fitDelivery,
   DELIVERY_TOKEN,
 } from "../src/dispatcher";
-import { causalKey, readLedger, type Delivery } from "../src/steering";
+import { appendLine, causalKey, readLedger, type Delivery } from "../src/steering";
 import type { Records } from "../src/records";
 import { reason } from "../src/naming";
 import type { AgentEntry } from "../src/registry";
@@ -543,7 +543,7 @@ test("the same work is not sent twice while the first attempt is unsettled", () 
     }),
   ));
 
-test("a different agent in the same pane is not the addressee, and pending work fails", () =>
+test("a different agent in the same pane is not the addressee", () =>
   runEffect(
     Effect.gen(function* () {
       const moved = fake({ agents: [{ ...alive, terminalId: "term-2" }] });
@@ -555,6 +555,46 @@ test("a different agent in the same pane is not the addressee, and pending work 
       expect(Arr.some(moved.calls, (c) => pipe_(c, Str.startsWith("agentPrompt")))).toBe(false);
     }),
   ));
+
+test.each([
+  ["gone", "reserved", "unknown"],
+  ["gone", "deferred", "failed"],
+  ["replaced", "reserved", "unknown"],
+  ["replaced", "deferred", "failed"],
+] as const)("a %s incarnation leaves a %s delivery %s", (lost, state, settled) =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* appendLine({
+        id: "pending-1",
+        at: entry.at,
+        run: draft.run,
+        incarnation: "term-1",
+        agent: entry.agent,
+        causal_key: causalKey(draft.run, draft.cause, draft.intentVersion),
+        request_id: "pending",
+        cause: draft.cause,
+        mode: draft.mode,
+        text_hash: "pending-text",
+        intent_version: draft.intentVersion,
+        attempt: 1,
+        state,
+      });
+      const gone = fake({ agents: lost === "gone" ? [] : [{ ...alive, terminalId: "term-2" }] });
+      yield* transaction(gone.deps, entry, (channel) => channel.submit("carry on", draft)).pipe(
+        Effect.flip,
+      );
+      expect((yield* ledgerLines()).at(-1)).toMatchObject({ id: "pending-1", state: settled });
+      const restored = fake();
+      const retry = yield* transaction(restored.deps, entry, (channel) =>
+        channel.submit("carry on", draft),
+      );
+      expect(retry).toMatchObject(
+        state === "reserved" ? { ok: false, reason: "blocked" } : { ok: true },
+      );
+      expect(prompted(restored.calls)).toBe(state === "reserved" ? 0 : 1);
+    }),
+  ),
+);
 
 test("an entry with no incarnation is refused before anything is read", () =>
   runEffect(
