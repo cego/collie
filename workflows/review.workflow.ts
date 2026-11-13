@@ -30,6 +30,7 @@ import {
   findingKey,
   forecast,
   panelOf,
+  remainingDisputes,
   settleRound,
   splitDisputed,
   step,
@@ -269,6 +270,7 @@ export default defineWorkflow({
       // A dispute is carried into the next review rather than re-argued, as in implement.
       let disputed: ReadonlyArray<Finding> = [];
       for (;;) {
+        disputed = remainingDisputes(disputed, synthesis);
         const split = splitDisputed(synthesis.findings, disputed);
         const round = settleRound({ live: split.live, disputed, at: reviews, seen });
         let chosen: string = FIX;

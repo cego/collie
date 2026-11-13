@@ -2824,6 +2824,12 @@ review. Each rally is bounded to four rounds and stops on no progress or an unan
 blocking dispute. Later tickets start only after the rally settles. When the last review
 already covers the finished plan, it is reused; further work gets another review.
 
+A reviewer can resolve a carried dispute by explicitly withdrawing the same finding with
+a reason or confirming that it was corrected. Both the implement rally and a standalone
+review's fix loop apply that decision. A clean verdict or an omitted finding alone leaves
+the dispute unresolved. If the review still raises or disputes that finding, it remains
+open despite a conflicting withdrawal.
+
 The detail panel of a run that stopped opens with **Stopped**: one line saying why — the
 review loop out of iterations or making no progress, a blocking finding the implementer
 disputed, a last fix whose own account did not hold up, a stop someone asked for, or work

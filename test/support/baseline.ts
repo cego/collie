@@ -2668,6 +2668,63 @@ scenario(
 );
 
 scenario(
+  "fix findings reaches clean without another fixer when review explicitly accepts a blocking dispute",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* reviewedBranch();
+        const runId = "r-review-accepted-dispute";
+        const input = { target: "branch:main...feature" };
+        const finding = {
+          severity: "blocker",
+          title: "the guard is on the wrong side",
+          file: "src/a.ts",
+        };
+        yield* rig.queueOutputs([
+          { ...SYNTHESIS, findings: [finding] },
+          {
+            verdict: "clean",
+            findings: [],
+            fixed: [],
+            disputed: [{ ...finding, reason: "the caller rejects empty lists before this branch" }],
+            checks: [],
+          },
+          {
+            ...SYNTHESIS,
+            verdict: "clean",
+            findings: [],
+            dropped: [
+              {
+                ...finding,
+                reason: "The caller already guards empty lists, so the builder's dispute is valid.",
+              },
+            ],
+          },
+        ]);
+        yield* parked({ entry: shipped("review"), runId, input, decision: "post-1" });
+        const rows = yield* answeredThen({
+          entry: shipped("review"),
+          runId,
+          input,
+          decision: "post-1",
+          value: "Fix findings",
+          until: "post-2",
+        });
+
+        expect(
+          Option.getOrNull(Arr.findFirst(rows, (row) => row.decision === "post-2"))?.prompt,
+        ).toContain("nothing blocking is left");
+        expect(optionsOf(rows, "post-2")).not.toContain("Fix findings");
+        expect(yield* prompts()).toHaveLength(3);
+        expect(yield* wasAsked(runId, "fix-2")).toBe(false);
+        expect(yield* findingsIn(runDir(dir, runId))).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "a review's fix works in the reviewed branch's own checkout, and is verified there",
   () =>
     runEffect(
@@ -7039,7 +7096,7 @@ scenario(
         );
         const rules = [
           "is a follow-up",
-          "unless you can answer the reason",
+          "Check the disputed reason against the code",
           "`collie verify -- <command>`",
           '`"scope_met": true`',
           "`summary` — two sentences",
@@ -9253,6 +9310,123 @@ scenario(
           `${evidenceDir(dir, "r-impl-own-red")}/steering/verifications.jsonl`,
         );
         expect(journal).not.toContain(base);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "implement proceeds to checks and a merge request when review explicitly accepts a blocking dispute",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        const runId = "r-impl-accepted-dispute";
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve(runId, ["unit"]);
+        const finding = {
+          severity: "blocker",
+          title: "the guard is on the wrong side",
+          file: "src/a.ts",
+        };
+        yield* rig.queueOutputs([
+          BUILT,
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [finding] },
+          {
+            verdict: "clean",
+            findings: [],
+            fixed: [],
+            disputed: [{ ...finding, reason: "the caller rejects empty lists before this branch" }],
+            checks: [{ name: "unit" }],
+          },
+          {
+            ...CLEAN_SYNTHESIS,
+            dropped: [
+              {
+                ...finding,
+                reason: "The caller already guards empty lists, so the builder's dispute is valid.",
+              },
+            ],
+          },
+          OPENED,
+        ]);
+
+        expect(
+          yield* stoppedAt({ entry: shipped("implement"), runId, input: { plan, ...FINISH } }),
+        ).toEqual({ status: "complete", why: "" });
+        expect(yield* passesOf(runId)).toEqual(["gate"]);
+        expect(yield* wasAsked(runId, "mr")).toBe(true);
+        expect(yield* wasAsked(runId, "fix-2")).toBe(false);
+        expect(yield* findingsIn(runDir(dir, runId))).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+once(
+  "a reviewer panel's final synthesis explicitly accepts a blocking dispute before implement delivers",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        const runId = "r-panel-accepted-dispute";
+        const entry = yield* fork(
+          "implement",
+          "accepted-dispute-panel",
+          `{ ...shipped.agents, roles: { ...shipped.agents?.roles, reviewer: [{ harness: "claude", model: "opus" }, { harness: "pi", model: "openai-codex/gpt-6-astra" }] } }`,
+        );
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve(runId, ["unit"]);
+        const finding = {
+          severity: "blocker",
+          title: "the guard is on the wrong side",
+          file: "src/a.ts",
+        };
+        const review = { verdict: "findings", findings: [finding] };
+        const accepted = {
+          ...finding,
+          reason: "The caller already guards empty lists, so the builder's dispute is valid.",
+        };
+        const agreed = { verdict: "clean", findings: [], dropped: [accepted] };
+        yield* rig.queueOutputs([
+          BUILT,
+          review,
+          review,
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [finding] },
+          {
+            verdict: "clean",
+            findings: [],
+            fixed: [],
+            disputed: [{ ...finding, reason: "the caller rejects empty lists before this branch" }],
+            checks: [{ name: "unit" }],
+          },
+          agreed,
+          agreed,
+          { ...CLEAN_SYNTHESIS, dropped: [accepted] },
+          OPENED,
+        ]);
+
+        expect(yield* stoppedAt({ entry, runId, input: { plan, ...FINISH } })).toEqual({
+          status: "complete",
+          why: "",
+        });
+        expect(yield* passesOf(runId)).toEqual(["gate"]);
+        expect(yield* wasAsked(runId, "mr")).toBe(true);
+        expect(yield* prompts()).toHaveLength(9);
+        const fanIn = yield* asked(runId, "synthesize-2");
+        expect(fanIn).toContain("the caller rejects empty lists before this branch");
+        expect(yield* asked(runId, "review-2-1")).toContain(
+          "the caller rejects empty lists before this branch",
+        );
+        const fs = yield* FileSystem.FileSystem;
+        for (const seat of [1, 2]) {
+          const output = `${dir}/agents/${runId}/review-2-${seat}.json`;
+          expect(fanIn).toContain(output);
+          expect(yield* fs.readFileString(output)).toContain(accepted.reason);
+        }
+        expect(yield* findingsIn(runDir(dir, runId))).toEqual([]);
       }),
     ),
   120_000,
