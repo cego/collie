@@ -12993,7 +12993,6 @@ const signed = (runId: string) => `\n\nPosted by Collie's Run ${runId} on ${host
 const failingIn = (...failed: ReadonlyArray<string>) =>
   Arr.join(["test/a.test.ts:", ...Arr.map(failed, (one) => `(fail) ${one} [1.00ms]`)], "\n");
 
-/** The `test` job on the target branch's newest commit, at `at`, in `state`. */
 const targetTest = (at: string, state: "failed" | "passed", ...failed: ReadonlyArray<string>) => ({
   target: { at, jobs: [{ name: "test", state, trace: failingIn(...failed) }] },
 });
