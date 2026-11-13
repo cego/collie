@@ -474,8 +474,14 @@ export const healParks = <E, R, E2, R2>(opts: {
       ).slice(0, REPORTS_PER_ROUND);
       for (const item of due) {
         const reported = yield* report(opts.host, item, known);
+        const last = Option.getOrUndefined(
+          Arr.findLast(
+            yield* readMetrics(evidence(item.run)),
+            (line) => line.kind === "report" && line.heal === item.heal,
+          ),
+        );
         // A retry that changes nothing is not recorded again, so a lasting refusal is one line.
-        if (item.last?.publication !== reported.publication || item.last.note !== reported.note)
+        if (last?.publication !== reported.publication || last.note !== reported.note)
           yield* appendMetric(evidence(item.run), {
             at: yield* nowIso,
             kind: "report",
