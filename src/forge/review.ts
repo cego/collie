@@ -50,7 +50,7 @@ export type ReviewRead =
     }
   | { readonly ok: false; readonly reason: string };
 
-/** The logins a forge's merge queue merges as, for whoever queued the merge request. */
+/** The logins GitHub's merge queue merges as, for whoever queued the pull request. */
 export const QUEUE_MERGERS: ReadonlySet<string> = new Set([
   "github-merge-queue",
   "github-merge-queue[bot]",
