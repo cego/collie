@@ -329,6 +329,11 @@ export const reach = (machine: ChatMachine) =>
     }),
   );
 
+export const readable = (machine: ChatMachine) =>
+  machine.door === undefined
+    ? reach(machine).pipe(Effect.map(({ name, door }) => ({ name, door })))
+    : Effect.succeed({ name: machine.name, door: machine.door });
+
 /** Each Machine, and the live board Desktop follows for it or why it has none. */
 const boards = (flock: FlockChat) =>
   Effect.map(Clock.currentTimeMillis, (now) =>
@@ -582,7 +587,7 @@ const onRun = Effect.fn("FlockTools.onRun")(function* (
 
 /** A Machine's own answer to one of its reads, headed with its name. */
 const readOn = (machine: ChatMachine, tool: (typeof FLOCK_READS)[number], input: JsonObject) =>
-  reach(machine).pipe(
+  readable(machine).pipe(
     Effect.matchEffect({
       onFailure: ({ reason }) => Effect.succeed(reason),
       onSuccess: ({ door }) =>
