@@ -128,7 +128,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   /** Bumped by every invalidation, so a read it overtook is read again. */
   let generation = 0;
   const revisions = new Map<string, number>();
-  const facts = new Map<string, string>();
+  const facts = new Map<string, { readonly text: string; readonly revision: number }>();
   const cards = new Map<
     string,
     { readonly text: string; readonly seq: number; readonly from: TaskView; readonly to: TaskView }
@@ -147,6 +147,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     revisions.set(run, at);
     if (facts) factual.set(run, at);
     link?.touched(run, at, facts);
+    return at;
   };
   const touchFacts = (run: string) => touch(run, true);
   /** The Runs whose rows were written. */
@@ -337,10 +338,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     if (last.get(run.id) === run) return;
     last.set(run.id, run);
     const text = fingerprint(run);
-    if (facts.get(run.id) !== text) {
-      facts.set(run.id, text);
-      touch(run.id);
-    }
+    if (facts.get(run.id)?.text !== text) facts.set(run.id, { text, revision: touch(run.id) });
     index(run.id, keysOf(run));
   };
   /** Runs another model observed, indexed here without numbering them again. */
@@ -389,6 +387,14 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   const factsAt = (run: string) => (enabled ? (factual.get(run) ?? 0) : next());
   const highest = (runs: ReadonlyArray<string>) =>
     enabled ? Math.max(0, ...Arr.map(runs, (run) => revisions.get(run) ?? 0)) : next();
+  /** Source facts and files, excluding the revisions a derived card or record adds. */
+  const inputsAt = (runs: ReadonlyArray<string>) =>
+    enabled
+      ? Math.max(
+          0,
+          ...Arr.map(runs, (run) => Math.max(factual.get(run) ?? 0, facts.get(run)?.revision ?? 0)),
+        )
+      : next();
 
   const records = new Map<string, { readonly text: string; readonly seq: number }>();
   /**
@@ -446,7 +452,11 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   const moved = (cwd: string) => {
     checkouts.set(cwd, (checkouts.get(cwd) ?? 0) + 1);
     for (const key of heads.keys()) if (Str.startsWith(`${cwd}\0`)(key)) heads.delete(key);
-    for (const run of readers.get(cwd) ?? []) touch(run);
+    for (const run of readers.get(cwd) ?? []) {
+      const revision = touch(run);
+      const observed = facts.get(run);
+      if (observed !== undefined) facts.set(run, { ...observed, revision });
+    }
     PubSub.publishUnsafe(moves, undefined);
   };
   /** The checkout's git directories, watched for its HEAD and its branches moving. */
@@ -528,6 +538,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     gone,
     revision,
     factsAt,
+    inputsAt,
     highest,
     stamp,
     stampRecord,

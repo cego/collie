@@ -134,6 +134,23 @@ test("a long model never truncates away the number that makes a name unique", ()
   );
 });
 
+test("long numeric steps keep every generation suffix when the legal name needs a letter prefix", () => {
+  const generations = [1, 2, 10, 11];
+  const names = Arr.map(generations, (sequence) =>
+    agentName(
+      "run-71558ed9.implement.implement-.",
+      "01-public-text-is-checked-and-marked-hidden.md.review-2-1",
+      null,
+      sequence,
+    ),
+  );
+  expect(new Set(names).size).toBe(generations.length);
+  for (let index = 0; index < names.length; index++) {
+    expect(names[index]).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
+    expect(names[index]).toEndWith(`-r${generations[index]}`);
+  }
+});
+
 test("sibling children that share a long prefix get agents of their own", () => {
   // The live failure: both registered run-053c5b9d-implement-build-r1.
   const nuxt = agentName(
