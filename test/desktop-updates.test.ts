@@ -78,6 +78,8 @@ const fakeUpdater = (
     readonly feed?: Feed;
     /** Why the signature could not be fetched. */
     readonly signatureFails?: string;
+    /** A signature request that never answers while `hangs` holds. */
+    readonly signatureHangs?: { hangs: boolean };
   },
 ): Effect.Effect<Fake, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
@@ -130,6 +132,7 @@ const fakeUpdater = (
       signatureOf: (name, version) =>
         Effect.suspend(() => {
           calls.push(`signature ${name} from ${version}`);
+          if (options.signatureHangs?.hangs === true) return Effect.never;
           return options.signatureFails === undefined
             ? Effect.succeed(options.signature)
             : Effect.fail(options.signatureFails);
@@ -654,6 +657,27 @@ test("a signature that cannot be fetched fails the check and keeps the download 
       expect(offline.calls).not.toContain("discard");
       expect(yield* offline.port.prepared).not.toBeNull();
     }).pipe(Effect.scoped),
+  );
+});
+
+test("a signature request that never answers fails the check and Restart, and the hourly check still runs", () => {
+  const key = pair();
+  const signature = { hangs: true };
+  return run((dir) =>
+    Effect.gen(function* () {
+      const { port } = yield* fakeUpdater(dir, {
+        signature: signRelease(TAR, key.privateKey),
+        signatureHangs: signature,
+      });
+      const updates = yield* updatesOf(port, "0.32.0", key.publicKey);
+      const first = yield* updates.check;
+      expect(first._tag === "Failed" && first.reason).toContain("1 minute");
+      expect(yield* restartToUpdate(port, key.publicKey).pipe(Effect.flip)).toContain("1 minute");
+      expect(yield* port.prepared).not.toBeNull();
+      signature.hangs = false;
+      const said = yield* told(updates, Effect.sleep("62 minutes"));
+      expect(said.at(-1)).toEqual({ _tag: "Ready", version: "0.33.0" });
+    }).pipe(Effect.scoped, (effect) => fastForward(effect, 10_000)),
   );
 });
 

@@ -51,18 +51,36 @@ const CHECKOUT = "this Desktop runs from a checkout, which never updates itself"
 const GONE = "its download is gone";
 const CHECK_WITHIN: Minutes = "2 minutes";
 const DOWNLOAD_WITHIN: Minutes = "30 minutes";
+const SIGNATURE_WITHIN: Minutes = "1 minute";
 /** How soon a check that could not reach the releases is tried again. */
 const RETRY: Minutes = "5 minutes";
 
 /** Whether this Desktop updates itself: a release build does, and one from a checkout never. */
 const released = (port: UpdaterPort) => Effect.map(port.channel, (channel) => channel === "stable");
 
+const within = <A>(
+  effect: Effect.Effect<A, string>,
+  duration: Minutes,
+  what: string,
+): Effect.Effect<A, string> =>
+  Effect.timeoutOrElse(effect, {
+    duration,
+    orElse: () => Effect.fail(`${what} had no answer in ${duration}`),
+  });
+
 /** Why the prepared update may not be installed, or null where its tar verifies. */
 const refusalOf = (port: UpdaterPort, prepared: Prepared, key: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const name = appliedSignatureOf(prepared.artifact);
-    const signature = name === null ? null : yield* port.signatureOf(name, prepared.version);
+    const signature =
+      name === null
+        ? null
+        : yield* within(
+            port.signatureOf(name, prepared.version),
+            SIGNATURE_WITHIN,
+            "the signature",
+          );
     const bytes = yield* fs.readFile(prepared.tar).pipe(Effect.orElseSucceed(() => null));
     if (bytes === null) return GONE;
     const verified = verifyRelease(bytes, signature, key);
@@ -78,16 +96,6 @@ const verified = (port: UpdaterPort, key: string) =>
     if (refused === null) return { _tag: "Ready", version: prepared.version } satisfies UpdateNews;
     yield* port.discard;
     return { _tag: "Refused", version: prepared.version, reason: refused } satisfies UpdateNews;
-  });
-
-const within = <A>(
-  effect: Effect.Effect<A, string>,
-  duration: Minutes,
-  what: string,
-): Effect.Effect<A, string> =>
-  Effect.timeoutOrElse(effect, {
-    duration,
-    orElse: () => Effect.fail(`${what} had no answer in ${duration}`),
   });
 
 export interface Updates {

@@ -208,3 +208,23 @@ test("a signature the release could not serve fails the check instead of refusin
       expect(yield* fs.exists(`${install}/data/self-extraction`)).toBe(true);
     }),
   ));
+
+test("a release published without a signature is refused as unsigned and nothing is staged", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.remove(`${install}/.update`, { recursive: true, force: true });
+      yield* fs.remove(`${install}/data`, { recursive: true, force: true });
+      yield* releasedAt("https://github.com/cego/collie/releases/latest/download");
+      signatureStatus = 404;
+      const { news } = yield* checked.pipe(
+        Effect.ensuring(Effect.sync(() => (signatureStatus = 200))),
+      );
+      expect(news).toEqual({
+        _tag: "Refused",
+        version: "0.131.0",
+        reason: "the download is unsigned, so it was refused",
+      });
+      expect(yield* fs.exists(`${install}/.update`)).toBe(false);
+    }),
+  ));
