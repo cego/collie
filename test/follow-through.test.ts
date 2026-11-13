@@ -269,26 +269,30 @@ for (const { following, after, refused } of [
           let dismissed = 0;
           const api = yield* serveForges({
             forge: "github",
-            face: async (url, init) => {
-              if (accepted && url.endsWith("/pulls/7") && init?.method === "GET") {
-                if (after !== "push")
-                  return Response.json({ message: "temporarily unavailable" }, { status: after });
-                const now = await runLive(forge.model());
-                await runLive(
-                  forge.set({
-                    ...now,
-                    mrs: now.mrs.map((one) => ({ ...one, head: "f".repeat(40) })),
-                  }),
-                );
-              }
-              if (url.endsWith("/dismissals")) {
-                dismissed += 1;
-                if (refused) return Response.json({ message: "Forbidden" }, { status: 403 });
-              }
-              const response = await forge.face(url, init);
-              if (url.endsWith("/reviews") && init?.method === "POST") accepted = true;
-              return response;
-            },
+            face: (url, init) =>
+              runLive(
+                Effect.gen(function* () {
+                  if (accepted && Str.endsWith("/pulls/7")(url) && init?.method === "GET") {
+                    if (after !== "push")
+                      return Response.json(
+                        { message: "temporarily unavailable" },
+                        { status: after },
+                      );
+                    const now = yield* forge.model();
+                    yield* forge.set({
+                      ...now,
+                      mrs: Arr.map(now.mrs, (one) => ({ ...one, head: Str.repeat(40)("f") })),
+                    });
+                  }
+                  if (Str.endsWith("/dismissals")(url)) {
+                    dismissed += 1;
+                    if (refused) return Response.json({ message: "Forbidden" }, { status: 403 });
+                  }
+                  const response = yield* Effect.promise(() => forge.face(url, init));
+                  if (Str.endsWith("/reviews")(url) && init?.method === "POST") accepted = true;
+                  return response;
+                }),
+              ),
           });
           yield* host.settingOn(following);
           yield* rig.queueOutputs([review([])]);
@@ -304,7 +308,7 @@ for (const { following, after, refused } of [
               yield* (yield* Registry).answer({
                 runId,
                 decision,
-                value: following ? "Approve" : `Post and approve ${head.slice(0, 7)}`,
+                value: following ? "Approve" : `Post and approve ${Str.slice(0, 7)(head)}`,
                 request: "approve",
               });
               const { view: done } = yield* until(
@@ -332,7 +336,7 @@ for (const { following, after, refused } of [
               expect(
                 Arr.filter(
                   forge.requests(),
-                  (one) => one.method === "POST" && one.url.endsWith("/reviews"),
+                  (one) => one.method === "POST" && Str.endsWith("/reviews")(one.url),
                 ),
               ).toHaveLength(1);
             }),
@@ -354,11 +358,15 @@ for (const state of ["closed", "merged"] as const)
           yield* host.settingOn(true);
           yield* rig.queueOutputs([review([])]);
           let ended = false;
-          forge.before(async () => {
-            if (ended || (await runLive(host.agentStarts)).length === 0) return;
-            ended = true;
-            await runLive(forge.set(model(head, { mrs: [mr(head, { state })] })));
-          });
+          forge.before(() =>
+            runLive(
+              Effect.gen(function* () {
+                if (ended || (yield* host.agentStarts).length === 0) return;
+                ended = true;
+                yield* forge.set(model(head, { mrs: [mr(head, { state })] }));
+              }),
+            ),
+          );
           yield* host.session(
             forge,
             Effect.gen(function* () {
@@ -521,7 +529,7 @@ for (const id of ["review", "second-look"])
               const thirdPrompt = Option.getOrThrow(
                 Arr.findFirst(
                   prompts,
-                  (file) => file.startsWith("review-3-") && file.endsWith(".prompt.md"),
+                  (file) => Str.startsWith("review-3-")(file) && Str.endsWith(".prompt.md")(file),
                 ),
               );
               expect(
