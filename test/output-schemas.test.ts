@@ -21,6 +21,7 @@ import {
   parseFixOutput,
   parseReviewOutput,
   parseSynthesis,
+  renderPublicReview,
   unmetCriteria,
   type Parsed,
 } from "../src/output";
@@ -96,6 +97,50 @@ test("a review reads the same through the shared schema and the parser", () => {
 
 test("a synthesis reads the same through the shared schema and the parser", () => {
   agree(SynthesisSchema, (text) => parseSynthesis(text, "synthesized.json"), SYNTHESES);
+});
+
+test("a synthesis keeps its public summary and the internal finding classification", () => {
+  const output = {
+    verdict: "findings",
+    summary: "This Run has no failing-first evidence.",
+    public_summary: "Updates profile verification. No runtime regression was found.",
+    findings: [{ severity: "major", title: "Record failing-first evidence", internal: true }],
+  };
+  expect(
+    flow(Schema.decodeUnknownResult(SynthesisSchema), Result.getOrThrow)(output),
+  ).toMatchObject(output);
+  expect(parseSynthesis(JSON.stringify(output), "synthesized.json")).toMatchObject({
+    ok: true,
+    value: output,
+  });
+});
+
+test("public summary and internal classification reject malformed values", () => {
+  for (const extra of ['"public_summary": "  "', '"public_summary": null']) {
+    const text = `{"verdict": "clean", "summary": "s", ${extra}}`;
+    expect(accepts(SynthesisSchema, text)).toBe(false);
+    expect(parseSynthesis(text, "synthesized.json").ok).toBe(false);
+  }
+  const text = `{"verdict": "findings", "summary": "s", "findings": [{"severity": "major", "title": "t", "internal": "true"}]}`;
+  expect(accepts(ReviewOutputSchema, text)).toBe(false);
+  expect(accepts(SynthesisSchema, text)).toBe(false);
+  expect(parseReviewOutput(text, "review.json").ok).toBe(false);
+  expect(parseSynthesis(text, "synthesized.json").ok).toBe(false);
+});
+
+test("an older synthesis uses its summary and unmarked findings in the public rendering", () => {
+  const output = {
+    verdict: "findings",
+    summary: "Adds a version flag. It exits with an error.",
+    findings: [{ severity: "major", title: "Exit zero on success" }],
+  };
+  const decoded = flow(Schema.decodeUnknownResult(SynthesisSchema), Result.getOrThrow)(output);
+  const parsed = parseSynthesis(JSON.stringify(output), "synthesized.json");
+  if (!parsed.ok) throw new Error(parsed.error);
+  expect(decoded).toEqual(parsed.value);
+  expect(renderPublicReview(decoded)).toBe(
+    "Adds a version flag. It exits with an error.\n\n**Major**\n\n- Exit zero on success\n",
+  );
 });
 
 test("a fix report reads the same through the shared schema and the parser", () => {

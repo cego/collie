@@ -1925,6 +1925,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     severity: string;
     title: string;
     detail?: string;
+    internal?: boolean;
     /** A reviewer's answer to the implementer's reason for disputing this finding. */
     rebuttal?: string;
     /** Why a synthesis dropped this finding; only a dropped entry carries one. */
@@ -1987,6 +1988,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   export interface Synthesis extends ReviewOutput {
     summary: string;
+    public_summary?: string;
     dropped: Finding[];
     fixed: Fixed[];
   }
@@ -2091,6 +2093,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     evidence: CheckEvidence,
   ): FinalFix;
   export function renderReview(synthesis: Synthesis): string;
+  export function renderPublicReview(synthesis: SynthesisReport): string;
   export function formatFindings(findings: ReadonlyArray<Finding>): string;
 
   /** The prose a human reads, and the findings a card counts, where both are looked for. */
@@ -2165,6 +2168,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   export interface SynthesisReport extends ReviewReport {
     readonly summary: string;
+    readonly public_summary?: string;
     readonly dropped: ReadonlyArray<Finding>;
     readonly fixed: ReadonlyArray<Fixed>;
   }

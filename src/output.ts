@@ -6,7 +6,7 @@ import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Effect, FileSystem, Schema, SchemaGetter, flow, Result } from "effect";
-import { isNumber, isString } from "./schema";
+import { isBoolean, isNumber, isString } from "./schema";
 import { checkProof, owesNothingHere, type CheckProof } from "./check-proof";
 import type { Measurement } from "./measurement-model";
 import type { CheckCommand, Snapshot, Verification } from "./verify";
@@ -66,6 +66,9 @@ export const FindingSchema = Schema.Struct({
   }).pipe(said("severity")),
   title: Schema.String.pipe(said("title")),
   detail: Schema.optionalKey(Schema.String),
+  internal: Schema.optionalKey(
+    Schema.Boolean.annotate({ description: "true only for a finding about Collie's own process" }),
+  ),
   /** A reviewer's answer to the implementer's reason for disputing this finding. */
   rebuttal: Schema.optionalKey(Schema.String),
   /** Why the implementer disputes this finding, or the review withdraws it. */
@@ -78,6 +81,7 @@ export interface Finding {
   severity: string;
   title: string;
   detail?: string;
+  internal?: boolean;
   /** A reviewer's answer to the implementer's reason for disputing this finding. */
   rebuttal?: string;
   /** Why the implementer disputes this finding, or the review withdraws it. */
@@ -102,6 +106,7 @@ export interface ReviewOutput {
 export interface Synthesis extends ReviewOutput {
   /** Two sentences: what the change does, and what is wrong with it. */
   summary: string;
+  public_summary?: string;
   /** Findings withdrawn with a reason, including disputes the review accepts. */
   dropped: Finding[];
   /** What the previous review over this target raised and this one found fixed. */
@@ -168,6 +173,7 @@ const DroppedSchema = FindingSchema.pipe(
 export const SynthesisSchema = Schema.Struct({
   verdict: VerdictSchema,
   summary: Schema.String.pipe(said("summary")),
+  public_summary: Schema.optionalKey(Schema.String.pipe(said("public_summary"))),
   findings: optionalList(FindingSchema),
   disputed: optionalList(FindingSchema),
   dropped: optionalList(DroppedSchema),
@@ -422,6 +428,11 @@ export function parseFindings(raw: YamlValue | undefined, where: string): Parsed
     if (isString(item.file)) finding.file = item.file;
     if (isNumber(item.line)) finding.line = item.line;
     if (isString(item.detail)) finding.detail = item.detail;
+    if (item.internal !== undefined) {
+      if (!isBoolean(item.internal))
+        return { ok: false, error: `${where}[${index}]: internal must be a boolean` };
+      finding.internal = item.internal;
+    }
     if (isString(item.rebuttal)) finding.rebuttal = item.rebuttal;
     if (isString(item.reason)) finding.reason = item.reason;
     out.push(finding);
@@ -451,6 +462,12 @@ export function parseSynthesis(text: string, where: string): Parsed<Synthesis> {
   if (!isString(obj.summary) || Str.trim(obj.summary) === "") {
     return { ok: false, error: `${where}: summary is required` };
   }
+  if (
+    obj.public_summary !== undefined &&
+    (!isString(obj.public_summary) || Str.trim(obj.public_summary) === "")
+  ) {
+    return { ok: false, error: `${where}: public_summary must be a non-blank string` };
+  }
   const dropped = parseFindings(obj.dropped, `${where}: dropped`);
   if (!dropped.ok) return dropped;
   for (const [i, finding] of dropped.value.entries()) {
@@ -461,15 +478,14 @@ export function parseSynthesis(text: string, where: string): Parsed<Synthesis> {
   }
   const fixed = parseFixed(obj.fixed, `${where}: fixed`);
   if (!fixed.ok) return fixed;
-  return {
-    ok: true,
-    value: {
-      ...base.value,
-      summary: Str.trim(obj.summary),
-      dropped: dropped.value,
-      fixed: fixed.value,
-    },
+  const value: Synthesis = {
+    ...base.value,
+    summary: Str.trim(obj.summary),
+    dropped: dropped.value,
+    fixed: fixed.value,
   };
+  if (isString(obj.public_summary)) value.public_summary = Str.trim(obj.public_summary);
+  return { ok: true, value };
 }
 
 /** What the last review raised and this one could not find any more. */
@@ -865,11 +881,7 @@ function severityOrder(findings: ReadonlyArray<Finding>): string[] {
   return [...known, ...Arr.filter(present, (s) => !SEVERITIES.includes(s)).sort()];
 }
 
-/**
- * The review a human reads, and the note posted to a merge request. Rendered here
- * rather than asked for, so every review is the same shape: the summary, then the
- * findings under their severity, and nothing about how it was produced.
- */
+/** The complete review kept in the Run, including process findings and fixed entries. */
 export function renderReview(synthesis: typeof SynthesisSchema.Type): string {
   const blocks = [Str.trim(synthesis.summary)];
   // Read first: it is what says the rally is converging rather than repeating.
@@ -902,6 +914,15 @@ export function renderReview(synthesis: typeof SynthesisSchema.Type): string {
     }
   }
   return `${Arr.join(blocks, "\n\n")}\n`;
+}
+
+export function renderPublicReview(synthesis: typeof SynthesisSchema.Type): string {
+  return renderReview({
+    ...synthesis,
+    summary: synthesis.public_summary ?? synthesis.summary,
+    findings: Arr.filter(synthesis.findings, (finding) => finding.internal !== true),
+    fixed: [],
+  });
 }
 
 function reviewBullet(finding: Finding): string {

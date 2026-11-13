@@ -2618,6 +2618,85 @@ for (const name of ["gitlab", "github"] as const) {
       ),
     120_000,
   );
+
+  scenario(
+    `a ${name} review publishes its public note while keeping an internal blocker unapproved`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const runId = `r-review-${name}-internal`;
+          const internal = {
+            ...SYNTHESIS,
+            summary: "New test evidence is incomplete.",
+            public_summary: "Updates profile verification. No runtime regression was found.",
+            findings: [
+              {
+                severity: "blocker",
+                title: "Record test reproduction evidence",
+                file: "src/a.ts",
+                detail: "No failing execution was recorded for the new test.",
+                internal: true,
+              },
+            ],
+          };
+          const { model } = yield* posted(runId, internal);
+          expect(Rec.values(model.notes ?? {}).flat()).toEqual([
+            "Updates profile verification. No runtime regression was found.\n\nNothing to fix.\n",
+          ]);
+          expect(model.approved ?? []).toEqual([]);
+          expect(yield* readText(`${runDir(dir, runId)}/review.md`)).toContain(
+            "Record test reproduction evidence",
+          );
+          expect(yield* findingsIn(runDir(dir, runId))).toEqual(internal.findings);
+          const prompt = yield* asked(runId, "review-1");
+          expect(prompt).toContain("For an MR no Run built");
+          expect(prompt).toContain("public_summary");
+          expect(prompt).toContain('"internal": true');
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `a ${name} review refuses a leaking public summary and brings back the menu with the reason`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge } = yield* reviewing();
+          const review = {
+            entry: shipped("review"),
+            runId: `r-review-${name}-leaking-summary`,
+            input: { target },
+          };
+          yield* rig.queueOutputs([
+            {
+              ...SYNTHESIS,
+              verdict: "clean",
+              summary: "This Run found no product issue.",
+              public_summary: "Check with collie verify before merging.",
+              findings: [],
+            },
+          ]);
+          yield* parked({ ...review, decision: "post-1" });
+          const rows = yield* answeredThen({
+            ...review,
+            decision: "post-1",
+            value: `Post to ${noun}`,
+            until: "post-2",
+          });
+          expect(
+            Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === "post-2"))?.prompt,
+          ).toContain('"collie verify"');
+          expect(optionsOf(rows, "post-2")).toContain(`Post to ${noun}`);
+          const model = yield* forge.model();
+          expect(model.notes ?? {}).toEqual({});
+          expect(model.approved ?? []).toEqual([]);
+          yield* answered({ ...review, decision: "post-2", value: "Don't post" });
+          yield* bin.restore();
+        }),
+      ),
+    120_000,
+  );
 }
 
 scenario(

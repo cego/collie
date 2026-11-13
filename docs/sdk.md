@@ -1438,6 +1438,15 @@ it, each with its own fix. A module of your own can import it the same way.
 write. Hand one to `agentWork` and what comes back is its own type — the same contract the
 shipped steps are held to, not a copy of it.
 
+`SynthesisSchema` accepts an optional `public_summary` for the MR's audience. A finding's
+optional `internal: true` marks a concern about Collie's own process. `renderReview`
+retains the complete review and fixed history for `review.md`; `renderPublicReview` uses
+the public summary and non-internal live findings, in severity order. With no public findings, it says there is
+nothing to fix. Older Outputs use `summary` as the public summary and unmarked findings
+remain public. The shipped review workflow writes this rendering to `public-review.md`
+beside `review.md`, then passes that file to `host.post` for the Public text check.
+Approval still follows every live finding, including internal ones.
+
 A review's `verdict` of `findings` means it found some. A fix's means it left some
 unresolved, each listed in `findings`. What it fixed goes in `fixed`, and what it disputes
 goes in `disputed`. With nothing left unresolved its verdict is `clean`. The fix contract's
