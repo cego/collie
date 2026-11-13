@@ -64,10 +64,15 @@ test("only reports still owed are selected, including an unfinished Task closure
       const store = yield* Store;
       const sql = yield* SqlClient.SqlClient;
       const placing = '{"from":"/work","taskLabel":null,"closes":"reported"}';
-      for (const run of ["unreported", "closing", "closed", "ordinary"])
+      for (const run of ["unreported", "closing", "closed", "requested", "ordinary"])
         yield* store.admit({
           ...admission(run, run, {}),
-          placing: run === "ordinary" ? undefined : placing,
+          placing:
+            run === "ordinary"
+              ? undefined
+              : run === "requested"
+                ? '{"from":"/work","taskLabel":null,"requestedBy":{"run":"parent","agent":"a","machine":{"installation":"here","name":"here"}}}'
+                : placing,
         });
       const report = {
         state: "undelivered" as const,
@@ -79,8 +84,10 @@ test("only reports still owed are selected, including an unfinished Task closure
       yield* store.reported("closed", { ...report, closed: true });
       expect(Arr.map(yield* store.reportsPending, (row) => row.run).sort()).toEqual([
         "closing",
+        "requested",
         "unreported",
       ]);
+      yield* store.reported("requested", report);
       yield* store.reported("closing", { ...report, closed: true });
       expect(Arr.map(yield* store.reportsPending, (row) => row.run)).toEqual(["unreported"]);
       expect(yield* Schema.decodeEffect(ReportJson)((yield* store.run("closed"))!.report!)).toEqual(
