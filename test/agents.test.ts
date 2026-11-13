@@ -1420,7 +1420,7 @@ test.each([false, true])(
             const fiber = yield* Effect.forkChild(started("r1"));
             if (!replay) yield* killServer;
             // Independent of the idle budget: the stale TUI never becomes idle.
-            yield* spend(20_000);
+            yield* until(prompted("Your task for this step", 2));
             expect(everyLaunch(yield* rig.calls())).toHaveLength(2);
             yield* fs.writeFileString(outputPath("r1"), '{"verdict":"clean","note":"recovered"}');
             return yield* Fiber.join(fiber);
