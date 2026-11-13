@@ -143,9 +143,9 @@ on lavapipe. Its first frame took 387 ms. The live board was one Snapshot of 21 
 
 ### Go to pane's terminal
 
-Selecting a Flow Step gives its detail and work the remaining record height. The map and
-details scroll independently; on a narrow record the details sit above the work. Resizing
-the window or Flock chat refits the terminal without reconnecting its pane.
+Selecting a Flow Step gives its detail and work the remaining record height. The map,
+details and action forms scroll independently. On a narrow record the details sit above
+the work. Resizing the window or Flock chat refits the terminal without reconnecting its pane.
 
 The terminal keeps today's transport: the `terminal` stream brings frames, and `terminalSend`
 carries input, resizes, scrolls and mouse presses. Leaving the Terminal tab interrupts the

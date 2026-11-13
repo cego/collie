@@ -1368,13 +1368,27 @@ fn form_view(app: &App, record: &Record, k: &Kit) -> Option<El> {
                 .child(cancel),
         ),
     };
-    Some(
-        panel(k)
-            .key("flow-form")
-            .role("group")
-            .label("Action")
-            .child(body),
-    )
+    let form = col()
+        .key("flow-form-scroll")
+        .w_full()
+        .min_h(0.0)
+        .shrink()
+        .scroll(ScrollSpec {
+            stick_bottom: false,
+        })
+        .scroll_anchor()
+        .scroll_edge_fade(16.0)
+        .child(
+            panel(k)
+                .key("flow-form")
+                .role("group")
+                .label("Action")
+                .child(body),
+        );
+    Some(collie_desktop_chat::glide::smooth::<App>(
+        form,
+        "flow-form-scroll",
+    ))
 }
 
 /// The questions of a Step one at a time, "Question k of n" with Back and Next when there are
