@@ -806,7 +806,6 @@ const retriedJob = ({ trace, ...job }: FakeJob, n: number): FakeJob => {
 /** A pull request's Actions run: its head's, its base's 1000 on, its target's 2000 on. */
 const actionsRun = (mr: FakeMr | undefined, from = 0) => 4000 + from + Number(mr?.iid ?? 0);
 
-/** Each job of a pull request's head, base and target runs, and each attempt behind it, with its run and `run_attempt`. */
 const actionsAttempts = (mr: FakeMr) =>
   Arr.flatMap(
     [

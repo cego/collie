@@ -8368,7 +8368,6 @@ scenario(
 
 const CI_PULL = `https://${PROJECT.github}/pull/31`;
 
-/** The pull request on `head`, its run's jobs as given, and its base's run's jobs as given. */
 const ciOnGithub = (
   head: string,
   jobs: ReadonlyArray<FakeJob>,
