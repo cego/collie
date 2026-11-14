@@ -23,7 +23,7 @@ import { logged } from "./check-supervisor";
 import type { VerifySpec } from "./intent";
 import { failedAlone, failedTests, ranAlone, rerunArgv } from "./bun-tests";
 import { appendJournal, readJournal } from "./journal";
-import { shell } from "./mr";
+import { shell, type Ran } from "./mr";
 import { nowIso, epochMs } from "./time";
 import { CurrentStep, type StepPlace } from "./steps";
 import { Pass, VerificationSchema, type FailedTest, type Snapshot } from "./verify-model";
@@ -73,8 +73,10 @@ const git = (args: string[], cwd: string) => shell("git", args, cwd);
  * Untracked content is included deliberately. A test run that passed because of a file
  * nobody committed passed on a tree that is not the one anybody will get.
  */
-export const fingerprint = (cwd: string) =>
-  Effect.map(treeOf(cwd), ({ head_sha, fingerprint }) => ({ head_sha, fingerprint }));
+export const fingerprint = (cwd: string): Effect.Effect<Snapshot, never, Services> =>
+  Effect.map(treeOf(cwd), ({ head_sha, fingerprint, unmeasured }) =>
+    unmeasured === undefined ? { head_sha, fingerprint } : { head_sha, fingerprint, unmeasured },
+  );
 
 /** The Git tree HEAD names: the same files at two commits are the same content. Empty before a first commit. */
 export const contentOf = (cwd: string) =>
@@ -99,10 +101,14 @@ const statusParts = (stdout: string) => {
  * The fingerprint, with the branch HEAD names (`HEAD` when detached, null before a first
  * commit) and whether anything is uncommitted, all from one status.
  */
-export const treeOf: (
-  cwd: string,
-) => Effect.Effect<
-  { head_sha: string; fingerprint: string; branch: string | null; dirty: boolean },
+export const treeOf: (cwd: string) => Effect.Effect<
+  {
+    head_sha: string;
+    fingerprint: string;
+    unmeasured?: string;
+    branch: string | null;
+    dirty: boolean;
+  },
   never,
   Services
 > = Effect.fn("Verify.treeOf")(function* (cwd: string) {
@@ -145,14 +151,18 @@ export const treeOf: (
     if (bytes > FINGERPRINT_MAX_BYTES) return { head_sha, fingerprint: TOO_LARGE, branch, dirty };
   }
   // Outside a repository there is no tree to move, as there never was.
-  const tree = place === null ? "" : yield* workingTree(cwd, place.index);
-  if (tree === UNMEASURED) return { head_sha, fingerprint: UNMEASURED, branch, dirty };
+  const { tree, unmeasured } = place === null ? { tree: "" } : yield* workingTree(cwd, place.index);
+  if (unmeasured !== undefined)
+    return { head_sha, fingerprint: UNMEASURED, unmeasured, branch, dirty };
   const parts = [tree];
   for (const sub of changedSubmodules(entries)) {
-    const inner = (yield* treeOf(path.join(root, sub))).fingerprint;
-    if (inner === TOO_LARGE || inner === UNMEASURED || inner === "")
-      return { head_sha, fingerprint: inner === TOO_LARGE ? TOO_LARGE : UNMEASURED, branch, dirty };
-    parts.push(`${sub}=${inner}`);
+    const inner = yield* treeOf(path.join(root, sub));
+    if (inner.fingerprint === TOO_LARGE) return { head_sha, fingerprint: TOO_LARGE, branch, dirty };
+    if (inner.fingerprint === UNMEASURED || inner.fingerprint === "")
+      return inner.unmeasured === undefined
+        ? { head_sha, fingerprint: UNMEASURED, branch, dirty }
+        : { head_sha, fingerprint: UNMEASURED, unmeasured: inner.unmeasured, branch, dirty };
+    parts.push(`${sub}=${inner.fingerprint}`);
   }
   return { head_sha, fingerprint: Arr.join(parts, " "), branch, dirty };
 });
@@ -236,8 +246,16 @@ const placeOf = Effect.fn("Verify.placeOf")(function* (cwd: string) {
   return place;
 });
 
+/** A written tree, or why git could not write one. */
+type Measured = { readonly tree: string; readonly unmeasured?: string };
+
+const unmeasuredBy = (verb: string, ran: Ran): Measured => ({
+  tree: UNMEASURED,
+  unmeasured: tail(Str.trim(ran.stderr ?? "")) || `git ${verb} exited ${ran.code}`,
+});
+
 /** The tree `git add -A` would stage, written through a scratch copy so the checkout's own index is left as it was. */
-const workingTree = Effect.fn("Verify.workingTree")(
+const stageAndWrite = Effect.fn("Verify.stageAndWrite")(
   function* (cwd: string, index: string) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -260,15 +278,29 @@ const workingTree = Effect.fn("Verify.workingTree")(
               yield* fs.utimes(env.GIT_INDEX_FILE, at, at);
             }
           }
-          if ((yield* shell("git", ["add", "-A"], cwd, env)).code !== 0) return UNMEASURED;
+          const added = yield* shell("git", ["add", "-A"], cwd, env);
+          if (added.code !== 0) return unmeasuredBy("add", added);
           const tree = yield* shell("git", ["write-tree"], cwd, env);
-          return tree.code === 0 ? Str.trim(tree.stdout) : UNMEASURED;
+          return tree.code === 0
+            ? { tree: Str.trim(tree.stdout) }
+            : unmeasuredBy("write-tree", tree);
         }),
       (scratch) => fs.remove(scratch, { recursive: true }).pipe(Effect.ignore),
     );
   },
-  Effect.orElseSucceed(() => UNMEASURED),
+  Effect.catch((error) =>
+    Effect.succeed<Measured>({ tree: UNMEASURED, unmeasured: error.message }),
+  ),
 );
+
+/** Tried once more, with a fresh scratch index, before the tree is called unmeasured. */
+const workingTree = (cwd: string, index: string) =>
+  stageAndWrite(cwd, index).pipe(
+    Effect.filterOrElse(
+      (first) => first.unmeasured === undefined,
+      () => stageAndWrite(cwd, index),
+    ),
+  );
 
 /** Whether two snapshots are the same bytes, whatever commit each was on. A tree nobody measured is never the same as another. */
 export const sameTree = (
