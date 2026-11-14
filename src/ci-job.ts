@@ -57,13 +57,18 @@ export type CiJob =
 
 /**
  * The failed jobs a head attempt of `job` shares with its base attempt, or null where the
- * failure is the Run's own: each failed there too, naming failed tests that failed there
- * too; only `job` itself may name none, and only beside others (#460).
+ * failure is the Run's own: each failed there too, naming failed tests that failed in a
+ * shared job there, whose log was read; only `job` itself may name none, and only beside
+ * others (#460).
  */
 const sharedFailure = (job: string, head: FailedAttempt, base: FailedAttempt) => {
-  const there = base.jobs;
-  if (head.jobs === null || there === null || head.jobs.length === 0) return null;
-  const others = Arr.filter(head.jobs, (one) => one.name !== job);
+  const here = head.jobs;
+  if (here === null || base.jobs === null || here.length === 0) return null;
+  const others = Arr.filter(here, (one) => one.name !== job);
+  const there = Arr.filter(base.jobs, (failed) =>
+    Arr.some(here, (one) => one.name === failed.name),
+  );
+  if (Arr.some(there, (one) => one.tests === null)) return null;
   const failedThere = Arr.flatMap(there, (one) => one.tests ?? []);
   const shared = (one: FailedJob) =>
     one.tests !== null &&
@@ -73,7 +78,7 @@ const sharedFailure = (job: string, head: FailedAttempt, base: FailedAttempt) =>
     Arr.every(one.tests, (test) =>
       Arr.some(failedThere, (failed) => failed.name === test.name && failed.file === test.file),
     );
-  if (!Arr.every(head.jobs, shared)) return null;
+  if (!Arr.every(here, shared)) return null;
   return others.length === 0 ? [job] : Arr.map(others, (one) => one.name);
 };
 

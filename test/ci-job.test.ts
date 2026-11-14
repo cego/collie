@@ -701,7 +701,6 @@ const GH_LOG = "gh run view 4031 --log-failed --repo owner/repo";
 const reruns = (requests: ReadonlyArray<FakeRequest>) =>
   Arr.filter(requests, (one) => pipe_(one.url, Str.endsWith("/rerun-failed-jobs")));
 
-/** `settle` on a failed job and its run's jobs at the base: the Run's own, retried, never excused. */
 const notExcused = (name: MrForge, head: ReadonlyArray<FakeJob>, base: ReadonlyArray<FakeJob>) =>
   runEffect(
     Effect.gen(function* () {
@@ -761,6 +760,36 @@ test("a checked job that failed alone naming no test is the Run's own, though it
     "gitlab",
     [CHECKED],
     [CHECKED, { name: "suite (1)", state: "failed", trace: trace(OLD_TEST) }],
+  ));
+
+test("a failure naming a test that fails where the branch leaves its target only in a job that passes here is the Run's own", () =>
+  notExcused(
+    "gitlab",
+    [CHECKED, { name: "suite (1)", state: "failed", trace: trace(OLD_TEST) }],
+    [
+      CHECKED,
+      {
+        name: "suite (1)",
+        state: "failed",
+        trace: trace(["test/other.test.ts", "another thing works"]),
+      },
+      { name: "suite (2)", state: "failed", trace: trace(OLD_TEST) },
+    ],
+  ));
+
+test("a GitHub failure whose shared job's log cannot be read where the branch leaves its target is the Run's own", () =>
+  notExcused(
+    "github",
+    [
+      AGGREGATE,
+      { name: "suite (1)", state: "failed", trace: githubLog("", "an old thing settles") },
+      { name: "suite (2)", state: "failed", trace: githubLog("", "an old thing settles") },
+    ],
+    [
+      AGGREGATE,
+      { name: "suite (1)", state: "failed" },
+      { name: "suite (2)", state: "failed", trace: githubLog("", "an old thing settles") },
+    ],
   ));
 
 test("a failure in a job that failed where the branch leaves its target only in an attempt retried there to a pass is the Run's own", () =>
