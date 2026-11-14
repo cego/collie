@@ -5,7 +5,17 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import { stripVTControlCharacters } from "node:util";
-import { DateTime, Effect, FileSystem, Option, Path, Redacted, Result, Schema } from "effect";
+import {
+  DateTime,
+  Effect,
+  FileSystem,
+  Option,
+  Order,
+  Path,
+  Redacted,
+  Result,
+  Schema,
+} from "effect";
 import { CommandLine } from "effect/process";
 import {
   mrPath,
@@ -818,22 +828,36 @@ function failedAttempt(
   cwd: string,
 ): Effect.Effect<FailedAttempt, never, ForgeHttp> {
   return Effect.gen(function* () {
-    const unread: FailedAttempt = { url: null, tests: [] };
+    const unread: FailedAttempt = { url: null, tests: [], jobs: null };
     const reached = projectRest(ref, cwd);
     if (!reached.ok) return unread;
     const attempt = yield* reached.rest(AttemptJob, `jobs/${id}`);
     if (!attempt.ok) return unread;
     const url = attempt.value.web_url ?? null;
     const jobs = yield* pipelineJobs(reached, cwd, attempt.value.pipeline.id);
-    if (!jobs.ok) return { url, tests: [] };
-    const traces = yield* Effect.forEach(
-      Arr.filter(jobs.value, (one) => one.status === "failed"),
-      (one) => requestText(reached.login, cwd, `${reached.project}/jobs/${one.id}/trace`),
+    if (!jobs.ok) return { url, tests: [], jobs: null };
+    const failed = Arr.filter(jobs.value, (one) => one.status === "failed");
+    const traces = yield* Effect.forEach(failed, (one) =>
+      requestText(reached.login, cwd, `${reached.project}/jobs/${one.id}/trace`),
     );
-    const tests = Arr.flatMap(traces, (trace) =>
-      trace.ok ? failedTestsIn(plainTrace(trace.value)) : [],
+    const named = Arr.map(traces, (trace) =>
+      trace.ok ? failedTestsIn(plainTrace(trace.value)) : null,
     );
-    return { url, tests: Arr.dedupeWith(tests, (a, b) => a.name === b.name && a.file === b.file) };
+    const tests = Arr.flatMap(named, (one) => one ?? []);
+    // A retried job is its newest attempt.
+    const newest = pipe(
+      jobs.value,
+      Arr.sortWith((one) => -one.id, Order.Number),
+      Arr.dedupeWith((a, b) => a.name === b.name),
+    );
+    return {
+      url,
+      tests: Arr.dedupeWith(tests, (a, b) => a.name === b.name && a.file === b.file),
+      jobs: Arr.flatMap(newest, (one) => {
+        const at = failed.indexOf(one);
+        return at === -1 ? [] : [{ name: one.name, tests: named[at]! }];
+      }),
+    };
   });
 }
 
@@ -882,7 +906,13 @@ function baseJob(
         ok: false,
         reason: `could not list the jobs of pipeline ${pipeline.id}: ${found.reason}`,
       };
-    return { ok: true, at: pipeline.sha, state: found.value.state, url: found.value.url };
+    return {
+      ok: true,
+      at: pipeline.sha,
+      state: found.value.state,
+      url: found.value.url,
+      id: found.value.id,
+    };
   });
 }
 

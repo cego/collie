@@ -334,15 +334,21 @@ const retries = (requests: ReadonlyArray<FakeRequest>) =>
 test("a failed job that also fails where the branch leaves its target is reported, and not retried", () =>
   runEffect(
     Effect.gen(function* () {
+      const failing = trace(["test/old-thing.test.ts", "an old thing works"]);
       const { asked, at, forge } = yield* waiting("failed", MR, undefined, {
-        base: { at: BASE, jobs: [{ name: "nuxi-typecheck", state: "failed" }] },
+        jobs: [{ name: "nuxi-typecheck", state: "failed", trace: failing }],
+        base: { at: BASE, jobs: [{ name: "nuxi-typecheck", state: "failed", trace: failing }] },
       });
       expect(yield* read({ ...asked, settle: true }, forge)).toEqual({
         unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${pipe_(at, Str.slice(0, 12))} is failed`,
         state: "failed",
         url: `https://${PROJECT.gitlab}/-/jobs/1`,
         log: LOG,
-        before: { at: BASE, url: `https://${PROJECT.gitlab}/-/jobs/1001` },
+        before: {
+          at: BASE,
+          url: `https://${PROJECT.gitlab}/-/jobs/1001`,
+          jobs: ["nuxi-typecheck"],
+        },
       });
       expect(retries(forge.requests)).toEqual([]);
     }),
@@ -694,6 +700,123 @@ const ATTEMPT = `https://${PROJECT.github}/actions/runs/4031/job/2`;
 const GH_LOG = "gh run view 4031 --log-failed --repo owner/repo";
 const reruns = (requests: ReadonlyArray<FakeRequest>) =>
   Arr.filter(requests, (one) => pipe_(one.url, Str.endsWith("/rerun-failed-jobs")));
+
+/** `settle` on a failed job and its run's jobs at the base: the Run's own, retried, never excused. */
+const notExcused = (name: MrForge, head: ReadonlyArray<FakeJob>, base: ReadonlyArray<FakeJob>) =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, forge } = yield* waiting(
+        "failed",
+        name === "gitlab" ? MR : PULL,
+        undefined,
+        {
+          jobs: Arr.map(head, (job) => ({ ...job, retried: "failed" as const })),
+          base: { at: BASE, jobs: base },
+        },
+        name,
+      );
+      const spec = name === "gitlab" ? NUXI : GATE;
+      const result = yield* read({ ...asked, spec, settle: true }, forge);
+      expect(result).toMatchObject({ state: "failed" });
+      expect("before" in result).toBe(false);
+      expect((name === "gitlab" ? retries : reruns)(forge.requests)).toHaveLength(1);
+    }),
+  );
+const OLD_TEST = ["test/old-thing.test.ts", "an old thing works"] as const;
+const AGGREGATE = { name: "test", state: "failed", trace: githubLog("") } as const;
+const CHECKED = { name: "nuxi-typecheck", state: "failed", trace: trace() } as const;
+
+test("a GitHub failure whose run has a failed job that passes where the branch leaves its target is the Run's own", () =>
+  notExcused(
+    "github",
+    [
+      AGGREGATE,
+      { name: "suite (1)", state: "failed", trace: githubLog("", NEW_TEST) },
+      { name: "desktop-rune", state: "failed", trace: githubLog("", "the rune types are current") },
+    ],
+    [
+      AGGREGATE,
+      { name: "suite (1)", state: "failed", trace: githubLog("", NEW_TEST) },
+      { name: "desktop-rune", state: "passed" },
+    ],
+  ));
+
+test("a failure whose failed jobs name no test is the Run's own, though the same jobs fail where the branch leaves its target", () => {
+  const jobs = [
+    CHECKED,
+    { name: "static", state: "failed", trace: "error: format differs\n" },
+  ] as const;
+  return notExcused("gitlab", jobs, jobs);
+});
+
+test("a failure naming a test that does not fail where the branch leaves its target is the Run's own", () =>
+  notExcused(
+    "gitlab",
+    [CHECKED, { name: "suite (1)", state: "failed", trace: trace(OLD_TEST, [OWN_FILE, NEW_TEST]) }],
+    [CHECKED, { name: "suite (1)", state: "failed", trace: trace(OLD_TEST) }],
+  ));
+
+test("a checked job that failed alone naming no test is the Run's own, though it fails where the branch leaves its target", () =>
+  notExcused(
+    "gitlab",
+    [CHECKED],
+    [CHECKED, { name: "suite (1)", state: "failed", trace: trace(OLD_TEST) }],
+  ));
+
+test("a failure in a job that failed where the branch leaves its target only in an attempt retried there to a pass is the Run's own", () =>
+  notExcused(
+    "gitlab",
+    [CHECKED, { name: "suite (1)", state: "failed", trace: trace(OLD_TEST) }],
+    [
+      CHECKED,
+      {
+        name: "suite (1)",
+        state: "passed",
+        attempts: [{ id: 902, state: "failed", trace: trace(OLD_TEST) }],
+      },
+    ],
+  ));
+
+test("a GitHub failure whose tests fail in other shards where the branch leaves its target is reported, and not rerun", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const one = { name: "suite (1)", state: "failed" } as const;
+      const two = { name: "suite (2)", state: "failed" } as const;
+      const { asked, at, forge } = yield* waiting(
+        "failed",
+        PULL,
+        undefined,
+        {
+          jobs: [
+            AGGREGATE,
+            { ...one, trace: githubLog("", NEW_TEST) },
+            { ...two, trace: githubLog("", "an old thing settles") },
+          ],
+          base: {
+            at: BASE,
+            jobs: [
+              AGGREGATE,
+              { ...one, trace: githubLog("", "an old thing settles") },
+              { ...two, trace: githubLog("", NEW_TEST) },
+            ],
+          },
+        },
+        "github",
+      );
+      expect(yield* read({ ...asked, spec: GATE, settle: true }, forge)).toEqual({
+        unproved: `nuxi is left to CI and unproved: job test on ${pipe_(at, Str.slice(0, 12))} is failed`,
+        state: "failed",
+        url: `https://${PROJECT.github}/actions/runs/4031/job/1`,
+        log: GH_LOG,
+        before: {
+          at: BASE,
+          url: `https://${PROJECT.github}/actions/runs/5031/job/1001`,
+          jobs: ["suite (1)", "suite (2)"],
+        },
+      });
+      expect(reruns(forge.requests)).toEqual([]);
+    }),
+  ));
 
 for (const name of ["gitlab", "github"] as const)
   test(`a ${name} retried pass of an own test in an explicitly selected Bun file proves nothing`, () =>

@@ -6,7 +6,7 @@ import { pipe as pipe_ } from "effect/Function";
 import { Clock, Duration, Effect, FileSystem } from "effect";
 import { mrRefOf } from "./board-model";
 import { checkProof } from "./check-proof";
-import { forgeOf, type JobState } from "./forge/forge";
+import { forgeOf, type FailedAttempt, type FailedJob, type JobState } from "./forge/forge";
 import { noteVerification } from "./metrics";
 import { shell, type Runner } from "./mr";
 import { appendLog } from "./oversight";
@@ -45,10 +45,37 @@ export type CiJob =
       /** The command that prints its log, where there is such a job. */
       readonly log: string | null;
       /** It failed where the branch leaves its target too: not this Run's to fix. */
-      readonly before?: { readonly at: string; readonly url: string | null };
+      readonly before?: {
+        readonly at: string;
+        readonly url: string | null;
+        /** The failed jobs compared, each failing there too. */
+        readonly jobs: ReadonlyArray<string>;
+      };
       /** Missing because the merge request conflicts with its target branch. */
       readonly conflicts?: true;
     };
+
+/**
+ * The failed jobs a head attempt of `job` shares with its base attempt, or null where the
+ * failure is the Run's own: each failed there too, naming failed tests that failed there
+ * too; only `job` itself may name none, and only beside others (#460).
+ */
+const sharedFailure = (job: string, head: FailedAttempt, base: FailedAttempt) => {
+  const there = base.jobs;
+  if (head.jobs === null || there === null || head.jobs.length === 0) return null;
+  const others = Arr.filter(head.jobs, (one) => one.name !== job);
+  const failedThere = Arr.flatMap(there, (one) => one.tests ?? []);
+  const shared = (one: FailedJob) =>
+    one.tests !== null &&
+    (one.name === job
+      ? one.tests.length > 0 || others.length > 0
+      : one.tests.length > 0 && Arr.some(there, (failed) => failed.name === one.name)) &&
+    Arr.every(one.tests, (test) =>
+      Arr.some(failedThere, (failed) => failed.name === test.name && failed.file === test.file),
+    );
+  if (!Arr.every(head.jobs, shared)) return null;
+  return others.length === 0 ? [job] : Arr.map(others, (one) => one.name);
+};
 
 export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
   readonly runId: string;
@@ -63,7 +90,7 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
   readonly wait: boolean;
   /**
    * A failed job is read where the branch leaves its target, and retried once and waited on
-   * where it did not fail there too (ADR-0034).
+   * where its failed jobs and tests did not fail there too (ADR-0034).
    */
   readonly settle?: boolean;
   readonly run: Runner<R>;
@@ -123,12 +150,19 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
       const log = read.id === null ? null : forge.jobLog(ref, read.id);
       if (state === "failed" && asked.settle === true && retried === null) {
         const base = yield* forge.baseJob(ref, job, cwd, asked.run);
-        if (base.ok && base.state === "failed") {
-          const before: CiJob = {
-            ...unproved("is failed", state, read.url, log),
-            before: { at: base.at, url: base.url },
-          };
-          return before;
+        if (base.ok && base.state === "failed" && base.id !== null && read.id !== null) {
+          const jobs = sharedFailure(
+            job,
+            yield* forge.failedAttempt(ref, read.id, cwd, asked.run),
+            yield* forge.failedAttempt(ref, base.id, cwd, asked.run),
+          );
+          if (jobs !== null) {
+            const before: CiJob = {
+              ...unproved("is failed", state, read.url, log),
+              before: { at: base.at, url: base.url, jobs },
+            };
+            return before;
+          }
         }
         if (read.id !== null && (yield* forge.retryJob(ref, read.id, cwd, asked.run)).ok) {
           retried = read.id;

@@ -808,7 +808,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
                 );
             } else if (read.before !== undefined)
               yield* told(
-                `unsettled: ${spec.name}: job ${job} also fails at ${pipe_(read.before.at, Str.slice(0, 12))}, where this branch leaves its target branch, so it failed before this Run's changes.`,
+                `unsettled: ${spec.name}: job ${job} also fails at ${pipe_(read.before.at, Str.slice(0, 12))}, where this branch leaves its target branch, so it failed before this Run's changes (failed there too: ${Arr.join(read.before.jobs, ", ")}).`,
               );
             else if (read.state === "failed")
               failed.push({
