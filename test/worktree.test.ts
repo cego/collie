@@ -2641,31 +2641,44 @@ test("a Renovate Run takes over the checkout an ended Run of the repository left
     }),
   ));
 
+const realGit = (cwd: string, ...args: string[]) =>
+  Effect.flatMap(shell("git", args, cwd), (ran) =>
+    ran.code === 0 ? Effect.void : Effect.die(`git ${Arr.join(args, " ")}: ${ran.stderr}`),
+  );
+
 /**
- * An ended Run's roaming checkout at head 1, which has no `tool`, and a git whose move to
- * the default branch lays head 2's `.collie/dependencies.json` and `install.sh` over it.
+ * Real repositories: an ended Run's roaming checkout at head 1, which has no `tool`, and a
+ * remote whose default branch has moved to head 2, declaring `install.sh` as its dependencies.
  */
 const roamingMovedTo = Effect.fn("worktreeTest.roamingMovedTo")(function* (head: {
   install: string;
   dependencies?: string;
 }) {
   const fs = yield* FileSystem.FileSystem;
+  const remote = join(rig.root, "remote.git");
+  const upstream = join(rig.root, "upstream");
   const taken = join(rig.root, ".collie", "worktrees", "project", "roaming");
-  yield* worktreeOwnedBy(taken, rig.projectDir);
+  yield* realGit(rig.root, "init", "-q", "--bare", "-b", "master", remote);
+  yield* realGit(rig.root, "clone", "-q", remote, upstream);
+  yield* realGit(upstream, "config", "user.email", "test@example.com");
+  yield* realGit(upstream, "config", "user.name", "Test");
+  yield* realGit(upstream, "checkout", "-q", "-b", "master");
+  yield* fs.writeFileString(join(upstream, ".gitignore"), "node_modules/\n");
+  yield* realGit(upstream, "add", "-A");
+  yield* realGit(upstream, "commit", "-q", "-m", "head 1");
+  yield* realGit(upstream, "push", "-q", "origin", "master");
+  yield* realGit(rig.root, "clone", "-q", remote, rig.projectDir);
+  yield* realGit(rig.projectDir, "worktree", "add", "-q", "--detach", taken, "origin/master");
   yield* renovateRunAt(taken);
-  const next = join(rig.root, "head-2");
-  yield* fs.makeDirectory(join(next, ".collie"), { recursive: true });
+  yield* fs.makeDirectory(join(upstream, ".collie"));
   yield* fs.writeFileString(
-    join(next, ".collie", "dependencies.json"),
+    join(upstream, ".collie", "dependencies.json"),
     head.dependencies ?? '{ "executable": "sh", "argv": ["install.sh"] }',
   );
-  yield* fs.writeFileString(join(next, "install.sh"), head.install);
-  yield* fakeGitWithRoaming(
-    taken,
-    {},
-    {},
-    { "checkout --quiet --no-overwrite-ignore --detach": `cp -R "${next}/." "$PWD"` },
-  );
+  yield* fs.writeFileString(join(upstream, "install.sh"), head.install);
+  yield* realGit(upstream, "add", "-A");
+  yield* realGit(upstream, "commit", "-q", "-m", "head 2");
+  yield* realGit(upstream, "push", "-q", "origin", "master");
   return taken;
 });
 
