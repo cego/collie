@@ -5,6 +5,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Effect, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
+import { installDependencies } from "./dependencies";
 import { defaultBase } from "./inputs";
 import { whatItSaid, type Runner } from "./mr";
 
@@ -12,7 +13,8 @@ import { whatItSaid, type Runner } from "./mr";
  * What an integration did. `ref` and `sha` are what the branch is now measured against —
  * a reviewer's diff is `<sha>...HEAD`. `conflicted` leaves the merge in progress for the
  * builder to finish; `waiting` merged nothing because the checkout has work of its own;
- * `unavailable` could not tell where the default branch is, a failed fetch included.
+ * `unavailable` could not tell where the default branch is, a failed fetch included, or
+ * merged it but could not bring the checkout's dependencies to the merged head.
  */
 export const IntegrationSchema = Schema.Struct({
   status: Schema.Literals(["unchanged", "merged", "conflicted", "waiting", "unavailable"]),
@@ -89,7 +91,12 @@ export const integrateDefault = (
     if ((yield* git("merge-base", "--is-ancestor", at.sha, "HEAD")).code === 0)
       return { ...at, status: "unchanged" } satisfies Integration;
     const merged = yield* git("merge", "--no-ff", "--no-edit", ref);
-    if (merged.code === 0) return { ...at, status: "merged" } satisfies Integration;
+    if (merged.code === 0) {
+      const installed = yield* installDependencies(run, cwd);
+      if (installed.refused !== undefined)
+        return { ...at, status: "unavailable", reason: installed.refused } satisfies Integration;
+      return { ...at, status: "merged" } satisfies Integration;
+    }
     const files = yield* unmerged;
     if (files.length > 0) return { ...at, status: "conflicted", files } satisfies Integration;
     return { ...at, status: "unavailable", reason: whatItSaid(merged) } satisfies Integration;
