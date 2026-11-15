@@ -16,6 +16,14 @@
     {
       "criterion": "`deadline` is the clock's time plus the duration.",
       "met": "test/timeout.test.ts; what was built is written up in {run}/handoffs/build.md"
+    },
+    {
+      "criterion": "`README.md` contains \"Reads durations such as `90s`, `5m` and `1h30m` as milliseconds, and writes them back.\"",
+      "met": "README.md line 3 holds that sentence, in the commit \"Read hours and compound durations\""
+    },
+    {
+      "criterion": "A reviewer confirms `README.md`'s first paragraph names every unit `parseDuration` reads, as built.",
+      "met": "README.md line 3 names `s`, `m` and `h`, the keys of `UNITS` in src/duration.ts"
     }
   ],
   "assumptions": []

@@ -43,7 +43,8 @@ Collie already refused claims as proof. It did not refuse work that could not fa
 - a verification that checks nothing a change could break, such as a text search for code
   the change just wrote;
 - a comment or doc that says what the code already says;
-- an acceptance criterion true by construction, including one the base already meets;
+- an acceptance criterion true by construction, including one the base already meets and one
+  that only says text the change adds is there;
 - a finding, summary or hand-off that only repeats the goal or the diff;
 - a judgement that cannot report anything, or that cites the goal it was given as evidence.
 
@@ -58,8 +59,10 @@ user's forks therefore follow it without being edited.
 
 **D3. Each step applies it where its work is made or judged.**
 
-- **Planner.** A criterion is one the ticket's absence would make false. Before a criterion
-  names a command, the planner runs that command on the base:
+- **Planner.** A criterion is one the ticket's absence would make false. Text a ticket adds is
+  never a criterion by being present: its criterion is a reviewer's confirmation that the text
+  describes the behaviour as built. Before a criterion names a command, the planner runs that
+  command on the base:
   - where the base already passes, the criterion is a guard and says so;
   - where the base already fails, the criterion is that the branch adds no failure over the
     base.

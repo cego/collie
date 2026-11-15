@@ -55,7 +55,10 @@ A criterion is one the ticket's absence would make false, never a text search. B
 criterion names a command, the planner runs it on the default branch's head: one that passes
 there is labelled a guard, and one that fails there becomes "the branch adds no failure over
 the base", naming the failures already present. The second opinion raises a criterion true
-by construction, a guard not labelled as one, and one whose only proof is a text search
+by construction, a guard not labelled as one, and one whose only proof is a text search. A
+criterion for text a ticket adds, such as a doc, is a reviewer's confirmation that it
+describes the behaviour as built, because its presence is true as soon as it is written; the
+second opinion raises one that only says the text is there
 ([ADR-draft-a-tautology-proves-nothing](adr/draft-a-tautology-proves-nothing.md)).
 
 A criterion that something is faster, smaller or lighter is a Measurement, never a timing

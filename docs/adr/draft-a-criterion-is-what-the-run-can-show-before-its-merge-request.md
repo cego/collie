@@ -12,9 +12,10 @@ for "criteria someone else can check".
 ## Decision
 
 **D1. A criterion is something the implement Run can show before its merge request**, such
-as a test, a file or a command's result on the branch. An outcome that only CI, a merge or a
-deploy can show goes under the ticket's `## After merge` heading as a plain list, not as
-checkboxes, and is not a criterion. `plan.md`'s tickets step says so. Criteria are read only
+as a test, a command's result on the branch, or a reviewer's confirmation that text the branch
+adds describes the behaviour as built. An outcome that only CI, a merge or a deploy can show
+goes under the ticket's `## After merge` heading as a plain list, not as checkboxes, and is
+not a criterion. `plan.md`'s tickets step says so. Criteria are read only
 from checkboxes under the Acceptance criteria heading, or from the whole ticket where it has
 none, and never from under `## After merge`.
 

@@ -49,6 +49,13 @@
     "lines": [15, 15]
   },
   {
+    "id": "criterion-doc-present",
+    "kind": "a ticket criterion that only says text the change adds is there",
+    "tautology": true,
+    "file": "plan/issues/01-hours.md",
+    "lines": [18, 18]
+  },
+  {
     "id": "handoff-repeats-diff",
     "kind": "a hand-off that only repeats the diff",
     "tautology": true,
@@ -110,5 +117,12 @@
     "tautology": false,
     "file": "plan/issues/01-hours.md",
     "lines": [17, 17]
+  },
+  {
+    "id": "criterion-readme-units",
+    "kind": "honest criterion",
+    "tautology": false,
+    "file": "plan/issues/01-hours.md",
+    "lines": [19, 19]
   }
 ]
