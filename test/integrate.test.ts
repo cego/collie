@@ -206,3 +206,17 @@ test("a merge whose declared dependencies command fails is unavailable, with wha
       expect(done.reason).toContain("lockfile had changes but is frozen");
     }),
   ));
+
+test("an integration resumed after its install failed installs again, never calling the merged head ready", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const run = yield* masterInstalling(
+        'test -f ../registry-up || { echo "registry unreachable" >&2; exit 1; }; mkdir -p node_modules/.bin && printf "#!/bin/sh\\nexit 0\\n" > node_modules/.bin/tool && chmod +x node_modules/.bin/tool',
+      );
+      expect((yield* integrateDefault(shell, run)).status).toBe("unavailable");
+      yield* fs.writeFileString(`${run}/../registry-up`, "");
+      expect((yield* integrateDefault(shell, run)).status).toBe("merged");
+      expect((yield* shell("sh", ["-c", "node_modules/.bin/tool"], run)).code).toBe(0);
+    }),
+  ));

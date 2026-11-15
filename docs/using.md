@@ -2854,8 +2854,8 @@ Before every ticket after the first, and before every review round, `implement` 
 default branch. Where it has moved, Collie merges it into the Run's branch with a merge
 commit and records `integrated <branch>@<sha>` in the Run's log. It never rebases and never
 force-pushes. A merge also runs the project's [`.collie/dependencies.json`](#what-a-run-does-to-your-repository)
-command, so the checkout has the merged head's dependencies; a command that fails parks the
-Run with what it printed, until resumed. A checkout with uncommitted changes is left alone and handed back for the
+command, so the checkout has the merged head's dependencies; a command that fails undoes
+that merge and parks the Run with what it printed, and a resume merges and installs again. A checkout with uncommitted changes is left alone and handed back for the
 builder to commit, and an unchanged default branch is skipped. A conflict at a ticket
 boundary is the builder's next work: that ticket's prompt names the conflicted files and has
 the merge finished first. Before a review, a merge step finishes it. Work goes on only from
