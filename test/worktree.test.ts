@@ -2641,6 +2641,74 @@ test("a Renovate Run takes over the checkout an ended Run of the repository left
     }),
   ));
 
+/**
+ * An ended Run's roaming checkout at head 1, which has no `tool`, and a git whose move to
+ * the default branch lays head 2's `.collie/dependencies.json` and `install.sh` over it.
+ */
+const roamingMovedTo = Effect.fn("worktreeTest.roamingMovedTo")(function* (head: {
+  install: string;
+  dependencies?: string;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const taken = join(rig.root, ".collie", "worktrees", "project", "roaming");
+  yield* worktreeOwnedBy(taken, rig.projectDir);
+  yield* renovateRunAt(taken);
+  const next = join(rig.root, "head-2");
+  yield* fs.makeDirectory(join(next, ".collie"), { recursive: true });
+  yield* fs.writeFileString(
+    join(next, ".collie", "dependencies.json"),
+    head.dependencies ?? '{ "executable": "sh", "argv": ["install.sh"] }',
+  );
+  yield* fs.writeFileString(join(next, "install.sh"), head.install);
+  yield* fakeGitWithRoaming(
+    taken,
+    {},
+    {},
+    { "checkout --quiet --no-overwrite-ignore --detach": `cp -R "${next}/." "$PWD"` },
+  );
+  return taken;
+});
+
+test("a taken-over roaming checkout has its new head's dependencies installed before a check runs in it", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const taken = yield* roamingMovedTo({
+        install:
+          'mkdir -p node_modules/.bin && printf "#!/bin/sh\\nexit 0\\n" > node_modules/.bin/tool && chmod +x node_modules/.bin/tool',
+      });
+
+      const checkout = yield* renovateCheckout();
+
+      expect(checkout.refused).toBe(null);
+      expect(checkout.cwd).toBe(taken);
+      expect((yield* shell("sh", ["-c", "node_modules/.bin/tool"], checkout.cwd)).code).toBe(0);
+      expect(checkout.note).toEndWith("; brought its dependencies to its head with sh install.sh");
+    }),
+  ));
+
+test("a roaming start is refused with what the declared dependencies command said when it fails", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* roamingMovedTo({ install: 'echo "lockfile had changes but is frozen" >&2; exit 1' });
+
+      const checkout = yield* renovateCheckout();
+
+      expect(checkout.refused).toContain("sh install.sh");
+      expect(checkout.refused).toContain("lockfile had changes but is frozen");
+    }),
+  ));
+
+test("a roaming start is refused naming a dependencies file that does not decode, never read as none", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const taken = yield* roamingMovedTo({ install: "exit 0", dependencies: '{ "executable": ' });
+
+      const checkout = yield* renovateCheckout();
+
+      expect(checkout.refused).toContain(join(taken, ".collie", "dependencies.json"));
+    }),
+  ));
+
 test("a checkout made at a recorded path since the Run recorded it is passed over, never taken over", () =>
   runOnPath(
     Effect.gen(function* () {

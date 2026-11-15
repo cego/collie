@@ -52,6 +52,7 @@ import { unlistedServers, type CompactionPorts } from "./compaction";
 import { COMPACTION_PORTS } from "./compactors";
 import { endAgent, endedLine, runLog } from "./agent-end";
 import { readLaunches } from "./launches";
+import { installDependencies } from "./dependencies";
 
 /**
  * Whether a Workflow changes the repository, and so needs a checkout of its own. It
@@ -1231,6 +1232,20 @@ const whyNotWorkIn = Effect.fn("worktree.whyNotWorkIn")(function* (
   return null;
 });
 
+/** `checkout` with its dependencies brought to its head, or refused with why they could not be. */
+const withDependencies = Effect.fn("worktree.withDependencies")(function* (checkout: Checkout) {
+  const installed = yield* installDependencies(shell, checkout.cwd);
+  if (installed.refused !== undefined) return { ...checkout, refused: installed.refused };
+  if (installed.ran === null) return checkout;
+  return {
+    ...checkout,
+    note: Arr.join(
+      [checkout.note, `brought its dependencies to its head with ${installed.ran}`],
+      "; ",
+    ),
+  };
+});
+
 /**
  * Where this Run works. A Workflow that changes the repository owns its branch's
  * checkout; every other Workflow works in the directory it was started from.
@@ -1305,7 +1320,7 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
       return { ...here, refused: `no worktree for ${from}: ${made.refused}` };
     }
     const { worktree } = made;
-    return {
+    return yield* withDependencies({
       ...here,
       cwd: worktree.path,
       worktree,
@@ -1318,7 +1333,7 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
         ],
         "; ",
       ),
-    } satisfies Checkout;
+    });
   }
 
   const plan = yield* branchFor(opts);
@@ -1362,11 +1377,11 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     const why = yield* whyNotWorkIn(herdr, cwd, plan.branch, { ref: plan.base, in: opts.cwd });
     const whose = `${cwd}, Run ${run}'s checkout`;
     if (why === null)
-      return {
+      return yield* withDependencies({
         ...here,
         cwd,
         note: `working in ${whose}: it is clean, at ${plan.branch}'s head, and no agent is working in it`,
-      } satisfies Checkout;
+      });
     notTaken = `not working in ${whose}: ${why}; `;
   }
 
@@ -1392,7 +1407,7 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
       created_branch: made,
       created_on: made ? newOn : null,
     };
-    return {
+    return yield* withDependencies({
       ...here,
       cwd: worktree.path,
       // The workspace herdr just opened on the checkout, which is the whole point of
@@ -1403,7 +1418,7 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
       workspaceLabel: workspaceLabel ?? opts.openLabel ?? null,
       worktree,
       note: `${worktree.created_by_collie ? "created" : "opened"} worktree ${worktree.path} on ${plan.branch}`,
-    } satisfies Checkout;
+    });
   }
 
   const made = yield* gitCheckout({
@@ -1430,14 +1445,14 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     root_tab_id: null,
     root_pane_id: null,
   } satisfies WorktreeRecord;
-  return {
+  return yield* withDependencies({
     ...here,
     cwd: worktree.path,
     worktree,
     note: `${notTaken}${made.created ? "created" : "reused"} worktree ${worktree.path} on ${plan.branch}${
       made.passed.length === 0 ? "" : `, passing over ${Arr.join(made.passed, "; ")}`
     }`,
-  } satisfies Checkout;
+  });
 });
 
 /**

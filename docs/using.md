@@ -521,11 +521,20 @@ directory, or this repository's checkout of another branch — is left as it is 
 over, and the run's log says whose it is (ADR-draft-an-occupied-branch-checkout-path-is-passed-over).
 When all three are held, the run does not start, and its refusal names each path, what
 holds it, and asks you to free one and retry; a refused attempt leaves no new branch
-behind. A fresh checkout is a fresh checkout, so the first thing the implementer does
-there is install the project's dependencies. Where the run cannot be given a worktree, it
+behind. Where the run cannot be given a worktree, it
 does not start and says which branch it could not be given one for, in git's own words:
 working in the directory you started it from is what two runs sharing a checkout — and a
 stash stack — looks like, which is the thing this exists to prevent.
+
+A project names the command that brings a checkout's installed dependencies to its
+lockfile in `.collie/dependencies.json`, in the same shape as a Measurement's `prepare`:
+`{ "executable": "bun", "argv": ["install", "--frozen-lockfile"] }`. Collie runs it in
+every checkout it places for a run — cut, reused, taken over or a roaming one — reading the
+file from that checkout's own tree, since that head's lockfile is the one to satisfy, and
+the run's log says which command it ran. A command that fails refuses the start with the
+command and what it printed, and a file that does not decode refuses it naming the file.
+A project without the file is placed exactly as before, and its agents install what they
+need themselves.
 
 ### A run that roams across branches
 
