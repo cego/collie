@@ -220,3 +220,18 @@ test("an integration resumed after its install failed installs again, never call
       expect((yield* shell("sh", ["-c", "node_modules/.bin/tool"], run)).code).toBe(0);
     }),
   ));
+
+test("an integration resumed after its install left the index locked installs again", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const run = yield* masterInstalling(
+        'test -f ../registry-up || { touch .git/index.lock; echo "registry unreachable" >&2; exit 1; }; mkdir -p node_modules/.bin && printf "#!/bin/sh\\nexit 0\\n" > node_modules/.bin/tool && chmod +x node_modules/.bin/tool',
+      );
+      expect((yield* integrateDefault(shell, run)).status).toBe("unavailable");
+      yield* fs.remove(`${run}/.git/index.lock`);
+      yield* fs.writeFileString(`${run}/../registry-up`, "");
+      expect((yield* integrateDefault(shell, run)).status).toBe("merged");
+      expect((yield* shell("sh", ["-c", "node_modules/.bin/tool"], run)).code).toBe(0);
+    }),
+  ));
