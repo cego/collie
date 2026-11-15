@@ -58,7 +58,6 @@ const repositories = Effect.gen(function* () {
   return { run, upstream, moveMaster };
 });
 
-/** The default branch moved to a head whose declared dependencies command runs `install`. */
 const masterInstalling = (install: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

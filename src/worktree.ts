@@ -1232,7 +1232,6 @@ const whyNotWorkIn = Effect.fn("worktree.whyNotWorkIn")(function* (
   return null;
 });
 
-/** `checkout` with its dependencies brought to its head, or refused with why they could not be. */
 const withDependencies = Effect.fn("worktree.withDependencies")(function* (checkout: Checkout) {
   const installed = yield* installDependencies(shell, checkout.cwd);
   if (installed.refused !== undefined) return { ...checkout, refused: installed.refused };
