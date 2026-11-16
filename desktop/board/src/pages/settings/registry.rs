@@ -279,7 +279,7 @@ pub fn settings() -> Vec<Setting> {
             words(
                 "Agents",
                 "Close an idle agent after",
-                "How long an agent of a finished Run is idle before cleanup judges it. It is closed only where core proves nobody is viewing or typing into it, which core cannot yet, so it is kept. 0 never judges one.",
+                "How long an agent of a finished Run is idle before cleanup judges it. It is closed only where core proves nobody is viewing or typing into it, which core cannot yet, so it is kept. 0 never closes one.",
             )
             .unit("minutes"),
         ),
