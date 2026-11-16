@@ -25,6 +25,7 @@ import { newsPath, pending, read as readNews } from "../src/news";
 import { collie, proves, type World } from "./support/world";
 import { until } from "./support/host";
 import { hostRecords } from "./support/records";
+import { NOTIFIED, RunRecords } from "../src/run-records";
 
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const reportReader = Option.getOrUndefined(
@@ -70,9 +71,11 @@ const healsOf = (client: Client, runId: string) =>
   );
 
 const notified = (world: World, runId: string) =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) => fs.readFileString(`${world.state}/notified.${runId}`)),
-    Effect.map((text) => Arr.filter(Str.split(text, "\n"), (line) => line !== "")),
+  hostRecords(
+    world.state,
+    RunRecords.use((records) => records.controlsOf(NOTIFIED, runId)),
+  ).pipe(
+    Effect.map(Arr.map((row) => row.key)),
     Effect.orElseSucceed((): ReadonlyArray<string> => []),
   );
 

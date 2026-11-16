@@ -19,16 +19,10 @@ import { Rig, FakeHerdr } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { Agents, agentsLayer, type AgentHost } from "../src/agents";
 import { Children, Host } from "../src/sdk";
-import {
-  PARKED,
-  answerDecision,
-  controlPath,
-  foundationLayer,
-  loadEntry,
-  pollStatus,
-} from "../src/engine";
+import { PARKED, answerDecision, foundationLayer, loadEntry, pollStatus } from "../src/engine";
 import { Store } from "../src/store";
 import { events, fixtures, until } from "./support/host";
+import { hostRunRecords } from "./support/records";
 
 let rig: Rig;
 let dir: string;
@@ -397,7 +391,7 @@ test(
         yield* parkedAt("r-unusable");
         // Two prompts and one repair; the third ticket was not handed to anyone yet.
         expect(yield* prompts()).toHaveLength(3);
-        const why = yield* fs.readFileString(controlPath(dir, PARKED, "r-unusable"));
+        const why = yield* hostRunRecords(() => dir).control(PARKED, "r-unusable");
         expect(why).toContain(`${dir}/agents/r-unusable/02-ui.md.json`);
         expect(toasts).toEqual([expect.stringMatching(/^request\|.* needs you\|/)]);
         expect(toasts[0]).toEndWith(`|${why}`);

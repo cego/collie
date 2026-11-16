@@ -17,7 +17,6 @@ import { agentsLayer } from "../src/agents";
 import {
   HOLD,
   Registry,
-  controlPath,
   foundationLayer,
   registryLayer,
   runDir,
@@ -28,6 +27,7 @@ import type { RunReport, RequestedBy } from "../src/board-model";
 import { Store } from "../src/store";
 import { writeTask } from "../src/task";
 import { socketOf } from "../src/host";
+import { RunRecords } from "../src/run-records";
 import { reportsLayer } from "../src/reports";
 import { DEFAULT_AUTHORITY, writeIntent } from "../src/intent";
 import type { Peer } from "../src/peers-model";
@@ -176,7 +176,7 @@ const REPORT: RunReport = {
   closed: true,
 };
 
-test("Run listings and related views read intent from the Run's records and displayed controls from their supplied reader", () =>
+test("Run listings and related views given a reader still take intent and displayed controls from the Run's records", () =>
   runEffect(
     hosted(
       Effect.gen(function* () {
@@ -197,19 +197,17 @@ test("Run listings and related views read intent from the Run's records and disp
           parent: null,
           history: [],
         });
-        const reader: FileSystem.FileSystem = {
-          ...fs,
-          exists: (path) =>
-            path === controlPath(dir(), HOLD, run.runId) ? Effect.succeed(true) : fs.exists(path),
-        };
-        const all = yield* registry.views(null, reader);
+        yield* RunRecords.use((records) =>
+          records.setControl(HOLD, run.runId, new Date().toISOString()),
+        );
+        const all = yield* registry.views(null, fs);
         expect(
           Option.getOrUndefined(Arr.findFirst(all, (view) => view.runId === run.runId)),
         ).toMatchObject({
           options: { outcome: "performance" },
           controls: [HOLD],
         });
-        const related = yield* registry.related(run.runId, [], reader);
+        const related = yield* registry.related(run.runId, [], fs);
         expect(
           Option.getOrUndefined(Arr.findFirst(related, (view) => view.runId === run.runId)),
         ).toMatchObject({
@@ -218,13 +216,13 @@ test("Run listings and related views read intent from the Run's records and disp
         });
         const fresh = yield* registry.view(run.runId);
         expect(fresh?.options.outcome).toBe("performance");
-        expect(fresh?.controls).toEqual([]);
+        expect(fresh?.controls).toEqual([HOLD]);
       }),
     ),
   ));
 
 test(
-  "a completed Run is polled at most once across two listings, and its files are read on each",
+  "a completed Run is polled at most once across two listings, and its records are read on each",
   () =>
     runEffect(
       hosted(
@@ -242,7 +240,9 @@ test(
           expect(first?.controls).toEqual([]);
 
           yield* (yield* Store).reported(run.runId, REPORT);
-          yield* write(controlPath(dir(), HOLD, run.runId), "");
+          yield* RunRecords.use((records) =>
+            records.setControl(HOLD, run.runId, new Date().toISOString()),
+          );
           const second = Option.getOrUndefined(
             Arr.findFirst(yield* registry.views(null), (view) => view.runId === run.runId),
           );

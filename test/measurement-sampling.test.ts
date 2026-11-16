@@ -12,6 +12,9 @@ import { stillRunning, startedOf } from "../src/processes";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { until } from "./support/host";
+import { RunRecords } from "../src/run-records";
+import { controlOf } from "../src/controls";
+import { AWAITING } from "../src/engine";
 
 type Plan = typeof BenchmarkPlan.Encoded;
 
@@ -78,14 +81,16 @@ const measuring = (
   root: string,
   ask: Omit<MeasureAsk, "runId" | "pass"> & { readonly pass?: string },
 ) =>
-  measure({
-    stateDir: `${root}/state`,
-    env: null,
-    ask: { runId: "run-1", pass: "calibration", ...ask },
-    evidence: `${root}/evidence`,
-    awaiting: `${root}/awaiting.json`,
-    stopped: Effect.succeed(false),
-  }).pipe(
+  RunRecords.use((records) =>
+    measure({
+      stateDir: `${root}/state`,
+      env: null,
+      ask: { runId: "run-1", pass: "calibration", ...ask },
+      evidence: `${root}/evidence`,
+      awaiting: controlOf(records, AWAITING, "run-1"),
+      stopped: Effect.succeed(false),
+    }),
+  ).pipe(
     Effect.flatMap((answered) =>
       answered === "stopped" ? Effect.die("stopped") : Effect.succeed(answered.measurement),
     ),
@@ -554,7 +559,7 @@ test.skipIf(process.platform !== "linux")(
         }).pipe(Effect.provideService(CheckProcesses, next));
         expect(resultOf(measured)._tag).toBe("Judged");
         expect(yield* stillRunning(left)).toBe(false);
-      }),
+      }).pipe(Effect.scoped),
     ),
   30_000,
 );

@@ -1,4 +1,4 @@
-import { launchesAt, overHost } from "./records";
+import { hostRecords, hostRunRecords, launchesAt, overHost } from "./records";
 // The shipped workflows as modules, run the way a user's own module is run.
 //
 // Nothing here is special-cased for being shipped, and every scenario runs twice: as
@@ -12,6 +12,7 @@ import { launchesAt, overHost } from "./records";
 
 import * as Arr from "effect/Array";
 import { RunRecords } from "../../src/run-records";
+import { nowIso } from "../../src/time";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
@@ -117,7 +118,6 @@ import {
   Registry,
   answerDecision,
   checkoutRefusedFile,
-  controlPath,
   declaredByModule,
   evidenceDir,
   foundationLayer,
@@ -1333,12 +1333,11 @@ scenario(
           runId,
           input: { plan: `${runDir(dir, runId)}/plan`, ...FINISH },
         };
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.writeFileString(controlPath(dir, HOLD, runId), "");
+        yield* setControl(HOLD, runId);
         const status = yield* stalled(options).pipe(Effect.timeout("5 seconds"));
         expect(status).toBe("suspended");
         expect(started).toEqual([]);
-        yield* fs.remove(controlPath(dir, HOLD, runId));
+        yield* clearControl(HOLD, runId);
         expect(said(yield* resumed(options))).toContain("3 repositories built in 2 wave(s)");
         expect(Arr.map(started, (one) => one.invocation)).toEqual([
           "implement-api",
@@ -6859,8 +6858,7 @@ scenario(
               () => awaitingOn(runId),
               (on) => on === `${other}'s Change to merge`,
             );
-            const fs = yield* FileSystem.FileSystem;
-            yield* fs.writeFileString(controlPath(dir, HOLD, runId), "").pipe(Effect.orDie);
+            yield* setControl(HOLD, runId);
             return yield* until(
               () => status,
               (got) => got === "suspended",
@@ -10333,8 +10331,7 @@ scenario(
         const runId = "r-gate-resumed-unrepaired";
         const { bin, options } = yield* heldUnproved(runId);
         expect(yield* runsOf(`${rig.root}/lint-runs`)).toBe(2);
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.remove(controlPath(dir, PARKED, runId));
+        yield* clearControl(PARKED, runId);
 
         const why = yield* resumedUntilParked(options);
         yield* bin.restore();
@@ -12070,17 +12067,32 @@ const resumed = (options: {
     options.host,
   );
 
-const parkedWhy = (runId: string) =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) => fs.readFileString(controlPath(dir, PARKED, runId))),
+/** The controls over a Run, where the host on `dir` keeps them. */
+const controls = hostRunRecords(() => dir);
+
+/** A control set over the Run, as an operator sets one. */
+const setControl = (control: string, runId: string) =>
+  Effect.flatMap(nowIso, (at) => controls.setControl(control, runId, at));
+
+const clearControl = (control: string, runId: string) => controls.setControl(control, runId, null);
+
+/**
+ * A control's value over the Run, or "" while it is not set or the host has yet to make its
+ * database. Read as the door reads: a poll that opened the database to migrate it would
+ * contend with the host it watches.
+ */
+const controlText = (control: string, runId: string) =>
+  hostRecords(
+    dir,
+    RunRecords.use((records) => records.control(control, runId)),
+  ).pipe(
+    Effect.map((data) => data ?? ""),
     Effect.orElseSucceed(() => ""),
   );
 
-const parkedCause = (runId: string) =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) => fs.readFileString(controlPath(dir, PARK_CAUSE, runId))),
-    Effect.orElseSucceed(() => ""),
-  );
+const parkedWhy = (runId: string) => controlText(PARKED, runId);
+
+const parkedCause = (runId: string) => controlText(PARK_CAUSE, runId);
 
 const parkRecheck = (runId: string, mr: string, cwd: string) =>
   Effect.gen(function* () {
@@ -12109,16 +12121,14 @@ const halts = (runId: string) =>
 
 /** What a Run awaits that ends by itself, or "" while it awaits nothing. */
 const awaitingOn = (runId: string) =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) => fs.readFileString(controlPath(dir, AWAITING, runId))),
+  controlText(AWAITING, runId).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(AwaitingJson)),
     Effect.map((awaiting) => awaiting.on),
     Effect.orElseSucceed(() => ""),
   );
 
 const awaitedLine = (runId: string) =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) => fs.readFileString(controlPath(dir, AWAITING, runId))),
+  controlText(AWAITING, runId).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(AwaitingJson)),
     Effect.map(awaitingLine),
     Effect.orElseSucceed(() => ""),
@@ -13137,8 +13147,7 @@ scenario(
                 (requests) =>
                   Arr.some(requests, (request) => pipe(request.url, Str.includes("deployments"))),
               );
-              const fs = yield* FileSystem.FileSystem;
-              yield* fs.writeFileString(controlPath(dir, HOLD, runId), "").pipe(Effect.orDie);
+              yield* setControl(HOLD, runId);
               return yield* until(
                 () => status,
                 (got) => got === "suspended",
@@ -13174,18 +13183,13 @@ scenario(
                 () => awaitingOn(runId),
                 (got) => got !== "",
               );
-              const fs = yield* FileSystem.FileSystem;
               const threeHoursAgo = DateTime.subtract(yield* DateTime.now, { hours: 3 });
-              yield* fs
-                .writeFileString(
-                  controlPath(dir, AWAITING, runId),
-                  yield* Schema.encodeEffect(AwaitingJson)({
-                    on,
-                    who: null,
-                    since: DateTime.formatIso(threeHoursAgo),
-                  }).pipe(Effect.orDie),
-                )
-                .pipe(Effect.orDie);
+              const overdue = yield* Schema.encodeEffect(AwaitingJson)({
+                on,
+                who: null,
+                since: DateTime.formatIso(threeHoursAgo),
+              }).pipe(Effect.orDie);
+              yield* controls.setControl(AWAITING, runId, overdue);
               expect(
                 yield* until(
                   () => parkedWhy(runId),
@@ -16022,7 +16026,6 @@ for (const name of ["gitlab", "github"] as const) {
               checks: [{ name: "build", state: "failed" }],
             });
             const runId = `r-ci-${control}-${name}`;
-            const fs = yield* FileSystem.FileSystem;
             const controlled = Layer.effect(Host)(
               Effect.gen(function* () {
                 const host = yield* Host;
@@ -16033,11 +16036,7 @@ for (const name of ["gitlab", "github"] as const) {
                       .awaitReview(asked)
                       .pipe(
                         Effect.tap((standing) =>
-                          standing._tag === "FailedCi"
-                            ? fs
-                                .writeFileString(controlPath(dir, control, runId), "")
-                                .pipe(Effect.orDie)
-                            : Effect.void,
+                          standing._tag === "FailedCi" ? setControl(control, runId) : Effect.void,
                         ),
                       ),
                 });
@@ -16441,7 +16440,6 @@ for (const name of ["gitlab", "github"] as const) {
             );
             const runId = `r-conflict-delayed-${name}`;
             yield* ownCheck(runId);
-            const fs = yield* FileSystem.FileSystem;
             let reads = 0;
             const delayed = Layer.effect(Host)(
               Effect.gen(function* () {
@@ -16453,10 +16451,7 @@ for (const name of ["gitlab", "github"] as const) {
                       if (asked.returnConflicts) {
                         reads++;
                         if (reads === 2) return { _tag: "Conflicting", head } as const;
-                        if (held && reads === 3)
-                          yield* fs
-                            .writeFileString(controlPath(dir, HOLD, runId), "")
-                            .pipe(Effect.orDie);
+                        if (held && reads === 3) yield* setControl(HOLD, runId);
                       }
                       return yield* host.awaitReview(asked);
                     }),
@@ -16964,16 +16959,13 @@ for (const name of ["gitlab", "github"] as const) {
           Effect.gen(function* () {
             const { bin, forge } = yield* releasable(name, { mergeable: "conflict" }, false);
             const runId = `r-conflict-${control}-${name}`;
-            const fs = yield* FileSystem.FileSystem;
             const controlled = Layer.effect(Host)(
               Effect.gen(function* () {
                 const host = yield* Host;
                 return Host.of({
                   ...host,
                   awaitReview: (asked) =>
-                    fs
-                      .writeFileString(controlPath(dir, control, runId), "")
-                      .pipe(Effect.orDie, Effect.andThen(host.awaitReview(asked))),
+                    setControl(control, runId).pipe(Effect.andThen(host.awaitReview(asked))),
                 });
               }),
             ).pipe(Layer.provide(releaseHost()));
@@ -17014,8 +17006,7 @@ for (const name of ["gitlab", "github"] as const) {
                   () => awaitingOn(runId),
                   (why) => why !== "",
                 );
-                const fs = yield* FileSystem.FileSystem;
-                yield* fs.writeFileString(controlPath(dir, HOLD, runId), "").pipe(Effect.orDie);
+                yield* setControl(HOLD, runId);
                 return yield* until(
                   () => Effect.map(run.status, (got) => got.status),
                   (got) => got === "suspended",
@@ -19471,8 +19462,7 @@ for (const name of ["gitlab", "github"] as const) {
                 () => parkedWhy(runId),
                 (why) => why !== "",
               );
-              const fs = yield* FileSystem.FileSystem;
-              yield* fs.writeFileString(controlPath(dir, HOLD, runId), "").pipe(Effect.orDie);
+              yield* setControl(HOLD, runId);
               return yield* until(
                 () => Effect.map(run.status, (got) => got.status),
                 (got) => got === "suspended",

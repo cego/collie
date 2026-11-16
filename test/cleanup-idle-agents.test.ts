@@ -18,6 +18,8 @@ import {
   type IdleSince,
 } from "../src/cleanup";
 import { appendCard } from "../src/cards";
+import { STOP } from "../src/controls";
+import { RunRecords } from "../src/run-records";
 import { readLaunches, recordLaunch, type Launched } from "../src/launches";
 import { keepQueued } from "../src/delivery-queue";
 import { Herdr, type AgentInfo } from "../src/herdr";
@@ -351,8 +353,7 @@ test("a Run stopped again between sweeps counts from its newest stop", () =>
   runEffect(
     Effect.gen(function* () {
       yield* arranged();
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.writeFileString(`${rig.stateDir}/stop.r1`, "");
+      yield* (yield* RunRecords).setControl(STOP, "r1", yield* isoAgo(0));
       const run = runFacts({ id: "r1", state: "stopped", finished: null });
       const finishedSince: FinishedSince = new Map([["r1", yield* ago(80 * MIN_MS)]]);
       const judged = yield* sweep(

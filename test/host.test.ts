@@ -32,7 +32,7 @@ import {
   CHECK_INSTALLATION,
   encodeCheckRecord,
   KILL_CEILING,
-  runningChecksDir,
+  runningChecks,
   type CheckRecord,
 } from "../src/check-processes";
 import { evidenceDir } from "../src/engine";
@@ -45,7 +45,8 @@ import { VerifySpecSchema } from "../src/verify-spec";
 import { exec, startDetached } from "./support/command";
 import { fastForward, runEffect, suiteEnv } from "./support/effect";
 import { stopHost, until } from "./support/host";
-import { hostRecords, recordsAt } from "./support/records";
+import { hostRecords, hostRunRecords, recordsAt } from "./support/records";
+import { RUNNING_CHECK } from "../src/run-records";
 import { Rig } from "./support/recorder";
 
 const root = new URL("../", import.meta.url).pathname;
@@ -656,6 +657,9 @@ test.skipIf(process.platform !== "linux")(
 
 const heldCheck = `${root}test/fixtures/checks/held.sh`;
 
+/** The checks the host on `state` has recorded as running; a failure before it has made host.db. */
+const checksAt = (state: string) => hostRecords(state, runningChecks);
+
 /**
  * Runs the `held` check, which ignores SIGTERM and has a `setsid` child, on a host watching
  * `watch`, then ends the host with `end`. Gives back the check's two processes, each with
@@ -663,17 +667,9 @@ const heldCheck = `${root}test/fixtures/checks/held.sh`;
  */
 /** The check records in `state` once there are at least `least`. */
 const recordedChecks = (state: string, least: number) =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) =>
-      until(
-        () =>
-          fs.readDirectory(runningChecksDir(state)).pipe(
-            Effect.map((files) => Arr.filter(files, (file) => pipe_(file, Str.endsWith(".json")))),
-            Effect.orElseSucceed((): ReadonlyArray<string> => []),
-          ),
-        (files) => files.length >= least,
-      ),
-    ),
+  until(
+    () => checksAt(state),
+    (records) => records.length >= least,
   );
 
 /** The `held` check running for a Run on a host watching `watch`, with its two processes. */
@@ -791,7 +787,6 @@ test.skipIf(process.platform !== "linux")(
   () =>
     proves(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
         const { state, runId, check, notes } = yield* runsAHeldCheck("");
         yield* Effect.addFinalizer(() => stopHost(state).pipe(Effect.ignore));
         yield* Effect.scoped(
@@ -806,7 +801,7 @@ test.skipIf(process.platform !== "linux")(
               () => client.status({ runId }),
               (status) => status.status === "suspended",
             );
-            expect(yield* fs.readDirectory(runningChecksDir(state))).toEqual([]);
+            expect(yield* checksAt(state)).toEqual([]);
             expect(yield* verifyingIn(`${state}/runs/${runId}`)).toBeNull();
 
             yield* client.resume({ runId, request: "resume-1" });
@@ -934,23 +929,9 @@ const notedIn = (notes: string, file: string) =>
     Effect.orElseSucceed((): ReadonlyArray<string> => []),
   );
 
-/** The leader pid of each running check the host has recorded, its temp files aside. */
+/** The leader pid of each running check the host has recorded. */
 const recordedLeaders = (state: string) =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) =>
-      fs.readDirectory(runningChecksDir(state)).pipe(
-        Effect.map((names) => Arr.filter(names, (name) => pipe_(name, Str.endsWith(".json")))),
-        Effect.flatMap((names) =>
-          Effect.forEach(names, (name) =>
-            fs
-              .readFileString(`${runningChecksDir(state)}/${name}`)
-              .pipe(Effect.map((text): number => JSON.parse(text).leader.pid)),
-          ),
-        ),
-      ),
-    ),
-    Effect.orElseSucceed((): ReadonlyArray<number> => []),
-  );
+  Effect.map(checksAt(state), (records) => Arr.map(records, (record) => record.leader.pid));
 
 /** Lets the held check end, waits for its Run to complete, and gives back its verifications. */
 const releasedOnce = (state: string, runId: string, notes: string) =>
@@ -982,7 +963,7 @@ test.skipIf(process.platform !== "linux")(
         const run = `${state}/runs/${runId}`;
         const stale = yield* verifyingIn(run);
         expect(stale).not.toBeNull();
-        const [record] = yield* fs.readDirectory(runningChecksDir(state));
+        const [record] = yield* checksAt(state);
         yield* Effect.addFinalizer(() => stopHost(state).pipe(Effect.ignore));
 
         yield* Effect.scoped(
@@ -997,7 +978,7 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* fs.readFileString(`${run}/log.txt`)).toContain(
           `check held (pass gate) of ${runId}, left running by host ${killed.host} `,
         );
-        expect(yield* fs.readDirectory(runningChecksDir(state))).not.toContain(record);
+        expect(Arr.map(yield* checksAt(state), (one) => one.id)).not.toContain(record!.id);
         expect((yield* verifyingIn(run))?.started).not.toBe(stale?.started);
 
         expect(yield* releasedOnce(state, runId, notes)).toHaveLength(1);
@@ -1368,12 +1349,13 @@ test.skipIf(process.platform !== "linux")(
             ),
           ),
         );
-        yield* fs.makeDirectory(runningChecksDir(state));
         yield* fs.makeDirectory(`${state}/runs/run-four`, { recursive: true });
         const recorded = (record: CheckRecord) =>
-          fs.writeFileString(
-            `${runningChecksDir(state)}/${record.id}.json`,
+          hostRunRecords(() => state).setControl(
+            RUNNING_CHECK,
+            "",
             encodeCheckRecord(record),
+            record.id,
           );
         yield* recorded({
           id: "run-one@1-reused",
@@ -1406,7 +1388,7 @@ test.skipIf(process.platform !== "linux")(
           (running) => !Arr.some(running, Boolean),
         );
         yield* until(
-          () => fs.readDirectory(runningChecksDir(state)),
+          () => checksAt(state),
           (records) => records.length === 0,
         );
         yield* until(

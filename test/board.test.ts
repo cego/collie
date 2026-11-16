@@ -61,7 +61,7 @@ import {
   type Verification,
 } from "../src/verify";
 import { checkSentence, followLog } from "../src/checks";
-import { encodeCheckRecord, runningChecksDir } from "../src/check-processes";
+import { encodeCheckRecord } from "../src/check-processes";
 import { readEnv } from "../src/env";
 import type { AgentInfo } from "../src/herdr";
 import { appendLine, toldIn, toldLine, type Delivery } from "../src/steering";
@@ -73,7 +73,7 @@ import type { RunView } from "../src/engine";
 import type { TaskRecord } from "../src/task";
 import { memoryRecords, runEffect } from "./support/effect";
 import { hostRecords, madeRun, recordsAt } from "./support/records";
-import { RunRecords } from "../src/run-records";
+import { RUNNING_CHECK, RunRecords } from "../src/run-records";
 import { exec } from "./support/command";
 import { collie, proves } from "./support/world";
 import { stopHost, until } from "./support/host";
@@ -1192,12 +1192,11 @@ test("a stopped Run whose check still runs is working, and stopped once the chec
   runEffect(
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
-      const fs = yield* FileSystem.FileSystem;
+      const records = yield* RunRecords;
       const run = yield* madeRun(dir, { id: "r-stopped", task: "task-1", state: "stopped" });
-      const record = `${runningChecksDir(dir)}/r-stopped@1-a.json`;
-      yield* fs.makeDirectory(runningChecksDir(dir), { recursive: true });
-      yield* fs.writeFileString(
-        record,
+      yield* records.setControl(
+        RUNNING_CHECK,
+        "",
         encodeCheckRecord({
           id: "r-stopped@1-a",
           run: run.id,
@@ -1208,6 +1207,7 @@ test("a stopped Run whose check still runs is working, and stopped once the chec
           host: { pid: 4241, started: "1" },
           started: "2026-09-14T10:03:00Z",
         }),
+        "r-stopped@1-a",
       );
 
       const [checking] = yield* board(env, [run]);
@@ -1215,7 +1215,7 @@ test("a stopped Run whose check still runs is working, and stopped once the chec
       expect(sectionOf(checking!)).toBe("working");
       expect(checking!.sentence).toBe("Running unit on the branch, 2 min.");
 
-      yield* fs.remove(record);
+      yield* records.setControl(RUNNING_CHECK, "", null, "r-stopped@1-a");
       const [stopped] = yield* board(env, [run]);
       expect(stopped!.state).toBe("stopped");
     }),
@@ -1225,7 +1225,6 @@ test("a check still running for an older Run of a Task keeps the Task working, e
   runEffect(
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
-      const fs = yield* FileSystem.FileSystem;
       const newer = yield* madeRun(dir, {
         id: "r-newer",
         task: "task-1",
@@ -1247,9 +1246,9 @@ test("a check still running for an older Run of a Task keeps the Task working, e
         ref: "cego/collie!43",
         note: null,
       });
-      yield* fs.makeDirectory(runningChecksDir(dir), { recursive: true });
-      yield* fs.writeFileString(
-        `${runningChecksDir(dir)}/r-older@1-a.json`,
+      yield* (yield* RunRecords).setControl(
+        RUNNING_CHECK,
+        "",
         encodeCheckRecord({
           id: "r-older@1-a",
           run: older.id,
@@ -1260,6 +1259,7 @@ test("a check still running for an older Run of a Task keeps the Task working, e
           host: { pid: 4241, started: "1" },
           started: "2026-09-14T10:03:00Z",
         }),
+        "r-older@1-a",
       );
 
       const [card] = yield* board(env, [newer, older]);

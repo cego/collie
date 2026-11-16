@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { ConfigProvider, Effect, Exit, FileSystem, Path } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { Host } from "../src/sdk";
-import { controlPath, evidenceDir, foundationLayer, runDir, STOP } from "../src/engine";
+import { evidenceDir, foundationLayer, runDir, STOP } from "../src/engine";
 import { Store } from "../src/store";
 import { appendVerification, collect, readVerifications } from "../src/verify";
 import { updateApproved } from "../src/verify-spec";
@@ -11,7 +11,7 @@ import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
 import { recordsAt } from "./support/records";
-import type { RunRecords } from "../src/run-records";
+import { RunRecords } from "../src/run-records";
 
 let rig: Rig;
 let dir: string;
@@ -222,10 +222,11 @@ test("a Check pass waits while its Machine is short of memory, runs nothing mean
 test("a stop of a Run whose Check pass waits for memory runs nothing, however soon memory frees", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       const stopOnceWaiting = Effect.gen(function* () {
         while ((yield* waitingFor()) === null) yield* Effect.sleep("20 millis");
-        yield* fs.writeFileString(controlPath(dir, STOP, runId), "").pipe(Effect.orDie);
+        yield* RunRecords.use((records) =>
+          records.setControl(STOP, runId, new Date().toISOString()),
+        );
         yield* rig.memory(50).pipe(Effect.orDie);
       });
       const got = yield* gateOnRig(

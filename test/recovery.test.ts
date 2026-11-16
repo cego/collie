@@ -7,6 +7,7 @@ import { collie, proves } from "./support/world";
 import { until } from "./support/host";
 import { readAudit } from "../src/audit";
 import { recordsReadLayer } from "../src/records";
+import { NOTIFIED, RunRecords } from "../src/run-records";
 import { FakeBin } from "./support/bin";
 import {
   FORGE_HOST,
@@ -633,11 +634,14 @@ test(
           expect(audit).toHaveLength(3);
           const shown = yield* collie(world, ["board"]);
           expect(asJson(shown.envelope.data)).toContain("rechecked");
-          const notices = yield* (yield* FileSystem.FileSystem)
-            .readFileString(`${world.state}/notified.${runId}`)
-            .pipe(Effect.orDie);
+          const notices = yield* RunRecords.use((records) =>
+            records.controlsOf(NOTIFIED, runId),
+          ).pipe(Effect.provide(recordsReadLayer(world.state)), Effect.orDie);
           expect(
-            Arr.filter(Str.split(notices, "\n"), (line) => Str.includes("parked:")(line)),
+            Arr.filter(
+              Arr.map(notices, (row) => row.key),
+              (line) => Str.includes("parked:")(line),
+            ),
           ).toEqual(["needs-you:parked:checkout-dirty-collie"]);
           const report = yield* collie(world, ["run", "report"]);
           expect(report.envelope.data).toMatchObject({

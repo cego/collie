@@ -22,11 +22,10 @@ import { endAgent } from "../src/agent-end";
 import type { Backend } from "../src/herdr";
 import { readControl } from "../src/compaction";
 import { processAbsent } from "../src/processes";
-import { launchDir, readLaunches, recordLaunch, startedDir, stemOf } from "../src/launches";
+import { launchDir, readLaunches, recordLaunch, stemOf } from "../src/launches";
 import {
   PARK_CAUSE,
   Registry,
-  controlPath,
   foundationLayer,
   registryLayer,
   type Generation,
@@ -34,7 +33,8 @@ import {
 } from "../src/engine";
 import type { Store } from "../src/store";
 import { agentName } from "../src/naming";
-import { deliveredTo, recordsAt } from "./support/records";
+import { deliveredTo, hostRecords, hostRunRecords, recordsAt } from "./support/records";
+import { RELAUNCH, RunRecords } from "../src/run-records";
 import { appendLine } from "../src/steering";
 import { COMPACT_AT_TOKENS } from "../src/settings";
 import { COMPACTION_PORTS, codexPort } from "../src/compactors";
@@ -106,10 +106,10 @@ const until = <A, E, R>(read: () => Effect.Effect<A, E, R>, wanted: (value: A) =
 const remindersSpent = (runId: string) =>
   until(
     () =>
-      FileSystem.FileSystem.pipe(
-        Effect.flatMap((fs) => fs.readFileString(controlPath(dir(), PARK_CAUSE, runId))),
-        Effect.orElseSucceed(() => ""),
-      ),
+      hostRecords(
+        dir(),
+        RunRecords.use((records) => records.control(PARK_CAUSE, runId)),
+      ).pipe(Effect.orElseSucceed(() => null)),
     (cause) => cause === "output-absent",
   );
 
@@ -693,7 +693,6 @@ for (const [hasSession, sessionOnlyAnchor, outcome] of [
           const core = yield* rig.startCore();
           yield* rig.queueOutputs([null, null, null, null]);
           yield* Effect.gen(function* () {
-            const fs = yield* FileSystem.FileSystem;
             const agents = yield* Agents;
             const runId = "r-collided-generations";
             const ask = {
@@ -747,16 +746,21 @@ for (const [hasSession, sessionOnlyAnchor, outcome] of [
                 agent: collided,
               });
             }
-            const starts = startedDir(dir(), runId);
+            const runRecords = yield* RunRecords;
             // The original start was saved before its terminal could be recorded. Later
             // work established the terminal of that same session, without another start.
             if (sessionOnlyAnchor)
-              yield* fs.writeFileString(
-                `${starts}/${latest.agent}.json`,
+              yield* runRecords.setControl(
+                RELAUNCH,
+                runId,
                 asJson({ ...Struct.omit(ask, ["prompt"]), sequence: 2 }),
+                latest.agent,
               );
-            yield* fs.rename(`${starts}/${latest.agent}.json`, `${starts}/${collided}.json`);
-            yield* fs.remove(`${starts}/${earlier.agent}.json`);
+            const moved = yield* runRecords.control(RELAUNCH, runId, latest.agent);
+            expect(moved).not.toBeNull();
+            yield* runRecords.setControl(RELAUNCH, runId, null, latest.agent);
+            yield* runRecords.setControl(RELAUNCH, runId, moved, collided);
+            yield* runRecords.setControl(RELAUNCH, runId, null, earlier.agent);
             yield* core.lose;
             const before = coreCalls(yield* rig.calls()).length;
 
@@ -881,7 +885,6 @@ test("quota incident publication waits for an admitted core recovery", () =>
 test("one Run's core recovery does not hold up another Run's revive", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       const listing = yield* Deferred.make<void>();
       const proceed = yield* Deferred.make<void>();
       class HeldList extends FakeHerdr {
@@ -897,8 +900,7 @@ test("one Run's core recovery does not hold up another Run's revive", () =>
         ["run-a", agentName("run-a", "work", null, 1)],
         ["run-b", other],
       ] as const) {
-        yield* fs.makeDirectory(startedDir(dir(), runId), { recursive: true });
-        yield* fs.writeFileString(`${startedDir(dir(), runId)}/${agent}.json`, "{}");
+        yield* hostRunRecords(dir).setControl(RELAUNCH, runId, "{}", agent);
       }
       yield* Effect.gen(function* () {
         const agents = yield* Agents;

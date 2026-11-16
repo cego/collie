@@ -41,7 +41,8 @@ import type { TaskRecord } from "../src/task";
 import { epochMs } from "../src/time";
 import { withLock } from "../src/lock";
 import { NOTHING_SETTLING, onBranch, reviewingDir, type Settling } from "../src/worktree";
-import { encodeCheckRecord, runningChecksDir } from "../src/check-processes";
+import { encodeCheckRecord } from "../src/check-processes";
+import { RUNNING_CHECK, RunRecords } from "../src/run-records";
 import { shell } from "../src/mr";
 import { Herdr } from "../src/herdr";
 import { processOf } from "../src/processes";
@@ -3273,13 +3274,12 @@ test("a stopped run keeps the checkout a resume carries on in, until its work la
 test("a stopped run whose check still runs keeps its checkout, though its work landed", () =>
   runOnPath(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       const at = yield* collieWorktree("wt", { state: "stopped" });
       yield* settledGit();
       yield* mergedMr();
-      yield* fs.makeDirectory(runningChecksDir(rig.stateDir), { recursive: true });
-      yield* fs.writeFileString(
-        `${runningChecksDir(rig.stateDir)}/run-wt@1-a.json`,
+      yield* (yield* RunRecords).setControl(
+        RUNNING_CHECK,
+        "",
         encodeCheckRecord({
           id: "run-wt@1-a",
           run: "run-wt",
@@ -3289,6 +3289,7 @@ test("a stopped run whose check still runs keeps its checkout, though its work l
           host: { pid: 4241, started: "1" },
           started: "2026-10-26T00:00:00.000Z",
         }),
+        "run-wt@1-a",
       );
 
       const judged = yield* sweeper().judge;
