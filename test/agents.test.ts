@@ -1701,7 +1701,7 @@ test("a managed Codex server's late Output during retirement prevents rebuilding
   ));
 
 test("a reused managed Codex server dying just before delivery is replaced without parking", () =>
-  runLive(
+  runEffect(
     Effect.gen(function* () {
       const managed = yield* managedCodex;
       class DiesBeforeDelivery extends FakeHerdr {
@@ -1713,11 +1713,7 @@ test("a reused managed Codex server dying just before delivery is replaced witho
               this.killed = true;
               managed.state.reachable = false;
               managed.children[0]!.kill();
-              return Effect.promise(() => managed.children[0]!.exited).pipe(
-                // Retirement may outlast 30 simulated seconds without stalling the process.
-                Effect.andThen(spend(35_000)),
-                Effect.andThen(status),
-              );
+              return Effect.promise(() => managed.children[0]!.exited).pipe(Effect.andThen(status));
             }
             return status;
           });
