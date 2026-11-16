@@ -507,6 +507,56 @@ test(
   30_000,
 );
 
+test(
+  "an issue on Collie's repository may not name the Run's own checkout or its remote",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* repository(rig.projectDir, `https://${PROJECT.gitlab}.git`);
+        yield* fs.writeFileString(
+          `${rig.userDir}/config.json`,
+          json({ projects: { root: rig.root } }),
+        );
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        try {
+          const fake = yield* forgeOnPath(bin, "github", {
+            installed: true,
+            loggedIn: [FORGE_HOST.github],
+            login: "me",
+            mrs: [],
+          });
+          forgeApi = yield* serveForges(fake);
+          yield* Effect.gen(function* () {
+            const registry = yield* Registry;
+            const generation = yield* registry.load(
+              new URL("./fixtures/workflows/issues.workflow.ts", import.meta.url).pathname,
+            );
+            for (const text of [`Seen in ${rig.projectDir}/file`, `Seen in ${PROJECT.gitlab}`]) {
+              const run = yield* registry.start({
+                generation,
+                request: text,
+                project: rig.projectDir,
+                input: { operation: "file-on-collie", text },
+                handsOver: true,
+              });
+              const answer = yield* registry.result(run.runId).pipe(Effect.result);
+              expect(Result.isFailure(answer)).toBe(true);
+              if (Result.isFailure(answer))
+                expect(answer.failure.reason).toBe(
+                  `issue text names another checkout: ${rig.projectDir}`,
+                );
+            }
+          }).pipe(withMachine);
+          expect((yield* fake.model()).issues ?? []).toEqual([]);
+        } finally {
+          yield* bin.restore();
+        }
+      }),
+    ),
+  30_000,
+);
+
 for (const failure of ["configuration", "inventory"] as const) {
   test(
     `the host refuses with a recordable error when its ${failure} cannot be inspected`,

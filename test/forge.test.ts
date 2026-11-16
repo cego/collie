@@ -153,6 +153,28 @@ for (const name of ["gitlab", "github"] as const) {
         );
       });
 
+    test("an issue write the forge refuses says so, with nothing to inspect", () => {
+      const fake = fakeForge(name, model(name, { refusesIssueWrite: 403 }));
+      return runEffect(
+        Effect.gen(function* () {
+          const filed = yield* forge.fileIssue(
+            PROJECT[name],
+            "Problem",
+            "Evidence",
+            "/w",
+            fake.run,
+          );
+          const noted = yield* forge.commentIssue(PROJECT[name], 1, "Evidence", "/w", fake.run);
+          for (const refused of [filed, noted]) {
+            expect(refused.ok).toBe(false);
+            if (refused.ok) continue;
+            expect(refused.reason).toContain("403");
+            expect(refused.reason).not.toContain("before retrying");
+          }
+        }).pipe(Effect.provide(fake.layer)),
+      );
+    });
+
     test("comments on an issue over HTTP from a cold login", () => {
       const fake = fakeForge(
         name,
