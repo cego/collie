@@ -178,6 +178,7 @@ import {
   desktopSweeper,
   renovateClonesSweeper,
   measurementTreesSweeper,
+  buildCachesSweeper,
   retentionSweeper,
   runnersSweeper,
   settlingOf,
@@ -1458,6 +1459,7 @@ const hostBoard = (dir: string) =>
           checksSweeper(checks),
           renovateClonesSweeper(env.stateDir, all),
           measurementTreesSweeper(env.stateDir, all),
+          buildCachesSweeper(board.runs.pipe(Effect.orElseSucceed(() => []))),
           desktopSweeper(
             desktopRootOf(dataHomeOf(env.home, env.raw["XDG_DATA_HOME"])),
             `${env.raw["XDG_STATE_HOME"] || `${env.home}/.local/state`}/collie-desktop`,
@@ -1859,7 +1861,7 @@ const isHerdName = (herd: string) => herd !== "." && herd !== ".." && /^[^/\\]+$
 const finishTakenOver = (stateDir: string) =>
   Effect.gen(function* () {
     const checks = yield* CheckProcesses;
-    const { finishCheck } = yield* Effect.promise(() => import("./verify"));
+    const { finishCheck, noVerdict } = yield* Effect.promise(() => import("./verify"));
     const { noteVerification } = yield* Effect.promise(() => import("./metrics"));
     const followed = new Map<
       string,
@@ -1872,15 +1874,19 @@ const finishTakenOver = (stateDir: string) =>
       yield* Effect.scoped(
         checks.claim(record.id).pipe(
           Effect.flatMap((running) =>
-            running === null ? Effect.never : running.collected(running.exit),
+            running === null
+              ? Effect.never
+              : running.collected(
+                  running.exit.pipe(Effect.mapError(noVerdict(record.name, "exit status", "read"))),
+                ),
           ),
-          Effect.flatMap((exit) => finishCheck(record.id, exit)),
+          Effect.flatMap((exit) => finishCheck(record.id, record.name, exit)),
         ),
       ).pipe(
         Effect.tap((verification) =>
           noteVerification(evidenceDir(stateDir, record.run), verification),
         ),
-        Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
+        Effect.mapError((cause) => new HostRefused({ reason: `invalid_state: ${cause.why}` })),
         Effect.exit,
         Effect.flatMap((exit) => Deferred.done(done, exit)),
         Effect.forkScoped,
@@ -2575,6 +2581,31 @@ const frontDoorHandlers = (
               ),
             ),
           ),
+        publish: ({ runId, title, file, onto, pushOnly, skipCi, request }, { client }) =>
+          once(
+            runDir(dir, runId),
+            {
+              operation: "publish",
+              request,
+              ...whoOf(client),
+              asked: {
+                title,
+                file,
+                onto: onto ?? null,
+                pushOnly: pushOnly ?? false,
+                skipCi: skipCi ?? false,
+              },
+              result: Schema.Struct({ url: Schema.String }),
+            },
+            Effect.gen(function* () {
+              yield* known(runId);
+              const published = yield* (yield* Host)
+                .publish({ runId, title, file, onto, pushOnly, skipCi })
+                .pipe(Effect.mapError((error) => new HostRefused({ reason: error.reason })));
+              if (!pushOnly) yield* registry.mergeRequest(runId, published.url);
+              return published;
+            }),
+          ).pipe(Effect.provideContext(hosted)),
         withdrawNote: ({ runId, note, request }, { client }) =>
           once(
             runDir(dir, runId),

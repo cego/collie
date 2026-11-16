@@ -47,6 +47,8 @@ import {
   type Verification,
   type VerifySpec,
 } from "collie";
+import { CommandLine } from "effect/process";
+import { Result } from "effect";
 import { Effect, FileSystem, Schema, Stream } from "effect";
 import { connection } from "./connections.ts";
 import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
@@ -149,8 +151,7 @@ interface Opening {
     readonly template: string;
     readonly issues: string;
     readonly existing: string;
-    readonly create: string;
-    readonly comment: string;
+    readonly publish: string;
   };
   readonly target_repo: string;
 }
@@ -695,8 +696,15 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
               template: ready.template,
               issues: linear.state === "ok" ? Arr.join(ready.issues, ", ") : "",
               existing: ready.existing ?? "",
-              create: ready.commands?.create ?? "",
-              comment: ready.commands?.comment ?? "",
+              publish: Result.getOrThrow(
+                CommandLine.join([
+                  "collie",
+                  "run",
+                  "publish",
+                  runId,
+                  ...(ask.onto ? ["--onto", ask.onto] : []),
+                ]),
+              ),
             },
             // Not read by the shipped content; a fork's may, and `--repo` suits both CLIs.
             target_repo: ready.repository ? `--repo ${ready.repository}` : "",
@@ -804,13 +812,13 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
             if ("proved" in read) {
               if (read.retried === true)
                 yield* told(
-                  `unsettled: ${spec.name}: job ${job} failed on ${pipe_(read.proved.end.head_sha, Str.slice(0, 12))}, then passed when retried — a Flake, so this Run has not settled it.`,
+                  `unsettled: ${spec.name}: job ${job} failed on ${pipe_(read.proved.end.head_sha, Str.slice(0, 12))}, then passed when retried — a flake, so it is not settled.`,
                 );
             } else if (read.before !== undefined)
               yield* told(
                 read.before.branch === undefined
-                  ? `unsettled: ${spec.name}: job ${job} also fails at ${pipe_(read.before.at, Str.slice(0, 12))}, where this branch leaves its target branch, so it failed before this Run's changes.`
-                  : `unsettled: ${spec.name}: job ${job} also fails on its target branch ${read.before.branch} at ${pipe_(read.before.at, Str.slice(0, 12))}${read.before.url === null ? "" : ` (${read.before.url})`}, so the failure is the target's, not this Run's.`,
+                  ? `unsettled: ${spec.name}: job ${job} also fails at ${pipe_(read.before.at, Str.slice(0, 12))}, where this branch leaves its target branch, so it failed before this branch's changes.`
+                  : `unsettled: ${spec.name}: job ${job} also fails on its target branch ${read.before.branch} at ${pipe_(read.before.at, Str.slice(0, 12))}${read.before.url === null ? "" : ` (${read.before.url})`}, so the failure is the target's, not this branch's.`,
               );
             else if (read.state === "failed")
               failed.push({

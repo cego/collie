@@ -50,6 +50,12 @@ Where you judge a comment wrong, change nothing for it and dispute it with your 
 Collie replies to each comment on the forge for you, and never resolves a thread: never
 post on the merge request, reply to a comment or resolve a thread yourself.
 
+Public text is what goes outside Collie in the human's name: a merge request note or reply,
+an issue or comment in another repository, a Slack message, a Linear issue. Write it as the
+human would for that repository's readers. It never names Collie, a Run, a step, an agent, a
+card or a `collie` command, and never holds anyone to a rule only Collie's process has.
+Each `note` you write is posted as Public text.
+
 This Run's checks, which Collie runs on the head you push:
 
 {{verify}}

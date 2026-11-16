@@ -46,6 +46,7 @@ import { settled, type RunFacts } from "./runs";
 import { epochMs, nowIso, took } from "./time";
 import {
   isDestinationLock,
+  isTheOneMade,
   judgeWorktrees,
   onBranch,
   PRUNE_FILE,
@@ -1587,6 +1588,79 @@ export const measurementTreesSweeper = (
         }),
         0,
       ).pipe(Effect.catch((error) => Effect.succeed({ kept: String(error) }))),
+  };
+};
+
+/** The Cache Directory Tagging signature, which Cargo writes into every `target`. */
+const CACHE_SIGNATURE = "Signature: 8a477f597d28d172789f06886806bc55";
+
+/**
+ * Build caches in checkouts Collie made: git-ignored directories holding a signed
+ * `CACHEDIR.TAG`, each removed once no live Run works in its checkout (ADR-0045 D1, D5).
+ */
+export const buildCachesSweeper = (
+  runs: Effect.Effect<ReadonlyArray<RunFacts>, never, PlatformServices>,
+): Sweeper => {
+  const kind = "build-cache";
+  const checkouts = Effect.gen(function* () {
+    const all = yield* runs;
+    const liveIn = new Map<string, string>();
+    for (const run of Arr.filter(all, (one) => !settled(one)))
+      for (const path of [run.cwd, run.worktree?.path])
+        if (path !== undefined && !liveIn.has(path)) liveIn.set(path, run.id);
+    const made = new Set<string>();
+    for (const run of all)
+      if (run.worktree !== null && (yield* isTheOneMade(run.worktree.path, run.worktree)))
+        made.add(run.worktree.path);
+    return Arr.map([...made], (path) => ({ path, live: liveIn.get(path) }));
+  });
+  const cachesIn = (checkout: string) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const listed = yield* shell(
+        "git",
+        ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"],
+        checkout,
+      );
+      if (listed.code !== 0) return [];
+      const caches: string[] = [];
+      for (const entry of Str.split(listed.stdout, "\0"))
+        if (pipe(entry, Str.endsWith("/"))) {
+          const dir = `${checkout}/${pipe(entry, Str.slice(0, -1))}`;
+          const tag = yield* fs
+            .readFileString(`${dir}/CACHEDIR.TAG`)
+            .pipe(Effect.orElseSucceed(() => ""));
+          if (pipe(tag, Str.startsWith(CACHE_SIGNATURE))) caches.push(dir);
+        }
+      return caches;
+    });
+  const reasonOf = (live: string | undefined): { remove: string } | { keep: string } =>
+    live === undefined
+      ? { remove: "no live Run works in this checkout" }
+      : { keep: `${live} still works in this checkout` };
+  const verdict = (target: string) =>
+    Effect.gen(function* () {
+      const checkout = Option.getOrUndefined(
+        Arr.findFirst(yield* checkouts, (one) => pipe(target, Str.startsWith(`${one.path}/`))),
+      );
+      if (checkout === undefined || !(yield* cachesIn(checkout.path)).includes(target)) return null;
+      return reasonOf(checkout.live);
+    });
+  return {
+    kind,
+    judge: Effect.gen(function* () {
+      const remove: CleanupItem[] = [];
+      const keep: CleanupKept[] = [];
+      for (const checkout of yield* checkouts)
+        for (const target of yield* cachesIn(checkout.path)) {
+          const judged = reasonOf(checkout.live);
+          if ("keep" in judged) keep.push({ kind, target, reason: judged.keep });
+          else remove.push({ kind, target, bytes: 0, reason: judged.remove });
+        }
+      const sizes = yield* sizesOf(Arr.map(remove, (item) => item.target));
+      return { remove: Arr.map(remove, (item, at) => ({ ...item, bytes: sizes[at] ?? 0 })), keep };
+    }),
+    remove: (item) => removeIf(item.target, verdict(item.target)),
   };
 };
 

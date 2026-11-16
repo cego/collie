@@ -218,10 +218,7 @@ const exchange = <A>(
       Effect.mapError(reason),
     );
     if (Option.isNone(answer)) return yield* Effect.fail(`${command} stopped before it answered`);
-    return yield* Result.match(answer.value, {
-      onSuccess: (answered) => Effect.succeed(answered),
-      onFailure: (why) => Effect.fail(why),
-    });
+    return yield* Effect.fromResult(answer.value);
   }).pipe(Effect.scoped);
 
 const ClaudeReply = Schema.fromJsonString(

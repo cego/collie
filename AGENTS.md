@@ -206,14 +206,16 @@ binary still starts.
 While you iterate, run what covers what you touched, each through `collie verify`:
 
 - `bun run typecheck`;
+- `bun run format` (writes) or `bun run format:check`;
+- `bun run tools/rune-types.ts --check` after changing a Schema Desktop speaks;
 - `bun test <files>`, which runs the sources and takes no suite lock, and
   `bun test --parallel=N <files>` for more than a few;
 - `bun run scenario "<pattern>"` for baseline scenarios: it runs only the shard files whose
   scenarios match, in parallel, never all of them;
-- never the whole suite (`bun run test`, `bun run check`): that is the gate's, which runs
-  the Run's Checks on the final tree. Given one of the Run's Checks, `collie verify` runs
-  nothing: it answers with that Check's latest record on the tree, or refuses with
-  `invalid_state` and names the gate.
+- never `bun run check:static` or the whole suite (`bun run test`, `bun run check`): those
+  are the gate's, which runs the Run's Checks on the final tree. Given one of the Run's
+  Checks, `collie verify` runs nothing: it answers with that Check's latest record on the
+  tree, or refuses with `invalid_state` and names the gate.
 
 Tests are unit tests only: they call the code through its own interface, with fakes at
 its edges. No Playwright and no test that drives a built app or a browser — a behaviour

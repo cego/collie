@@ -1747,8 +1747,8 @@ Tests live in `test/`, with a fake herdr and shared fixtures under `test/support
 `herdr.ts` is the only boundary, an end-to-end test drives the real engine against that
 fake.
 
-`check` runs `check:static`, which is formatting, lint, and type checking in parallel, then
-tests after all three pass. Keeping those phases separate avoids CPU contention with the subprocess-heavy tests.
+`check` runs `check:static`, which is formatting, lint, type checking and the generated Rust
+types' freshness (`rune-types:check`) in parallel, then tests after all four pass. Keeping those phases separate avoids CPU contention with the subprocess-heavy tests.
 The individual scripts in `package.json` still work for focused feedback.
 
 Lint enables Effect's correctness, effect-native, and strict presets. Effect findings
@@ -1899,7 +1899,7 @@ the suite changes substantially.
 Missing or stale entries cannot skip a test; deleting the scratch file restores the seed.
 
 CI runs `bun run check` in two halves. The `static` job runs `bun run check:static`
-(format check, lint and typecheck), then the build, smoke and contract check. The `suite`
+(format check, lint, typecheck and the Rust-types check), then the build, smoke and contract check. The `suite`
 job is a matrix of three shards, each running `bun run test --shard=i/3` on a runner of its
 own. Bun splits the files by their recorded durations, and no shard restores a timings
 cache: each balances on the committed seed alone, so all three split a commit's files
