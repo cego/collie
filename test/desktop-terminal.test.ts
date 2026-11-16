@@ -265,8 +265,13 @@ echo '{"ok":true,"data":{"machine":"vm-mk","path":"${dir}/control","opened":true
 `,
     ssh: `#!/bin/bash
 args=("$@")
-for ((i = 0; i < \${#args[@]}; i++)); do [ "\${args[i]}" = -S ] && control="\${args[i+1]}"; done
-[ "\${args[2]}" = -O ] && { [ -e "$control" ]; exit; }
+for ((i = 0; i < \${#args[@]}; i++)); do
+  case "\${args[i]}" in
+    -S) control="\${args[i+1]}" ;;
+    -O) verb="\${args[i+1]}" ;;
+  esac
+done
+[ -n "$verb" ] && { [ -e "$control" ]; exit; }
 [ -e "$control" ] || { echo "no master" >&2; exit 255; }
 [[ " $* " == *" ControlMaster=no "* ]] || { echo "a channel could log in by itself" >&2; exit 255; }
 FAKE_TARGET="\${args[-2]}" SHELL='${dir}/shell' exec /bin/sh -c "\${args[-1]}"

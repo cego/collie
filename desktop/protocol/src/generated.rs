@@ -211,6 +211,8 @@ pub enum Cause {
     CiJobAbsent,
     #[serde(rename = "ci-failed")]
     CiFailed,
+    #[serde(rename = "target-red")]
+    TargetRed,
     #[serde(rename = "forge-unavailable")]
     ForgeUnavailable,
     #[serde(rename = "herdr-unavailable")]

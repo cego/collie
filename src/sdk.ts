@@ -43,7 +43,7 @@ import type { Report } from "./report";
 export type { Report } from "./report";
 export type { Produces, StepKind, StepMeta } from "./steps";
 import type { VerifySpec } from "./verify-spec";
-import type { CiJob } from "./ci-job";
+import type { CiJob, TakeTarget, TargetFailure } from "./ci-job";
 import type { ParkCause } from "./park-cause";
 import type { PipelineStart } from "./forge/forge";
 import type { ChildProcessSpawner } from "effect/process";
@@ -196,6 +196,7 @@ export {
   answerFor,
   blockingKeys,
   findingKey,
+  sameFinding,
   formatFindings,
   isBlocking,
   remainingDisputes,
@@ -241,7 +242,7 @@ export {
 
 export type { FailedTest, Snapshot, Verification } from "./verify";
 export type { VerifySpec } from "./verify-spec";
-export type { CiJob } from "./ci-job";
+export type { CiJob, TakeTarget, TargetFailure } from "./ci-job";
 export type { JobState, PipelineStart } from "./forge/forge";
 
 /** This Run's checks as a human would type them, for a prompt to name what it faces. */
@@ -971,11 +972,31 @@ export interface HostApi {
     readonly name: string;
     readonly wait?: boolean;
     /**
-     * A failed job is read where the branch leaves its target, and is retried once and
-     * waited on where it did not fail there too (ADR-0034): `before` and `retried` say which.
+     * A failed job is read on the target branch's newest commit, then where the branch leaves
+     * its target, and is retried once and waited on where its failed jobs and tests did not
+     * fail there too (ADR-0034): `before`, with `branch` for the target's, and `retried` say which.
      */
     readonly settle?: boolean;
   }) => Effect.Effect<CiJob>;
+  /**
+   * The failure of this Run's checks left to CI on the head of the merge request it recorded,
+   * where each job that failed there failed on its target branch's newest commit too, in every
+   * test its failed attempt names or with none named: the settle's comparison. Else null.
+   */
+  readonly targetFailure: (options: {
+    readonly runId: string;
+    readonly cwd: string;
+  }) => Effect.Effect<TargetFailure | null>;
+  /**
+   * What a Release that saw a failure its target shared at `head` does now: `Moved` where the
+   * merge request's head is no longer `head`; `Retried` where `head` already has the target
+   * branch's newest commit, its failed jobs retried; else `Take`, the target to merge in.
+   */
+  readonly takeTarget: (options: {
+    readonly runId: string;
+    readonly cwd: string;
+    readonly head: string;
+  }) => Effect.Effect<TakeTarget>;
   /**
    * A pipeline on `cwd`'s HEAD, through the forge of the merge request the Run recorded,
    * unless that head has one that was not skipped. GitLab starts the merge request's, and the
@@ -1312,7 +1333,7 @@ export interface HostApi {
    * written out again by an agent — asking for a file to be repeated verbatim is how
    * verbatim stops being true. The refusal is the message: a target that is not a merge
    * request, no CLI or login for its forge, or one assigned to whoever is running this.
-   * With `approve`, the merge request is approved too, and the message says whether it was.
+   * Reads back the round's signature before posting, so a replay sends no second note.
    */
   readonly post: (options: {
     readonly runId: string;
@@ -1320,8 +1341,27 @@ export interface HostApi {
     readonly cwd: string;
     /** The file to send, as the Run wrote it. */
     readonly file: string;
-    /** Approve the merge request too: a review with nothing live left to fix. */
-    readonly approve?: boolean;
+    readonly head: string;
+    readonly round: number;
+  }) => Effect.Effect<Posted>;
+  /** Reads the target's head before review. Take it inside an Activity. */
+  readonly reviewedHead: (options: {
+    readonly target: string;
+    readonly cwd: string;
+  }) => Effect.Effect<string>;
+  readonly reviewChanges: (options: {
+    readonly target: string;
+    readonly cwd: string;
+    readonly previous: string;
+    readonly head: string;
+  }) => Effect.Effect<string, WorkflowError>;
+  /** Approves once per Run and round; an interrupted attempt returns an uncertain outcome. */
+  readonly approveReview: (options: {
+    readonly runId: string;
+    readonly round: number;
+    readonly target: string;
+    readonly cwd: string;
+    readonly head: string;
   }) => Effect.Effect<Posted>;
 }
 
@@ -1388,6 +1428,7 @@ export interface MrReady {
 export interface Posted {
   readonly ok: boolean;
   readonly message: string;
+  readonly signature?: string;
 }
 
 // oxlint-disable-next-line effecttsgo/lazy-effect -- Host serves the published HostApi.usage() method unchanged.

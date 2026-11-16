@@ -737,12 +737,31 @@ an earlier Run to compare against is doing it there, and this is where you read 
 `outcome` is the one that can change while the Run is live, with `run intent set-outcome`:
 read it again, inside an `Activity`, wherever the kind decides something.
 
-`host.post` puts a file on the merge request a Run was pointed at, as one note Collie sends
-rather than an agent writes out again, through the merge request's own forge. With
-`approve`, it approves it too — the shipped review passes it when nothing live is left to
-fix — and the message says whether the approval landed. Its refusal is its message: not a
+`host.reviewedHead({ target, cwd })` reads the head before review; journal it in an Activity.
+Pass that head, the Run id, and the round to `host.post` alongside the file, target, and cwd.
+It ends the note with a hidden marker, `<!-- collie:<run> round <n> at <head> by <login> -->`,
+and reads that marker back before posting, so a replay sends no second note.
+Journal posting in its own Activity. Its refusal is its message: not a
 merge request, no CLI or login for its forge, or one assigned to whoever is running this —
 whose findings are theirs to fix rather than to post to themselves.
+On success, its `signature` identifies the posted note for the findings ledger.
+
+`host.reviewChanges({ target, cwd, previous, head })` reads the interdiff from the previous
+reviewed head when the new head descends from it. Otherwise it reads the full diff.
+Journal it in an Activity with `error: WorkflowError`; an unreadable forge fails the read.
+
+`host.approveReview({ runId, round, target, cwd, head })` requests approval of that reviewed head, independently of posting.
+Journal it in a separate Activity after the post succeeds. The shipped review offers approval
+explicitly and ends with the forge's reason on its card when the forge refuses it.
+GitLab enforces the reviewed `sha` atomically. GitHub submits the reviewed `commit_id`, with
+head checks before and after. A moved or unreadable head after submission triggers attempted
+dismissal and `ok: false`. GitHub has no atomic head guard: stale approval can stand during
+a racing push and remain active if dismissal fails. The message identifies the review to dismiss
+and reports that risk. Neither approval nor dismissal is blindly retried.
+Before submission, the host exclusively records the attempt for that Run and round.
+If recovery re-enters the call before its Activity recorded an outcome, it returns
+`ok: false` with an uncertain-outcome message and sends no approval or dismissal request.
+Inspect the forge before starting another review; approval may already be active.
 
 Every host operation that sends **Public text** (`CONTEXT.md`) checks it first: `host.post`,
 `host.note`, `host.reply`, `host.fileIssue`, `host.commentIssue` and
@@ -1460,8 +1479,8 @@ optional `internal: true` marks a concern about Collie's own process. `renderRev
 retains the complete review and fixed history for `review.md`; `renderPublicReview` uses
 the public summary and non-internal live findings, in severity order. With no public findings, it says there is
 nothing to fix. Older Outputs use `summary` as the public summary and unmarked findings
-remain public. The shipped review workflow writes this rendering to `public-review.md`
-beside `review.md`, then passes that file to `host.post` for the Public text check.
+remain public. The shipped review workflow writes its round's note, built from this rendering,
+to `review-note.md` beside `review.md`, then passes that file to `host.post` for the Public text check.
 Approval still follows every live finding, including internal ones.
 
 A review's `verdict` of `findings` means it found some. A fix's means it left some
@@ -1651,13 +1670,25 @@ by the forge adapter (`glab ci trace <id> --repo <project>` on GitLab; on GitHub
 view <run> --log-failed --repo <owner/repo>`, the failed jobs of the job's Actions run), so
 a prompt hands an agent the adapter's command rather than naming a CLI of its own
 (ADR-0050). With `settle: true` a failed job is
-settled first: the adapter reads the same job at the merge-base of the merge request's head
-and its target branch, or on the target branch's latest pipeline where that commit has
-none, and one that failed there too answers with `before: { at, url }` and is not retried.
+settled first. The adapter reads the same job on the target branch's newest commit, then at
+the merge-base of the merge request's head and its target branch, or on the target branch's
+latest pipeline where that commit has none. Where it failed there, every other job that
+failed on the head failed there too, each names a failed test, and every failed test on the
+head failed there, it answers with `before: { at, url, jobs }`, with `branch` for the
+target's newest commit, and is not retried. Where only some of its failed tests failed on
+the target's newest commit, the unproved sentence names them.
 Otherwise the adapter retries it once — GitLab's job retry, GitHub's rerun of that job —
 and waits on it; a pass then answers `{ proved, retried: true }`, a Flake. Name either on
 the merge request with `host.note({ runId, cwd, body })`, which puts a note on the merge
 request the Run recorded.
+
+`host.targetFailure({ runId, cwd })` asks the same comparison of the Run's checks left to CI
+on the merge request's head: it answers `{ job, branch, at, url, tests, jobs }` where
+each job that failed there failed on the target branch's newest commit too, else null.
+`host.takeTarget({ runId, cwd, head })` says what a Release that saw such a failure at `head`
+does once the target passes: `Moved` with the head where the merge request moved, `Retried`
+where `head` already has the target's newest commit and its failed jobs were retried, else
+`Take`.
 
 A merge request's head that an earlier push with `ci.skip` carried has no pipeline to read a
 job from. `host.startPipeline({ runId, cwd })` asks the forge adapter for one on `cwd`'s
@@ -1822,7 +1853,7 @@ export default defineWorkflow({
 - **`followUps` and `actions`** carry an `id` that is stable and a `title` a human reads.
   Two fields, because a retitled action is the same action and a card matching on the
   title would start a different one. `workflow` is a public id or `"self"` for the one
-  declaring it; `inputs` names what Collie fills in from the Run — `run-dir`, `plan-dir`,
+  declaring it; `inputs` names what Collie fills in from the Run — `run-id`, `run-dir`, `plan-dir`,
   `diff-target`, `branch`, `merge-request`, or `started-with` for what the Run was started
   with under the same input name — so a card makes the offer without asking a human to type
   a path. `arguments` is the child's schema; eligibility is decided from facts, never from a
@@ -1893,6 +1924,22 @@ before anything exists: `new`, or the absolute path of a directory. Anything els
 `PlanOutputSchema` are exported so a step you write declares the same contract the engine
 reads, rather than a copy of it. `FindingSchema`, `FixedSchema` and `CheckSchema` are the
 pieces they are built from.
+
+A standalone MR review keeps its findings ledger in `findings.json`, including resolved
+findings. Each finding carries a stable `id`, a [Finding status](../CONTEXT.md), the reviewed
+`head`, and the posted note's `note` signature. Before posting, `note` is empty for new
+findings and changed statuses. These fields are optional in the shared Output schema so
+older Outputs remain readable; a supplied status outside the four values is refused.
+The reviewer returns every earlier id with its current status, plus new findings.
+Disputes match by id across file and title changes. Older records without ids still
+match by file and title.
+
+The **Review again** offer passes the earlier Run id as the host's `previous` option.
+The next reviewer receives its ledger and an interdiff, or the full diff after a force push.
+The posted note lists new findings and status changes; unchanged open findings appear by
+id only. Only findings with a posted-note anchor count as previously published.
+An unchanged, previously posted ledger posts nothing. `fixed` and `obsolete` findings stay in the
+record without blocking a fix or approval; unresolved disputes still require a decision.
 
 `CriterionSchema` is how a builder answers one of its ticket's acceptance criteria:
 `criterion`, copied from the ticket, and `met`, the test or file that shows it, or

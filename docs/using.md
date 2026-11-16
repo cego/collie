@@ -521,11 +521,20 @@ directory, or this repository's checkout of another branch — is left as it is 
 over, and the run's log says whose it is (ADR-draft-an-occupied-branch-checkout-path-is-passed-over).
 When all three are held, the run does not start, and its refusal names each path, what
 holds it, and asks you to free one and retry; a refused attempt leaves no new branch
-behind. A fresh checkout is a fresh checkout, so the first thing the implementer does
-there is install the project's dependencies. Where the run cannot be given a worktree, it
+behind. Where the run cannot be given a worktree, it
 does not start and says which branch it could not be given one for, in git's own words:
 working in the directory you started it from is what two runs sharing a checkout — and a
 stash stack — looks like, which is the thing this exists to prevent.
+
+A project names the command that brings a checkout's installed dependencies to its
+lockfile in `.collie/dependencies.json`, in the same shape as a Measurement's `prepare`:
+`{ "executable": "bun", "argv": ["install", "--frozen-lockfile"] }`. Collie runs it in
+every checkout it places for a run — cut, reused, taken over or a roaming one — reading the
+file from that checkout's own tree, since that head's lockfile is the one to satisfy, and
+the run's log says which command it ran. A command that fails refuses the start with the
+command and what it printed, and a file that does not decode refuses it naming the file.
+A project without the file is placed exactly as before, and its agents install what they
+need themselves.
 
 ### A run that roams across branches
 
@@ -716,7 +725,9 @@ carrying a deploy: it stays under Working and says what it waits for and on whom
 nothing in News. Once such a wait outlasts its patience — 2 hours where nobody acts, 2 days
 where a person does — it parks, and the card goes to Needs you. A parked card carries one
 more line naming its [**Park cause**](../CONTEXT.md) and what that cause lets Collie do —
-`Parked: ci-job-absent · Collie rechecks`, or `· needs you` — and the drawer's **parked**
+`Parked: ci-job-absent · Collie rechecks`,
+`Parked: target-red · Collie rechecks` for a CI failure its target branch shares too,
+or `· needs you` — and the drawer's **parked**
 section adds why a person is needed; `collie run show` gives the same as `park` with its
 `cause` and `kind`. A Release whose merge-request pipeline went red and whose CI fix round
 could not move its head reads `Parked: ci-failed · Collie rechecks`. Collie rechecks the
@@ -2854,7 +2865,9 @@ board closing and the terminal being detached.
 Before every ticket after the first, and before every review round, `implement` fetches the
 default branch. Where it has moved, Collie merges it into the Run's branch with a merge
 commit and records `integrated <branch>@<sha>` in the Run's log. It never rebases and never
-force-pushes. A checkout with uncommitted changes is left alone and handed back for the
+force-pushes. A merge also runs the project's [`.collie/dependencies.json`](#what-a-run-does-to-your-repository)
+command, so the checkout has the merged head's dependencies; a command that fails parks
+the Run with what it printed, and a resume runs it again before the merge counts. A checkout with uncommitted changes is left alone and handed back for the
 builder to commit, and an unchanged default branch is skipped. A conflict at a ticket
 boundary is the builder's next work: that ticket's prompt names the conflicted files and has
 the merge finished first. Before a review, a merge step finishes it. Work goes on only from
@@ -2930,7 +2943,7 @@ is never the one asked or handed work.
   implementer works where the review was pointed — checking out the branch, or `glab mr
   checkout` for a merge request, so the fixes land on that MR's own branch and its merge
   request is updated instead of a second one opened.
-- **Post to MR** — only for a merge request target: posts the review's public rendering.
+- **Post** — only for a merge request target: posts the review's public rendering; a clean review offers **Post and approve `<short sha>`**.
 - **Don't post** — the run ends with its findings.
 
 **A plan that changes under an implementer.** `implement` reads its tickets again after
@@ -2970,19 +2983,43 @@ a folder that is not a git repository at all.
 An older bare target such as `mr:42` still means GitLab. Posting or preparing delivery
 from a GitHub checkout refuses that target. Use `#42` or the pull request URL there.
 
-**Post to merge request** (**Post to pull request** on GitHub) puts the review on it as one
-note, rendered from the public summary and findings not marked internal. `review.md`, the
-findings JSON, the board, and the rally retain every finding. An internal finding concerns
-Collie's own process; a public concern cites the repository's own rules in ordinary words.
-With no public findings, the note says there is nothing to fix.
-Where nothing in the complete review is still live, it also approves it — on GitHub as one
-review that both comments and approves — and the message says whether the approval landed.
-With findings left, including internal ones, it posts the note without approving. The host
+**Post** puts the review on the merge request as one note per round, including after
+a host restart. The note is rendered from the public summary and the findings not marked
+internal. `review.md`, the findings JSON, the board, and the rally retain every finding. An
+internal finding concerns Collie's own process; a public concern cites the repository's own
+rules in ordinary words. With no public findings, the note says there is nothing to fix.
+The note names the reviewed head and ends with a hidden marker naming the Run, the round
+and your forge login, which Collie reads to find it again and no reader sees. The host
 checks the public rendering before posting; a refusal brings back the menu with its reason.
 Reviews of an MR no Run built raise no finding about missing failing-first evidence.
-It refuses a merge request assigned to
+If the head changes while the reviewer reads the change, the Run fails before offering
+to post. Start another review of the new head.
+When no open or disputed findings remain, including internal ones, the menu offers
+**Post and approve `<short sha>`**. Approval follows
+the post as a separate act. On GitLab, the approval request carries the reviewed `sha`,
+which GitLab rejects atomically if the head has moved.
+On GitHub, approval names the reviewed `commit_id`. Collie checks the head before and after
+approval, and attempts to dismiss the approval if the head moved or cannot be read afterward.
+GitHub cannot atomically guard the head: approval can briefly stand during a racing push.
+If dismissal fails, stale approval can remain active and satisfy merge requirements despite
+the failed Run. The card names the review to dismiss and reports that it may still be active.
+An approval refusal ends the Run with its reason on the card and is not retried.
+If the host stops during approval, recovery reports an uncertain outcome and sends no
+second approval or dismissal request. Inspect the forge before starting another review:
+the approval may already be active.
+With findings left, **Post** sends only the note. It refuses a merge request assigned to
 you, on either forge: those findings are yours to fix. On GitLab, that comparison uses
 your login on the target's own host.
+
+**Review again** carries the earlier findings, with stable ids and their
+[Finding status](../CONTEXT.md), into the next review. The reviewer reads the interdiff
+since the last reviewed head, or the full diff after a force push. The next note lists
+new findings and status changes, with unchanged open findings listed by id only.
+If GitLab collapses or omits a file's interdiff, the review refuses the incomplete input
+and names the affected files.
+An unchanged, previously posted ledger posts nothing. Findings you chose not to post
+still appear in full when you first post them. Fixed and obsolete findings stay in the record;
+obsolete means the finding no longer applies, not that its bug was fixed.
 
 Fixing one is a different matter. A fix round is an `implement` run, and a mutating run
 works in a checkout of its own branch — which `herdr worktree` can only cut from the

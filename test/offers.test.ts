@@ -84,7 +84,7 @@ test("an offer that names no workflow of its own starts the one that declared it
 test("a value the Run was started with is passed on as it was, null included", () => {
   const passed = inputsFor(
     { inputs: { value: "started-with", missing: "started-with", mr: "merge-request" } },
-    { runDir: "/r", facts: facts(), input: { value: null } },
+    { runId: "r", runDir: "/r", facts: facts(), input: { value: null } },
   );
   // An explicit null is a value; a field nobody gave, and a fact the Run lacks, are not.
   expect(passed).toEqual({ value: null });
