@@ -4,7 +4,7 @@ import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import { epochMs } from "../src/time";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Layer } from "effect";
+import { Effect, FileSystem, Layer, Schema } from "effect";
 import * as Rec from "effect/Record";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import * as Reactivity from "effect/reactivity/Reactivity";
@@ -194,7 +194,7 @@ test("the first host imports the usual Step times an older build kept past its r
         ms,
       });
       yield* legacy({
-        "step-durations.json": JSON.stringify([
+        "step-durations.json": yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))([
           sample("gone-1", "build", "2026-10-01T10:00:00.000Z", 60_000),
           sample("gone-2", "build", "2026-10-02T10:00:00.000Z", 120_000),
           sample("gone-3", "review", "2026-10-03T10:00:00.000Z", 180_000),

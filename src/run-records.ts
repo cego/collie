@@ -258,6 +258,8 @@ export const readAhead = (records: RunRecordsApi, runs: ReadonlyArray<string>): 
   const controls = once((name) =>
     Effect.map(records.everyControl(name), (rows) => Arr.groupBy(rows, (row) => row.run)),
   );
+  const only = <A>(all: ReadonlyMap<string, A>, some: ReadonlyArray<string>) =>
+    new Map(Arr.flatMap(some, (run) => (all.has(run) ? [[run, all.get(run)!] as const] : [])));
   return {
     ...records,
     lines: (run, name) =>
@@ -266,10 +268,7 @@ export const readAhead = (records: RunRecordsApi, runs: ReadonlyArray<string>): 
         : records.lines(run, name),
     lastOf: (some, name, kinds) =>
       Arr.every(some, (run) => ids.has(run))
-        ? Effect.map(
-            last(Arr.join([name, ...(kinds ?? [])], "\u0000")),
-            (all) => new Map(Arr.filter([...all], ([run]) => some.includes(run))),
-          )
+        ? Effect.map(last(Arr.join([name, ...(kinds ?? [])], "\u0000")), (all) => only(all, some))
         : records.lastOf(some, name, kinds),
     fact: (run, name) =>
       ids.has(run)
@@ -281,10 +280,7 @@ export const readAhead = (records: RunRecordsApi, runs: ReadonlyArray<string>): 
         : records.controlsOf(control, run),
     activity: (some) =>
       Arr.every(some, (run) => ids.has(run))
-        ? Effect.map(
-            activity(""),
-            (all) => new Map(Arr.filter([...all], ([run]) => some.includes(run))),
-          )
+        ? Effect.map(activity(""), (all) => only(all, some))
         : records.activity(some),
   };
 };
