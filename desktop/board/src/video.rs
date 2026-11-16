@@ -150,6 +150,10 @@ mod tests {
         audio.seek(0.5);
         assert_eq!(audio.time(), 0.5);
         let missing = Player::open(Path::new("/no-such-collie-file.mp4"), Arc::new(|| {}));
-        assert!(missing.state().error.is_some());
+        let mut missing =
+            rune::Runtime::new(missing, view, (64.0, 48.0), rune::Env::new(true, 1.0));
+        // Headless video probes its source on the first draw, not preload.
+        missing.frame(0.0);
+        assert!(missing.state.state().error.is_some());
     }
 }
