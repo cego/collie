@@ -971,6 +971,90 @@ test.each(["major", "minor"] as const)(
   180_000,
 );
 
+test(
+  "Improve's second hand-off to a live implementer waits for its own push",
+  () =>
+    host.runEffect(
+      Effect.gen(function* () {
+        yield* repository;
+        yield* git(["checkout", "-q", "-b", "feature"]);
+        const first = yield* pushed("Task work");
+        const forge = yield* host.gitlab(model(first));
+        yield* rig.addAgent("impl-live", "9-1");
+        yield* rig.queueOutputs([
+          review([F1]),
+          review([{ ...F1, status: "fixed" }, F2]),
+          review([{ ...F1, status: "fixed" }, F2]),
+        ]);
+        yield* host.session(
+          forge,
+          Effect.gen(function* () {
+            yield* writeTask({
+              id: "task-human",
+              workspace: null,
+              label: "The human's work",
+              cwd: rig.projectDir,
+              created_at: "2026-11-12T09:00:00Z",
+            });
+            const registry = yield* Registry;
+            const building = yield* registry.start({
+              generation: yield* registry.load(`${fixtures}/placed.workflow.ts`),
+              request: "building",
+              project: rig.projectDir,
+              input: { work: "keep feature", ending: "succeed" },
+              task: "task-human",
+              options: { branch: "feature" },
+            });
+            yield* registerAgent(scopeFor(host.env(), rig.projectDir), {
+              role: "implementer",
+              agent: "impl-live",
+              paneId: "9-1",
+              workspaceId: null,
+              runId: building.runId,
+              workflow: "placed",
+              at: "2026-11-12T09:00:00Z",
+              incarnation: { terminalId: "term-impl-live", agentSession: null },
+            });
+            yield* configured(false);
+            yield* registry.load(`${ROOT}workflows/review-improve.workflow.ts`);
+            const parent = yield* registry.start({
+              generation: yield* registry.load(yield* entryOf("review")),
+              request: "review-task",
+              project: rig.projectDir,
+              input: { target: TARGET },
+              task: "task-human",
+            });
+            yield* until(
+              () => asked(parent.runId),
+              (rows) => rows.length > 0,
+            );
+            const improved = yield* registry.invoke({
+              runId: parent.runId,
+              offer: "improve",
+              input: {},
+              request: "improve-twice",
+            });
+            yield* until(
+              () => host.watchOf(improved.runId, TARGET),
+              (row) => row?.name === "improved-head",
+            );
+            yield* host.mergeWatched;
+            const second = yield* pushed("guard the input");
+            yield* forge.set(model(second, { ancestry: { [second]: [first] } }));
+            yield* TestClock.adjust("6 minutes");
+            const again = yield* until(
+              () => host.watchOf(improved.runId, TARGET),
+              (row) => row?.name === "improved-head-2",
+            ).pipe(Effect.timeoutOption("3 minutes"));
+            expect(Option.getOrNull(again)?.name).toBe("improved-head-2");
+            expect(yield* host.agentStarts).toHaveLength(2);
+          }),
+        );
+      }),
+    ),
+  180_000,
+);
+
 test.each(["major", "minor"] as const)(
   "Improve fixes an owned MR's %s findings in its reviewed checkout and independently reviews the pushed head",
   (severity) =>
