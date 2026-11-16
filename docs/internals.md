@@ -1895,13 +1895,19 @@ Missing or stale entries cannot skip a test; deleting the scratch file restores 
 
 CI runs `bun run check` in two halves. The `static` job runs `bun run check:static`
 (format check, lint, typecheck and the Rust-types check), then the build, smoke and contract check. The `suite`
-job is a matrix of three shards, each running `bun run test --shard=i/3` on a runner of its
+job is a matrix of six shards, each running `bun run test --shard=i/6` on a runner of its
 own. Bun splits the files by their recorded durations, and no shard restores a timings
-cache: each balances on the committed seed alone, so all three split a commit's files
-alike, and every file runs in exactly one. The required `test` job needs both, runs even
-when one of them failed, and fails unless each succeeded.
+cache: each balances on the committed seed alone, so all six split a commit's files
+alike, and every file runs in exactly one. The shard count comes from the matrix size.
+The required `test` job also needs the Mac runner, Desktop checks and both native bundles.
+It runs even when a dependency failed, and fails unless each succeeded.
 
-`bun run test --shard=2/3` reproduces shard 2 locally. It is a whole suite, so it takes the
+The native jobs cache Cargo dependencies, keyed by platform, compiler, manifests and lockfile.
+Each job keeps its own cache, shared with the same job in the release workflow where applicable.
+Workspace crates are rebuilt, and all checks, tests, bundle builds and signing checks still run on cache hits.
+No test results or finished release archives are reused.
+
+`bun run test --shard=2/6` reproduces shard 2 locally. It is a whole suite, so it takes the
 suite's lock and share, and agents do not run it. To split as CI did, delete
 `.scratch/test-timings.json` first, so the runner starts from the seed, and again after,
 since the run leaves only its shard's files in it.

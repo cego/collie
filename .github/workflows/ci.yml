@@ -36,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v7
       - run: sudo apt-get update && sudo apt-get install -y libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-alsa gstreamer1.0-libav
@@ -44,7 +44,7 @@ jobs:
         with:
           bun-version: "1.4"
       - run: bun install --frozen-lockfile
-      - run: bun run test --shard=${{ matrix.shard }}/3
+      - run: bun run test --shard=${{ matrix.shard }}/${{ strategy.job-total }}
         # 4 workers: a dedicated runner needs no reserve for targeted runs (budget ADR, D2).
         env:
           COLLIE_TEST_BUDGET: 6
@@ -56,7 +56,7 @@ jobs:
 
   # The required check. Never skipped, which a required check would read as passing.
   test:
-    needs: [static, suite, desktop, desktop-native]
+    needs: [static, suite, macos, desktop, desktop-native]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -64,6 +64,7 @@ jobs:
           echo "static: ${{ needs.static.result }}, suite: ${{ needs.suite.result }}"
           test "${{ needs.static.result }}" = success
           test "${{ needs.suite.result }}" = success
+          test "${{ needs.macos.result }}" = success
           test "${{ needs.desktop.result }}" = success
           test "${{ needs.desktop-native.result }}" = success
 
@@ -114,6 +115,10 @@ jobs:
       # Installs the toolchain desktop/rust-toolchain.toml pins.
       - run: rustup toolchain install
         working-directory: desktop
+      # Cache compiler inputs and dependencies; Cargo still checks and runs every target.
+      - uses: Swatinem/rust-cache@2201cc584a476d1b508be977bbe4b7d1c7a52e9c # v2.9.3
+        with:
+          workspaces: desktop
       - run: cargo fmt --all --check
         working-directory: desktop
       - run: cargo clippy --workspace --all-targets -- -D warnings
