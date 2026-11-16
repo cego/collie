@@ -3,6 +3,7 @@
 //! takes it. Ports the record's cases of `test/desktop-record-door.test.ts`,
 //! `desktop-deliver.test.ts`, `desktop-retry.test.ts` and `desktop/test/diff-comments.test.ts`.
 
+mod support;
 use base64::Engine;
 use collie_desktop_board::calls::CallError;
 use collie_desktop_board::calls::testing::Harness;
@@ -13,6 +14,7 @@ use rune::edit::TextEdit;
 use rune::{Env, Runtime, WheelEvent};
 use rune_kit::diff::{LineRange, LineRef, Side};
 use serde_json::{Value, json};
+use support::clock::FrameAt;
 
 const FLOCK: &str = include_str!("../../fixtures/flock.ndjson");
 
@@ -39,16 +41,19 @@ fn named(runtime: &Runtime<App>, key: &str) -> Value {
         .unwrap_or_else(|| panic!("no {key} in {:?}", keys(runtime)))
 }
 
+/// Presses `key` where it rests, once what moves has landed.
 fn tap(runtime: &mut Runtime<App>, key: &str, at: f64) {
+    runtime.settle_all();
+    runtime.frame(0.0);
     let (x, y) = runtime
         .find(key)
         .unwrap_or_else(|| panic!("no {key} in {:?}", keys(runtime)));
     runtime.pointer_move(x, y);
-    runtime.frame(at);
+    runtime.frame_at(at);
     runtime.pointer_down(x, y);
-    runtime.frame(at + 50.0);
+    runtime.frame_at(at + 50.0);
     runtime.pointer_up(x, y);
-    runtime.frame(at + 100.0);
+    runtime.frame_at(at + 100.0);
 }
 
 fn opened(harness: &Harness<App>) -> Runtime<App> {
@@ -75,7 +80,7 @@ fn settle(runtime: &mut Runtime<App>, harness: &Harness<App>, at: f64) {
     harness.settle(&mut runtime.state);
     // Rune draws again only for a change it is told of.
     runtime.update(|_, _| {});
-    runtime.frame(at);
+    runtime.frame_at(at);
 }
 
 fn detail(extra: Value) -> Value {
@@ -130,7 +135,7 @@ fn facts_list_each_offer_with_its_owner_and_refusal_even_while_details_are_loadi
             .unwrap();
             app.open_record("inst-build".into(), run.into(), "Build box".into(), None);
         });
-        runtime.frame(100.0);
+        runtime.frame_at(100.0);
         tap(&mut runtime, "tab-facts", 200.0);
         for reading in [true, false] {
             if !reading {
@@ -162,7 +167,7 @@ fn a_card_opens_its_runs_record_on_its_first_tab_never_its_terminal_streaming_un
     let mut runtime = opened(&harness);
     // Build box's board is a saved one, so its card opens by name, not by a double press.
     runtime.update(|app, _| app.open_card("inst-build:b2"));
-    runtime.frame(100.0);
+    runtime.frame_at(100.0);
     assert_eq!(
         harness.fake.asked_of("runDetail"),
         [json!({"installation": "inst-build", "runId": "r1"})]
@@ -291,7 +296,7 @@ fn the_diff_is_read_file_by_file_and_a_file_ticked_viewed_is_counted() {
     assert!(shown.iter().any(|k| k == "tree-file-src/a.rs"), "{shown:?}");
     assert_eq!(named(&runtime, "diff-viewed")["name"], "0 of 1 viewed");
     runtime.update(|app, _| app.toggle_viewed("src/a.rs"));
-    runtime.frame(300.0);
+    runtime.frame_at(300.0);
     assert_eq!(named(&runtime, "diff-viewed")["name"], "1 of 1 viewed");
     let row = named(&runtime, "tree-file-src/a.rs");
     assert!(row["name"].as_str().unwrap().contains("viewed"), "{row}");
@@ -306,7 +311,7 @@ fn with_a_draft(runtime: &mut Runtime<App>, said: &str) {
             end: at,
         }));
     });
-    runtime.frame(400.0);
+    runtime.frame_at(400.0);
     assert!(keys(runtime).iter().any(|k| k == "diff-composer"));
     let said = said.to_string();
     runtime.update(move |app, _| app.diff.as_mut().unwrap().comment = TextEdit::new(said.clone()));
@@ -531,7 +536,7 @@ fn a_long_question_can_be_scrolled_to_its_answer_control_with_or_without_a_selec
         }
         for at in [400.0, 500.0, 600.0, 700.0] {
             runtime.invalidate();
-            runtime.frame(at);
+            runtime.frame_at(at);
         }
         tap(&mut runtime, "option-choice-0", 800.0);
         let [x, y, width, height] = rect(&runtime, "tabpanel-flow");
@@ -539,7 +544,7 @@ fn a_long_question_can_be_scrolled_to_its_answer_control_with_or_without_a_selec
         assert!(before > y + height, "fixture must require scrolling");
         for i in 0..20 {
             runtime.wheel_event(WheelEvent::new(0.0, -80.0).at(x + width / 2.0, y + height - 32.0));
-            runtime.frame(1000.0 + i as f64 * 100.0);
+            runtime.frame_at(1000.0 + i as f64 * 100.0);
         }
         let [send_x, send_y, send_width, send_height] = rect(&runtime, "form-send");
         assert!(
@@ -727,7 +732,7 @@ fn a_steps_start_asks_the_run_what_it_offers_and_starts_it_with_what_was_typed()
         key: rune::Key::Text("Ship it".into()),
         mods: Default::default(),
     });
-    runtime.frame(380.0);
+    runtime.frame_at(380.0);
     tap(&mut runtime, "offer-start", 400.0);
     assert_eq!(
         harness.fake.asked_of("act")[0]["action"],
@@ -888,7 +893,7 @@ fn a_folder_of_the_diffs_tree_folds_its_files_away_until_a_filter_looks_inside()
         "{folder}"
     );
     runtime.update(|app, _| app.diff.as_mut().unwrap().filter = TextEdit::new("a.rs"));
-    runtime.frame(300.0);
+    runtime.frame_at(300.0);
     assert!(keys(&runtime).iter().any(|k| k == "tree-file-src/a.rs"));
 }
 
@@ -940,7 +945,7 @@ fn a_cards_flow_strip_opens_its_record_on_flow_with_the_active_step_chosen_never
         {"title": "Plan", "state": "done"}, {"title": "Ask", "state": "needs-you"},
         {"title": "Build", "state": "done"}, {"title": "Ship", "state": "expected"}]});
     runtime.update(|app, _| app.apply(serde_json::from_value(upsert).unwrap()));
-    runtime.frame(50.0);
+    runtime.frame_at(50.0);
     let shown = keys(&runtime);
     let strip = shown
         .iter()
@@ -1087,7 +1092,7 @@ fn a_parked_runs_record_names_its_park_and_keeps_its_recovery_after_it_clears() 
     let harness = Harness::<App>::new();
     let mut runtime = opened(&harness);
     runtime.update(|app, _| app.open_card("inst-build:b2"));
-    runtime.frame(100.0);
+    runtime.frame_at(100.0);
     let recovery: Vec<String> = (1..=22).map(|n| format!("rechecked {n}")).collect();
     harness.fake.push(
         "runDetail",

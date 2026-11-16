@@ -2,8 +2,10 @@
 
 #![allow(dead_code)]
 
+pub mod clock;
 pub mod pane;
 
+use clock::FrameAt;
 use collie_desktop_board::App;
 use collie_desktop_board::calls::testing::Harness;
 use collie_desktop_board::view;
@@ -43,15 +45,15 @@ pub fn settle(harness: &Harness<App>, runtime: &mut Runtime<App>) {
 
 pub fn tap(runtime: &mut Runtime<App>, key: &str, at: &mut f64) {
     runtime.invalidate();
-    runtime.frame(*at);
+    runtime.frame_at(*at);
     let path = path_of(runtime, key).unwrap_or_else(|| panic!("no {key}"));
     let (x, y) = runtime.find(&path).unwrap_or_else(|| panic!("no {key}"));
     runtime.pointer_move(x, y);
-    runtime.frame(*at + 16.0);
+    runtime.frame_at(*at + 16.0);
     runtime.pointer_down(x, y);
-    runtime.frame(*at + 50.0);
+    runtime.frame_at(*at + 50.0);
     runtime.pointer_up(x, y);
-    runtime.frame(*at + 100.0);
+    runtime.frame_at(*at + 100.0);
     *at += 600.0;
 }
 
@@ -65,7 +67,7 @@ pub fn said(runtime: &Runtime<App>, text: &str) -> bool {
 /// Taps the element whose accessible label is `label`.
 pub fn tap_label(runtime: &mut Runtime<App>, label: &str, at: &mut f64) {
     runtime.invalidate();
-    runtime.frame(*at);
+    runtime.frame_at(*at);
     let path = runtime
         .elements()
         .into_iter()

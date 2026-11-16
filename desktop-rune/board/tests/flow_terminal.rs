@@ -4,6 +4,7 @@
 //! frames; nothing here reaches a real pane.
 
 mod support;
+use support::clock::FrameAt;
 
 use collie_desktop_board::calls::testing::Harness;
 use collie_desktop_board::calls::{CallError, Post};
@@ -135,7 +136,7 @@ fn the_steps_pane_uses_the_remaining_height_and_refits_with_the_window_and_chat(
         runtime.state.nav.chat.set_width(chat_width);
         for _ in 0..4 {
             runtime.invalidate();
-            runtime.frame(at);
+            runtime.frame_at(at);
             at += 1000.0;
         }
         let [_, top, _, height] = rect(runtime, "terminal-grid");
@@ -296,7 +297,7 @@ fn keys_typed_with_the_steps_pane_focused_reach_it() {
     let mut at = 10.0;
     tap(&mut runtime, &grid, &mut at);
     runtime.key(typed_key("x"));
-    runtime.frame(at);
+    runtime.frame_at(at);
     assert_eq!(typed_after(&typed, 1), ["x"]);
 }
 

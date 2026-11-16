@@ -119,27 +119,33 @@ fn cards_in(runtime: &Runtime<App>, key: &str) -> Vec<String> {
         .collect()
 }
 
+/// Presses `key` where it rests, as a person waits for a panel to land before pressing in it.
+/// Short steps: a shown spinner walks every step, and the core's retries wait in wall time.
 fn press(runtime: &mut Runtime<App>, key: &str) {
+    runtime.settle_all();
+    runtime.frame(0.0);
     let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
     runtime.pointer_move(x, y);
-    runtime.frame(1.0);
+    runtime.frame(0.1);
     runtime.pointer_down(x, y);
     runtime.frame(0.05);
     runtime.pointer_up(x, y);
-    runtime.frame(1.0);
+    runtime.frame(0.1);
 }
 
 fn double_press(runtime: &mut Runtime<App>, key: &str) {
+    runtime.settle_all();
+    runtime.frame(0.0);
     let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
     runtime.pointer_move(x, y);
-    runtime.frame(1.0);
+    runtime.frame(0.1);
     for _ in 0..2 {
         runtime.pointer_down(x, y);
         runtime.frame(0.05);
         runtime.pointer_up(x, y);
         runtime.frame(0.05);
     }
-    runtime.frame(1.0);
+    runtime.frame(0.1);
 }
 
 fn settle(harness: &Harness<App>, runtime: &mut Runtime<App>) {

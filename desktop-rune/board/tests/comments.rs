@@ -3,14 +3,15 @@
 //! Enter or Comment saves a draft, every way out closes the box saving nothing, and drafts are
 //! edited and removed where they are drawn.
 
+mod support;
 use collie_desktop_board::calls::testing::Harness;
 use collie_desktop_board::record::review::Anchor;
 use collie_desktop_board::{App, view};
 use collie_desktop_terminal::view::Tab;
-use rune::edit::Modifier;
-use rune::{Env, Key, KeyEvent, Runtime};
+use rune::{Env, Key, KeyEvent, PhysicalInput, Runtime};
 use rune_kit::diff::Side;
 use serde_json::{Value, json};
+use support::clock::FrameAt;
 
 const FLOCK: &str = include_str!("../../fixtures/flock.ndjson");
 
@@ -48,16 +49,19 @@ fn focused(runtime: &Runtime<App>) -> String {
         .unwrap_or_default()
 }
 
+/// Presses `key` where it rests, once what moves has landed.
 fn press(runtime: &mut Runtime<App>, key: &str, at: f64) {
+    runtime.settle_all();
+    runtime.frame(0.0);
     let (x, y) = runtime
         .find(key)
         .unwrap_or_else(|| panic!("no {key} in {:?}", keys(runtime)));
     runtime.pointer_move(x, y);
-    runtime.frame(at);
+    runtime.frame_at(at);
     runtime.pointer_down(x, y);
-    runtime.frame(at + 30.0);
+    runtime.frame_at(at + 30.0);
     runtime.pointer_up(x, y);
-    runtime.frame(at + 60.0);
+    runtime.frame_at(at + 60.0);
 }
 
 fn key(runtime: &mut Runtime<App>, key: Key, at: f64) {
@@ -65,7 +69,7 @@ fn key(runtime: &mut Runtime<App>, key: Key, at: f64) {
         key,
         mods: Default::default(),
     });
-    runtime.frame(at);
+    runtime.frame_at(at);
 }
 
 fn typed(runtime: &mut Runtime<App>, said: &str, at: f64) {
@@ -95,7 +99,7 @@ fn opened(harness: &Harness<App>) -> Runtime<App> {
 fn settle(runtime: &mut Runtime<App>, harness: &Harness<App>, at: f64) {
     harness.settle(&mut runtime.state);
     runtime.update(|_, _| {});
-    runtime.frame(at);
+    runtime.frame_at(at);
 }
 
 fn detail(extra: Value) -> Value {
@@ -215,36 +219,32 @@ fn a_drag_down_the_numbers_or_a_shift_press_extends_the_range() {
     let (x, y) = runtime.find("df0.c1/gutter/nn").unwrap();
     let (_, to) = runtime.find("df0.c4/gutter/nn").unwrap();
     runtime.pointer_move(x, y);
-    runtime.frame(300.0);
+    runtime.frame_at(300.0);
     runtime.pointer_down(x, y);
-    runtime.frame(320.0);
+    runtime.frame_at(320.0);
     for step in 1..=8 {
         runtime.pointer_move(x, y + (to - y) * step as f32 / 8.0);
-        runtime.frame(320.0 + 16.0 * step as f64);
+        runtime.frame_at(320.0 + 16.0 * step as f64);
     }
     runtime.pointer_up(x, to);
-    runtime.frame(500.0);
+    runtime.frame_at(500.0);
     assert_eq!(selection(&runtime), Some((1, 4)), "a drag");
     assert!(shown(&runtime, "diff-composer"));
 
     key(&mut runtime, Key::Escape, 550.0);
     press(&mut runtime, "df0.c1/gutter/nn", 600.0);
-    runtime.set_modifier_keys(true);
-    let shift = |pressed| KeyEvent {
-        key: Key::Modifier {
-            modifier: Modifier::ShiftLeft,
-            pressed,
-        },
-        mods: rune::edit::Mods {
-            shift: pressed,
+    // A pointer press reads Shift as the platform reports it held, not from a key event.
+    let shift = |shift| {
+        PhysicalInput::Modifiers(rune::edit::Mods {
+            shift,
             ..Default::default()
-        },
+        })
     };
-    runtime.key(shift(true));
-    runtime.frame(700.0);
+    runtime.physical_input(shift(true));
+    runtime.frame_at(700.0);
     press(&mut runtime, "df0.c3/gutter/nn", 750.0);
-    runtime.key(shift(false));
-    runtime.frame(850.0);
+    runtime.physical_input(shift(false));
+    runtime.frame_at(850.0);
     assert_eq!(selection(&runtime), Some((1, 3)), "a Shift-press");
 }
 
@@ -257,18 +257,18 @@ fn drag_over(
     mut mid: impl FnMut(&Runtime<App>, (f32, f32)),
 ) {
     runtime.pointer_move(from.0, from.1);
-    runtime.frame(at);
+    runtime.frame_at(at);
     runtime.pointer_down(from.0, from.1);
-    runtime.frame(at + 20.0);
+    runtime.frame_at(at + 20.0);
     for step in 1..=8 {
         let f = step as f32 / 8.0;
         let point = (from.0 + (to.0 - from.0) * f, from.1 + (to.1 - from.1) * f);
         runtime.pointer_move(point.0, point.1);
-        runtime.frame(at + 20.0 + 16.0 * step as f64);
+        runtime.frame_at(at + 20.0 + 16.0 * step as f64);
         mid(runtime, point);
     }
     runtime.pointer_up(to.0, to.1);
-    runtime.frame(at + 300.0);
+    runtime.frame_at(at + 300.0);
 }
 
 /// A point on `path`'s code, `dx` in from its left edge.
@@ -340,12 +340,12 @@ fn a_drag_that_stays_on_one_line_chooses_none_and_a_double_click_still_selects_a
 
     let word = on_code(&runtime, "df0.c3/code/text", 6.0);
     runtime.pointer_move(word.0, word.1);
-    runtime.frame(1000.0);
+    runtime.frame_at(1000.0);
     for _ in 0..2 {
         runtime.pointer_down(word.0, word.1);
         runtime.pointer_up(word.0, word.1);
     }
-    runtime.frame(1016.0);
+    runtime.frame_at(1016.0);
     assert_eq!(runtime.selected_text().as_deref(), Some("fn"));
     assert_eq!(selection(&runtime), None, "a double-click is about words");
 }
@@ -532,16 +532,16 @@ fn select_plan(runtime: &mut Runtime<App>, at: f64) {
     let [x, y, w, h] = rect(runtime, "plan-text");
     let (from, to) = ((x + 4.0, y + h - 8.0), (x + w.min(300.0), y + h - 8.0));
     runtime.pointer_move(from.0, from.1);
-    runtime.frame(at);
+    runtime.frame_at(at);
     runtime.pointer_down(from.0, from.1);
-    runtime.frame(at + 20.0);
+    runtime.frame_at(at + 20.0);
     for step in 1..=6 {
         let f = step as f32 / 6.0;
         runtime.pointer_move(from.0 + (to.0 - from.0) * f, to.1);
-        runtime.frame(at + 20.0 + 16.0 * step as f64);
+        runtime.frame_at(at + 20.0 + 16.0 * step as f64);
     }
     runtime.pointer_up(to.0, to.1);
-    runtime.frame(at + 200.0);
+    runtime.frame_at(at + 200.0);
 }
 
 #[test]

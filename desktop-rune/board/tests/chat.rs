@@ -20,7 +20,6 @@ const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/chat");
 struct Window {
     core: Harness<App>,
     rt: Runtime<App>,
-    at: f64,
 }
 
 fn within(node: &Value) -> Vec<&Value> {
@@ -49,7 +48,7 @@ impl Window {
             },
         );
         rt.frame(0.0);
-        Window { core, rt, at: 0.0 }
+        Window { core, rt }
     }
 
     /// Opened, with the conversation read as `items`.
@@ -60,14 +59,15 @@ impl Window {
     }
 
     fn frame(&mut self) {
-        self.at += 100.0;
-        self.rt.frame(self.at);
+        self.rt.frame(0.1);
     }
 
-    /// Applies what the core answered, and draws it; a file drop held for a fresh build lands.
+    /// Applies what the core answered, and draws it at rest; a file drop held for a fresh build
+    /// lands.
     fn settle(&mut self) {
         let core = &self.core;
         self.rt.update(|board, _| core.settle(board));
+        self.rt.settle_all();
         self.frame();
         self.frame();
     }
@@ -139,7 +139,7 @@ impl Window {
         self.rt.pointer_move(x, y);
         self.frame();
         self.rt.pointer_down(x, y);
-        self.rt.frame(self.at + 50.0);
+        self.rt.frame(0.05);
         self.rt.pointer_up(x, y);
         self.frame();
         self.settle();
@@ -1067,7 +1067,7 @@ fn popping_the_chat_out_moves_it_to_its_own_window_and_back() {
     );
 
     window.rt.update(|board, _| board.nav.chat.set_open(true));
-    window.frame();
+    window.settle();
     assert!(window.has("chat-popped"), "{:?}", window.keys());
     assert!(
         !window.has("composer"),
@@ -1259,10 +1259,8 @@ fn the_chats_pickers_open_at_their_trigger_in_its_own_window() {
         scale: 1.0,
     };
     let mut rt = Runtime::new(alone, chat_window::view, (520.0, 820.0), env);
-    let mut at = 0.0;
-    let mut frame = |rt: &mut Runtime<Alone>| {
-        at += 100.0;
-        rt.frame(at);
+    let frame = |rt: &mut Runtime<Alone>| {
+        rt.frame(0.1);
     };
     frame(&mut rt);
     core.fake.answer("transcript", Ok(json!([])));
@@ -1455,5 +1453,6 @@ fn ctrl_backspace_and_ctrl_delete_in_the_composer_take_one_word() {
     assert_eq!(window.rt.state.chat.composer.text, "one two ");
     window.key(Key::Home, Mods::default());
     window.key(Key::Delete, ctrl());
-    assert_eq!(window.rt.state.chat.composer.text, " two ");
+    // Off macOS a word forward runs past its spaces, as Chromium's Ctrl+Delete does.
+    assert_eq!(window.rt.state.chat.composer.text, "two ");
 }

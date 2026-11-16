@@ -3,12 +3,14 @@
 //! the Run among the options, words for the agent instead, a status line, and the form moving
 //! on once the host takes an answer and closing after the last.
 
+mod support;
 use collie_desktop_board::calls::CallError;
 use collie_desktop_board::calls::testing::Harness;
 use collie_desktop_board::{App, view};
 use collie_desktop_terminal::view::Tab;
 use rune::{Env, Key, KeyEvent, Mods, Runtime};
 use serde_json::{Value, json};
+use support::clock::FrameAt;
 
 const FLOCK: &str = include_str!("../../fixtures/flock.ndjson");
 
@@ -44,11 +46,11 @@ fn tap(runtime: &mut Runtime<App>, key: &str, at: f64) {
         .find(key)
         .unwrap_or_else(|| panic!("no {key} in {:?}", keys(runtime)));
     runtime.pointer_move(x, y);
-    runtime.frame(at);
+    runtime.frame_at(at);
     runtime.pointer_down(x, y);
-    runtime.frame(at + 50.0);
+    runtime.frame_at(at + 50.0);
     runtime.pointer_up(x, y);
-    runtime.frame(at + 100.0);
+    runtime.frame_at(at + 100.0);
 }
 
 fn key(runtime: &mut Runtime<App>, key: Key, at: f64) {
@@ -56,13 +58,13 @@ fn key(runtime: &mut Runtime<App>, key: Key, at: f64) {
         key,
         mods: Mods::default(),
     });
-    runtime.frame(at);
+    runtime.frame_at(at);
 }
 
 fn settle(runtime: &mut Runtime<App>, harness: &Harness<App>, at: f64) {
     harness.settle(&mut runtime.state);
     runtime.update(|_, _| {});
-    runtime.frame(at);
+    runtime.frame_at(at);
 }
 
 fn sent(harness: &Harness<App>) -> Vec<Value> {

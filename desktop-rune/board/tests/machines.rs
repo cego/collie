@@ -2,6 +2,7 @@
 //! what its buttons ask of the core, through the fake core and the accessibility tree.
 
 mod support;
+use support::clock::FrameAt;
 
 use collie_desktop_board::App;
 use collie_desktop_board::calls::CallError;
@@ -729,7 +730,7 @@ fn machines_page(harness: &Harness<App>) -> Runtime<App> {
     );
     let mut runtime = runtime(app);
     settle(harness, &mut runtime);
-    runtime.frame(200.0);
+    runtime.frame_at(200.0);
     runtime
 }
 
@@ -781,7 +782,7 @@ fn sync_now_remove_and_onboard_ask_the_core_for_that_machine_and_say_what_came_o
         Err(CallError("herdr refused: busy".into())),
     );
     settle(&harness, &mut runtime);
-    runtime.frame(at);
+    runtime.frame_at(at);
     assert_eq!(
         runtime.state.pages.machines.told.texts(),
         ["Upgraded vm to 0.35.0", "herdr refused: busy"]
@@ -818,7 +819,7 @@ fn add_machine_sends_what_was_typed_trimmed_then_shows_its_onboarding_and_herdrs
     );
     harness.fake.answer("addMachine", Ok(json!("job-1")));
     settle(&harness, &mut runtime);
-    runtime.frame(at);
+    runtime.frame_at(at);
     assert!(said(&runtime, "Starting…"));
     let machine = json!({ "profile": "p-new", "name": "vm-new", "target": "mk@vm-new" });
     let asking = item(
@@ -828,7 +829,7 @@ fn add_machine_sends_what_was_typed_trimmed_then_shows_its_onboarding_and_herdrs
     );
     runtime.state.pages.machines.heard(&asking);
     runtime.invalidate();
-    runtime.frame(at);
+    runtime.frame_at(at);
     assert!(said(&runtime, "Onboarding vm-new"));
     assert!(said(&runtime, "Trust this host key?"));
     tap(&mut runtime, "herdr-yes", &mut at);
@@ -860,7 +861,7 @@ fn add_machine_keeps_its_dialog_until_the_core_takes_it_and_says_why_it_refused(
         Err(CallError("herdr refused: vm-new is already saved".into())),
     );
     settle(&harness, &mut runtime);
-    runtime.frame(at);
+    runtime.frame_at(at);
     let adding = runtime
         .state
         .pages
@@ -900,7 +901,7 @@ fn an_ended_onboarding_offers_retry_and_skip_on_its_unsettled_steps() {
     runtime.state.pages.machines.job = Some("job-2".into());
     let mut at = 400.0;
     runtime.invalidate();
-    runtime.frame(at);
+    runtime.frame_at(at);
     assert!(said(&runtime, "Not onboarded yet."));
     tap(&mut runtime, "onboarding-steps/step-helle/skip", &mut at);
     assert_eq!(
@@ -933,7 +934,7 @@ fn clean_up_reads_each_live_machine_and_sweeps_the_chosen_ones_under_a_request()
         "remove": [{ "kind": "worktree", "target": "/w/run-1", "bytes": 2048, "reason": "its Run ended" }],
         "keep": [], "bytes": 2048 } })));
     settle(&harness, &mut runtime);
-    runtime.frame(at);
+    runtime.frame_at(at);
     assert!(said(&runtime, "Would free 2.0 KiB"));
     assert!(said(&runtime, "2 Machines chosen · would free 2.0 KiB"));
     tap(&mut runtime, "cleanup-p-vm/chosen", &mut at);
@@ -950,7 +951,7 @@ fn clean_up_reads_each_live_machine_and_sweeps_the_chosen_ones_under_a_request()
         .fake
         .answer("sweep", Ok(json!({ "remove": [], "keep": [], "bytes": 0 })));
     settle(&harness, &mut runtime);
-    runtime.frame(at);
+    runtime.frame_at(at);
     assert!(
         !runtime.state.pages.machines.cleanup.open,
         "every sweep cleaned, the dialog closes"
@@ -984,7 +985,7 @@ fn a_failed_sweep_is_tried_again_under_its_own_request() {
     settle(&harness, &mut runtime);
     let first = harness.fake.asked_of("sweep")[1]["request"].clone();
     let mut at = 400.0;
-    runtime.frame(at);
+    runtime.frame_at(at);
     assert!(said(&runtime, "the disk is gone"));
     tap(&mut runtime, "cleanup-p-vm/try-again", &mut at);
     let again = harness.fake.asked_of("sweep");
@@ -1004,7 +1005,7 @@ fn the_header_says_which_machines_it_reaches_and_never_calls_one_connecting_in_s
         runtime.state.apply(one);
     }
     settle(&harness, &mut runtime);
-    runtime.frame(400.0);
+    runtime.frame_at(400.0);
     let reach = runtime
         .elements()
         .into_iter()
@@ -1024,7 +1025,7 @@ fn the_header_says_which_machines_it_reaches_and_never_calls_one_connecting_in_s
         .state
         .apply(snapshot("i-vm", "p-vm", "vm", "0.35.0"));
     settle(&harness, &mut runtime);
-    runtime.frame(800.0);
+    runtime.frame_at(800.0);
     assert!(said(&runtime, "2 of 2 Machines reached"));
     assert!(said(
         &runtime,
@@ -1039,13 +1040,13 @@ fn an_onboarding_started_anywhere_shows_over_whichever_page_is_open() {
     runtime.state.open_page(Page::Settings);
     runtime.state.pages.machines.job = Some("job-9".into());
     settle(&harness, &mut runtime);
-    runtime.frame(400.0);
+    runtime.frame_at(400.0);
     assert!(
         said(&runtime, "Starting…"),
         "the onboarding shows on Settings"
     );
     runtime.state.open_page(Page::Board);
     settle(&harness, &mut runtime);
-    runtime.frame(800.0);
+    runtime.frame_at(800.0);
     assert!(said(&runtime, "Starting…"), "and on the Board");
 }

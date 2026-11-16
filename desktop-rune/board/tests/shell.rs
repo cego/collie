@@ -1,5 +1,6 @@
 //! The window's frame and the view's calls to the core, without a window or a core.
 
+mod support;
 use collie_desktop_board::calls::CallError;
 use collie_desktop_board::calls::testing::Harness;
 use collie_desktop_board::pages::usage::Level;
@@ -7,6 +8,7 @@ use collie_desktop_board::shell::Page;
 use collie_desktop_board::{App, view};
 use rune::{Env, Runtime};
 use serde_json::{Value, json};
+use support::clock::FrameAt;
 
 fn runtime(app: App) -> Runtime<App> {
     let mut runtime = Runtime::new(
@@ -22,14 +24,17 @@ fn runtime(app: App) -> Runtime<App> {
     runtime
 }
 
+/// Taps `key` where it rests, once what moves has landed.
 fn tap(runtime: &mut Runtime<App>, key: &str, at: f64) {
+    runtime.settle_all();
+    runtime.frame(0.0);
     let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
     runtime.pointer_move(x, y);
-    runtime.frame(at);
+    runtime.frame_at(at);
     runtime.pointer_down(x, y);
-    runtime.frame(at + 50.0);
+    runtime.frame_at(at + 50.0);
     runtime.pointer_up(x, y);
-    runtime.frame(at + 100.0);
+    runtime.frame_at(at + 100.0);
 }
 
 #[test]
@@ -414,7 +419,8 @@ fn p2_a_narrow_window_narrows_the_chat_without_saving_it_and_a_wide_one_gives_it
         for _ in 0..3 {
             at += 100.0;
             runtime.update(|app, _| app.keep_chat_width());
-            runtime.frame(at);
+            runtime.settle_all();
+            runtime.frame_at(at);
         }
     };
     settle(&mut runtime);

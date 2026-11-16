@@ -4,6 +4,7 @@
 //! Desktop's own NDJSON frames; nothing here reaches a real pane.
 
 mod support;
+use support::clock::FrameAt;
 
 use collie_desktop_board::calls::testing::Harness;
 use collie_desktop_board::calls::{CallError, Post};
@@ -349,8 +350,8 @@ fn paste_into_composer(
 ) {
     clipboard.set_content(held);
     runtime.update(|_, tx| tx.request_paste());
-    runtime.frame(at);
-    runtime.frame(at + 0.1);
+    runtime.frame_at(at);
+    runtime.frame_at(at + 0.1);
 }
 
 #[test]

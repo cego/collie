@@ -1,10 +1,12 @@
 //! What floats over the page: toasts stand clear of the Flock chat's composer, and a dialog is
 //! drawn on the raised surface a card stands on.
 
+mod support;
 use collie_desktop_board::shell::Page;
 use collie_desktop_board::{App, view};
 use rune::{Env, Runtime};
 use serde_json::json;
+use support::clock::FrameAt;
 
 const FLOCK: &str = include_str!("../../fixtures/flock.ndjson");
 const SIZE: (f32, f32) = (1280.0, 860.0);
@@ -27,7 +29,7 @@ fn runtime(app: App, dark: bool) -> Runtime<App> {
 fn settle(runtime: &mut Runtime<App>, from: f64) {
     runtime.invalidate();
     for at in 1..=12 {
-        runtime.frame(from + at as f64 * 100.0);
+        runtime.frame_at(from + at as f64 * 100.0);
     }
 }
 
