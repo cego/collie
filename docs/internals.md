@@ -1785,8 +1785,8 @@ Desktop's dependencies too, frozen to `desktop/bun.lock`. After changing Desktop
 dependencies, run `bun install` in `desktop/` first: the root install refuses a stale
 Desktop lockfile. CI relies on that one install before its root gate.
 CI's `desktop-checks` job checks the core's TypeScript (`cd desktop && bun run typecheck`) and
-the Rune workspace's format, clippy and tests; the required CI gate also includes both
-native platform bundles.
+the Rune workspace's format, clippy and tests. Its `lint` and `test` matrix entries run
+independently; the required CI gate needs both entries and both native platform bundles.
 
 A test leaves nothing behind. `test/support/hosts.ts`, a preload, gives each test file a
 temporary root of its own, `TMPDIR` inside it, and removes it when the file ends. Every
@@ -1903,7 +1903,7 @@ The required `test` job also needs the Mac runner, Desktop checks and both nativ
 It runs even when a dependency failed, and fails unless each succeeded.
 
 The native jobs cache Cargo dependencies, keyed by platform, compiler, manifests and lockfile.
-Each job keeps its own cache, shared with the same job in the release workflow where applicable.
+Each native check and platform keeps its own cache, shared with the same job in the release workflow where applicable.
 Workspace crates are rebuilt, and all checks, tests, bundle builds and signing checks still run on cache hits.
 Ghostty honors the `ZIG_LOCAL_CACHE_DIR` supplied by CI's Zig setup, so Zig can reuse its
 compiled inputs across Cargo profiles and CI runs while still checking them for changes.

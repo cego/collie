@@ -94,6 +94,10 @@ jobs:
   # vendor/ghostty submodule with the Zig it pins, and bindgen needs libclang.
   desktop-checks:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [lint, test]
     env:
       VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
     steps:
@@ -111,6 +115,7 @@ jobs:
       # Desktop's Effect is the root's, so the board's Schemas exist once.
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
+        if: matrix.check == 'lint'
         working-directory: desktop
       # Installs the toolchain desktop/rust-toolchain.toml pins.
       - run: rustup toolchain install
@@ -119,12 +124,16 @@ jobs:
       - uses: Swatinem/rust-cache@2201cc584a476d1b508be977bbe4b7d1c7a52e9c # v2.9.3
         with:
           workspaces: desktop
-          shared-key: desktop
+          shared-key: desktop-${{ matrix.check }}
       - run: cargo fmt --all --check
+        if: matrix.check == 'lint'
         working-directory: desktop
       - run: cargo clippy --workspace --all-targets -- -D warnings
+        if: matrix.check == 'lint'
         working-directory: desktop
       # protocol/tests/core.rs starts Desktop's main process under Bun.
       - run: cargo test --workspace
+        if: matrix.check == 'test'
         working-directory: desktop
       - run: bun test test/rune-contract.test.ts test/rune-types.test.ts test/rune-shell.test.ts test/rune-media.test.ts
+        if: matrix.check == 'test'
