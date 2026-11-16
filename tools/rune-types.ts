@@ -1,7 +1,7 @@
 // The Rust types the Rune spike decodes `DesktopRpcs` with, generated from the JSON Schema
-// documents of every RPC in `DesktopRpcs`, so no Schema is copied by hand (desktop-rune/README.md):
+// documents of every RPC in `DesktopRpcs`, so no Schema is copied by hand (desktop/README.md):
 //
-//   bun run tools/rune-types.ts --write   # regenerate desktop-rune/protocol/src/generated.rs
+//   bun run tools/rune-types.ts --write   # regenerate desktop/protocol/src/generated.rs
 //   bun run tools/rune-types.ts --check   # fail where the checked-in file differs
 
 import * as Arr from "effect/Array";
@@ -16,8 +16,7 @@ import type * as Rpc from "effect/rpc/Rpc";
 import * as RpcSchema from "effect/rpc/RpcSchema";
 import { DesktopRpcs } from "../desktop/src/shared/flock";
 
-export const GENERATED = new URL("../desktop-rune/protocol/src/generated.rs", import.meta.url)
-  .pathname;
+export const GENERATED = new URL("../desktop/protocol/src/generated.rs", import.meta.url).pathname;
 export const REGENERATE = "bun run tools/rune-types.ts --write";
 
 /** Each part of an RPC the spike speaks that is not void, and its Rust name. */
