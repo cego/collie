@@ -60,6 +60,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `park-recheck.ts`      | Read-only rechecks of a parked fact, including the CI job and head recorded before parking                                  |
 | `park-recovery.ts`     | Recovery rounds, backoff, durable resume claims, limits, failure News, and starting and judging Heals                       |
 | `heal.ts`              | Whether a park goes to a Heal or straight to you, the healer a project declares, and a Heal's Output                        |
+| `heal-report.ts`       | Filing a judged Heal's Collie defect on cego/collie, or linking the issue already there                                     |
 | `landing.ts`           | A Run's merge at a head: its landing record, and the one rule settling an attempt a restart interrupted                     |
 | `review-wait.ts`       | Where a merge request's review stands for a Release Run, and the wait's parked line                                         |
 | `prerequisites.ts`     | Whether the other Runs' Changes a ticket needs merged have landed, and the wait's awaited line                              |
