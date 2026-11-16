@@ -281,7 +281,8 @@ test(
             return super.paneClose(pane, backend).pipe(
               Effect.tap(() => {
                 if (agents === undefined || recovering === null) return Effect.void;
-                return Effect.forkChild(agents.resumeLost(recovering, runningNow)).pipe(
+                // Detached: recovery interrupts the fiber closing the pane, and a child would end with it.
+                return Effect.forkDetach(agents.resumeLost(recovering, runningNow)).pipe(
                   Effect.tap((fiber) => Effect.sync(() => competitions.push(fiber))),
                   Effect.asVoid,
                 );
