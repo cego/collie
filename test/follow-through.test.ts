@@ -24,6 +24,7 @@ import { slackApi } from "../src/slack";
 import { findingsIn } from "../src/output";
 import { writeTask } from "../src/task";
 import { registerAgent, scopeFor } from "../src/registry";
+import { isString } from "../src/schema";
 
 const PROJECT = "gitlab.cego.dk/mk/collie";
 const TARGET = `https://${PROJECT}/-/merge_requests/7`;
@@ -904,7 +905,7 @@ test.each(["major", "minor"] as const)(
               runId: building.runId,
               workflow: "placed",
               at: "2026-11-12T09:00:00Z",
-              incarnation: { terminalId: paneId, agentSession: null },
+              incarnation: { terminalId: paneId, agentSession: null, backend: "core" },
             });
             yield* configured(true);
             yield* registry.load(`${ROOT}workflows/review-improve.workflow.ts`);
@@ -958,12 +959,12 @@ test.each(["major", "minor"] as const)(
             const handed = Arr.filter(
               yield* rig.calls(),
               (one) =>
-                one.argv?.[0] === "agent" &&
-                one.argv?.[1] === "prompt" &&
-                one.argv?.[2] === "impl-live",
+                one.cmd === "terminal.send" &&
+                one.params?.terminal === "impl-live" &&
+                isString(one.params.text) &&
+                one.params.text.includes(`${improved.runId}/findings.json`),
             );
             expect(handed).toHaveLength(1);
-            expect(handed[0]?.argv?.[3]).toContain(`${improved.runId}/findings.json`);
           }),
         );
       }),
