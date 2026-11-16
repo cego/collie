@@ -23,6 +23,7 @@ export interface WorkflowTally {
   readonly workflow: string;
   readonly total: number;
   readonly complete: number;
+  readonly ended: number;
   readonly failed: number;
   readonly suspended: number;
   readonly pending: number;
@@ -112,6 +113,7 @@ export function reportOf(
         workflow,
         total: 0,
         complete: 0,
+        ended: 0,
         failed: 0,
         suspended: 0,
         pending: 0,
@@ -276,7 +278,7 @@ export const reportLines = (report: Report, unreadable: string | null): string =
       ...Arr.map(
         report.workflows,
         (t) =>
-          `${t.workflow}  ${t.total}: ${t.complete} complete, ${t.failed} failed, ${t.suspended} suspended, ${t.pending} pending; ${t.withMr} recorded a merge request; ${t.stopped} stopped; ${t.answered} decisions answered; rework ${t.rework}; verifications ${t.verifications.pass} pass, ${t.verifications.fail} fail, ${t.verifications.unstable} unstable`,
+          `${t.workflow}  ${t.total}: ${t.complete} complete, ${t.failed} failed, ${t.suspended} suspended, ${t.pending} pending${t.ended === 0 ? "" : `, ${t.ended} ended with outcome unavailable`}; ${t.withMr} recorded a merge request; ${t.stopped} stopped; ${t.answered} decisions answered; rework ${t.rework}; verifications ${t.verifications.pass} pass, ${t.verifications.fail} fail, ${t.verifications.unstable} unstable`,
       ),
       ...(report.failed.length === 0 ? [] : ["failed:"]),
       ...capped(

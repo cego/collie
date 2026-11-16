@@ -1,7 +1,7 @@
 // The Rune spike's side of `DesktopRpcs`: frames encoded here through the real Schemas,
 // decoded and re-encoded by the Rust types, and decoded here again, come back equal. A field
 // the Rust types lack is dropped on the way, and that turns this red. Needs cargo, which the
-// `desktop-rune` CI job has.
+// `desktop` CI job has.
 
 import { beforeAll, describe, expect, test } from "bun:test";
 import * as Arr from "effect/Array";
@@ -14,7 +14,7 @@ import { AguiEvent } from "../desktop/src/shared/agui";
 import { FLOCK, SAID } from "./support/rune-fixtures";
 import { exec } from "./support/command";
 
-const WORKSPACE = new URL("../desktop-rune/", import.meta.url).pathname;
+const WORKSPACE = new URL("../desktop/", import.meta.url).pathname;
 const cargo = Bun.which("cargo");
 
 const flock = DesktopRpcs.requests.get("flock")!;

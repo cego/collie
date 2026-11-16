@@ -979,7 +979,7 @@ const occupiedAs = (owner: string | null, recorded: Recorded | null) =>
   }${recorded === null ? "" : `, recorded by Run ${recorded.run}`}`;
 
 /** Whether the checkout at `at` is the one Collie made and recorded, not one made there since. */
-const isTheOneMade = Effect.fn("worktree.isTheOneMade")(function* (
+export const isTheOneMade = Effect.fn("worktree.isTheOneMade")(function* (
   at: string,
   record: WorktreeRecord | null,
 ) {

@@ -347,6 +347,7 @@ function recentDetail(run: RunFacts): string {
 function glyphFor(run: RunFacts): string {
   switch (run.state) {
     case "succeeded":
+    case "ended":
       return GLYPH.done;
     case "failed":
     case "stopped":

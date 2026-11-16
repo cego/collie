@@ -11,6 +11,10 @@
 
 It also stops a start from focusing the workspace it opens.
 
+D1 and D5 are amended by
+[ADR-draft-a-worktrees-build-cache-goes-once-no-live-run-works-in-it](draft-a-worktrees-build-cache-goes-once-no-live-run-works-in-it.md):
+a worktree's build cache goes once no live Run works in it.
+
 ## What was true before
 
 Collie made things and never removed them. On 2026-10-07 vm-mk's root filesystem was at

@@ -23,7 +23,7 @@ import { logged } from "./check-supervisor";
 import type { VerifySpec } from "./intent";
 import { failedAlone, failedTests, ranAlone, rerunArgv } from "./bun-tests";
 import { appendJournal, readJournal } from "./journal";
-import { shell } from "./mr";
+import { shell, type Ran } from "./mr";
 import { nowIso, epochMs } from "./time";
 import { CurrentStep, type StepPlace } from "./steps";
 import { Pass, VerificationSchema, type FailedTest, type Snapshot } from "./verify-model";
@@ -61,6 +61,15 @@ export class VerifyRefused extends Data.TaggedError("VerifyRefused")<{
   state?: true;
 }> {}
 
+/** Neither pass nor fail: what a check ended with could not be kept. */
+export const noVerdict =
+  (name: string, what: "exit status" | "output" | "record", how: "read" | "written") =>
+  (error: Error) =>
+    new VerifyRefused({
+      why: `"${name}" gave no verdict: its ${what} could not be ${how}: ${error.message}`,
+      state: true,
+    });
+
 type Services = FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner;
 
 const git = (args: string[], cwd: string) => shell("git", args, cwd);
@@ -73,8 +82,10 @@ const git = (args: string[], cwd: string) => shell("git", args, cwd);
  * Untracked content is included deliberately. A test run that passed because of a file
  * nobody committed passed on a tree that is not the one anybody will get.
  */
-export const fingerprint = (cwd: string) =>
-  Effect.map(treeOf(cwd), ({ head_sha, fingerprint }) => ({ head_sha, fingerprint }));
+export const fingerprint = (cwd: string): Effect.Effect<Snapshot, never, Services> =>
+  Effect.map(treeOf(cwd), ({ head_sha, fingerprint, unmeasured }) =>
+    unmeasured === undefined ? { head_sha, fingerprint } : { head_sha, fingerprint, unmeasured },
+  );
 
 /** The Git tree HEAD names: the same files at two commits are the same content. Empty before a first commit. */
 export const contentOf = (cwd: string) =>
@@ -99,10 +110,14 @@ const statusParts = (stdout: string) => {
  * The fingerprint, with the branch HEAD names (`HEAD` when detached, null before a first
  * commit) and whether anything is uncommitted, all from one status.
  */
-export const treeOf: (
-  cwd: string,
-) => Effect.Effect<
-  { head_sha: string; fingerprint: string; branch: string | null; dirty: boolean },
+export const treeOf: (cwd: string) => Effect.Effect<
+  {
+    head_sha: string;
+    fingerprint: string;
+    unmeasured?: string;
+    branch: string | null;
+    dirty: boolean;
+  },
   never,
   Services
 > = Effect.fn("Verify.treeOf")(function* (cwd: string) {
@@ -145,14 +160,18 @@ export const treeOf: (
     if (bytes > FINGERPRINT_MAX_BYTES) return { head_sha, fingerprint: TOO_LARGE, branch, dirty };
   }
   // Outside a repository there is no tree to move, as there never was.
-  const tree = place === null ? "" : yield* workingTree(cwd, place.index);
-  if (tree === UNMEASURED) return { head_sha, fingerprint: UNMEASURED, branch, dirty };
+  const { tree, unmeasured } = place === null ? { tree: "" } : yield* workingTree(cwd, place.index);
+  if (unmeasured !== undefined)
+    return { head_sha, fingerprint: UNMEASURED, unmeasured, branch, dirty };
   const parts = [tree];
   for (const sub of changedSubmodules(entries)) {
-    const inner = (yield* treeOf(path.join(root, sub))).fingerprint;
-    if (inner === TOO_LARGE || inner === UNMEASURED || inner === "")
-      return { head_sha, fingerprint: inner === TOO_LARGE ? TOO_LARGE : UNMEASURED, branch, dirty };
-    parts.push(`${sub}=${inner}`);
+    const inner = yield* treeOf(path.join(root, sub));
+    if (inner.fingerprint === TOO_LARGE) return { head_sha, fingerprint: TOO_LARGE, branch, dirty };
+    if (inner.fingerprint === UNMEASURED || inner.fingerprint === "")
+      return inner.unmeasured === undefined
+        ? { head_sha, fingerprint: UNMEASURED, branch, dirty }
+        : { head_sha, fingerprint: UNMEASURED, unmeasured: inner.unmeasured, branch, dirty };
+    parts.push(`${sub}=${inner.fingerprint}`);
   }
   return { head_sha, fingerprint: Arr.join(parts, " "), branch, dirty };
 });
@@ -236,8 +255,16 @@ const placeOf = Effect.fn("Verify.placeOf")(function* (cwd: string) {
   return place;
 });
 
+/** A written tree, or why git could not write one. */
+type Measured = { readonly tree: string; readonly unmeasured?: string };
+
+const unmeasuredBy = (verb: string, ran: Ran): Measured => ({
+  tree: UNMEASURED,
+  unmeasured: tail(Str.trim(ran.stderr ?? "")) || `git ${verb} exited ${ran.code}`,
+});
+
 /** The tree `git add -A` would stage, written through a scratch copy so the checkout's own index is left as it was. */
-const workingTree = Effect.fn("Verify.workingTree")(
+const stageAndWrite = Effect.fn("Verify.stageAndWrite")(
   function* (cwd: string, index: string) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -260,15 +287,29 @@ const workingTree = Effect.fn("Verify.workingTree")(
               yield* fs.utimes(env.GIT_INDEX_FILE, at, at);
             }
           }
-          if ((yield* shell("git", ["add", "-A"], cwd, env)).code !== 0) return UNMEASURED;
+          const added = yield* shell("git", ["add", "-A"], cwd, env);
+          if (added.code !== 0) return unmeasuredBy("add", added);
           const tree = yield* shell("git", ["write-tree"], cwd, env);
-          return tree.code === 0 ? Str.trim(tree.stdout) : UNMEASURED;
+          return tree.code === 0
+            ? { tree: Str.trim(tree.stdout) }
+            : unmeasuredBy("write-tree", tree);
         }),
       (scratch) => fs.remove(scratch, { recursive: true }).pipe(Effect.ignore),
     );
   },
-  Effect.orElseSucceed(() => UNMEASURED),
+  Effect.catch((error) =>
+    Effect.succeed<Measured>({ tree: UNMEASURED, unmeasured: error.message }),
+  ),
 );
+
+/** Tried once more, with a fresh scratch index, before the tree is called unmeasured. */
+const workingTree = (cwd: string, index: string) =>
+  stageAndWrite(cwd, index).pipe(
+    Effect.filterOrElse(
+      (first) => first.unmeasured === undefined,
+      () => stageAndWrite(cwd, index),
+    ),
+  );
 
 /** Whether two snapshots are the same bytes, whatever commit each was on. A tree nobody measured is never the same as another. */
 export const sameTree = (
@@ -542,7 +583,7 @@ export interface Collected {
 /** A check `startCheck` started, finished by `finishCheck` once `exit` is known. */
 export interface StartedCheck {
   readonly id: string;
-  readonly exit: Effect.Effect<number>;
+  readonly exit: Effect.Effect<number, VerifyRefused>;
 }
 
 /**
@@ -638,14 +679,15 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
     exit: handle
       .collected(
         Effect.all(
-          [drain(handle.stdout, echo?.stdout), drain(handle.stderr, echo?.stderr), handle.exit],
+          [
+            drain(handle.stdout, echo?.stdout).pipe(Effect.orDie),
+            drain(handle.stderr, echo?.stderr).pipe(Effect.orDie),
+            handle.exit.pipe(Effect.mapError(noVerdict(what.name, "exit status", "read"))),
+          ],
           { concurrency: "unbounded" },
         ),
       )
-      .pipe(
-        Effect.map(([, , exit]) => exit),
-        Effect.orDie,
-      ),
+      .pipe(Effect.map(([, , exit]) => exit)),
   };
 });
 
@@ -653,12 +695,14 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
  * The Verification of a check that exited with `exit`, from its record and output alone, so
  * any host on its state directory can finish it; appended to its Run's evidence.
  */
-export const finishCheck = (id: string, exit: number) =>
-  Effect.flatMap(readCheck(id), (read) => settleCheck(read, exit));
+export const finishCheck = (id: string, name: string, exit: number) =>
+  Effect.flatMap(readCheck(id, name), (read) => settleCheck(read, exit));
 
 /** What a check is finished from, read while its record and output are still there. */
-const readCheck = Effect.fn("Verify.readCheck")(function* (id: string) {
-  const found = yield* (yield* CheckProcesses).finished(id);
+const readCheck = Effect.fn("Verify.readCheck")(function* (id: string, name: string) {
+  const found = yield* (yield* CheckProcesses)
+    .finished(id)
+    .pipe(Effect.mapError(noVerdict(name, "output", "read")));
   if (found === null) return yield* Effect.die(`check ${id} has no record to finish it from`);
   return {
     ...found,
@@ -669,7 +713,7 @@ const readCheck = Effect.fn("Verify.readCheck")(function* (id: string) {
 const settleCheck = Effect.fn("Verify.settleCheck")(function* (
   { check, command, tail: { stdout, stderr } }: Effect.Success<ReturnType<typeof readCheck>>,
   exit: number,
-): Effect.fn.Return<Verification, never, Services> {
+): Effect.fn.Return<Verification, VerifyRefused, Services> {
   const { spec } = command;
   const fs = yield* FileSystem.FileSystem;
   const end = yield* fingerprint(command.cwd);
@@ -715,7 +759,9 @@ const settleCheck = Effect.fn("Verify.settleCheck")(function* (
     spec.step === null
       ? loggedRecord
       : { ...loggedRecord, step: spec.step.step, place: spec.step.place };
-  yield* appendVerification(spec.evidence, kept).pipe(Effect.orDie);
+  yield* appendVerification(spec.evidence, kept).pipe(
+    Effect.mapError(noVerdict(check.name, "record", "written")),
+  );
   return kept;
 });
 
@@ -733,7 +779,7 @@ export const collect = (
   startCheck(runDir, what, echo).pipe(
     Effect.flatMap((started) =>
       Effect.flatMap(started.exit, (exit) =>
-        Effect.map(readCheck(started.id), (read) => [read, exit] as const),
+        Effect.map(readCheck(started.id, what.name), (read) => [read, exit] as const),
       ),
     ),
     // Its Scope ends what is left of it before the tree is looked at again.

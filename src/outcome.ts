@@ -15,7 +15,7 @@ import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import { CommandLine } from "effect/process";
 import type { VerifySpec } from "./verify-spec";
-import { checkProof, owedLocally, owesNothingHere } from "./check-proof";
+import { checkProof, owedLocally, owesNothingHere, unstableWhy } from "./check-proof";
 import {
   passed,
   ranOneTest,
@@ -411,7 +411,7 @@ function approvedSetGaps(got: Collected): string[] {
     else if (Arr.some(runs, (v) => v.result === "fail" || v.expect === "fail"))
       gaps.push(`${spec.name} failed`);
     else if (Arr.some(runs, (v) => v.result === "unstable"))
-      gaps.push(`${spec.name} ran on a tree that moved under it`);
+      gaps.push(`${spec.name} ${unstableWhy(runs)}`);
     else gaps.push(`${spec.name} last passed on a different tree`);
   }
   return gaps;
@@ -728,16 +728,20 @@ export function endsWithoutPatch(kind: Outcome, got: Collected): boolean {
   );
 }
 
-/** What the `mr` prompt says was actually proved, and by whom. */
+/** Recorded evidence for prompts, or repository commands and results for public text. */
 export function renderEvidence(
   got: Pick<Collected, "verifications" | "final" | "measurements">,
+  audience: "internal" | "public" = "internal",
 ): string {
   const latest = new Map<string, Verification>();
+  const command = (v: Verification) => CommandLine.display([v.asked ?? v.executable, ...v.argv]);
   for (const v of got.verifications) if (!ranOneTest(v)) latest.set(`${v.name}:${v.by}`, v);
-  const measured = finalMeasurementLine(got.measurements ?? []);
+  const measured = audience === "public" ? null : finalMeasurementLine(got.measurements ?? []);
   const lines = Arr.map([...latest.values()], (v) => {
     const stale = sameTree(v.end, got.final) ? "" : " (on an earlier tree)";
     const expected = v.expect === "fail" ? ", expected to fail" : "";
+    if (audience === "public")
+      return `- \`${command(v)}\`: ${v.result} (exit ${v.exit}${expected})${stale}`;
     return `- ${v.name}: ${v.result} (by ${v.by}${expected})${stale}`;
   });
   if (measured !== null) lines.push(`- ${measured}`);
