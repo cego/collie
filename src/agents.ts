@@ -2028,6 +2028,18 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   const ports = host.ports ?? COMPACTION_PORTS;
   const adapterFor = (harness: string) => HARNESSES[harness] ?? configured;
 
+  const registeredOnCore = (runId: string, agent: string, terminalId: string | undefined) =>
+    Effect.map(
+      everyRegistered,
+      Arr.some(
+        (one) =>
+          one.agent === agent &&
+          one.runId === runId &&
+          one.incarnation?.backend === "core" &&
+          one.incarnation.terminalId === terminalId,
+      ),
+    );
+
   /** Null places it where herdr says the agent is. */
   const entryFor = (
     about: Launched | AgentAsk,
@@ -2049,16 +2061,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       });
       if (found.entry === null || place !== null) return found;
       // Herdr 1 named its agents as core does: only a start on core registers this terminal.
-      const terminalId = found.entry.incarnation?.terminalId;
-      const startedOnCore = Arr.some(
-        yield* everyRegistered,
-        (one) =>
-          one.agent === agent &&
-          one.runId === about.runId &&
-          one.incarnation?.backend === "core" &&
-          one.incarnation.terminalId === terminalId,
-      );
-      return startedOnCore
+      return (yield* registeredOnCore(about.runId, agent, found.entry.incarnation?.terminalId))
         ? found
         : { entry: null, reason: `${agent} was never started on core`, gone: true };
     });
@@ -2819,7 +2822,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         const launched = alive
           ? yield* Effect.gen(function* () {
               const found = yield* entryFor(ask, agent, { paneId: live.paneId, workspaceId: null });
-              if (found.entry !== null)
+              if (
+                found.entry !== null &&
+                !(yield* registeredOnCore(ask.runId, agent, live.terminalId))
+              )
                 yield* registerAgent(scopeFor(ask.cwd), found.entry, {
                   agents: listing.success,
                   listedAt,

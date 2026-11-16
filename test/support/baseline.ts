@@ -12308,7 +12308,7 @@ scenario(
             input: { plan: "why is the board slow?", ...FINISH },
             options: { outcome: "investigation" },
           });
-          expect(why).toContain("has written nothing to");
+          expect(why).toContain("without writing");
           expect(why).not.toContain("approved");
           expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
         }),

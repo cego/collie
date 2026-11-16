@@ -345,8 +345,7 @@ test(
         // The reason is recorded, and nothing was written as though an agent had answered.
         expect(yield* events(dir, "r-skipped")).toEqual(["skipped 01-api.md: it names no checks"]);
         expect(yield* prompts()).toHaveLength(1);
-        const tabs = Arr.filter(yield* rig.cmds(), (cmd) => cmd === "tab create");
-        expect(tabs).toHaveLength(1);
+        expect(yield* starts()).toHaveLength(1);
       }),
     ),
   120_000,
