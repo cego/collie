@@ -46,7 +46,8 @@ Runs in one query. A write names its Run to the Run model after it commits (`Sto
 the other tables' writes do. The usual Step times are one query over every Run's Step rows
 (`stepSamples`); no file of them is kept. Retiring a Run keeps its latest ten times of each
 Step in `collie_step_times`, which `stepSamples` reads beside the live rows, so a workflow's
-usual times outlive the Runs they came from. A board build reads each journal or fact it
+usual times outlive the Runs they came from. The migration imports the samples an older build kept in
+`step-durations.json` for Runs no longer admitted, and leaves the file for that build. A board build reads each journal or fact it
 uses, and activity, for all of its Runs in one query, the first time it reads it for any of
 them (`readAhead`): it makes as many queries for five Runs as for two. Only the host writes these tables
 ([ADR-0040](0040-the-host-is-the-only-writer.md)); a reader outside it opens `host.db`

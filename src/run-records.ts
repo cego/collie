@@ -279,15 +279,21 @@ export const keepStepTimes = (run: string) =>
       `${stepSamplesOf} INSERT INTO collie_step_times (workflow, step, at, ms) SELECT workflow, step, at, ms FROM samples`,
       [run],
     );
-    yield* sql`
-      DELETE FROM collie_step_times WHERE rowid IN (
-        SELECT rowid FROM (
-          SELECT rowid, row_number() OVER (PARTITION BY workflow, step ORDER BY at DESC) AS nth
-          FROM collie_step_times
-        ) WHERE nth > ${STEP_SAMPLES}
-      )
-    `;
+    yield* trimStepTimes;
   });
+
+/** Keeps each Step's latest ten kept times. */
+export const trimStepTimes = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`
+    DELETE FROM collie_step_times WHERE rowid IN (
+      SELECT rowid FROM (
+        SELECT rowid, row_number() OVER (PARTITION BY workflow, step ORDER BY at DESC) AS nth
+        FROM collie_step_times
+      ) WHERE nth > ${STEP_SAMPLES}
+    )
+  `;
+});
 
 /** Records that `run` did work now, as part of the write it is in. */
 export const markWorked = (run: string) =>
