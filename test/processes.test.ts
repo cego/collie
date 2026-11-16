@@ -28,20 +28,29 @@ test("a process's command and start time read alone are what reading it whole sa
 test.skipIf(process.platform !== "linux")(
   "a zombie is not running, whether proc or ps is read",
   () => {
-    // The shell execs a sleep that never reaps the background child, which stays a zombie.
-    const parent = Bun.spawn(["sh", "-c", "sleep 0 & echo $!; exec sleep 30 >/dev/null"], {
-      stdout: "pipe",
-    });
+    // The child waits on stdin, which is closed only once the shell has become a sleep that
+    // never reaps it, so the child is certain to stay a zombie.
+    const parent = Bun.spawn(
+      ["sh", "-c", "cat >/dev/null <&0 & echo $!; exec sleep 30 >/dev/null"],
+      { stdin: "pipe", stdout: "pipe" },
+    );
     return runEffect(
       Effect.gen(function* () {
         const pid = Number(
           Str.trim(yield* Effect.promise(() => new Response(parent.stdout).text())),
         );
         const fs = yield* FileSystem.FileSystem;
-        yield* fs.readFileString(`/proc/${pid}/stat`).pipe(
-          Effect.filterOrFail((stat) => Str.includes(") Z ")(stat)),
-          Effect.retry({ times: 100, schedule: Schedule.spaced("10 millis") }),
+        const until = <A>(read: Effect.Effect<A, unknown>, done: (value: A) => boolean) =>
+          read.pipe(
+            Effect.filterOrFail(done),
+            Effect.retry({ times: 100, schedule: Schedule.spaced("10 millis") }),
+          );
+        yield* until(
+          fs.readFileString(`/proc/${parent.pid}/comm`),
+          (comm) => Str.trim(comm) === "sleep",
         );
+        yield* Effect.promise(async () => parent.stdin.end());
+        yield* until(fs.readFileString(`/proc/${pid}/stat`), Str.includes(") Z "));
         expect(yield* processOf(pid)).toBeNull();
         const withoutProc = FileSystem.makeNoop({ exists: () => Effect.succeed(false) });
         expect(

@@ -34,7 +34,7 @@ import { compactionSweeper, sweep } from "../src/cleanup";
 import { Herdr } from "../src/herdr";
 import { recordClaudeEvent } from "../src/compactors";
 import { installControls, readControl, withControlLock } from "../src/compaction";
-import { processOf } from "../src/processes";
+import { processAbsent, processOf } from "../src/processes";
 import { FakeHerdr } from "./support/recorder";
 import { agentName } from "../src/naming";
 import { COMPACTION_PORTS, codexPort } from "../src/compactors";
@@ -437,10 +437,10 @@ test.each([true, false])(
         const control = (yield* readControl(`${rig.root}/state`, agent))!;
         const pid = control.pid!;
         const fs = yield* FileSystem.FileSystem;
+        // Reaped, not only a zombie: the stop proves its server's absence by ESRCH.
         const loseServer = Effect.gen(function* () {
           kill(pid);
-          while ((yield* processOf(pid)) !== null)
-            yield* TestClock.withLive(Effect.sleep("10 millis"));
+          while (!(yield* processAbsent(pid))) yield* TestClock.withLive(Effect.sleep("10 millis"));
         }).pipe(Effect.provideService(FileSystem.FileSystem, fs));
         if (alreadyGone) yield* loseServer;
         let reads = 0;
