@@ -6,7 +6,6 @@ import { RunRecords, type RunRecordsApi } from "./run-records";
 export const HOLD = "hold";
 export const STOP = "stop";
 
-/** Whether any of `controls` is set over the Run. */
 export const controlSet = (
   runId: string,
   ...controls: ReadonlyArray<string>
@@ -18,7 +17,6 @@ export const controlSet = (
     return false;
   });
 
-/** One control over one Run, read and set. */
 export interface Control {
   readonly get: Effect.Effect<string | null>;
   readonly set: (data: string | null) => Effect.Effect<void>;
