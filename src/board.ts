@@ -1152,11 +1152,14 @@ const nextChange = (then: number, now: number) => {
 export const buildBoard = Effect.fn("Board.build")(function* (opts: BoardOptions) {
   const runs = newestFirst(opts.runs ?? (yield* listRuns(opts.env)));
   const records = yield* RunRecords;
-  const ids = Arr.map(runs, (run) => run.id);
   return yield* drawBoard({ ...opts, runs }, records).pipe(
-    Effect.provideService(Launches, yield* launchesAhead(yield* Launches, ids)),
-    Effect.provideService(Deliveries, yield* deliveriesAhead(yield* Deliveries, ids)),
-    Effect.provideService(RunRecords, readAhead(records, ids)),
+    Effect.provideService(
+      RunRecords,
+      readAhead(
+        records,
+        Arr.map(runs, (run) => run.id),
+      ),
+    ),
   );
 });
 
@@ -1243,6 +1246,17 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
       for (const one of [run, ...(repoRunsOf.get(run.id) ?? [])]) cardOf.set(one.id, key);
 
   const flowInputs = yield* flowInputsFor(opts.env, all);
+  // A card asks what its leader ordered last, and an ended leader's deliveries.
+  const leaders = Arr.map([...groups.values()], leaderOf);
+  const launches = yield* launchesAhead(
+    yield* Launches,
+    Arr.map(all, (run) => run.id),
+    Arr.map(leaders, (run) => run.id),
+  );
+  const deliveries = yield* deliveriesAhead(
+    yield* Deliveries,
+    Arr.flatMap(leaders, (run) => (ended(run) ? [run.id] : [])),
+  );
   const views = yield* Effect.forEach(
     groups,
     ([id, runs]) =>
@@ -2036,7 +2050,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
       }),
     // The host's own build goes one Task at a time, so the loop stays free between them.
     { concurrency: opts.cards === undefined ? READS_AT_ONCE : 1 },
-  );
+  ).pipe(Effect.provideService(Launches, launches), Effect.provideService(Deliveries, deliveries));
   if (opts.only === undefined && opts.cards !== undefined)
     for (const id of opts.cards.kept.keys()) if (!groups.has(id)) opts.cards.kept.delete(id);
   return sortBoard(Arr.filter(views, (view) => view !== null));

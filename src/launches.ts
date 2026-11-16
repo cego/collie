@@ -316,14 +316,19 @@ export const launchesLayer = Layer.effect(Launches)(
   }),
 );
 
-/** `launches` for one pass over these Runs, as `readAhead` reads their records. */
+/**
+ * `launches` for one pass over these Runs, as `readAhead` reads their records; what was
+ * ordered last is read ahead for the Runs in `ordering` alone.
+ */
 export const launchesAhead = Effect.fn("Launches.ahead")(function* (
   launches: LaunchesApi,
   runs: ReadonlyArray<string>,
+  ordering: ReadonlyArray<string>,
 ) {
   const ids = new Set(runs);
+  const ordered = new Set(ordering);
   const all = yield* Effect.cached(launches.recordsOf(runs));
-  const last = yield* Effect.cached(launches.lastOrderedOf(runs));
+  const last = yield* Effect.cached(launches.lastOrderedOf(ordering));
   return {
     ...launches,
     of: (some) =>
@@ -340,7 +345,9 @@ export const launchesAhead = Effect.fn("Launches.ahead")(function* (
           )
         : launches.of(some),
     lastOrdered: (run) =>
-      ids.has(run) ? Effect.map(last, (got) => got.get(run) ?? null) : launches.lastOrdered(run),
+      ordered.has(run)
+        ? Effect.map(last, (got) => got.get(run) ?? null)
+        : launches.lastOrdered(run),
   } satisfies LaunchesApi;
 });
 
