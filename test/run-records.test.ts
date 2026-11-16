@@ -300,6 +300,75 @@ test("migrate down: a rollback writes every record back where an older build rea
     }),
   ));
 
+test("a Run's controls are imported once from the state directory's files and written back by a rollback", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* legacy({
+        "stop.run-a": "",
+        "hold.run-a": "Paused before Build",
+        "parked.run-a": "no usage left",
+        "parked.run-a.new": "torn",
+        "notified.run-a": "done:x\nfailed:y\n",
+        "awaited.run-a/run-a.1": "",
+        "relaunch/run-a/build.json": '{"agent":"build"}',
+        "running-checks/c1.json": '{"id":"c1","run":"run-a"}',
+      });
+      const imported = yield* records(
+        Effect.gen(function* () {
+          const one = yield* RunRecords;
+          const read = {
+            stop: yield* one.control("stop", "run-a"),
+            hold: yield* one.control("hold", "run-a"),
+            parked: yield* one.control("parked", "run-a"),
+            notified: yield* one.controlsOf("notified", "run-a"),
+            awaited: yield* one.controlsOf("awaited", "run-a"),
+            relaunch: yield* one.control("relaunch", "run-a", "build"),
+            checks: yield* one.everyControl("running-check"),
+          };
+          yield* one.setControl("hold", "run-a", null);
+          yield* one.setControl("usage", "run-b", '{"until":"later"}');
+          return read;
+        }),
+      );
+      expect(imported).toEqual({
+        stop: "",
+        hold: "Paused before Build",
+        parked: "no usage left",
+        notified: [
+          { key: "done:x", data: "" },
+          { key: "failed:y", data: "" },
+        ],
+        awaited: [{ key: "run-a.1", data: "" }],
+        relaunch: '{"agent":"build"}',
+        checks: [{ run: "run-a", key: "c1", data: '{"id":"c1","run":"run-a"}' }],
+      });
+
+      expect(yield* rollbackAt(stateDir)).toBe("rolled-back");
+      const read = (name: string) =>
+        fs.readFileString(`${stateDir}/${name}`).pipe(Effect.orElseSucceed(() => null));
+      expect({
+        stop: yield* read("stop.run-a"),
+        hold: yield* read("hold.run-a"),
+        parked: yield* read("parked.run-a"),
+        usage: yield* read("usage.run-b"),
+        notified: yield* read("notified.run-a"),
+        awaited: yield* read("awaited.run-a/run-a.1"),
+        relaunch: yield* read("relaunch/run-a/build.json"),
+        check: yield* read("running-checks/c1.json"),
+      }).toEqual({
+        stop: "",
+        hold: null,
+        parked: "no usage left",
+        usage: '{"until":"later"}',
+        notified: "done:x\nfailed:y\n",
+        awaited: "",
+        relaunch: '{"agent":"build"}',
+        check: '{"id":"c1","run":"run-a"}',
+      });
+    }),
+  ));
+
 test("a rollback dates each Run's files by when it last did work, not by the rollback", () =>
   runEffect(
     Effect.gen(function* () {
