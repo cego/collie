@@ -20,7 +20,7 @@ import {
 import { epochMs } from "../src/time";
 import { Launches } from "../src/launches";
 import { Deliveries } from "../src/steering";
-import { appendVerification, verificationsPath } from "../src/verify";
+import { appendVerification, readProofsOf, verificationsPath } from "../src/verify";
 import { madeRun } from "./support/records";
 import { runEffect } from "./support/effect";
 
@@ -257,5 +257,50 @@ test("a board build reads what each verification says of its Step, never the ver
         }),
       );
       expect(whole).not.toContain(verificationsPath(run.evidence).name);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a verification's brief keeps its place as written, a round with no maximum included", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({
+        prefix: "collie-board-briefs-",
+      });
+      const run = yield* madeRun(dir, {
+        id: "r1",
+        task: "t1",
+        state: "failed",
+        created: "2026-09-13T08:00:00Z",
+      });
+      const checked = {
+        run: run.id,
+        name: "test",
+        executable: "/usr/bin/false",
+        argv: [],
+        cwd: "/project",
+        start: { head_sha: "h", fingerprint: "f" },
+        end: { head_sha: "h", fingerprint: "f" },
+        exit: 1,
+        seconds: 1,
+        expect: "pass" as const,
+        tail: { stdout: "", stderr: "it broke" },
+        result: "fail" as const,
+        at: "2026-09-13T08:30:00Z",
+        by: "collie" as const,
+      };
+      yield* appendVerification(run.evidence, {
+        ...checked,
+        id: "open-round",
+        step: "review",
+        place: { round: 2, of: null },
+      });
+      yield* appendVerification(run.evidence, { ...checked, id: "no-place", place: null });
+      yield* appendVerification(run.evidence, { ...checked, id: "unplaced", result: "pass" });
+      const briefs = yield* readProofsOf([run.evidence]);
+      expect(Arr.map(briefs, (one) => [one.step, one.place, one.tail?.stderr])).toEqual([
+        ["review", { round: 2, of: null }, "it broke"],
+        [undefined, null, "it broke"],
+        [undefined, undefined, undefined],
+      ]);
     }).pipe(Effect.scoped),
   ));
