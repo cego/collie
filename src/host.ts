@@ -71,7 +71,9 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import manifest from "../herdr-plugin.toml";
 import { RunModel, runModelLayer, type RunModelApi } from "./run-model";
-import type { Records } from "./records";
+import { recordsAt, type Records } from "./records";
+import { RunRecords } from "./run-records";
+import { controlOf, controlSet } from "./controls";
 import {
   FINISHED_STEPS,
   drawerWrites,
@@ -110,7 +112,6 @@ import {
   evidenceDir,
   STOP,
   AWAITING,
-  controlPath,
   type HostServices,
   type KeptViews,
   type Locate,
@@ -3434,9 +3435,10 @@ const frontDoorHandlers = (
                           )?.step
                         : undefined;
                     const fs = yield* FileSystem.FileSystem;
-                    const stopped = fs
-                      .exists(controlPath(env.stateDir, STOP, runId))
-                      .pipe(Effect.orElseSucceed(() => false));
+                    const runRecords = yield* RunRecords;
+                    const stopped = controlSet(runId, STOP).pipe(
+                      Effect.provideService(RunRecords, runRecords),
+                    );
                     const memory = yield* waitForMemory({
                       env,
                       stateDir: env.stateDir,
@@ -3566,7 +3568,7 @@ const frontDoorHandlers = (
               return Stream.callback<typeof MeasureEvent.Type, HostRefused>(
                 (queue) =>
                   Effect.gen(function* () {
-                    const fs = yield* FileSystem.FileSystem;
+                    const runRecords = yield* RunRecords;
                     const answered = yield* measure({
                       stateDir: env.stateDir,
                       env,
@@ -3579,10 +3581,10 @@ const frontDoorHandlers = (
                         ...(reason !== undefined && { reason }),
                       },
                       evidence: evidenceDir(env.stateDir, runId),
-                      awaiting: controlPath(env.stateDir, AWAITING, runId),
-                      stopped: fs
-                        .exists(controlPath(env.stateDir, STOP, runId))
-                        .pipe(Effect.orElseSucceed(() => false)),
+                      awaiting: controlOf(runRecords, AWAITING, runId),
+                      stopped: controlSet(runId, STOP).pipe(
+                        Effect.provideService(RunRecords, runRecords),
+                      ),
                       say: (text) => Queue.offer(queue, { _tag: "Said", text }).pipe(Effect.asVoid),
                     }).pipe(
                       Effect.mapError(
@@ -4408,6 +4410,9 @@ export const serve = (named: string): Effect.Effect<void, never, PlatformService
           .readFileString(handedOverOf(dir))
           .pipe(Effect.flatMap(Schema.decodeUnknownEffect(HandedOverJson)), Effect.option);
         yield* fs.remove(handedOverOf(dir), { force: true }).pipe(Effect.ignore);
+        // Its own connection, since the host's opens after the checks a host before it left
+        // are taken over; the store it migrates first is the one the host's then finds.
+        const checkRecords = yield* Layer.build(recordsAt(dir));
         const checks = yield* hostCheckProcesses({
           dir,
           installation,
@@ -4417,7 +4422,7 @@ export const serve = (named: string): Effect.Effect<void, never, PlatformService
           // Only a host of the build it was handed to takes the checks over.
           ...(Option.isSome(handedOver) &&
             handedOver.value.build === BUILD && { handedOver: handedOver.value }),
-        });
+        }).pipe(Effect.provideContext(checkRecords));
         const sweep = fresh
           ? Effect.void
           : checks.left.pipe(

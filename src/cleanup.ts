@@ -19,6 +19,8 @@ import {
 } from "effect";
 import type { PlatformServices } from "./platform";
 import type { Records } from "./records";
+import { STOP } from "./controls";
+import { RunRecords } from "./run-records";
 import { readEnv } from "./env";
 import {
   FrontDoor,
@@ -1316,17 +1318,13 @@ export const idleAgentsSweeper = (opts: {
    */
   const lastFinished = (run: RunFacts, now: number) =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       const card = yield* finishedOnRecord(run.dir).pipe(Effect.orElseSucceed(() => null));
-      // engine.ts's `controlPath(dir, STOP, runId)`.
-      const stop = yield* fs.stat(`${opts.stateDir}/stop.${run.id}`).pipe(
-        Effect.map((info) => Option.getOrNull(info.mtime)?.getTime() ?? null),
-        Effect.orElseSucceed(() => null),
-      );
+      const stop = yield* RunRecords.use((records) => records.control(STOP, run.id));
+      const stopped = stop === null || stop === "" ? 0 : epochMs(stop);
       return Math.max(
         opts.finishedSince.get(run.id) ?? now,
         card === null ? 0 : epochMs(card),
-        stop ?? 0,
+        Number.isFinite(stopped) ? stopped : 0,
       );
     });
 

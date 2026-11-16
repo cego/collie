@@ -4,7 +4,7 @@
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { Effect, FileSystem, Layer, Option, Path, PlatformError, Schema } from "effect";
+import { Data, Effect, FileSystem, Layer, Option, Path, PlatformError, Schema } from "effect";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import { hostLockOf, withLock } from "./lock";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -367,9 +367,9 @@ const legacyPath = (stateDir: string, run: string, name: string) => {
 };
 
 /** A later build's migration is recorded: it must be undone by that build first. */
-export class LaterMigration extends Schema.TaggedErrorClass<LaterMigration>()("LaterMigration", {
-  migration: Schema.String,
-}) {}
+export class LaterMigration extends Data.TaggedError("LaterMigration")<{
+  readonly migration: string;
+}> {}
 
 /**
  * Undoes `RUN_RECORDS_MIGRATION` for a host that is not running: every Run's records and

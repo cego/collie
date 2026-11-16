@@ -25,6 +25,7 @@ import { CheckProcesses, type CheckOf } from "./check-processes";
 import type { PluginEnv } from "./env";
 import { appendRunJournal, readRunJournal, runJournal } from "./journal";
 import type { RunRecords } from "./run-records";
+import type { Control } from "./controls";
 import { ensureLockDir, withLock } from "./lock";
 import { judge, MeasurementRefused } from "./measurement-verdict";
 import {
@@ -387,9 +388,9 @@ export interface Measuring {
   readonly ask: MeasureAsk;
   /** The Run's evidence directory. */
   readonly evidence: string;
-  /** The Run's `awaiting` file, which says what its waiting Measurement waits for. */
-  readonly awaiting: string;
-  readonly stopped: Effect.Effect<boolean, never, FileSystem.FileSystem>;
+  /** The Run's `awaiting` control, which says what its waiting Measurement waits for. */
+  readonly awaiting: Control;
+  readonly stopped: Effect.Effect<boolean>;
   readonly say?: (line: string) => Effect.Effect<void>;
 }
 
@@ -526,11 +527,11 @@ export const measure = Effect.fn("Measurement.measure")(function* (
 
   yield* ensureLockDir(lock).pipe(Effect.orDie);
   const clearWait = Effect.gen(function* () {
-    const before = yield* fs
-      .readFileString(opts.awaiting)
-      .pipe(Effect.flatMap(Schema.decodeUnknownEffect(AwaitingJson)), Effect.option);
+    const before = yield* Schema.decodeUnknownEffect(AwaitingJson)(yield* opts.awaiting.get).pipe(
+      Effect.option,
+    );
     if (Option.isSome(before) && pipe_(before.value.on, Str.startsWith("this Machine")))
-      yield* fs.remove(opts.awaiting);
+      yield* opts.awaiting.set(null);
   }).pipe(Effect.ignore);
   return yield* Effect.gen(function* () {
     const since = yield* nowIso;
@@ -548,12 +549,9 @@ export const measure = Effect.fn("Measurement.measure")(function* (
       if (Option.isNone(holder) || waited.machine.includes(holder.value.id)) continue;
       waited.machine.push(holder.value.id);
       const on = `this Machine: Measurement ${holder.value.id} of ${holder.value.run} is running on it`;
-      yield* fs
-        .writeFileString(
-          opts.awaiting,
-          yield* Schema.encodeEffect(AwaitingJson)({ on, who: null, since }).pipe(Effect.orDie),
-        )
-        .pipe(Effect.orDie);
+      yield* opts.awaiting.set(
+        yield* Schema.encodeEffect(AwaitingJson)({ on, who: null, since }).pipe(Effect.orDie),
+      );
       yield* say(`waiting for ${on}`);
     }
   }).pipe(Effect.ensuring(clearWait));

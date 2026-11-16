@@ -72,7 +72,7 @@ import * as ProcessModules from "effect/process";
 import * as CryptoModules from "effect/crypto";
 import * as EffectRoot from "effect";
 import * as AgentsSdk from "./agents";
-import { HOLD, STOP, controlPath, controlSet } from "./controls";
+import { HOLD, STOP, controlOf, controlSet } from "./controls";
 import manifest from "../herdr-plugin.toml";
 import { Agents } from "./agents";
 import * as Sdk from "./sdk";
@@ -3523,31 +3523,29 @@ export const forgetExecution = (name: string, execution: string) =>
 /** How long a start waits for the engine to take its Run before it is refused. */
 const HAND_OVER_TIMEOUT = "30 seconds";
 
-export { HOLD, STOP, controlPath };
+export { HOLD, STOP };
 /** Why work parked; the host clears it when taking that work up. */
 export const PARKED = "parked";
 /** The Park cause of the park in `PARKED`; left when that clears, and read only beside it. */
 export const PARK_CAUSE = "park-cause";
 const PARK_INFO = "park-info";
 const ParkJson = Schema.fromJsonString(Park);
-const readParkInfo = (fs: FileSystem.FileSystem, path: string) =>
-  fs.readFileString(path).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(ParkJson)),
-    Effect.orElseSucceed(() => null),
-  );
+const parkInfoOf = (text: string | null) =>
+  text === null
+    ? Effect.succeed(null)
+    : Schema.decodeUnknownEffect(ParkJson)(text).pipe(Effect.orElseSucceed(() => null));
 /** A wait that ends by itself; the host clears it when the wait ends. */
 export const AWAITING = "awaiting";
 /** Work waiting for a Subscription to reset; cleared once it goes on. */
 export const USAGE = "usage";
-/** A directory per parent, holding a file per child whose result it is blocked on. */
+/** A row per child whose result its parent is blocked on, keyed by the child. */
 const AWAITED = "awaited";
+/** A row per notice sent about a Run, keyed by it, so a replay does not send it again. */
+const NOTIFIED = "notified";
 
 const decodeParkCause = Schema.decodeUnknownOption(ParkCause);
-const readParkCause = (fs: FileSystem.FileSystem, path: string) =>
-  fs.readFileString(path).pipe(
-    Effect.map((text) => Option.getOrElse(decodeParkCause(text), (): ParkCause => "unknown")),
-    Effect.orElseSucceed((): ParkCause => "unknown"),
-  );
+const parkCauseOf = (text: string | null): ParkCause =>
+  text === null ? "unknown" : Option.getOrElse(decodeParkCause(text), (): ParkCause => "unknown");
 
 export const UsageWaitSchema = Schema.Struct({
   account: Schema.String,
@@ -4098,7 +4096,7 @@ export const hostLayer = (options: {
           );
         });
       const anySet = (runId: string, ...controls: ReadonlyArray<string>) =>
-        controlSet(dir, runId, ...controls).pipe(Effect.provideService(FileSystem.FileSystem, fs));
+        controlSet(runId, ...controls).pipe(Effect.provideService(RunRecords, runRecords));
       const set = (control: string, runId: string) => anySet(runId, control);
       const untilSet = (runId: string, ...controls: ReadonlyArray<string>) =>
         anySet(runId, ...controls).pipe(
@@ -4150,10 +4148,8 @@ export const hostLayer = (options: {
             if (toast === undefined && (channel === "" || row === null)) return;
             // Mark before delivery: a replay must not repeat an attempted post.
             const said = `${kind}:${pipe(about.key ?? "", Str.replaceAll("\n", " "))}`;
-            const file = notifiedPath(dir, runId);
-            const before = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
-            if (Arr.contains(Str.split(before, "\n"), said)) return;
-            yield* fs.writeFileString(file, `${said}\n`, { flag: "a" });
+            if ((yield* runRecords.control(NOTIFIED, runId, said)) !== null) return;
+            yield* runRecords.setControl(NOTIFIED, runId, "", said);
             const cwd =
               row === null
                 ? dir
@@ -4444,10 +4440,8 @@ export const hostLayer = (options: {
           if (parent === null) return {};
           const placed = placedOf(parent, {});
           if (placed.worktree === null) return {};
-          const awaited = yield* fs
-            .readDirectory(controlPath(dir, AWAITED, parent.run))
-            .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-          return awaited.length === 1 && awaited[0] === row.run
+          const awaited = yield* runRecords.controlsOf(AWAITED, parent.run);
+          return awaited.length === 1 && awaited[0]!.key === row.run
             ? { starting: { run: parent.run, cwd: placed.cwd } }
             : {};
         });
@@ -4707,13 +4701,12 @@ export const hostLayer = (options: {
           | null,
       ) =>
         Effect.gen(function* () {
-          const path = controlPath(dir, AWAITING, runId);
-          const before = yield* fs
-            .readFileString(path)
-            .pipe(Effect.flatMap(Schema.decodeUnknownEffect(AwaitingJson)), Effect.option);
-          const parked = yield* fs.exists(controlPath(dir, PARKED, runId));
+          const before = yield* Schema.decodeUnknownEffect(AwaitingJson)(
+            yield* runRecords.control(AWAITING, runId),
+          ).pipe(Effect.option);
+          const parked = (yield* runRecords.control(PARKED, runId)) !== null;
           if (wait === null) {
-            if (Option.isSome(before)) yield* fs.remove(path, { force: true });
+            if (Option.isSome(before)) yield* runRecords.setControl(AWAITING, runId, null);
             if (parked) yield* host.parked(runId, null);
             else if (Option.isSome(before)) yield* store.announce;
             return;
@@ -4730,8 +4723,9 @@ export const hostLayer = (options: {
             before.value.on !== awaiting.on ||
             before.value.who !== awaiting.who
           ) {
-            yield* fs.writeFileString(
-              path,
+            yield* runRecords.setControl(
+              AWAITING,
+              runId,
               yield* Schema.encodeEffect(AwaitingJson)(awaiting).pipe(Effect.orDie),
             );
             if (overdue === null && !parked) yield* store.announce;
@@ -5100,32 +5094,16 @@ export const hostLayer = (options: {
           }).pipe(Effect.provideContext(bun), under),
         held: (runId) => set(HOLD, runId),
         stopRequested: (runId) => set(STOP, runId),
-        usageWait: (runId, wait) => {
-          const path = controlPath(dir, USAGE, runId);
-          return (
-            wait === null
-              ? fs.remove(path, { force: true })
-              : fs
-                  .makeDirectory(
-                    pipe(
-                      path,
-                      Str.slice(
-                        0,
-                        Option.getOrElse(pipe(path, Str.lastIndexOf("/")), () => -1),
-                      ),
-                    ),
-                    { recursive: true },
-                  )
-                  .pipe(
-                    Effect.andThen(
-                      fs.writeFileString(
-                        path,
-                        flow(Schema.encodeResult(UsageWaitJson), Result.getOrThrow)(wait),
-                      ),
-                    ),
-                  )
-          ).pipe(Effect.orDie, Effect.andThen(store.announce));
-        },
+        usageWait: (runId, wait) =>
+          runRecords
+            .setControl(
+              USAGE,
+              runId,
+              wait === null
+                ? null
+                : flow(Schema.encodeResult(UsageWaitJson), Result.getOrThrow)(wait),
+            )
+            .pipe(Effect.andThen(store.announce)),
         step: (runId, note) =>
           Effect.gen(function* () {
             const where = runDir(dir, runId);
@@ -5150,12 +5128,11 @@ export const hostLayer = (options: {
               yield* noteStep(where, { ...note, log });
               const pause = yield* reachPause(where, note.step.id);
               if (pause !== null) {
-                yield* fs
-                  .writeFileString(
-                    controlPath(dir, HOLD, runId),
-                    `Paused before ${note.step.title}, as ${pause.by} asked`,
-                  )
-                  .pipe(Effect.orDie);
+                yield* runRecords.setControl(
+                  HOLD,
+                  runId,
+                  `Paused before ${note.step.title}, as ${pause.by} asked`,
+                );
                 yield* store.announce;
               }
               return;
@@ -5181,31 +5158,26 @@ export const hostLayer = (options: {
             Effect.orDie,
           ),
         parked: (runId, why, cause = "unknown") => {
-          const path = controlPath(dir, PARKED, runId);
-          const causePath = controlPath(dir, PARK_CAUSE, runId);
-          // Renamed into place, so a reader never sees it empty.
-          const put = (to: string, text: string) =>
-            fs
-              .writeFileString(`${to}.new`, text)
-              .pipe(Effect.andThen(fs.rename(`${to}.new`, to)), Effect.orDie);
+          const put = (control: string, text: string | null) =>
+            runRecords.setControl(control, runId, text);
           return (
             why === null
-              ? fs.remove(path, { force: true }).pipe(Effect.orDie)
+              ? put(PARKED, null)
               : Effect.gen(function* () {
-                  const before = yield* fs.readFileString(path).pipe(Effect.option);
-                  const causeBefore = yield* readParkCause(fs, causePath);
-                  let info = yield* readParkInfo(fs, controlPath(dir, PARK_INFO, runId));
+                  const before = Option.fromNullishOr(yield* runRecords.control(PARKED, runId));
+                  const causeBefore = parkCauseOf(yield* runRecords.control(PARK_CAUSE, runId));
+                  let info = yield* parkInfoOf(yield* runRecords.control(PARK_INFO, runId));
                   if (Option.isNone(before) || causeBefore !== cause || info === null) {
                     const since = yield* nowIso;
                     info = { ...parkOf(cause), id: `${since}-${yield* Random.nextInt}`, since };
                     yield* put(
-                      controlPath(dir, PARK_INFO, runId),
+                      PARK_INFO,
                       yield* Schema.encodeEffect(ParkJson)(info).pipe(Effect.orDie),
                     );
                   }
                   if (Option.getOrNull(before) === why && causeBefore === cause) {
-                    yield* put(causePath, cause);
-                    yield* put(path, why);
+                    yield* put(PARK_CAUSE, cause);
+                    yield* put(PARKED, why);
                     return;
                   }
                   // Decided before the park shows: a resume that comes while the Run is still
@@ -5224,8 +5196,8 @@ export const hostLayer = (options: {
                     // A park its Heal caused again is that Heal's to settle.
                     !(healing._tag === "Some" && healing.value.cause === cause);
                   const passed = claims ? yield* passedOverHere(runId, cause, recoveries) : null;
-                  yield* put(causePath, cause);
-                  yield* put(path, why);
+                  yield* put(PARK_CAUSE, cause);
+                  yield* put(PARKED, why);
                   yield* under(
                     Effect.gen(function* () {
                       yield* appendMetric(evidenceDir(dir, runId), {
@@ -5811,7 +5783,7 @@ export const hostLayer = (options: {
                   : null,
                 ask: asked,
                 evidence: evidenceDir(dir, asked.runId),
-                awaiting: controlPath(dir, AWAITING, asked.runId),
+                awaiting: controlOf(runRecords, AWAITING, asked.runId),
                 stopped: set(STOP, asked.runId),
               }).pipe(Effect.mapError((cause) => new WorkflowError({ reason: cause.why })));
               if (answered !== "stopped") return answered;
@@ -6690,7 +6662,6 @@ export interface Herd {
 }
 
 /** Which toasts a Run has raised, so a replay or a second host does not raise them again. */
-const notifiedPath = (dir: string, runId: string) => `${dir}/notified.${runId}`;
 
 /**
  * The next generation of an entry: opaque, distinct, and never a name already used. A
@@ -7901,6 +7872,7 @@ const makeRegistry: (
     ));
   // Captured, so placing a Run asks git and herdr without its callers providing either.
   const bun = yield* Effect.context<PlatformServices | SecureRandom.SecureRandom | Records>();
+  const runRecords = Context.get(bun, RunRecords);
   const mergeRequestOf = (runId: string) =>
     recordedMergeRequest(runId).pipe(Effect.provideContext(bun));
 
@@ -7982,24 +7954,18 @@ const makeRegistry: (
   const forgetWatch = (run: string, name?: string) =>
     Effect.gen(function* () {
       if (!(yield* store.unwatch(run, name))) return;
-      yield* fs.remove(controlPath(dir, AWAITING, run), { force: true }).pipe(Effect.orDie);
+      yield* runRecords.setControl(AWAITING, run, null);
       yield* store.announce;
     });
+  const parkedOf = (runId: string) =>
+    Effect.map(runRecords.control(PARKED, runId), Option.fromNullishOr);
   const clearParked = (runId: string) =>
-    fs
-      .remove(controlPath(dir, PARKED, runId), { force: true })
-      .pipe(Effect.orDie, Effect.andThen(store.announce));
+    runRecords.setControl(PARKED, runId, null).pipe(Effect.andThen(store.announce));
 
   const restoreParked = (runId: string, old: Option.Option<string>) =>
     Effect.gen(function* () {
-      if (
-        Option.isSome(old) &&
-        !(yield* fs.exists(controlPath(dir, PARKED, runId)).pipe(Effect.orDie))
-      ) {
-        const path = controlPath(dir, PARKED, runId);
-        yield* fs
-          .writeFileString(`${path}.new`, old.value)
-          .pipe(Effect.andThen(fs.rename(`${path}.new`, path)), Effect.orDie);
+      if (Option.isSome(old) && (yield* runRecords.control(PARKED, runId)) === null) {
+        yield* runRecords.setControl(PARKED, runId, old.value);
         yield* store.announce;
       }
     });
@@ -8043,7 +8009,7 @@ const makeRegistry: (
         } else if (status === "pending") {
           pending.push({
             row,
-            parked: yield* fs.readFileString(controlPath(dir, PARKED, row.run)).pipe(Effect.option),
+            parked: yield* parkedOf(row.run),
           });
           yield* clearParked(row.run);
         }
@@ -8062,6 +8028,9 @@ const makeRegistry: (
             Layer.succeed(Host)(
               Host.of({
                 ...Context.get(hostServices, Host),
+                held: (runId) => boundary(Context.get(hostServices, Host).held(runId), HOLD, runId),
+                stopRequested: (runId) =>
+                  boundary(Context.get(hostServices, Host).stopRequested(runId), STOP, runId),
                 report: machineReport,
                 takeOverLanding: landingTakeover,
               }),
@@ -8787,12 +8756,7 @@ const makeRegistry: (
     const payload = yield* payloadOf(found.generation.registration, row).pipe(
       Effect.mapError(() => refused(`${found.generation.entry} no longer takes ${row.input}`)),
     );
-    const waits = row.parent === null ? null : controlPath(dir, AWAITED, row.parent);
-    const awaited = waits === null ? null : `${waits}/${child.runId}`;
-    if (waits !== null && awaited !== null)
-      yield* fs
-        .makeDirectory(waits, { recursive: true })
-        .pipe(Effect.andThen(fs.writeFileString(awaited, "")), Effect.orDie);
+    if (row.parent !== null) yield* runRecords.setControl(AWAITED, row.parent, "", child.runId);
     // Executed on the parent's own fiber, which is what links the two: the engine
     // reads the parent's instance from here, so the child's completion wakes the
     // parent and interrupting the parent reaches the child.
@@ -8815,9 +8779,9 @@ const makeRegistry: (
     ).pipe(
       // A suspension is still a wait; only a result ends it.
       Effect.onExit((exit) =>
-        awaited === null || (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause))
+        row.parent === null || (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause))
           ? Effect.void
-          : fs.remove(awaited, { force: true }).pipe(Effect.ignore),
+          : runRecords.setControl(AWAITED, row.parent, null, child.runId),
       ),
       Effect.mapError((failure) => {
         if (isWorkflowError(failure)) return failure;
@@ -8867,7 +8831,7 @@ const makeRegistry: (
     yield* attachInto(row);
     yield* crash("admitted");
     const before = entriesOf.get(generation.registration.workflow)?.get(row.run) ?? 0;
-    const old = yield* fs.readFileString(controlPath(dir, PARKED, row.run)).pipe(Effect.option);
+    const old = yield* parkedOf(row.run);
     if (clear) yield* clearParked(row.run);
     yield* releaseEntry(row.run);
     // Upstream retries a send it cannot route without end; the row stays unaccepted for the next host.
@@ -8955,7 +8919,7 @@ const makeRegistry: (
         );
         if (state.status !== "suspended") continue;
         const before = entriesOf.get(generation.registration.workflow)?.get(row.run) ?? 0;
-        const old = yield* fs.readFileString(controlPath(dir, PARKED, row.run)).pipe(Effect.option);
+        const old = yield* parkedOf(row.run);
         yield* clearParked(row.run);
         for (const one of answered) {
           yield* answerDecision(generation.registration, {
@@ -9094,9 +9058,15 @@ const makeRegistry: (
     const { cwd, branch, workspace, worktree } = placedOf(row, admitted.options);
     const outcome = admitted.options.outcome ?? UNSPECIFIED;
     const generation = live.get(row.generation);
-    const parked = yield* fs
-      .readFileString(controlPath(dir, PARKED, row.run))
-      .pipe(Effect.orElseSucceed(() => null));
+    const controls = yield* runRecords.controlsIn([row.run]);
+    const control = (name: string) =>
+      Option.getOrNull(
+        Option.map(
+          Arr.findFirst(controls.get(row.run) ?? [], (one) => one.control === name),
+          (one) => one.data,
+        ),
+      );
+    const parked = control(PARKED);
     const metrics = yield* readMetrics(evidenceDir(dir, row.run)).pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideContext(bun),
@@ -9106,8 +9076,8 @@ const makeRegistry: (
     const info =
       parked === null
         ? null
-        : ((yield* readParkInfo(fs, controlPath(dir, PARK_INFO, row.run))) ?? {
-            ...parkOf(yield* readParkCause(fs, controlPath(dir, PARK_CAUSE, row.run))),
+        : ((yield* parkInfoOf(control(PARK_INFO))) ?? {
+            ...parkOf(parkCauseOf(control(PARK_CAUSE))),
             id: lastPark?.park ?? lastPark?.at ?? row.admitted,
             since: lastPark?.at ?? row.admitted,
           });
@@ -9125,16 +9095,14 @@ const makeRegistry: (
       outcome,
       created: row.admitted,
       waiting: yield* steered(row.run),
-      controls: yield* controlsOf(row.run, fs),
+      controls: Arr.filter([HOLD, STOP], (one) => control(one) !== null),
       parked,
       park: parked === null ? null : parkWithRecovery(info!, recovery),
       recovery: Arr.map(recovery.slice(-20), recoveryLine),
-      awaiting: yield* fs.readFileString(controlPath(dir, AWAITING, row.run)).pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(AwaitingJson)),
+      awaiting: yield* Schema.decodeUnknownEffect(AwaitingJson)(control(AWAITING)).pipe(
         Effect.orElseSucceed(() => null),
       ),
-      usage: yield* fs.readFileString(controlPath(dir, USAGE, row.run)).pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(UsageWaitJson)),
+      usage: yield* Schema.decodeUnknownEffect(UsageWaitJson)(control(USAGE)).pipe(
         Effect.orElseSucceed(() => null),
       ),
       mr: yield* mergeRequestOf(row.run),
@@ -9194,24 +9162,15 @@ const makeRegistry: (
     control: string,
     set: boolean,
   ) {
-    const path = controlPath(dir, control, runId);
-    yield* (set ? fs.writeFileString(path, "") : fs.remove(path).pipe(Effect.ignore)).pipe(
-      Effect.orDie,
-    );
+    // A stop's value is when it was set, which a sweep counts the Run's idle time from.
+    yield* runRecords.setControl(control, runId, set ? yield* nowIso : null);
   });
 
   /** Which controls an operator has set over this run. */
-  const controlsOf = Effect.fn("Engine.controlsOf")(function* (
-    runId: string,
-    reader: FileSystem.FileSystem = fs,
-  ) {
+  const controlsOf = Effect.fn("Engine.controlsOf")(function* (runId: string) {
     const set: string[] = [];
-    for (const control of [HOLD, STOP]) {
-      const on = yield* reader
-        .exists(controlPath(dir, control, runId))
-        .pipe(Effect.orElseSucceed(() => false));
-      if (on) set.push(control);
-    }
+    for (const control of [HOLD, STOP])
+      if ((yield* runRecords.control(control, runId)) !== null) set.push(control);
     return set;
   });
 
@@ -9260,7 +9219,7 @@ const makeRegistry: (
       if (yield* recoveryEntered()) return true;
       const row = yield* store.run(runId);
       const view = row === null ? null : yield* viewOf(row);
-      const savedPark = yield* readParkInfo(fs, controlPath(dir, PARK_INFO, runId));
+      const savedPark = yield* parkInfoOf(yield* runRecords.control(PARK_INFO, runId));
       if (
         claim === undefined ||
         view === null ||
@@ -9286,7 +9245,7 @@ const makeRegistry: (
     if (status === "suspended") {
       const entries = entriesOf.get(workflow);
       const before = entries?.get(runId) ?? 0;
-      const old = yield* fs.readFileString(controlPath(dir, PARKED, runId)).pipe(Effect.option);
+      const old = yield* parkedOf(runId);
       yield* clearParked(runId);
       if (recoveryPark !== undefined) yield* crash("recovery-park-cleared");
       yield* engine
@@ -9306,6 +9265,35 @@ const makeRegistry: (
       });
     return recoveryPark !== undefined || status === "suspended";
   }, waking.withPermits(1));
+
+  /**
+   * A boundary's read of `control`. One that finds it set suspends the run, and a release that
+   * lands before that suspend has completed finds the run still going and resumes nothing
+   * (ADR-0021, D7): so once the run has suspended, the control is read again, and a run it
+   * no longer holds is woken.
+   */
+  const boundary = (read: Effect.Effect<boolean>, control: string, runId: string) =>
+    Effect.tap(read, (on) =>
+      on
+        ? Effect.gen(function* () {
+            const found = yield* routed(runId);
+            const workflow = found.generation.registration.workflow;
+            yield* engine.poll(workflow, found.execution).pipe(
+              Effect.map((result) => pollStatus(result, found.generation.entry).status),
+              Effect.repeat({
+                until: (status) => status !== "pending",
+                schedule: Schedule.spaced(WAKE_INTERVAL),
+              }),
+            );
+            if (!(yield* controlsOf(runId)).includes(control)) yield* wake(runId, found);
+          }).pipe(
+            Effect.ignore,
+            Effect.provideService(RunRecords, runRecords),
+            Effect.forkIn(hostScope),
+            Effect.asVoid,
+          )
+        : Effect.void,
+    );
 
   const settle = (found: { readonly generation: Generation; readonly execution: string }) =>
     engine.poll(found.generation.registration.workflow, found.execution).pipe(

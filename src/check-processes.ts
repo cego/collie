@@ -29,6 +29,7 @@ import type { Scope } from "effect";
 import { KEPT_BYTES, SUPERVISE, checkFiles } from "./check-supervisor";
 import { boundProcesses, groupOf, startedOf, stillRunning } from "./processes";
 import { StepPlace } from "./steps";
+import { RUNNING_CHECK, RunRecords, type RunRecordsApi } from "./run-records";
 import { epochMs, nowIso } from "./time";
 import { FailedTestSchema, VerificationSchema } from "./verify-model";
 
@@ -205,18 +206,20 @@ export const encodeCheckRecord = flow(
 );
 const decodeRecord = Schema.decodeUnknownOption(Schema.fromJsonString(RecordSchema));
 
-export const runningChecksDir = (stateDir: string) => `${stateDir}/running-checks`;
-const recordPath = (stateDir: string, id: string) => `${runningChecksDir(stateDir)}/${id}.json`;
 const checkOutputDir = (stateDir: string) => `${stateDir}/check-output`;
 const outputsOf = (stateDir: string, id: string) => checkFiles(checkOutputDir(stateDir), id);
 
 const finishingPath = (stateDir: string, id: string) => `${checkOutputDir(stateDir)}/${id}.json`;
 
-const removeRecord = (fs: FileSystem.FileSystem, stateDir: string, id: string) => {
+const removeRecord = (
+  fs: FileSystem.FileSystem,
+  records: RunRecordsApi,
+  stateDir: string,
+  id: string,
+) => {
   const outputs = outputsOf(stateDir, id);
-  return Effect.forEach(
+  return Effect.andThen(records.setControl(RUNNING_CHECK, "", null, id), Effect.forEach(
     [
-      recordPath(stateDir, id),
       finishingPath(stateDir, id),
       outputs.stdout,
       outputs.stderr,
@@ -225,7 +228,7 @@ const removeRecord = (fs: FileSystem.FileSystem, stateDir: string, id: string) =
     ],
     (path) => fs.remove(path, { force: true }).pipe(Effect.ignore),
     { discard: true },
-  );
+  ));
 };
 
 /** `text` at `path` whole or not at all, and no `.new` left where it could not be. */
@@ -248,18 +251,9 @@ const readFinishing = (fs: FileSystem.FileSystem, stateDir: string, id: string) 
     .pipe(Effect.map((text) => Option.getOrNull(decodeFinishing(text))));
 
 /** The records of the checks running in this state directory, as their hosts wrote them. */
-export const recordsIn = Effect.fn("CheckProcesses.recordsIn")(function* (stateDir: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const dir = runningChecksDir(stateDir);
-  const found: CheckRecord[] = [];
-  for (const file of yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []))) {
-    if (!pipe_(file, Str.endsWith(".json"))) continue;
-    const text = yield* fs.readFileString(`${dir}/${file}`).pipe(Effect.orElseSucceed(() => ""));
-    const read = decodeRecord(text);
-    if (Option.isSome(read)) found.push(read.value);
-  }
-  return found;
-});
+export const runningChecks = RunRecords.use((records) => records.everyControl(RUNNING_CHECK)).pipe(
+  Effect.map((rows) => Arr.getSomes(Arr.map(rows, (row) => decodeRecord(row.data)))),
+);
 
 const spawnCheck = (command: CheckCommand, env?: Readonly<Record<string, string>>) =>
   Effect.flatMap(ChildProcessSpawner.ChildProcessSpawner, (spawner) =>
@@ -634,6 +628,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
 }) {
   const { dir, installation, kill = processKill, supervisor } = options;
   const fs = yield* FileSystem.FileSystem;
+  const records = yield* RunRecords;
   // Only these, so a check's spawn and finalizer stay in its caller's Scope.
   const services = Context.make(FileSystem.FileSystem, fs).pipe(
     Context.add(
@@ -657,7 +652,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   const host = { pid: process.pid, started: (yield* startedOf(process.pid)) ?? "" };
 
   const untrack = (id: string) => Effect.sync(() => collecting.delete(id));
-  const forget = (id: string) => removeRecord(fs, dir, id).pipe(Effect.andThen(untrack(id)));
+  const forget = (id: string) => removeRecord(fs, records, dir, id).pipe(Effect.andThen(untrack(id)));
   /** As a check's Scope closes: ended for good, unless it was handed over. */
   const endOwn = (entry: Collecting) =>
     Effect.suspend(() =>
@@ -684,9 +679,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
 
   const left = Effect.gen(function* () {
     const found = new Map<string, Leftover>();
-    for (const record of yield* recordsIn(dir).pipe(
-      Effect.provideService(FileSystem.FileSystem, fs),
-    )) {
+    for (const record of yield* runningChecks.pipe(Effect.provideService(RunRecords, records))) {
       if (ours.has(record.id)) continue;
       found.set(record.id, {
         id: record.id,
@@ -741,7 +734,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
         : (yield* endCheck(proof, installation, kill))
           ? "ended"
           : "still running";
-      if (outcome !== "still running") yield* removeRecord(fs, dir, leftover.id);
+      if (outcome !== "still running") yield* removeRecord(fs, records, dir, leftover.id);
       const line = saidOf(leftover, outcome);
       yield* Effect.logInfo(line);
       if (options.onRun !== undefined) yield* options.onRun(leftover, outcome, line);
@@ -880,13 +873,12 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
             collecting.set(id, entry);
             return { handle, record, entry };
           }).pipe(
-            Effect.onError(() => removeRecord(fs, dir, id)),
+            Effect.onError(() => removeRecord(fs, records, dir, id)),
             Effect.ensuring(Effect.sync(() => spawning.delete(id))),
           );
           yield* Effect.addFinalizer(() => endOwn(entry));
           if (entry.ended) yield* signalAll([id], killing ? "SIGKILL" : "SIGTERM");
-          yield* fs.makeDirectory(runningChecksDir(dir), { recursive: true }).pipe(Effect.ignore);
-          yield* writeWhole(fs, recordPath(dir, id), encodeCheckRecord(record)).pipe(Effect.ignore);
+          yield* records.setControl(RUNNING_CHECK, "", encodeCheckRecord(record), id);
           return { handle, entry };
         }),
       );
@@ -1060,7 +1052,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   /** Collects each check handed over that is proved its supervisor's, by pid and start token (D2), as this host's. */
   const takeOver = (handed: HandedOver) =>
     Effect.gen(function* () {
-      for (const record of yield* recordsIn(dir)) {
+      for (const record of yield* runningChecks.pipe(Effect.provideService(RunRecords, records))) {
         if (
           !handed.checks.includes(record.id) ||
           record.host.pid !== handed.host.pid ||
@@ -1073,7 +1065,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
         const exited = yield* fs.exists(outputsOf(dir, record.id).exit);
         if (!proved && !exited) continue;
         const taken: CheckRecord = { ...record, host };
-        yield* writeWhole(fs, recordPath(dir, record.id), encodeCheckRecord(taken));
+        yield* records.setControl(RUNNING_CHECK, "", encodeCheckRecord(taken), record.id);
         const entry: Collecting = {
           check: checkOfRecord(record),
           record: taken,

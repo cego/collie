@@ -41,7 +41,7 @@ import { approvedFor, approvedIn } from "./verify-spec";
 import { readIntent } from "./intent";
 import { findingsIn, isBlocking } from "./output";
 import { type KeptMarkers, markersOf, runningCheck } from "./checks";
-import { recordsIn } from "./check-processes";
+import { runningChecks } from "./check-processes";
 import { waitLine } from "./memory-wait";
 import { runWaits } from "./run-waits";
 import { awaitingLine } from "./awaiting";
@@ -1246,7 +1246,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   const forge = opts.forge ?? (yield* readForge(stateDir));
   const since = yield* seenSince(stateDir);
   const live = new Map(Arr.map(opts.alive ?? [], (agent) => [agent.name, agent]));
-  const records = yield* recordsIn(stateDir);
+  const records = yield* runningChecks;
   const keptCards = opts.only === undefined ? opts.cards : undefined;
   const markers = yield* markersOf(
     all,

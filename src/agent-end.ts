@@ -16,6 +16,7 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Data, Effect, FileSystem, Result } from "effect";
 import type { PlatformServices } from "./platform";
+import { RELAUNCH, RunRecords } from "./run-records";
 import { STOP_WAIT_MS, notStopped, stopAgent, type CompactionDeps } from "./compaction";
 import type { AgentInfo, Herdr, HerdrError, PaneInfo } from "./herdr";
 import {
@@ -183,12 +184,9 @@ const ending = Effect.fnUntraced(function* (
     } satisfies Ended;
 
   // Ended on purpose, so nothing starts it again.
-  if (launched.runId !== undefined)
-    yield* (yield* FileSystem.FileSystem)
-      .remove(`${startedDir(deps.stateDir, launched.runId)}/${launched.agent}.json`, {
-        force: true,
-      })
-      .pipe(Effect.ignore);
+  const runId = launched.runId;
+  if (runId !== undefined)
+    yield* RunRecords.use((records) => records.setControl(RELAUNCH, runId, null, launched.agent));
   if (paneId !== undefined && closes === "close") {
     // Core has no workspace to keep.
     if (one?.backend === undefined) {

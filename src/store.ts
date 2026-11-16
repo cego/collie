@@ -1213,7 +1213,10 @@ function makeStore(
                 yield* sql`DELETE FROM collie_narratives WHERE run = ${run}`.pipe(Effect.orDie);
                 yield* sql`DELETE FROM collie_narrative_work WHERE run = ${run}`.pipe(Effect.orDie);
                 yield* sql`DELETE FROM collie_watches WHERE run = ${run}`.pipe(Effect.orDie);
-                yield* keepStepTimes(run).pipe(Effect.orDie);
+                yield* keepStepTimes(run).pipe(
+                  Effect.provideService(SqlClient.SqlClient, sql),
+                  Effect.orDie,
+                );
                 yield* sql`DELETE FROM collie_run_lines WHERE run = ${run}`.pipe(Effect.orDie);
                 yield* sql`DELETE FROM collie_run_facts WHERE run = ${run}`.pipe(Effect.orDie);
                 yield* sql`DELETE FROM collie_run_activity WHERE run = ${run}`.pipe(Effect.orDie);
