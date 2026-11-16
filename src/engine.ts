@@ -208,7 +208,7 @@ import {
   recommendedFirst,
 } from "./board-model";
 import { readMrStates } from "./merges";
-import { forgeOf } from "./forge/forge";
+import { COLLIE_REPOSITORY, FORGES, forgeOf } from "./forge/forge";
 import { links } from "./forge/review";
 import { integrateDefault, integratedLine } from "./integrate";
 import { planRunOf, strategyNamed, workSourceOf } from "./strategies";
@@ -933,9 +933,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly recordReview: (runId: string, scope: ReviewScope | null, base: string, review: SynthesisReport) => Effect.Effect<void>;
     readonly recovery: (runId: string, parent: string, source: string) => Effect.Effect<Recovery, WorkflowError>;
     readonly report: (since: string) => Effect.Effect<Report, WorkflowError>;
-    readonly issues: (runId: string, numbers?: ReadonlyArray<number>) => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
-    readonly fileIssue: (options: { readonly runId: string; readonly title: string; readonly body: string }) => Effect.Effect<IssueRef, WorkflowError>;
-    readonly commentIssue: (options: { readonly runId: string; readonly number: number; readonly body: string }) => Effect.Effect<void, WorkflowError>;
+    readonly issues: (runId: string, numbers?: ReadonlyArray<number>, on?: "collie") => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
+    readonly fileIssue: (options: { readonly runId: string; readonly title: string; readonly body: string; readonly on?: "collie" }) => Effect.Effect<IssueRef, WorkflowError>;
+    readonly commentIssue: (options: { readonly runId: string; readonly number: number; readonly body: string; readonly on?: "collie" }) => Effect.Effect<void, WorkflowError>;
     readonly dir: string;
     /** The Collie release this host runs, as its tag names it. */
     readonly build: string;
@@ -4217,7 +4217,26 @@ export const hostLayer = (options: {
             ? Effect.fail(new WorkflowError({ reason: `${runId} is stopped, so it ${what}` }))
             : Effect.void,
         );
-      const issueCheckout = Effect.fn("Host.issueCheckout")(function* (runId: string) {
+      const issueCheckout = Effect.fn("Host.issueCheckout")(function* (
+        runId: string,
+        on?: "collie",
+      ) {
+        if (on === "collie") {
+          const { env } = yield* placing;
+          const reading = yield* connectionOnMachine({ ...env, cwd: env.home }, "github");
+          if (reading.state !== "ok")
+            return yield* new WorkflowError({
+              reason: `${reading.detail}. Fix: ${reading.fix}`,
+            });
+          return {
+            ok: true as const,
+            forge: FORGES.github,
+            project: COLLIE_REPOSITORY,
+            cwd: env.home,
+            env,
+            collie: true,
+          };
+        }
         const row = yield* store.run(runId);
         if (row === null) return yield* new WorkflowError({ reason: `there is no Run ${runId}` });
         const launch = yield* decodeStrings(row.options ?? "{}").pipe(
@@ -4243,7 +4262,7 @@ export const hostLayer = (options: {
           return yield* new WorkflowError({
             reason: `${reading.detail}. Fix: ${reading.fix}`,
           });
-        return { ...here, cwd, env };
+        return { ...here, cwd, env, collie: false };
       });
       const issuePrivacyBudget = Duration.fromInputUnsafe(options.issuePrivacyBudget ?? "1 minute");
       const walks = yield* Cache.makeWith(
@@ -4334,16 +4353,20 @@ export const hostLayer = (options: {
           });
           const inventory = yield* inventoryOf(root.path);
           const expanded = yield* Effect.try(() => throughAliases(text, inventory.aliases));
-          const common = yield* runShell(
-            "git",
-            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-            here.cwd,
-          );
-          if (common.code !== 0)
-            return yield* new WorkflowError({
-              reason: "issue checkout's Git identity could not be read",
-            });
-          const own = yield* fs.realPath(pipe(common.stdout, Str.replace(/\n$/, "")));
+          // Collie's repository has no checkout of the Run's to exempt.
+          let own: string | null = null;
+          if (!here.collie) {
+            const common = yield* runShell(
+              "git",
+              ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+              here.cwd,
+            );
+            if (common.code !== 0)
+              return yield* new WorkflowError({
+                reason: "issue checkout's Git identity could not be read",
+              });
+            own = yield* fs.realPath(pipe(common.stdout, Str.replace(/\n$/, "")));
+          }
           const ownRemote = Arr.join(Str.split(here.project, "/").slice(1), "/");
           for (const { checkout, canonical, repository, names } of inventory.checkouts) {
             if (
@@ -4541,10 +4564,10 @@ export const hostLayer = (options: {
           Effect.fail(
             new WorkflowError({ reason: "Run reporting requires the host's workflow registry" }),
           ),
-        issues: (runId, numbers) =>
+        issues: (runId, numbers, on) =>
           under(
             Effect.gen(function* () {
-              const here = yield* issueCheckout(runId);
+              const here = yield* issueCheckout(runId, on);
               const listed = yield* here.forge.issues(here.project, here.cwd, runShell, numbers);
               if (!listed.ok) return yield* new WorkflowError({ reason: listed.reason });
               return listed.issues;
@@ -4554,7 +4577,7 @@ export const hostLayer = (options: {
           under(
             Effect.gen(function* () {
               yield* unstopped(asked.runId, "files no issue");
-              const here = yield* issueCheckout(asked.runId);
+              const here = yield* issueCheckout(asked.runId, asked.on);
               yield* checkIssueText(here, `${asked.title}\n${asked.body}`);
               const filed = yield* here.forge.fileIssue(
                 here.project,
@@ -4571,7 +4594,7 @@ export const hostLayer = (options: {
           under(
             Effect.gen(function* () {
               yield* unstopped(asked.runId, "comments on no issue");
-              const here = yield* issueCheckout(asked.runId);
+              const here = yield* issueCheckout(asked.runId, asked.on);
               yield* checkIssueText(here, asked.body);
               const commented = yield* here.forge.commentIssue(
                 here.project,
