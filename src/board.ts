@@ -13,7 +13,7 @@ import * as Rec from "effect/Record";
 import { Clock, Effect, FileSystem, Option, Result, Schema, flow } from "effect";
 import { lastAudit } from "./audit";
 import { planDirOf } from "./run-detail";
-import { readAhead, RunRecords } from "./run-records";
+import { readAhead, RunRecords, type RunRecordsApi } from "./run-records";
 import { openReports, readDrift } from "./drift";
 import { describeAction } from "./lines";
 import type { PickItem } from "./inputs";
@@ -33,6 +33,7 @@ import {
   ranOneTest,
   ranCommand,
   passed,
+  readProofsOf,
   readVerifications,
   type CheckCommand,
   type Verification,
@@ -648,7 +649,7 @@ function stateOf(
  * again is not failing "three times in a row".
  */
 export function lastFailure(
-  records: ReadonlyArray<Verification>,
+  records: ReadonlyArray<Pick<Verification, "name" | "result">>,
 ): { name: string; times: number } | null {
   const last = records.at(-1);
   if (last === undefined || last.result !== "fail") return null;
@@ -1151,7 +1152,7 @@ const nextChange = (then: number, now: number) => {
 export const buildBoard = Effect.fn("Board.build")(function* (opts: BoardOptions) {
   const runs = newestFirst(opts.runs ?? (yield* listRuns(opts.env)));
   const records = yield* RunRecords;
-  return yield* drawBoard({ ...opts, runs }).pipe(
+  return yield* drawBoard({ ...opts, runs }, records).pipe(
     Effect.provideService(
       RunRecords,
       readAhead(
@@ -1192,7 +1193,7 @@ interface BoardOptions {
   cards?: KeptCards;
 }
 
-const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions) {
+const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: RunRecordsApi) {
   const { stateDir } = opts.env;
   const fs = yield* FileSystem.FileSystem;
   const { boundary } = yield* Foreground;
@@ -1533,11 +1534,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions) {
         const settledNow =
           state === "done" || state === "failed" || state === "stopped" || state === "abandoned";
         const failure =
-          state === "failed"
-            ? lastFailure(
-                yield* readVerifications(leader.evidence).pipe(Effect.orElseSucceed(() => [])),
-              )
-            : null;
+          state === "failed" ? lastFailure(yield* readProofsOf([leader.evidence])) : null;
         const open = openReports(yield* readDrift(leader.dir).pipe(Effect.orElseSucceed(() => [])));
         const task = leader.task === null ? null : (tasks.get(leader.task) ?? null);
         const { name, project } = namesOf(task?.label ?? "", leader);
@@ -1582,7 +1579,9 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions) {
           // Collie's own evidence counts at the head the forge reported, where it reported one.
           const verified = awaiting
             ? {
+                // One Run's whole records, which the read-ahead would read for every Run.
                 records: yield* readVerifications(merging.evidence).pipe(
+                  Effect.provideService(RunRecords, whole),
                   Effect.orElseSucceed(() => []),
                 ),
                 head: forged?.head ?? (yield* opts.head?.(merging) ?? branchHead(merging, now)),

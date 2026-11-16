@@ -113,6 +113,20 @@ export const readRunJournalWhole = Effect.fn("Journal.readRunWhole")(function* <
 export const readRunJournal = <A>(at: RunJournal, json: Schema.Codec<A, string, never, never>) =>
   readRunJournalWhole(at, json).pipe(Effect.map((journal) => journal.lines));
 
+/** These Runs' briefs of journal `name`, in one read, decoded as `readRunJournal` decodes lines. */
+export const readBriefsOf = Effect.fn("Journal.readBriefsOf")(function* <A>(
+  runs: ReadonlyArray<string>,
+  name: string,
+  json: Schema.Codec<A, string, never, never>,
+) {
+  const decode = Schema.decodeUnknownOption(json);
+  const briefs = yield* RunRecords.use((records) => records.briefsOf(runs, name));
+  return Arr.flatMap(
+    runs,
+    (run) => tally(Arr.map(briefs.get(run) ?? [], (one) => decode(one))).lines,
+  );
+});
+
 /** The last matching record, without decoding the history before it. */
 export const findLastRunJournal = Effect.fn("Journal.findLastRun")(function* <A>(
   at: RunJournal,

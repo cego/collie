@@ -32,6 +32,7 @@ const counted = (records: RunRecordsApi, calls: { n: number }): RunRecordsApi =>
     ...records,
     lines: (run, journal) => count(records.lines(run, journal)),
     linesOf: (runs, journal) => count(records.linesOf(runs, journal)),
+    briefsOf: (runs, journal) => count(records.briefsOf(runs, journal)),
     lastOf: (runs, journal, kinds) => count(records.lastOf(runs, journal, kinds)),
     fact: (run, name) => count(records.fact(run, name)),
     factsOf: (runs, name) => count(records.factsOf(runs, name)),

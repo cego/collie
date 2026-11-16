@@ -12,6 +12,7 @@ import type { RunFacts } from "./runs";
 import type { RunningCheck } from "./board-model";
 import {
   decodeVerifying,
+  readProofsOf,
   readVerifications,
   VERIFYING,
   verifyingOf,
@@ -100,19 +101,17 @@ const usualOf = Effect.fn("Checks.usualOf")(function* (
   runs: ReadonlyArray<RunFacts>,
   marker: Verifying,
 ) {
-  const same: Verification[] = [];
-  for (const other of runs) {
-    if (other.project !== run.project) continue;
-    for (const record of yield* readOrNone(other))
-      if (
-        record.by === "collie" &&
-        record.name === marker.name &&
-        commandOf(record.executable) === commandOf(marker.executable) &&
-        record.argv.length === marker.argv.length &&
-        Arr.every(record.argv, (word, at) => word === marker.argv[at])
-      )
-        same.push(record);
-  }
+  const same = Arr.filter(
+    yield* readProofsOf(
+      Arr.flatMap(runs, (other) => (other.project === run.project ? [other.evidence] : [])),
+    ),
+    (record) =>
+      record.by === "collie" &&
+      record.name === marker.name &&
+      commandOf(record.executable) === commandOf(marker.executable) &&
+      record.argv.length === marker.argv.length &&
+      Arr.every(record.argv, (word, at) => word === marker.argv[at]),
+  );
   const last = Arr.map(
     same.sort((a, b) => pipe_(a.at, Str.localeCompare(b.at))).slice(-USUAL_OF),
     (record) => record.seconds * 1000,

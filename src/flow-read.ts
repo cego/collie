@@ -32,7 +32,7 @@ import { stepTimesByWorkflow, usualStepTimes } from "./step-durations";
 import { readRunLinks } from "./run-links";
 import { settleFlow } from "./flow-timing";
 import { epochMs } from "./time";
-import { readVerifications } from "./verify";
+import { readProofsOf } from "./verify";
 import { changeKey } from "./plan";
 
 const executionOfState = (state: RunState): Execution => {
@@ -136,7 +136,7 @@ export const laneFor = Effect.fn("Flow.lane")(function* (
     usual: usual ?? (yield* usualStepTimes(run.workflow)),
     launches,
     questions: run.engine?.questions ?? [],
-    verifications: yield* readVerifications(run.evidence).pipe(Effect.orElseSucceed(() => [])),
+    verifications: yield* readProofsOf([run.evidence]),
     ...context,
     wakes: run.engine?.wakes ?? null,
     stoppedBy: run.state === "stopped" && stop !== undefined ? whoActed(stop.actor) : null,

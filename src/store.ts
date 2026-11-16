@@ -50,6 +50,7 @@ import { RequestConflict, RunReport, type Solution } from "./board-model";
 import { nowIso } from "./time";
 import { Observed, WatchCursor, Woke } from "./mr-watch-model";
 import { ShippingGo } from "./shipping";
+import { PROOF_SQL } from "./verify-model";
 
 /** A run as it was admitted: the claim, the arguments and the execution it became. */
 const Run = Schema.Struct({
@@ -657,6 +658,7 @@ const migrations = (imports: {
         line TEXT NOT NULL,
         kind TEXT AS (coalesce(${field("kind")}, ${field("operation")})),
         key TEXT AS (${field("key")}),
+        brief TEXT AS (${PROOF_SQL}) STORED,
         PRIMARY KEY (run, journal, seq)
       ) WITHOUT ROWID
     `);

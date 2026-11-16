@@ -53,7 +53,11 @@ a rollback writes the kept times back to it. A board build reads each journal or
 uses, and activity, for all of its Runs in one query, the first time it reads it for any of
 them (`readAhead`): it makes as many queries for five Runs as for two. A Run's last line of a
 kind (its final card, its latest hold or stop) is read through the `kind` index, which an
-operation's line fills from its `operation`, never by reading the journal whole. Every
+operation's line fills from its `operation`, never by reading the journal whole. A verification
+line keeps a brief beside it in the same row (`brief`): what a reader across Runs needs of it,
+none of its trees and its output only where it failed. A board build, its Flow and a running
+check's usual time read briefs (`briefsOf`), a third of the bytes; only one Run's own detail
+and its merge readiness read the whole records. Every
 connection to `host.db` reads it through a memory map (`hostDatabase`), so a read across
 hundreds of Runs is not copied page by page through SQLite's own 2 MB page cache. Only the host writes these tables
 ([ADR-0040](0040-the-host-is-the-only-writer.md)); a reader outside it opens `host.db`

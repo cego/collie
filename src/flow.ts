@@ -29,7 +29,7 @@ import {
 import type { Launched } from "./launches";
 import type { RunState } from "./runs";
 import type { StepLine, StepMeta, StepPlace } from "./steps";
-import type { Verification } from "./verify-model";
+import type { Proof } from "./verify-model";
 import { clockTime, epochMs, minutes } from "./time";
 import { since, stepElapsed } from "./flow-timing";
 import type { readStepSteering } from "./step-steering";
@@ -54,7 +54,7 @@ export interface AskedFact {
 export interface LaneFacts {
   readonly usual?: ReadonlyMap<string, number>;
   readonly steering?: Effect.Success<ReturnType<typeof readStepSteering>>;
-  readonly verifications?: ReadonlyArray<Verification>;
+  readonly verifications?: ReadonlyArray<Proof>;
   readonly run: {
     readonly id: string;
     readonly workflow: string;
@@ -274,7 +274,7 @@ export function laneOf(facts: LaneFacts): FlowLane {
     const last = Option.getOrUndefined(
       Arr.findLast(proofsFor(one), (proof) => proof.at >= one.attempts.at(-1)!.at),
     );
-    if (last?.result === "fail") {
+    if (last?.result === "fail" && last.tail !== undefined) {
       const command = CommandLine.display([last.executable, ...last.argv]);
       const output = Str.split(
         Arr.join(

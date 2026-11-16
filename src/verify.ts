@@ -22,12 +22,18 @@ import { CheckProcesses, type CheckOf } from "./check-processes";
 import { logged } from "./check-supervisor";
 import type { VerifySpec } from "./intent";
 import { failedAlone, failedTests, ranAlone, rerunArgv } from "./bun-tests";
-import { appendRunJournal, readRunJournal, runJournal } from "./journal";
+import { appendRunJournal, readBriefsOf, readRunJournal, runJournal } from "./journal";
 import { RunRecords } from "./run-records";
 import { shell, type Ran } from "./mr";
 import { nowIso, epochMs } from "./time";
 import { CurrentStep, type StepPlace } from "./steps";
-import { Pass, VerificationSchema, type FailedTest, type Snapshot } from "./verify-model";
+import {
+  Pass,
+  ProofSchema,
+  VerificationSchema,
+  type FailedTest,
+  type Snapshot,
+} from "./verify-model";
 
 /** Over this many bytes of working-tree content, the tree is not fingerprinted at all. */
 export const FINGERPRINT_MAX_BYTES = 50 * 1024 * 1024;
@@ -47,7 +53,14 @@ export const TOO_LARGE = "unstable:too-large";
 /** A repository's tree git could not write, which is never the same as another for the same reason as `TOO_LARGE`. */
 export const UNMEASURED = "unstable:unmeasured";
 
-export { PASSES, Pass, VerificationSchema, type FailedTest, type Snapshot } from "./verify-model";
+export {
+  PASSES,
+  Pass,
+  VerificationSchema,
+  type FailedTest,
+  type Proof,
+  type Snapshot,
+} from "./verify-model";
 /** A pass, and the gate fix it follows where it is a `fix`. */
 export interface CheckPass {
   readonly pass: Pass;
@@ -495,6 +508,21 @@ export const verifyingOf = (runId: string): Effect.Effect<Verifying | null, neve
 export const readVerifications = Effect.fn("Verify.read")(function* (runDir: string) {
   return yield* readRunJournal(verificationsPath(runDir), VerificationJson);
 });
+
+/** What each verification of these Runs says across them (`ProofSchema`), in one read. */
+export const readProofsOf = Effect.fn("Verify.readProofsOf")(function* (
+  runDirs: ReadonlyArray<string>,
+) {
+  const at = Arr.map(runDirs, verificationsPath);
+  return at.length === 0
+    ? []
+    : yield* readBriefsOf(
+        Arr.map(at, (one) => one.run),
+        at[0]!.name,
+        ProofJson,
+      );
+});
+const ProofJson = Schema.fromJsonString(ProofSchema);
 
 /**
  * Whether this directory is one of the Run's own. A verification names the tree it was
