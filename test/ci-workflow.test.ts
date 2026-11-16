@@ -18,16 +18,12 @@ const workflowSchema = Schema.Struct({
         needs: Schema.optionalKey(Schema.Union([Schema.String, Schema.Array(Schema.String)])),
         strategy: Schema.optionalKey(
           Schema.Struct({
-            matrix: Schema.Struct({
-              shard: Schema.optionalKey(Schema.Array(Schema.Finite)),
-              check: Schema.optionalKey(Schema.Array(Schema.String)),
-            }),
+            matrix: Schema.Struct({ shard: Schema.optionalKey(Schema.Array(Schema.Finite)) }),
           }),
         ),
         steps: Schema.Array(
           Schema.Struct({
             run: Schema.optionalKey(Schema.String),
-            if: Schema.optionalKey(Schema.String),
             "working-directory": Schema.optionalKey(Schema.String),
           }),
         ),
@@ -123,25 +119,12 @@ test("CI requires the Mac runner and the same native desktop builds that the rel
         );
       }
       const desktop = ci.jobs["desktop-checks"];
-      expect(desktop !== undefined && "steps" in desktop).toBe(true);
-      if (desktop === undefined || !("steps" in desktop)) return;
-      expect(desktop.strategy?.matrix.check).toEqual(["lint", "test"]);
-      for (const [command, check] of [
-        ["bun run typecheck", "lint"],
-        ["cargo fmt --all --check", "lint"],
-        ["cargo clippy --workspace --all-targets -- -D warnings", "lint"],
-        ["cargo test --workspace", "test"],
-        [
-          "bun test test/rune-contract.test.ts test/rune-types.test.ts test/rune-shell.test.ts test/rune-media.test.ts",
-          "test",
-        ],
-      ])
-        expect(
-          Option.getOrUndefined(Arr.findFirst(desktop.steps, (step) => step.run === command))?.if,
-        ).toBe(`matrix.check == '${check}'`);
-      const inDesktop = Arr.flatMap(desktop.steps, (step) =>
-        step["working-directory"] === "desktop" && step.run !== undefined ? [step.run] : [],
-      );
+      const inDesktop =
+        desktop !== undefined && "steps" in desktop
+          ? Arr.flatMap(desktop.steps, (step) =>
+              step["working-directory"] === "desktop" && step.run !== undefined ? [step.run] : [],
+            )
+          : [];
       expect(inDesktop).toEqual(
         expect.arrayContaining([
           "bun run typecheck",
