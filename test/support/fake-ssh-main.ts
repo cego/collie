@@ -170,12 +170,14 @@ const main = Effect.gen(function* () {
   let path: string | undefined;
   let verb: string | undefined;
   let spec: string | undefined;
+  let config: string | undefined;
   let isMaster = false;
   const options = new Map<string, string>();
   let at = 0;
   for (; at < argv.length; at++) {
     const word = argv[at]!;
     if (word === "-S") path = argv[++at];
+    else if (word === "-F") config = argv[++at];
     else if (word === "-O") verb = argv[++at];
     else if (word === "-L") spec = argv[++at];
     else if (word === "-o") {
@@ -228,6 +230,20 @@ const main = Effect.gen(function* () {
   }
   if (verb !== undefined) {
     yield* said(`mux ${verb}${spec === undefined ? "" : ` ${spec}`} ${target}`);
+    // OpenSSH includes configured forwards in both requests, even though -S already
+    // identifies the master. An unrelated remote forward can fail either operation.
+    if (
+      (verb === "forward" || verb === "cancel") &&
+      config !== "/dev/null" &&
+      config !== "none" &&
+      (yield* fs.exists(`${dir}/configured-forwards`))
+    ) {
+      yield* said(`configured ${verb} 9222`);
+      process.stderr.write(
+        "mux_client_forward: forwarding request failed: remote port forwarding failed for listen port 9222\n",
+      );
+      return process.exit(255);
+    }
     const request = spec === undefined ? { op: verb } : { op: verb, spec };
     const answer = yield* ask(path ?? "", request);
     if (answer === "ok") {
