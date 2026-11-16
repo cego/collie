@@ -767,7 +767,6 @@ test(
   180_000,
 );
 
-/** What the card of `runId`'s Task says. */
 const cardSentence = (runId: string) =>
   Effect.gen(function* () {
     const { board } = yield* host.mergeWatched;
@@ -847,6 +846,7 @@ test(
         yield* host.session(
           forge,
           Effect.gen(function* () {
+            yield* host.mergeWatched;
             yield* until(
               () => host.watchOf(runId, TARGET),
               (one) => one?.name === "follow-1",
