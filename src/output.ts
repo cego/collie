@@ -7,7 +7,7 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Effect, FileSystem, Schema, SchemaGetter, flow, Result } from "effect";
 import { isBoolean, isNumber, isString } from "./schema";
-import { checkProof, owesNothingHere, type CheckProof } from "./check-proof";
+import { checkProof, owesNothingHere, unstableWhy, type CheckProof } from "./check-proof";
 import type { Measurement } from "./measurement-model";
 import type { CheckCommand, Snapshot, Verification } from "./verify";
 import { isYamlMap, YamlValueJsonSchema, type YamlValue } from "./yaml";
@@ -773,7 +773,7 @@ function checkGap(name: string, proof: CheckProof, evidence: CheckEvidence): str
     case "failed":
       return `check failed: ${name}`;
     case "unstable":
-      return `check "${name}" ran on a tree that moved under it`;
+      return `check "${name}" ${unstableWhy(proof.runs)}`;
   }
 }
 

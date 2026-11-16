@@ -1776,6 +1776,8 @@ the result; changing any byte makes it about an earlier tree.
 That pair is the point: a pass on a tree that changed while the command ran says nothing
 about either tree, so such a result is `unstable` and never `pass`. So is a tree too large
 to fingerprint at all, because two unmeasured trees are not one tree.
+A tree git cannot stage or write is unmeasured too. Collie tries once more before it says
+so, and the snapshot keeps git's message as `unmeasured`, so the record says why.
 
 Reading the tree writes nothing in the checkout. Collie's status of a checkout runs with
 `GIT_OPTIONAL_LOCKS=0`, so it never holds `index.lock` and a commit made beside it is never

@@ -5,7 +5,7 @@ import { expect, test } from "bun:test";
 import { checkProof, owedLocally } from "../src/check-proof";
 import { evidenceGaps, type Collected } from "../src/outcome";
 import { settleFinalFix } from "../src/output";
-import { TOO_LARGE, type CheckCommand, type Verification } from "../src/verify";
+import { TOO_LARGE, UNMEASURED, type CheckCommand, type Verification } from "../src/verify";
 import type { VerifySpec } from "../src/verify-spec";
 import type { YamlValue } from "../src/yaml";
 
@@ -79,6 +79,23 @@ test("on a tree too large to fingerprint, every record is unstable, and its sent
     "tests ran on a tree that moved under it",
   ]);
   expect(fixReasons([run], large)).toEqual(['check "tests" ran on a tree that moved under it']);
+});
+
+test("a check on a tree git could not measure says git's reason, not that the tree moved", () => {
+  const unmeasured = {
+    head_sha: "abc123",
+    fingerprint: UNMEASURED,
+    unmeasured:
+      "\nfatal: Unable to create index.lock: File exists.\nhint: Another git process seems to be running\n",
+  };
+  const run = record({ result: "unstable", end: unmeasured });
+  const said = [...evidenceGaps("unspecified", collected([run])), ...fixReasons([run], FINAL)];
+  expect(said).toHaveLength(2);
+  for (const sentence of said) {
+    expect(sentence).toContain("fatal: Unable to create index.lock: File exists.");
+    expect(sentence).not.toContain("hint:");
+    expect(sentence).not.toContain("moved under it");
+  }
 });
 
 test("an agent's record counts by name for a gap decider that counts anyone's, and not for the approved set", () => {
