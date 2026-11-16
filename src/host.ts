@@ -112,7 +112,6 @@ import {
   type Locate,
 } from "./engine";
 import { RequestedBy } from "./board-model";
-import { Host } from "./sdk";
 import type { MeasureEvent } from "./measurement-model";
 import {
   RunMetrics,
