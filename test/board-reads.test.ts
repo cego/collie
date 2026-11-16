@@ -1,10 +1,22 @@
 // A board build reads its Runs' records in a fixed number of reads, however many Runs it
-// draws (ADR-draft-a-runs-own-records-are-rows-in-the-hosts-database, D6).
+// draws, and none of them from files (ADR-draft-a-runs-own-records-are-rows-in-the-hosts-database, D6).
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { buildBoard } from "../src/board";
 import { readEnv } from "../src/env";
-import { RunRecords, type RunRecordsApi } from "../src/run-records";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import {
+  AWAITED,
+  LEGACY_CONTROLS,
+  LEGACY_FACT_PREFIXES,
+  LEGACY_FACTS,
+  LEGACY_JOURNALS,
+  NOTIFIED,
+  parentOf,
+  RunRecords,
+  type RunRecordsApi,
+} from "../src/run-records";
 import { epochMs } from "../src/time";
 import { madeRun } from "./support/records";
 import { runEffect } from "./support/effect";
@@ -73,4 +85,76 @@ test("a board build reads its Runs' records in as many reads for five Runs as fo
       expect([two.cards, five.cards]).toEqual([2, 5]);
       expect(five.reads).toBe(two.reads);
     }),
+  ));
+
+/** Where an older build kept `run`'s records, each by its exact path or, ending `/`, under it. */
+const recordPlaces = (dir: string, run: string) => [
+  `${dir}/runs/${run}`,
+  `${dir}/evidence/${run}`,
+  `${dir}/agents/${run}`,
+  ...Arr.map([...LEGACY_JOURNALS, ...LEGACY_FACTS], (name) =>
+    Str.startsWith("evidence/")(name)
+      ? `${dir}/evidence/${run}/${Str.slice("evidence/".length)(name)}`
+      : `${dir}/runs/${run}/${name}`,
+  ),
+  ...Arr.flatMap(LEGACY_FACT_PREFIXES, (prefix) => [
+    `${dir}/runs/${run}/${prefix}`,
+    `${dir}/runs/${run}/${parentOf(prefix)}`,
+  ]),
+  ...Arr.map([...LEGACY_CONTROLS, NOTIFIED, AWAITED], (control) => `${dir}/${control}.${run}`),
+  `${dir}/relaunch/${run}/`,
+  `${dir}/running-checks/`,
+];
+
+test("a board build touches no file or directory an older build kept a Run's records in", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-board-io-" });
+      const runs = [];
+      for (const id of ["r1", "r2", "r3"])
+        runs.push(
+          yield* madeRun(dir, {
+            id,
+            task: `t-${id}`,
+            state: id === "r1" ? "running" : "succeeded",
+            created: "2026-09-13T08:00:00Z",
+            finished: id === "r1" ? null : "2026-09-13T09:00:00Z",
+          }),
+        );
+      const touched: string[] = [];
+      const noted =
+        <A extends ReadonlyArray<unknown>, B>(use: (path: string, ...rest: A) => B) =>
+        (path: string, ...rest: A) => {
+          touched.push(path);
+          return use(path, ...rest);
+        };
+      const watched: FileSystem.FileSystem = {
+        ...fs,
+        readFileString: noted(fs.readFileString),
+        readFile: noted(fs.readFile),
+        readDirectory: noted(fs.readDirectory),
+        stat: noted(fs.stat),
+        exists: noted(fs.exists),
+        access: noted(fs.access),
+      };
+      yield* buildBoard({
+        env: readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" }),
+        runs,
+        tasks: [],
+        registered: [],
+        proposals: [],
+        mrStates: new Map(),
+        offers: () => Effect.succeed([]),
+        now: epochMs("2026-09-13T10:00:00Z"),
+      }).pipe(Effect.provideService(FileSystem.FileSystem, watched));
+      const places = Arr.flatMap(runs, (run) => recordPlaces(dir, run.id));
+      expect(
+        Arr.filter(touched, (path) =>
+          Arr.some(places, (place) =>
+            Str.endsWith("/")(place) ? Str.startsWith(place)(`${path}/`) : path === place,
+          ),
+        ),
+      ).toEqual([]);
+    }).pipe(Effect.scoped),
   ));
