@@ -274,7 +274,6 @@
     "test/processes.test.ts": 557,
     "test/proactive.test.ts": 548,
     "test/desktop-upgrade.test.ts": 539,
-    "test/herdr-left-alone.test.ts": 531,
     "test/herdr-contract.test.ts": 525,
     "test/heal-output.test.ts": 522,
     "test/launch-records.test.ts": 518,
