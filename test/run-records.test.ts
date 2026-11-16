@@ -1,5 +1,7 @@
 // A Run's own records, kept in the host's database
 // (ADR-draft-a-runs-own-records-are-rows-in-the-hosts-database).
+import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 import { epochMs } from "../src/time";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Layer } from "effect";
@@ -176,6 +178,33 @@ test("work moves a Run's activity and bookkeeping does not", () =>
       expect([...(yield* one.activity(["run-a", "run-b", "run-c"])).keys()]).toEqual([
         "run-b",
         "run-c",
+      ]);
+    }),
+  ));
+
+test("the first host imports the usual Step times an older build kept past its retired Runs", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const sample = (run: string, step: string, at: string, ms: number) => ({
+        workflow: "implement",
+        step,
+        run,
+        key: step,
+        at,
+        ms,
+      });
+      yield* legacy({
+        "step-durations.json": JSON.stringify([
+          sample("gone-1", "build", "2026-10-01T10:00:00.000Z", 60_000),
+          sample("gone-2", "build", "2026-10-02T10:00:00.000Z", 120_000),
+          sample("gone-3", "review", "2026-10-03T10:00:00.000Z", 180_000),
+        ]),
+      });
+      const samples = yield* records(RunRecords.use((one) => one.stepSamples));
+      expect(Arr.sortWith(samples, (one) => one.ms, Order.Number)).toEqual([
+        { workflow: "implement", step: "build", ms: 60_000 },
+        { workflow: "implement", step: "build", ms: 120_000 },
+        { workflow: "implement", step: "review", ms: 180_000 },
       ]);
     }),
   ));
