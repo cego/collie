@@ -112,6 +112,26 @@ fn every_setting_shows_under_its_group_with_its_value_and_its_default_in_its_uni
 }
 
 #[test]
+fn follow_through_uses_an_off_default_and_the_saved_flock_value() {
+    let unset = row(&flock(json!({})), "review.follow_through");
+    assert_eq!(unset.group, "Runs");
+    assert_eq!(unset.kind, registry::Kind::Boolean);
+    assert_eq!(unset.effective(), "false");
+    assert_eq!(unset.default_said, "Default: off");
+    assert!(unset.shared);
+    assert!(!unset.set);
+
+    let saved = row(
+        &flock(json!({
+            "review.follow_through": edit(json!(true), "2026-11-11T09:30:00.000Z", "vm-a")
+        })),
+        "review.follow_through",
+    );
+    assert_eq!(saved.effective(), "true");
+    assert!(saved.set);
+}
+
+#[test]
 fn record_timing_is_this_computers_and_the_flock_chats_rule_and_switch_are_every_machines() {
     let on: SettingsSuccess = serde_json::from_value(json!({ "recordTiming": true })).unwrap();
     let all: Vec<model::Row> = model::sections(&flock(json!({})), &on, now(), 0)
@@ -855,7 +875,7 @@ fn opening_settings_asks_the_core_for_everything_it_shows_and_draws_it() {
     );
     assert_eq!(
         said(&runtime, "settings-count").as_deref(),
-        Some("44 settings")
+        Some("45 settings")
     );
     assert!(element(&runtime, "connection-gitlab").is_some());
 }
@@ -1162,7 +1182,7 @@ fn the_search_keeps_the_rows_it_names_and_says_how_many() {
     type_text(&mut runtime, "quiet", 1100.0);
     assert_eq!(
         said(&runtime, "settings-count").as_deref(),
-        Some("2 of 44 settings shown")
+        Some("2 of 45 settings shown")
     );
     assert!(element(&runtime, "setting-flock-quiet_ms").is_some());
     assert!(element(&runtime, "setting-flock-trust").is_none());
@@ -1170,7 +1190,7 @@ fn the_search_keeps_the_rows_it_names_and_says_how_many() {
     tap(&mut runtime, "settings-only-set", 1300.0);
     assert_eq!(
         said(&runtime, "settings-count").as_deref(),
-        Some("1 of 44 settings shown")
+        Some("1 of 45 settings shown")
     );
 }
 

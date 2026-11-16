@@ -10,6 +10,7 @@ export default defineWorkflow({
     target: Schema.String,
     head: Schema.String,
     approve: Schema.optionalKey(Schema.Boolean),
+    again: Schema.optionalKey(Schema.Boolean),
   }),
   hints: { target: "diff-target" },
   output: Schema.String,
@@ -38,14 +39,27 @@ export default defineWorkflow({
           success: Schema.Struct({ ok: Schema.Boolean, message: Schema.String }),
           execute: host.approveReview({
             runId,
-            round: 1,
+            attempt: "approve-review",
             target: input.target,
             cwd: place.cwd,
             head: input.head,
           }),
         });
         if (!approved.ok) return yield* new WorkflowError({ reason: approved.message });
-        return approved.message;
+        if (!input.again) return approved.message;
+        const again = yield* Activity.make({
+          name: "approve-again",
+          success: Schema.Struct({ ok: Schema.Boolean, message: Schema.String }),
+          execute: host.approveReview({
+            runId,
+            attempt: "approve-again",
+            target: input.target,
+            cwd: place.cwd,
+            head: input.head,
+          }),
+        });
+        if (!again.ok) return yield* new WorkflowError({ reason: again.message });
+        return again.message;
       }
       return posted.message;
     }),

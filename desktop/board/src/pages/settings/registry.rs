@@ -398,6 +398,16 @@ pub fn settings() -> Vec<Setting> {
             ),
         ),
         of(
+            "review.follow_through",
+            Boolean,
+            "false",
+            words(
+                "Runs",
+                "Follow a reviewed merge request to approval",
+                "Whether a review of a merge request posts its findings, waits for the author's changes with no agent, reviews each new head, and asks you only whether to approve. Read at each round: off, a running one asks what to do next as before.",
+            ),
+        ),
+        of(
             "slack.notification_channel",
             Text,
             "",

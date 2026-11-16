@@ -46,7 +46,9 @@ import { task } from "./support/task";
 import { runEffect } from "./support/effect";
 import { epochMs } from "../src/time";
 import { connect, frontDoor, socketOf } from "../src/host";
-import { hosted, hostedRun, settledRun } from "./support/hosted";
+import { MODULES, hosted, hostedRun, settledRun } from "./support/hosted";
+import { FakeBin } from "./support/bin";
+import { forgeOnPath, serveForges } from "./support/forge";
 import { readDispositions } from "../src/disposition";
 import { until } from "./support/host";
 import { collie, save } from "./support/world";
@@ -941,6 +943,136 @@ test(
       }),
     ),
   // A host, and a Run of it that finishes.
+  60_000,
+);
+
+for (const answer of ["Keep F1 (no approval)", "Drop it (approve abc123)"])
+  test(
+    `chat answers the keep/drop Decision with ${answer}`,
+    () =>
+      hosted(
+        "collie-parity-dispute-",
+        ({ world, env }) =>
+          Effect.gen(function* () {
+            const { envelope } = yield* collie(world, [
+              "run",
+              "start",
+              "follows-mr",
+              "--input",
+              "target=worktree",
+              "--input",
+              "proves=dispute",
+            ]);
+            expect(envelope).toMatchObject({ ok: true });
+            const { runId } = yield* Schema.decodeUnknownEffect(
+              Schema.Struct({ runId: Schema.String }),
+            )(envelope.data).pipe(Effect.orDie);
+            const client = yield* connect(world.state).pipe(Effect.orDie);
+            const pending = yield* until(
+              () => client.run({ runId }).pipe(Effect.orDie),
+              (view) => (view?.waiting.length ?? 0) > 0,
+            );
+            expect(pending?.waiting[0]?.name).toBe("dispute-1");
+            const said = yield* toolNamed("collie_do")!.call(env, {
+              actions: [
+                {
+                  kind: "answer",
+                  run: runId,
+                  choiceId: "dispute-1",
+                  answer,
+                },
+              ],
+            });
+            expect(said).toContain("answer: applied");
+            const done = yield* until(
+              () => client.run({ runId }).pipe(Effect.orDie),
+              (view) => view?.status.status === "complete",
+            );
+            expect(done?.status.status === "complete" && done.status.value).toBe(answer);
+          }),
+        [...MODULES, "follows-mr.workflow.ts"],
+      ),
+    60_000,
+  );
+
+test(
+  "chat starts a followed merge request as the Run the CLI started, and answers its approval",
+  () =>
+    hosted(
+      "collie-parity-follow-",
+      ({ world, env }) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs
+            .writeFileString(
+              `${world.config}/config.json`,
+              `{"review": {"follow_through": true}}\n`,
+            )
+            .pipe(Effect.orDie);
+          const bin = yield* FakeBin.make(`${world.home}/bin`);
+          const gitlab = yield* forgeOnPath(bin, "gitlab", {
+            installed: true,
+            loggedIn: ["gitlab.example.com"],
+            login: "me",
+            mrs: [
+              {
+                project: "gitlab.example.com/mk/project",
+                iid: "7",
+                state: "open",
+                author: "ann",
+                head: "1234567890abcdef1234567890abcdef12345678",
+              },
+            ],
+          });
+          const COLLIE_FORGE_API = yield* serveForges(gitlab);
+          yield* bin.restore();
+          const target = "https://gitlab.example.com/mk/project/-/merge_requests/7";
+          const { envelope } = yield* collie(
+            world,
+            ["run", "start", "follows-mr", "--input", `target=${target}`, "--input", "proves=main"],
+            { PATH: `${bin.dir}:${Bun.env.PATH}`, COLLIE_FORGE_API },
+          );
+          expect(envelope).toMatchObject({ ok: true });
+          const { runId } = yield* Schema.decodeUnknownEffect(
+            Schema.Struct({ runId: Schema.String }),
+          )(envelope.data).pipe(Effect.orDie);
+
+          const again = yield* toolNamed("collie_do")!.call(env, {
+            actions: [
+              {
+                kind: "start",
+                workflow: "follows-mr",
+                workspace: world.project,
+                inputs: { target, proves: "feature" },
+              },
+            ],
+          });
+          expect(again).toContain(`${runId} already follows gitlab.example.com/mk/project!7`);
+
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          yield* until(
+            () => client.run({ runId }).pipe(Effect.orDie),
+            (view) => Arr.some(view?.waiting ?? [], (one) => one.name === "approve-1"),
+          );
+          const answered = yield* toolNamed("collie_do")!.call(env, {
+            actions: [
+              {
+                kind: "answer",
+                run: runId,
+                choiceId: "approve-1",
+                answer: "Approve",
+              },
+            ],
+          });
+          expect(answered).toContain("answer: applied");
+          const done = yield* until(
+            () => client.run({ runId }).pipe(Effect.orDie),
+            (view) => view?.status.status === "complete",
+          );
+          expect(done?.status.status === "complete" && done.status.value).toBe("Approve");
+        }),
+      [...MODULES, "follows-mr.workflow.ts"],
+    ),
   60_000,
 );
 

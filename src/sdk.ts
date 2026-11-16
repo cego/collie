@@ -87,6 +87,7 @@ import type { Integration } from "./integrate";
 import type { BenchmarkPlan, Measurement } from "./measurement-model";
 import type { MergeOutcome, Takeover } from "./landing";
 import type { ReviewHead, ReviewStanding } from "./review-wait";
+import { Woke, type WatchCursor } from "./mr-watch-model";
 import type { PrerequisiteStanding } from "./prerequisites";
 import type {
   FastForward,
@@ -115,7 +116,16 @@ export { repoArgs } from "./forge/gitlab";
 export { mrForgeFacts } from "./forge/forge";
 /** How much of a Subscription is used, as the host reads it (ADR-0049). */
 export { subscriptionOf, usedFor, type UsageReading } from "./usage-model";
-export { forgeOfRef, mrSet, mrUrlOf, parseMrTarget, readMrRef, type MrRef } from "./board-model";
+export {
+  forgeOfRef,
+  mrLabel,
+  mrSet,
+  mrUrlOf,
+  parseMrTarget,
+  readMrRef,
+  type MrRef,
+} from "./board-model";
+export type { WatchChange, WatchCursor, Woke } from "./mr-watch-model";
 import { AuthoredSolution, type Solution } from "./board-model";
 /** What merging the default branch into a Run's branch did (`HostApi.integrate`). */
 export { IntegrationSchema, type Integration } from "./integrate";
@@ -183,6 +193,7 @@ export {
   MrOutputSchema,
   PlanOutputSchema,
   ReviewOutputSchema,
+  ReassessmentSchema,
   SynthesisSchema,
 } from "./output";
 
@@ -630,6 +641,11 @@ export interface Declarations {
   readonly heals?: true;
   readonly followUps?: ReadonlyArray<FollowUp>;
   readonly actions?: ReadonlyArray<ActionProvider>;
+  /**
+   * The boolean setting that, on, makes a start on a merge request its login's one Run of
+   * it: a second start, from any door and with any input, is that Run.
+   */
+  readonly follows?: string;
 }
 
 /**
@@ -750,6 +766,16 @@ const SingleClaim = Schema.NullOr(Schema.Struct({ slug: Schema.String })).pipe(
 export const ClaimedSchema = Schema.Union([Holding, SingleClaim]);
 
 export interface HostApi {
+  readonly reviewFix: (
+    runId: string,
+    target: string,
+  ) => Effect.Effect<{
+    readonly owned: boolean;
+    readonly head: string;
+    readonly reviewed: string;
+    readonly lineage: ReadonlyArray<string>;
+    readonly following: boolean;
+  }>;
   readonly reviewScope: (
     runId: string,
     source: string,
@@ -1160,6 +1186,53 @@ export interface HostApi {
     readonly returnFailedCi?: boolean;
   }) => Effect.Effect<ReviewStanding, WorkflowError>;
   /**
+   * Has the merge watch watch the merge request `target` for this Run's wake `name`, from
+   * `cursor`, and says on the card that the Run waits on the author. `watch` takes it.
+   */
+  readonly watching: (options: {
+    readonly runId: string;
+    readonly target: string;
+    readonly name: string;
+    readonly cursor: WatchCursor;
+    /** Who the card names as waited on, the author by default. */
+    readonly author?: string;
+    /** The head this login's approval stands at, which the card says beside the wait. */
+    readonly approved?: string;
+    /** A question shares the wake, so the card says it waits on whoever answers that. */
+    readonly asking?: boolean;
+  }) => Effect.Effect<void, WorkflowError>;
+  /** The merge request `target` as the forge reads it now: what a watch's cursor starts from. */
+  readonly mrReading: (options: {
+    readonly target: string;
+    readonly cwd: string;
+    readonly replies?: boolean;
+  }) => Effect.Effect<MrRead, WorkflowError>;
+  /** Whether this login's approval of `target` stands while its head is `head`. */
+  readonly approvedAt: (options: {
+    readonly target: string;
+    readonly cwd: string;
+    readonly head: string;
+  }) => Effect.Effect<boolean, WorkflowError>;
+  /**
+   * Makes this Run's checkout the merge request `target`'s head, detached and Collie's own,
+   * fetched from the forge's own ref for it: `moved` where that is no longer `head`.
+   */
+  readonly pinHead: (options: {
+    readonly runId: string;
+    readonly target: string;
+    readonly head: string;
+  }) => Effect.Effect<PinnedHead, WorkflowError>;
+  /**
+   * Whether `head` descends from `previous` on `target`'s forge; a `previous` the forge no
+   * longer has does not. Take it inside an Activity.
+   */
+  readonly descends: (options: {
+    readonly target: string;
+    readonly cwd: string;
+    readonly previous: string;
+    readonly head: string;
+  }) => Effect.Effect<boolean, WorkflowError>;
+  /**
    * One read of whether the Changes the ticket at `ticket` names on its `**Needs merged:**`
    * line have landed: merged, with the merge commit on origin's default branch as fetched in
    * `cwd`. `Landed` where every one has, or none is named; `Waiting` with the card's line
@@ -1344,6 +1417,14 @@ export interface HostApi {
     readonly head: string;
     readonly round: number;
   }) => Effect.Effect<Posted>;
+  readonly slackTarget: (link: string, target?: string) => Effect.Effect<string, WorkflowError>;
+  readonly reviewSlack: (options: {
+    readonly runId: string;
+    readonly target: string;
+    readonly cwd: string;
+    readonly permalink?: string;
+    readonly wanted: ReadonlyArray<string>;
+  }) => Effect.Effect<string>;
   /** Reads the target's head before review. Take it inside an Activity. */
   readonly reviewedHead: (options: {
     readonly target: string;
@@ -1355,10 +1436,10 @@ export interface HostApi {
     readonly previous: string;
     readonly head: string;
   }) => Effect.Effect<string, WorkflowError>;
-  /** Approves once per Run and round; an interrupted attempt returns an uncertain outcome. */
+  /** Approves once per Run and attempt; an interrupted attempt returns an uncertain outcome. */
   readonly approveReview: (options: {
     readonly runId: string;
-    readonly round: number;
+    readonly attempt: string;
     readonly target: string;
     readonly cwd: string;
     readonly head: string;
@@ -1390,6 +1471,37 @@ export interface Place {
 export type ReviewedCheckout =
   | { readonly cwd: string; readonly branch: string }
   | { readonly refused: string };
+
+/** A merge request as a round reads it before it starts: where its watch takes up from. */
+export const MrRead = Schema.Struct({
+  state: Schema.Literals(["open", "merged", "closed"]),
+  head: Schema.String,
+  author: Schema.String,
+  /** The head's checks as the card reads them. */
+  pipeline: Schema.String,
+  /** The ids of the comments on it now. */
+  comments: Schema.Array(Schema.String),
+  replies: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        id: Schema.String,
+        author: Schema.String,
+        thread: Schema.NullOr(Schema.String),
+        body: Schema.String,
+        run: Schema.NullOr(Schema.String),
+      }),
+    ),
+  ),
+});
+export type MrRead = typeof MrRead.Type;
+
+/** The pinned checkout, the head the forge has instead, or why there is no checkout. */
+export const PinnedHead = Schema.Union([
+  Schema.Struct({ cwd: Schema.String }),
+  Schema.Struct({ moved: Schema.String }),
+  Schema.Struct({ refused: Schema.String }),
+]);
+export type PinnedHead = typeof PinnedHead.Type;
 
 /** The reviewed branch, or why there is none, in the resolver's own words. */
 export type ReviewedBranch = { readonly branch: string } | { readonly refused: string };
@@ -1477,7 +1589,14 @@ const recommendationShortfall = (solutions: ReadonlyArray<Solution>): string | n
  * cannot show the question, cannot refuse an answer to one nobody asked, and cannot tell
  * a second answer from the first.
  */
-export const ask = (question: {
+export const ask = (question: Question): Effect.Effect<string, never, Asking> =>
+  opened(question).pipe(
+    Effect.andThen(
+      DurableDeferred.await(DurableDeferred.make(question.name, { success: Schema.String })),
+    ),
+  );
+
+interface Question {
   /** Its identity: the same name is the same question, however often the work replays. */
   readonly name: string;
   readonly prompt?: string;
@@ -1487,7 +1606,12 @@ export const ask = (question: {
    * the operator's own words.
    */
   readonly options?: ReadonlyArray<AskOption>;
-}): Effect.Effect<string, never, Run | Host | WorkflowEngine | WorkflowInstance> =>
+}
+
+type Asking = Run | Host | WorkflowEngine | WorkflowInstance;
+
+/** Tells the host the question is open, without waiting for its answer. */
+const opened = (question: Question): Effect.Effect<void, never, Asking> =>
   Effect.gen(function* () {
     const shipping =
       question.shipping === undefined
@@ -1517,9 +1641,98 @@ export const ask = (question: {
       shortfall: shortfall ?? undefined,
       shipping,
     });
-    return yield* DurableDeferred.await(
-      DurableDeferred.make(question.name, { success: Schema.String }),
+  });
+
+/**
+ * Suspends this Run until the merge watch reads the merge request `target` changed from
+ * `cursor` in a way that matters, or merged or closed. Nothing runs meanwhile: no agent,
+ * and no forge read beyond the merge watch's own. `name` is its identity, as an `ask`'s is.
+ * A new head is then read once for whether it descends from the cursor's.
+ */
+export const watch = (options: Watching): Effect.Effect<Woke, WorkflowError, Asking> =>
+  Effect.gen(function* () {
+    yield* watched(options, false);
+    const woke = yield* DurableDeferred.await(
+      DurableDeferred.make(options.name, { success: Schema.String }),
+    ).pipe(Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(Woke))), Effect.orDie);
+    return yield* withAncestry(options, woke);
+  });
+
+/**
+ * Asks `question` while watching as `watch` does, under the question's name: whichever comes
+ * first, its answer or a change that matters, is what this returns, and the other is gone. A
+ * change closes the question unanswered.
+ */
+export const askWhileWatching = (
+  question: Omit<Question, "name">,
+  options: Watching,
+): Effect.Effect<Woke | Answered, WorkflowError, Asking> =>
+  Effect.gen(function* () {
+    yield* watched(options, true);
+    yield* opened({ ...question, name: options.name });
+    const said = yield* DurableDeferred.await(
+      DurableDeferred.make(options.name, { success: Schema.String }),
     );
+    const woke = Schema.decodeOption(Schema.fromJsonString(Woke))(said);
+    return Option.isSome(woke)
+      ? yield* withAncestry(options, woke.value)
+      : { _tag: "Answered" as const, answer: said };
+  });
+
+/** What a question asked while watching was answered with. */
+export interface Answered {
+  readonly _tag: "Answered";
+  readonly answer: string;
+}
+
+interface Watching {
+  /** Its identity, as an `ask`'s is: watch again under a new name. */
+  readonly name: string;
+  readonly target: string;
+  readonly cwd: string;
+  readonly cursor: WatchCursor;
+  /** Who the card names as waited on, the author by default. */
+  readonly author?: string;
+  /** The head this login's approval stands at, which the card says beside the wait. */
+  readonly approved?: string;
+}
+
+const watched = (options: Watching, asking: boolean) =>
+  Effect.gen(function* () {
+    const host = yield* Host;
+    const runId = (yield* Run).id;
+    yield* Activity.make({
+      name: `watch.${options.name}`,
+      error: WorkflowError,
+      execute: host.watching({
+        runId,
+        target: options.target,
+        name: options.name,
+        cursor: options.cursor,
+        author: options.author,
+        approved: options.approved,
+        asking,
+      }),
+    });
+  });
+
+/** A new head, read once for whether it descends from the cursor's. */
+const withAncestry = (options: Watching, woke: Woke) =>
+  Effect.gen(function* () {
+    if (woke._tag === "Ended" || !woke.change.newHead) return woke;
+    const host = yield* Host;
+    const descends = yield* Activity.make({
+      name: `watch.${options.name}.descends`,
+      success: Schema.Boolean,
+      error: WorkflowError,
+      execute: host.descends({
+        target: options.target,
+        cwd: options.cwd,
+        previous: woke.change.previous,
+        head: woke.change.head,
+      }),
+    });
+    return { ...woke, change: { ...woke.change, forcePush: !descends } };
   });
 
 /**
@@ -1796,6 +2009,7 @@ export interface WorkflowMetadata {
   readonly followUps?: ReadonlyArray<FollowUp>;
   readonly actions?: ReadonlyArray<ActionProvider>;
   readonly path?: ReadonlyArray<StepMeta>;
+  readonly follows?: string;
 }
 
 /**
@@ -1836,6 +2050,7 @@ export type Ships = "merge" | "release";
  * user-authored workflow offers what its own results earn, exactly as a shipped one does.
  */
 export interface ActionFacts {
+  readonly review?: { readonly head: string; readonly reviewed: string; readonly owned: boolean };
   readonly recovery?: Recovery;
   readonly outcome: Outcome;
   readonly succeeded: boolean;

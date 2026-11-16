@@ -46,6 +46,7 @@ import {
 import { StoreWrites } from "./store-writes";
 import { RequestConflict, RunReport, type Solution } from "./board-model";
 import { nowIso } from "./time";
+import { Observed, WatchCursor, Woke } from "./mr-watch-model";
 import { ShippingGo } from "./shipping";
 
 /** A run as it was admitted: the claim, the arguments and the execution it became. */
@@ -229,6 +230,19 @@ type AskedFor = {
   attachments?: ReadonlyArray<string>;
 };
 
+/** A Run waiting on its merge request: what it last saw, what the watch read since, and its wake. */
+export interface WatchRow {
+  readonly run: string;
+  /** The merge request's id, which the merge watch reads it by. */
+  readonly mr: string;
+  /** The durable wake's name. */
+  readonly name: string;
+  readonly cursor: WatchCursor;
+  readonly observed: Observed | null;
+  /** What it was woken with, kept until the wake is done so a new host completes it again. */
+  readonly woke: Woke | null;
+}
+
 export interface StoreApi {
   readonly remember: (generation: GenerationRow) => Effect.Effect<void>;
   /**
@@ -334,6 +348,9 @@ export interface StoreApi {
   readonly run: (run: string) => Effect.Effect<RunRow | null>;
   /** The run a request id was already admitted as, or null. */
   readonly requested: (request: string) => Effect.Effect<RunRow | null>;
+  readonly releaseClaim: (row: RunRow) => Effect.Effect<void>;
+  /** The run a request ending in `suffix` was admitted as, or null. */
+  readonly requestedEnding: (suffix: string) => Effect.Effect<RunRow | null>;
   readonly runs: Effect.Effect<ReadonlyArray<RunRow>>;
   /**
    * The rows a Run's record may read, a superset its reader narrows: the Run's Task's, or the
@@ -348,6 +365,19 @@ export interface StoreApi {
   readonly announce: Effect.Effect<void>;
   /** Moves whenever the Run's decisions may have changed, which no Run's row shows. Read when called. */
   readonly decided: Effect.Effect<(run: string) => number>;
+  /** Watches `mr` for the Run's wake `name`; a replay of the same watch changes nothing. */
+  readonly watch: (row: {
+    readonly run: string;
+    readonly mr: string;
+    readonly name: string;
+    readonly cursor: WatchCursor;
+  }) => Effect.Effect<void>;
+  readonly watches: (mrs: ReadonlyArray<string>) => Effect.Effect<ReadonlyArray<WatchRow>>;
+  readonly observe: (run: string, name: string, observed: Observed) => Effect.Effect<void>;
+  /** Keeps what a watch is woken with; false where it was already woken. */
+  readonly wake: (run: string, name: string, woke: Woke) => Effect.Effect<boolean>;
+  /** Forgets the Run's watch; false where it had none. */
+  readonly unwatch: (run: string, name?: string) => Effect.Effect<boolean>;
 }
 
 export class Store extends Context.Service<Store, StoreApi>()("collie/Store") {}
@@ -599,6 +629,20 @@ const migrations = (imports: {
     yield* sql`CREATE TABLE collie_narratives (run TEXT NOT NULL, key TEXT NOT NULL, ordinal INTEGER NOT NULL, fingerprint TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(run, key))`;
     yield* sql`CREATE TABLE collie_narrative_work (run TEXT PRIMARY KEY, cursor TEXT NOT NULL)`;
   }),
+  "24_watches": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      CREATE TABLE collie_watches (
+        run TEXT PRIMARY KEY,
+        mr TEXT NOT NULL,
+        name TEXT NOT NULL,
+        cursor TEXT NOT NULL,
+        observed TEXT,
+        woke TEXT
+      )
+    `;
+    yield* sql`CREATE INDEX collie_watches_mr ON collie_watches (mr)`;
+  }),
 });
 
 /** How often a commit by another connection, another process's, is looked for. */
@@ -684,6 +728,13 @@ function makeStore(
       Request: Schema.String,
       Result: Run,
       execute: (request) => sql`SELECT ${columns} FROM collie_runs WHERE request = ${request}`,
+    });
+
+    const byRequestEnding = SqlSchema.findAll({
+      Request: Schema.String,
+      Result: Run,
+      execute: (suffix) =>
+        sql`SELECT ${columns} FROM collie_runs WHERE substr(request, ${-suffix.length}) = ${suffix}`,
     });
 
     const byRun = SqlSchema.findAll({
@@ -1113,6 +1164,7 @@ function makeStore(
                 yield* sql`DELETE FROM collie_artefact_index WHERE run = ${run}`.pipe(Effect.orDie);
                 yield* sql`DELETE FROM collie_narratives WHERE run = ${run}`.pipe(Effect.orDie);
                 yield* sql`DELETE FROM collie_narrative_work WHERE run = ${run}`.pipe(Effect.orDie);
+                yield* sql`DELETE FROM collie_watches WHERE run = ${run}`.pipe(Effect.orDie);
                 yield* sql`DELETE FROM collie_runs WHERE run = ${run}`.pipe(Effect.orDie);
                 gone.push(run);
               }
@@ -1139,14 +1191,96 @@ function makeStore(
           Effect.map((rows) => rows[0] ?? null),
           Effect.orDie,
         ),
+      releaseClaim: (row) =>
+        mutation(
+          [row.run],
+          sql`UPDATE collie_runs SET request = ${`${row.request}:finished:${row.run}`} WHERE run = ${row.run} AND request = ${row.request}`,
+        ).pipe(Effect.asVoid, Effect.orDie),
+      requestedEnding: (suffix: string) =>
+        byRequestEnding(suffix).pipe(
+          Effect.map((rows) => rows[0] ?? null),
+          Effect.orDie,
+        ),
       watching: (read) => reactivity.stream(RUNS, read),
       changes: sql.reactive(RUNS, all),
       // Only this store writes the Runs, so an announce moves none of their rows.
       announce: reactivity.invalidate(RUNS),
       decided: Effect.succeed((run: string) => elsewhere + (decisions.get(run) ?? 0)),
+      watch: (row) =>
+        sql`
+          INSERT INTO collie_watches (run, mr, name, cursor) VALUES (
+            ${row.run}, ${row.mr}, ${row.name}, ${cursorText(row.cursor)}
+          )
+          ON CONFLICT (run) DO UPDATE SET
+            mr = excluded.mr, name = excluded.name, cursor = excluded.cursor,
+            observed = NULL, woke = NULL
+          WHERE collie_watches.name != excluded.name
+        `.pipe(Effect.asVoid, Effect.orDie),
+      watches: (mrs) =>
+        mrs.length === 0
+          ? Effect.succeed([])
+          : sql<{
+              readonly run: string;
+              readonly mr: string;
+              readonly name: string;
+              readonly cursor: string;
+              readonly observed: string | null;
+              readonly woke: string | null;
+            }>`SELECT * FROM collie_watches WHERE mr IN ${sql.in(mrs)}`.pipe(
+              Effect.flatMap(Effect.forEach(watchRowOf)),
+              Effect.orDie,
+            ),
+      observe: (run, name, observed) =>
+        sql`UPDATE collie_watches SET observed = ${observedText(observed)} WHERE run = ${run} AND name = ${name}`.pipe(
+          Effect.asVoid,
+          Effect.orDie,
+        ),
+      wake: (run, name, woke) =>
+        sql<{ readonly run: string }>`
+          UPDATE collie_watches SET woke = ${wokeText(woke)}
+          WHERE run = ${run} AND name = ${name} AND woke IS NULL
+          RETURNING run
+        `.pipe(
+          Effect.map((rows) => rows.length > 0),
+          Effect.orDie,
+        ),
+      unwatch: (run, name) =>
+        sql<{ readonly run: string }>`
+          DELETE FROM collie_watches
+          WHERE run = ${run} AND (${name ?? null} IS NULL OR name = ${name ?? null})
+          RETURNING run
+        `.pipe(
+          Effect.map((rows) => rows.length > 0),
+          Effect.orDie,
+        ),
     } satisfies StoreApi;
   });
 }
+
+const cursorText = flow(Schema.encodeResult(Schema.fromJsonString(WatchCursor)), Result.getOrThrow);
+const observedText = flow(Schema.encodeResult(Schema.fromJsonString(Observed)), Result.getOrThrow);
+const wokeText = flow(Schema.encodeResult(Schema.fromJsonString(Woke)), Result.getOrThrow);
+const watchRowOf = (row: {
+  readonly run: string;
+  readonly mr: string;
+  readonly name: string;
+  readonly cursor: string;
+  readonly observed: string | null;
+  readonly woke: string | null;
+}) =>
+  Effect.all({
+    cursor: Schema.decodeEffect(Schema.fromJsonString(WatchCursor))(row.cursor),
+    observed:
+      row.observed === null
+        ? Effect.succeed(null)
+        : Schema.decodeEffect(Schema.fromJsonString(Observed))(row.observed),
+    woke:
+      row.woke === null
+        ? Effect.succeed(null)
+        : Schema.decodeEffect(Schema.fromJsonString(Woke))(row.woke),
+  }).pipe(
+    Effect.map((decoded): WatchRow => ({ run: row.run, mr: row.mr, name: row.name, ...decoded })),
+  );
 
 const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Json));
 const asJsonText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);

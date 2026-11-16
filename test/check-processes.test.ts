@@ -1088,7 +1088,7 @@ test(
             ? String(pid)
             : args.includes("lstart=")
               ? started
-              : `${pid} 1 ${started} check`;
+              : `${pid} 1 S ${started} check`;
           return Effect.succeed(
             ChildProcessSpawner.makeHandle({
               pid: ChildProcessSpawner.ProcessId(pid),

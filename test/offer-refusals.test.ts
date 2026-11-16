@@ -1,7 +1,8 @@
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { Effect } from "effect";
+import { Effect, FileSystem } from "effect";
 import { readDispositions } from "../src/disposition";
+import { MR_STATES_FILE } from "../src/merges";
 import { currentEnv } from "../src/env";
 import { connect, type HostClient } from "../src/host";
 import { carryOutAsked } from "../src/run-actions";
@@ -258,6 +259,11 @@ test(
           ]);
 
           yield* stopHost(world.state);
+          // A first host that reached the watch's round asked the absent forge, and that ask
+          // holds a restarted host off for five minutes; this proves the read that follows.
+          yield* (yield* FileSystem.FileSystem).remove(`${world.state}/${MR_STATES_FILE}`, {
+            force: true,
+          });
           const bin = yield* Effect.acquireRelease(FakeBin.make(`${world.home}/bin`), (bin) =>
             bin.restore(),
           );

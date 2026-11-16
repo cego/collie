@@ -435,7 +435,13 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       return started.ok
         ? {
             state: "applied" as const,
-            note: withNotice(`started ${started.runId}`, started.redacted, "; "),
+            note: withNotice(
+              started.followed === undefined
+                ? `started ${started.runId}`
+                : `${started.runId} already follows ${started.followed}`,
+              started.redacted,
+              "; ",
+            ),
           }
         : failed(started.error.message);
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),

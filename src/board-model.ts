@@ -662,6 +662,10 @@ export const MrDetails = Schema.TaggedStruct("Details", {
   /** Whether a discussion is still blocking, which is the one a reviewer chases. */
   unresolved: Schema.Boolean,
   notes: Schema.Finite,
+  /** Its comments, a person's or a bot's, as read with it: what a watching Run judges. */
+  comments: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ id: Schema.String, body: Schema.String })),
+  ),
   /** Seven characters: enough to tell two heads apart, short enough to read. */
   headSha: Schema.String,
   /** The head revision in full, which evidence is matched against, or "" where unsaid. */
@@ -681,7 +685,10 @@ export const MrDetails = Schema.TaggedStruct("Details", {
 export type MrDetails = typeof MrDetails.Type;
 
 /** Why the panel has nothing to show — one line, and nothing else in the panel breaks. */
-export const MrUnavailable = Schema.TaggedStruct("Unavailable", { reason: Schema.String });
+export const MrUnavailable = Schema.TaggedStruct("Unavailable", {
+  reason: Schema.String,
+  transient: Schema.optionalKey(Schema.Boolean),
+});
 export type MrUnavailable = typeof MrUnavailable.Type;
 
 export const MrPanel = Schema.Union([MrDetails, MrUnavailable]);
@@ -1347,6 +1354,8 @@ export const Started = Schema.Struct({
   registration: Schema.String,
   execution: Schema.String,
   fresh: Schema.Boolean,
+  /** The merge request a Run of this login already follows, which this start became. */
+  followed: Schema.optionalKey(Schema.String),
   /** The kind of each credential-shaped value taken out before anything was written. */
   redacted: Schema.optionalKey(Schema.Array(Schema.String)),
 });

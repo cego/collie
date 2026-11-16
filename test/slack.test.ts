@@ -6,6 +6,32 @@ import { slackApi } from "../src/slack";
 import { fakeSlack } from "./support/slack";
 import { runEffect } from "./support/effect";
 
+test("reaction reconciliation adds only missing reactions and accepts already_reacted", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fake = fakeSlack();
+      fake.messages([
+        {
+          channel: "C456",
+          ts: "1700000000.000001",
+          text: "Review https://gitlab.cego.dk/mk/collie/-/merge_requests/7",
+        },
+      ]);
+      const api = slackApi("xoxp-fixture", fake.client);
+      yield* api.reconcile("C456", "1700000000.000001", ["eyes", "memo"]);
+      yield* api.reconcile("C456", "1700000000.000001", ["eyes", "memo", "white_check_mark"]);
+      expect(fake.reactions()).toEqual(["eyes", "memo", "white_check_mark"]);
+      expect(
+        Arr.map(
+          Arr.filter(fake.calls, (call) => call.method === "reactions.add"),
+          (call) => call.parameters.name,
+        ),
+      ).toEqual(["eyes", "memo", "white_check_mark"]);
+      fake.refuse("already_reacted", "reactions.add");
+      yield* api.reconcile("C456", "1700000000.000001", ["heart"]);
+    }),
+  ));
+
 test("a user token reads its workspace and user; invalid_auth refuses without logging it", () =>
   runEffect(
     Effect.gen(function* () {

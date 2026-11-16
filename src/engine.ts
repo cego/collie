@@ -157,6 +157,7 @@ import {
   type Metric,
 } from "./metrics";
 import { ForgeHttp, forgeHttpLayer } from "./forge/http";
+import { followRequest } from "./follow-through";
 import { EngineTouches, engineTouchesLayer, touching } from "./engine-touches";
 import { ciJob, sharedFailure, takeTarget } from "./ci-job";
 import { rememberFailedCi } from "./park-recheck";
@@ -182,7 +183,9 @@ import {
   type ReviewStanding,
 } from "./review-wait";
 import { nothingToLandFile } from "./standing";
-import { AwaitingJson, AwaitingSchema, overdueLine } from "./awaiting";
+import { AwaitingJson, AwaitingSchema, THE_AUTHOR, overdueLine } from "./awaiting";
+import { Woke, collieRunOf } from "./mr-watch-model";
+import { readingOf } from "./mr-watch";
 import {
   autoMergingHere,
   whatItSaid,
@@ -212,6 +215,7 @@ import type { Metrics, Solution } from "./board-model";
 import {
   forgeOfRef,
   mrId,
+  mrLabel,
   mrRefOf,
   mrRefsIn,
   mrWords,
@@ -308,6 +312,7 @@ import {
   checkoutFor,
   checkoutRefusal,
   defaultStart,
+  pinnedCheckout,
   repositoryName,
   workOf,
   type BranchAsk,
@@ -319,6 +324,8 @@ import type { PluginEnv } from "./env";
 import { connectionOnMachine } from "./connections";
 import { isDirectMessage, slackApi, slackText } from "./slack";
 import { slackUserToken } from "./slack-credentials";
+import { reconcileReviewSlack, targetFromSlack } from "./review-slack";
+import { slackMessageRef } from "./slack";
 import { ConnectionId, type ConnectionReading } from "./connection-model";
 import { StartedSchema, type RunAuthority, type Started } from "./automode";
 import { WorktreeRecordSchema, type WorktreeRecord } from "./run";
@@ -932,6 +939,27 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   /** The reviewed branch, or why there is none. */
   export type ReviewedBranch = { readonly branch: string } | { readonly refused: string };
+  /** A merge request as a round reads it before it starts: where its watch takes up from. */
+  export interface MrRead {
+    readonly state: "open" | "merged" | "closed";
+    readonly head: string;
+    readonly author: string;
+    readonly pipeline: string;
+    readonly comments: ReadonlyArray<string>;
+    readonly replies?: ReadonlyArray<{
+      readonly id: string;
+      readonly author: string;
+      readonly thread: string | null;
+      readonly body: string;
+      readonly run: string | null;
+    }>;
+  }
+  export const MrRead: Schema.Codec<MrRead, unknown, never, never>;
+  export type PinnedHead =
+    | { readonly cwd: string }
+    | { readonly moved: string }
+    | { readonly refused: string };
+  export const PinnedHead: Schema.Codec<PinnedHead, unknown, never, never>;
 
   /** What opening a merge request from here needs, and what it would be filled in with. */
   export interface MrReady {
@@ -962,6 +990,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   /** What the host lends a workflow. Hold and stop are read fresh on every replay. */
   export interface HostApi {
+    readonly reviewFix: (runId: string, target: string) => Effect.Effect<{ readonly owned: boolean; readonly head: string; readonly reviewed: string; readonly lineage: ReadonlyArray<string>; readonly following: boolean }>;
     readonly reviewScope: (runId: string, source: string, outcome: string, risks: string) => Effect.Effect<ReviewScope | null>;
     readonly recordReview: (runId: string, scope: ReviewScope | null, base: string, review: SynthesisReport) => Effect.Effect<void>;
     readonly recovery: (runId: string, parent: string, source: string) => Effect.Effect<Recovery, WorkflowError>;
@@ -1043,6 +1072,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly head: string;
       readonly round: number;
     }) => Effect.Effect<Posted>;
+    readonly slackTarget: (link: string, target?: string) => Effect.Effect<string, WorkflowError>;
+    readonly reviewSlack: (options: { readonly runId: string; readonly target: string; readonly cwd: string; readonly permalink?: string; readonly wanted: ReadonlyArray<string> }) => Effect.Effect<string>;
     /** Reads the target's head before review. Take it inside an Activity. */
     readonly reviewedHead: (options: {
       readonly target: string;
@@ -1054,10 +1085,10 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly previous: string;
       readonly head: string;
     }) => Effect.Effect<string, WorkflowError>;
-    /** Approves once per Run and round; an interrupted attempt returns an uncertain outcome. */
+    /** Approves once per Run and attempt; an interrupted attempt returns an uncertain outcome. */
     readonly approveReview: (options: {
       readonly runId: string;
-      readonly round: number;
+      readonly attempt: string;
       readonly target: string;
       readonly cwd: string;
       readonly head: string;
@@ -1232,6 +1263,42 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       /** Return terminal CI failure at the proved head, after fresh comments. */
       readonly returnFailedCi?: boolean;
     }) => Effect.Effect<ReviewStanding, WorkflowError>;
+    /** Has the merge watch watch \`target\` for this Run's wake \`name\` from \`cursor\`; \`watch\` takes it. */
+    readonly watching: (options: {
+      readonly runId: string;
+      readonly target: string;
+      readonly name: string;
+      readonly cursor: WatchCursor;
+      readonly author?: string;
+      readonly approved?: string;
+      /** A question shares the wake, so the card waits on whoever answers that. */
+      readonly asking?: boolean;
+    }) => Effect.Effect<void, WorkflowError>;
+    /** The merge request \`target\` as the forge reads it now: what a watch's cursor starts from. Take it inside an Activity. */
+    readonly mrReading: (options: {
+      readonly target: string;
+      readonly cwd: string;
+      readonly replies?: boolean;
+    }) => Effect.Effect<MrRead, WorkflowError>;
+    /** Whether this login's approval of \`target\` stands while its head is \`head\`. Take it inside an Activity. */
+    readonly approvedAt: (options: {
+      readonly target: string;
+      readonly cwd: string;
+      readonly head: string;
+    }) => Effect.Effect<boolean, WorkflowError>;
+    /** Makes this Run's checkout \`target\`'s head, detached and Collie's, from the forge's own ref; \`moved\` where that is no longer \`head\`. Take it inside an Activity. */
+    readonly pinHead: (options: {
+      readonly runId: string;
+      readonly target: string;
+      readonly head: string;
+    }) => Effect.Effect<PinnedHead, WorkflowError>;
+    /** Whether \`head\` descends from \`previous\` on \`target\`'s forge; a \`previous\` it no longer has does not. Take it inside an Activity. */
+    readonly descends: (options: {
+      readonly target: string;
+      readonly cwd: string;
+      readonly previous: string;
+      readonly head: string;
+    }) => Effect.Effect<boolean, WorkflowError>;
     /**
      * One read of whether the Changes the ticket at \`ticket\` names on its **Needs merged:** line
      * have landed on origin's default branch: Landed, Waiting or Never. Take it inside an Activity.
@@ -1536,6 +1603,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly heals?: true;
     readonly followUps?: ReadonlyArray<FollowUp>;
     readonly actions?: ReadonlyArray<ActionProvider>;
+    /** The boolean setting that, on, makes a start on a merge request its login's one Run of it. */
+    readonly follows?: string;
   }
 
   export interface WorkflowConnections {
@@ -1624,6 +1693,59 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     /** The answers it takes; none is a question answered in the operator's own words. */
     readonly options?: ReadonlyArray<AskOption>;
   }): Effect.Effect<string, never, Run | Host | WorkflowEngine | WorkflowInstance>;
+
+  /** Where a Run watching a merge request left off: its head, the comments it saw, its head's checks. */
+  export interface WatchCursor {
+    readonly head: string;
+    readonly seen: ReadonlyArray<string>;
+    readonly pipeline: string;
+    readonly headOnly?: boolean;
+  }
+  /** What changed on a watched merge request; \`forcePush\` says a new head does not descend from \`previous\`. */
+  export interface WatchChange {
+    readonly head: string;
+    readonly previous: string;
+    readonly newHead: boolean;
+    readonly comments: ReadonlyArray<string>;
+    readonly pipeline: string | null;
+    readonly forcePush: boolean | null;
+  }
+  export type Woke =
+    | { readonly _tag: "Changed"; readonly change: WatchChange }
+    | { readonly _tag: "Ended"; readonly state: "merged" | "closed" };
+
+  /**
+   * Suspends this Run, with no agent and no forge read of its own, until the merge watch reads
+   * \`target\` changed from \`cursor\` in a way that matters, or merged or closed. The name is
+   * its identity, as an \`ask\`'s is.
+   */
+  export function watch(options: Watching): Effect.Effect<Woke, WorkflowError, Run | Host | WorkflowEngine | WorkflowInstance>;
+  export interface Watching {
+    readonly name: string;
+    readonly target: string;
+    readonly cwd: string;
+    readonly cursor: WatchCursor;
+    /** Who the card names as waited on, the author by default. */
+    readonly author?: string;
+    /** The head this login's approval stands at, which the card says beside the wait. */
+    readonly approved?: string;
+  }
+  export interface Answered {
+    readonly _tag: "Answered";
+    readonly answer: string;
+  }
+  /**
+   * Asks \`question\` while watching as \`watch\` does, under the watch's name: whichever comes
+   * first, its answer or a change that matters, is what this returns. A change closes the
+   * question unanswered.
+   */
+  export function askWhileWatching(
+    question: {
+      readonly prompt?: string;
+      readonly options?: ReadonlyArray<AskOption>;
+    },
+    options: Watching,
+  ): Effect.Effect<Woke | Answered, WorkflowError, Run | Host | WorkflowEngine | WorkflowInstance>;
 
   /** What a parent asks for when part of its own work is another workflow. */
   export interface ChildAsk {
@@ -1880,6 +2002,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly operation: string;
     readonly role: string;
     readonly text: string;
+    readonly lineage?: ReadonlyArray<string>;
   }): Effect.Effect<
     string | null,
     WorkflowError,
@@ -1966,6 +2089,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   /** What an action decides eligibility from: facts, never a workflow's name. */
   export interface ActionFacts {
+    readonly review?: { readonly head: string; readonly reviewed: string; readonly owned: boolean };
     readonly recovery?: Recovery;
     readonly outcome: Outcome;
     readonly succeeded: boolean;
@@ -2222,6 +2346,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function readMrRef(text: string): MrRef | null;
   /** Where a merge request is read in a browser, where its reference says which project. */
   export function mrUrlOf(ref: MrRef): string | null;
+  /** \`group/app!345\` or \`owner/repo#30\` rather than the whole URL. */
+  export function mrLabel(mr: string): string;
   /** The forge a merge request is on. */
   export function forgeOfRef(ref: MrRef): "gitlab" | "github";
   /** The merge requests a set names, each once by MR id, or the first reference naming none; null for one or none. */
@@ -2271,6 +2397,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export const CriterionSchema: Schema.Codec<Criterion, unknown, never, never>;
   export const CheckSchema: Schema.Codec<Check, unknown, never, never>;
   export const ReviewOutputSchema: Schema.Codec<ReviewReport, unknown, never, never>;
+  export function ReassessmentSchema(ids: ReadonlyArray<string>): Schema.Codec<{
+    readonly findings: ReadonlyArray<{
+      readonly id: string;
+      readonly status: "open" | "fixed" | "disputed" | "obsolete";
+      readonly reason: string;
+    }>;
+  }, unknown, never, never>;
   export const SynthesisSchema: Schema.Codec<SynthesisReport, unknown, never, never>;
   export const FixOutputSchema: Schema.Codec<FixReport, unknown, never, never>;
   export const MrOutputSchema: Schema.Codec<
@@ -2758,7 +2891,7 @@ const isWritten = (exported: unknown): exported is WrittenDefinition =>
 
 /** A definition as the entry the rest of the host reads. */
 const entryOf = (definition: WorkflowDefinition): WorkflowEntry => {
-  const { outcome, checkout, closes, heals, followUps, actions, connections } = definition;
+  const { outcome, checkout, closes, heals, followUps, actions, connections, follows } = definition;
   const path = Option.getOrUndefined(
     Option.map(Option.fromNullishOr(definition.path), (present) =>
       Arr.map(present, (one) => one.meta),
@@ -2785,6 +2918,7 @@ const entryOf = (definition: WorkflowDefinition): WorkflowEntry => {
         actions,
         path,
         connections,
+        follows,
       }),
       ([, value]) => value !== undefined,
     ),
@@ -3934,6 +4068,40 @@ export const hostLayer = (options: {
       const bun = yield* Effect.context<PlatformServices | Records>();
       const under = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
         Effect.provideContext(effect, services);
+      const parkReview = (reason: string) =>
+        Effect.gen(function* () {
+          const run = yield* Effect.serviceOption(Run);
+          const instance = yield* Effect.serviceOption(WorkflowEngine.WorkflowInstance);
+          if (Option.isSome(run) && Option.isSome(instance)) {
+            yield* host.parked(run.value.id, reason, "forge-unavailable");
+            return yield* Workflow.suspend(instance.value);
+          }
+        });
+      const reviewForge = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
+        Effect.gen(function* () {
+          const run = yield* Effect.serviceOption(Run);
+          const instance = yield* Effect.serviceOption(WorkflowEngine.WorkflowInstance);
+          if (Option.isNone(run) || Option.isNone(instance)) return yield* under(effect);
+          const parking = yield* Semaphore.make(1);
+          return yield* under(
+            effect.pipe(
+              Effect.updateService(ForgeHttp, (http) =>
+                ForgeHttp.of({
+                  ask: (login, cwd, call) =>
+                    http
+                      .ask(login, cwd, call)
+                      .pipe(
+                        Effect.tap((answer) =>
+                          !answer.ok && answer.transient
+                            ? parkReview(answer.reason).pipe(parking.withPermits(1))
+                            : Effect.void,
+                        ),
+                      ),
+                }),
+              ),
+            ),
+          );
+        });
       const anySet = (runId: string, ...controls: ReadonlyArray<string>) =>
         controlSet(dir, runId, ...controls).pipe(Effect.provideService(FileSystem.FileSystem, fs));
       const set = (control: string, runId: string) => anySet(runId, control);
@@ -4696,6 +4864,72 @@ export const hostLayer = (options: {
           });
         });
       const host = Host.of({
+        reviewFix: (runId, target) =>
+          under(
+            Effect.gen(function* () {
+              const row = yield* store.run(runId);
+              const ref = readMrRef(target);
+              const missing = {
+                owned: false,
+                head: "",
+                reviewed: "",
+                lineage: Arr.empty<string>(),
+                following: false,
+              };
+              if (row === null || ref === null) return missing;
+              const cwd = placedOf(row, {}).cwd;
+              const forge = forgeOf(ref);
+              const panel = yield* forge.details(ref, cwd, runShell);
+              if (panel._tag !== "Details" || !["open", "opened", "draft"].includes(panel.state))
+                return missing;
+              const me = yield* forge.login(cwd, runShell, ref.project);
+              const runs = yield* store.runs;
+              const { herdr } = yield* placing;
+              const workspaces = new Set(
+                Arr.map(
+                  yield* herdr.workspaceList().pipe(Effect.orElseSucceed(() => [])),
+                  (one) => one.workspaceId,
+                ),
+              );
+              const tasks = new Map(
+                Arr.map(
+                  yield* listTasks.pipe(Effect.orElseSucceed(() => [])),
+                  (one) => [one.id, one] as const,
+                ),
+              );
+              const taskIds = new Set(row.task === null ? [] : [row.task]);
+              let ownsBranch = false;
+              for (const candidate of runs) {
+                const task = candidate.task === null ? undefined : tasks.get(candidate.task);
+                if (
+                  candidate.project !== row.project ||
+                  task === undefined ||
+                  !isOpen(task, workspaces)
+                )
+                  continue;
+                const at = placedOf(candidate, {});
+                if (at.branch === panel.sourceBranch && at.branch !== null) {
+                  ownsBranch = true;
+                  taskIds.add(task.id);
+                }
+              }
+              return {
+                owned: me !== null && (panel.author === me || ownsBranch),
+                head: panel.head ?? "",
+                reviewed: yield* fs
+                  .readFileString(`${runDir(dir, runId)}/review-head`)
+                  .pipe(Effect.orElseSucceed(() => "")),
+                lineage: Arr.map(
+                  Arr.filter(runs, (one) => one.task !== null && taskIds.has(one.task)),
+                  (one) => one.run,
+                ),
+                following: Arr.some(
+                  yield* store.watches([mrId(target)!]),
+                  (one) => one.run === runId,
+                ),
+              };
+            }).pipe(Effect.provideContext(bun)),
+          ),
         dir,
         build: manifest.version,
         report: () =>
@@ -5687,6 +5921,126 @@ export const hostLayer = (options: {
             yield* waitOn(asked.runId, null);
             return standing;
           }),
+        watching: (asked) =>
+          Effect.gen(function* () {
+            const mr = mrId(asked.target);
+            if (mr === null)
+              return yield* new WorkflowError({
+                reason: `${asked.target} names no merge request the merge watch can read`,
+              });
+            yield* store.watch({ run: asked.runId, mr, name: asked.name, cursor: asked.cursor });
+            // A question sharing the wake is what the card shows: it waits on whoever answers.
+            if (asked.asking === true) return;
+            yield* waitOn(asked.runId, {
+              on: `${asked.author ?? THE_AUTHOR} to change ${mrLabel(asked.target)}${asked.approved === undefined ? "" : `, approved at ${Str.slice(0, 7)(asked.approved)}`}`,
+              who: THE_AUTHOR,
+            });
+          }),
+        mrReading: (asked) =>
+          Effect.gen(function* () {
+            const ref = mrRefOf(asked.target);
+            if (ref === null)
+              return yield* new WorkflowError({ reason: `${asked.target} is not a merge request` });
+            const panel = yield* reviewForge(forgeOf(ref).details(ref, asked.cwd, runShell));
+            if (panel._tag !== "Details")
+              return yield* new WorkflowError({
+                reason: `could not read ${mrLabel(asked.target)}: ${panel.reason}`,
+              });
+            const read = readingOf(panel);
+            const discussion = asked.replies
+              ? yield* reviewForge(forgeOf(ref).readReview(ref, asked.cwd, runShell))
+              : null;
+            if (discussion !== null && !discussion.ok)
+              return yield* new WorkflowError({ reason: discussion.reason });
+            const replies = discussion?.ok
+              ? Arr.map(
+                  Arr.filter(discussion.comments, (one) => one.kind !== "system"),
+                  (one) => ({
+                    id: one.id,
+                    author: one.author,
+                    thread: one.thread,
+                    body: one.body,
+                    run: collieRunOf(one.body),
+                  }),
+                )
+              : undefined;
+            const reading = {
+              state: discussion?.ok ? discussion.state : read.state,
+              head: discussion?.ok ? discussion.head : read.head,
+              author: panel.author,
+              pipeline: read.pipeline,
+              comments: Arr.map(replies ?? read.comments, (one) => one.id),
+            };
+            return replies === undefined ? reading : { ...reading, replies };
+          }),
+        approvedAt: (asked) =>
+          Effect.gen(function* () {
+            const ref = mrRefOf(asked.target);
+            if (ref === null)
+              return yield* new WorkflowError({ reason: `${asked.target} is not a merge request` });
+            const forge = forgeOf(ref);
+            const me = yield* reviewForge(forge.login(asked.cwd, runShell, ref.project));
+            if (me === null)
+              return yield* new WorkflowError({
+                reason: `the forge did not say who is logged in to read ${mrLabel(asked.target)}'s approval`,
+              });
+            const read = yield* reviewForge(
+              forge.approvedAt(ref, me, asked.head, asked.cwd, runShell),
+            );
+            if (!read.ok)
+              return yield* new WorkflowError({
+                reason: `could not read ${mrLabel(asked.target)}'s approval: ${read.reason}`,
+              });
+            return read.value;
+          }),
+        pinHead: (asked) =>
+          Effect.gen(function* () {
+            const ref = mrRefOf(asked.target);
+            const row = yield* store.run(asked.runId);
+            if (ref === null || row === null)
+              return { refused: `${asked.target} is not a merge request of a Run here` };
+            const { env } = yield* placing;
+            const pinned = yield* pinnedCheckout({
+              repo: row.project,
+              worktrees: yield* worktreesDirectory(env),
+              runId: asked.runId,
+              forge: forgeOf(ref).name,
+              project: ref.project,
+              iid: ref.iid,
+              head: asked.head,
+              run: runShell,
+            });
+            if (pinned.refused !== undefined) return { refused: pinned.refused };
+            if (pinned.moved !== undefined) return { moved: pinned.moved };
+            const launch = yield* decodeStrings(row.options ?? "{}").pipe(
+              Effect.orElseSucceed((): Record<string, string> => ({})),
+            );
+            const placed = placedOf(row, launch);
+            yield* store.place(asked.runId, {
+              checkout: encodePlaced({
+                ...placed,
+                cwd: pinned.cwd,
+                branch: null,
+                worktree: pinned.worktree,
+              }),
+              task: null,
+            });
+            return { cwd: pinned.cwd };
+          }).pipe(Effect.provideContext(bun)),
+        descends: (asked) =>
+          Effect.gen(function* () {
+            const ref = mrRefOf(asked.target);
+            if (ref === null)
+              return yield* new WorkflowError({ reason: `${asked.target} is not a merge request` });
+            const read = yield* reviewForge(
+              forgeOf(ref).descends(ref, asked.previous, asked.head, asked.cwd, runShell),
+            );
+            if (!read.ok)
+              return yield* new WorkflowError({
+                reason: `could not read whether ${asked.head} descends from ${asked.previous}: ${read.reason}`,
+              });
+            return read.value;
+          }),
         prerequisites: prerequisitesRead,
         awaitPrerequisites: (asked) =>
           Effect.gen(function* () {
@@ -5927,7 +6281,7 @@ export const hostLayer = (options: {
             ),
           ),
         post: (asked) =>
-          under(
+          reviewForge(
             fs.readFileString(asked.file).pipe(
               Effect.map(redact),
               Effect.flatMap((body) =>
@@ -5965,8 +6319,60 @@ export const hostLayer = (options: {
               })),
             ),
           ),
-        reviewedHead: (asked) =>
+        slackTarget: (link, target) =>
           under(
+            Effect.gen(function* () {
+              const { env } = yield* placing;
+              const slack = options.slack ?? slackApi;
+              const api = slack(yield* slackUserToken(env, slack));
+              return yield* targetFromSlack(link, api, target);
+            }),
+          ).pipe(Effect.mapError((reason) => new WorkflowError({ reason }))),
+        reviewSlack: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const ref = readMrRef(asked.target);
+              if (ref?.project == null) return "no Slack message found";
+              const forge = forgeOf(ref);
+              const details = yield* forge.details(ref, asked.cwd, runShell);
+              if (details._tag !== "Details") return `Slack reactions deferred: ${details.reason}`;
+              if (!["open", "opened", "draft"].includes(details.state))
+                return `no Slack reactions: merge request is ${details.state}`;
+              const { env } = yield* placing;
+              const slack = options.slack ?? slackApi;
+              const file = `${runDir(dir, asked.runId)}/review-slack.json`;
+              const project = ref.project;
+              const created = under(
+                Effect.gen(function* () {
+                  const branches = yield* forge.fromBranch(
+                    project,
+                    details.sourceBranch,
+                    asked.cwd,
+                    runShell,
+                  );
+                  if (!branches.ok) return yield* Effect.fail(branches.reason);
+                  const created = Option.getOrUndefined(
+                    Arr.findFirst(branches.mrs, (one) => one.iid === ref.iid),
+                  )?.created;
+                  if (!created || epochMs(created) <= 0)
+                    return yield* Effect.fail(
+                      "the forge did not report when this merge request was created",
+                    );
+                  return created;
+                }),
+              );
+              return yield* reconcileReviewSlack({
+                file,
+                url: details.url,
+                created,
+                permalink: asked.permalink,
+                wanted: asked.wanted,
+                api: slackUserToken(env, slack).pipe(Effect.map(slack)),
+              });
+            }),
+          ),
+        reviewedHead: (asked) =>
+          reviewForge(
             Effect.gen(function* () {
               const ref = parseMrTarget(asked.target);
               if (ref === null) return "";
@@ -5975,7 +6381,7 @@ export const hostLayer = (options: {
             }),
           ),
         reviewChanges: (asked) =>
-          under(
+          reviewForge(
             Effect.gen(function* () {
               const ref = parseMrTarget(asked.target);
               if (ref === null) return "";
@@ -5991,17 +6397,15 @@ export const hostLayer = (options: {
             }),
           ),
         approveReview: (asked) =>
+          // Approval may already stand: finish verification and dismissal without parking to replay it.
           under(
             Effect.gen(function* () {
               const ref = parseMrTarget(asked.target);
               if (ref === null)
                 return { ok: false, message: `${asked.target} is not a merge request` };
+              const marker = `${runDir(dir, asked.runId)}/approval-${asked.attempt}.attempt`;
               const claimed = yield* fs
-                .writeFileString(
-                  `${runDir(dir, asked.runId)}/approval-${asked.round}.attempt`,
-                  `${asked.target}\n${asked.head}\n`,
-                  { flag: "wx" },
-                )
+                .writeFileString(marker, `${asked.target}\n${asked.head}\n`, { flag: "wx" })
                 .pipe(
                   Effect.as(true),
                   Effect.catchReason("PlatformError", "AlreadyExists", () => Effect.succeed(false)),
@@ -6010,9 +6414,15 @@ export const hostLayer = (options: {
               if (!claimed)
                 return {
                   ok: false,
-                  message: `approval outcome is uncertain for ${asked.target} at ${asked.head}: an earlier attempt exists for round ${asked.round}; approval or dismissal may already have applied; inspect the forge before starting another review`,
+                  message: `approval outcome is uncertain for ${asked.target} at ${asked.head}: an earlier attempt exists for ${asked.attempt}; approval or dismissal may already have applied; inspect the forge before starting another review`,
                 };
-              return yield* forgeOf(ref).approve(ref, asked.head, asked.cwd, runShell);
+              const approved = yield* forgeOf(ref).approve(ref, asked.head, asked.cwd, runShell);
+              if (approved.retryable) {
+                // The retry reads whether approval already stands before it submits.
+                yield* fs.remove(marker).pipe(Effect.orDie);
+                yield* parkReview(approved.message);
+              }
+              return approved;
             }),
           ),
       });
@@ -6316,6 +6726,8 @@ const untilStopped = (registration: Registration, executionId: string) =>
     Effect.repeat({ until: Option.isSome, schedule: Schedule.spaced(WAKE_INTERVAL) }),
     Effect.asVoid,
   );
+
+const wokeText = flow(Schema.encodeResult(Schema.fromJsonString(Woke)), Result.getOrThrow);
 
 /**
  * The exit a decision is answered with, encoded by the decision's own schema, once the Run
@@ -7090,6 +7502,8 @@ export interface Generation {
   /** What it needs of the repository, which is what the host places a Run of it on. */
   readonly checkout: CheckoutKind;
   readonly closes?: "reported";
+  /** The setting that makes a start on a merge request its login's one Run of it. */
+  readonly follows?: string;
   /** The file and the revision this was built from: what makes a later start the same code. */
   readonly source: string;
   readonly metadata: Schema.Json;
@@ -7175,6 +7589,16 @@ export interface RegistryApi {
     readonly request: string;
     readonly by?: Asker & { readonly schedule?: ScheduledBy | undefined };
   }) => Effect.Effect<typeof Answered.Type, HostRefused, HostServices>;
+  /**
+   * Wakes a Run watching its merge request with what the merge watch judged, once it has
+   * stopped to wait, and then forgets its watch. Kept on the watch first, so a host that
+   * ends before the wake is done leaves it to the next.
+   */
+  readonly wake: (
+    run: string,
+    name: string,
+    woke: Woke,
+  ) => Effect.Effect<void, never, HostServices>;
   /** Sets one open question aside for a human's message, and records it on the Run's trail. */
   readonly supersede: (options: {
     readonly runId: string;
@@ -7341,6 +7765,8 @@ export interface Admitted {
   readonly execution: string;
   /** False when the request had already been admitted: a retry, not a second run. */
   readonly fresh: boolean;
+  /** The merge request a Run of this login already follows, which this start became. */
+  readonly followed?: string;
 }
 
 /**
@@ -7528,6 +7954,13 @@ const makeRegistry: (
     const field = fieldWith(generation.hints, "diff-target");
     const value = field === undefined ? undefined : settled.input[field];
     if (field === undefined || !isText(value) || Str.trim(value) === "") return settled;
+    const permalink = slackMessageRef(value) !== null ? value : settled.input.slack;
+    if (isText(permalink) && permalink !== "") {
+      const target = yield* Context.get(hostServices, Host)
+        .slackTarget(permalink, permalink === value ? undefined : value)
+        .pipe(Effect.mapError((error) => new HostRefused({ reason: error.reason })));
+      return { ...settled, input: { ...settled.input, [field]: target, slack: permalink } };
+    }
     const set = yield* classifyGivenSet(value, { cwd }).pipe(Effect.provideContext(bun));
     if (set !== null && "unresolved" in set)
       return yield* refusedInput(
@@ -7554,6 +7987,15 @@ const makeRegistry: (
   yield* clearGenerations(dir);
   const waking = yield* Semaphore.make(1);
   const controlling = yield* Semaphore.make(1);
+  /** The Runs whose watch this host is waking now. */
+  const wakingWatches = new Set<string>();
+  /** A watch's row and the card's wait on the author, once the Run no longer waits on it. */
+  const forgetWatch = (run: string, name?: string) =>
+    Effect.gen(function* () {
+      if (!(yield* store.unwatch(run, name))) return;
+      yield* fs.remove(controlPath(dir, AWAITING, run), { force: true }).pipe(Effect.orDie);
+      yield* store.announce;
+    });
   const clearParked = (runId: string) =>
     fs
       .remove(controlPath(dir, PARKED, runId), { force: true })
@@ -7661,6 +8103,7 @@ const makeRegistry: (
       hints: entry.metadata?.hints ?? {},
       fixedOutcome: entry.metadata?.outcome?.fixed ?? null,
       closes: entry.metadata?.closes,
+      follows: entry.metadata?.follows,
       checkout: entry.metadata?.checkout ?? "none",
       source,
       metadata: describeMetadata(entry.metadata),
@@ -9403,6 +9846,7 @@ const makeRegistry: (
     reason?: string,
   ) {
     const { runs } = yield* applyControl(runId, STOP, true, undefined, alone);
+    for (const one of runs) yield* forgetWatch(one);
     // Closing their panes is what stops the agents; the Run only stops looking.
     const agents = yield* Agents;
     const left: string[] = [];
@@ -9534,6 +9978,8 @@ const makeRegistry: (
       claim: yield* claimOf(runId),
     };
     const work = fieldWith(generation.hints, "work-source");
+    if (facts.diffTarget !== null && readMrRef(facts.diffTarget) !== null && facts.openFindings > 0)
+      facts.review = yield* Context.get(hostServices, Host).reviewFix(runId, facts.diffTarget);
     const workSource =
       work === undefined ? undefined : Rec.get(input, work).pipe(Option.getOrUndefined);
     if (isText(workSource) && Arr.some(generation.offers, (offer) => offer.entry !== undefined))
@@ -9793,8 +10239,40 @@ const makeRegistry: (
       options,
       runId,
     );
+    const following = yield* followRequest({
+      workflow: generation.id,
+      setting: generation.follows,
+      target: pointedAt(generation, settled.input),
+      userDir,
+      cwd: options.project,
+    }).pipe(
+      Effect.provideService(ForgeHttp, Context.get(hostServices, ForgeHttp)),
+      Effect.provideContext(bun),
+      Effect.mapError((reason) => new HostRefused({ reason })),
+    );
+    const followed =
+      following === null
+        ? null
+        : yield* claimingOf(following.request).withPermits(1)(
+            Effect.gen(function* () {
+              const previous = yield* store.requested(following.request);
+              if (previous !== null && (yield* workflowEnded(previous.run))) {
+                yield* store.releaseClaim(previous);
+                return null;
+              }
+              return previous;
+            }),
+          );
+    if (following !== null && followed !== null)
+      return {
+        runId: followed.run,
+        registration: followed.generation,
+        execution: followed.execution,
+        fresh: false,
+        followed: following.mr,
+      };
     const claimed = yield* claimAndPlace({
-      request: options.request,
+      request: following?.request ?? options.request,
       run: runId,
       workflow: generation.id,
       project: options.project,
@@ -10323,6 +10801,35 @@ const makeRegistry: (
 
       return { runId: options.runId, decision: name, value, fresh: settled._tag === "accepted" };
     }, waking.withPermits(1)),
+
+    wake: Effect.fn("Engine.Registry.wake")(function* (run: string, name: string, woke: Woke) {
+      yield* store.wake(run, name, woke);
+      if (wakingWatches.has(run)) return;
+      // A question asked under the watch's name is the watch's to close, unless it was answered.
+      if (Arr.some(yield* store.asked(run), (row) => row.decision === name)) {
+        const closed = yield* store.settle({
+          run,
+          decision: name,
+          value: wokeText(woke),
+          request: `${run}-${name}-woke`,
+        });
+        if (closed._tag === "refused") return yield* forgetWatch(run, name);
+      }
+      const found = yield* routed(run).pipe(Effect.option);
+      if (Option.isNone(found)) return;
+      wakingWatches.add(run);
+      const { generation, execution } = found.value;
+      yield* answerDecision(generation.registration, {
+        name,
+        executionId: execution,
+        value: wokeText(woke),
+      }).pipe(
+        Effect.andThen(forgetWatch(run, name)),
+        waking.withPermits(1),
+        Effect.ensuring(Effect.sync(() => wakingWatches.delete(run))),
+        Effect.forkIn(hostScope),
+      );
+    }),
 
     supersede: supersedeQuestion,
 

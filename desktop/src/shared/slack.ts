@@ -7,7 +7,7 @@ export const SLACK_CLIENT_ID = "2673706937.12461393591409";
 export const SLACK_CALLBACK_PORT = 47328;
 export const SLACK_CALLBACK_PATH = "/slack/callback";
 export const SLACK_REDIRECT_URL = `http://localhost:${SLACK_CALLBACK_PORT}${SLACK_CALLBACK_PATH}`;
-export const SLACK_USER_SCOPES = ["chat:write", "channels:read", "groups:read"];
+export { SLACK_USER_SCOPES } from "../../../src/slack";
 
 type Channels = ReadonlyArray<typeof SlackChannel.Type>;
 

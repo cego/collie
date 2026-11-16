@@ -40,7 +40,12 @@ export type Provider = ForgeProvider & Partial<Pick<GitHubProvider, "graphql">>;
 /** What a forge answered, or why it could not be asked. */
 export type Answered<A> =
   | { readonly ok: true; readonly value: A }
-  | { readonly ok: false; readonly reason: string; readonly status?: number };
+  | {
+      readonly ok: false;
+      readonly reason: string;
+      readonly status?: number;
+      readonly transient?: boolean;
+    };
 
 export class ForgeHttp extends Context.Service<
   ForgeHttp,
@@ -172,11 +177,18 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
                 // Another call may have read a new token since this one sent its own.
                 if (refused && slot.token === token) slot.token = null;
                 const reason = reasonOf(forges, login.display, error);
+                const transient =
+                  error instanceof forges.RateLimitedError ||
+                  error instanceof forges.ForgeNetworkError ||
+                  error instanceof forges.ForgeTimeoutError ||
+                  (error instanceof forges.ForgeApiError &&
+                    error.status >= 500 &&
+                    error.status < 600);
                 return {
                   sent:
                     error instanceof forges.ForgeApiError
-                      ? { ok: false, reason, status: error.status }
-                      : { ok: false, reason },
+                      ? { ok: false, reason, status: error.status, transient }
+                      : { ok: false, reason, transient },
                   refused,
                 };
               }),

@@ -1877,6 +1877,8 @@ pub struct Details {
     pub approvals: String,
     pub unresolved: bool,
     pub notes: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comments: Option<Vec<Comment>>,
     #[serde(rename = "headSha")]
     pub head_sha: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1935,6 +1937,12 @@ pub struct DetailsChecksFailed {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Comment {
+    pub id: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Mergeable {
     pub state: MergeableState,
     pub said: String,
@@ -1955,6 +1963,8 @@ pub struct Unavailable {
     #[serde(rename = "_tag")]
     pub tag: UnavailableTag,
     pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transient: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

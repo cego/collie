@@ -47,6 +47,7 @@ import type {
   PipelineStart,
   TagPipelineRead,
   Readiness,
+  ReviewRequest,
 } from "./forge";
 import {
   ForgeHttp,
@@ -64,6 +65,8 @@ import {
   commentIssue,
   postReview,
   approveReview,
+  descendsFrom,
+  approvedAt,
   findReviewNote,
   reviewChanges,
   viewerLogin,
@@ -142,7 +145,15 @@ const Approvals = Schema.Struct({
   approved_by: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.Struct({})))),
 });
 const Discussion = Schema.Struct({
-  notes: Schema.Array(Schema.Struct({ resolvable: optionalFlag, resolved: optionalFlag })),
+  notes: Schema.Array(
+    Schema.Struct({
+      id: Schema.optionalKey(Schema.Finite),
+      body: Schema.optionalKey(Schema.String),
+      system: optionalFlag,
+      resolvable: optionalFlag,
+      resolved: optionalFlag,
+    }),
+  ),
 });
 
 /** What GitLab says while it is still working out whether it can merge. */
@@ -200,7 +211,15 @@ export function mrDetails<R>(
       return {
         _tag: "Unavailable",
         reason: `could not read ${where}: ${read.reason}`,
+        transient: read.transient,
       } satisfies MrUnavailable;
+    for (const part of [approvals, discussions])
+      if (!part.ok && part.transient)
+        return {
+          _tag: "Unavailable",
+          reason: part.reason,
+          transient: true,
+        } satisfies MrUnavailable;
     const mr = read.value;
     const draft = mr.draft === true || mr.work_in_progress === true;
     const pipeline = mr.head_pipeline?.status ?? mr.pipeline?.status ?? "";
@@ -231,6 +250,15 @@ export function mrDetails<R>(
           )
         : mr.blocking_discussions_resolved === false,
       notes: mr.user_notes_count ?? 0,
+      ...(discussions.ok && {
+        comments: Arr.flatMap(discussions.value, (one) =>
+          Arr.flatMap(one.notes, (note) =>
+            note.system === true || note.id === undefined
+              ? []
+              : [{ id: String(note.id), body: note.body ?? "" }],
+          ),
+        ),
+      }),
       headSha: pipe(mr.sha ?? "", Str.slice(0, 7)),
       head: mr.sha ?? "",
       mergedSha:
@@ -335,6 +363,33 @@ export function glabLogin<R>(
     return yield* viewerLogin(glabLoginTo(hostOf(named) ?? "gitlab.com"), cwd);
   });
 }
+
+const ReviewRequested = Schema.Struct({
+  web_url: Schema.String,
+  title: Schema.String,
+  author: Schema.Struct({ username: Schema.String }),
+});
+
+const reviewRequests = (host: string, login: string, cwd: string) =>
+  Effect.map(
+    pagesAs(
+      ReviewRequested,
+      glabLoginTo(host),
+      cwd,
+      `merge_requests?scope=all&state=opened&reviewer_username=${encodeURIComponent(login)}`,
+    ),
+    (listed): Answered<ReadonlyArray<ReviewRequest>> =>
+      listed.ok
+        ? {
+            ok: true,
+            value: Arr.map(listed.value, (one) => ({
+              url: one.web_url,
+              title: one.title,
+              author: one.author.username,
+            })),
+          }
+        : listed,
+  );
 
 const Environments = Schema.Array(Schema.Struct({ name: Schema.String, tier: optionalText }));
 const Deployments = Schema.Array(
@@ -1513,6 +1568,31 @@ export const gitlab: Forge = {
         cwd,
       );
     }),
+  descends: (ref, previous, head, cwd, run) =>
+    Effect.gen(function* () {
+      const project = ref.project ?? (yield* projectHere(cwd, run));
+      if (project === null) return { ok: false, reason: `${whereOf(ref)} names no GitLab project` };
+      return yield* descendsFrom(
+        glabLoginTo(hostOf(project) ?? "gitlab.com"),
+        project,
+        previous,
+        head,
+        cwd,
+      );
+    }),
+  approvedAt: (ref, login, head, cwd, run) =>
+    Effect.gen(function* () {
+      const project = ref.project ?? (yield* projectHere(cwd, run));
+      if (project === null) return { ok: false, reason: `${whereOf(ref)} names no GitLab project` };
+      return yield* approvedAt(
+        glabLoginTo(hostOf(project) ?? "gitlab.com"),
+        project,
+        ref,
+        login,
+        head,
+        cwd,
+      );
+    }),
   findNote: (ref, signature, cwd, run) =>
     Effect.gen(function* () {
       const project = ref.project ?? (yield* projectHere(cwd, run));
@@ -1538,6 +1618,7 @@ export const gitlab: Forge = {
         cwd,
       );
     }),
+  reviewRequests: (host, login, cwd) => reviewRequests(host, login, cwd),
   mine: (named, cwd, run) =>
     Effect.gen(function* () {
       const project = named ?? (yield* projectHere(cwd, run));

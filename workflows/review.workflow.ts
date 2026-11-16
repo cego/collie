@@ -19,9 +19,15 @@ import {
   REVIEW_FILE,
   Run,
   WorkflowError,
+  MrRead,
+  PinnedHead,
   agentWork,
   ask,
+  askWhileWatching,
   defineWorkflow,
+  isBlocking,
+  mrLabel,
+  watch,
   formatFindings,
   findingsIn,
   leaveReview,
@@ -42,13 +48,18 @@ import {
   targetKind,
   type Finding,
   type SynthesisReport,
+  type Woke,
+  type Answered,
 } from "collie";
 import { Effect, FileSystem, Schema } from "effect";
 import { connection } from "./connections.ts";
+import { reassess, repliesTo, formatReplies } from "./reassessment.ts";
 import * as Activity from "effect/workflow/Activity";
 import {
   DEFAULT_BASE,
   FIX_PROMPT,
+  HEAD_MOVED,
+  MR_ENDED,
   IMPLEMENTER,
   NO_MR,
   REVIEWER,
@@ -61,6 +72,9 @@ const FIX = "Fix findings";
 const IMPLEMENT = "Fix findings in a full implement run";
 const DONE = "Don't post";
 const AGAIN = "Review again";
+const FOLLOW = "review.follow_through";
+const APPROVE = "Approve";
+const NOT_NOW = "Not now";
 const Posted = Schema.Struct({
   ok: Schema.Boolean,
   message: Schema.String,
@@ -98,6 +112,10 @@ export default defineWorkflow({
   id: "review",
   connections: {
     uses: {
+      slack: {
+        with: "Reacts to the merge request's message as you",
+        without: "Reviews without Slack reactions",
+      },
       gitlab: {
         with: "Reads and answers the merge request",
         without: "Reviews the local diff only",
@@ -113,6 +131,8 @@ export default defineWorkflow({
     "Reviews a change — an MR, a branch diff or the working tree — in one complete review, and what happens next is your call: fix the findings here, hand them to a live implementer, run a full implement, or post the review to somebody else's merge request.",
   input: Schema.Struct({
     target: Schema.String,
+    slack: Schema.optionalKey(Schema.String),
+    improving: Schema.optionalKey(Schema.Boolean),
     plan: Schema.optionalKey(
       Schema.String.annotate({
         description: "The spec the change is held to; empty where there is none",
@@ -129,19 +149,30 @@ export default defineWorkflow({
   output: Schema.String,
   agents: { roles: { implementer: IMPLEMENTER, reviewer: REVIEWER } },
   path: [reviewRound, menu],
-  hints: { target: "diff-target" },
+  hints: { target: "diff-target", slack: "internal", improving: "internal" },
+  follows: FOLLOW,
   // A review proves it wrote a review a human can read; nobody chooses that.
   outcome: { fixed: "review" },
   // What a finished review offers to do next. Declared here because it is this workflow
   // that knows a review can be fixed and re-run — Collie only carries the offer.
   actions: [
     {
-      id: "fix-open",
-      title: "Fix what is open",
-      workflow: "implement",
+      id: "improve",
+      title: "Improve",
+      workflow: "review-improve",
       arguments: {},
-      inputs: { plan: "run-dir" },
-      eligible: (facts) => facts.openFindings > 0,
+      inputs: { target: "diff-target", previous: "run-id" },
+      eligible: (facts) => {
+        if (facts.review?.owned !== true)
+          throw new Error("Collie never pushes to someone else's branch");
+        if (
+          facts.openFindings === 0 ||
+          facts.review.head === "" ||
+          facts.review.head !== facts.review.reviewed
+        )
+          throw new Error("no finding is open at the current head");
+        return true;
+      },
     },
     {
       id: "run-again",
@@ -206,6 +237,33 @@ export default defineWorkflow({
           : yield* fs
               .readFileString(`${earlierPlace.dir}/review-head`)
               .pipe(Effect.orElseSucceed(() => ledger?.[0]?.head ?? ""));
+      const improving = requested.improving === true;
+      const fixContext =
+        kind === "mr"
+          ? yield* Activity.make({
+              name: improving ? "improve-eligibility" : "fix-ownership",
+              success: Schema.Struct({
+                owned: Schema.Boolean,
+                head: Schema.String,
+                reviewed: Schema.String,
+                lineage: Schema.Array(Schema.String),
+                following: Schema.Boolean,
+              }),
+              execute: host.reviewFix(improving ? previous : run.id, asked.target),
+            })
+          : null;
+      if (
+        improving &&
+        (fixContext?.owned !== true ||
+          fixContext.head !== earlierHead ||
+          !Arr.some(
+            ledger ?? [],
+            (one) => (one.status ?? "open") === "open" && one.head === earlierHead,
+          ))
+      )
+        return yield* new WorkflowError({
+          reason: "Improve requires open findings at the current head on your own branch",
+        });
       const changesAt = (round: number, earlier: string) =>
         earlier === "" || kind !== "mr"
           ? Effect.succeed("")
@@ -220,26 +278,403 @@ export default defineWorkflow({
                 head,
               }),
             });
-      const changes = yield* changesAt(1, earlierHead);
+      // Journaled, so a replay takes the road the round took whatever the setting says now.
+      const following = (round: number) =>
+        kind !== "mr"
+          ? Effect.succeed(false)
+          : Activity.make({
+              name: `follow-through-${round}`,
+              success: Schema.Boolean,
+              execute: host.config(FOLLOW).pipe(Effect.map((value) => Str.trim(value) === "true")),
+            });
+      const fact = (name: string, line: string) =>
+        Activity.make({ name, execute: host.record(run.id, line) });
+      // Null where the head moved under it and `carry` keeps the findings for the next round.
+      const roundAt = (
+        round: number,
+        changes: string,
+        carry: boolean,
+        assessment?: {
+          readonly findings: ReadonlyArray<Finding>;
+          readonly replies: NonNullable<MrRead["replies"]>;
+        },
+      ) =>
+        Effect.gen(function* () {
+          const previous =
+            round === 1
+              ? before
+              : yield* fs
+                  .readFileString(`${place.dir}/${REVIEW_FILE}`)
+                  .pipe(Effect.orElseSucceed(() => ""));
+          return yield* reviewRound(
+            (assessment === undefined
+              ? reviewPass({
+                  target: asked.target,
+                  plan: asked.plan ?? "",
+                  proves: asked.proves ?? "",
+                  previous,
+                  ledger: ledger ?? [],
+                  head,
+                  changes,
+                  answered: "",
+                  risks: place.options.risks ?? "",
+                  at: round,
+                  of: round,
+                  disputed: [],
+                })
+              : reassess({
+                  target: asked.target,
+                  head,
+                  at: round,
+                  ledger: ledger ?? [],
+                  ...assessment,
+                })
+            ).pipe(
+              Effect.catchIf(
+                (failure) => carry && Str.startsWith(HEAD_MOVED)(failure.reason),
+                () =>
+                  findingsIn(place.dir).pipe(
+                    Effect.tap((findings) =>
+                      Effect.sync(() => {
+                        ledger = findings;
+                      }),
+                    ),
+                    Effect.as(null),
+                  ),
+              ),
+            ),
+            { round },
+          );
+        });
+      const slackAt = (round: number, stage: string, wanted: ReadonlyArray<string>) =>
+        Activity.make({
+          name: `follow-slack-${round}-${stage}`,
+          error: WorkflowError,
+          execute: Effect.gen(function* () {
+            if (
+              wanted.includes("white_check_mark") &&
+              !(yield* host.approvedAt({ target: asked.target, cwd: place.cwd, head }))
+            )
+              return;
+            const message = yield* host.reviewSlack({
+              runId: run.id,
+              target: asked.target,
+              cwd: place.cwd,
+              permalink: asked.slack,
+              wanted,
+            });
+            yield* host.record(run.id, message);
+          }),
+        });
+      const postedAt = (review: SynthesisReport, round: number) =>
+        Effect.gen(function* () {
+          const note = reviewNote(review, ledger, head);
+          if (note === "") {
+            yield* fact(`follow-posted-${round}`, "no findings changed; no review note posted");
+            return review;
+          }
+          const noteFile = `${place.dir}/review-note-${round}.md`;
+          yield* fs.writeFileString(noteFile, note).pipe(Effect.orDie);
+          const answer = yield* Activity.make({
+            name: `follow-post-${round}`,
+            success: Posted,
+            execute: host.post({
+              runId: run.id,
+              target: asked.target,
+              cwd: place.cwd,
+              file: noteFile,
+              head,
+              round,
+            }),
+          });
+          yield* fact(`follow-posted-${round}`, answer.message);
+          const signature = answer.ok ? answer.signature : undefined;
+          if (signature === undefined) return review;
+          const signed = {
+            ...review,
+            findings: Arr.map(review.findings, (one) => ({ ...one, note: one.note || signature })),
+          };
+          yield* leaveReview(place.dir, signed);
+          if (signed.findings.length > 0) yield* slackAt(round, "posted", ["memo"]);
+          return signed;
+        });
+      const cleanAt = (review: SynthesisReport) =>
+        head !== "" &&
+        Arr.every(
+          review.findings,
+          (one) =>
+            one.status === "fixed" ||
+            one.status === "obsolete" ||
+            (one.status !== "disputed" && !isBlocking(one)),
+        );
+
+      const followThrough = Effect.gen(function* () {
+        const label = mrLabel(asked.target);
+        const readAt = (round: number) =>
+          Activity.make({
+            name: `follow-read-${round}`,
+            success: MrRead,
+            error: WorkflowError,
+            execute: host.mrReading({ target: asked.target, cwd: place.cwd, replies: round > 1 }),
+          });
+        let reading = yield* readAt(1);
+        let reviewedAt = earlierHead;
+        let forcePush = false;
+        let last: SynthesisReport | null = null;
+        let commentsOnly = false;
+        let changedComments: ReadonlyArray<string> = [];
+        const droppedByHuman = new Set<string>();
+        for (let round = 1; ; round += 1) {
+          if (reading.state !== "open") return { done: `${label} is ${reading.state}` };
+          head = reading.head;
+          if (head !== reviewedAt) droppedByHuman.clear();
+          const replies = reading.replies ?? [];
+          const affected = Arr.filter(
+            ledger ?? [],
+            (one) =>
+              !droppedByHuman.has(one.id ?? one.title) &&
+              Arr.some(repliesTo(one, replies, run.id), (reply) =>
+                changedComments.includes(reply.id),
+              ),
+          );
+          const attached = Arr.filter(replies, (reply) =>
+            Arr.some(commentsOnly ? affected : (ledger ?? []), (one) =>
+              repliesTo(one, replies, run.id).includes(reply),
+            ),
+          );
+          const changes = (at: number) =>
+            forcePush || reviewedAt === "" ? Effect.succeed("") : changesAt(at, reviewedAt);
+          if (round > 1 && !(yield* following(round))) {
+            yield* fact(`follow-off-${round}`, `${FOLLOW} is off: back to asking what next`);
+            const review = yield* roundAt(round, yield* changes(round), false);
+            return { menu: review ?? last, at: round };
+          }
+          yield* slackAt(round, "started", ["eyes"]);
+          const watching = {
+            name: `follow-${round}`,
+            target: asked.target,
+            cwd: place.cwd,
+            cursor: { head, seen: reading.comments, pipeline: reading.pipeline },
+            author: `@${reading.author}`,
+          };
+          const maintained: ReadonlyArray<Finding> = commentsOnly
+            ? Arr.filter(affected, (one) => one.status === "disputed" && Boolean(one.rebuttal))
+            : [];
+          let woke: Woke;
+          if (maintained.length > 0 && last !== null) {
+            let settled: SynthesisReport = last;
+            let interrupted: Woke | null = null;
+            let kept = false;
+            for (const [index, finding] of maintained.entries()) {
+              const identity = finding.id ?? finding.title;
+              const keep = `Keep ${identity} (no approval)`;
+              const drop = `Drop it (approve ${head})`;
+              const decision: Woke | Answered = yield* askWhileWatching(
+                {
+                  prompt: `${keep} / ${drop}?`,
+                  options: [{ id: keep, recommended: true }, drop],
+                },
+                {
+                  ...watching,
+                  name: `dispute-${round}-${index + 1}`,
+                  cursor: { ...watching.cursor, headOnly: true },
+                },
+              );
+              if (decision._tag !== "Answered") {
+                interrupted = decision;
+                break;
+              }
+              kept ||= decision.answer === keep;
+              if (decision.answer === drop) {
+                droppedByHuman.add(identity);
+                ledger = Arr.map(ledger ?? [], (one): Finding =>
+                  (one.id ?? one.title) === identity
+                    ? {
+                        ...one,
+                        status: "obsolete",
+                        head,
+                        reason: `Dropped by the human at ${head}`,
+                      }
+                    : one,
+                );
+                settled = {
+                  ...settled,
+                  findings: ledger,
+                  verdict: Arr.some(
+                    ledger,
+                    (one) => one.status === "open" || one.status === "disputed",
+                  )
+                    ? "findings"
+                    : "clean",
+                };
+                yield* leaveReview(place.dir, settled);
+              }
+              yield* fact(`dispute-said-${round}-${index + 1}`, `${identity}: ${decision.answer}`);
+            }
+            last = settled;
+            if (interrupted !== null) woke = interrupted;
+            else {
+              const canApprove: boolean = !kept && cleanAt(settled);
+              if (canApprove) {
+                const approved = yield* Activity.make({
+                  name: `dispute-approve-${round}`,
+                  success: Posted,
+                  execute: host.approveReview({
+                    runId: run.id,
+                    attempt: `dispute-approve-${round}`,
+                    target: asked.target,
+                    cwd: place.cwd,
+                    head,
+                  }),
+                });
+                yield* fact(`dispute-approved-${round}`, approved.message);
+                if (!approved.ok) return yield* new WorkflowError({ reason: approved.message });
+                yield* slackAt(round, "dispute-approved", ["white_check_mark"]);
+              }
+              const resumed = { ...watching, cursor: { ...watching.cursor, headOnly: kept } };
+              woke = yield* watch(canApprove ? { ...resumed, approved: head } : resumed);
+            }
+          } else {
+            const pinned = yield* Activity.make({
+              name: `follow-pin-${round}`,
+              success: PinnedHead,
+              error: WorkflowError,
+              execute: host.pinHead({ runId: run.id, target: asked.target, head }),
+            });
+            if ("refused" in pinned)
+              return yield* new WorkflowError({
+                reason: `no checkout of ${label} at ${head}: ${pinned.refused}`,
+              });
+            const reviewed: SynthesisReport | null =
+              "moved" in pinned
+                ? null
+                : commentsOnly && affected.length === 0
+                  ? last
+                  : yield* roundAt(
+                      round,
+                      commentsOnly
+                        ? ""
+                        : `${yield* changes(round)}${attached.length === 0 ? "" : `\n\n${formatReplies(attached)}`}`,
+                      true,
+                      commentsOnly ? { findings: affected, replies: attached } : undefined,
+                    );
+            yield* Activity.make({
+              name: `follow-close-${round}`,
+              execute: Agents.pipe(
+                Effect.flatMap((agents) => agents.halt(run.id)),
+                Effect.asVoid,
+              ),
+            });
+            if (reviewed === null)
+              yield* fact(
+                `follow-moved-${round}`,
+                `the head of ${label} moved while reviewing ${head}; nothing posted, the findings carry to the next round`,
+              );
+            else {
+              last = yield* postedAt(reviewed, round);
+              ledger = last.findings;
+              reviewedAt = head;
+            }
+            if (reviewed === null || !cleanAt(reviewed)) woke = yield* watch(watching);
+            else if (
+              yield* Activity.make({
+                name: `follow-approved-${round}`,
+                success: Schema.Boolean,
+                error: WorkflowError,
+                execute: host.approvedAt({ target: asked.target, cwd: place.cwd, head }),
+              })
+            ) {
+              yield* slackAt(round, "already-approved", ["white_check_mark"]);
+              woke = yield* watch({ ...watching, approved: head });
+            } else {
+              const said = yield* askWhileWatching(
+                {
+                  prompt: `Approve ${label} at ${head}?`,
+                  options: [{ id: APPROVE, recommended: true }, NOT_NOW],
+                },
+                { ...watching, name: `approve-${round}` },
+              );
+              if (said._tag !== "Answered") woke = said;
+              else {
+                const approved =
+                  said.answer === APPROVE
+                    ? yield* Activity.make({
+                        name: `follow-approve-${round}`,
+                        success: Posted,
+                        execute: host.approveReview({
+                          runId: run.id,
+                          attempt: `follow-approve-${round}`,
+                          target: asked.target,
+                          cwd: place.cwd,
+                          head,
+                        }),
+                      })
+                    : null;
+                if (approved !== null) {
+                  yield* fact(`approve-said-${round}`, approved.message);
+                  if (!approved.ok) return yield* new WorkflowError({ reason: approved.message });
+                  yield* slackAt(round, "approved", ["white_check_mark"]);
+                }
+                woke = yield* watch(
+                  approved?.ok === true ? { ...watching, approved: head } : watching,
+                );
+              }
+            }
+          }
+          if (woke._tag === "Ended") return { done: `${label} was ${woke.state}` };
+          forcePush = woke.change.forcePush === true;
+          commentsOnly = !woke.change.newHead && woke.change.pipeline === null;
+          changedComments = woke.change.comments;
+          reading = yield* readAt(round + 1);
+        }
+      });
 
       // The first review; "Fix findings" below rallies from it.
-      let synthesis = yield* reviewRound(
-        reviewPass({
-          target: asked.target,
-          plan: asked.plan ?? "",
-          proves: asked.proves ?? "",
-          previous: before,
-          ledger: kind === "mr" ? (ledger ?? []) : undefined,
-          head,
-          changes,
-          answered: "",
-          risks: place.options.risks ?? "",
-          at: 1,
-          of: 1,
-          disputed: [],
-        }),
-        { round: 1 },
-      );
+      const followed =
+        !improving && (yield* following(1))
+          ? yield* followThrough.pipe(
+              Effect.catchIf(
+                (failure) => Str.startsWith(MR_ENDED)(failure.reason),
+                (failure) =>
+                  Effect.succeed({
+                    done: `${mrLabel(asked.target)} was ${Str.slice(MR_ENDED.length)(failure.reason)}`,
+                  }),
+              ),
+            )
+          : null;
+      if (followed?.done !== undefined) return followed.done;
+      let synthesis: SynthesisReport = improving
+        ? {
+            verdict: "findings",
+            summary: "Earlier findings to improve",
+            findings: [...(ledger ?? [])],
+            dropped: [],
+            fixed: [],
+            disputed: [],
+          }
+        : (followed?.menu ??
+          (yield* reviewRound(
+            reviewPass({
+              target: asked.target,
+              plan: asked.plan ?? "",
+              proves: asked.proves ?? "",
+              previous: before,
+              ledger: kind === "mr" ? (ledger ?? []) : undefined,
+              head,
+              changes: yield* changesAt(1, earlierHead),
+              answered: "",
+              risks: place.options.risks ?? "",
+              at: 1,
+              of: 1,
+              disputed: [],
+            }),
+            { round: 1 },
+          )));
+
+      if (improving) {
+        yield* leaveReview(place.dir, synthesis);
+        yield* fs.writeFileString(`${place.dir}/review-head`, head).pipe(Effect.orDie);
+      }
 
       const inputs = {
         target: asked.target,
@@ -279,6 +714,7 @@ export default defineWorkflow({
               plan: asked.plan ?? "",
               proves: asked.proves ?? "",
               previous: last,
+              reviewers: improving ? `improve-${at}-` : undefined,
               ledger: kind === "mr" ? ledger : undefined,
               head,
               changes,
@@ -308,18 +744,23 @@ export default defineWorkflow({
           ),
         ),
       });
-      let unfixable = "refused" in fixable ? fixable.refused : "";
+      const owned = kind !== "mr" || fixContext?.owned === true;
+      let unfixable = !owned
+        ? "Collie never pushes to someone else's branch"
+        : "refused" in fixable
+          ? fixable.refused
+          : "";
       // A hand-off needs no checkout, so a live implementer in the lineage may still take one.
-      let handOff = place.lineage.length > 1;
+      let handOff = owned && place.lineage.length > 1;
 
       let handed = false;
       // Reviews are numbered by how many there have been, not by how often the menu came.
-      let reviews = 1;
+      let reviews = followed?.at ?? 1;
       let fixes = 0;
       let asks = 0;
       // Set by the human's "Fix findings": the rally then goes on by itself, through the
       // same `settleRound` implement's does, and asks again once it settles or runs out.
-      let fixing = false;
+      let fixing = improving;
       let rallied = 0;
       let seen: { readonly at: number; readonly keys: ReadonlyArray<string> } | null = null;
       let settled = "";
@@ -353,7 +794,8 @@ export default defineWorkflow({
         const POST = approve ? `Post and approve ${Str.slice(0, 7)(head)}` : "Post";
         let chosen: string = FIX;
         if (fixing) {
-          if (round.go !== "fix" || rallied >= ROUNDS) {
+          const firstImprovement = improving && fixes === 0 && round.go === "clean";
+          if ((round.go !== "fix" && !firstImprovement) || rallied >= ROUNDS) {
             fixing = false;
             settled =
               round.go === "halt"
@@ -362,6 +804,7 @@ export default defineWorkflow({
                   ? "nothing blocking is left"
                   : `the rally ran ${ROUNDS} rounds and findings remain`;
             yield* host.record(run.id, `rally settled after review ${reviews}: ${settled}`);
+            if (improving) return settled;
           }
         }
         // Posting is offered for a merge request and nothing else; whether this is one to
@@ -447,7 +890,7 @@ export default defineWorkflow({
               success: Posted,
               execute: host.approveReview({
                 runId: run.id,
-                round: reviews,
+                attempt: `approve-review-${reviews}`,
                 target: asked.target,
                 cwd: place.cwd,
                 head,
@@ -489,9 +932,24 @@ export default defineWorkflow({
           operation,
           role: "implementer",
           text: handOffText(place.dir),
+          lineage: improving ? fixContext?.lineage : undefined,
         });
         if (to !== null) {
           yield* host.record(run.id, `${operation}: handed the findings to ${to}`);
+          if (improving) {
+            const changed = yield* watch({
+              name: "improved-head",
+              target: asked.target,
+              cwd: place.cwd,
+              cursor: { head, seen: [], pipeline: "none", headOnly: true },
+              author: to,
+            });
+            if (changed._tag === "Ended") return `${mrLabel(asked.target)} was ${changed.state}`;
+            if (fixContext?.following)
+              return `findings handed to ${to}; the Follow-through reviews its push`;
+            synthesis = yield* reviewedAgain((reviews += 1), "");
+            continue;
+          }
           handed = true;
           fixing = false;
           continue;
@@ -544,6 +1002,8 @@ export default defineWorkflow({
           run.id,
           `${operation}: fixed ${fixed.fixed.length}, disputed ${fixed.disputed.length}`,
         );
+        if (improving && fixContext?.following)
+          return `fixed ${fixed.fixed.length}; the Follow-through reviews the pushed head`;
         disputed = [
           ...disputed,
           ...Arr.filter(
@@ -580,7 +1040,11 @@ const reviewNote = (
     Arr.join(
       [
         ...(added.length === 0 ? [] : [formatFindings(added)]),
-        ...Arr.map(changed, (one) => `- ${one.id}: ${one.status}`),
+        ...Arr.map(
+          changed,
+          (one) =>
+            `- ${one.id}: ${one.status}${one.rebuttal || one.reason ? ` — ${one.rebuttal || one.reason}` : ""}`,
+        ),
         ...Arr.map(stillOpen, (one) => `- ${one.id}: still open`),
         ...(Arr.every(shown, (one) => one.status === "fixed" || one.status === "obsolete")
           ? [`all findings fixed at \`${head}\``]
