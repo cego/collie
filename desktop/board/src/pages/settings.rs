@@ -15,7 +15,6 @@ use crate::calls::{CallError, Stop};
 use collie_desktop_protocol::generated::{
     CataloguesSuccessItem, ConnectionReadingsSuccessItem, CredentialsSuccess, FlockSettingsSuccess,
     Id, LostState, News, SettingsSuccess, SlackUserChannelsSuccessItem, SlackUserSuccess,
-    UpdatesSuccess,
 };
 use model::{Reached, Row};
 use rune::TextEdit;
@@ -67,10 +66,6 @@ pub struct Settings {
     pub desktop: Option<SettingsSuccess>,
     pub credentials: Option<CredentialsSuccess>,
     pub credentials_trouble: Option<String>,
-    pub updates: Option<UpdatesSuccess>,
-    pub updates_trouble: Option<String>,
-    pub checking: bool,
-    pub restart_refused: Option<String>,
     pub slack_user: Option<SlackUserSuccess>,
     /// The channels the human is in; `None` while they are not signed in to Slack.
     pub slack_yours: Option<Vec<SlackUserChannelsSuccessItem>>,
@@ -172,20 +167,6 @@ impl Settings {
                 },
             ),
             core.stream(
-                "updates",
-                (),
-                |app: &mut App, read: Result<UpdatesSuccess, CallError>| {
-                    let page = &mut app.pages.settings;
-                    match read {
-                        Ok(news) => {
-                            page.updates = Some(news);
-                            page.updates_trouble = None;
-                        }
-                        Err(why) => page.updates_trouble = Some(why.0),
-                    }
-                },
-            ),
-            core.stream(
                 "slackUser",
                 (),
                 |app: &mut App, read: Result<SlackUserSuccess, CallError>| {
@@ -195,6 +176,7 @@ impl Settings {
                 },
             ),
         ];
+        app.listen_updates();
         refresh_catalogues(app);
         app.pages.settings.onboardings_read = app.pages.machines.onboardings;
         refresh_connections(app);
@@ -850,42 +832,7 @@ pub fn sign_in_slack(app: &mut App, out: bool) {
 }
 
 pub fn check_for_updates(app: &mut App) {
-    let Some(core) = app.core.clone() else {
-        return;
-    };
-    app.pages.settings.checking = true;
-    core.request(
-        "checkForUpdates",
-        (),
-        |app: &mut App, news: Result<News, CallError>| {
-            let page = &mut app.pages.settings;
-            page.checking = false;
-            match news {
-                Ok(news) => {
-                    if let Some(updates) = page.updates.as_mut() {
-                        updates.news = news;
-                    }
-                }
-                Err(why) => page.updates_trouble = Some(why.0),
-            }
-        },
-    );
-}
-
-pub fn restart(app: &mut App) {
-    let Some(core) = app.core.clone() else {
-        return;
-    };
-    app.pages.settings.restart_refused = None;
-    core.request(
-        "restart",
-        (),
-        |app: &mut App, done: Result<Value, CallError>| {
-            if let Err(why) = done {
-                app.pages.settings.restart_refused = Some(why.0);
-            }
-        },
-    );
+    app.check_for_updates_then(|_, _| {});
 }
 
 pub fn fire(app: &App, tag: &str, payload: Value) {

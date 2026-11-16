@@ -15,3 +15,5 @@
 - [ ] `parseDuration("90s")` is 90000.
 - [ ] `formatDuration(5400000)` is `1h30m`.
 - [ ] `deadline` is the clock's time plus the duration.
+- [ ] `README.md` contains "Reads durations such as `90s`, `5m` and `1h30m` as milliseconds, and writes them back."
+- [ ] A reviewer confirms `README.md`'s first paragraph names every unit `parseDuration` reads, as built.
