@@ -288,7 +288,7 @@ test("an unplaced or ambiguous review request says why once and starts after it 
     }),
   ));
 
-test("an empty review-request listing refreshes a changed login on the next round", () =>
+test("idle review-request rounds read the login once and only list after that", () =>
   host.runEffect(
     Effect.gen(function* () {
       yield* repository;
@@ -301,14 +301,11 @@ test("an empty review-request listing refreshes a changed login on the next roun
           yield* host.mergeWatched;
           yield* until(
             () => Effect.sync(() => listings(forge).length),
-            (count) => count > 0,
+            (count) => count >= 3,
           );
-          yield* forge.set(model(head, { login: "bob" }));
-          yield* until(
-            () => Effect.sync(() => forge.requests()),
-            (requests) =>
-              Arr.some(requests, (one) => Str.includes("reviewer_username=bob")(one.url)),
-          ).pipe(Effect.timeout("1 minute"));
+          expect(
+            Arr.filter(forge.requests(), (one) => /\/user(?:\?|$)/.test(one.url)),
+          ).toHaveLength(1);
           expect(yield* runsHere).toEqual([]);
         }),
       );
