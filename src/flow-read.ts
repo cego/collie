@@ -133,7 +133,7 @@ export const laneFor = Effect.fn("Flow.lane")(function* (
     machine: machineOf(env),
     lines: yield* readStepLines(run.dir),
     steering: yield* readStepSteering(run.dir),
-    usual: usual ?? (yield* usualStepTimes(env.stateDir, run.workflow)),
+    usual: usual ?? (yield* usualStepTimes(run.workflow)),
     launches,
     questions: run.engine?.questions ?? [],
     verifications: yield* readVerifications(run.evidence).pipe(Effect.orElseSucceed(() => [])),
@@ -222,7 +222,7 @@ export const flowInputsFor = Effect.fn("Flow.inputs")(function* (
       requested.set(run.requestedBy.run, rows);
     }
   }
-  return { installation, children, requested, usual: yield* stepTimesByWorkflow(env.stateDir) };
+  return { installation, children, requested, usual: yield* stepTimesByWorkflow };
 });
 
 /** A Task drawn as the work it took (ADR-draft-a-step-is-declared-where-its-work-is-written D3, D5). */

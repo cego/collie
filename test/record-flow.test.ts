@@ -7,7 +7,8 @@ import { Effect, FileSystem, Schema, Tracer } from "effect";
 import { buildBoard, taskFlowOf } from "../src/board";
 import { recordAudit } from "../src/audit";
 import { laneFor } from "../src/flow-read";
-import { encodeStepLine, STEPS_FILE } from "../src/steps";
+import { appendStepLine } from "../src/steps";
+import { RunRecords } from "../src/run-records";
 import { readEnv } from "../src/env";
 import type { RunFacts } from "../src/runs";
 import { runEffect } from "./support/effect";
@@ -54,23 +55,20 @@ test("a lane reads stop attribution only while its Run is stopped", () =>
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-flow-audit-" });
       const env = readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" });
       const run = yield* madeRun(dir);
-      yield* fs.writeFileString(
-        `${run.dir}/${STEPS_FILE}`,
-        encodeStepLine({
-          kind: "enter",
-          key: "work",
-          at: "2026-09-14T10:00:00Z",
-          place: null,
-          step: {
-            id: "work",
-            title: "Work",
-            description: "",
-            kind: "check",
-            role: null,
-            produces: null,
-          },
-        }),
-      );
+      yield* appendStepLine(run.dir, {
+        kind: "enter",
+        key: "work",
+        at: "2026-09-14T10:00:00Z",
+        place: null,
+        step: {
+          id: "work",
+          title: "Work",
+          description: "",
+          kind: "check",
+          role: null,
+          produces: null,
+        },
+      });
       yield* recordAudit(run.dir, {
         operation: "stop",
         request: "stop",
@@ -108,6 +106,8 @@ test("two Tasks share one reading of the installation and step duration index", 
         yield* madeRun(dir, { id: "second", task: "task-b", state: "running" }),
       ];
       const reads: string[] = [];
+      const records = yield* RunRecords;
+      let sampled = 0;
       const views = yield* buildBoard({
         env,
         runs,
@@ -123,9 +123,16 @@ test("two Tasks share one reading of the installation and step duration index", 
               Effect.andThen(fs.readFileString(path, encoding)),
             ),
         }),
+        Effect.provideService(RunRecords, {
+          ...records,
+          stepSamples: Effect.suspend(() => {
+            sampled++;
+            return records.stepSamples;
+          }),
+        }),
       );
       expect(views).toHaveLength(2);
       expect(Arr.filter(reads, (path) => path === `${dir}/installation`)).toHaveLength(1);
-      expect(Arr.filter(reads, (path) => path === `${dir}/step-durations.json`)).toHaveLength(1);
+      expect(sampled).toBe(1);
     }),
   ));

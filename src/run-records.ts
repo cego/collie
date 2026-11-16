@@ -60,7 +60,6 @@ export const LEGACY_FACTS: ReadonlyArray<string> = [
 /** Facts an older build kept one file each beside others of their kind, by name prefix. */
 export const LEGACY_FACT_PREFIXES: ReadonlyArray<string> = [
   "steering/progress/",
-  "steering/proof-",
   "steering/externals.",
 ];
 
@@ -70,6 +69,9 @@ export const addressOf = (dir: string) => {
   const parent = runOfDir(dir.slice(0, Math.max(0, dir.length - run.length - 1)));
   return { run, prefix: parent === "runs" || parent === "" ? "" : `${parent}/` };
 };
+
+/** The journal of a Run's Steps. */
+export const STEPS = "steps.jsonl";
 
 /** What a write to a Run's records invalidates. */
 export const RUN_RECORDS = "collie/run-records";
@@ -116,6 +118,13 @@ export interface RunRecordsApi {
   ) => Effect.Effect<string | null, E, R>;
   /** When each of these Runs last did work, epoch ms; a Run with none recorded is absent. */
   readonly activity: (runs: ReadonlyArray<string>) => Effect.Effect<ReadonlyMap<string, number>>;
+  /**
+   * How long each workflow's Steps took: for each Step, at most its 10 latest runs, each
+   * from the Step's first entry to its last leaving.
+   */
+  readonly stepSamples: Effect.Effect<
+    ReadonlyArray<{ readonly workflow: string; readonly step: string; readonly ms: number }>
+  >;
   /** Records that the Run did work now. */
   readonly touch: (run: string) => Effect.Effect<void>;
 }
@@ -247,6 +256,29 @@ export const runRecordsLayer = Layer.effect(RunRecords)(
               Effect.map((rows) => new Map(Arr.map(rows, (row) => [row.run, row.at] as const))),
               Effect.orDie,
             ),
+      stepSamples: sql<{ readonly workflow: string; readonly step: string; readonly ms: number }>`
+        WITH leaves AS (
+          SELECT l.run, l.key, json_extract(l.line, '$.at') AS at, r.workflow,
+            row_number() OVER (PARTITION BY l.run, l.key ORDER BY json_extract(l.line, '$.at') DESC) AS nth
+          FROM collie_run_lines l JOIN collie_runs r ON r.run = l.run
+          WHERE l.journal = ${STEPS} AND l.kind = 'leave'
+        ), entered AS (
+          SELECT run, key, min(seq) AS seq FROM collie_run_lines
+          WHERE journal = ${STEPS} AND kind = 'enter' GROUP BY run, key
+        ), samples AS (
+          SELECT leaves.workflow, json_extract(e.line, '$.step.id') AS step, leaves.at,
+            CAST(round((julianday(leaves.at) - julianday(json_extract(e.line, '$.at'))) * 86400000) AS INTEGER) AS ms
+          FROM leaves
+          JOIN entered ON entered.run = leaves.run AND entered.key = leaves.key
+          JOIN collie_run_lines e ON e.run = entered.run AND e.journal = ${STEPS} AND e.seq = entered.seq
+          WHERE leaves.nth = 1
+        ), ranked AS (
+          SELECT workflow, step, ms,
+            row_number() OVER (PARTITION BY workflow, step ORDER BY at DESC) AS nth
+          FROM samples WHERE ms >= 0
+        )
+        SELECT workflow, step, ms FROM ranked WHERE nth <= 10
+      `.pipe(Effect.orDie),
       touch: (run) => worked(run, "").pipe(Effect.andThen(moved(run)), Effect.orDie),
     } satisfies RunRecordsApi;
   }),

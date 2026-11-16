@@ -872,9 +872,9 @@ test("an Output still unusable after its repair parks the Step, saying what to c
       expect(why).toContain(`["note"]`);
       expect(why).toEndWith("Correct it, then resume r1.");
       expect(yield* read(controlPath(dir, PARK_CAUSE, "r1"))).toBe("step-failed");
-      expect(Arr.last(yield* readStepLines(runDir(dir, "r1")))).toEqual(
-        Option.some(expect.objectContaining({ kind: "fail", key: "review", why })),
-      );
+      expect(
+        Arr.last(yield* readStepLines(runDir(dir, "r1")).pipe(Effect.provide(recordsAt(dir)))),
+      ).toEqual(Option.some(expect.objectContaining({ kind: "fail", key: "review", why })));
       // Exactly one: the allowance is one repair, not one per issue.
       expect(sent(yield* rig.calls(), "not usable")).toBe(1);
     }),

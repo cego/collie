@@ -30,7 +30,7 @@ import {
   type MrState,
   type OfferView,
 } from "../src/board-model";
-import { encodeStepLine, STEPS_FILE, type StepLine, type StepMeta } from "../src/steps";
+import { appendStepLine, type StepLine, type StepMeta } from "../src/steps";
 import { machineName } from "../src/peers";
 import { nothingToLandFile } from "../src/standing";
 import { writeStageProof } from "../src/shipping";
@@ -4641,13 +4641,7 @@ const stepsRecorded = Effect.fn("board.stepsRecorded")(function* (
     lines.push({ kind: "enter", key: step.id, step, place: null, at: ago(since) });
     if (left) lines.push({ kind: "leave", key: step.id, at: ago(since - minutes) });
   });
-  yield* (yield* FileSystem.FileSystem).writeFileString(
-    `${run.dir}/${STEPS_FILE}`,
-    Arr.join(
-      Arr.map(lines, (line) => `${encodeStepLine(line)}\n`),
-      "",
-    ),
-  );
+  yield* Effect.forEach(lines, (line) => appendStepLine(run.dir, line));
 });
 
 /** The board built over these Runs, and each Task's whole Flow beside it. */
@@ -5465,13 +5459,7 @@ test.each([false, true])("a fan-out's Repo runs appear once, by Wave (item calls
             { kind: "child", key: "fan", run: "r-a", at: "2026-09-14T10:01:10.000Z" },
             { kind: "child", key: "fan", run: "r-b", at: "2026-09-14T10:01:20.000Z" },
           ];
-      yield* fs.writeFileString(
-        `${parent.dir}/${STEPS_FILE}`,
-        Arr.join(
-          Arr.map(startedIn, (line) => `${encodeStepLine(line)}\n`),
-          "",
-        ),
-      );
+      yield* Effect.forEach(startedIn, (line) => appendStepLine(parent.dir, line));
       const repoRun = (id: string, repo: string, over: Partial<RunFacts> = {}) =>
         madeRun(dir, { id, task: "task-1", parent: "r-fan", repo, ...over });
       const runsOf = (flow: Flow) =>

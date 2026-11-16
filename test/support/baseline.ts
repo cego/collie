@@ -1555,8 +1555,8 @@ const resumeImplementPark = (
   options: ShippedRun,
   reason: string,
   hooks: {
-    beforePark?: Effect.Effect<void, never, FileSystem.FileSystem>;
-    beforeResume?: Effect.Effect<void, never, FileSystem.FileSystem>;
+    beforePark?: Effect.Effect<void, never, FileSystem.FileSystem | Records>;
+    beforeResume?: Effect.Effect<void, never, FileSystem.FileSystem | Records>;
     stop?: { decision: string; answer: string };
   } = {},
 ) =>
@@ -13608,7 +13608,7 @@ const driven = <A, E>(
     /** Whether the engine has done with the answer to `decision`, waking the Run included. */
     readonly taken: (decision: string) => Effect.Effect<boolean>;
     readonly resume: Effect.Effect<void>;
-  }) => Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>,
+  }) => Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | Records>,
 ) =>
   session(
     Effect.gen(function* () {

@@ -17,7 +17,6 @@ import { agentsLayer } from "../src/agents";
 import { Children, Host } from "../src/sdk";
 import { buildBoard } from "../src/board";
 import { sectionOf, type Flow } from "../src/board-model";
-import { ensureStepDurations } from "../src/step-durations";
 
 test(
   "the host learns B from three completed Runs and keeps its usual time after their records go",
@@ -101,9 +100,6 @@ test(
             const execution = yield* made.workflow.executionId(third);
             yield* until(() => made.workflow.poll(execution), Option.isSome);
             yield* start("four");
-            expect((yield* read("four")).nodes[0]!.usual).toBe(12 * 60_000);
-            yield* fs.remove(`${dir}/step-durations.json`);
-            yield* ensureStepDurations(dir, yield* store.runs);
             expect((yield* read("four")).nodes[0]!.usual).toBe(12 * 60_000);
             for (const id of ["one", "two", "three"])
               yield* fs.remove(`${dir}/runs/${id}`, { recursive: true });

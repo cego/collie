@@ -248,6 +248,7 @@ import {
 import { evaluationDeps } from "./evaluator";
 import { budgetPath, herdOf, humanSubmits, machineHerd } from "./steering";
 import { recordsLayer, type Records } from "./records";
+import { RunRecords } from "./run-records";
 import { Steered } from "./delivery-queue";
 import type { JudgementDeps } from "./drift";
 import { finishedOnRecord, type Card } from "./cards";
@@ -343,15 +344,7 @@ import {
 } from "./step-steering";
 import { launchesOf, readLaunches, type Launched } from "./launches";
 import { steerTarget } from "./steer-target";
-import { ensureStepDurations, rememberStepDurations } from "./step-durations";
-import {
-  CurrentStep,
-  encodeStepLine,
-  readStepLines,
-  STEPS_FILE,
-  type StepLine,
-  type StepNote,
-} from "./steps";
+import { CurrentStep, appendStepLine, readStepLines, type StepLine, type StepNote } from "./steps";
 import { classifyGivenSet, classifyGivenTarget, classifyWorkSource, defaultBase } from "./inputs";
 import type { PlatformServices } from "./platform";
 import {
@@ -2950,13 +2943,8 @@ const readEnvelope = flow(
 /** One line of a Run's Step records, stamped now. The host is their only writer. */
 const noteStep = (dir: string, note: StepNote) =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
     // SAFETY: a note is a line without its time, which is added here.
-    const line = { ...note, at: yield* nowIso } as StepLine;
-    yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
-    yield* fs
-      .writeFileString(`${dir}/${STEPS_FILE}`, `${encodeStepLine(line)}\n`, { flag: "a" })
-      .pipe(Effect.orDie);
+    yield* appendStepLine(dir, { ...note, at: yield* nowIso } as StepLine);
   });
 
 /** Why a Run's work is about to be entered again, where it goes on with work left part-done. */
@@ -4066,6 +4054,7 @@ export const hostLayer = (options: {
         | Records;
       const services = yield* Effect.context<Collecting>();
       const bun = yield* Effect.context<PlatformServices | Records>();
+      const runRecords = yield* RunRecords;
       const under = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
         Effect.provideContext(effect, services);
       const parkReview = (reason: string) =>
@@ -4111,7 +4100,6 @@ export const hostLayer = (options: {
         );
       const untilStopped = (runId: string) => untilSet(runId, STOP);
       yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
-      yield* ensureStepDurations(dir, yield* store.runs);
       const toast = options.toast;
       const notifying = yield* Semaphore.make(1);
       /** Why this needs-you park goes straight to a person, or null where a Heal takes it first. */
@@ -5179,12 +5167,10 @@ export const hostLayer = (options: {
               note.cause === "restarted" &&
               !Arr.some(yield* readStepLines(where), (line) => line.kind === "entry");
             yield* noteStep(where, first ? { kind: "entry", cause: null } : note);
-            if (note.kind === "leave") {
-              const row = yield* store.run(runId);
-              if (row !== null)
-                yield* rememberStepDurations(dir, runId, row.workflow, yield* readStepLines(where));
-            }
-          }).pipe(Effect.provideService(FileSystem.FileSystem, fs)),
+          }).pipe(
+            Effect.provideService(FileSystem.FileSystem, fs),
+            Effect.provideService(RunRecords, runRecords),
+          ),
         record: (runId, event) =>
           // A replay writes its records again, as it re-enters every step: the log is what
           // the Run did each time it ran, not a deduplicated story.
@@ -5347,7 +5333,7 @@ export const hostLayer = (options: {
                 kind: "check",
                 key: at.key,
                 name: asked.name,
-              }).pipe(Effect.provideService(FileSystem.FileSystem, fs));
+              }).pipe(Effect.provideService(RunRecords, runRecords));
             return yield* check(asked, passAsked(asked));
           }),
         approved: (runId) => under(approvedOf(dir, runId)),
