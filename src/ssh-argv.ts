@@ -67,11 +67,15 @@ export const viaTarget = (via: string) => {
 
 export type Verb = "check" | "forward" | "cancel" | "exit";
 
-/** `ssh -S <path> -O <verb> … <destination>`: answered by an open master, or failed. */
+/**
+ * Only the named master and explicit forwards participate: reading SSH config here
+ * would replay its LocalForward/RemoteForward entries on both forward and cancel.
+ * The master has already used that config to establish its connection.
+ */
 export const muxArgv = (
   ssh: string,
   path: string,
   verb: Verb,
   destination: string,
   ...forward: ReadonlyArray<string>
-) => [ssh, "-S", path, "-O", verb, ...forward, destination];
+) => [ssh, "-F", "/dev/null", "-S", path, "-O", verb, ...forward, destination];

@@ -86,6 +86,14 @@ export interface FailedAttempt {
   readonly url: string | null;
   /** None where the logs cannot be read or name no test. */
   readonly tests: ReadonlyArray<FailedTest>;
+  /** Its pipeline's or run attempt's failed jobs, null where they could not be listed. */
+  readonly jobs: ReadonlyArray<FailedJob> | null;
+}
+
+/** A failed job by name, and the failed tests its own log names, null where it could not be read. */
+export interface FailedJob {
+  readonly name: string;
+  readonly tests: ReadonlyArray<FailedTest> | null;
 }
 
 /** A job of a pipeline read whole; `manual` waits for somebody to start it by hand. */
@@ -149,6 +157,8 @@ export type BaseJobRead =
       readonly at: string;
       readonly state: JobState;
       readonly url: string | null;
+      /** What `failedAttempt` takes; null where there is no such job. */
+      readonly id: string | null;
     }
   | { readonly ok: false; readonly reason: string };
 

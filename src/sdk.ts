@@ -972,8 +972,8 @@ export interface HostApi {
     readonly wait?: boolean;
     /**
      * A failed job is read on the target branch's newest commit, then where the branch leaves
-     * its target, and is retried once and waited on where it did not fail there too
-     * (ADR-0034): `before`, with `branch` for the target's, and `retried` say which.
+     * its target, and is retried once and waited on where its failed jobs and tests did not
+     * fail there too (ADR-0034): `before`, with `branch` for the target's, and `retried` say which.
      */
     readonly settle?: boolean;
   }) => Effect.Effect<CiJob>;

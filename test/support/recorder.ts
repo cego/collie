@@ -22,7 +22,7 @@ import {
 } from "effect";
 import { readEnv, type PluginEnv } from "../../src/env";
 import { Herdr } from "../../src/herdr";
-import { fakeHerdr, writeFakeHerdrShim } from "./fake-herdr-core";
+import { editState, fakeHerdr, writeFakeHerdrShim } from "./fake-herdr-core";
 import { serveFakeHc } from "./fake-hc";
 
 const JsonString = Schema.fromJsonString(Schema.Json);
@@ -417,28 +417,24 @@ export class Rig {
   }
 
   /** Another process under this agent's name, in the same pane. */
-  reincarnate(name: string): Effect.Effect<void, RigError, FileSystem.FileSystem> {
-    const statePath = `${this.logPath}.state.json`;
-    const readJsonObject = this.readJsonObject.bind(this);
-    return Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const state = yield* readJsonObject(statePath);
-      const agents = Option.getOrElse(
-        Schema.decodeUnknownOption(Schema.Array(Schema.JsonObject))(state.agents),
-        (): ReadonlyArray<Schema.JsonObject> => [],
-      );
-      const renewed = Arr.map(agents, (agent) =>
-        agent.name === name
-          ? Object.assign({}, agent, {
-              terminal_id: `${isText(agent.terminal_id) ? agent.terminal_id : ""}+next`,
-            })
-          : agent,
-      );
-      yield* fs.writeFileString(
-        statePath,
-        encodeJson(Object.assign({}, state, { agents: renewed })),
-      );
-    });
+  reincarnate(name: string): Effect.Effect<void, RigError, RigServices> {
+    return editState(this.logPath, (text) =>
+      Effect.gen(function* () {
+        const state = yield* Schema.decodeEffect(JsonObjectString)(text);
+        const agents = Option.getOrElse(
+          Schema.decodeUnknownOption(Schema.Array(Schema.JsonObject))(state.agents),
+          (): ReadonlyArray<Schema.JsonObject> => [],
+        );
+        const renewed = Arr.map(agents, (agent) =>
+          agent.name === name
+            ? Object.assign({}, agent, {
+                terminal_id: `${isText(agent.terminal_id) ? agent.terminal_id : ""}+next`,
+              })
+            : agent,
+        );
+        return encodeJson(Object.assign({}, state, { agents: renewed }));
+      }),
+    );
   }
 
   /** A pane herdr already has, with the directory, agent and workspace it is in. */

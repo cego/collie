@@ -325,18 +325,21 @@ target. A job missing while the forge has not yet said whether it can merge is w
 pending. A merge of the merge request while the run waits stops it, through
 the merge watch, and records nothing for the job.
 
-A failed job is settled before anyone fixes it. The run first reads the same job on
-its target branch's newest commit. Where it failed there, and every failed test the
-run's failed attempt names failed there too, or the attempt names none, the failure
-is the target's. The merge request and the run's log say so, naming the target
-branch, its commit and its job, and the job gets no fix. A job still pending,
-running or missing there does not count. Otherwise the run reads the same job where
-the branch leaves its target branch, or on the target branch's latest pipeline where
-that commit has none. If it failed there too, it failed before the run's changes:
-the merge request and the run's log say so, with the commit, and the job gets no fix
-(ADR-0034). Anything else there (no merge-base, no pipeline, no such job, any other
-result) makes the failure the run's own. Where only some of its failed tests fail on
-the target too, its fix round names which ones are the target's.
+A failed job is settled before anyone fixes it. The run first reads the same job on its
+target branch's newest commit, then, where that does not settle it, where the branch leaves
+its target branch, or on the target branch's latest pipeline where that commit has none. On
+each it compares the failed jobs of both pipelines and the failed tests each job's log names.
+Only where the job failed there too, every other job that failed on the head failed there
+too, each of them names a failed test, and every failed test on the head failed there, is
+the failure not the run's. On the target's newest commit it is the target's: the merge
+request and the run's log say so, naming the target branch, its commit and the jobs. Where
+the branch leaves its target, it failed before the run's changes: they say so with the
+commit and the jobs (ADR-0034). Either way the job gets no fix. A job that names no failed
+test is never excused, and neither is an aggregate job that failed alone. A job still
+pending, running or missing on the target's newest commit does not count, and anything else
+where the branch leaves it — no merge-base, no pipeline, no such job, any other result —
+makes the failure the run's own. Where only some of its failed tests fail on the target's
+newest commit too, its fix round names which ones are the target's.
 That job is then retried once through the forge; a pass on the retry is a Flake, named on
 the merge request and the log, and recorded as the check's proof. Not where the failed
 attempt's logs name a failed test of the branch's own — one whose file the branch adds or

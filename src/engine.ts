@@ -877,7 +877,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
         /** The command that prints its log, where there is such a job. */
         readonly log: string | null;
         /** It failed where the branch leaves its target too, or with \`branch\` on that branch's newest commit: not this Run's to fix. */
-        readonly before?: { readonly at: string; readonly url: string | null; readonly branch?: string };
+        readonly before?: {
+          readonly at: string;
+          readonly url: string | null;
+          readonly branch?: string;
+          /** The failed jobs compared, each failing there too. */
+          readonly jobs: ReadonlyArray<string>;
+        };
         /** Missing because the merge request conflicts with its target branch. */
         readonly conflicts?: true;
       };
@@ -888,7 +894,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly at: string;
     readonly url: string | null;
     readonly tests: ReadonlyArray<FailedTest>;
-    readonly shared: boolean;
+    /** The failed jobs compared, each failing there too; null where the failure is the Run's own. */
+    readonly jobs: ReadonlyArray<string> | null;
   }
   /** What a Release that saw a failure its target shared does once that target passes. */
   export type TakeTarget =
@@ -1063,7 +1070,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
      * Verification. With wait, a pending or running job is read again every 30 s for up to 2
      * hours. Anything else is why it is unproved, naming the check, the job and the commit.
      * With settle, a failed job is read on the target branch's newest commit, then where the
-     * branch leaves its target, and is retried once and waited on where it did not fail there too.
+     * branch leaves its target, and is retried once and waited on where its failed jobs and
+     * tests did not fail there too.
      */
     readonly ciJob: (options: {
       readonly runId: string;

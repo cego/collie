@@ -830,19 +830,27 @@ const retriedJob = ({ trace, ...job }: FakeJob, n: number): FakeJob => {
   };
 };
 
-const actionsRun = (mr: FakeMr | undefined) => 4000 + Number(mr?.iid ?? 0);
-/** The Actions run of a pull request's target branch's newest commit. */
-const targetRun = (mr: FakeMr) => 5000 + Number(mr.iid);
+/** A pull request's Actions run: its head's, its base's 1000 on, its target's 2000 on. */
+const actionsRun = (mr: FakeMr | undefined, from = 0) => 4000 + from + Number(mr?.iid ?? 0);
 
-/** Each job of a pull request's head run, and each attempt behind it, with its `run_attempt`. */
 const actionsAttempts = (mr: FakeMr) =>
-  Arr.flatMap(jobsOf(mr.jobs ?? [], 0), ({ attempts = [], ...job }) => [
-    ...Arr.map(attempts, (one, at) => ({ ...one, name: job.name, attempt: at + 1 })),
-    { ...job, attempt: attempts.length + 1 },
-  ]);
-
-const targetAttempts = (mr: FakeMr) =>
-  Arr.map(jobsOf(mr.target?.jobs ?? [], 2000), (job) => ({ ...job, attempt: 1 }));
+  Arr.flatMap(
+    [
+      [mr.jobs ?? [], 0],
+      [mr.base?.jobs ?? [], 1000],
+      [mr.target?.jobs ?? [], 2000],
+    ] as const,
+    ([jobs, from]) =>
+      Arr.flatMap(jobsOf(jobs, from), ({ attempts = [], ...job }) => [
+        ...Arr.map(attempts, (one, at) => ({
+          ...one,
+          name: job.name,
+          attempt: at + 1,
+          run: actionsRun(mr, from),
+        })),
+        { ...job, attempt: attempts.length + 1, run: actionsRun(mr, from) },
+      ]),
+  );
 
 /** The merge request a project's job `id` is on its head pipeline of. */
 const headJobAt = (model: ForgeModel, project: (mr: FakeMr) => boolean, id: number) => {
@@ -1093,12 +1101,17 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
     if (trace && !args.includes("POST")) {
       const found = Option.getOrUndefined(
         Arr.findFirst(
-          Arr.flatMap(model.mrs, (mr) => [
-            ...Arr.flatMap(jobsOf(mr.jobs ?? [], 0), (job) =>
-              Arr.map([...(job.attempts ?? []), job], (one) => ({ mr, one, pipeline: 0 })),
+          Arr.flatMap(model.mrs, (mr) =>
+            Arr.flatMap([mr.jobs ?? [], mr.base?.jobs ?? [], mr.target?.jobs ?? []], (jobs, n) =>
+              Arr.flatMap(jobsOf(jobs, n * 1000), (job) =>
+                Arr.map([...(job.attempts ?? []), job], (one) => ({
+                  mr,
+                  one,
+                  pipeline: pipelineIdOf(mr) + n,
+                })),
+              ),
             ),
-            ...Arr.map(jobsOf(mr.target?.jobs ?? [], 2000), (one) => ({ mr, one, pipeline: 2 })),
-          ]),
+          ),
           ({ one }) => one.id === Number(trace[2]),
         ),
       );
@@ -1107,7 +1120,7 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
         ? json({
             id: found.one.id,
             web_url: `https://${found.mr.project}/-/jobs/${found.one.id}`,
-            pipeline: { id: pipelineIdOf(found.mr) + found.pipeline },
+            pipeline: { id: found.pipeline },
           })
         : ok(found.one.trace ?? "");
     }
@@ -1807,14 +1820,14 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
     const target = Option.getOrUndefined(
       Arr.findFirst(ofRepo, (one) => one.targetBranch === sha && one.target !== undefined),
     );
-    const [jobs, at] =
+    const [jobs, at, run] =
       head !== undefined
-        ? [jobsOf(head.jobs ?? [], 0), sha]
+        ? [jobsOf(head.jobs ?? [], 0), sha, actionsRun(head)]
         : base !== undefined
-          ? [jobsOf(base.base?.jobs ?? [], 1000), sha]
+          ? [jobsOf(base.base?.jobs ?? [], 1000), sha, actionsRun(base, 1000)]
           : target !== undefined
-            ? [jobsOf(target.target!.jobs, 2000), target.target!.at]
-            : [jobsOf(model.checksAt?.[sha] ?? [], 0), sha];
+            ? [jobsOf(target.target!.jobs, 2000), target.target!.at, actionsRun(target, 2000)]
+            : [jobsOf(model.checksAt?.[sha] ?? [], 0), sha, actionsRun(undefined)];
     const page = {
       check_runs: pipe(
         Arr.flatMap(jobs, (job) => [
@@ -1837,7 +1850,7 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
                   name: job.name,
                   head_sha: at,
                   ...GITHUB_RUN[job.state],
-                  html_url: `https://github.com/${repo}/actions/runs/${head === undefined && base === undefined && target !== undefined ? targetRun(target) : actionsRun(head ?? base)}/job/${job.id}`,
+                  html_url: `https://github.com/${repo}/actions/runs/${run}/job/${job.id}`,
                 },
               ]
             : [],
@@ -1855,16 +1868,13 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
       Arr.findFirst(
         Arr.flatMap(
           Arr.filter(model.mrs, (one) => one.project === `github.com/${repo}`),
-          (mr: FakeMr) => [
-            ...Arr.map(actionsAttempts(mr), (job) => ({ mr, job, run: actionsRun(mr) })),
-            ...Arr.map(targetAttempts(mr), (job) => ({ mr, job, run: targetRun(mr) })),
-          ],
+          (mr: FakeMr) => Arr.map(actionsAttempts(mr), (job) => ({ mr, job })),
         ),
         ({ job }) => job.id === Number(id),
       ),
     );
     if (found === undefined) return no();
-    const run = found.run;
+    const run = found.job.run;
     if (logs !== undefined) return found.job.trace === undefined ? no() : ok(found.job.trace);
     return json({
       id: found.job.id,
@@ -1876,16 +1886,18 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
   const attemptJobs = /^repos\/(.+)\/actions\/runs\/(\d+)\/attempts\/(\d+)\/jobs/.exec(route);
   if (attemptJobs) {
     const [, repo = "", run = "", attempt = ""] = attemptJobs;
-    const ofRepo = Arr.filter(model.mrs, (one) => one.project === `github.com/${repo}`);
-    const head = Arr.findFirst(ofRepo, (one) => actionsRun(one) === Number(run));
-    const target = Arr.findFirst(ofRepo, (one) => targetRun(one) === Number(run));
-    if (head._tag === "None" && target._tag === "None") return no();
-    const listed =
-      head._tag === "Some"
-        ? actionsAttempts(head.value)
-        : targetAttempts(Option.getOrThrow(target));
-    const jobs = Arr.flatMap(listed, (job) =>
-      job.attempt === Number(attempt)
+    const mr = Option.getOrUndefined(
+      Arr.findFirst(
+        model.mrs,
+        (one) =>
+          one.project === `github.com/${repo}` &&
+          (actionsRun(one) === Number(run) ||
+            Arr.some(actionsAttempts(one), (job) => job.run === Number(run))),
+      ),
+    );
+    if (mr === undefined) return no();
+    const jobs = Arr.flatMap(actionsAttempts(mr), (job) =>
+      job.run === Number(run) && job.attempt === Number(attempt)
         ? [
             {
               id: job.id,

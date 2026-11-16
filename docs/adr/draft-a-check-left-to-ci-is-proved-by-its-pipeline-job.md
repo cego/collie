@@ -46,8 +46,8 @@ They tell a human what the job runs. Collie never runs them.
   log, as a CI fix round. The builder fixes, commits and pushes without `ci.skip`, and the
   Run waits again.
 - A failed job is first read on the target branch's newest commit. Where it failed
-  there, and every failed test the merge request's failed attempt names failed there
-  too, or the attempt names none, the failure is the target's. It gets no fix round,
+  there, and that commit shares the failure as the base must below, the failure is the
+  target's. It gets no fix round,
   at implement or at Release, and it is named with the target branch, its commit and
   its job. Release parks on it with the cause `target-red`
   ([ADR-draft-a-run-recovers-where-it-parks](draft-a-run-recovers-where-it-parks.md)).
@@ -66,6 +66,13 @@ They tell a human what the job runs. Collie never runs them.
   or cannot be read, the pass stands and the Run records it as an unsettled Flake.
   (Amended 2026-11-11: a branch's flaky new scenario failed once, passed on retry, was
   released, and turned its target branch red for the Runs after it.)
+- A failed job is excused as failing before the Run, or as the target's, only where the base,
+  or the target's newest commit, shares the failure:
+  the failed jobs of the job's pipeline or run on the head all failed at the base, each
+  names a failed test, and every failed test on the head failed there. A job naming no
+  tests, or an aggregate job that failed alone, is the Run's own. (Amended 2026-11-14,
+  #460: an aggregate job red on the target excused every new failure beneath it, and Runs
+  completed over a format failure and stale generated types their own changes caused.)
 - After the gate's round limit, the Run parks as an unproved gate does.
 - The Run parks unproved, with the reason, in three cases: the pipeline on the head has no
   such job, the job was skipped or cancelled, or the checkout has no forge.

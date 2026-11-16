@@ -626,7 +626,8 @@ function baseJob(
       // Only where CI never ran at the merge-base does the target branch's tip stand in for it.
       const any = yield* checkRuns(repo, base, "per_page=1", cwd);
       if (!any.ok) return unread(any.reason);
-      if (any.value.length > 0) return { ok: true, at: base, state: "missing", url: null };
+      if (any.value.length > 0)
+        return { ok: true, at: base, state: "missing", url: null, id: null };
     }
     const tip = there.value === undefined ? yield* checkRun(repo, target, name, cwd) : there;
     if (!tip.ok) return unread(tip.reason);
@@ -636,7 +637,13 @@ function baseJob(
         ok: false,
         reason: `no check run ${name} at ${pipe(base, Str.slice(0, 12))} or on ${target}`,
       };
-    return { ok: true, at: found.head_sha, state: stateOf(found), url: found.html_url ?? null };
+    return {
+      ok: true,
+      at: found.head_sha,
+      state: stateOf(found),
+      url: found.html_url ?? null,
+      id: actionsJob(found.html_url),
+    };
   });
 }
 
@@ -1155,7 +1162,12 @@ const AttemptJob = Schema.Struct({
 });
 const AttemptJobs = Schema.Struct({
   jobs: Schema.Array(
-    Schema.Struct({ id: Schema.Finite, status: Schema.String, conclusion: optionalText }),
+    Schema.Struct({
+      id: Schema.Finite,
+      name: Schema.String,
+      status: Schema.String,
+      conclusion: optionalText,
+    }),
   ),
 });
 
@@ -1181,22 +1193,27 @@ function failedAttempt(
       cwd,
       `repos/${repo}/actions/jobs/${Str.split(id, "/")[1]}`,
     );
-    if (!attempt.ok) return { url: null, tests: [] };
+    if (!attempt.ok) return { url: null, tests: [], jobs: null };
     const url = attempt.value.html_url ?? null;
     const route = `repos/${repo}/actions/runs/${attempt.value.run_id}/attempts/${attempt.value.run_attempt}/jobs`;
     const jobs: Array<(typeof AttemptJobs.Type)["jobs"][number]> = [];
     for (let page = 1; ; page++) {
       const listed = yield* rest(AttemptJobs, cwd, `${route}?per_page=100&page=${page}`);
-      if (!listed.ok) return { url, tests: [] };
+      if (!listed.ok) return { url, tests: [], jobs: null };
       jobs.push(...listed.value.jobs);
       if (listed.value.jobs.length < 100) break;
     }
-    const logs = yield* Effect.forEach(
-      Arr.filter(jobs, (one) => stateOf(one) === "failed"),
-      (one) => requestText(LOGIN, cwd, `repos/${repo}/actions/jobs/${one.id}/logs`),
+    const failed = Arr.filter(jobs, (one) => stateOf(one) === "failed");
+    const logs = yield* Effect.forEach(failed, (one) =>
+      requestText(LOGIN, cwd, `repos/${repo}/actions/jobs/${one.id}/logs`),
     );
-    const tests = Arr.flatMap(logs, (log) => (log.ok ? failedTestsIn(plainLog(log.value)) : []));
-    return { url, tests: Arr.dedupeWith(tests, (a, b) => a.name === b.name && a.file === b.file) };
+    const named = Arr.map(logs, (log) => (log.ok ? failedTestsIn(plainLog(log.value)) : null));
+    const tests = Arr.flatMap(named, (one) => one ?? []);
+    return {
+      url,
+      tests: Arr.dedupeWith(tests, (a, b) => a.name === b.name && a.file === b.file),
+      jobs: Arr.zipWith(failed, named, (one, tests) => ({ name: one.name, tests })),
+    };
   });
 }
 
