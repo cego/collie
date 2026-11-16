@@ -29,7 +29,6 @@ import {
 import { LinkDelivery, readLinkDeliveries } from "./run-links";
 import { appendLogLine } from "./run-log";
 import { readReplies, recordReply } from "./replies";
-import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import {
   Cache,
   Cause,
@@ -247,7 +246,7 @@ import {
 } from "./oversight";
 import { evaluationDeps } from "./evaluator";
 import { budgetPath, herdOf, humanSubmits, machineHerd } from "./steering";
-import { recordsLayer, type Records } from "./records";
+import { hostDatabase, recordsLayer, type Records } from "./records";
 import { addressOf, RunRecords } from "./run-records";
 import { Steered } from "./delivery-queue";
 import type { JudgementDeps } from "./drift";
@@ -3406,10 +3405,7 @@ export function engineLayer(options: {
   // One connection, two halves: the engine's own tables and the rows Collie keeps beside
   // them are in the same file, written by the same process.
   // A host that cannot open its own database has nothing to serve.
-  const sql = SqliteClient.layer({ filename: `${options.dir}/host.db` }).pipe(
-    Layer.orDie,
-    Layer.provideMerge(Reactivity.layer),
-  );
+  const sql = hostDatabase(options.dir).pipe(Layer.orDie, Layer.provideMerge(Reactivity.layer));
   const shardingConfig = {
     // A host told to stop must not take a running workflow down with it: the work
     // finishes its step, and what is left is picked up by the next host.
