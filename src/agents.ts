@@ -3798,12 +3798,13 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           ),
         });
         if ((yield* completed) !== null) return false;
+        const rows = Arr.filter(
+          yield* everyRegistered,
+          (one) => one.agent === agent && one.runId === ask.runId,
+        );
         if (
-          Arr.some(
-            yield* everyRegistered,
-            (one) =>
-              one.agent === agent && one.runId === ask.runId && one.incarnation?.backend !== "core",
-          )
+          Arr.isReadonlyArrayNonEmpty(rows) &&
+          !Arr.some(rows, (one) => one.incarnation?.backend === "core")
         ) {
           yield* log(ask.runId, `${agent}: started before core, so not started again`);
           return false;

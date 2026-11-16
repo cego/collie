@@ -1057,6 +1057,51 @@ test(
 );
 
 test(
+  "a host starts again an agent resumed on core, though its Herdr 1 register row remains",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const core = yield* rig.startCore();
+        yield* rig.queueOutputs([null]);
+        const { runId, agent } = yield* hosted(
+          Effect.gen(function* () {
+            const runId = yield* started("pi", "r1");
+            const agent = agentName(runId, "pi", null, 1);
+            yield* idleAfterItsStep(agent);
+            return { runId, agent };
+          }),
+        );
+        // Herdr 1 kept its row in a register named by its socket and workspace.
+        yield* registerAgent(
+          { session: `${rig.root}/herdr.sock`, workspaceId: "w1", cwd: rig.projectDir },
+          {
+            role: "pi",
+            agent,
+            paneId: "1-9",
+            workspaceId: "w1",
+            runId,
+            workflow: "relaunched",
+            at: "2026-09-09T09:00:00Z",
+            incarnation: { terminalId: agent, agentSession: null },
+          },
+        ).pipe(Effect.provide(recordsAt(dir())));
+        yield* fs.remove(`${startedDir(dir(), runId)}/${agent}.json`);
+        yield* core.lose;
+        const before = coreCalls(yield* rig.calls()).length;
+
+        yield* hosted(
+          until(
+            () => Effect.flatMap(rig.calls(), (calls) => launchesSince(calls, before)),
+            (launches) => Arr.some(launches, (one) => one.name === agent),
+          ),
+        );
+      }),
+    ),
+  120_000,
+);
+
+test(
   "an agent ended on purpose stays ended when core reports its exit before the end is done",
   () =>
     runEffect(
