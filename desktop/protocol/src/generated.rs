@@ -209,6 +209,8 @@ pub enum Cause {
     IdleBudget,
     #[serde(rename = "ci-job-absent")]
     CiJobAbsent,
+    #[serde(rename = "ci-failed")]
+    CiFailed,
     #[serde(rename = "target-red")]
     TargetRed,
     #[serde(rename = "forge-unavailable")]
@@ -225,6 +227,8 @@ pub enum Cause {
     BranchForcePushed,
     #[serde(rename = "release-failed")]
     ReleaseFailed,
+    #[serde(rename = "review-blocked")]
+    ReviewBlocked,
     #[serde(rename = "gate-fix-unproved")]
     GateFixUnproved,
     #[serde(rename = "step-failed")]

@@ -157,6 +157,7 @@ import {
 import { ForgeHttp, forgeHttpLayer } from "./forge/http";
 import { EngineTouches, engineTouchesLayer, touching } from "./engine-touches";
 import { ciJob, sharedFailure, takeTarget } from "./ci-job";
+import { rememberFailedCi } from "./park-recheck";
 import { land, LandingSchema, readLanding, takeOver } from "./landing";
 import {
   carried,
@@ -4540,7 +4541,7 @@ export const hostLayer = (options: {
         runId: string,
         wait:
           | { readonly on: string; readonly who: string | null }
-          | { readonly repair: string }
+          | { readonly repair: string; readonly cause: ParkCause }
           | null,
       ) =>
         Effect.gen(function* () {
@@ -4555,7 +4556,7 @@ export const hostLayer = (options: {
             else if (Option.isSome(before)) yield* store.announce;
             return;
           }
-          if ("repair" in wait) return yield* host.parked(runId, wait.repair);
+          if ("repair" in wait) return yield* host.parked(runId, wait.repair, wait.cause);
           const awaiting = {
             on: wait.on,
             who: wait.who,
@@ -4592,6 +4593,15 @@ export const hostLayer = (options: {
               reason: "this Run has recorded no merge request to read the review of",
             });
           const read = yield* under(forgeOf(ref).readReview(ref, asked.cwd, runShell));
+          if (read.ok && read.pipeline.state === "failed")
+            yield* under(
+              rememberFailedCi(runDir(dir, asked.runId), {
+                head: read.head,
+                name: read.pipeline.name,
+                mr,
+                cwd: asked.cwd,
+              }),
+            ).pipe(Effect.orDie);
           return { mr, ref, read, standing: standingOf(read, asked) };
         });
       const unrecorded = "this Run recorded no merge request to read deployments of";
@@ -5664,7 +5674,9 @@ export const hostLayer = (options: {
                 }
                 yield* waitOn(
                   asked.runId,
-                  wait._tag === "Awaiting" ? wait : { repair: blockedLine(mr, wait.why) },
+                  wait._tag === "Awaiting"
+                    ? wait
+                    : { repair: blockedLine(mr, wait.why), cause: wait.cause },
                 );
                 yield* Effect.sleep(options.reviewPoll ?? "5 minutes");
               }
