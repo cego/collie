@@ -58,6 +58,7 @@ test.each(["merged", "abandoned"] as const)(
             aligned: "unverified",
             crossRun: "none",
             significance: {
+              readiness: "claimed",
               mrTouched: false,
               pendingChoice: false,
               driftUnresolved: false,

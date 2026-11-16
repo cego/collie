@@ -1,5 +1,6 @@
 // A Run's own records, kept in the host's database
 // (ADR-draft-a-runs-own-records-are-rows-in-the-hosts-database).
+import { epochMs } from "../src/time";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Layer } from "effect";
 import * as Rec from "effect/Record";
@@ -374,7 +375,7 @@ test("a rollback dates each Run's files by when it last did work, not by the rol
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       yield* legacy({ "runs/run-c/steps.jsonl": '{"kind":"enter"}\n' });
-      const worked = Date.UTC(2020, 0, 2) / 1000;
+      const worked = epochMs("2020-01-02T00:00:00Z") / 1000;
       yield* fs.utimes(`${stateDir}/runs/run-c/steps.jsonl`, worked, worked);
       const activity = yield* records(RunRecords.use((one) => one.activity(["run-c"])));
       expect(activity.get("run-c")).toBe(worked * 1000);
@@ -399,8 +400,8 @@ test("a rollback is refused while a later build's migration is recorded, and cha
         later: `${RUN_RECORDS_MIGRATION_ID + 1}_later`,
       });
       expect(yield* fs.exists(`${stateDir}/runs/run-a/steps.jsonl`)).toBe(false);
-      expect(
-        yield* records(RunRecords.use((one) => one.lines("run-a", "steps.jsonl"))),
-      ).toEqual(["{}"]);
+      expect(yield* records(RunRecords.use((one) => one.lines("run-a", "steps.jsonl")))).toEqual([
+        "{}",
+      ]);
     }),
   ));

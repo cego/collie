@@ -55,7 +55,6 @@ import {
   recordLaunch,
   sameSession,
   StartedWith,
-  startedDir,
   withRelaunchLock,
   stemOf,
   wasOrdered,
@@ -2308,8 +2307,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
    * transaction so a steer still reaches it. A status herdr cannot give ends the wait.
    * `false` where the Run was stopped while it waited.
    */
-  const stoppedRun = (runId: string) =>
-    under(controlSet(runId, STOP));
+  const stoppedRun = (runId: string) => under(controlSet(runId, STOP));
 
   const turnEnded = (launched: Launched) =>
     Effect.gen(function* () {
@@ -3940,11 +3938,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         });
         if ((yield* completed) !== null) return false;
         // The host starts an agent on core again, in the session it had.
-        if (
-          lost === null &&
-          (yield* startedWith(ask.runId, agent)) !== null
-        )
-          return false;
+        if (lost === null && (yield* startedWith(ask.runId, agent)) !== null) return false;
         const listing = yield* host.herdr.agentList().pipe(Effect.option);
         if (listing._tag === "None") return false;
         if (lost !== null) {
@@ -4515,7 +4509,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     halt,
     collect: (...args: Parameters<typeof collect>) =>
       Effect.tap(collect(...args), (text) =>
-        text === null ? Effect.void : under(RunRecords.use((records) => records.touch(args[0].runId))),
+        text === null
+          ? Effect.void
+          : under(RunRecords.use((records) => records.touch(args[0].runId))),
       ),
     peekOutput: (launched) =>
       under(

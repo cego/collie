@@ -224,9 +224,7 @@ test("a stop of a Run whose Check pass waits for memory runs nothing, however so
     Effect.gen(function* () {
       const stopOnceWaiting = Effect.gen(function* () {
         while ((yield* waitingFor()) === null) yield* Effect.sleep("20 millis");
-        yield* RunRecords.use((records) =>
-          records.setControl(STOP, runId, new Date().toISOString()),
-        );
+        yield* RunRecords.use((records) => records.setControl(STOP, runId, "2026-09-14T10:00:00Z"));
         yield* rig.memory(50).pipe(Effect.orDie);
       });
       const got = yield* gateOnRig(

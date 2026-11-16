@@ -218,17 +218,14 @@ const removeRecord = (
   id: string,
 ) => {
   const outputs = outputsOf(stateDir, id);
-  return Effect.andThen(records.setControl(RUNNING_CHECK, "", null, id), Effect.forEach(
-    [
-      finishingPath(stateDir, id),
-      outputs.stdout,
-      outputs.stderr,
-      outputs.pid,
-      outputs.exit,
-    ],
-    (path) => fs.remove(path, { force: true }).pipe(Effect.ignore),
-    { discard: true },
-  ));
+  return Effect.andThen(
+    records.setControl(RUNNING_CHECK, "", null, id),
+    Effect.forEach(
+      [finishingPath(stateDir, id), outputs.stdout, outputs.stderr, outputs.pid, outputs.exit],
+      (path) => fs.remove(path, { force: true }).pipe(Effect.ignore),
+      { discard: true },
+    ),
+  );
 };
 
 /** `text` at `path` whole or not at all, and no `.new` left where it could not be. */
@@ -652,7 +649,8 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   const host = { pid: process.pid, started: (yield* startedOf(process.pid)) ?? "" };
 
   const untrack = (id: string) => Effect.sync(() => collecting.delete(id));
-  const forget = (id: string) => removeRecord(fs, records, dir, id).pipe(Effect.andThen(untrack(id)));
+  const forget = (id: string) =>
+    removeRecord(fs, records, dir, id).pipe(Effect.andThen(untrack(id)));
   /** As a check's Scope closes: ended for good, unless it was handed over. */
   const endOwn = (entry: Collecting) =>
     Effect.suspend(() =>
@@ -738,7 +736,9 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       const line = saidOf(leftover, outcome);
       yield* Effect.logInfo(line);
       if (options.onRun !== undefined)
-        yield* options.onRun(leftover, outcome, line).pipe(Effect.provideService(RunRecords, records));
+        yield* options
+          .onRun(leftover, outcome, line)
+          .pipe(Effect.provideService(RunRecords, records));
       return outcome;
     }).pipe(Effect.provideContext(services));
 

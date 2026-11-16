@@ -198,7 +198,7 @@ test("Run listings and related views given a reader still take intent and displa
           history: [],
         });
         yield* RunRecords.use((records) =>
-          records.setControl(HOLD, run.runId, new Date().toISOString()),
+          records.setControl(HOLD, run.runId, "2026-09-14T10:00:00Z"),
         );
         const all = yield* registry.views(null, fs);
         expect(
@@ -241,7 +241,7 @@ test(
 
           yield* (yield* Store).reported(run.runId, REPORT);
           yield* RunRecords.use((records) =>
-            records.setControl(HOLD, run.runId, new Date().toISOString()),
+            records.setControl(HOLD, run.runId, "2026-09-14T10:00:00Z"),
           );
           const second = Option.getOrUndefined(
             Arr.findFirst(yield* registry.views(null), (view) => view.runId === run.runId),

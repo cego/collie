@@ -10,7 +10,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
-import { Clock, Effect, FileSystem, Option, Path, Result, Schema, flow } from "effect";
+import { Clock, Effect, FileSystem, Option, Result, Schema, flow } from "effect";
 import { readAudit } from "./audit";
 import { planDirOf } from "./run-detail";
 import { readAhead, RunRecords } from "./run-records";

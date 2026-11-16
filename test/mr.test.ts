@@ -70,7 +70,7 @@ test("settled commit and Run references do not inspect a checkout to find a merg
     Effect.gen(function* () {
       const calls: string[] = [];
       const run = (command: string, args: string[]) => {
-        calls.push(`${command} ${args.join(" ")}`);
+        calls.push(`${command} ${Arr.join(args, " ")}`);
         return Effect.succeed({ code: 1, stdout: "" });
       };
       for (const ref of [

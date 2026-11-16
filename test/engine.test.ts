@@ -151,7 +151,13 @@ test(
         yield* host.ask({ op: "start", id: "proof", runId: "r1", input: { note: "raced" } });
         yield* host.until({ op: "waiting", runId: "r1" }, asking);
         yield* host.ask({ op: "hold", runId: "r1" });
-        yield* host.ask({ op: "answer", id: "proof", runId: "r1", decision: "decision", value: "go" });
+        yield* host.ask({
+          op: "answer",
+          id: "proof",
+          runId: "r1",
+          decision: "decision",
+          value: "go",
+        });
         yield* until(
           () => events(state, "r1"),
           (log) => log.includes("held"),

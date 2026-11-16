@@ -45,19 +45,19 @@ const rollback = Command.make(
         Effect.map((done) =>
           done === "owned"
             ? err("invalid_state", `A host owns ${dir}; stop it before rolling its records back.`)
-            : typeof done === "object"
-              ? err(
+            : done === "rolled-back" || done === "not-migrated"
+              ? {
+                  ok: true as const,
+                  data: { dir, done },
+                  human:
+                    done === "rolled-back"
+                      ? `Wrote ${dir}'s Run records back to their files for an older build.`
+                      : `${dir}'s Run records were never moved into its database.`,
+                }
+              : err(
                   "invalid_state",
                   `${dir} has a later build's migration ${done.later}; roll that build back first.`,
-                )
-              : {
-                ok: true as const,
-                data: { dir, done },
-                human:
-                  done === "rolled-back"
-                    ? `Wrote ${dir}'s Run records back to their files for an older build.`
-                    : `${dir}'s Run records were never moved into its database.`,
-              },
+                ),
         ),
       );
     }),

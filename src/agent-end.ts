@@ -23,7 +23,6 @@ import {
   launchDir,
   readLaunches,
   sameSession,
-  startedDir,
   stemOf,
   withRelaunchLock,
   type Launched,

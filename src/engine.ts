@@ -3533,7 +3533,7 @@ const ParkJson = Schema.fromJsonString(Park);
 const parkInfoOf = (text: string | null) =>
   text === null
     ? Effect.succeed(null)
-    : Schema.decodeUnknownEffect(ParkJson)(text).pipe(Effect.orElseSucceed(() => null));
+    : Schema.decodeEffect(ParkJson)(text).pipe(Effect.orElseSucceed(() => null));
 /** A wait that ends by itself; the host clears it when the wait ends. */
 export const AWAITING = "awaiting";
 /** Work waiting for a Subscription to reset; cleared once it goes on. */
