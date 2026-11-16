@@ -1,4 +1,5 @@
 mod support;
+use support::clock::FrameAt;
 
 use collie_desktop_board::calls::testing::Harness;
 use collie_desktop_board::{App, record::artefacts::Preview};
@@ -134,11 +135,11 @@ fn a_concise_card_opens_the_helpers_actual_markdown_and_returns_to_the_same_task
     };
     assert_eq!(text, REPORT);
     assert!(*markdown && !truncated);
-    runtime.frame(at);
+    runtime.frame_at(at);
     assert!(said(&runtime, "Socket diagnosis"));
     assert!(said(&runtime, "ECONNREFUSED"));
     runtime.update(|app, _| app.back());
-    runtime.frame(at + 200.0);
+    runtime.frame_at(at + 200.0);
     assert!(runtime.state.record.open.is_none());
     assert!(said(&runtime, "Recover the build"));
 }
@@ -184,7 +185,7 @@ fn a_failed_read_is_unseen_and_retry_reads_again_without_reopening_the_card() {
         Err(CallError("The owner is offline".into())),
     );
     settle(&harness, &mut runtime);
-    runtime.frame(at);
+    runtime.frame_at(at);
     assert!(said(&runtime, "The owner is offline"));
     assert!(harness.fake.asked_of("artefactSeen").is_empty());
     tap_label(&mut runtime, "Retry report", &mut at);
@@ -344,7 +345,7 @@ fn accepted_producer_fixture() {
         );
         std::thread::park_timeout(std::time::Duration::from_millis(1));
     }
-    runtime.frame(at);
+    runtime.frame_at(at);
     assert!(said(&runtime, "ECONNREFUSED"));
     assert!(harness.fake.asked_of("artefactSeen").is_empty());
     collie_desktop_board::record::artefacts::frame_drawn(&runtime);
@@ -352,6 +353,6 @@ fn accepted_producer_fixture() {
     assert_eq!(seen[0]["id"], address["id"]);
     assert_eq!(seen[0]["revision"], address["revision"]);
     runtime.update(|app, _| app.back());
-    runtime.frame(at + 200.0);
+    runtime.frame_at(at + 200.0);
     assert!(said(&runtime, &name));
 }

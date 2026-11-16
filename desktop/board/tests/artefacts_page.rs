@@ -2,6 +2,7 @@
 //! the fake core, each result opened on its owning Run's record.
 
 mod support;
+use support::clock::FrameAt;
 
 use collie_desktop_board::App;
 use collie_desktop_board::calls::testing::Harness;
@@ -129,7 +130,7 @@ fn the_page_searches_every_machine_names_what_it_could_not_search_and_loads_more
         )),
     );
     settle(&harness, &mut runtime);
-    runtime.frame(100.0);
+    runtime.frame_at(100.0);
     assert!(said(&runtime, "old-notes.md"));
     assert!(said(&runtime, "vm · r-old"));
     assert!(said(
@@ -165,7 +166,7 @@ fn the_page_searches_every_machine_names_what_it_could_not_search_and_loads_more
             ("i-pc".into(), "b1".into(), false)
         ]
     );
-    runtime.frame(at);
+    runtime.frame_at(at);
     assert!(runtime.find("artefacts-more").is_none());
 }
 
@@ -274,7 +275,7 @@ fn a_machine_gone_unreachable_keeps_its_earlier_results_visibly_stale_and_takes_
             ("i-vm".into(), "a1".into(), true)
         ]
     );
-    runtime.frame(100.0);
+    runtime.frame_at(100.0);
     assert!(said(
         &runtime,
         "Saved from an earlier search; vm is unreachable"
@@ -441,7 +442,7 @@ fn switching_results_during_a_read_cannot_show_or_acknowledge_the_earlier_one() 
     assert!(matches!(record.artefacts.preview, Some(Preview::Link)));
     assert!(record.artefacts.bytes.is_none());
     assert!(harness.fake.asked_of("artefactSeen").is_empty());
-    runtime.frame(100.0);
+    runtime.frame_at(100.0);
     assert!(!said(&runtime, "Old notes"));
 }
 
@@ -492,12 +493,12 @@ fn enter_submits_a_named_search_field_and_the_result_controls_are_accessible() {
         key: rune::Key::Text("notes".into()),
         mods: Default::default(),
     });
-    runtime.frame(at + 16.0);
+    runtime.frame_at(at + 16.0);
     runtime.key(rune::KeyEvent {
         key: rune::Key::Enter,
         mods: Default::default(),
     });
-    runtime.frame(at + 32.0);
+    runtime.frame_at(at + 32.0);
     assert_eq!(
         harness.fake.asked_of("artefactSearch")[1],
         json!({"query": "notes"})
@@ -510,7 +511,7 @@ fn enter_submits_a_named_search_field_and_the_result_controls_are_accessible() {
         Ok(page(vec![found("vm", notes_vm())], Value::Null, vec![])),
     );
     settle(&harness, &mut runtime);
-    runtime.frame(at);
+    runtime.frame_at(at);
     let tree = runtime.accessibility_json();
     for label in ["Open", "Mark seen"] {
         assert!(
