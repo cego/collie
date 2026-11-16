@@ -13,7 +13,7 @@ import type { Ran, Runner } from "../mr";
 import type { Posted } from "../sdk";
 import { github } from "./github";
 import { gitlab } from "./gitlab";
-import type { ForgeHttp } from "./http";
+import type { Answered, ForgeHttp } from "./http";
 import type { FiledIssue, IssueList } from "./issues";
 import type { ForgeComment, MergeAnswer, ReviewRead } from "./review";
 import type { FailedTest } from "../own-tests";
@@ -86,6 +86,14 @@ export interface FailedAttempt {
   readonly url: string | null;
   /** None where the logs cannot be read or name no test. */
   readonly tests: ReadonlyArray<FailedTest>;
+  /** Its pipeline's or run attempt's failed jobs, null where they could not be listed. */
+  readonly jobs: ReadonlyArray<FailedJob> | null;
+}
+
+/** A failed job by name, and the failed tests its own log names, null where it could not be read. */
+export interface FailedJob {
+  readonly name: string;
+  readonly tests: ReadonlyArray<FailedTest> | null;
 }
 
 /** A job of a pipeline read whole; `manual` waits for somebody to start it by hand. */
@@ -149,6 +157,21 @@ export type BaseJobRead =
       readonly at: string;
       readonly state: JobState;
       readonly url: string | null;
+      /** What `failedAttempt` takes; null where there is no such job. */
+      readonly id: string | null;
+    }
+  | { readonly ok: false; readonly reason: string };
+
+/** A job on the target branch's newest commit; `at` is null where no pipeline names one. */
+export type TargetJobRead =
+  | {
+      readonly ok: true;
+      readonly branch: string;
+      readonly at: string | null;
+      readonly state: JobState;
+      readonly url: string | null;
+      /** What `failedAttempt` takes; null where there is no such job. */
+      readonly id: string | null;
     }
   | { readonly ok: false; readonly reason: string };
 
@@ -161,6 +184,13 @@ export interface ReviewCommands {
 /** What Collie asks a forge. Every answer is a value: a forge that cannot be asked says why. */
 export interface Forge {
   readonly name: MrForge;
+  readonly reviewChanges: <R>(
+    ref: MrRef,
+    previous: string,
+    head: string,
+    cwd: string,
+    run: Runner<R>,
+  ) => Effect.Effect<Answered<string>, never, R | ForgeHttp>;
   readonly create: <R>(
     options: {
       readonly project: string;
@@ -279,6 +309,13 @@ export interface Forge {
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<BaseJobRead, never, R | ForgeHttp>;
+  /** The job named `name` on the merge request's target branch's newest commit. */
+  readonly targetJob: <R>(
+    ref: MrRef,
+    name: string,
+    cwd: string,
+    run: Runner<R>,
+  ) => Effect.Effect<TargetJobRead, never, R | ForgeHttp>;
   /** The failed attempt `id` of a job, and the failed tests its run's failed jobs name. */
   readonly failedAttempt: <R>(
     ref: MrRef,
@@ -349,14 +386,27 @@ export interface Forge {
   readonly noun: string;
   /** The repository's web address, from its `host/path`. */
   readonly webUrl: (project: string) => string;
-  /** One note on the merge request, and its approval where `approve` asks for it. */
+  /** One note on the merge request. */
   readonly post: <R>(
     ref: MrRef,
     body: string,
-    approve: boolean,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<Posted, never, R | ForgeHttp>;
+  /** Approves only the reviewed head, returning the forge's refusal unchanged in the message. */
+  readonly approve: <R>(
+    ref: MrRef,
+    head: string,
+    cwd: string,
+    run: Runner<R>,
+  ) => Effect.Effect<Posted, never, R | ForgeHttp>;
+  /** Finds a top-level note by its exact last-line signature. */
+  readonly findNote: <R>(
+    ref: MrRef,
+    signature: string,
+    cwd: string,
+    run: Runner<R>,
+  ) => Effect.Effect<Answered<boolean>, never, R | ForgeHttp>;
   /** The merge request's review: its state, approval, mergeability, pipeline and comments. */
   readonly readReview: <R>(
     ref: MrRef,

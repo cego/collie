@@ -3,8 +3,9 @@
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { Effect, Schema } from "effect";
+import { Effect, FileSystem, Path, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
+import { installDependencies } from "./dependencies";
 import { defaultBase } from "./inputs";
 import { whatItSaid, type Runner } from "./mr";
 
@@ -12,7 +13,9 @@ import { whatItSaid, type Runner } from "./mr";
  * What an integration did. `ref` and `sha` are what the branch is now measured against —
  * a reviewer's diff is `<sha>...HEAD`. `conflicted` leaves the merge in progress for the
  * builder to finish; `waiting` merged nothing because the checkout has work of its own;
- * `unavailable` could not tell where the default branch is, a failed fetch included.
+ * `unavailable` could not tell where the default branch is, a failed fetch included, or
+ * could not bring the checkout's dependencies to the merged head, which the next
+ * integration installs again before it reports `merged`.
  */
 export const IntegrationSchema = Schema.Struct({
   status: Schema.Literals(["unchanged", "merged", "conflicted", "waiting", "unavailable"]),
@@ -38,6 +41,8 @@ export const integrateDefault = (
   cwd: string,
 ) =>
   Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
     const git = (...args: string[]) => run("git", args, cwd);
     const none = { branch: "", ref: "", sha: "", files: [], reason: "" };
     const branch = yield* defaultBase(run, cwd);
@@ -86,11 +91,31 @@ export const integrateDefault = (
         status: "waiting",
         reason: "the checkout has uncommitted changes, so it waits for the builder's commit",
       } satisfies Integration;
-    if ((yield* git("merge-base", "--is-ancestor", at.sha, "HEAD")).code === 0)
+    // Outlives a failed install, so a resume installs at a head it finds already integrated.
+    const owing = path.resolve(
+      cwd,
+      Str.trim((yield* git("rev-parse", "--git-path", "collie-dependencies-owed")).stdout),
+    );
+    if ((yield* git("merge-base", "--is-ancestor", at.sha, "HEAD")).code !== 0) {
+      const owed = yield* fs.writeFileString(owing, "").pipe(Effect.result);
+      if (owed._tag === "Failure")
+        return {
+          ...at,
+          status: "unavailable",
+          reason: `could not mark the dependencies owed at ${owing}: ${owed.failure.message}`,
+        } satisfies Integration;
+      const merged = yield* git("merge", "--no-ff", "--no-edit", ref);
+      if (merged.code !== 0) {
+        yield* fs.remove(owing).pipe(Effect.ignore);
+        const files = yield* unmerged;
+        if (files.length > 0) return { ...at, status: "conflicted", files } satisfies Integration;
+        return { ...at, status: "unavailable", reason: whatItSaid(merged) } satisfies Integration;
+      }
+    } else if (!(yield* fs.exists(owing).pipe(Effect.orElseSucceed(() => false))))
       return { ...at, status: "unchanged" } satisfies Integration;
-    const merged = yield* git("merge", "--no-ff", "--no-edit", ref);
-    if (merged.code === 0) return { ...at, status: "merged" } satisfies Integration;
-    const files = yield* unmerged;
-    if (files.length > 0) return { ...at, status: "conflicted", files } satisfies Integration;
-    return { ...at, status: "unavailable", reason: whatItSaid(merged) } satisfies Integration;
+    const installed = yield* installDependencies(run, cwd);
+    if (installed.refused !== undefined)
+      return { ...at, status: "unavailable", reason: installed.refused } satisfies Integration;
+    yield* fs.remove(owing).pipe(Effect.ignore);
+    return { ...at, status: "merged" } satisfies Integration;
   });

@@ -144,6 +144,16 @@ As of `cego/collie@c3005804` (0.123.1), on vm-mk:
 - **Setting:** `recovery.resume`, default `on`. Asking a person to resume a Run whose
   cause provably cleared protects nothing (invariant 1, ADR-0037).
 
+A Release whose failed CI job fails on its target branch's newest commit too parks
+with the cause `target-red`, which rechecks. Its recheck reads that job on the
+target's newest commit and clears once the job passed there. It is never handed to a
+Heal, because no agent of the Run can repair its target. On resume, while the merge
+request's head is still the one it parked at, the Release's fixer first merges the
+now-green target into the source branch and plain-pushes, outside the CI repair
+rounds. A forge reruns a pipeline on the merge it made before, so only a new head is
+proved against the green target. (Amended 2026-11-13: six Heals each found the same
+red target and escalated.)
+
 **D6. A recovery is evidence, and a cause that recurs is a defect with a stable key.**
 
 - **What is recorded:** every park and every recovery action is a line in the Run's

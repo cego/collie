@@ -161,6 +161,7 @@ export type Need = keyof typeof NEEDS;
  * closed list: Collie fills these from the Run, and anything else is the caller's to give.
  */
 export const SOURCES = {
+  "run-id": "the Run making the offer",
   "run-dir": "the Run's own directory, which holds what it wrote",
   "plan-dir": "the plan directory inside it, where its tickets are",
   "diff-target": "what this Run was pointed at",
@@ -170,6 +171,7 @@ export const SOURCES = {
 } as const;
 export type Source = keyof typeof SOURCES;
 export const SOURCE_NAMES: ReadonlyArray<Source> = [
+  "run-id",
   "run-dir",
   "plan-dir",
   "diff-target",
@@ -240,6 +242,7 @@ export function inputsFor(
     readonly given?: OfferGiven | undefined;
   },
   from: {
+    readonly runId: string;
     readonly runDir: string;
     readonly facts: OfferFacts;
     readonly input: Readonly<Record<string, Schema.Json>>;
@@ -248,6 +251,8 @@ export function inputsFor(
   /** Undefined where there is nothing to pass; a null the Run was started with is a value. */
   const value = (source: Source, name: string): Schema.Json | undefined => {
     switch (source) {
+      case "run-id":
+        return from.runId;
       case "run-dir":
         return from.runDir;
       case "plan-dir":

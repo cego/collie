@@ -41,6 +41,8 @@ export interface FakeSsh {
   readonly drop: Effect.Effect<void>;
   /** Whether a master ends just before a session rides it. */
   readonly dropsBeforeRide: (dropping: boolean) => Effect.Effect<void>;
+  /** Whether SSH config adds a remote forward already held by another connection. */
+  readonly configuredForwards: (configured: boolean) => Effect.Effect<void>;
 }
 
 const Bound = Schema.Struct({ port: Schema.Finite });
@@ -115,6 +117,7 @@ export const writeFakeSsh = Effect.fn("FakeSsh.write")(function* (
     hangs: flag("master-hangs"),
     drop,
     dropsBeforeRide: flag("drops-before-ride"),
+    configuredForwards: flag("configured-forwards"),
   };
   return fake;
 });
