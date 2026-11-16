@@ -1060,8 +1060,8 @@ test.each(["major", "minor"] as const)(
             ]);
             expect(yield* host.agentStarts).toHaveLength(3);
             const launched = Arr.map(
-              Arr.filter(yield* rig.calls(), (one) => one.cmd === "agent start"),
-              (one) => one.argv?.[2],
+              Arr.filter(yield* rig.calls(), (one) => one.cmd === "terminal.run"),
+              (one) => one.params?.name,
             );
             expect(new Set(launched).size).toBe(3);
           }),

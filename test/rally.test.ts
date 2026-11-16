@@ -33,6 +33,7 @@ beforeEach(() =>
   runEffect(
     Effect.gen(function* () {
       rig = yield* Rig.make();
+      yield* rig.startCore();
       const fs = yield* FileSystem.FileSystem;
       dir = `${rig.root}/host`;
       yield* fs.makeDirectory(dir, { recursive: true });

@@ -29,7 +29,7 @@ let dir: string;
 let cwd: string;
 
 beforeEach(() =>
-  runEffect(
+  runLive(
     Effect.gen(function* () {
       rig = yield* Rig.make();
       dir = `${rig.root}/host`;
@@ -40,7 +40,7 @@ beforeEach(() =>
 );
 
 afterEach(() =>
-  runEffect(
+  runLive(
     Effect.gen(function* () {
       const pid = (yield* started())?.pid;
       if (pid !== undefined) kill(pid);
@@ -50,7 +50,7 @@ afterEach(() =>
 );
 
 const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
-  runLive(fastForward(effect));
+  runLive(fastForward(Effect.andThen(Effect.suspend(() => rig.startCore()), effect)));
 
 const Verdict = Schema.Struct({
   verdict: Schema.Literals(["clean", "findings"]),

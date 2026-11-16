@@ -30,7 +30,7 @@ let rig: Rig;
 let dir: string;
 
 beforeEach(() =>
-  runEffect(
+  runLive(
     Effect.gen(function* () {
       rig = yield* Rig.make();
       dir = `${rig.root}/host`;
@@ -43,7 +43,7 @@ beforeEach(() =>
 const Started = Schema.fromJsonString(Schema.Struct({ pid: Schema.Finite }));
 
 afterEach(() =>
-  runEffect(
+  runLive(
     Effect.gen(function* () {
       const events = yield* (yield* FileSystem.FileSystem)
         .readFileString(`${rig.root}/codex-server.events`)
@@ -57,7 +57,7 @@ afterEach(() =>
 );
 
 const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
-  runLive(fastForward(effect));
+  runLive(fastForward(Effect.andThen(Effect.suspend(() => rig.startCore()), effect)));
 
 const Verdict = Schema.Struct({ verdict: Schema.String });
 const work = enveloped({ name: "agent-work", input: { skip: Schema.Boolean }, success: Verdict });
