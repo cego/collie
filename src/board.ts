@@ -1786,6 +1786,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
             waves: fan?.waves ?? [],
             leader,
             settled: settledNow,
+            leaderOnly: opts.flows === undefined,
             waitOf: (run) => {
               const waits = waitsOf(run);
               const running = checksOf.get(run.id) ?? null;

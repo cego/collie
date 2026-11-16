@@ -173,6 +173,8 @@ export interface TaskFacts {
   readonly leader: RunFacts;
   /** Whether the Task's work has settled, so nothing is current. */
   readonly settled: boolean;
+  /** Only the leader's lane, which is all a card's strip draws. */
+  readonly leaderOnly?: boolean;
   readonly waitOf: (run: RunFacts) => LaneWait | null;
   readonly offer: { readonly id: string; readonly title: string; readonly run?: string } | null;
   readonly mr: string | null;
@@ -276,7 +278,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
   });
 
   const lanes: FlowLane[] = [];
-  for (const run of rows) {
+  for (const run of task.leaderOnly === true ? [task.leader] : rows) {
     const repos = task.repoRunsOf.get(run.id) ?? [];
     const own = Arr.filter(
       inputs.children.get(run.id) ?? [],
