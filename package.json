@@ -35,13 +35,13 @@
     "solid-js": "^1.9.19"
   },
   "devDependencies": {
-    "@effect/tsgo": "0.68.1",
+    "@effect/tsgo": "0.69.0",
     "@modelcontextprotocol/sdk": "1.32.2",
     "@oxlint/plugins": "1.93.0",
     "@types/bun": "1.4.4",
     "oxfmt": "0.78.0",
     "oxlint": "1.93.0",
-    "oxlint-tsgolint": "7.0.2006",
+    "oxlint-tsgolint": "7.0.2007",
     "tsrs": "0.25.0-ts7.1.0-beta",
     "typescript": "7.0.2"
   },
