@@ -981,10 +981,19 @@ test("an unavailable action fails immediately instead of waiting for confirmatio
     }),
   ));
 
+/**
+ * The Herd's news file, with the host's own news sweep off: it would retire these items,
+ * whose Runs do not exist, before the read under test.
+ */
+const newsFile = Effect.fn("test.newsFile")(function* () {
+  yield* setSetting(env.userDir, "proactive", false, "2026-11-16T00:00:00.000Z");
+  return yield* newsPath(stateDir, KEY);
+});
+
 test("reading the news is what settles it, and it settles once", () =>
   inWorld(
     Effect.gen(function* () {
-      const file = yield* newsPath(stateDir, KEY);
+      const file = yield* newsFile();
       yield* appendNews(file, { key: "r1:ended", run: "r1", text: "Run r1 ended done." });
       yield* appendNews(file, { key: "r2:halt", run: "r2", text: "Run r2 stopped." });
 
@@ -1002,7 +1011,7 @@ test("reading the news is what settles it, and it settles once", () =>
 test("what Native chat read is still news to another conversation", () =>
   inWorld(
     Effect.gen(function* () {
-      const file = yield* newsPath(stateDir, KEY);
+      const file = yield* newsFile();
       yield* appendNews(file, { key: "r1:ended", run: "r1", text: "Run r1 ended done." });
       expect(yield* call("collie_news")).toContain("Run r1 ended done.");
       const lines = yield* readNews(file);
@@ -1016,7 +1025,7 @@ test("what Native chat read is still news to another conversation", () =>
 test("news is built from the record, and carries no transcripts or diffs", () =>
   inWorld(
     Effect.gen(function* () {
-      const file = yield* newsPath(stateDir, KEY);
+      const file = yield* newsFile();
       yield* appendNews(file, {
         key: "r1:gaps",
         run: "r1",

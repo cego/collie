@@ -512,10 +512,11 @@ export interface AgentsApi {
   readonly usageWaiting: (launched: Launched, incident: RanOut | null) => Effect.Effect<void>;
   /** An incident persisted before its collect Activity could record the result. */
   readonly usageIncident: (launched: Launched) => Effect.Effect<RanOut | null>;
-  /** Waits for working → idle/done with absent Output and permission to remind. */
+  /** Waits for working → idle/done with absent Output, no open question and permission to remind. */
   readonly endedWithoutOutput: (
     launched: Launched,
     may: Effect.Effect<boolean>,
+    questions?: Questions,
   ) => Effect.Effect<void>;
   /** Returns when the reminder was sent, or null if it could not be. */
   readonly remind: (
@@ -1027,7 +1028,7 @@ export const agentWork = <
           parksOnStop(on),
         ),
       );
-      const ended = agents.endedWithoutOutput(on, remindable).pipe(
+      const ended = agents.endedWithoutOutput(on, remindable, questions).pipe(
         Effect.andThen(Clock.currentTimeMillis),
         Effect.map((endedAt) => TurnEnded.make({ endedAt })),
       );
@@ -3065,12 +3066,13 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               ids.has(`${call.id}${UNREPAIRED}`)
             )
               continue;
+            // Taken before the send, as a second reader of the same call may be polling.
+            answeredCalls.add(key);
             const sent = yield* deliver(launched, questionRepair(call.questions), {
               kind: "repair",
               ref: `question-${call.id}`,
               herdr: yield* herdr,
             });
-            answeredCalls.add(key);
             if (sent.sent) continue;
             yield* log(
               launched.runId,
@@ -3377,7 +3379,11 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       ),
     );
 
-  const endedWithoutOutput = (launched: Launched, may: Effect.Effect<boolean>) =>
+  const endedWithoutOutput = (
+    launched: Launched,
+    may: Effect.Effect<boolean>,
+    questions?: Questions,
+  ) =>
     under(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -3385,6 +3391,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           Effect.map((text) => Str.trim(text) === ""),
           Effect.orElseSucceed(() => true),
         );
+        // Read here too: a turn that ended on a question may not be on its Run yet.
+        const asking = questions === undefined ? null : yield* questionsOf(launched, questions);
+        const unasked =
+          asking === null ? Effect.succeed(true) : Effect.map(asking(null), (open) => !open);
         // A turn begun with its launch may end before it is first watched.
         let working = givenAtLaunch.delete(launched.agent);
         for (;;) {
@@ -3392,7 +3402,14 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             .agentStatus(launched.agent)
             .pipe(Effect.orElseSucceed(() => null));
           working ||= status === "working";
-          if (working && status !== null && isSettled(status) && (yield* absent) && (yield* may))
+          if (
+            working &&
+            status !== null &&
+            isSettled(status) &&
+            (yield* absent) &&
+            (yield* unasked) &&
+            (yield* may)
+          )
             return;
           yield* Effect.sleep(Duration.millis(host.pollMs ?? DEFAULT_POLL_MS));
         }
