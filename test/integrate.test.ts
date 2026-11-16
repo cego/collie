@@ -55,8 +55,22 @@ const repositories = Effect.gen(function* () {
       yield* git(upstream, "push", "-q", "origin", "master");
       return yield* git(upstream, "rev-parse", "HEAD");
     });
-  return { run, moveMaster };
+  return { run, upstream, moveMaster };
 });
+
+const masterInstalling = (install: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const { run, upstream, moveMaster } = yield* repositories;
+    yield* fs.makeDirectory(`${upstream}/.collie`);
+    yield* fs.writeFileString(
+      `${upstream}/.collie/dependencies.json`,
+      '{ "executable": "sh", "argv": ["install.sh"] }',
+    );
+    yield* fs.writeFileString(`${upstream}/.gitignore`, "node_modules/\n");
+    yield* moveMaster("install.sh", install);
+    return run;
+  });
 
 const parents = (cwd: string) =>
   Effect.map(git(cwd, "rev-list", "--parents", "-n", "1", "HEAD"), (line) =>
@@ -169,5 +183,55 @@ test("a repository with no remote integrates its local default branch", () =>
       yield* git(root, "checkout", "-q", "feature");
       const done = yield* integrateDefault(shell, root);
       expect(done).toMatchObject({ status: "merged", ref: "master", sha: moved });
+    }),
+  ));
+
+test("a merged default branch leaves the checkout with the merged head's dependencies installed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const run = yield* masterInstalling(
+        'mkdir -p node_modules/.bin && printf "#!/bin/sh\\nexit 0\\n" > node_modules/.bin/tool && chmod +x node_modules/.bin/tool',
+      );
+      expect((yield* integrateDefault(shell, run)).status).toBe("merged");
+      expect((yield* shell("sh", ["-c", "node_modules/.bin/tool"], run)).code).toBe(0);
+    }),
+  ));
+
+test("a merge whose declared dependencies command fails is unavailable, with what the command said", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const run = yield* masterInstalling('echo "lockfile had changes but is frozen" >&2; exit 1');
+      const done = yield* integrateDefault(shell, run);
+      expect(done.status).toBe("unavailable");
+      expect(done.reason).toContain("lockfile had changes but is frozen");
+    }),
+  ));
+
+test("an integration resumed after its install failed installs again, never calling the merged head ready", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const run = yield* masterInstalling(
+        'test -f ../registry-up || { echo "registry unreachable" >&2; exit 1; }; mkdir -p node_modules/.bin && printf "#!/bin/sh\\nexit 0\\n" > node_modules/.bin/tool && chmod +x node_modules/.bin/tool',
+      );
+      expect((yield* integrateDefault(shell, run)).status).toBe("unavailable");
+      yield* fs.writeFileString(`${run}/../registry-up`, "");
+      expect((yield* integrateDefault(shell, run)).status).toBe("merged");
+      expect((yield* shell("sh", ["-c", "node_modules/.bin/tool"], run)).code).toBe(0);
+    }),
+  ));
+
+test("an integration resumed after its install left the index locked installs again", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const run = yield* masterInstalling(
+        'test -f ../registry-up || { touch .git/index.lock; echo "registry unreachable" >&2; exit 1; }; mkdir -p node_modules/.bin && printf "#!/bin/sh\\nexit 0\\n" > node_modules/.bin/tool && chmod +x node_modules/.bin/tool',
+      );
+      expect((yield* integrateDefault(shell, run)).status).toBe("unavailable");
+      yield* fs.remove(`${run}/.git/index.lock`);
+      yield* fs.writeFileString(`${run}/../registry-up`, "");
+      expect((yield* integrateDefault(shell, run)).status).toBe("merged");
+      expect((yield* shell("sh", ["-c", "node_modules/.bin/tool"], run)).code).toBe(0);
     }),
   ));
