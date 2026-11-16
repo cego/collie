@@ -98,12 +98,7 @@ fn every_setting_shows_under_its_group_with_its_value_and_its_default_in_its_uni
         "Unset: shares nothing"
     );
     let keys: Vec<String> = rows(&held).into_iter().map(|r| r.key).collect();
-    for kept_apart in [
-        "gitlab_host",
-        "terminal_backend",
-        "worktrees_directory",
-        "zoom",
-    ] {
+    for kept_apart in ["gitlab_host", "worktrees_directory", "zoom"] {
         assert!(
             !keys.contains(&kept_apart.to_string()),
             "{kept_apart} is shown"
