@@ -137,6 +137,7 @@ export const hostRunRecords = (stateDir: () => string): RunRecordsApi => {
   return {
     lines: (run, journal) => at((records) => records.lines(run, journal)),
     linesOf: (runs, journal) => at((records) => records.linesOf(runs, journal)),
+    lastOf: (runs, journal, kinds) => at((records) => records.lastOf(runs, journal, kinds)),
     append: (run, journal, lines) => at((records) => records.append(run, journal, lines)),
     fact: (run, name) => at((records) => records.fact(run, name)),
     factsOf: (runs, name) => at((records) => records.factsOf(runs, name)),

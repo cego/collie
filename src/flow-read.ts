@@ -10,7 +10,7 @@ import { Clock, Effect, FileSystem } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type { Flow, FlowLane, FlowNode, FlowRun, MrState } from "./board-model";
 import { mrRefOf, mrUrlOf } from "./board-model";
-import { readAudit, whoActed } from "./audit";
+import { lastAudit, whoActed } from "./audit";
 import type { PluginEnv } from "./env";
 import {
   currentOf,
@@ -114,12 +114,12 @@ export const laneFor = Effect.fn("Flow.lane")(function* (
       Effect.map((done) => ({ launch, done })),
     ),
   );
-  const stop = Option.getOrUndefined(
-    Arr.findLast(
-      run.state === "stopped" ? yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => [])) : [],
-      (line) => line.operation === "stop",
-    ),
-  );
+  const stop =
+    run.state === "stopped"
+      ? Option.getOrUndefined(
+          yield* lastAudit(run.dir, ["stop"]).pipe(Effect.orElseSucceed(() => Option.none())),
+        )
+      : undefined;
   return laneOf({
     run: {
       id: run.id,

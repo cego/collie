@@ -18,7 +18,7 @@ import { pipe as pipe_ } from "effect/Function";
 import { Effect, Schema } from "effect";
 import { Significance, mrWords, readMrRef } from "./board-model";
 import { forgeOf } from "./forge/forge";
-import { appendRunJournal, findLastRunJournal, readRunJournal, runJournal } from "./journal";
+import { appendRunJournal, lastRunJournal, readRunJournal, runJournal } from "./journal";
 import { redact } from "./redact";
 import { RunRecords, runOfDir } from "./run-records";
 import { sameTree, type Verification } from "./verify";
@@ -97,7 +97,7 @@ export const readCards = Effect.fn("Cards.read")(function* (runDir: string) {
 });
 
 export const readFinalCard = Effect.fn("Cards.final")(function* (runDir: string) {
-  return yield* findLastRunJournal(cardsPath(runDir), CardJson, (card) => card.kind === "final");
+  return yield* lastRunJournal(cardsPath(runDir), CardJson, ["final"]);
 });
 
 /**

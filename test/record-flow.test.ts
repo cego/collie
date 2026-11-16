@@ -82,9 +82,9 @@ test("a lane reads stop attribution only while its Run is stopped", () =>
         const lane = yield* laneFor(env, { ...run, state }, undefined, new Map()).pipe(
           Effect.provideService(RunRecords, {
             ...records,
-            lines: (one, journal) => {
-              if (one === run.id && journal === AUDIT_FILE) reads++;
-              return records.lines(one, journal);
+            lastOf: (some, journal, kinds) => {
+              if (some.includes(run.id) && journal === AUDIT_FILE) reads++;
+              return records.lastOf(some, journal, kinds);
             },
           }),
         );

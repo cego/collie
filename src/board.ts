@@ -11,7 +11,7 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
 import { Clock, Effect, FileSystem, Option, Result, Schema, flow } from "effect";
-import { readAudit } from "./audit";
+import { lastAudit } from "./audit";
 import { planDirOf } from "./run-detail";
 import { readAhead, RunRecords } from "./run-records";
 import { openReports, readDrift } from "./drift";
@@ -800,16 +800,17 @@ function agentsOf(
 
 /** Who set the hold that stands, and why, as the Run's audit trail recorded it. */
 const holderOf = Effect.fn("Board.holderOf")(function* (run: RunFacts) {
-  const lines = yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => []));
   const last = Option.getOrUndefined(
-    Arr.findLast(lines, (line) => line.operation === "hold" || line.operation === "unhold"),
+    yield* lastAudit(run.dir, ["hold", "unhold"]).pipe(Effect.orElseSucceed(() => Option.none())),
   );
   return last?.operation === "hold" ? { by: last.actor.origin, reason: last.reason ?? "" } : null;
 });
 
 /** The answer a Run carried on with, while nothing has been launched since it was given. */
 const resumedWith = Effect.fn("Board.resumedWith")(function* (run: RunFacts) {
-  const last = (yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => []))).at(-1);
+  const last = Option.getOrUndefined(
+    yield* lastAudit(run.dir, null).pipe(Effect.orElseSucceed(() => Option.none())),
+  );
   if (last?.operation !== "answer") return null;
   if (((yield* lastOrdered(run.id))?.at ?? 0) > epochMs(last.at)) return null;
   const answered = Schema.decodeUnknownOption(Answered)(last.result);
@@ -895,12 +896,8 @@ function over(run: RunFacts, runs: ReadonlyArray<RunFacts>): boolean {
 
 /** Who made a Run's latest stop, from its audit trail (ADR-0039). */
 const lastStopBy = (run: RunFacts) =>
-  readAudit(run.dir).pipe(
-    Effect.map(
-      (lines) =>
-        Option.getOrUndefined(Arr.findLast(lines, (line) => line.operation === "stop"))?.actor
-          .origin,
-    ),
+  lastAudit(run.dir, ["stop"]).pipe(
+    Effect.map((last) => Option.getOrUndefined(last)?.actor.origin),
     Effect.orElseSucceed(() => undefined),
   );
 

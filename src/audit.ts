@@ -11,6 +11,7 @@ import { voiceOf, type Voice } from "./proposals";
 import {
   appendJournal,
   appendRunJournal,
+  lastRunJournal,
   readJournal,
   readRunJournal,
   runJournal,
@@ -87,6 +88,18 @@ const ofRun = (dir: string) => runOfDir(parentOf(dir)) === "runs";
 export const readAudit = Effect.fn("Audit.read")(function* (dir: string) {
   if (ofRun(dir)) return yield* readRunJournal(runJournal(dir, AUDIT_FILE), AuditJson);
   return yield* readJournal(fileOf(dir), AuditJson);
+});
+
+/** The trail's last line of one of `operations`, or its last line for null. */
+export const lastAudit = Effect.fn("Audit.last")(function* (
+  dir: string,
+  operations: ReadonlyArray<string> | null,
+) {
+  if (ofRun(dir)) return yield* lastRunJournal(runJournal(dir, AUDIT_FILE), AuditJson, operations);
+  return Arr.findLast(
+    yield* readJournal(fileOf(dir), AuditJson),
+    (line) => operations === null || operations.includes(line.operation),
+  );
 });
 
 /** Keeps a trail's newest `keep` lines, for one that is written too often to keep whole. */

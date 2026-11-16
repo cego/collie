@@ -114,6 +114,16 @@ export interface RunRecordsApi {
     runs: ReadonlyArray<string>,
     journal: string,
   ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<string>>>;
+  /**
+   * These Runs' lines of `journal` whose kind (its `kind`, else its `operation`) is one of
+   * `kinds`, newest first, or for null only the last line that has a kind, in one read; a
+   * Run with none is absent.
+   */
+  readonly lastOf: (
+    runs: ReadonlyArray<string>,
+    journal: string,
+    kinds: ReadonlyArray<string> | null,
+  ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<string>>>;
   /** Appends lines to a journal, after every line already there. */
   readonly append: (
     run: string,
@@ -240,6 +250,10 @@ export const readAhead = (records: RunRecordsApi, runs: ReadonlyArray<string>): 
   };
   const journal = once((name) => records.linesOf(runs, name));
   const fact = once((name) => records.factsOf(runs, name));
+  const last = once((key) => {
+    const [name = "", ...kinds] = Str.split(key, "\u0000");
+    return records.lastOf(runs, name, kinds.length === 0 ? null : kinds);
+  });
   const activity = once(() => records.activity(runs));
   const controls = once((name) =>
     Effect.map(records.everyControl(name), (rows) => Arr.groupBy(rows, (row) => row.run)),
@@ -250,6 +264,13 @@ export const readAhead = (records: RunRecordsApi, runs: ReadonlyArray<string>): 
       ids.has(run)
         ? Effect.map(journal(name), (all) => all.get(run) ?? [])
         : records.lines(run, name),
+    lastOf: (some, name, kinds) =>
+      Arr.every(some, (run) => ids.has(run))
+        ? Effect.map(
+            last(Arr.join([name, ...(kinds ?? [])], "\u0000")),
+            (all) => new Map(Arr.filter([...all], ([run]) => some.includes(run))),
+          )
+        : records.lastOf(some, name, kinds),
     fact: (run, name) =>
       ids.has(run)
         ? Effect.map(fact(name), (all) => all.get(run) ?? null)
@@ -358,6 +379,26 @@ export const runRecordsLayer = Layer.effect(RunRecords)(
               WHERE journal = ${journal} AND run IN ${sql.in(runs)} ORDER BY run, seq
             `.pipe(
               Effect.map((rows) => grouped(rows, (row: { line: string }) => row.line)),
+              Effect.orDie,
+            ),
+      lastOf: (runs, journal, kinds) =>
+        runs.length === 0
+          ? Effect.succeed(new Map())
+          : (kinds === null
+              ? sql<{ readonly run: string; readonly line: string }>`
+                  SELECT l.run, l.line FROM collie_run_lines l JOIN (
+                    SELECT run, max(seq) AS seq FROM collie_run_lines
+                    WHERE journal = ${journal} AND kind IS NOT NULL AND run IN ${sql.in(runs)}
+                    GROUP BY run
+                  ) latest ON l.run = latest.run AND l.journal = ${journal} AND l.seq = latest.seq
+                `
+              : sql<{ readonly run: string; readonly line: string }>`
+                  SELECT run, line FROM collie_run_lines
+                  WHERE journal = ${journal} AND kind IN ${sql.in(kinds)} AND run IN ${sql.in(runs)}
+                  ORDER BY run, seq DESC
+                `
+            ).pipe(
+              Effect.map((rows) => grouped(rows, (row) => row.line)),
               Effect.orDie,
             ),
       append: (run, journal, lines) =>

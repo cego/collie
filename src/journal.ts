@@ -50,18 +50,22 @@ export const journalOf = <A>(
 export const readJournal = <A>(file: string, json: Schema.Codec<A, string, never, never>) =>
   readJournalWhole(file, json).pipe(Effect.map((journal) => journal.lines));
 
-/** The last matching record, without decoding the history before it. */
-export const findLastJournal = Effect.fn("Journal.findLast")(function* <A>(
-  file: string,
+/**
+ * The last record whose kind is one of `kinds`, or for null the last record, without reading
+ * the history before it. A line that cannot be decoded is passed over.
+ */
+export const lastRunJournal = Effect.fn("Journal.lastRun")(function* <A>(
+  at: RunJournal,
   json: Schema.Codec<A, string, never, never>,
-  matches: (record: A) => boolean,
+  kinds: ReadonlyArray<string> | null,
 ) {
-  const fs = yield* FileSystem.FileSystem;
-  const lines = textsOf(yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => "")));
+  const newest =
+    (yield* RunRecords.use((records) => records.lastOf([at.run], at.name, kinds))).get(at.run) ??
+    [];
   const decode = Schema.decodeUnknownOption(json);
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const read = yield* Effect.sync(() => decode(lines[i]));
-    if (read._tag === "Some" && matches(read.value)) return read;
+  for (const line of newest) {
+    const read = decode(line);
+    if (Option.isSome(read)) return read;
   }
   return Option.none<A>();
 });

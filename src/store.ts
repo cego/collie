@@ -655,7 +655,7 @@ const migrations = (imports: {
         journal TEXT NOT NULL,
         seq INTEGER NOT NULL,
         line TEXT NOT NULL,
-        kind TEXT AS (${field("kind")}),
+        kind TEXT AS (coalesce(${field("kind")}, ${field("operation")})),
         key TEXT AS (${field("key")}),
         PRIMARY KEY (run, journal, seq)
       ) WITHOUT ROWID
