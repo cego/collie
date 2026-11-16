@@ -11,8 +11,16 @@ import { proposalsLayer, type Proposals } from "./proposals";
 import { registeredLayer, type Registered } from "./registry";
 import { tasksLayer, type Tasks } from "./task";
 import { artefactsLayer, type Artefacts } from "./artefacts";
+import { runRecordsLayer, type RunRecords } from "./run-records";
 
-export type Records = Deliveries | Launches | Proposals | Registered | Tasks | Artefacts;
+export type Records =
+  | Deliveries
+  | Launches
+  | Proposals
+  | Registered
+  | Tasks
+  | Artefacts
+  | RunRecords;
 
 /**
  * Over the host's own connection, which the Store has migrated. Fresh, or a layer provided
@@ -26,6 +34,7 @@ export const recordsLayer = Layer.fresh(
     registeredLayer,
     tasksLayer,
     artefactsLayer,
+    runRecordsLayer,
   ),
 );
 
