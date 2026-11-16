@@ -5,7 +5,7 @@
 import { Effect, Schema } from "effect";
 import { FrontDoor } from "./board-model";
 
-/** A saved herdr machine, as `herdr machine list --json` lists it. */
+/** A Machine core keeps, as its machine list gives it. */
 export const HerdrMachine = Schema.Struct({
   id: Schema.String,
   label: Schema.String,

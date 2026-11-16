@@ -8475,7 +8475,8 @@ const makeRegistry: (
 
   /**
    * The Task whose work this Run is about, or null: one whose Runs opened or were given the
-   * merge request its diff target names, or, while it is open, were placed on its branch. Where several are, the one whose matching Run came first.
+   * merge request its diff target names, or, while it is open, were placed on its branch.
+   * Where several are, the one whose matching Run came first.
    */
   const taskWorking = Effect.fn("Engine.taskWorking")(function* (
     generation: Generation,

@@ -2819,7 +2819,6 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         const launched = alive
           ? yield* Effect.gen(function* () {
               const found = yield* entryFor(ask, agent, { paneId: live.paneId, workspaceId: null });
-              // Registered as a start is, so a later delivery finds it was launched on core.
               if (found.entry !== null)
                 yield* registerAgent(scopeFor(ask.cwd), found.entry, {
                   agents: listing.success,

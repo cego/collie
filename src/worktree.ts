@@ -681,16 +681,16 @@ const isBranch = Effect.fn("worktree.isBranch")(function* (
  */
 const branchPath = (branch: string) => Str.split(branch, "/");
 
-/**
- * Every checkout git itself knows about, and which of them the repository is. git's own
- * list rather than herdr's: it answers both questions at once, needs no herdr to be
- * running, and lists a checkout however it was made.
- */
-/** A checkout as git lists it; null where it is detached. */
 interface Listed {
   path: string;
+  /** Null where the checkout is detached. */
   branch: string | null;
 }
+
+/**
+ * Every checkout git itself knows about, and which of them the repository is: git's own
+ * list answers both questions at once and lists a checkout however it was made.
+ */
 
 const gitWorktrees = Effect.fn("worktree.gitWorktrees")(function* (
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,

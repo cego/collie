@@ -862,7 +862,6 @@ export const tasksSweeper = (opts: {
       return { ms: now - since, said: `Finished ${Math.floor((now - since) / 60_000)} min ago` };
     });
 
-  /** Whether a Task closes now. */
   const closing = (task: TaskRecord): Effect.Effect<{ keep: string } | { remove: string } | null> =>
     Effect.gen(function* () {
       if (task.closed_at !== undefined) return null;
