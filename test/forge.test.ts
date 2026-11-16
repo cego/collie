@@ -100,6 +100,32 @@ for (const name of ["gitlab", "github"] as const) {
         }),
       ));
 
+    if (name === "gitlab")
+      for (const flag of ["collapsed", "too_large"])
+        test(`refuses a re-review when GitLab marks a file ${flag}`, () => {
+          const fake = fakeForge(name, model(name, { ancestry: { [HEAD]: [MERGED] } }));
+          const layer = forgeHttpTest(fake.run, (url, init) =>
+            Str.includes("/repository/compare?")(url)
+              ? Promise.resolve(
+                  Response.json({
+                    compare_timeout: false,
+                    diffs: [{ new_path: "src/omitted.ts", diff: "", [flag]: true }],
+                  }),
+                )
+              : fake.fetch(url, init),
+          );
+          return runEffect(
+            Effect.gen(function* () {
+              const diff = yield* forge.reviewChanges(ref(name), MERGED, HEAD, "/w", fake.run);
+              expect(diff.ok).toBe(false);
+              if (!diff.ok) {
+                expect(diff.reason).toContain("incomplete");
+                expect(diff.reason).toContain("src/omitted.ts");
+              }
+            }).pipe(Effect.provide(layer)),
+          );
+        });
+
     test("pins approval to the reviewed head", () => {
       const fake = fakeForge(name, model(name));
       return runEffect(
@@ -428,6 +454,28 @@ for (const name of ["gitlab", "github"] as const) {
           }).pipe(Effect.provide(fake.layer)),
         );
       });
+
+    test("an issue write the forge refuses says so, with nothing to inspect", () => {
+      const fake = fakeForge(name, model(name, { refusesIssueWrite: 403 }));
+      return runEffect(
+        Effect.gen(function* () {
+          const filed = yield* forge.fileIssue(
+            PROJECT[name],
+            "Problem",
+            "Evidence",
+            "/w",
+            fake.run,
+          );
+          const noted = yield* forge.commentIssue(PROJECT[name], 1, "Evidence", "/w", fake.run);
+          for (const refused of [filed, noted]) {
+            expect(refused.ok).toBe(false);
+            if (refused.ok) continue;
+            expect(refused.reason).toContain("403");
+            expect(refused.reason).not.toContain("before retrying");
+          }
+        }).pipe(Effect.provide(fake.layer)),
+      );
+    });
 
     test("comments on an issue over HTTP from a cold login", () => {
       const fake = fakeForge(

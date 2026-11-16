@@ -101,7 +101,8 @@ explaining why you accept it. If the finding has since been corrected, record it
 that puts it back in front of the implementer. If you cannot decide, keep it under
 `disputed` for the human. An omitted finding or a clean verdict alone does not settle a
 dispute. A finding still in `findings` or `disputed` remains unresolved even if you also
-list it as dropped or fixed.
+list it as dropped or fixed, unless its ledger status is `fixed` or `obsolete`.
+With a ledger, retain withdrawals as `obsolete` with their reason and verified corrections as `fixed`.
 
 The checks already recorded for this Run, the latest of each — `by collie` is one Collie
 ran itself, `by agent` one an agent ran through the collector:
@@ -176,6 +177,7 @@ gets — the review a careful colleague would leave on it.
 When a ledger is supplied, reconcile every earlier id into `findings` with its current
 `status` (`open`, `fixed`, `disputed`, or `obsolete`), plus any new findings. Keep resolved
 findings in the ledger. Code made irrelevant by a force push is `obsolete`, not `fixed`.
+Retain withdrawals as `obsolete` with their reason and verified corrections as `fixed`.
 
 The implementer's carried disputes are:
 

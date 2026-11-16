@@ -2980,6 +2980,9 @@ GitHub cannot atomically guard the head: approval can briefly stand during a rac
 If dismissal fails, stale approval can remain active and satisfy merge requirements despite
 the failed Run. The card names the review to dismiss and reports that it may still be active.
 An approval refusal ends the Run with its reason on the card and is not retried.
+If the host stops during approval, recovery reports an uncertain outcome and sends no
+second approval or dismissal request. Inspect the forge before starting another review:
+the approval may already be active.
 With findings left, **Post** sends only the note. It refuses a merge request assigned to
 you, on either forge: those findings are yours to fix. On GitLab, that comparison uses
 your login on the target's own host.
@@ -2988,6 +2991,8 @@ your login on the target's own host.
 [Finding status](../CONTEXT.md), into the next review. The reviewer reads the interdiff
 since the last reviewed head, or the full diff after a force push. The next note lists
 new findings and status changes, with unchanged open findings listed by id only.
+If GitLab collapses or omits a file's interdiff, the review refuses the incomplete input
+and names the affected files.
 An unchanged, previously posted ledger posts nothing. Findings you chose not to post
 still appear in full when you first post them. Fixed and obsolete findings stay in the record;
 obsolete means the finding no longer applies, not that its bug was fixed.

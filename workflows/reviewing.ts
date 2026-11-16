@@ -238,16 +238,20 @@ export const reviewPass = (ask: ReviewAsk) =>
           }),
         });
     });
-    const keepLedger = (report: SynthesisReport) =>
+    const record = (report: SynthesisReport) =>
       Effect.gen(function* () {
         if (ask.ledger === undefined) {
           yield* leaveReview(dir, report);
+          yield* confirmHead;
+          yield* recordReview(report);
           return report;
         }
         const before = ask.ledger;
         const findings: Finding[] = [];
         const ids = new Set<string>();
-        for (const [index, finding] of report.findings.entries()) {
+        const reserved = new Set(Arr.map([...before, ...report.findings], (one) => one.id));
+        let next = 1;
+        for (const finding of report.findings) {
           const earlier = Option.getOrUndefined(
             Arr.findFirst(before, (one) =>
               finding.id === undefined
@@ -255,10 +259,15 @@ export const reviewPass = (ask: ReviewAsk) =>
                 : one.id === finding.id,
             ),
           );
-          const identity = finding.id ?? earlier?.id ?? `${id}-F${index + 1}`;
+          let identity = finding.id ?? earlier?.id;
+          if (identity === undefined) {
+            while (reserved.has(`${id}-F${next}`)) next += 1;
+            identity = `${id}-F${next}`;
+          }
           if (ids.has(identity))
             return yield* new WorkflowError({ reason: `duplicate finding id ${identity}` });
           ids.add(identity);
+          reserved.add(identity);
           const status = finding.status ?? "open";
           findings.push({
             ...finding,
@@ -288,8 +297,10 @@ export const reviewPass = (ask: ReviewAsk) =>
         yield* (yield* FileSystem.FileSystem)
           .writeFileString(`${dir}/review-head`, ask.head ?? "")
           .pipe(Effect.orDie);
+        yield* confirmHead;
+        yield* recordReview(recorded);
         return recorded;
-      }).pipe(Effect.tap(() => confirmHead));
+      });
     // A check left to CI is read from the forge where the Run has a merge request, never run.
     const leftToCi = yield* Effect.forEach(
       Arr.filter(yield* host.approved(id), (spec) => spec.ci !== undefined),
@@ -331,7 +342,7 @@ export const reviewPass = (ask: ReviewAsk) =>
       }).pipe(Effect.orDie),
     });
     const input = told({ ...ask, base: scope?.target ?? ask.base }, { dir, id });
-    const record = (review: SynthesisReport) =>
+    const recordReview = (review: SynthesisReport) =>
       Activity.make({
         name: `${synthesis}.record`,
         success: Schema.Void,
@@ -350,9 +361,7 @@ export const reviewPass = (ask: ReviewAsk) =>
         input: { ...input, checks, criteria: ask.criteria ?? "" },
         output: SynthesisSchema,
       });
-      const recorded = yield* keepLedger(alone);
-      yield* record(recorded);
-      return recorded;
+      return yield* record(alone);
     }
     yield* Effect.forEach(
       seats,
@@ -386,9 +395,7 @@ export const reviewPass = (ask: ReviewAsk) =>
       }),
     );
     // The prose a human reads and the findings a card counts, where both are looked for.
-    const recorded = yield* keepLedger(reconciled);
-    yield* record(recorded);
-    return recorded;
+    return yield* record(reconciled);
   });
 
 /** At most four rounds per rally; it leaves at the first review with nothing blocking. */

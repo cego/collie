@@ -2737,6 +2737,67 @@ for (const name of ["gitlab", "github"] as const) {
     120_000,
   );
 
+  for (const resolution of ["fixed list", "retained finding"] as const)
+    scenario(
+      `review ledger on ${name}: new identities preserve earlier resolutions via ${resolution}`,
+      () =>
+        runEffect(
+          Effect.gen(function* () {
+            yield* reviewedBranch();
+            yield* exec(["git", "remote", "set-url", "upstream", `https://${PROJECT[name]}.git`], {
+              cwd: rig.projectDir,
+            });
+            const { bin, forge } = yield* reviewing();
+            const model = yield* forge.model();
+            yield* forge.set({
+              ...model,
+              mrs: Arr.map(model.mrs, (one) => ({ ...one, sourceBranch: "feature" })),
+            });
+            const runId = `r-ledger-ids-${name}`;
+            const earlier = { severity: "major", file: "src/old.ts", title: "guard input" };
+            yield* rig.queueOutputs([
+              { ...SYNTHESIS, findings: [earlier] },
+              { verdict: "clean", fixed: [earlier], disputed: [], checks: [] },
+              {
+                ...SYNTHESIS,
+                findings: [
+                  { severity: "minor", file: "src/new.ts", title: "close handle" },
+                  { id: `${runId}-F2`, severity: "minor", title: "check response" },
+                  ...(resolution === "retained finding"
+                    ? [{ ...earlier, id: `${runId}-F1`, status: "fixed" }]
+                    : []),
+                ],
+                fixed: resolution === "fixed list" ? [earlier] : [],
+              },
+            ]);
+            yield* driven({ entry: shipped("review"), runId, input: { target } }, (run) =>
+              Effect.gen(function* () {
+                yield* until(
+                  () => run.asked,
+                  (rows) => Arr.some(rows, (row) => row.decision === "post-1"),
+                );
+                yield* run.answer("post-1", "Fix findings");
+                const [status, rows] = yield* until(
+                  () => Effect.all([run.status, run.asked]),
+                  ([status, rows]) =>
+                    status.status === "failed" ||
+                    Arr.some(rows, (row) => row.decision === "post-2"),
+                );
+                expect(status.status).not.toBe("failed");
+                expect(optionsOf(rows, "post-2")).toContain("Post");
+                expect(yield* findingsIn(runDir(dir, runId))).toMatchObject([
+                  { id: `${runId}-F3`, title: "close handle", status: "open" },
+                  { id: `${runId}-F2`, title: "check response", status: "open" },
+                  { id: `${runId}-F1`, title: "guard input", status: "fixed" },
+                ]);
+              }),
+            );
+            yield* bin.restore();
+          }),
+        ),
+      120_000,
+    );
+
   for (const mode of [
     "partial",
     "force push",
@@ -3933,6 +3994,10 @@ const HEALED = {
     root_cause: "A reminder does not repeat the Output path once the agent's context is compacted.",
     fix: "Repeat the Output path in every Output reminder.",
     regression: "A reminder after compaction names the Output path.",
+    title: "A reminder after compaction loses the Output path",
+    observed: "The agent finished its turn without its Output after its context was compacted.",
+    expected: "The reminder names where its Output goes.",
+    issue: null,
   },
 };
 
@@ -3941,6 +4006,22 @@ scenario(
   () =>
     runEffect(
       Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* forgeOnPath(bin, "github", {
+          installed: true,
+          loggedIn: [FORGE_HOST.github],
+          login: "tester",
+          mrs: [],
+          issues: [
+            {
+              project: "github.com/cego/collie",
+              number: 444,
+              title: "A retired agent's park is never rechecked",
+              body: "",
+              state: "open",
+            },
+          ],
+        });
         const { finding: _, ...unfound } = HEALED;
         yield* rig.queueOutputs([unfound, HEALED]);
         const result = yield* ran({
@@ -3953,8 +4034,12 @@ scenario(
         expect(messages).toHaveLength(2);
         expect(messages[1]).toContain("finding");
         expect(yield* asked("r-heal", "heal")).toContain("Run run-parked is parked (park park-1)");
+        expect(yield* asked("r-heal", "heal")).toContain(
+          "- #444 A retired agent's park is never rechecked",
+        );
         expect(yield* persona("r-heal", "heal")).toContain("healer");
         expect((yield* loadEntry(shipped("heal"))).metadata?.heals).toBe(true);
+        yield* bin.restore();
       }),
     ),
   120_000,

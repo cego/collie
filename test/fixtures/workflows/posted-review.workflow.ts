@@ -1,4 +1,4 @@
-import { Host, Run, defineWorkflow } from "collie";
+import { Host, Run, WorkflowError, defineWorkflow } from "collie";
 import { Effect, FileSystem, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 
@@ -6,7 +6,12 @@ export default defineWorkflow({
   id: "posted-review",
   title: "Post a signed review",
   description: "Exercises a review post across host recovery.",
-  input: Schema.Struct({ target: Schema.String, head: Schema.String }),
+  input: Schema.Struct({
+    target: Schema.String,
+    head: Schema.String,
+    approve: Schema.optionalKey(Schema.Boolean),
+    again: Schema.optionalKey(Schema.Boolean),
+  }),
   hints: { target: "diff-target" },
   output: Schema.String,
   run: ({ input }) =>
@@ -28,6 +33,34 @@ export default defineWorkflow({
           round: 1,
         }),
       });
+      if (input.approve) {
+        const approved = yield* Activity.make({
+          name: "approve-review",
+          success: Schema.Struct({ ok: Schema.Boolean, message: Schema.String }),
+          execute: host.approveReview({
+            runId,
+            attempt: "approve-review",
+            target: input.target,
+            cwd: place.cwd,
+            head: input.head,
+          }),
+        });
+        if (!approved.ok) return yield* new WorkflowError({ reason: approved.message });
+        if (!input.again) return approved.message;
+        const again = yield* Activity.make({
+          name: "approve-again",
+          success: Schema.Struct({ ok: Schema.Boolean, message: Schema.String }),
+          execute: host.approveReview({
+            runId,
+            attempt: "approve-again",
+            target: input.target,
+            cwd: place.cwd,
+            head: input.head,
+          }),
+        });
+        if (!again.ok) return yield* new WorkflowError({ reason: again.message });
+        return again.message;
+      }
       return posted.message;
     }),
 });

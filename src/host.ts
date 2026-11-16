@@ -90,6 +90,7 @@ import {
   servedNow,
 } from "./foreground";
 import { tracingLayer } from "./tracing";
+import { Host } from "./sdk";
 import * as Scheduler from "effect/Scheduler";
 import {
   EntryError,
@@ -161,7 +162,6 @@ import { SharedDefinition } from "./definitions-model";
 import { DefinitionRefused, sharedDefinitions, takeDefinitions } from "./shared-definitions";
 import { sideJobs } from "./side-jobs";
 import { healParks, recoverParks } from "./park-recovery";
-import { Host } from "./sdk";
 import { Notifier } from "./notify";
 import { machineMemory } from "./memory";
 import { Usage, usageLayer } from "./usage";
@@ -2409,6 +2409,7 @@ const frontDoorHandlers = (
                   : notifier.value.notify(runId, kind, body, { key }),
               ),
             ),
+          host: Context.get(hosted, Host),
         }).pipe(Effect.provideContext(hosted)),
       );
       return FrontDoorRpcs.of({

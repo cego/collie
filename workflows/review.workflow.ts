@@ -519,7 +519,13 @@ export default defineWorkflow({
                 const approved = yield* Activity.make({
                   name: `dispute-approve-${round}`,
                   success: Posted,
-                  execute: host.approveReview({ target: asked.target, cwd: place.cwd, head }),
+                  execute: host.approveReview({
+                    runId: run.id,
+                    attempt: `dispute-approve-${round}`,
+                    target: asked.target,
+                    cwd: place.cwd,
+                    head,
+                  }),
                 });
                 yield* fact(`dispute-approved-${round}`, approved.message);
                 if (!approved.ok) return yield* new WorkflowError({ reason: approved.message });
@@ -595,7 +601,13 @@ export default defineWorkflow({
                     ? yield* Activity.make({
                         name: `follow-approve-${round}`,
                         success: Posted,
-                        execute: host.approveReview({ target: asked.target, cwd: place.cwd, head }),
+                        execute: host.approveReview({
+                    runId: run.id,
+                    attempt: `follow-approve-${round}`,
+                    target: asked.target,
+                    cwd: place.cwd,
+                    head,
+                  }),
                       })
                     : null;
                 if (approved !== null) {
@@ -873,7 +885,13 @@ export default defineWorkflow({
             const approved = yield* Activity.make({
               name: `approve-review-${reviews}`,
               success: Posted,
-              execute: host.approveReview({ target: asked.target, cwd: place.cwd, head }),
+              execute: host.approveReview({
+                runId: run.id,
+                attempt: `approve-review-${reviews}`,
+                target: asked.target,
+                cwd: place.cwd,
+                head,
+              }),
             });
             yield* host.record(run.id, approved.message);
             if (!approved.ok) return yield* new WorkflowError({ reason: approved.message });
