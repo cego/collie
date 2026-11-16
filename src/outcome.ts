@@ -223,7 +223,10 @@ function rerunOf(got: Journal, last: Verification | undefined) {
           !earlierTree(v, got.final),
       ),
     );
-  const alone = (test: FailedTest) => rerun(test)?.result === "pass";
+  const passedAlone = (test: FailedTest) => rerun(test)?.result === "pass";
+  // The branch's own test that passed alone is still the Run's to fix, and the base never had it fail.
+  const ownPassedAlone = (test: FailedTest) => passedAlone(test) && rerun(test)?.own === true;
+  const alone = (test: FailedTest) => passedAlone(test) && !ownPassedAlone(test);
   // Its runs in this check's directory where the branch leaves the default branch, which fail only where bun said that test failed.
   const bases = (test: FailedTest, among: ReadonlyArray<Verification>) =>
     Arr.filter(
@@ -237,7 +240,7 @@ function rerunOf(got: Journal, last: Verification | undefined) {
         v.test.name === test.name,
     );
   const base = (test: FailedTest) => bases(test, got.verifications).at(-1);
-  const still = Arr.filter(last.failed, (test) => !alone(test));
+  const still = Arr.filter(last.failed, (test) => !passedAlone(test));
   return {
     flakes: Arr.filter(last.failed, alone),
     still,
@@ -246,7 +249,13 @@ function rerunOf(got: Journal, last: Verification | undefined) {
       const at = base(test);
       return at?.result === "fail" ? [{ ...test, at: at.start.head_sha }] : [];
     }),
-    own: Arr.filter(still, (test) => base(test)?.result !== "fail"),
+    own: Arr.map(
+      Arr.filter(
+        last.failed,
+        (test) => ownPassedAlone(test) || (!passedAlone(test) && base(test)?.result !== "fail"),
+      ),
+      (test) => ({ ...test, passedAlone: ownPassedAlone(test) }),
+    ),
     unasked: Arr.filter(still, (test) => bases(test, after).length === 0),
   };
 }
@@ -390,7 +399,11 @@ function approvedSetGaps(got: Collected): string[] {
       if (reran.own.length === 0) continue;
       gaps.push(
         `${spec.name} failed: ${Arr.join(
-          Arr.map(reran.own, (test) => `${test.name} (${test.file})`),
+          Arr.map(
+            reran.own,
+            (test) =>
+              `${test.name} (${test.file})${test.passedAlone ? ", which then passed alone but is this branch's own test" : ""}`,
+          ),
           ", ",
         )}`,
       );
@@ -715,16 +728,20 @@ export function endsWithoutPatch(kind: Outcome, got: Collected): boolean {
   );
 }
 
-/** What the `mr` prompt says was actually proved, and by whom. */
+/** Recorded evidence for prompts, or repository commands and results for public text. */
 export function renderEvidence(
   got: Pick<Collected, "verifications" | "final" | "measurements">,
+  audience: "internal" | "public" = "internal",
 ): string {
   const latest = new Map<string, Verification>();
+  const command = (v: Verification) => CommandLine.display([v.asked ?? v.executable, ...v.argv]);
   for (const v of got.verifications) if (!ranOneTest(v)) latest.set(`${v.name}:${v.by}`, v);
-  const measured = finalMeasurementLine(got.measurements ?? []);
+  const measured = audience === "public" ? null : finalMeasurementLine(got.measurements ?? []);
   const lines = Arr.map([...latest.values()], (v) => {
     const stale = sameTree(v.end, got.final) ? "" : " (on an earlier tree)";
     const expected = v.expect === "fail" ? ", expected to fail" : "";
+    if (audience === "public")
+      return `- \`${command(v)}\`: ${v.result} (exit ${v.exit}${expected})${stale}`;
     return `- ${v.name}: ${v.result} (by ${v.by}${expected})${stale}`;
   });
   if (measured !== null) lines.push(`- ${measured}`);

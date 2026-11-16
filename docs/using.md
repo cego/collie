@@ -574,6 +574,13 @@ happen under one lock keyed by that path, so two runs starting at the same momen
 both find it free. A resumed run reuses only the checkout it recorded itself, and never
 claims a new one.
 
+At the merge request step, the agent writes the description or update note to a file.
+The host checks its public text and commit messages, then pushes and opens or updates
+the branch's merge request through [`collie run publish`](cli.md#publish-a-runs-merge-request).
+A refusal names what needs rewording before anything is pushed.
+Earlier build and fix steps use the same command with `--push-only`, so their commit
+messages are checked before review pushes too.
+
 The worktree outlives the merge request: it is still there when the run ends, so you can
 look at what it built. It is removed only once **settled** — the tree is clean, it holds
 no commit that is not on the remote already, nothing is working in it or could be resumed

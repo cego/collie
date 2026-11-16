@@ -11,6 +11,27 @@ there is a command for it.
 For the vocabulary, see [`CONTEXT.md`](../CONTEXT.md). For what each workflow is for, see
 [Workflows](workflows.md).
 
+## Publish a Run's merge request
+
+`collie run publish <run> --title "<title>" --file <path> --request-id <request>` asks the
+host to check, push, and open the branch's merge request. Use `--onto <branch>` for a
+target other than the default branch. The file must be on the Run's Machine.
+
+The host checks the title, file, and full commit messages before pushing. A refusal names
+the leaked phrase and its location, including the commit's short SHA. Reword locally and
+retry with a new request id. Collie's own repository keeps its internal vocabulary.
+
+When the branch already has an open merge request, the file becomes a note and `--title`
+is optional. The host adds a hidden marker and records the returned URL on the Run.
+Repeating a successful request id returns its result without publishing again.
+`--json` returns `mr_url` and `pushed`. Auto-merge must be off before publishing.
+
+Earlier build and fix steps use `collie run publish <run> --push-only --request-id <request>`.
+This checks commit messages and pushes without opening a merge request or posting a note.
+It needs neither `--title` nor `--file`, and returns `pushed` in JSON.
+Add `--skip-ci` to skip GitLab CI for a review push; GitHub ignores this flag.
+CI fixes omit `--skip-ci` so their pipeline runs. `--skip-ci` requires `--push-only`.
+
 ## Global flags
 
 Put these before the subcommand:
@@ -1523,7 +1544,9 @@ The gate runs before the merge request, which is where the claim is made. Collie
 run's own checks itself at the tree as it stands, reading them again at every pass, then
 says what is missing. A check
 that failed and named its failing tests has each of them run once more alone (`rerun`); one
-that passes is a Flake, which is neither a gap nor a pass and is named in the merge request.
+that passes is a Flake, which is neither a gap nor a pass and is named in the merge request,
+unless the branch adds or changes that test: then it is never a Flake but a gap, which goes to
+the fixes.
 A failure outside any test, such as a file's `afterAll` (bun's `(unnamed)`), cannot be run
 alone, so a check that has one names no tests.
 A check that failed naming no tests runs once more whole (`recheck`). Gaps a check could
@@ -1846,7 +1869,10 @@ waits for that job on the merge request's head commit, read through the forge, a
 its pass as a verification of the check, with the job's URL. A failed job is first read
 where the branch leaves its target branch: failed there too, it is reported as failing
 before the run's changes, and left unproved. Otherwise it is retried once, and a pass on
-the retry is reported as a Flake. A job that fails its retry goes to the builder in a CI
+the retry is reported as a Flake, unless the failed attempt's logs name a failed test of
+the branch's own: one whose file the branch adds or changes, or whose name holds a string
+a line the branch adds holds. That job is failed, as is one the forge says was retried
+before, by anyone. A job that fails its retry goes to the builder in a CI
 fix round, at most 4; see [`docs/workflows.md`](workflows.md). A job missing right after
 its retry, as GitHub holds back a job behind `needs` until its needs finish, is waited on
 like a pending one, up to 2 hours. A skipped, cancelled or missing job, a job not finished

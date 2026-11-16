@@ -625,6 +625,35 @@ test("the rendered evidence says who collected each result, and which tree it wa
   expect(rendered).toContain("- lint: pass (by agent)");
 });
 
+test("public evidence names repository commands and results without private labels or collectors", () => {
+  const rendered = renderEvidence(
+    collected({
+      verifications: [
+        record({
+          name: "private-check-label",
+          asked: "bun",
+          executable: "/bin/bun",
+          argv: ["test", "test/cache.test.ts"],
+        }),
+        record({
+          name: "private-baseline",
+          asked: "bun",
+          executable: "/bin/bun",
+          argv: ["test", "test/retry.test.ts"],
+          by: "agent",
+          expect: "fail",
+          exit: 1,
+          end: EARLIER,
+        }),
+      ],
+    }),
+    "public",
+  );
+  expect(rendered).toBe(
+    "- `bun test test/cache.test.ts`: pass (exit 0)\n- `bun test test/retry.test.ts`: pass (exit 1, expected to fail) (on an earlier tree)",
+  );
+});
+
 test("a reviewer is handed the recorded checks: result, who, tree, when, and the baseline", () => {
   expect(renderRecordedChecks(collected({ verifications: [] }))).toBe(
     "(nothing is recorded for this Run)",
@@ -913,6 +942,22 @@ test("a check whose failed tests all passed their rerun on this tree is not a ga
   expect(
     checkGaps("feature", { ...got, tickets: [{ file: "01-a.md", checks: ["tests"] }] }),
   ).toEqual([]);
+});
+
+test("a test the branch owns that passed its rerun is a gap naming it, never a Flake, and is not asked about at the base", () => {
+  const [gate, quick, nested] = gateThenReruns(
+    [QUICK, NESTED],
+    [
+      [QUICK, "pass"],
+      [NESTED, "pass"],
+    ],
+  );
+  const got = collected({ verifications: [gate!, { ...quick!, own: true }, nested!] });
+  expect(evidenceGaps("unspecified", got)).toEqual([
+    "tests failed: the quick one (test/one.test.ts), which then passed alone but is this branch's own test",
+  ]);
+  expect(flakesOf(got)).toEqual([{ check: "tests", ...NESTED }]);
+  expect(baselinesOwed(got)).toEqual([]);
 });
 
 test("a check with a test still failing after its rerun is a gap naming that test", () => {

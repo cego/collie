@@ -115,7 +115,7 @@ export const laneFor = Effect.fn("Flow.lane")(function* (
   );
   const stop = Option.getOrUndefined(
     Arr.findLast(
-      yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => [])),
+      run.state === "stopped" ? yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => [])) : [],
       (line) => line.operation === "stop",
     ),
   );

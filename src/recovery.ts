@@ -7,7 +7,7 @@ import { readIntent } from "./intent";
 import { isBlocking, SynthesisSchema, FindingSchema } from "./output";
 import { sameTree, treeOf } from "./verify";
 import { appendJournal, readJournalWhole } from "./journal";
-import { readCards } from "./cards";
+import { readFinalCard } from "./cards";
 import { shell } from "./mr";
 import { nowIso } from "./time";
 
@@ -191,8 +191,7 @@ export const recoveryFrom = Effect.fn("Recovery.from")(
       Arr.flatMap(readings, (one) => one.lines),
       Order.mapInput(Str.Order, (one: typeof ReviewedWork.Type) => one.at),
     );
-    const finals = yield* readCards(options.parent).pipe(Effect.orElseSucceed(() => []));
-    const final = Arr.findLast(finals, (one) => one.kind === "final");
+    const final = yield* readFinalCard(options.parent);
     const prior = Arr.findLast(records, (one) => one.source === options.source);
     const previous =
       prior._tag === "Some"
@@ -304,10 +303,7 @@ export const branchMovement = Effect.fn("Recovery.branchMovement")(function* (ru
   readonly state: string;
 }) {
   if (run.branch === null || !["succeeded", "failed"].includes(run.state)) return null;
-  const final = Arr.findLast(
-    yield* readCards(run.dir).pipe(Effect.orElseSucceed(() => [])),
-    (card) => card.kind === "final",
-  );
+  const final = yield* readFinalCard(run.dir);
   if (final._tag === "None" || final.value.revision.head_sha === "") return null;
   const finished = final.value.revision.head_sha;
   const read = yield* shell(

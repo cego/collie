@@ -136,6 +136,7 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["run wait", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["run stop", { route: "write", tool: "collie_do" }],
   ["run resume", { route: "write", tool: "collie_do" }],
+  ["run publish", { route: "shell" }],
   ["run answer", { route: "write", tool: "collie_do" }],
   // The human's own instruction, carried out rather than proposed (ADR-0011). Stop,
   // resume, release, answer, steer and follow up are `collie_do`'s; a hold has a tool of

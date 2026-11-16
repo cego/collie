@@ -10,7 +10,7 @@ use collie_desktop_board::record::review::compose;
 use collie_desktop_board::{App, view};
 use collie_desktop_terminal::view::Tab;
 use rune::edit::TextEdit;
-use rune::{Env, Runtime};
+use rune::{Env, Runtime, WheelEvent};
 use rune_kit::diff::{LineRange, LineRef, Side};
 use serde_json::{Value, json};
 
@@ -435,6 +435,74 @@ fn an_open_question_is_answered_by_an_option() {
         harness.fake.asked_of("act")[0]["action"],
         json!({"_tag": "Answer", "runId": "r1", "decision": "q-1", "value": "right"})
     );
+}
+
+#[test]
+fn a_long_question_can_be_scrolled_to_its_answer_control_with_or_without_a_selected_step() {
+    let rect = |runtime: &Runtime<App>, key: &str| {
+        runtime
+            .elements()
+            .iter()
+            .find(|e| e.key.as_deref() == Some(key))
+            .unwrap_or_else(|| panic!("no {key}"))
+            .rect
+    };
+    for inspected in [true, false] {
+        let harness = Harness::<App>::new();
+        let mut runtime = opened(&harness);
+        runtime.set_viewport((1000.0, 850.0), 1.0);
+        runtime.update(|app, _| {
+            app.nav.chat.set_open(true);
+            app.open_record(
+                "inst-build".into(),
+                "r1".into(),
+                "Build box".into(),
+                Some("flow"),
+            );
+        });
+        let options: Vec<Value> = (0..if inspected { 12 } else { 24 })
+            .map(|i| json!({"id": format!("choice-{i}"), "title": format!("Choice {i}")}))
+            .collect();
+        let flow = flow_with(
+            json!({"id": "ask", "title": "Ask", "state": "needs-you", "primary": "answer",
+                "questions": [{"id": "q-1", "name": "Which way?", "open": true,
+                    "text": "Which way?", "options": options}]}),
+            json!([]),
+        );
+        harness
+            .fake
+            .push("runDetail", Ok(detail(json!({"flow": flow}))));
+        settle(&mut runtime, &harness, 100.0);
+        tap(&mut runtime, "next-action", 200.0);
+        if !inspected {
+            runtime.update(|app, _| app.flow.as_mut().unwrap().selected = None);
+        }
+        for at in [400.0, 500.0, 600.0, 700.0] {
+            runtime.invalidate();
+            runtime.frame(at);
+        }
+        tap(&mut runtime, "option-choice-0", 800.0);
+        let [x, y, width, height] = rect(&runtime, "tabpanel-flow");
+        let before = rect(&runtime, "form-send")[1];
+        assert!(before > y + height, "fixture must require scrolling");
+        for i in 0..20 {
+            runtime.wheel_event(WheelEvent::new(0.0, -80.0).at(x + width / 2.0, y + height - 32.0));
+            runtime.frame(1000.0 + i as f64 * 100.0);
+        }
+        let [send_x, send_y, send_width, send_height] = rect(&runtime, "form-send");
+        assert!(
+            send_y < before && send_y >= y && send_y + send_height <= y + height,
+            "Answer must scroll inside Flow (inspected={inspected}): {:?}",
+            rect(&runtime, "form-send")
+        );
+        assert!(send_x >= x && send_x + send_width <= x + width);
+        tap(&mut runtime, "form-send", 4000.0);
+        assert_eq!(
+            harness.fake.asked_of("act")[0]["action"],
+            json!({"_tag": "Answer", "runId": "r1", "decision": "q-1", "value": "choice-0"}),
+            "the visible control must submit the selected answer (inspected={inspected})"
+        );
+    }
 }
 
 #[test]

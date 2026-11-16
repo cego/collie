@@ -148,6 +148,13 @@ prove the current revision, and delivery updates the branch's existing merge req
 The parent keeps its terminal status and finishing revision
 ([ADR-draft-a-finished-delivery-names-the-way-back-to-work](adr/draft-a-finished-delivery-names-the-way-back-to-work.md)).
 
+The merge request step calls [`collie run publish`](cli.md#publish-a-runs-merge-request).
+The host checks the title, description or note, and commit messages before pushing.
+It opens a merge request or notes the existing one and records its URL.
+Descriptions name repository commands and results; open questions omit internal ticket names.
+The Run's record retains the ticket names and assumptions.
+Tune-up uses the same publishing command after its measurements and checks finish.
+
 **What happens:** one implementer agent builds, a commit per ticket. It reviews what it
 built with the same pass `review` runs — one complete review — and loops on the findings for
 at most four review and fix rounds. Every commit is pushed, so the reviewers read the change
@@ -164,9 +171,9 @@ names the blockers too. **Hand back** reads the ticket again, goes on with no bu
 nothing is unmet any more, and otherwise hands it back with two tries fresh. **Stop** parks
 the Run with that reason, before any review. A resume asks the builder again under a new
 operation and reads its new Output. An unattended Run waits on either question. A ticket's `## After merge` outcomes are not criteria:
-the merge request names them under **Not settled by the run**. A criterion only CI, a merge
+the merge request names them under **Open questions**. A criterion only CI, a merge
 or a deploy can show may be answered `after merge: <reason>`: it does not end the Run, the
-reviewer blocks one the Run could have shown, and the merge request names the ticket, the
+reviewer blocks one the Run could have shown, and the merge request names the
 criterion and the reason under the same heading
 ([ADR-draft-a-criterion-is-what-the-run-can-show-before-its-merge-request](adr/draft-a-criterion-is-what-the-run-can-show-before-its-merge-request.md)).
 The builder records each new test failing before the code that makes it pass, never offers a
@@ -256,8 +263,10 @@ them go onto the merge request as one note from Collie. Nobody is asked along
 the way: the human verifies the work in the merge request, before it lands. Where a failed check's
 output names the tests that failed (bun test's does), the gate reruns each of those tests
 once, alone, on the same tree. A test that then passes is a **Flake**: it is not handed to a
-fix and never counts as a pass, and the merge request names it under **Not settled by the
-run**. A failed check whose output names no tests is re-run whole once instead, since a check
+fix and never counts as a pass, and the merge request names it under **Open questions**.
+A test the branch adds or changes is never a Flake: one that fails, then passes alone,
+is still the Run's own and goes to the fixes, its finding saying it passed alone, and it is
+not run at the base. A failed check whose output names no tests is re-run whole once instead, since a check
 that fails and then passes is a flake. The gate then hands
 what a check could still prove to the implementer for up to four fixes; a reviewer's
 judgement or an Output's claim is not handed over, since no fix moves it. Before any fix, each
@@ -312,7 +321,12 @@ none: failed there too, it failed before the run's changes, and the merge reques
 run's log say so, with the commit, and the job gets no fix (ADR-0034). Anything else there —
 no merge-base, no pipeline, no such job, any other result — makes the failure the run's own.
 That job is then retried once through the forge; a pass on the retry is a Flake, named on
-the merge request and the log, and recorded as the check's proof. A job that still fails
+the merge request and the log, and recorded as the check's proof. Not where the failed
+attempt's logs name a failed test of the branch's own — one whose file the branch adds or
+changes since its merge-base with the target branch, or whose name holds a string of 16 or
+more characters a line the branch adds holds: that job is failed, and its round's prompt
+names the test and says it passed only when retried. A job the forge says was already
+retried, by anyone, is read the same way. A job that still fails
 starts a **CI fix round**, `ci-fix-<n>`, on the builder: its prompt names every failed
 check with its job, the job's URL and the forge adapter's command for its log, and has it
 push without `ci.skip`. The run then waits on the job again on the new head commit, and the
@@ -708,7 +722,10 @@ channel, the Run says so on its log and asks nothing.
 **Checks** run on every head before it can be asked about, the one a round pushed
 included, and a check Collie leaves to CI is waited on there. A check that already passed
 on a head with the same bytes is relied on there rather than run again. A failure goes to a fix
-round, `fix-<n>`, which fixes and pushes as implement's gate fixes do. Four rounds in a
+round, `fix-<n>`, which fixes and pushes as implement's gate fixes do. A job that passed
+only when retried, by this Run or before it, is read as implement reads one: a failed test
+of the branch's own in its failed attempt's logs is a failure, never proof, and any other
+retried pass is a Flake, which the log records as `unsettled:`. Four rounds in a
 row that leave a check failing, or one that changes nothing, park the Run with why;
 resuming it runs the checks again. Collie's own `check` is left to CI's `test` job, so a
 Release of Collie is proved by that job at its head, never by a local `bun run check`.

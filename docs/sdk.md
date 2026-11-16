@@ -792,14 +792,15 @@ and `noun` is `merge request` or `pull request`; `provider` is `gitlab` or `gith
 its forge's adapter writes it, and `branch` the checkout's branch, empty on a detached
 one: the facts a Clearance names. `existing` is the URL of this branch's
 open one, or empty, and `autoMerge` whether it merges itself once green — a step that
-pushes to it should not run. `commands.create` and `commands.comment` are the command
-lines an agent runs to open one (with `<title>` and `<file>` left to fill in) or to note on
-`existing`, written by the forge's adapter so a prompt names no CLI of its own.
+pushes to it should not run. Agents publish with
+[`collie run publish`](cli.md#publish-a-runs-merge-request). The host checks the title,
+file, and commit messages before pushing and opening or noting the merge request.
 One question rather than two,
 because a step that cannot reach its forge has
 nothing to fill in — check it before you start an agent, and say the reason where it is no.
 Once one is open, `host.mergeRequest(runId, url)` records it as a fact of the Run: its card
-links it, waits on it, and follows what the forge says of it.
+links it, waits on it, and follows what the forge says of it. The publish command records
+the URL itself.
 
 `host.integrate(runId, cwd)` fetches the default branch and, where it has moved, merges it
 into the branch checked out at `cwd` with a merge commit: never a rebase, never a push.
@@ -1535,7 +1536,10 @@ is no flag to ask for it.
 `host.approved(runId)` is the Run's checks as they stand now, for a prompt to name what the
 work will be held to — `renderApproved` writes it out — and
 `renderEvidence(host.evidence(...))` is what was actually collected and by whom, with the latest `final` Measurement, for a
-merge request to say what it proved. `redact(text)` takes every credential-shaped value out
+prompt to say what was proved. Use `renderEvidence(evidence, "public")` for published text:
+it lists repository commands and results, preserving earlier-tree and expected-failure qualifiers,
+and omits private check labels, collectors, and measurement records.
+`redact(text)` takes every credential-shaped value out
 of text you publish yourself, as Collie does before it files an issue. `renderRecordedChecks` writes the same journal for a
 reviewer — the latest of each check, by whom, whether on the tree in front of it, when,
 whether the same command was seen failing on an earlier tree, and the baseline — so a review reads what was run rather than running it again. The list can grow while the Run works, since an
@@ -1872,7 +1876,8 @@ it. Implement's `Built` carries them as an optional `criteria` list.
 `unmetCriteria(ticket, criteria, answers)` turns each criterion left unanswered or not met
 into a blocking finding against the ticket; an `after merge` answer is neither.
 `afterMergeAnswers(criteria, answers)` is each criterion answered `after merge`, which
-shipped `implement` names in its merge request as not settled by the Run. `answerFor(criterion, answers)` is the
+shipped `implement` names in its merge request under **Open questions**, without ticket filenames.
+`answerFor(criterion, answers)` is the
 answer a criterion has: one to its whole wording, where a copy that dropped the criterion's
 formatting still counts, so an answer to earlier wording does not answer an amended criterion. Shipped
 `implement` hands what is unmet back to the builder before any reviewer is launched, and

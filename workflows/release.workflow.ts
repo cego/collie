@@ -974,7 +974,15 @@ export default defineWorkflow({
                   wait: true,
                   settle: true,
                 });
-                if ("proved" in read || read.before !== undefined) continue;
+                if ("proved" in read) {
+                  if (read.retried === true)
+                    yield* host.record(
+                      runId,
+                      `unsettled: ${spec.name}: job ${spec.ci} failed on ${Str.slice(0, 12)(read.proved.end.head_sha)}, then passed when retried — a Flake, so this Run has not settled it.`,
+                    );
+                  continue;
+                }
+                if (read.before !== undefined) continue;
                 if (read.conflicts === true) conflicting = true;
                 else failed.push(read.unproved);
               }
