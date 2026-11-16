@@ -40,13 +40,13 @@ import {
 import { approvedFor, approvedIn } from "./verify-spec";
 import { readIntent } from "./intent";
 import { findingsIn, isBlocking } from "./output";
-import { type KeptMarkers, markersOf, runningCheck } from "./checks";
+import { markersOf, runningCheck } from "./checks";
 import { runningChecks } from "./check-processes";
 import { waitLine } from "./memory-wait";
 import { runWaits } from "./run-waits";
 import { awaitingLine } from "./awaiting";
 import { MERGE_POLL_MS, mrOf, readForge, readMrStates } from "./merges";
-import { filed, nothingToLandFile, type Recorded, settlementOf, standingOf } from "./standing";
+import { filed, NOTHING_TO_LAND, type Recorded, settlementOf, standingOf } from "./standing";
 import { offersOf } from "./lifecycle";
 import { mrIdIn, shell } from "./mr";
 import type {
@@ -1069,11 +1069,8 @@ const dispositionLine = (line: Disposition) =>
 /** The branch a Run left to land: none where it recorded it had nothing to land. */
 const branchOwed = Effect.fn("Board.branchOwed")(function* (run: RunFacts) {
   if (run.branch === null) return null;
-  const fs = yield* FileSystem.FileSystem;
-  const nothing = yield* fs
-    .exists(nothingToLandFile(run.dir))
-    .pipe(Effect.orElseSucceed(() => false));
-  return nothing ? null : run.branch;
+  const nothing = yield* RunRecords.use((records) => records.fact(run.id, NOTHING_TO_LAND));
+  return nothing !== null ? null : run.branch;
 });
 
 /** Whether none of these Runs left anything anyone has to file. */
@@ -1133,7 +1130,6 @@ interface Retimed {
 export interface KeptCards {
   readonly revision: (runs: ReadonlyArray<string>) => number;
   readonly kept: Map<string, KeptCard>;
-  readonly markers: KeptMarkers["markers"];
 }
 
 const cardKey = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
@@ -1221,12 +1217,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions) {
   const since = yield* seenSince(stateDir);
   const live = new Map(Arr.map(opts.alive ?? [], (agent) => [agent.name, agent]));
   const records = yield* runningChecks;
-  const keptCards = opts.only === undefined ? opts.cards : undefined;
-  const markers = yield* markersOf(
-    all,
-    records,
-    keptCards && { revision: (run) => keptCards.revision([run]), markers: keptCards.markers },
-  );
+  const markers = yield* markersOf(records);
   const checked = new Set(Arr.map(records, (record) => record.run));
   const offersOfRun =
     opts.offers ??

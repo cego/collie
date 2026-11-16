@@ -61,7 +61,7 @@ export const runWaits = Effect.fn("RunWaits.of")(function* (
     parked: run.state === "waiting" && run.asking.length === 0 ? { reason: run.parked } : null,
     // A hold left on a Run that ended holds nothing, and a finished Run refuses its release.
     held: run.held && !settled(run),
-    memory: yield* memoryWaitOf(run.dir),
+    memory: yield* memoryWaitOf(run.id),
     awaiting: run.awaiting,
     usage: run.usage ?? null,
   };

@@ -182,7 +182,7 @@ import {
   standingOf,
   type ReviewStanding,
 } from "./review-wait";
-import { nothingToLandFile } from "./standing";
+import { NOTHING_TO_LAND } from "./standing";
 import { AwaitingJson, AwaitingSchema, THE_AUTHOR, overdueLine } from "./awaiting";
 import { Woke, collieRunOf } from "./mr-watch-model";
 import { readingOf } from "./mr-watch";
@@ -371,7 +371,7 @@ import {
   rerunTest,
   resolveExecutable,
   runApproved,
-  VERIFYING_FILE,
+  VERIFYING,
   type CheckPass,
   type CheckRun,
   type FailedTest,
@@ -4271,7 +4271,7 @@ export const hostLayer = (options: {
               });
             }
             const journal = evidenceDir(dir, asked.runId);
-            const marker = `${runDir(dir, asked.runId)}/${VERIFYING_FILE}`;
+            const marker = controlOf(runRecords, VERIFYING, asked.runId);
             const away = `${runDir(dir, asked.runId)}/${AWAY_FILE}`;
             yield* restoreCheckout(asked.cwd, away);
             const rerun =
@@ -4320,22 +4320,19 @@ export const hostLayer = (options: {
                 const started = yield* nowIso;
                 // A file per run of the check, beside the journal its record goes to.
                 const log = `${journal}/checks/${pipe(started, Str.replace(/[:.]/g, "-"))}-${pipe(spec.name, Str.replace(/[^\w.-]/g, "_"))}.log`;
-                yield* fs
-                  .writeFileString(
-                    marker,
-                    encodeVerifying({
-                      name: spec.name,
-                      executable: rerun === undefined ? spec.executable : "bun",
-                      argv: rerun === undefined ? spec.argv : rerunArgv(rerun),
-                      pass: recorded.pass,
-                      round: recorded.round ?? null,
-                      revision: head.code === 0 ? Str.trim(head.stdout) : "",
-                      base,
-                      started,
-                      log,
-                    }),
-                  )
-                  .pipe(Effect.ignore);
+                yield* marker.set(
+                  encodeVerifying({
+                    name: spec.name,
+                    executable: rerun === undefined ? spec.executable : "bun",
+                    argv: rerun === undefined ? spec.argv : rerunArgv(rerun),
+                    pass: recorded.pass,
+                    round: recorded.round ?? null,
+                    revision: head.code === 0 ? Str.trim(head.stdout) : "",
+                    base,
+                    started,
+                    log,
+                  }),
+                );
                 return yield* (
                   rerun === undefined
                     ? runApproved(
@@ -4369,7 +4366,7 @@ export const hostLayer = (options: {
                 : verified(null)
               ).pipe(Effect.asSome),
               untilStopped(asked.runId).pipe(Effect.as(Option.none<Verification>())),
-            ).pipe(Effect.ensuring(fs.remove(marker).pipe(Effect.ignore)));
+            ).pipe(Effect.ensuring(marker.set(null)));
             if (Option.isSome(ran)) return ran.value;
             const instance = yield* Effect.serviceOption(WorkflowEngine.WorkflowInstance);
             if (Option.isSome(instance)) return yield* Workflow.suspend(instance.value);
@@ -5458,6 +5455,7 @@ export const hostLayer = (options: {
                   mr: yield* mergeRequestOf(asked.runId),
                   wait: asked.wait ?? false,
                   settle: asked.settle ?? false,
+                  verifying: controlOf(runRecords, VERIFYING, asked.runId),
                   run: runShell,
                 }),
                 stopped,
@@ -5830,7 +5828,7 @@ export const hostLayer = (options: {
               const status = yield* git("status", "--porcelain");
               if (status.code !== 0 || Str.trim(status.stdout) !== "") return null;
               const why = `nothing to land: no commits over ${pipe(found.base, Str.slice(0, 12))}, where this branch leaves ${found.branch}, and nothing uncommitted`;
-              yield* fs.writeFileString(nothingToLandFile(runDir(dir, runId)), `${why}\n`);
+              yield* runRecords.put(runId, NOTHING_TO_LAND, `${why}\n`);
               yield* appendLog(runDir(dir, runId), why);
               return why;
             }),
@@ -9943,9 +9941,7 @@ const makeRegistry: (
       // Where the host placed it: a branch it inferred is as much the Run's as one named.
       branch: placedOf(row, options).branch,
       mrUrl: yield* mergeRequestOf(runId),
-      nothingToLand: yield* fs
-        .exists(nothingToLandFile(where))
-        .pipe(Effect.orElseSucceed(() => false)),
+      nothingToLand: (yield* runRecords.fact(runId, NOTHING_TO_LAND)) !== null,
       planIssues: yield* planIssuesIn(where),
       disposed: disposition !== null,
       openFindings: yield* openFindingsIn(where),

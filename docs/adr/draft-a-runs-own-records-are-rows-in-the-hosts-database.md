@@ -29,6 +29,11 @@ what a human typed into an agent's pane, is a row of its own, named the same way
 checkpoints are read together by their prefix (`factsUnder`). Each owning module keeps its
 schema and its torn-line and corruption rules; only where the text lives changed. A fact is
 set or removed with `put`, and read-modify-write is one transaction (`RunRecords.update`).
+What the host marks over a Run only while it works on it, the check it runs (`verifying`) and
+each wait for memory (`memory-wait`, keyed as its file was named), is a control row: a host
+that is not running has none live, so neither is imported or written back, and the old
+one-line `verifying` shape ([ADR-0042](0042-a-check-collie-runs-is-seen-while-it-runs.md) D2)
+went with its file.
 
 **D2. Work moves a Run's activity; bookkeeping does not.** `collie_run_activity (run, at)` is
 bumped in the same transaction as every write except bookkeeping (the operations audit,

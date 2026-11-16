@@ -517,11 +517,10 @@ export const checkLines = Effect.fn("Tools.checkLines")(function* (
   now: number,
   all?: Effect.Effect<ReadonlyArray<RunFacts>>,
 ) {
-  const own = yield* markersOf([run]);
-  const every = own.has(run.id) && all !== undefined ? yield* all : runs;
-  const markers = own.has(run.id) ? yield* markersOf(every) : own;
+  const markers = yield* markersOf();
+  const every = markers.has(run.id) && all !== undefined ? yield* all : runs;
   const check = yield* runningCheck(run, every, markers, now);
-  const memory = yield* memoryWaitOf(run.dir);
+  const memory = yield* memoryWaitOf(run.id);
   const waiting = memory === null ? [] : [waitLine(memory)];
   if (check === null) return waiting;
   return [

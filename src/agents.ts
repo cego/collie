@@ -3477,7 +3477,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               budgetMs: budgetMs ?? host.collectMs ?? DEFAULT_COLLECT_MS,
               counts: Effect.gen(function* () {
                 if (asking !== null && (yield* asking(null))) return false;
-                if (yield* holdsBudgetOf(host.dir, launched.runId, launched.agent)) return false;
+                if (yield* holdsBudgetOf(launched.runId, launched.agent)) return false;
                 return yield* turnOver;
               }),
               usable: usable ?? (() => true),

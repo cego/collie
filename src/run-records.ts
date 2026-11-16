@@ -53,6 +53,7 @@ export const LEGACY_FACTS: ReadonlyArray<string> = [
   "landing.json",
   "terminal.json",
   "merge-request",
+  "nothing-to-land",
   "recovery-parent",
   "steering/judged.json",
   "evidence/approved.json",
@@ -219,8 +220,9 @@ const stepSamplesOf = `WITH leaves AS (
   ), samples AS (SELECT workflow, step, at, ms FROM timed WHERE ms >= 0)`;
 
 /**
- * `records` for one pass over these Runs: the first read of a journal, a fact or activity for
- * any of them reads it for all of them, in one query, and the pass reads that.
+ * `records` for one pass over these Runs: the first read of a journal, a fact, a control's
+ * values or activity for any of them reads it for all of them, in one query, and the pass
+ * reads that.
  */
 export const readAhead = (records: RunRecordsApi, runs: ReadonlyArray<string>): RunRecordsApi => {
   const ids = new Set(runs);
@@ -239,6 +241,9 @@ export const readAhead = (records: RunRecordsApi, runs: ReadonlyArray<string>): 
   const journal = once((name) => records.linesOf(runs, name));
   const fact = once((name) => records.factsOf(runs, name));
   const activity = once(() => records.activity(runs));
+  const controls = once((name) =>
+    Effect.map(records.everyControl(name), (rows) => Arr.groupBy(rows, (row) => row.run)),
+  );
   return {
     ...records,
     lines: (run, name) =>
@@ -249,6 +254,10 @@ export const readAhead = (records: RunRecordsApi, runs: ReadonlyArray<string>): 
       ids.has(run)
         ? Effect.map(fact(name), (all) => all.get(run) ?? null)
         : records.fact(run, name),
+    controlsOf: (control, run) =>
+      ids.has(run)
+        ? Effect.map(controls(control), (all) => all[run] ?? [])
+        : records.controlsOf(control, run),
     activity: (some) =>
       Arr.every(some, (run) => ids.has(run))
         ? Effect.map(

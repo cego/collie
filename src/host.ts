@@ -312,7 +312,7 @@ import { AgentEntrySchema, everyRegistered, REGISTERED } from "./registry";
 import { listTasks, readTask, taskKeptIn, TASKS, TaskSchema } from "./task";
 import { epochMs, nowIso } from "./time";
 import { appendLog } from "./oversight";
-import { VERIFYING_FILE, verifyingIn } from "./verify";
+import { VERIFYING, verifyingOf } from "./verify";
 import { reason } from "./naming";
 import { editString, globFiles, grepFiles, readPart, writeWhole } from "./host-files";
 import { receive, uploadsDir } from "./uploads";
@@ -1064,7 +1064,7 @@ const handlers = (
               running: yield* runningCheck(
                 run,
                 runs,
-                yield* markersOf(runs),
+                yield* markersOf(),
                 yield* Clock.currentTimeMillis,
               ),
               done: yield* donePasses(run),
@@ -1081,7 +1081,7 @@ const handlers = (
               const running = yield* runningCheck(
                 run,
                 runs,
-                yield* markersOf(runs),
+                yield* markersOf(),
                 yield* Clock.currentTimeMillis,
               );
               if (running?.log == null) return Stream.make({ _tag: "Ended" as const, check: null });
@@ -1154,7 +1154,7 @@ const handlers = (
                 bytes: file.bytes,
               })),
               replies: yield* readReplies(runDir(dir, runId)).pipe(Effect.orElseSucceed(() => [])),
-              memory: yield* Effect.map(memoryWaitOf(runDir(dir, runId)), (wait) =>
+              memory: yield* Effect.map(memoryWaitOf(runId), (wait) =>
                 wait === null ? null : waitLine(wait),
               ),
               flow:
@@ -1423,9 +1423,7 @@ const hostBoard = (dir: string) =>
     const idle: IdleSince = new Map();
     const finishedSince: FinishedSince = new Map();
     const cards: KeptCards | undefined =
-      model === undefined
-        ? undefined
-        : { revision: model.inputsAt, kept: new Map(), markers: new Map() };
+      model === undefined ? undefined : { revision: model.inputsAt, kept: new Map() };
     /** The offers a build read, which the door is told of with its listing. */
     const offered = new Map<string, ReadonlyArray<OfferView>>();
     const boardOf = (facts: ReadonlyArray<RunFacts>, alive: ReadonlyArray<AgentInfo>) =>
@@ -4363,7 +4361,7 @@ const onLeftoversRun = (dir: string) => (leftover: Leftover, outcome: LeftoverEn
     const fs = yield* FileSystem.FileSystem;
     const at = runDir(dir, leftover.run);
     if (!(yield* fs.exists(at).pipe(Effect.orElseSucceed(() => false)))) return;
-    const marker = yield* verifyingIn(at);
+    const marker = yield* verifyingOf(leftover.run);
     // A marker started after the check is a later check's.
     if (
       outcome !== "still running" &&
@@ -4372,7 +4370,7 @@ const onLeftoversRun = (dir: string) => (leftover: Leftover, outcome: LeftoverEn
       marker.pass === leftover.pass &&
       epochMs(marker.started) <= leftover.started
     )
-      yield* fs.remove(`${at}/${VERIFYING_FILE}`, { force: true }).pipe(Effect.ignore);
+      yield* RunRecords.use((records) => records.setControl(VERIFYING, leftover.run, null));
     yield* appendLog(at, line).pipe(Effect.ignore);
   });
 

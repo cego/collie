@@ -23,7 +23,7 @@ import { logged } from "./check-supervisor";
 import type { VerifySpec } from "./intent";
 import { failedAlone, failedTests, ranAlone, rerunArgv } from "./bun-tests";
 import { appendRunJournal, readRunJournal, runJournal } from "./journal";
-import type { RunRecords } from "./run-records";
+import { RunRecords } from "./run-records";
 import { shell, type Ran } from "./mr";
 import { nowIso, epochMs } from "./time";
 import { CurrentStep, type StepPlace } from "./steps";
@@ -456,10 +456,10 @@ export const appendVerification = Effect.fn("Verify.append")(function* (
 });
 
 /**
- * The check Collie itself is running for a Run, in its run directory while it runs. Its
+ * The control naming the check Collie itself is running for a Run, set while it runs. Its
  * agents are idle then, and without this a card reads whatever the last of them was doing.
  */
-export const VERIFYING_FILE = "verifying";
+export const VERIFYING = "verifying";
 
 const VerifyingSchema = Schema.Struct({
   name: Schema.String,
@@ -481,33 +481,15 @@ export type Verifying = typeof VerifyingSchema.Type;
 const VerifyingJson = Schema.fromJsonString(VerifyingSchema);
 export const encodeVerifying = flow(Schema.encodeResult(VerifyingJson), Result.getOrThrow);
 
-/**
- * The check running for the Run in `dir`, or null when none is. A marker in the old
- * one-line shape reads as its name alone, a plain `check` nothing else is known about.
- */
-export const verifyingIn = (
-  dir: string,
-): Effect.Effect<Verifying | null, never, FileSystem.FileSystem> =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) => fs.readFileString(`${dir}/${VERIFYING_FILE}`)),
-    Effect.map((text): Verifying | null => {
-      const decoded = Schema.decodeOption(VerifyingJson)(text);
-      if (decoded._tag === "Some") return decoded.value;
-      const name = Str.trim(text);
-      return name === ""
-        ? null
-        : {
-            name,
-            executable: "",
-            argv: [],
-            pass: "check",
-            round: null,
-            revision: "",
-            base: null,
-            started: "",
-          };
-    }),
-    Effect.orElseSucceed(() => null),
+/** The check a `verifying` control's value names, or null for none. */
+export const decodeVerifying = (data: string | null): Verifying | null =>
+  data === null ? null : Option.getOrNull(Schema.decodeOption(VerifyingJson)(data));
+
+/** The check running for the Run, or null when none is. */
+export const verifyingOf = (runId: string): Effect.Effect<Verifying | null, never, RunRecords> =>
+  Effect.map(
+    RunRecords.use((records) => records.control(VERIFYING, runId)),
+    decodeVerifying,
   );
 
 export const readVerifications = Effect.fn("Verify.read")(function* (runDir: string) {
