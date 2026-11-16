@@ -1417,6 +1417,8 @@ cannot mistake an agent still starting for a stale one; a failed launch releases
 lock, and the existing PID-lock recovery handles a process that crashes. An endpoint is
 stopped only while its recorded pid still runs the recorded command, read from
 `/proc/<pid>/cmdline`, or from `ps -ww -o command=` where there is no `/proc`, as on macOS.
+Installation reads the process start time independently of its command line, which can
+briefly be empty during exec, so that a later server death still has a recorded identity.
 
 A Codex agent's work runs in its App Server, not its pane, so a Run's stop goes through
 `stopAgent` in `src/compaction.ts`, under the agent's control lock, before its pane is
@@ -1929,7 +1931,8 @@ seed time, so no seed evens out runners that differ in speed on the day. Quiet-a
 use a controlled Effect clock so machine load cannot consume their nudge windows. A test
 whose work waits out timers runs under `fastForward` (`test/support/effect.ts`): a test
 clock a fiber of its own keeps moving many times faster than the wall's, from the wall's
-now.
+now. Follow-through tests advance it in 250 ms steps for the forge's five-minute polling
+intervals; intervening timers still fire in order and production intervals are unchanged.
 
 Workflow-authoring tests still install real packages and run the real compiler. Their
 isolated homes use [Bun's cache preference](https://bun.com/docs/runtime/bunfig#installprefer)

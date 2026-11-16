@@ -33,7 +33,14 @@ import type { AgentQuestion, HarnessVersionError, Submitting } from "./compactor
 import { LOCK_CLAIM_SPACING_MS, ensureLockDir, withLock } from "./lock";
 import { reason } from "./naming";
 import { COMPACTION_OFF } from "./settings";
-import { commandOf, processAbsent, processOf, stillRunning, terminate } from "./processes";
+import {
+  commandOf,
+  processAbsent,
+  processOf,
+  startedOf,
+  stillRunning,
+  terminate,
+} from "./processes";
 
 /**
  * How long Collie waits for a compaction request to resolve before it pauses the Run.
@@ -520,8 +527,7 @@ export const installControls = Effect.fn("Compaction.installControls")(function*
   };
   if (resumed !== undefined) ctx.session = resumed.session;
   const installed = yield* port.install(ctx);
-  const started =
-    installed.pid === undefined ? null : ((yield* processOf(installed.pid))?.started ?? null);
+  const started = installed.pid === undefined ? null : yield* startedOf(installed.pid);
   yield* writeControl(deps.stateDir, {
     ...agent,
     dir,
