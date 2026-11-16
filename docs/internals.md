@@ -1279,8 +1279,10 @@ the attempt, cannot be told from Collie's, and is taken as the merge the go aske
 
 The interface decodes the library's issues into the shared issue shape. Filing an issue
 uses the returned number and URL. An issue or review write that fails is not sent again,
-apart from the single resend after a 401; its reason asks the caller to inspect the issue
-or merge request before retrying, since a lost answer may have followed a successful write.
+apart from the single resend after a 401. An issue write with no answer, or a 5xx, and any
+failed review, says to inspect the issue or merge request before retrying, since a lost answer
+may have followed a successful write; one the forge refused with a 4xx, or never sent for want
+of a login, says only why.
 
 The Host service chooses the forge of the Run's recorded checkout. Before publishing,
 it applies Conversation redaction and checks text against other checkouts, including
