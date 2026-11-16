@@ -1,5 +1,5 @@
 import * as Str from "effect/String";
-import { Deferred, Effect, Fiber, FileSystem } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Schema } from "effect";
 import { expect, test } from "bun:test";
 import { editState } from "./support/fake-herdr-core";
 import { runEffect } from "./support/effect";
@@ -39,6 +39,12 @@ test("a test's edit of the fake herdr's state waits out a call in flight and lan
     }).pipe(Effect.orDie),
   ));
 
+const AgentsState = Schema.fromJsonString(
+  Schema.Struct({
+    agents: Schema.Array(Schema.Struct({ name: Schema.String, terminal_id: Schema.String })),
+  }),
+);
+
 test("a test's reincarnation of an agent waits out a call in flight and lands on its write", () =>
   runEffect(
     Effect.gen(function* () {
@@ -46,7 +52,10 @@ test("a test's reincarnation of an agent waits out a call in flight and lands on
       const rig = yield* Rig.scoped();
       const state = `${rig.logPath}.state.json`;
       const lock = `${rig.logPath}.lock`;
-      yield* fs.writeFileString(state, JSON.stringify({ agents: [{ name: "a", terminal_id: "t1" }] }));
+      yield* fs.writeFileString(
+        state,
+        yield* Schema.encodeEffect(AgentsState)({ agents: [{ name: "a", terminal_id: "t1" }] }),
+      );
       // A call in flight: it holds the lock, read the state, and will write it back with an agent it started.
       yield* fs.makeDirectory(lock);
       const waiting = yield* Deferred.make<void>();
@@ -65,7 +74,7 @@ test("a test's reincarnation of an agent waits out a call in flight and lands on
       yield* Effect.raceFirst(Deferred.await(waiting), Effect.asVoid(Fiber.await(reincarnating)));
       yield* fs.writeFileString(
         state,
-        JSON.stringify({
+        yield* Schema.encodeEffect(AgentsState)({
           agents: [
             { name: "a", terminal_id: "t1" },
             { name: "b", terminal_id: "t2" },
@@ -74,7 +83,9 @@ test("a test's reincarnation of an agent waits out a call in flight and lands on
       );
       yield* fs.remove(lock, { recursive: true });
       yield* Fiber.join(reincarnating);
-      expect(JSON.parse(yield* fs.readFileString(state)).agents).toEqual([
+      expect(
+        (yield* Schema.decodeEffect(AgentsState)(yield* fs.readFileString(state))).agents,
+      ).toEqual([
         { name: "a", terminal_id: "t1+next" },
         { name: "b", terminal_id: "t2" },
       ]);
