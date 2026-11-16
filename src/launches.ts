@@ -155,6 +155,10 @@ export interface LaunchesApi {
   readonly record: (launched: Launched) => Effect.Effect<void>;
   /** Puts the launch last in its Run's order: its agent was given the work. */
   readonly order: (launched: Launch) => Effect.Effect<void>;
+  /** The launch each of these Runs ordered last, and when, in one read; a Run with none is absent. */
+  readonly lastOrderedOf: (
+    runs: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyMap<string, { readonly stem: string; readonly at: number }>>;
   /** The launch its Run ordered last, and when. */
   readonly lastOrdered: (
     run: string,
@@ -241,6 +245,22 @@ export const launchesLayer = Layer.effect(Launches)(
           Effect.andThen(moved(launched.runId)),
           Effect.orDie,
         ),
+      lastOrderedOf: (runs) =>
+        runs.length === 0
+          ? Effect.succeed(new Map())
+          : sql<{ readonly run: string; readonly stem: string; readonly at: number | null }>`
+              SELECT run, stem, ordered_at AS at FROM (
+                SELECT run, stem, ordered_at,
+                  row_number() OVER (PARTITION BY run ORDER BY ordered DESC) AS nth
+                FROM collie_launches WHERE run IN ${sql.in(runs)} AND ordered IS NOT NULL
+              ) WHERE nth = 1
+            `.pipe(
+              Effect.map(
+                (rows) =>
+                  new Map(Arr.map(rows, (row) => [row.run, { stem: row.stem, at: row.at ?? 0 }])),
+              ),
+              Effect.orDie,
+            ),
       lastOrdered: (run) =>
         sql<{ readonly stem: string; readonly at: number | null }>`
           SELECT stem, ordered_at AS at FROM collie_launches

@@ -18,6 +18,7 @@ import {
   type RunRecordsApi,
 } from "../src/run-records";
 import { epochMs } from "../src/time";
+import { Launches } from "../src/launches";
 import { appendVerification, verificationsPath } from "../src/verify";
 import { madeRun } from "./support/records";
 import { runEffect } from "./support/effect";
@@ -66,6 +67,7 @@ const readsFor = (runs: number) =>
       made.push(run);
     }
     const calls = { n: 0 };
+    const launches = yield* Launches;
     const views = yield* buildBoard({
       env: readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" }),
       runs: made,
@@ -75,7 +77,24 @@ const readsFor = (runs: number) =>
       mrStates: new Map(),
       offers: () => Effect.succeed([]),
       now: epochMs("2026-09-13T10:00:00Z"),
-    }).pipe(Effect.provideService(RunRecords, counted(records, calls)));
+    }).pipe(
+      Effect.provideService(RunRecords, counted(records, calls)),
+      Effect.provideService(Launches, {
+        ...launches,
+        of: (runs) => {
+          calls.n++;
+          return launches.of(runs);
+        },
+        lastOrderedOf: (runs) => {
+          calls.n++;
+          return launches.lastOrderedOf(runs);
+        },
+        lastOrdered: (run) => {
+          calls.n++;
+          return launches.lastOrdered(run);
+        },
+      }),
+    );
     return { cards: views.length, reads: calls.n };
   }).pipe(Effect.scoped);
 
