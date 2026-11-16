@@ -314,7 +314,9 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
             )?.paneId;
             expect(sibling).toBeDefined();
           }
-          if (mode === "gone") yield* new Herdr(readEnv(second.env)).terminalKill(requester.paneId);
+          // Stopped, not killed: core starts a running Run's lost agent again.
+          if (mode === "gone")
+            expect((yield* second.cli(["run", "stop", requesterRun])).envelope.ok).toBe(true);
           if (mode === "away" || mode === "away-close") yield* stopHost(second.world.state);
           const before = mode === "restart" ? yield* ownerOf(first.world.state) : null;
           if (mode !== "failed")

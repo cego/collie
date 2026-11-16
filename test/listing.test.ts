@@ -18,6 +18,7 @@ import { Effect, FileSystem, Layer, Path, Schema } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
+import { isString } from "../src/schema";
 import { Agents, agentsLayer, type AgentHost } from "../src/agents";
 import { Children, Host } from "../src/sdk";
 import {
@@ -41,6 +42,7 @@ beforeEach(() =>
   runEffect(
     Effect.gen(function* () {
       rig = yield* Rig.make();
+      yield* rig.startCore();
       const fs = yield* FileSystem.FileSystem;
       dir = `${rig.root}/host`;
       plan = `${rig.root}/plan`;
@@ -198,7 +200,13 @@ const said = (result: { readonly _tag: string; readonly success?: unknown }) =>
   result._tag === "Success" ? String(result.success) : "";
 
 const prompts = () =>
-  rig.calls().pipe(Effect.map((calls) => Arr.filter(calls, (call) => call.cmd === "agent prompt")));
+  rig
+    .calls()
+    .pipe(
+      Effect.map((calls) =>
+        Arr.filter(calls, (call) => call.cmd === "terminal.send" && isString(call.params?.text)),
+      ),
+    );
 
 /** What an operation was actually asked, which is the file its message named. */
 const promptFile = (runId: string, operation: string) =>
@@ -208,7 +216,7 @@ const promptFile = (runId: string, operation: string) =>
   );
 
 const starts = () =>
-  rig.cmds().pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "agent start")));
+  rig.cmds().pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run")));
 
 const built = (what: string, findings: ReadonlyArray<Schema.Json> = []) => ({
   verdict: findings.length === 0 ? "clean" : "findings",
