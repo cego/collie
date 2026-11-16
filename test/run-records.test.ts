@@ -19,6 +19,8 @@ import { StoreWrites } from "../src/store-writes";
 import { runEffect } from "./support/effect";
 import { recordsAt } from "./support/records";
 import { rollbackAt } from "../src/records-import";
+import { Store } from "../src/store";
+import { encodeStepLine, STEPS_FILE } from "../src/steps";
 
 let stateDir: string;
 beforeEach(() =>
@@ -205,6 +207,85 @@ test("the first host imports the usual Step times an older build kept past its r
         { workflow: "implement", step: "build", ms: 60_000 },
         { workflow: "implement", step: "build", ms: 120_000 },
         { workflow: "implement", step: "review", ms: 180_000 },
+      ]);
+    }),
+  ));
+
+test("a rollback writes the usual Step times kept since the upgrade back where an older build reads them", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const samples = Schema.fromJsonString(
+        Schema.Array(
+          Schema.Struct({
+            workflow: Schema.String,
+            step: Schema.String,
+            run: Schema.String,
+            key: Schema.String,
+            at: Schema.String,
+            ms: Schema.Finite,
+          }),
+        ),
+      );
+      const gone = {
+        workflow: "implement",
+        step: "build",
+        run: "gone",
+        key: "build",
+        at: "2026-10-01T10:00:00.000Z",
+        ms: 60_000,
+      };
+      yield* legacy({ "step-durations.json": yield* Schema.encodeEffect(samples)([gone]) });
+      yield* Effect.provide(
+        Effect.gen(function* () {
+          yield* (yield* Store).admit({
+            request: "since",
+            run: "since",
+            workflow: "implement",
+            project: "/work",
+            input: {},
+            provenance: {},
+            options: {},
+            generation: "implement@1",
+            execution: "execution-since",
+            task: null,
+            parent: null,
+          });
+          yield* (yield* RunRecords).append(
+            "since",
+            STEPS_FILE,
+            Arr.map(
+              [
+                {
+                  kind: "enter" as const,
+                  key: "build",
+                  step: {
+                    id: "build",
+                    title: "",
+                    description: "",
+                    kind: "agent" as const,
+                    role: null,
+                    produces: null,
+                  },
+                  place: null,
+                  at: "2026-11-01T10:00:00.000Z",
+                },
+                { kind: "leave" as const, key: "build", at: "2026-11-01T10:02:00.000Z" },
+              ],
+              encodeStepLine,
+            ),
+          );
+        }),
+        recordsAt(stateDir),
+      );
+
+      expect(yield* rollbackAt(stateDir)).toBe("rolled-back");
+      const kept = yield* Schema.decodeEffect(samples)(
+        yield* fs.readFileString(`${stateDir}/step-durations.json`),
+      );
+      expect(Arr.sortWith(kept, (one) => one.at, Order.String)).toEqual([
+        gone,
+        { ...gone, run: "since", at: "2026-11-01T10:02:00.000Z", ms: 120_000 },
       ]);
     }),
   ));
