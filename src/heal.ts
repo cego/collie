@@ -9,11 +9,13 @@ import { configValue, readConfig } from "./config";
 import { HealFinding, type Metric } from "./metrics";
 import { PARK_CAUSES, type ParkCause } from "./park-cause";
 import { LAYERS } from "./definitions-model";
+import { ProducerReport } from "./narrative-model";
 
 export const HEALS_PER_RUN = 3;
 
 /** What a Heal hands back: a claim the host reads for words, never for its judgement. */
 const HealSaid = {
+  ...ProducerReport.fields,
   diagnosis: Schema.String,
   actions: Schema.Array(Schema.String),
   finding: HealFinding,
@@ -50,8 +52,10 @@ export const passedOver = (facts: {
   readonly recoveries: ReadonlyArray<Metric>;
 }): string | null => {
   const entry = PARK_CAUSES[facts.cause];
-  if (entry.kind === "needs-you" && entry.neverHeals === true)
-    return "only a person can act on its cause";
+  if (entry.kind !== "asks-agent" && entry.neverHeals === true)
+    return entry.kind === "needs-you"
+      ? "only a person can act on its cause"
+      : "only what its recheck reads can clear its cause";
   if (facts.isHeal) return "it is itself a Heal";
   if (!facts.on) return "recovery.heal is off";
   if (facts.waitsOnYou) return "it already waits on you";

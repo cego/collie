@@ -152,6 +152,13 @@ export function App(props: AppProps) {
    * dispatch, and asking again in between would switch it off.
    */
   let tailing = false;
+  let showingArtefacts = false;
+  createEffect(() => {
+    const wanted = openId() !== null && tab() === "artefacts";
+    if (wanted === showingArtefacts) return;
+    showingArtefacts = wanted;
+    props.dispatch({ _tag: "ToggleArtefacts" });
+  });
   createEffect(() => {
     const wanted = openId() !== null && tab() === "log";
     if (wanted === tailing) return;
@@ -571,6 +578,8 @@ export function App(props: AppProps) {
               ref={setDrawer}
               view={open()!}
               detail={props.state().detail}
+              artefacts={props.state().artefacts ?? null}
+              artefactsError={props.state().artefactsError ?? null}
               live={props.state().live}
               tab={tab()}
               onTab={setTab}

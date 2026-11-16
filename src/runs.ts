@@ -26,6 +26,7 @@ import type { Landing } from "./landing";
 import { awaitingLine, type Awaiting } from "./awaiting";
 import type { AskedFact, Execution, UsageWait } from "./flow";
 import type { ShippingGo } from "./shipping";
+import type { NarrativeReport } from "./narrative-model";
 
 /** Where a Run is, in the words every board and listing uses. */
 export type RunState = "running" | "waiting" | "succeeded" | "ended" | "failed" | "stopped";
@@ -43,6 +44,7 @@ export interface Asked {
 }
 
 export interface RunFacts {
+  readonly narratives?: ReadonlyArray<NarrativeReport>;
   readonly requestedBy?: RequestedBy;
   readonly report?: RunReport;
   readonly id: string;
@@ -133,6 +135,7 @@ const stateOf = (view: RunView): RunState => {
 };
 
 export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
+  narratives: view.narratives,
   id: view.runId,
   requestedBy: view.requestedBy,
   report: view.report,

@@ -630,6 +630,7 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
     flow: opts.flow ?? undefined,
   };
   let shown = detail;
+  if (run.narratives !== undefined) shown = { ...shown, narratives: run.narratives };
   if (run.park !== undefined) shown = { ...shown, park: run.park };
   if (run.recovery !== undefined) shown = { ...shown, recovery: run.recovery };
   if (progress !== null) shown = { ...shown, branchProgress: progress };

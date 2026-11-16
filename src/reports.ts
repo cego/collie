@@ -18,6 +18,8 @@ import { isJsonObject, isString } from "./schema";
 import type { Asker } from "./proposals";
 import { notifyRunLink, owedRunLinks, resendRunLink } from "./run-link-delivery";
 import type { Peer } from "./peers-model";
+import { Artefacts } from "./artefacts";
+import { factsOfView } from "./runs";
 
 export const reportsLayer = (opts: {
   env: PluginEnv;
@@ -170,8 +172,11 @@ export const reportsLayer = (opts: {
         Effect.gen(function* () {
           let report = view.report;
           if (report === undefined) {
-            yield* notifyRunLink(env, opts.installation, view, "settled");
-            report = yield* tell(view);
+            const catalogue = yield* Artefacts;
+            yield* catalogue.prepareReports(factsOfView(env.stateDir, view));
+            const reading = { ...view, narratives: yield* catalogue.reports(view.runId) };
+            yield* notifyRunLink(env, opts.installation, reading, "settled");
+            report = yield* tell(reading);
             yield* write(view.runId, report);
           }
           if (view.closes === "reported" && !report.closed) {

@@ -84,6 +84,7 @@ describe("the record's tabs", () => {
       { label: "Review", value: "review" },
       { label: "Diff", value: "diff" },
       { label: "Evidence", value: "evidence" },
+      { label: "Artefacts", value: "artefacts" },
       { label: "Log", value: "log" },
       { label: "Terminal", value: "terminal" },
       { label: "MR !12", value: "mr" },
@@ -96,6 +97,7 @@ describe("the record's tabs", () => {
       "summary",
       "review",
       "evidence",
+      "artefacts",
       "log",
       "terminal",
       "mr",
@@ -127,6 +129,7 @@ describe("the record's tabs", () => {
     expect(Arr.map(came, ({ value }) => value)).toEqual([
       "summary",
       "evidence",
+      "artefacts",
       "log",
       "terminal",
       "mr",
@@ -156,6 +159,7 @@ describe("the record's tabs", () => {
       ["Review", "review"],
       ["Diff", "diff"],
       ["Evidence", "evidence"],
+      ["Artefacts", "artefacts"],
       ["Log", "log"],
       ["Terminal", "terminal"],
       ["Merge request api!7", "mr:gitlab.cego.dk/spilnu/api!7"],
@@ -353,6 +357,7 @@ describe("the tabs kept mounted", () => {
 describe("an Evidence video", () => {
   test("plays only while Evidence is shown, so one read after leaving it stays still", () => {
     expect(videoPlays("evidence")).toBe(true);
+    expect(videoPlays("artefacts")).toBe(true);
     expect(videoPlays("summary")).toBe(false);
   });
 });

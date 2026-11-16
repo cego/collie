@@ -729,7 +729,10 @@ more line naming its [**Park cause**](../CONTEXT.md) and what that cause lets Co
 `Parked: target-red · Collie rechecks` for a CI failure its target branch shares too,
 or `· needs you` — and the drawer's **parked**
 section adds why a person is needed; `collie run show` gives the same as `park` with its
-`cause` and `kind`. Recheck parks stay quiet while Collie checks their facts and resumes
+`cause` and `kind`. A Release whose merge-request pipeline went red and whose CI fix round
+could not move its head reads `Parked: ci-failed · Collie rechecks`. Collie rechecks the
+forge's next head or pipeline and resumes it without a Heal; once its three tries are spent it
+needs you, still without a Heal. Recheck parks stay quiet while Collie checks their facts and resumes
 those whose cause clears. After three automatic tries for the same cause, another park
 needs you and lists the tries. Before a park tells you it needs you, the host first starts
 one **Heal**, a Run of the [`heal`](workflows.md#heal) workflow whose agent may only message
@@ -810,6 +813,11 @@ it, however old: it does not go behind `older…` until it is seen. Its sentence
 `Completed. It reported: “two blockers remain”`. Opening its record, or its **Acknowledge**
 button, records it seen once for the whole Flock, on every board and Desktop, and it goes back
 behind the line.
+
+Substantial agent findings and recovery diagnoses have **Open report** on the native
+card. It opens the complete retained Markdown while the card keeps a concise summary,
+blocker, and next action. See [reading an agent's report](artefacts.md#reading-an-agents-report)
+for preparation, helper ownership, retry, and exact revision receipts.
 
 A Task whose Runs opened or were given several merge requests — a fan-out across
 repositories, or a Follow-up Run that opened its own — lists each on its card, by wave, with
@@ -4247,3 +4255,21 @@ without starting a run, and names the file.
 the skill and the command that installs it, and `collie upgrade` reinstalls the whole set.
 See [Authoring](authoring.md#skills) for how a workflow refers to one, and
 [the skills](#the-skills) for where they come from.
+
+## Finding a Run's material
+
+Open **Artefacts** in Desktop's navigation to search across retained Runs and Machines,
+including earlier Runs absent from today's board. Filter by Run, kind, role, or unseen
+revision. Coverage shows historical indexing progress and Machines that could not be
+searched. Select **Open** to inspect a result on its owning Run; **Back** returns to search.
+See [Finding material across Runs and Machines](artefacts.md#finding-material-across-runs-and-machines)
+for stale results, owner qualification, and CLI/chat routes.
+
+The record's **Artefacts** tab brings together attachments, plan files, evidence files,
+and handoffs. Select an item to inspect its retained revision, or use **Open** and **Save**.
+Images, Markdown, and text have native previews; supported videos play inside the record.
+
+The tab distinguishes unseen material from updates to previously seen material. Old
+creation dates remain unknown where no trustworthy record exists. Missing sources can
+still have retained content. See [Inspecting a Run's material](artefacts.md) for receipt
+semantics, codec support, refresh limits, and the implementation's evidence mapping.

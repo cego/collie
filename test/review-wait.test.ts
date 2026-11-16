@@ -293,6 +293,7 @@ test("a red pipeline, changes requested or a merge the forge refuses blocks, wha
     ),
   ).toEqual({
     _tag: "Blocked",
+    cause: "ci-failed",
     why: [
       "the pipeline at 1a2b3c4d failed (lint)",
       "changes are requested",
@@ -308,7 +309,11 @@ test("each forge's word for a conflict with the target is the same conflict, and
   const CONFLICTS = "it conflicts with its target branch, and its branch must take the target";
   for (const said of ["conflicting", "dirty", "cannot be merged"]) {
     const conflicting = read({ mergeable: { state: "blocked", said } });
-    expect(reviewWaitOf(MR, conflicting)).toEqual({ _tag: "Blocked", why: [CONFLICTS] });
+    expect(reviewWaitOf(MR, conflicting)).toEqual({
+      _tag: "Blocked",
+      cause: "review-blocked",
+      why: [CONFLICTS],
+    });
     expect(standingOf(conflicting, at)).toEqual({
       _tag: "Waiting",
       why: [CONFLICTS],
@@ -318,6 +323,7 @@ test("each forge's word for a conflict with the target is the same conflict, and
   const draft = read({ mergeable: { state: "blocked", said: "draft status" } });
   expect(reviewWaitOf(MR, draft)).toEqual({
     _tag: "Blocked",
+    cause: "review-blocked",
     why: ["the forge will not merge it: draft status"],
   });
   expect(standingOf(draft, at)).toEqual({
@@ -325,6 +331,19 @@ test("each forge's word for a conflict with the target is the same conflict, and
     why: ["mergeability (draft status)"],
     approvers: ["alice"],
   });
+});
+
+test("a red pipeline blocks as ci-failed, and anything else that blocks as review-blocked", () => {
+  const failed = { state: "failed", name: "lint" } as const;
+  const causeOf = (over: Partial<Extract<ReviewRead, { ok: true }>>) => {
+    const wait = reviewWaitOf(MR, read(over));
+    return wait._tag === "Blocked" ? wait.cause : wait._tag;
+  };
+  expect(causeOf({ pipeline: failed })).toBe("ci-failed");
+  expect(causeOf({ pipeline: failed, changesRequested: true })).toBe("ci-failed");
+  expect(causeOf({ changesRequested: true })).toBe("review-blocked");
+  expect(causeOf({ mergeable: { state: "blocked", said: "draft status" } })).toBe("review-blocked");
+  expect(causeOf({ mergeable: { state: "blocked", said: "conflict" } })).toBe("review-blocked");
 });
 
 test("a forge that cannot be read is awaited on nobody", () => {
