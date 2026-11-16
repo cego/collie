@@ -696,10 +696,8 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     }
     for (const [id, ones] of yield* markedBy(installation)) {
       if (found.has(id) || ours.has(id)) continue;
-      const first = Arr.reduce(
-        Arr.drop(ones, 1),
-        Option.getOrThrow(Arr.head(ones)),
-        (least, one) => (one.pid < least.pid ? one : least),
+      const first = Arr.reduce(Arr.drop(ones, 1), Option.getOrThrow(Arr.head(ones)), (least, one) =>
+        one.pid < least.pid ? one : least,
       );
       found.set(id, {
         id,

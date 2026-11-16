@@ -213,7 +213,7 @@ const openingScope = <A, E, R>(effect: Effect.Effect<A, E, R | Scope.Scope>) =>
     const scope = yield* Scope.fork(yield* Effect.scope);
     return yield* effect.pipe(
       Scope.provide(scope),
-      Effect.onExit((exit) => (Exit.isFailure(exit) ? Scope.close(scope, exit) : Effect.void)),
+      Effect.onError((cause) => Scope.close(scope, Exit.failCause(cause))),
     );
   });
 
@@ -1155,11 +1155,7 @@ export const flockStream = <D extends BoardSource>(
             Effect.andThen(upgradeTo(route, version)),
             Effect.ensuring(Effect.sync(() => upgradingNow.delete(installation))),
             // Failed, or cut off with its connection: asked again when it next connects.
-            Effect.onExit((exit) =>
-              Exit.isSuccess(exit)
-                ? Effect.void
-                : Effect.sync(() => upgrading.delete(installation)),
-            ),
+            Effect.onError(() => Effect.sync(() => upgrading.delete(installation))),
             Effect.match({
               onSuccess: () =>
                 Stream.make(
