@@ -300,7 +300,6 @@ export const keepStepTimes = (run: string | null) =>
     yield* trimStepTimes;
   });
 
-/** Keeps each Step's latest ten kept times. */
 export const trimStepTimes = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`
