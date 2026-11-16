@@ -16,6 +16,7 @@ import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem } from "effect";
 import { readAudit } from "../src/audit";
+import { recordsReadLayer } from "../src/records";
 import { type MrState } from "../src/board-model";
 import { connect } from "../src/host";
 import { factsOfView } from "../src/runs";
@@ -493,9 +494,9 @@ const heldAtNextEntry = Effect.fn("test.heldAtNextEntry")(function* (prefix: str
   return { host, state, trail, runId, shut, open, held };
 });
 
-const recorded = (trail: string, request: string) =>
+const recorded = (state: string, trail: string, request: string) =>
   until(
-    () => readAudit(trail),
+    () => readAudit(trail).pipe(Effect.provide(recordsReadLayer(state))),
     (lines) => Arr.some(lines, (line) => line.request === request),
   ).pipe(Effect.map((lines) => Arr.filter(lines, (line) => line.request === request)));
 
@@ -521,7 +522,7 @@ test(
         yield* held;
         yield* Fiber.interrupt(cut);
         yield* open;
-        const [line] = yield* recorded(trail, "cut");
+        const [line] = yield* recorded(state, trail, "cut");
         expect(line).toMatchObject({
           operation: "resume",
           result: { applied: true },
@@ -558,7 +559,7 @@ test(
         yield* held;
         yield* Fiber.interrupt(cut);
         yield* open;
-        const [line] = yield* recorded(trail, "cut");
+        const [line] = yield* recorded(state, trail, "cut");
         expect(line).toMatchObject({
           operation: "stop",
           result: { applied: true },
@@ -601,7 +602,7 @@ test(
         const [first, second] = yield* Fiber.join(both);
         expect(first.applied).toBe(true);
         expect(second).toEqual(first);
-        expect(yield* recorded(trail, "twice")).toHaveLength(1);
+        expect(yield* recorded(state, trail, "twice")).toHaveLength(1);
         yield* host.stop;
       }).pipe(Effect.scoped),
     ),

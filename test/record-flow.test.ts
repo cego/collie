@@ -5,7 +5,7 @@ import { expect, test } from "bun:test";
 import * as Arr from "effect/Array";
 import { Effect, FileSystem, Schema, Tracer } from "effect";
 import { buildBoard, taskFlowOf } from "../src/board";
-import { recordAudit } from "../src/audit";
+import { AUDIT_FILE, recordAudit } from "../src/audit";
 import { laneFor } from "../src/flow-read";
 import { appendStepLine } from "../src/steps";
 import { RunRecords } from "../src/run-records";
@@ -76,14 +76,15 @@ test("a lane reads stop attribution only while its Run is stopped", () =>
         result: Schema.String,
         value: "stopped",
       });
+      const records = yield* RunRecords;
       for (const state of ["running", "waiting", "succeeded", "failed", "stopped"] as const) {
         let reads = 0;
         const lane = yield* laneFor(env, { ...run, state }, undefined, new Map()).pipe(
-          Effect.provideService(FileSystem.FileSystem, {
-            ...fs,
-            readFileString: (path, encoding) => {
-              if (path === `${run.dir}/operations.jsonl`) reads++;
-              return fs.readFileString(path, encoding);
+          Effect.provideService(RunRecords, {
+            ...records,
+            lines: (one, journal) => {
+              if (one === run.id && journal === AUDIT_FILE) reads++;
+              return records.lines(one, journal);
             },
           }),
         );

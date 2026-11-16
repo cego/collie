@@ -71,7 +71,8 @@ import { connect, frontDoor, socketOf } from "../src/host";
 import { runDir, type RunView } from "../src/engine";
 import { isSettled } from "../src/lifecycle";
 import { appendLog } from "../src/oversight";
-import { readAudit, trimAudit } from "../src/audit";
+import { AUDIT_FILE, readAudit } from "../src/audit";
+import * as SqlClient from "effect/sql/SqlClient";
 import { storedAnswers } from "./support/forge";
 import { Flow, FrontDoorRpcs, type Declaration, type FLOCK_READS } from "../src/board-model";
 
@@ -1817,7 +1818,12 @@ test("each answer says who gave it, the newest five are listed, and an unrecorde
         );
       }
       // The trail keeps only the newest four answers, so q2's author is gone from it.
-      yield* trimAudit(run.dir, 4);
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`DELETE FROM collie_run_lines WHERE run = ${run.id} AND journal = ${AUDIT_FILE}
+          AND seq NOT IN (SELECT seq FROM collie_run_lines WHERE run = ${run.id}
+            AND journal = ${AUDIT_FILE} ORDER BY seq DESC LIMIT 4)`;
+      }).pipe(Effect.provide(recordsAt(stateDir)), Effect.orDie);
 
       const said = yield* call("collie_run", { run: run.id });
       const answered = Str.split(Str.split(said, "### Answered\n\n")[1]!, "\n\n")[0]!;

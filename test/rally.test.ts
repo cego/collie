@@ -17,7 +17,8 @@ import { Effect, FileSystem, Layer, Schema, flow, Result } from "effect";
 import { VerifySpecSchema } from "../src/verify-spec";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { exec } from "./support/command";
-import { runEffect } from "./support/effect";
+import { runEffect as runShared } from "./support/effect";
+import { overHost } from "./support/records";
 import { agentsLayer, type AgentHost } from "../src/agents";
 import { Children, Host } from "../src/sdk";
 import { evidenceDir, foundationLayer, loadEntry } from "../src/engine";
@@ -27,6 +28,9 @@ import { Store } from "../src/store";
 
 let rig: Rig;
 let dir: string;
+/** A test's effect, whose own reads of a Run's records meet its host's. */
+const runEffect = <A, E>(effect: Parameters<typeof runShared<A, E>>[0]) =>
+  runShared(effect.pipe(overHost(() => dir)));
 
 beforeEach(() =>
   runEffect(
