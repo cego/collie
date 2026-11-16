@@ -40,7 +40,7 @@ import { restartHostAt } from "../src/lifecycle";
 import { registerAgent } from "../src/registry";
 import { signalProcess } from "../src/lock";
 import { groupOf, startedOf, stillRunning } from "../src/processes";
-import { readVerifications, verifyingOf } from "../src/verify";
+import { encodeVerifying, readVerifications, VERIFYING, verifyingOf } from "../src/verify";
 import { VerifySpecSchema } from "../src/verify-spec";
 import { exec, startDetached } from "./support/command";
 import { fastForward, runEffect, suiteEnv } from "./support/effect";
@@ -96,6 +96,37 @@ const workspace = Effect.fn("HostTest.workspace")(function* (prefix: string) {
   }
   return { wf, project: `${dir}/project`, state: `${dir}/state` };
 });
+
+test(
+  "a starting host clears the marker of a CI wait the host before it died during",
+  () =>
+    proves(
+      Effect.gen(function* () {
+        const { state } = yield* workspace("collie-host-ci-wait-");
+        yield* hostRunRecords(() => state).setControl(
+          VERIFYING,
+          "run-ci",
+          encodeVerifying({
+            name: "check",
+            executable: "bun",
+            argv: ["test"],
+            pass: "ci",
+            round: null,
+            revision: "abc",
+            base: null,
+            started: "2026-11-16T08:00:00.000Z",
+            job: "test",
+          }),
+        );
+        yield* Effect.addFinalizer(() => stopHost(state).pipe(Effect.ignore));
+        yield* Effect.scoped(
+          connect(state).pipe(Effect.flatMap((client) => client.identity())),
+        ).pipe(Effect.orDie);
+        expect(yield* hostRecords(state, verifyingOf("run-ci"))).toBeNull();
+      }),
+    ),
+  120_000,
+);
 
 test(
   "clients that start at the same moment converge on the one host that holds the lock",
