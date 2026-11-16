@@ -83,13 +83,7 @@ import { selectionPath, writeSelection } from "./selection";
 import type { TaskChoice, TaskRecord } from "./task";
 import { newRequestId } from "./operations";
 import { typedPaths } from "./attachments";
-import {
-  answerFor,
-  rereads,
-  runIdOf,
-  type AppState,
-  type Command,
-} from "./ui/state";
+import { answerFor, rereads, runIdOf, type AppState, type Command } from "./ui/state";
 import type { Focus } from "./ui/bridge";
 import { buildHistory, buildSettings, buildWorkflows } from "./views";
 import { nowIso } from "./time";
