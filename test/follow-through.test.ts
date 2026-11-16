@@ -1039,12 +1039,16 @@ test(
             const second = yield* pushed("guard the input");
             yield* forge.set(model(second, { ancestry: { [second]: [first] } }));
             yield* TestClock.adjust("6 minutes");
-            const again = yield* until(
-              () => host.watchOf(improved.runId, TARGET),
-              (row) => row?.name === "improved-head-2",
-            ).pipe(Effect.timeoutOption("3 minutes"));
-            expect(Option.getOrNull(again)?.name).toBe("improved-head-2");
-            expect(yield* host.agentStarts).toHaveLength(2);
+            const settled = yield* until(
+              () =>
+                Effect.all({
+                  watch: host.watchOf(improved.runId, TARGET),
+                  starts: host.agentStarts,
+                }),
+              (one) => one.watch?.name === "improved-head-2" || one.starts.length > 2,
+            );
+            expect(settled.watch?.name).toBe("improved-head-2");
+            expect(settled.starts).toHaveLength(2);
           }),
         );
       }),
