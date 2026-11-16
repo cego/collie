@@ -63,7 +63,6 @@ import { flowInputsFor, taskFlowFor } from "./flow-read";
 import { machineName } from "./peers";
 import { deliveriesOf, SENT_STATES, toldIn } from "./steering";
 import { finishedOnRecord } from "./cards";
-import { concise } from "./narrative-model";
 import { branchMovement } from "./recovery";
 import { owedLocally } from "./check-proof";
 import {
@@ -1918,13 +1917,11 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
                       },
               });
         const sentenceAt = (now: number) =>
-          concise(
-            `${saidAt(now)}${
-              missingCheckout
-                ? " This work has no checkout; a follow-up recreates it from the pushed branch."
-                : ""
-            }`,
-          );
+          `${saidAt(now)}${
+            missingCheckout
+              ? " This work has no checkout; a follow-up recreates it from the pushed branch."
+              : ""
+          }`;
         const bare: TaskView = {
           narratives: Arr.flatMap([...runs].reverse(), (run) => run.narratives ?? []),
           id,

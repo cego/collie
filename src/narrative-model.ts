@@ -34,9 +34,10 @@ export const concise = (text: string): string => {
   const words = Str.trim(Str.replace(/\s+/gu, " ")(text));
   const sentences = Str.trim(
     Arr.join(
-      Option.getOrElse(Str.match(/[^.!?。！？]+(?:[.!?。！？]+(?:\s|$)|$)/gu)(words), () => [
-        words,
-      ]).slice(0, 2),
+      Option.getOrElse(Str.match(/.+?(?:[.!?。！？](?:\s|$)|$)/gu)(words), () => [words]).slice(
+        0,
+        2,
+      ),
       "",
     ),
   );

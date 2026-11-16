@@ -121,6 +121,7 @@ test("the tools are the whole of the model's reach, and only one of them asks fo
       Order.String,
     ),
   ).toEqual([
+    "collie_artefacts",
     "collie_connections",
     "collie_definitions",
     "collie_do",
@@ -159,6 +160,7 @@ test("the tools are one Toolkit, each saying how it fails and that it needs no a
       Order.String,
     ),
   ).toEqual([
+    "collie_artefacts",
     "collie_connections",
     "collie_definitions",
     "collie_do",

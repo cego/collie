@@ -603,7 +603,7 @@ const make = Effect.gen(function* () {
       for (const name of [...new Set([...names, ...known])].sort()) {
         const ref = `${prefix}:${name}`;
         if (ref <= cursor) continue;
-        if (remaining-- <= 0) {
+        if (remaining <= 0) {
           return { items: yield* list(run.id) } satisfies ArtefactCollection;
         }
         yield* Effect.gen(function* () {
@@ -630,6 +630,7 @@ const make = Effect.gen(function* () {
               return yield* refused("The source leaves its Run collection");
             const before = yield* fs.stat(real);
             if (before.type !== "File") return null;
+            remaining -= 1;
             if (Number(before.size) > ATTACHMENT_BYTES)
               return yield* refused("The source exceeds the 100 MiB file limit");
             const bytes = yield* fs.readFile(real);
