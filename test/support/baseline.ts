@@ -14722,7 +14722,9 @@ for (const name of ["gitlab", "github"] as const) {
                 );
                 expect(yield* wasAsked(runId, "fix-4")).toBe(true);
                 expect(yield* wasAsked(runId, "fix-5")).toBe(false);
-                expect(yield* parkedWhy(runId)).toContain("remote head did not advance after fix-4");
+                expect(yield* parkedWhy(runId)).toContain(
+                  "remote head did not advance after fix-4",
+                );
                 expect(yield* parkedCause(runId)).toBe("release-failed");
                 const repaired = yield* pushedBySomebody((yield* forge.model()).mrs[0]!.head!);
                 yield* changed({ head: repaired, checks: [{ name: "build", state: "passed" }] });
