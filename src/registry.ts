@@ -34,9 +34,9 @@ export interface AgentEntry {
   incarnation?: Incarnation;
 }
 export interface RegistryScope {
+  /** Herdr 1's socket and workspace, which named an older register; null on core. */
   session: string | null;
   workspaceId: string | null;
-  /** Names the register only where there is no workspace to name it by. */
   cwd: string;
 }
 

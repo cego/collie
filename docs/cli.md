@@ -1224,7 +1224,8 @@ reads it ([ADR-0011](adr/0011-the-conversation-is-a-native-harness.md#amended-20
 
 `update_defaults` names the workspace whose new runs it changes, for the reason `start`
 names one: defaults are filed per workspace, and the board carrying out a confirmation is
-in the Home. Its `text` adds a constraint in your own words, or names the id of the one to
+in the Home. Defaults set inside a Herdr 1 workspace were filed under that workspace and are
+not read on core; set them again for the checkout. Its `text` adds a constraint in your own words, or names the id of the one to
 remove — prose there matches no id, and is refused rather than reported as applied. A
 proposal about the installation names no run, so the board draws it whichever row is
 selected.
