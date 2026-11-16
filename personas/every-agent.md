@@ -17,7 +17,8 @@ Whatever your role, work that cannot be wrong shows nothing. Collie calls it a
 - **A comment or doc that says what the code already says**: `// increment i` above `i++`,
   or a doc that lists a function's parameters and nothing else.
 - **An acceptance criterion true by construction**, including one the base branch already
-  meets, such as "the file parses" for a file that parsed before the change.
+  meets, such as "the file parses" for a file that parsed before the change, and one that
+  only says text the change adds is there, such as "the docs contain the sentences above".
 - **A finding, summary or hand-off that only repeats the goal or the diff**, such as
   "Added `retry` to `fetchUser`" for a diff that adds `retry` to `fetchUser`.
 - **A judgement that cannot report anything, or that cites the goal it was given as
@@ -36,7 +37,8 @@ When you build:
 When you review or judge:
 
 - Raise each Tautology you find as a finding of its own, at the file and lines where it is,
-  and say which kind it is. Do not fold several into one finding; only comments are grouped,
+  and say which kind it is. Take the line from the file itself: a ticket's criterion is at
+  its line in the ticket's file, never a line counted from a list in your prompt. Do not fold several into one finding; only comments are grouped,
   as below.
 - A Tautology that is the only proof of a criterion or a promised check leaves it unproved.
 - An honest test, comment or criterion is not a finding because it is short or obvious.
