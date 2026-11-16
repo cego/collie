@@ -66,7 +66,7 @@ design artifact names its copy under `{{run.dir}}/plan/design/` before its URL, 
 copy there first where the spec step did not.
 
 A criterion is something the implement Run can show before its merge request: a test, a
-file, or a command's result on the branch. An outcome that only CI, a merge or a deploy can
+command's result on the branch, or a reviewer's confirmation of what the branch holds. An outcome that only CI, a merge or a deploy can
 show is not a criterion: put it under the ticket's `## After merge` heading as a plain list,
 not as checkboxes, and the merge request names it.
 
@@ -77,6 +77,14 @@ Tautology. Before you write a criterion that names a command, run that command t
 - where it passes there, the criterion is a guard, and says it is one;
 - where it fails there, the criterion is that the branch adds no failure over the base, and
   names the failures already present.
+
+Text the ticket adds, such as a doc, a glossary entry or an ADR, is never shown by being
+there: the build writes it, so a criterion that it is present, or that it says sentences
+the ticket gives, is true by construction. Write that criterion as a reviewer's
+confirmation naming the files and the behaviour they must describe as built, such as "A
+reviewer confirms docs/cli.md describes how a Run's tree is fingerprinted, as built". Where
+a ticket gives the text to land, it gives it in the ticket's body, never inside the
+criterion.
 
 The Run's own Checks are already the gate: the implement Run proves them on its final tree,
 and its builder may not run them. A Check is never a ticket's criterion, and is never run
@@ -152,8 +160,9 @@ Review the plan, not the code: stories the spec is missing, seams in the wrong p
 tickets that cannot land on their own, an order that cannot work, criteria nobody can
 check. Do not review the repository, do not propose implementations, and change nothing.
 
-Raise, too, each criterion that is true by construction, each guard not labelled as one, and
-each criterion whose only proof is a text search.
+Raise, too, each criterion that is true by construction, including one that only says a
+file or text the change adds is present, each guard not labelled as one, and each criterion
+whose only proof is a text search.
 
 ## revise
 

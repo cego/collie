@@ -1,6 +1,6 @@
 id = "cego.collie"
 name = "Collie"
-version = "1.0.14"
+version = "1.0.15"
 min_herdr_version = "0.9.5"
 description = "Codified agent workflows (plan, implement, review); the board and chat are herdr-core terminals."
 platforms = ["linux", "macos"]

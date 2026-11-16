@@ -20,6 +20,9 @@ const allowed = (url: URL, redirected: boolean) =>
       (url.hostname === "release-assets.githubusercontent.com" ||
         url.hostname === "objects.githubusercontent.com")));
 
+/** What a release that does not carry the asset answers. */
+export const UNPUBLISHED = "the update download answered 404";
+
 export const downloadRelease = (source: string) =>
   Effect.gen(function* () {
     const client = yield* HttpClient.HttpClient;
@@ -40,6 +43,7 @@ export const downloadRelease = (source: string) =>
         url = yield* Effect.try({ try: () => new URL(location, url), catch: String });
         continue;
       }
+      if (response.status === 404) return yield* Effect.fail(UNPUBLISHED);
       if (response.status !== 200)
         return yield* Effect.fail(`the update download answered ${response.status}`);
       return response;

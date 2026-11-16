@@ -4,7 +4,7 @@ import { Effect, FileSystem, Option, Schema } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import { PreparedRecord, preparedRecordOf, releaseOf } from "../../../src/desktop";
 import type { UpdaterPort } from "./updates";
-import { downloadRelease } from "./release-download";
+import { downloadRelease, UNPUBLISHED } from "./release-download";
 
 const promised = <A>(evaluate: () => Promise<A>) =>
   Effect.tryPromise({ try: evaluate, catch: (cause) => String(cause) });
@@ -23,7 +23,11 @@ const Checked = Schema.Struct({
 type Checked = typeof Checked.Type;
 const Downloaded = Schema.Struct({ error: Schema.String });
 type Downloaded = typeof Downloaded.Type;
-const Status = Schema.Struct({ message: Schema.String });
+/** `restarting` says the restart is under way, so the apply that returned succeeded. */
+const Status = Schema.Struct({
+  message: Schema.String,
+  restarting: Schema.optional(Schema.Boolean),
+});
 type Status = typeof Status.Type;
 
 /** The upstream operations used here; their JavaScript results are checked before use. */
@@ -89,16 +93,21 @@ export const electrobunUpdater = (updater: ElectrobunUpdaterApi) =>
       }).pipe(Effect.ignore),
       signatureOf: (name, version) =>
         downloadRelease(`${releaseOf(info.baseUrl, version)}/${encodeURIComponent(name)}`).pipe(
-          Effect.flatMap((response) => response.text),
-          Effect.orElseSucceed(() => null),
+          Effect.flatMap((response) => Effect.mapError(response.text, String)),
+          Effect.catchIf(
+            (reason) => reason === UNPUBLISHED,
+            () => Effect.succeed(null),
+          ),
           Effect.provide(FetchHttpClient.layer),
         ),
-      // On success Electrobun quits Desktop, so returning at all means it did not install.
       apply: promised(() => updater.applyUpdate()).pipe(
         Effect.flatMap(() => Schema.decodeEffect(Schema.Array(Status))(updater.getStatusHistory())),
-        Effect.flatMap((history) =>
-          Effect.fail(history.at(-1)?.message ?? "Electrobun did not install it"),
-        ),
+        Effect.flatMap((history) => {
+          const last = history.at(-1);
+          return last?.restarting === true
+            ? Effect.void
+            : Effect.fail(last?.message ?? "Electrobun did not install it");
+        }),
         Effect.mapError(String),
       ),
     };
