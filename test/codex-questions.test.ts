@@ -57,7 +57,14 @@ afterEach(() =>
 );
 
 const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
-  runLive(fastForward(Effect.andThen(Effect.suspend(() => rig.startCore()), effect)));
+  runLive(
+    fastForward(
+      Effect.andThen(
+        Effect.suspend(() => rig.startCore()),
+        effect,
+      ),
+    ),
+  );
 
 const Verdict = Schema.Struct({ verdict: Schema.String });
 const work = enveloped({ name: "agent-work", input: { skip: Schema.Boolean }, success: Verdict });

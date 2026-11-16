@@ -2181,18 +2181,19 @@ const fork = (name: Shipped, id: string, agents: string) =>
 
 const launched = () =>
   rig.calls().pipe(
-    Effect.map((calls) =>
-      Arr.map(
+    Effect.flatMap((calls) =>
+      Effect.forEach(
         Arr.filter(calls, (call) => call.cmd === "terminal.run"),
-        (call) => {
-          const argv = Schema.decodeUnknownSync(Schema.Array(Schema.String))(call.params?.argv);
-          return {
-            kind: Option.getOrElse(Arr.last(Str.split(argv[0] ?? "", "/")), () => ""),
-            args: Arr.join(argv, " "),
-          };
-        },
+        (call) =>
+          Schema.decodeUnknownEffect(Schema.Array(Schema.String))(call.params?.argv).pipe(
+            Effect.map((argv) => ({
+              kind: Option.getOrElse(Arr.last(Str.split(argv[0] ?? "", "/")), () => ""),
+              args: Arr.join(argv, " "),
+            })),
+          ),
       ),
     ),
+    Effect.orDie,
   );
 
 const REVIEW = {

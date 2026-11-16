@@ -250,7 +250,9 @@ test("an agent on core is started with Collie's own names for its root and state
       const launched = Option.getOrUndefined(
         Arr.findFirst(yield* rig.calls(), (call) => call.cmd === "terminal.run"),
       )?.params?.env;
-      const names = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.String))(launched);
+      const names = yield* Schema.decodeUnknownEffect(Schema.Record(Schema.String, Schema.String))(
+        launched,
+      );
       expect(names).toMatchObject({
         COLLIE_STATE_DIR: rig.pluginEnv(env).stateDir,
         COLLIE_ROOT: rig.pluginEnv(env).pluginRoot,

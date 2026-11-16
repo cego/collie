@@ -50,7 +50,14 @@ afterEach(() =>
 );
 
 const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
-  runLive(fastForward(Effect.andThen(Effect.suspend(() => rig.startCore()), effect)));
+  runLive(
+    fastForward(
+      Effect.andThen(
+        Effect.suspend(() => rig.startCore()),
+        effect,
+      ),
+    ),
+  );
 
 const Verdict = Schema.Struct({
   verdict: Schema.Literals(["clean", "findings"]),
