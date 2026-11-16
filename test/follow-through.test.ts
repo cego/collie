@@ -757,6 +757,9 @@ test(
             expect(log).toContain(":memo:");
             expect(log).toContain("sign in again");
             expect((yield* host.status(runId))?.status.status).toBe("suspended");
+            const sentence = yield* cardSentence(runId);
+            expect(sentence).toContain("Slack missing :eyes: :memo:");
+            expect(sentence).toContain("sign in again");
           }),
         );
       }),
@@ -764,15 +767,71 @@ test(
   180_000,
 );
 
+/** What the card of `runId`'s Task says. */
+const cardSentence = (runId: string) =>
+  Effect.gen(function* () {
+    const { board } = yield* host.mergeWatched;
+    const { views } = yield* board;
+    return Option.getOrThrow(
+      Arr.findFirst(views, (view) => Arr.some(view.runs, (one) => one === runId)),
+    ).sentence;
+  });
+
+for (const [count, why] of [
+  [0, "no Slack message found"],
+  [2, "2 messages mention it"],
+] as const)
+  test(
+    `${count} candidate Slack messages add no reaction and the card says ${why}`,
+    () =>
+      host.runEffect(
+        Effect.gen(function* () {
+          const { forge, entry } = yield* begun("review", [review([F1])]);
+          yield* signedInToSlack(host.env(), "U456");
+          slack.messages(
+            Array.from({ length: count }, (_, index) => ({
+              channel: "C456",
+              ts: `1794474000.00000${index}`,
+              text: TARGET,
+            })),
+          );
+          yield* host.session(
+            forge,
+            Effect.gen(function* () {
+              const { runId } = yield* host.started(entry, `candidates-${count}`, {
+                target: TARGET,
+              });
+              yield* until(
+                () => host.watchOf(runId, TARGET),
+                (one) => one?.name === "follow-1",
+              );
+              expect(yield* notesOf(forge)).toHaveLength(1);
+              expect(slack.reactions()).toEqual([]);
+              expect(yield* cardSentence(runId)).toBe(
+                `Waiting for @ann to change mk/collie!7. No Slack reaction: ${why}.`,
+              );
+            }),
+          );
+        }),
+      ),
+    180_000,
+  );
+
 test(
-  "a restart after Slack accepted a reaction resumes without adding it twice",
+  "a restart during reactions, on the first round and at approval, adds each of the three once",
   () =>
     host.runEffect(
       Effect.gen(function* () {
-        const { forge, entry } = yield* begun("review", [review([F1])]);
+        const { first, forge, entry } = yield* begun("review", [
+          review([F1]),
+          review([{ ...F1, status: "fixed" }]),
+        ]);
         yield* signedInToSlack(host.env(), "U456");
         slack.messages([{ channel: "C456", ts: "1794474000.000001", text: TARGET }]);
-        slack.after((method) => (method === "reactions.add" ? Effect.never : Effect.void));
+        const hangOnReact = () =>
+          slack.after((method) => (method === "reactions.add" ? Effect.never : Effect.void));
+        const added = () => Arr.filter(slack.calls, (one) => one.method === "reactions.add");
+        hangOnReact();
         const runId = yield* host.session(
           forge,
           Effect.gen(function* () {
@@ -793,16 +852,54 @@ test(
               (one) => one?.name === "follow-1",
             );
             expect(slack.reactions()).toEqual(["eyes", "memo"]);
-            expect(Arr.filter(slack.calls, (one) => one.method === "reactions.add")).toHaveLength(
-              2,
-            );
+            expect(added()).toHaveLength(2);
             expect(yield* notesOf(forge)).toHaveLength(1);
             expect(yield* host.agentStarts).toHaveLength(1);
+
+            const second = yield* pushed("close the handle");
+            yield* forge.set(
+              model(second, {
+                ancestry: { [second]: [first] },
+                notes: (yield* forge.model()).notes,
+              }),
+            );
+            yield* until(
+              () => asked(runId),
+              (rows) => Arr.some(rows, (row) => row.decision === "approve-2"),
+            );
+            hangOnReact();
+            yield* (yield* Registry).answer({
+              runId,
+              decision: "approve-2",
+              value: "Approve",
+              request: "answer-1",
+            });
+            yield* until(
+              () => Effect.sync(() => slack.reactions()),
+              (one) => one.includes("white_check_mark"),
+            );
+          }),
+        );
+        slack.after(() => Effect.void);
+        yield* host.session(
+          forge,
+          Effect.gen(function* () {
+            yield* until(
+              () => host.watchOf(runId, TARGET),
+              (one) => one?.name === "follow-2",
+            );
+            expect(slack.reactions()).toEqual(["eyes", "memo", "white_check_mark"]);
+            expect(added()).toHaveLength(3);
+            expect(
+              Arr.filter(forge.requests(), (one) =>
+                Str.endsWith("/merge_requests/7/approve")(one.url),
+              ),
+            ).toHaveLength(1);
           }),
         );
       }),
     ),
-  180_000,
+  300_000,
 );
 
 for (const status of [503, 429])
