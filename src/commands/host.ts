@@ -45,7 +45,12 @@ const rollback = Command.make(
         Effect.map((done) =>
           done === "owned"
             ? err("invalid_state", `A host owns ${dir}; stop it before rolling its records back.`)
-            : {
+            : typeof done === "object"
+              ? err(
+                  "invalid_state",
+                  `${dir} has a later build's migration ${done.later}; roll that build back first.`,
+                )
+              : {
                 ok: true as const,
                 data: { dir, done },
                 human:

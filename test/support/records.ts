@@ -146,6 +146,12 @@ export const hostRunRecords = (stateDir: () => string): RunRecordsApi => {
     activity: (runs) => at((records) => records.activity(runs)),
     stepSamples: at((records) => records.stepSamples),
     touch: (run) => at((records) => records.touch(run)),
+    control: (control, run, key) => at((records) => records.control(control, run, key)),
+    controlsOf: (control, run) => at((records) => records.controlsOf(control, run)),
+    everyControl: (control) => at((records) => records.everyControl(control)),
+    controlsIn: (runs) => at((records) => records.controlsIn(runs)),
+    setControl: (control, run, data, key) =>
+      at((records) => records.setControl(control, run, data, key)),
   };
 };
 

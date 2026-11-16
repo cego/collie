@@ -16,12 +16,17 @@ import { decodeTaskOption } from "./task";
 import { RunReport } from "./board-model";
 import {
   AREAS,
+  AWAITED,
+  LEGACY_CONTROLS,
   LEGACY_FACT_PREFIXES,
   LEGACY_FACTS,
   LEGACY_JOURNALS,
+  NOTIFIED,
   parentOf,
   recordName,
+  RELAUNCH,
   RUN_RECORDS_MIGRATION_ID,
+  RUNNING_CHECK,
   TEXT_JOURNALS,
 } from "./run-records";
 
@@ -269,7 +274,90 @@ export const importRunRecords = Effect.fn("RecordsImport.runRecords")(function* 
     );
     if (at > 0) yield* sql`INSERT INTO collie_run_activity (run, at) VALUES (${run}, ${at})`;
   }
+  for (const control of yield* legacyControls(stateDir)) {
+    const data = yield* fs.readFileString(control.file).pipe(orMissing<string | null>(null));
+    if (data === null) continue;
+    const rows =
+      control.control === NOTIFIED
+        ? Arr.map(textLines(data), (line) => ({ ...control, key: line, data: "" }))
+        : control.control === RUNNING_CHECK
+          ? [{ ...control, run: Option.getOrElse(runOfCheck(data), () => ""), data }]
+          : [{ ...control, data }];
+    for (const row of rows)
+      yield* sql`
+        INSERT OR REPLACE INTO collie_controls (control, run, key, data)
+        VALUES (${row.control}, ${row.run}, ${row.key}, ${row.data})
+      `;
+  }
 });
+
+const runOfCheck = (text: string) =>
+  Option.map(
+    Schema.decodeOption(Schema.fromJsonString(Schema.Struct({ run: Schema.String })))(text),
+    (check) => check.run,
+  );
+
+const ROOT_CONTROL = new RegExp(`^(${Arr.join([...LEGACY_CONTROLS, NOTIFIED], "|")})\\.(.+)$`);
+const AWAITED_DIR = new RegExp(`^${AWAITED}\\.(.+)$`);
+
+/**
+ * The files an older build kept a Run's controls in: `<control>.<run>` in the state
+ * directory, `awaited.<run>/<child>`, `relaunch/<run>/<agent>.json` and
+ * `running-checks/<id>.json`, whose Run is in the file.
+ */
+const legacyControls = Effect.fn("RecordsImport.legacyControls")(function* (stateDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const list = (dir: string) => fs.readDirectory(dir).pipe(orMissing<ReadonlyArray<string>>([]));
+  const found: Array<{ control: string; run: string; key: string; file: string }> = [];
+  for (const name of yield* list(stateDir)) {
+    if (Str.endsWith(".new")(name)) continue;
+    const root = ROOT_CONTROL.exec(name);
+    if (root !== null) {
+      found.push({ control: root[1]!, run: root[2]!, key: "", file: `${stateDir}/${name}` });
+      continue;
+    }
+    const awaited = AWAITED_DIR.exec(name);
+    if (awaited !== null)
+      for (const child of yield* list(`${stateDir}/${name}`))
+        found.push({
+          control: AWAITED,
+          run: awaited[1]!,
+          key: child,
+          file: `${stateDir}/${name}/${child}`,
+        });
+  }
+  for (const run of yield* list(`${stateDir}/relaunch`))
+    for (const agent of yield* list(`${stateDir}/relaunch/${run}`))
+      if (Str.endsWith(".json")(agent))
+        found.push({
+          control: RELAUNCH,
+          run,
+          key: Str.slice(0, -".json".length)(agent),
+          file: `${stateDir}/relaunch/${run}/${agent}`,
+        });
+  for (const check of yield* list(`${stateDir}/running-checks`))
+    if (Str.endsWith(".json")(check))
+      found.push({
+        control: RUNNING_CHECK,
+        run: "",
+        key: Str.slice(0, -".json".length)(check),
+        file: `${stateDir}/running-checks/${check}`,
+      });
+  return found;
+});
+
+/** Where an older build kept the control row `row`. */
+const controlPath = (
+  stateDir: string,
+  row: { readonly control: string; readonly run: string; readonly key: string },
+) =>
+  row.control === AWAITED
+    ? `${stateDir}/${AWAITED}.${row.run}/${row.key}`
+    : row.control === RELAUNCH
+      ? `${stateDir}/relaunch/${row.run}/${row.key}.json`
+      : row.control === RUNNING_CHECK
+        ? `${stateDir}/running-checks/${row.key}.json`
+        : `${stateDir}/${row.control}.${row.run}`;
 
 /** Where an older build kept the record `name` of `run`. */
 const legacyPath = (stateDir: string, run: string, name: string) => {
@@ -278,37 +366,51 @@ const legacyPath = (stateDir: string, run: string, name: string) => {
   return `${stateDir}/${at}/${run}/${localName(at, name) ?? name}`;
 };
 
+/** A later build's migration is recorded: it must be undone by that build first. */
+export class LaterMigration extends Schema.TaggedErrorClass<LaterMigration>()("LaterMigration", {
+  migration: Schema.String,
+}) {}
+
 /**
- * Undoes `RUN_RECORDS_MIGRATION` for a host that is not running: every Run's records are
- * written back where an older build reads them, a legacy fact the host has since removed is
- * removed, and only then are the tables and the migration's record dropped, in one
- * transaction, so a later upgrade imports the files again.
+ * Undoes `RUN_RECORDS_MIGRATION` for a host that is not running: every Run's records and
+ * controls are written back where an older build reads them, each Run's files dated by when
+ * it last did work, a legacy file the host has since removed is removed, and only then are
+ * the tables and the migration's record dropped, in one transaction, so a later upgrade
+ * imports the files again. Refused while a later migration is recorded, since a re-upgrade
+ * runs only migrations after the latest one recorded.
  */
 export const rollbackRunRecords = Effect.fn("RecordsImport.rollback")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const sql = yield* SqlClient.SqlClient;
-  const [migrated] = yield* sql<{ readonly one: number }>`
-    SELECT 1 AS one FROM collie_migrations WHERE migration_id = ${RUN_RECORDS_MIGRATION_ID}
+  const [latest] = yield* sql<{ readonly migration_id: number; readonly name: string }>`
+    SELECT migration_id, name FROM collie_migrations ORDER BY migration_id DESC LIMIT 1
   `;
-  if (migrated === undefined) return false;
-  const write = Effect.fnUntraced(function* (file: string, text: string) {
+  if (latest === undefined || latest.migration_id < RUN_RECORDS_MIGRATION_ID) return false;
+  if (latest.migration_id > RUN_RECORDS_MIGRATION_ID)
+    return yield* new LaterMigration({ migration: `${latest.migration_id}_${latest.name}` });
+  const written = new Map<string, string[]>();
+  const write = Effect.fnUntraced(function* (run: string, file: string, text: string) {
     yield* fs.makeDirectory(path.dirname(file), { recursive: true });
     yield* fs.writeFileString(`${file}.rollback`, text);
     yield* fs.rename(`${file}.rollback`, file);
+    written.set(run, [...(written.get(run) ?? []), file]);
   });
-  const journals = new Map<string, string[]>();
+  const journals = new Map<string, { run: string; lines: string[] }>();
   for (const row of yield* sql<{ run: string; journal: string; line: string }>`
     SELECT run, journal, line FROM collie_run_lines ORDER BY run, journal, seq
   `) {
     const file = legacyPath(stateDir, row.run, row.journal);
-    journals.set(file, [...(journals.get(file) ?? []), row.line]);
+    const journal = journals.get(file) ?? { run: row.run, lines: [] };
+    journal.lines.push(row.line);
+    journals.set(file, journal);
   }
-  for (const [file, lines] of journals) yield* write(file, `${Arr.join(lines, "\n")}\n`);
+  for (const [file, { run, lines }] of journals)
+    yield* write(run, file, `${Arr.join(lines, "\n")}\n`);
   const facts = yield* sql<{ run: string; name: string; data: string }>`
     SELECT run, name, data FROM collie_run_facts
   `;
-  for (const row of facts) yield* write(legacyPath(stateDir, row.run, row.name), row.data);
+  for (const row of facts) yield* write(row.run, legacyPath(stateDir, row.run, row.name), row.data);
   const kept = new Set(Arr.map(facts, (row) => legacyPath(stateDir, row.run, row.name)));
   for (const area of AREAS)
     for (const run of yield* fs
@@ -316,11 +418,32 @@ export const rollbackRunRecords = Effect.fn("RecordsImport.rollback")(function* 
       .pipe(orMissing<ReadonlyArray<string>>([])))
       for (const { file } of yield* legacyFacts(area, path.join(stateDir, area, run)))
         if (!kept.has(file)) yield* fs.remove(file).pipe(orMissing<void>(undefined));
+  const controls = yield* sql<{ control: string; run: string; key: string; data: string }>`
+    SELECT control, run, key, data FROM collie_controls ORDER BY control, run, key
+  `;
+  const notified = new Map<string, string[]>();
+  for (const row of controls)
+    if (row.control === NOTIFIED)
+      notified.set(row.run, [...(notified.get(row.run) ?? []), row.key]);
+    else yield* write("", controlPath(stateDir, row), row.data);
+  for (const [run, said] of notified)
+    yield* write("", controlPath(stateDir, { control: NOTIFIED, run, key: "" }), `${Arr.join(said, "\n")}\n`);
+  const set = new Set([
+    ...Arr.map(controls, (row) => controlPath(stateDir, row.control === NOTIFIED ? { ...row, key: "" } : row)),
+  ]);
+  for (const { file } of yield* legacyControls(stateDir))
+    if (!set.has(file)) yield* fs.remove(file).pipe(orMissing<void>(undefined));
+  for (const { run, at } of yield* sql<{ run: string; at: number }>`
+    SELECT run, at FROM collie_run_activity
+  `)
+    for (const file of written.get(run) ?? []) yield* fs.utimes(file, at / 1000, at / 1000);
   yield* Effect.gen(function* () {
     yield* sql`DROP TABLE collie_run_lines`;
     yield* sql`DROP TABLE collie_run_facts`;
     yield* sql`DROP TABLE collie_run_activity`;
-    yield* sql`DELETE FROM collie_migrations WHERE migration_id >= ${RUN_RECORDS_MIGRATION_ID}`;
+    yield* sql`DROP TABLE collie_controls`;
+    yield* sql`DROP TABLE collie_step_times`;
+    yield* sql`DELETE FROM collie_migrations WHERE migration_id = ${RUN_RECORDS_MIGRATION_ID}`;
   }).pipe(sql.withTransaction);
   return true;
 });
@@ -332,6 +455,7 @@ export const rollbackAt = (stateDir: string) =>
     Effect.succeed("owned" as const),
     rollbackRunRecords(stateDir).pipe(
       Effect.map((done) => (done ? ("rolled-back" as const) : ("not-migrated" as const))),
+      Effect.catchTag("LaterMigration", (later) => Effect.succeed({ later: later.migration })),
       Effect.provide(Layer.orDie(SqliteClient.layer({ filename: `${stateDir}/host.db` }))),
     ),
   );

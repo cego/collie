@@ -64,6 +64,28 @@ export const LEGACY_FACT_PREFIXES: ReadonlyArray<string> = [
   "steering/externals.",
 ];
 
+/**
+ * The controls the host sets over a Run that an older build kept as `<control>.<run>`
+ * files in the state directory, one value each.
+ */
+export const LEGACY_CONTROLS: ReadonlyArray<string> = [
+  "hold",
+  "stop",
+  "parked",
+  "park-info",
+  "park-cause",
+  "awaiting",
+  "usage",
+];
+/** What the host told about a Run: one row per thing told, keyed by it (`notified.<run>`). */
+export const NOTIFIED = "notified";
+/** The children a Run waits on, one row each keyed by the child (`awaited.<run>/<child>`). */
+export const AWAITED = "awaited";
+/** What a Run's agent on core was started with, keyed by agent (`relaunch/<run>/<agent>.json`). */
+export const RELAUNCH = "relaunch";
+/** A check the host runs for a Run, keyed by the check's id (`running-checks/<id>.json`). */
+export const RUNNING_CHECK = "running-check";
+
 /** A Run directory's records: the Run, and what its records' names start with. */
 export const addressOf = (dir: string) => {
   const run = runOfDir(dir);
@@ -71,13 +93,11 @@ export const addressOf = (dir: string) => {
   return { run, prefix: parent === "runs" || parent === "" ? "" : `${parent}/` };
 };
 
-/** The journal of a Run's Steps. */
 export const STEPS = "steps.jsonl";
 
 /** What a write to a Run's records invalidates. */
 export const RUN_RECORDS = "collie/run-records";
 
-/** A Run's directory names its Run. */
 const lastSlash = (path: string) => Option.getOrElse(Str.lastIndexOf("/")(path), () => -1);
 
 export const runOfDir = (dir: string) => Str.slice(lastSlash(dir) + 1)(dir);
@@ -133,6 +153,36 @@ export interface RunRecordsApi {
   >;
   /** Records that the Run did work now. */
   readonly touch: (run: string) => Effect.Effect<void>;
+  /** A control's value over the Run, null where it is not set. */
+  readonly control: (control: string, run: string, key?: string) => Effect.Effect<string | null>;
+  /** Every value of `control` set over the Run, by key. */
+  readonly controlsOf: (
+    control: string,
+    run: string,
+  ) => Effect.Effect<ReadonlyArray<{ readonly key: string; readonly data: string }>>;
+  /** Every value of `control`, over any Run. */
+  readonly everyControl: (
+    control: string,
+  ) => Effect.Effect<
+    ReadonlyArray<{ readonly run: string; readonly key: string; readonly data: string }>
+  >;
+  /** These Runs' controls, in one read; a Run with none is absent. */
+  readonly controlsIn: (
+    runs: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<ControlRow>>>;
+  /** Sets a control over the Run, or clears it for null. Not work: activity stays. */
+  readonly setControl: (
+    control: string,
+    run: string,
+    data: string | null,
+    key?: string,
+  ) => Effect.Effect<void>;
+}
+
+export interface ControlRow {
+  readonly control: string;
+  readonly key: string;
+  readonly data: string;
 }
 
 export class RunRecords extends Context.Service<RunRecords, RunRecordsApi>()("collie/RunRecords") {}
@@ -146,6 +196,48 @@ export const BOOKKEEPING: ReadonlySet<string> = new Set([
   "steering/disposition.jsonl",
   "steering/seen.jsonl",
 ]);
+
+/** How many of a Step's latest times its usual time is taken from. */
+const STEP_SAMPLES = 10;
+
+/** Each Step's time in `?1`'s Runs, or every Run's for null: its latest leaving, less its first entry. */
+const stepSamplesOf = `WITH leaves AS (
+    SELECT l.run, l.key, json_extract(l.line, '$.at') AS at, r.workflow,
+      row_number() OVER (PARTITION BY l.run, l.key ORDER BY json_extract(l.line, '$.at') DESC) AS nth
+    FROM collie_run_lines l JOIN collie_runs r ON r.run = l.run
+    WHERE l.journal = '${STEPS}' AND l.kind = 'leave' AND (?1 IS NULL OR l.run = ?1)
+  ), entered AS (
+    SELECT run, key, min(seq) AS seq FROM collie_run_lines
+    WHERE journal = '${STEPS}' AND kind = 'enter' AND (?1 IS NULL OR run = ?1) GROUP BY run, key
+  ), timed AS (
+    SELECT leaves.workflow, json_extract(e.line, '$.step.id') AS step, leaves.at,
+      CAST(round((julianday(leaves.at) - julianday(json_extract(e.line, '$.at'))) * 86400000) AS INTEGER) AS ms
+    FROM leaves
+    JOIN entered ON entered.run = leaves.run AND entered.key = leaves.key
+    JOIN collie_run_lines e ON e.run = entered.run AND e.journal = '${STEPS}' AND e.seq = entered.seq
+    WHERE leaves.nth = 1
+  ), samples AS (SELECT workflow, step, at, ms FROM timed WHERE ms >= 0)`;
+
+/**
+ * Keeps a Run's Step times past its records, for the usual times its workflow's next Runs
+ * are measured against: each Step keeps its latest ten.
+ */
+export const keepStepTimes = (run: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql.unsafe(
+      `${stepSamplesOf} INSERT INTO collie_step_times (workflow, step, at, ms) SELECT workflow, step, at, ms FROM samples`,
+      [run],
+    );
+    yield* sql`
+      DELETE FROM collie_step_times WHERE rowid IN (
+        SELECT rowid FROM (
+          SELECT rowid, row_number() OVER (PARTITION BY workflow, step ORDER BY at DESC) AS nth
+          FROM collie_step_times
+        ) WHERE nth > ${STEP_SAMPLES}
+      )
+    `;
+  });
 
 export const runRecordsLayer = Layer.effect(RunRecords)(
   Effect.gen(function* () {
@@ -262,30 +354,60 @@ export const runRecordsLayer = Layer.effect(RunRecords)(
               Effect.map((rows) => new Map(Arr.map(rows, (row) => [row.run, row.at] as const))),
               Effect.orDie,
             ),
-      stepSamples: sql<{ readonly workflow: string; readonly step: string; readonly ms: number }>`
-        WITH leaves AS (
-          SELECT l.run, l.key, json_extract(l.line, '$.at') AS at, r.workflow,
-            row_number() OVER (PARTITION BY l.run, l.key ORDER BY json_extract(l.line, '$.at') DESC) AS nth
-          FROM collie_run_lines l JOIN collie_runs r ON r.run = l.run
-          WHERE l.journal = ${STEPS} AND l.kind = 'leave'
-        ), entered AS (
-          SELECT run, key, min(seq) AS seq FROM collie_run_lines
-          WHERE journal = ${STEPS} AND kind = 'enter' GROUP BY run, key
-        ), samples AS (
-          SELECT leaves.workflow, json_extract(e.line, '$.step.id') AS step, leaves.at,
-            CAST(round((julianday(leaves.at) - julianday(json_extract(e.line, '$.at'))) * 86400000) AS INTEGER) AS ms
-          FROM leaves
-          JOIN entered ON entered.run = leaves.run AND entered.key = leaves.key
-          JOIN collie_run_lines e ON e.run = entered.run AND e.journal = ${STEPS} AND e.seq = entered.seq
-          WHERE leaves.nth = 1
-        ), ranked AS (
-          SELECT workflow, step, ms,
-            row_number() OVER (PARTITION BY workflow, step ORDER BY at DESC) AS nth
-          FROM samples WHERE ms >= 0
+      stepSamples: sql
+        .unsafe<{ readonly workflow: string; readonly step: string; readonly ms: number }>(
+          `${stepSamplesOf}, every AS (
+            SELECT workflow, step, at, ms FROM samples
+            UNION ALL SELECT workflow, step, at, ms FROM collie_step_times
+          ), ranked AS (
+            SELECT workflow, step, ms,
+              row_number() OVER (PARTITION BY workflow, step ORDER BY at DESC) AS nth
+            FROM every
+          )
+          SELECT workflow, step, ms FROM ranked WHERE nth <= ${STEP_SAMPLES}`,
+          [null],
         )
-        SELECT workflow, step, ms FROM ranked WHERE nth <= 10
-      `.pipe(Effect.orDie),
+        .pipe(Effect.orDie),
       touch: (run) => worked(run, "").pipe(Effect.andThen(moved(run)), Effect.orDie),
+      control: (control, run, key = "") =>
+        sql<{ readonly data: string }>`
+          SELECT data FROM collie_controls
+          WHERE control = ${control} AND run = ${run} AND key = ${key}
+        `.pipe(
+          Effect.map(([row]) => row?.data ?? null),
+          Effect.orDie,
+        ),
+      controlsOf: (control, run) =>
+        sql<{ readonly key: string; readonly data: string }>`
+          SELECT key, data FROM collie_controls WHERE control = ${control} AND run = ${run} ORDER BY key
+        `.pipe(Effect.orDie),
+      everyControl: (control) =>
+        sql<{ readonly run: string; readonly key: string; readonly data: string }>`
+          SELECT run, key, data FROM collie_controls WHERE control = ${control} ORDER BY run, key
+        `.pipe(Effect.orDie),
+      controlsIn: (runs) =>
+        runs.length === 0
+          ? Effect.succeed(new Map())
+          : sql<ControlRow & { readonly run: string }>`
+              SELECT run, control, key, data FROM collie_controls WHERE run IN ${sql.in(runs)}
+            `.pipe(
+              Effect.map((rows) =>
+                grouped(rows, (row): ControlRow => ({
+                  control: row.control,
+                  key: row.key,
+                  data: row.data,
+                })),
+              ),
+              Effect.orDie,
+            ),
+      setControl: (control, run, data, key = "") =>
+        (data === null
+          ? sql`DELETE FROM collie_controls WHERE control = ${control} AND run = ${run} AND key = ${key}`
+          : sql`
+              INSERT INTO collie_controls (control, run, key, data) VALUES (${control}, ${run}, ${key}, ${data})
+              ON CONFLICT (control, run, key) DO UPDATE SET data = excluded.data
+            `
+        ).pipe(Effect.andThen(moved(run)), Effect.orDie),
     } satisfies RunRecordsApi;
   }),
 );
