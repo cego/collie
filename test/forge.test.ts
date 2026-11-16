@@ -142,6 +142,29 @@ for (const name of ["gitlab", "github"] as const) {
       );
     });
 
+    test("an uncertain approval write is recoverable without approving twice", () => {
+      const fake = fakeForge(name, model(name));
+      let refused = true;
+      const layer = forgeHttpTest(fake.run, (url, init) =>
+        fake.fetch(url, init).then((response) => {
+          if (init?.method === "POST" && refused) {
+            refused = false;
+            return new Response("temporarily unavailable", { status: 503 });
+          }
+          return response;
+        }),
+      );
+      return runEffect(
+        Effect.gen(function* () {
+          const first = yield* forge.approve(ref(name), HEAD, "/w", fake.run);
+          expect(first).toMatchObject({ ok: false, retryable: true });
+          expect((yield* forge.approve(ref(name), HEAD, "/w", fake.run)).ok).toBe(true);
+          expect(fake.model().approved ?? []).toHaveLength(1);
+          expect(Arr.filter(fake.requests, (one) => one.method === "POST")).toHaveLength(1);
+        }).pipe(Effect.provide(layer)),
+      );
+    });
+
     test("refuses an approval after the reviewed head has changed", () => {
       const fake = fakeForge(name, model(name, { mrs: [mr(name, { head: MERGED })] }));
       return runEffect(
@@ -256,6 +279,108 @@ for (const name of ["gitlab", "github"] as const) {
         }).pipe(Effect.provide(fake.layer)),
       );
     });
+
+    test("a head descends from an earlier head it carries, and not from one rewritten or gone", () => {
+      const pushed = "2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c";
+      const rewritten = "3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d";
+      const gone = "4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e";
+      const fake = fakeForge(
+        name,
+        model(name, {
+          mrs: [mr(name, { head: pushed })],
+          ancestry: { [pushed]: [HEAD] },
+          gone: [gone],
+        }),
+      );
+      return runEffect(
+        Effect.gen(function* () {
+          expect(yield* forge.descends(ref(name), HEAD, pushed, "/w", fake.run)).toEqual({
+            ok: true,
+            value: true,
+          });
+          expect(yield* forge.descends(ref(name), rewritten, pushed, "/w", fake.run)).toEqual({
+            ok: true,
+            value: false,
+          });
+          expect(yield* forge.descends(ref(name), gone, pushed, "/w", fake.run)).toEqual({
+            ok: true,
+            value: false,
+          });
+        }).pipe(Effect.provide(fake.layer)),
+      );
+    });
+
+    test("reads whether the login's approval stands at the head, and not at another or another's", () => {
+      const pushed = "2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c";
+      const key = name === "gitlab" ? `${PROJECT[name]}!30` : `${PROJECT[name]}#30`;
+      const at = (approved: ReadonlyArray<string>, head = HEAD) =>
+        fakeForge(name, model(name, { mrs: [mr(name, { head })], approved }));
+      const read = (fake: ReturnType<typeof at>, login: string) =>
+        forge.approvedAt(ref(name), login, HEAD, "/w", fake.run).pipe(Effect.provide(fake.layer));
+      return runEffect(
+        Effect.gen(function* () {
+          expect(yield* read(at([]), "me")).toEqual({ ok: true, value: false });
+          expect(yield* read(at([key]), "me")).toEqual({ ok: true, value: true });
+          expect(yield* read(at([key]), "someone-else")).toEqual({ ok: true, value: false });
+          expect(yield* read(at([key], pushed), "me")).toEqual({ ok: true, value: false });
+        }),
+      );
+    });
+
+    if (name === "github")
+      test("a later changes-requested review replaces the login's approval", () => {
+        const fake = fakeForge(name, model(name));
+        const layer = forgeHttpTest(fake.run, (url, init) =>
+          Str.includes("/reviews?")(url)
+            ? Promise.resolve(
+                Response.json([
+                  { user: { login: "me" }, state: "APPROVED" },
+                  { user: { login: "someone-else" }, state: "APPROVED" },
+                  { user: { login: "me" }, state: "CHANGES_REQUESTED" },
+                  { user: { login: "me" }, state: "COMMENTED" },
+                ]),
+              )
+            : fake.fetch(url, init),
+        );
+        return runEffect(
+          Effect.gen(function* () {
+            expect(yield* forge.approvedAt(ref(name), "me", HEAD, "/w", fake.run)).toEqual({
+              ok: true,
+              value: false,
+            });
+          }).pipe(Effect.provide(layer)),
+        );
+      });
+
+    if (name === "github")
+      test("a dismissal on a later review page cancels the login's approval", () => {
+        const fake = fakeForge(name, model(name));
+        const layer = forgeHttpTest(fake.run, (url, init) => {
+          if (!Str.includes("/reviews?")(url)) return fake.fetch(url, init);
+          const page = new URL(url).searchParams.get("page");
+          return Promise.resolve(
+            Response.json(
+              page === "2"
+                ? [{ user: { login: "me" }, state: "DISMISSED" }]
+                : [
+                    { user: { login: "me" }, state: "APPROVED" },
+                    ...Array.from({ length: 99 }, () => ({
+                      user: { login: "other" },
+                      state: "COMMENTED",
+                    })),
+                  ],
+            ),
+          );
+        });
+        return runEffect(
+          Effect.gen(function* () {
+            expect(yield* forge.approvedAt(ref(name), "me", HEAD, "/w", fake.run)).toEqual({
+              ok: true,
+              value: false,
+            });
+          }).pipe(Effect.provide(layer)),
+        );
+      });
 
     test("opens a merge request with its complete description and destination", () =>
       runEffect(
@@ -670,6 +795,35 @@ for (const name of ["gitlab", "github"] as const) {
         }),
       ));
 
+    test("reads its comments with their ids and bodies, and no system note", () =>
+      runEffect(
+        Effect.gen(function* () {
+          const read = yield* against(
+            name,
+            model(name, {
+              mrs: [
+                mr(name, {
+                  comments: [
+                    { id: 41, author: "ann", at: "2026-11-11T09:00:00Z", body: "Rename it." },
+                    {
+                      id: 42,
+                      author: "ann",
+                      kind: "system",
+                      at: "2026-11-11T09:01:00Z",
+                      body: "added 1 commit",
+                    },
+                  ],
+                }),
+              ],
+            }),
+            (run) => forge.details(ref(name), "/w", run),
+          );
+          expect(read._tag === "Details" && read.comments).toEqual([
+            { id: "41", body: "Rename it." },
+          ]);
+        }),
+      ));
+
     test("says whether it would merge it now, by its own rules and in its own words", () =>
       runEffect(
         Effect.gen(function* () {
@@ -783,6 +937,24 @@ for (const name of ["gitlab", "github"] as const) {
         }),
       ));
 
+    if (name === "gitlab")
+      for (const part of ["approvals", "discussions"])
+        test(`a transient failure reading ${part} makes the merge request unavailable`, () => {
+          const fake = fakeForge(name, model(name));
+          const layer = forgeHttpTest(fake.run, (url, init) =>
+            Str.endsWith(`/${part}`)(new URL(url).pathname)
+              ? Promise.resolve(new Response('{"message":"service unavailable"}', { status: 503 }))
+              : fake.fetch(url, init),
+          );
+          return runEffect(
+            Effect.gen(function* () {
+              const panel = yield* forge.details(ref(name), "/w", fake.run);
+              expect(panel).toMatchObject({ _tag: "Unavailable", transient: true });
+              expect(panel._tag === "Unavailable" && panel.reason).toContain("503");
+            }).pipe(Effect.provide(layer)),
+          );
+        });
+
     test("posts one review note over HTTP without approving", () => {
       const fake = fakeForge(name, model(name));
       return runEffect(
@@ -878,6 +1050,57 @@ for (const name of ["gitlab", "github"] as const) {
           ]);
         }),
       ));
+
+    test("lists the open merge requests that request a login's review, in one read", () => {
+      const fake = fakeForge(
+        name,
+        model(name, {
+          mrs: [
+            mr(name, { iid: "31", author: "ann", reviewers: ["me"], title: "Guard it" }),
+            mr(name, { iid: "32", author: "me", reviewers: ["bob", "me"], title: "Mine" }),
+            mr(name, { iid: "33", author: "ann", reviewers: ["bob"] }),
+            mr(name, { iid: "34", author: "ann", reviewers: ["me"], state: "merged" }),
+          ],
+        }),
+      );
+      const url = (iid: string) =>
+        name === "github"
+          ? `https://${PROJECT.github}/pull/${iid}`
+          : `https://${PROJECT.gitlab}/-/merge_requests/${iid}`;
+      return runEffect(
+        Effect.gen(function* () {
+          expect(yield* forge.reviewRequests(host, "me", "/w", fake.run)).toEqual({
+            ok: true,
+            value: [
+              { url: url("31"), title: "Guard it", author: "ann" },
+              { url: url("32"), title: "Mine", author: "me" },
+            ],
+          });
+          expect(fake.requests).toHaveLength(1);
+        }).pipe(Effect.provide(fake.layer)),
+      );
+    });
+
+    test("lists review requests beyond the first page", () => {
+      const fake = fakeForge(
+        name,
+        model(name, {
+          mrs: Arr.makeBy(101, (index) =>
+            mr(name, { iid: String(index + 1), author: "ann", reviewers: ["me"] }),
+          ),
+        }),
+      );
+      return runEffect(
+        Effect.gen(function* () {
+          const listed = yield* forge.reviewRequests(host, "me", "/w", fake.run);
+          expect(listed.ok && listed.value.length).toBe(101);
+          expect(listed.ok && listed.value.at(-1)?.url).toContain(
+            name === "github" ? "/pull/101" : "/merge_requests/101",
+          );
+          expect(fake.requests).toHaveLength(2);
+        }).pipe(Effect.provide(fake.layer)),
+      );
+    });
 
     test("opens one in a browser", () =>
       runEffect(

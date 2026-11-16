@@ -268,13 +268,18 @@ test(
             renovate: { needs: ["linear", "gitlab"], uses: [] },
             stage: { needs: ["helle", "gitlab"], uses: [] },
             "tune-up": { needs: [], uses: ["linear", "gitlab", "github"] },
-            review: { needs: [], uses: ["gitlab", "github"] },
+            review: { needs: [], uses: ["gitlab", "github", "slack"] },
+            "review-improve": { needs: [], uses: ["gitlab", "github", "slack"] },
             "self-improve": { needs: [], uses: ["gitlab", "github"] },
           };
           for (const [id, entries] of Rec.toEntries(declared)) {
+            // Bun's matcher mutates the Connection descriptions shared by these modules.
             expect(
-              Option.getOrUndefined(Arr.findFirst(view.workflows, (one) => one.id === id))
-                ?.metadata,
+              structuredClone(
+                Option.getOrUndefined(Arr.findFirst(view.workflows, (one) => one.id === id))
+                  ?.metadata,
+              ),
+              id,
             ).toMatchObject({
               connections: {
                 needs: Rec.fromEntries(

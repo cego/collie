@@ -16,6 +16,8 @@ import { serverSocket, type Herdr } from "./herdr";
 import { SESSIONS_EVERY, liveHerds, type LiveHerd } from "./herds";
 import { landingNow } from "./landing";
 import { settleMerges, type MrPanels } from "./merges";
+import { settleWatches, type Watches } from "./mr-watch";
+import { startRequested, type Requested } from "./review-requests";
 import { shell } from "./mr";
 import { append as appendNews, newsPath, read as readNews, retired, supersede } from "./news";
 import { disputesIn, eventsIn, holding, idleAgain, readSaid, remember } from "./proactive";
@@ -223,6 +225,63 @@ const keepRound = (env: PluginEnv, herdr: Herdr) =>
     ),
   );
 
+/**
+ * The merge watch, every `MERGES_EVERY` until the host stops: each Task's merge request is
+ * read when its answer is due, and the Runs watching one are judged on what was read.
+ */
+export const mergeWatch = <E, R>(opts: {
+  readonly env: PluginEnv;
+  readonly board: Effect.Effect<
+    { readonly runs: ReadonlyArray<RunFacts>; readonly views: ReadonlyArray<TaskView> },
+    E,
+    R
+  >;
+  readonly panels: MrPanels;
+  readonly record: (runId: string, url: string) => Effect.Effect<void>;
+  readonly stop: (runId: string, reason: string) => Effect.Effect<void>;
+  readonly watches: Watches;
+  readonly requested: Requested;
+}) => {
+  const checked = new Map<string, number>();
+  const states = new Map<string, MrState>();
+  const logins = new Map<string, string>();
+  return every(
+    MERGES_EVERY,
+    Effect.gen(function* () {
+      const { runs, views } = yield* opts.board;
+      const gitlabHost = yield* gitlabHostOf(opts.env);
+      yield* settleMerges({
+        stateDir: opts.env.stateDir,
+        cwd: opts.env.cwd,
+        run: shell,
+        views,
+        runs,
+        record: opts.record,
+        stop: opts.stop,
+        gitlabHost,
+        now: yield* Clock.currentTimeMillis,
+        checked,
+        states,
+        panels: opts.panels,
+        making: landingNow,
+      });
+      yield* settleWatches({
+        panels: opts.panels,
+        now: yield* Clock.currentTimeMillis,
+        watches: opts.watches,
+      });
+      yield* startRequested({
+        env: opts.env,
+        gitlabHost,
+        logins,
+        requested: opts.requested,
+      }).pipe(
+        Effect.catchCause((cause) => Effect.logWarning("could not list review requests", cause)),
+      );
+    }),
+  );
+};
+
 /** Every side job, run until the host stops. */
 export const sideJobs = <E, R>(opts: {
   readonly env: PluginEnv;
@@ -238,12 +297,12 @@ export const sideJobs = <E, R>(opts: {
   readonly record: (runId: string, url: string) => Effect.Effect<void>;
   /** The host's audited stop, for what a merge settled. */
   readonly stop: (runId: string, reason: string) => Effect.Effect<void>;
+  readonly watches: Watches;
+  readonly requested: Requested;
   readonly sweepers: Effect.Effect<ReadonlyArray<Sweeper>, E, R>;
 }) => {
   const { env, herdr } = opts;
-  const checked = new Map<string, number>();
   const kept = new Set<string>();
-  const states = new Map<string, MrState>();
   /** Steers to Reopened Runs seen being worked on. */
   const workedOn = new Set<string>();
   /** Reopened Runs whose agent has since finished; the said journal keeps each to one item. */
@@ -259,27 +318,7 @@ export const sideJobs = <E, R>(opts: {
             yield* catalogue.pass(runs);
           }),
         ),
-        every(
-          MERGES_EVERY,
-          Effect.gen(function* () {
-            const { runs, views } = yield* opts.board;
-            yield* settleMerges({
-              stateDir: env.stateDir,
-              cwd: env.cwd,
-              run: shell,
-              views,
-              runs,
-              record: opts.record,
-              stop: opts.stop,
-              gitlabHost: yield* gitlabHostOf(env),
-              now: yield* Clock.currentTimeMillis,
-              checked,
-              states,
-              panels: opts.panels,
-              making: landingNow,
-            });
-          }),
-        ),
+        mergeWatch(opts),
         every(
           LOOK_EVERY,
           Effect.gen(function* () {

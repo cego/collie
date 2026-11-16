@@ -16,6 +16,7 @@ import { Artefact } from "./artefact-model";
 // machine. `docs/adr/0015-one-local-host-owns-a-state-directory.md` is why each of those
 // is the way it is.
 
+import { requestedOver } from "./review-requests";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as Num from "effect/Number";
 import * as Arr from "effect/Array";
@@ -349,6 +350,7 @@ import { latest, readDispositions } from "./disposition";
 import { Launched, LAUNCHES, operationsOf, readLaunches, runAgents } from "./launches";
 import { factsOfView, newestFirst, settled, type RunFacts } from "./runs";
 import { Store } from "./store";
+import type { Woke } from "./mr-watch-model";
 import { SESSIONS_EVERY, agentsIn, focusPane, herdChanges, liveHerds } from "./herds";
 import {
   withDirLock,
@@ -1381,6 +1383,7 @@ const hostBoard = (dir: string) =>
   Effect.gen(function* () {
     const model = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
     const registry = yield* Registry;
+    const store = yield* Store;
     const checks = yield* CheckProcesses;
     const bun = yield* Effect.context<PlatformServices | Records>();
     const hosted = yield* Effect.context<HostServices>();
@@ -1606,6 +1609,22 @@ const hostBoard = (dir: string) =>
       sweepersOver,
       record: registry.mergeRequest,
       stop,
+      watches: {
+        list: store.watches,
+        observe: store.observe,
+        unavailable: (run: string, why: string) =>
+          Effect.flatMap(Host, (host) => host.parked(run, why, "forge-unavailable")).pipe(
+            Effect.provideContext(hosted),
+          ),
+        wake: (run: string, name: string, woke: Woke) =>
+          registry.wake(run, name, woke).pipe(Effect.provideContext(hosted)),
+      },
+      requested: requestedOver(
+        (suffix) => Effect.map(store.requestedEnding(suffix), (row) => row !== null),
+        registry,
+        env,
+        hosted,
+      ),
     };
   });
 
@@ -1875,7 +1894,8 @@ const doorFeedLayer = (door: EngineEnd, panels: MrPanels) =>
 const sideJobsLayer = (panels: MrPanels) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
-      const { env, herdr, bun, boards, sweepers, record, stop } = yield* SharedBoard;
+      const { env, herdr, bun, boards, sweepers, record, stop, watches, requested } =
+        yield* SharedBoard;
       const board = Stream.runHead(boards).pipe(
         Effect.flatMap((latest) =>
           latest._tag === "Some" ? Effect.succeed(latest.value) : Effect.never,
@@ -1883,7 +1903,7 @@ const sideJobsLayer = (panels: MrPanels) =>
       );
       const model = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
       yield* Effect.forkScoped(
-        sideJobs({ env, herdr, board, panels, record, stop, sweepers }).pipe(
+        sideJobs({ env, herdr, board, panels, record, stop, watches, requested, sweepers }).pipe(
           // Each round reads every Run's files, as the board does: through the model.
           (jobs) =>
             model === undefined

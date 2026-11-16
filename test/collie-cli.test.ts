@@ -399,6 +399,11 @@ test(
         expect(Arr.map(missing, (one) => one.name)).toEqual(["plan", "proves"]);
         for (const one of missing) expect(one.meaning).not.toBe("");
 
+        // An internal Input is the starting workflow's to set: a release's merge_only and together.
+        const release = yield* cli(["--json", "run", "start", "release", "--input", "mr=!1"]);
+        const releaseMissing = (yield* parseEnvelope(release.stdout)).error?.details["inputs"];
+        expect(releaseMissing).toEqual([expect.objectContaining({ name: "ship" })]);
+
         const plan = yield* cli(["--json", "run", "start", "plan", "--input", "goal=one registry"]);
         expect(yield* parseEnvelope(plan.stdout)).toMatchObject({
           ok: false,

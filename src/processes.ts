@@ -84,18 +84,20 @@ const readPs = (args: ReadonlyArray<string>) =>
 
 const ps = (args: ReadonlyArray<string>) => readPs(args).pipe(Effect.orElseSucceed(() => ""));
 
-/** `pid ppid lstart…` rows, where `lstart` is five words. */
+const PS_COLUMNS = "pid=,ppid=,stat=,lstart=,command=";
+
+/** `pid ppid stat lstart…` rows, where `lstart` is five words; a zombie has exited, as in `proc`. */
 const psRows = (text: string): ProcessInfo[] =>
   Arr.map(
     Arr.filter(
       Arr.map(Str.split(text, "\n"), (line) => Str.split(Str.trim(line), /\s+/)),
-      (words) => words.length >= 7,
+      (words) => words.length >= 8 && !Str.startsWith("Z")(words[2] ?? ""),
     ),
     (words) => ({
       pid: Number(words[0]),
       parent: Number(words[1]),
-      started: Arr.join(words.slice(2, 7), " "),
-      command: Arr.join(words.slice(7), " "),
+      started: Arr.join(words.slice(3, 8), " "),
+      command: Arr.join(words.slice(8), " "),
       session: null,
     }),
   );
@@ -109,7 +111,7 @@ export const readsSessions = FileSystem.FileSystem.pipe(
 /** This process as it is now, or null where no such process is running. */
 export const processOf = Effect.fn("Processes.processOf")(function* (pid: number) {
   if (yield* readsSessions) return yield* fromProc(pid).pipe(Effect.orElseSucceed(() => null));
-  const [row] = psRows(yield* ps(["-ww", "-o", "pid=,ppid=,lstart=,command=", "-p", String(pid)]));
+  const [row] = psRows(yield* ps(["-ww", "-o", PS_COLUMNS, "-p", String(pid)]));
   return row ?? null;
 });
 
@@ -152,7 +154,7 @@ export const sessionOf = Effect.fn("Processes.sessionOf")(function* (root: numbe
     }
     return found;
   }
-  const all = psRows(yield* readPs(["-A", "-ww", "-o", "pid=,ppid=,lstart=,command="]));
+  const all = psRows(yield* readPs(["-A", "-ww", "-o", PS_COLUMNS]));
   const tree = new Set([root]);
   for (let grew = true; grew;) {
     grew = false;

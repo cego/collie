@@ -96,6 +96,7 @@ export const agentStartRefusal = Effect.fn("AgentStart.refusal")(function* (
     });
   }
   for (const field of entry.inputs) {
+    if (field.strategy === "internal") continue;
     if (given.text[field.name] !== undefined || given.json[field.name] !== undefined) continue;
     const facts: string[] = [];
     if (checkoutNamed && field.strategy === "diff-target") {

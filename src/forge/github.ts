@@ -36,6 +36,7 @@ import type {
   PipelineRead,
   TagPipelineRead,
   Readiness,
+  ReviewRequest,
 } from "./forge";
 import {
   ForgeHttp,
@@ -54,6 +55,8 @@ import {
   commentIssue,
   postReview,
   approveReview,
+  descendsFrom,
+  approvedAt,
   findReviewNote,
   reviewChanges,
   viewerLogin,
@@ -188,7 +191,21 @@ const PanelData = Schema.Struct({
           mergedAt: optionalText,
           mergedBy: Schema.optionalKey(Schema.NullOr(Login)),
           reviewDecision: optionalText,
-          comments: Schema.optionalKey(Schema.NullOr(Schema.Struct({ totalCount: Schema.Finite }))),
+          comments: Schema.optionalKey(
+            Schema.NullOr(
+              Schema.Struct({
+                totalCount: Schema.Finite,
+                nodes: Schema.optionalKey(
+                  Schema.Array(
+                    Schema.Struct({
+                      databaseId: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
+                      body: Schema.optionalKey(Schema.String),
+                    }),
+                  ),
+                ),
+              }),
+            ),
+          ),
           updatedAt: optionalText,
           url: optionalText,
           autoMergeRequest: Schema.optionalKey(Schema.NullOr(Schema.Struct({}))),
@@ -225,7 +242,7 @@ const PANEL = `query($owner: String!, $name: String!, $number: Int!, $after: Str
     pullRequest(number: $number) {
       title state isDraft author { login } assignees(first: 100) { nodes { login } }
       headRefName isCrossRepository baseRefName headRefOid mergeCommit { oid } mergedAt mergedBy { login }
-      reviewDecision comments { totalCount } updatedAt url autoMergeRequest { enabledAt }
+      reviewDecision comments(last: 100) { totalCount nodes { databaseId body } } updatedAt url autoMergeRequest { enabledAt }
       mergeable mergeStateStatus
       commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100, after: $after) {
         nodes { __typename ... on CheckRun { name detailsUrl status conclusion } ... on StatusContext { context targetUrl state } }
@@ -283,6 +300,7 @@ function details(ref: MrRef, cwd: string): Effect.Effect<MrPanel, never, ForgeHt
       return {
         _tag: "Unavailable",
         reason: `could not read ${mrWords(ref).label}: ${read.reason}`,
+        transient: read.transient,
       };
     const { pull, rollup } = read.value;
     const checks = rollupChecks(rollup);
@@ -308,6 +326,13 @@ function details(ref: MrRef, cwd: string): Effect.Effect<MrPanel, never, ForgeHt
       approvals: APPROVALS.get(pull.reviewDecision ?? "") ?? "",
       unresolved: false,
       notes: pull.comments?.totalCount ?? 0,
+      ...(pull.comments?.nodes !== undefined && {
+        comments: Arr.flatMap(pull.comments.nodes, (one) =>
+          one.databaseId === undefined || one.databaseId === null
+            ? []
+            : [{ id: String(one.databaseId), body: one.body ?? "" }],
+        ),
+      }),
       headSha: pipe(head, Str.slice(0, 7)),
       head,
       mergedSha: pull.mergeCommit?.oid ?? "",
@@ -676,6 +701,42 @@ function targetJob(
     };
   });
 }
+
+const Searched = Schema.Struct({
+  items: Schema.Array(
+    Schema.Struct({
+      html_url: Schema.String,
+      title: Schema.String,
+      user: Schema.Struct({ login: Schema.String }),
+    }),
+  ),
+});
+
+const reviewRequests = (login: string, cwd: string) =>
+  Effect.gen(function* (): Effect.fn.Return<
+    Answered<ReadonlyArray<ReviewRequest>>,
+    never,
+    ForgeHttp
+  > {
+    const requests: ReviewRequest[] = [];
+    for (let page = 1; ; page++) {
+      const listed = yield* requestAs(
+        Searched,
+        LOGIN,
+        cwd,
+        `search/issues?q=${encodeURIComponent(`is:pr is:open review-requested:${login}`)}&per_page=100&page=${page}`,
+      );
+      if (!listed.ok) return listed;
+      requests.push(
+        ...Arr.map(listed.value.items, (one) => ({
+          url: one.html_url,
+          title: one.title,
+          author: one.user.login,
+        })),
+      );
+      if (listed.value.items.length < 100) return { ok: true, value: requests };
+    }
+  });
 
 const User = Schema.Struct({ login: Schema.String, type: optionalText });
 const IssueComment = Schema.Struct({
@@ -1612,6 +1673,14 @@ export const github: Forge = {
     ref.project === null
       ? Effect.succeed({ ok: false, message: `${mrWords(ref).label} names no GitHub project` })
       : approveReview(LOGIN, ref.project, ref, head, cwd),
+  descends: (ref, previous, head, cwd) =>
+    ref.project === null
+      ? Effect.succeed({ ok: false, reason: `${mrWords(ref).label} names no GitHub project` })
+      : descendsFrom(LOGIN, ref.project, previous, head, cwd),
+  approvedAt: (ref, login, head, cwd) =>
+    ref.project === null
+      ? Effect.succeed({ ok: false, reason: `${mrWords(ref).label} names no GitHub project` })
+      : approvedAt(LOGIN, ref.project, ref, login, head, cwd),
   findNote: (ref, signature, cwd) =>
     ref.project === null
       ? Effect.succeed({ ok: false, reason: `${mrWords(ref).label} names no GitHub project` })
@@ -1620,6 +1689,7 @@ export const github: Forge = {
     ref.project === null
       ? Effect.succeed({ ok: false, message: `${mrWords(ref).label} names no GitHub project` })
       : postReview(LOGIN, ref.project, ref, body, cwd),
+  reviewRequests: (_host, login, cwd) => reviewRequests(login, cwd),
   mine: (project, cwd) =>
     project === null ? Effect.succeed([]) : myMergeRequests(LOGIN, project, cwd),
   open: (ref, cwd, run) => run("gh", ["pr", "view", ref.iid, "--repo", mrPath(ref), "--web"], cwd),

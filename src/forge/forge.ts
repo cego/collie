@@ -175,6 +175,12 @@ export type TargetJobRead =
     }
   | { readonly ok: false; readonly reason: string };
 
+export interface ReviewRequest {
+  readonly url: string;
+  readonly title: string;
+  readonly author: string;
+}
+
 export interface ReviewCommands {
   readonly diff: string;
   readonly view: string;
@@ -393,13 +399,29 @@ export interface Forge {
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<Posted, never, R | ForgeHttp>;
-  /** Approves only the reviewed head, returning the forge's refusal unchanged in the message. */
+  /** A retry reconciles an uncertain write against the forge before approving again. */
   readonly approve: <R>(
     ref: MrRef,
     head: string,
     cwd: string,
     run: Runner<R>,
-  ) => Effect.Effect<Posted, never, R | ForgeHttp>;
+  ) => Effect.Effect<Posted & { readonly retryable?: boolean }, never, R | ForgeHttp>;
+  /** Whether `head` descends from `previous`; a `previous` the forge no longer has does not. */
+  readonly descends: <R>(
+    ref: MrRef,
+    previous: string,
+    head: string,
+    cwd: string,
+    run: Runner<R>,
+  ) => Effect.Effect<Answered<boolean>, never, R | ForgeHttp>;
+  /** Whether `login`'s approval stands while the head is `head`. */
+  readonly approvedAt: <R>(
+    ref: MrRef,
+    login: string,
+    head: string,
+    cwd: string,
+    run: Runner<R>,
+  ) => Effect.Effect<Answered<boolean>, never, R | ForgeHttp>;
   /** Finds a top-level note by its exact last-line signature. */
   readonly findNote: <R>(
     ref: MrRef,
@@ -428,6 +450,13 @@ export interface Forge {
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<MergeAnswer, never, R | ForgeHttp>;
+  /** The open merge requests on `host` that request `login`'s review, its own among them. */
+  readonly reviewRequests: <R>(
+    host: string,
+    login: string,
+    cwd: string,
+    run: Runner<R>,
+  ) => Effect.Effect<Answered<ReadonlyArray<ReviewRequest>>, never, R | ForgeHttp>;
   /** My open merge requests in `project`, as assignee or author, for a menu. */
   readonly mine: <R>(
     project: string | null,

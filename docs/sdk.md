@@ -750,7 +750,7 @@ On success, its `signature` identifies the posted note for the findings ledger.
 reviewed head when the new head descends from it. Otherwise it reads the full diff.
 Journal it in an Activity with `error: WorkflowError`; an unreadable forge fails the read.
 
-`host.approveReview({ runId, round, target, cwd, head })` requests approval of that reviewed head, independently of posting.
+`host.approveReview({ runId, attempt, target, cwd, head })` requests approval of that reviewed head, independently of posting.
 Journal it in a separate Activity after the post succeeds. The shipped review offers approval
 explicitly and ends with the forge's reason on its card when the forge refuses it.
 GitLab enforces the reviewed `sha` atomically. GitHub submits the reviewed `commit_id`, with
@@ -758,7 +758,10 @@ head checks before and after. A moved or unreadable head after submission trigge
 dismissal and `ok: false`. GitHub has no atomic head guard: stale approval can stand during
 a racing push and remain active if dismissal fails. The message identifies the review to dismiss
 and reports that risk. Neither approval nor dismissal is blindly retried.
-Before submission, the host exclusively records the attempt for that Run and round.
+Before submission, the host exclusively records the attempt for that Run and `attempt`,
+a key unique within the Run, such as the name of the Activity that journals the call.
+A transient forge failure clears the record and parks the Run, and its resume tries again:
+the call reads whether approval already stands at the head before it submits.
 If recovery re-enters the call before its Activity recorded an outcome, it returns
 `ok: false` with an uncertain-outcome message and sends no approval or dismissal request.
 Inspect the forge before starting another review; approval may already be active.
@@ -1126,6 +1129,69 @@ the first.
   answer path; the declaration grants no authority and never answers the question.
 - **The question survives a restart**, and so does its answer. What is waiting is in
   `run show`, and `run answer <run> <value> --decision <name>` settles it.
+
+## Waiting on a merge request
+
+`watch({ name, target, cwd, cursor })` suspends the Run until the merge request `target`
+changes in a way that matters since `cursor` — `{ head, seen, pipeline }`: the head it last
+worked from, the comment ids it has seen, and that head's checks (`passed`, `failed`,
+`running`, `unknown` or `none`). Nothing runs meanwhile: no agent, no polling Activity, and
+no forge read beyond the merge watch's own. Each round of the merge watch judges the watch
+on what it just read, or last read, of that merge request:
+
+- **A change** is a new head, a comment whose last line is not a Collie signature, or the
+  head's pipeline reaching `passed` or `failed`.
+- **A new head waits 5 minutes** unchanged before it is one, and a running pipeline is
+  waited for until it ends or for 30 minutes, whichever is first. When the head was first
+  seen and when its pipeline was first seen running are kept on the watch, so a host restart
+  keeps the deadlines.
+- **Merged or closed** ends the wait.
+
+It returns `Woke`: `{ _tag: "Changed", change }`, where `change` says the `head`, the
+`previous` one, whether it is a `newHead`, the new `comments`, the ended `pipeline`, and
+`forcePush` — a new head that does not descend from `previous`, read once after the wake;
+one the forge no longer has does not descend — or `{ _tag: "Ended", state }`. `name` is its
+identity, as an `ask`'s is: watch again under a new name. The watch is a row in `host.db`,
+indexed by MR id, and its wake is durable, so a restart comes back to it. It is forgotten
+when the wake completes or the Run is stopped. While it waits, the card says
+`Waiting for the author to change <mr>.`, which is never overdue and never Needs you, and no
+merge request is recorded on the Run, so no `mr-opened` notification is sent.
+
+`watch` also takes `author`, the name its card waits on instead of "the author", and
+`approved`, a head the card says was approved. `askWhileWatching(question, watching)` asks a
+question and watches at once, under the watch's name: the first of the answer and the wake
+settles it, and a wake first closes the question, so a late answer is refused. It returns
+the wake, or `{ _tag: "Answered", answer }`.
+
+A workflow that declares `follows: "<setting>"` follows the merge requests it is started
+on while that boolean setting is on: the start is claimed by the merge request and the
+forge login, so every door's second start answers the first Run with `followed`. The
+host gives such a workflow what a round needs without an agent:
+`host.mrReading({ target, cwd })` (state, head, author, pipeline and comment ids, as a
+watch's cursor wants them), `host.approvedAt({ target, cwd, head })` (whether your login's
+approval stands at that head), and `host.pinHead({ runId, target, head })`, a detached
+checkout of the merge request's own ref at `head` that is the Run's, or `moved` when the
+ref is somewhere else. Pinning selects the remote naming the MR's project, including `upstream` beside a fork's `origin`.
+The shipped `review` is the example: each round reads, pins, reviews,
+posts, then watches, or asks for approval while it watches.
+
+The merge watch also lists GitLab review requests while `review.follow_through` is on.
+It starts the sole saved workflow declaring `follows` for that setting in the matching
+Projects-root checkout. Multiple matching workflows or no matching checkout produce News
+instead of a start; later rounds retry. The login's own merge requests are excluded.
+Automatic and manual starts share the same merge-request-and-login claim.
+
+`host.reviewSlack({ runId, target, cwd, permalink, wanted })` reconciles the human's reactions inside an Activity.
+It keeps the correlation and wanted reactions in the Run's record, then reads Slack before adding anything.
+Its returned fact names ambiguous messages, missing reactions, or the sign-in repair; Slack failures do not fail the review.
+`host.slackTarget(link, target?)` validates a handed-in permalink before admission.
+An optional `slack` input preserves that message when the target itself is the permalink.
+
+The review's **Improve** action starts `review-improve`, sharing the Fix rally from `review` and the earlier Run's ledger.
+`ActionFacts.review` carries the current head, reviewed head, and ownership from `host.reviewFix(runId, target)`.
+Ownership means the forge login authored the MR or an open Task worked on its source branch in this repository.
+The host's existing Offer admission refuses another Improve while the first is going, including while a live implementer handles its delivery.
+Its watch leaves independent re-review to an existing Follow-through; otherwise the rally reviews the pushed head with a fresh reviewer.
 
 ## A workflow made of other workflows
 
@@ -1940,6 +2006,18 @@ The posted note lists new findings and status changes; unchanged open findings a
 id only. Only findings with a posted-note anchor count as previously published.
 An unchanged, previously posted ledger posts nothing. `fixed` and `obsolete` findings stay in the
 record without blocking a fix or approval; unresolved disputes still require a decision.
+
+`ReassessmentSchema(ids)` accepts exactly one `id`, `status`, and nonempty `reason` for
+each supplied finding, under `findings`. Missing, duplicate, and unknown ids are refused,
+as are extra fields. It cannot add findings or change their severity.
+The shipped review uses this contract for comment-only rounds. It labels each reply
+human-typed or Collie-signed and names the signing Run; a signature never authorizes approval.
+
+`host.mrReading({ target, cwd, replies: true })` includes the discussion's reply bodies,
+authors, thread ids, and signing Runs. Ordinary cursor reads omit them. These reads run
+inside the round's Activity, so waiting still makes only the merge watch's existing reads.
+A watch cursor's `headOnly: true` ignores comments and pipeline changes while a maintained
+dispute awaits a decision or a new head. Merged and closed still end the wait.
 
 `CriterionSchema` is how a builder answers one of its ticket's acceptance criteria:
 `criterion`, copied from the ticket, and `met`, the test or file that shows it, or

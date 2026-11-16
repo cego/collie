@@ -112,6 +112,108 @@ const threadRef = (
   number,
 });
 
+/** Whether `head` descends from `previous`; a `previous` the forge no longer has does not. */
+export const descendsFrom = (
+  login: ForgeLogin,
+  project: string,
+  previous: string,
+  head: string,
+  cwd: string,
+) =>
+  Effect.gen(function* () {
+    const repo = threadRepo(login, project);
+    const path = `${repo.owner}/${repo.name}`;
+    if (login.forge === "gitlab") {
+      const base = yield* requestAs(
+        Schema.Struct({ id: Schema.String }),
+        login,
+        cwd,
+        `/projects/${encodeURIComponent(path)}/repository/merge_base?refs[]=${encodeURIComponent(previous)}&refs[]=${encodeURIComponent(head)}`,
+      );
+      if (!base.ok) return base.status === 404 ? { ok: true as const, value: false } : base;
+      return { ok: true as const, value: base.value.id === previous };
+    }
+    const compared = yield* requestAs(
+      Schema.Struct({ status: Schema.String }),
+      login,
+      cwd,
+      `/repos/${path}/compare/${encodeURIComponent(previous)}...${encodeURIComponent(head)}`,
+    );
+    if (!compared.ok)
+      return compared.status === 404 ? { ok: true as const, value: false } : compared;
+    return {
+      ok: true as const,
+      value: compared.value.status === "ahead" || compared.value.status === "identical",
+    };
+  });
+
+/** Whether `me`'s approval stands on the merge request while its head is `head`. */
+export const approvedAt = (
+  login: ForgeLogin,
+  project: string,
+  ref: MrRef,
+  me: string,
+  head: string,
+  cwd: string,
+) =>
+  Effect.gen(function* () {
+    const repo = threadRepo(login, project);
+    const path = `${repo.owner}/${repo.name}`;
+    if (login.forge === "gitlab") {
+      const route = `/projects/${encodeURIComponent(path)}/merge_requests/${ref.iid}`;
+      const mr = yield* requestAs(Schema.Struct({ sha: Schema.String }), login, cwd, route);
+      if (!mr.ok) return mr;
+      const approvals = yield* requestAs(
+        Schema.Struct({
+          approved_by: Schema.NullOr(
+            Schema.Array(Schema.Struct({ user: Schema.Struct({ username: Schema.String }) })),
+          ),
+        }),
+        login,
+        cwd,
+        `${route}/approvals`,
+      );
+      if (!approvals.ok) return approvals;
+      return {
+        ok: true as const,
+        value:
+          mr.value.sha === head &&
+          Arr.some(approvals.value.approved_by ?? [], (one) => one.user.username === me),
+      };
+    }
+    const pull = `/repos/${path}/pulls/${ref.iid}`;
+    const current = yield* requestAs(
+      Schema.Struct({ head: Schema.Struct({ sha: Schema.String }) }),
+      login,
+      cwd,
+      pull,
+    );
+    if (!current.ok) return current;
+    const reviews = yield* pagesAs(
+      Schema.Struct({
+        user: Schema.NullOr(Schema.Struct({ login: Schema.String })),
+        state: Schema.String,
+      }),
+      login,
+      cwd,
+      `${pull}/reviews`,
+    );
+    if (!reviews.ok) return reviews;
+    const latest = Arr.last(
+      Arr.filter(
+        reviews.value,
+        (one) => one.user?.login === me && one.state !== "COMMENTED" && one.state !== "PENDING",
+      ),
+    );
+    return {
+      ok: true as const,
+      value:
+        current.value.head.sha === head &&
+        latest._tag === "Some" &&
+        latest.value.state === "APPROVED",
+    };
+  });
+
 export const reviewChanges = (
   login: ForgeLogin,
   project: string,
@@ -280,6 +382,13 @@ export const approveReview = (
   Effect.gen(function* () {
     const where = mrWords(ref).label;
     if (head === "") return { ok: false, message: `did not approve ${where}: no reviewed head` };
+    const http = yield* ForgeHttp;
+    const me = yield* http.ask(login, cwd, (provider, signal) => provider.users.me({ signal }));
+    if (!me.ok) return { ok: false, message: me.reason, retryable: me.transient === true };
+    const existing = yield* approvedAt(login, project, ref, me.value.login, head, cwd);
+    if (!existing.ok)
+      return { ok: false, message: existing.reason, retryable: existing.transient === true };
+    if (existing.value) return { ok: true, message: `approved ${where} at ${head}` };
     const repo = threadRepo(login, project);
     const path = `${repo.owner}/${repo.name}`;
     const pull = `repos/${path}/pulls/${ref.iid}`;
@@ -292,6 +401,7 @@ export const approveReview = (
         return {
           ok: false,
           message: `did not approve ${where} at ${head}: ${before.ok ? "SHA does not match HEAD" : before.reason}`,
+          retryable: !before.ok && before.transient === true,
         };
     }
     const approved = yield* login.forge === "gitlab"
@@ -325,7 +435,11 @@ export const approveReview = (
     }
     return approved.ok
       ? { ok: true, message: `approved ${where} at ${head}` }
-      : { ok: false, message: `did not approve ${where} at ${head}: ${approved.reason}` };
+      : {
+          ok: false,
+          message: `did not approve ${where} at ${head}: ${approved.reason}`,
+          retryable: approved.transient === true,
+        };
   });
 
 export const findReviewNote = (

@@ -128,3 +128,58 @@ for (const [name, action] of [
       ),
     180_000,
   );
+
+test(
+  "a second approval Activity in the same Run is not taken for an interrupted first",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const rig = yield* Rig.scoped();
+        const { state, wf } = yield* workspace("collie-review-approve-twice-");
+        const bin = yield* Effect.acquireRelease(FakeBin.make(`${rig.root}/bin`), (bin) =>
+          bin.restore(),
+        );
+        const forge = yield* forgeOnPath(bin, "gitlab", {
+          installed: true,
+          loggedIn: [FORGE_HOST.gitlab],
+          login: "tester",
+          mrs: [{ project: PROJECT.gitlab, iid: "30", state: "open", author: "ann", head: HEAD }],
+        });
+        const api = yield* serveForges({ forge: "gitlab", face: forge.face });
+        const host = yield* openHost(state, {
+          env: {
+            ...rig.env(),
+            PATH: `${bin.dir}:${rig.env().PATH}`,
+            HERDR_PLUGIN_STATE_DIR: state,
+            COLLIE_USER_DIR: `${wf}/..`,
+            HERDR_PLUGIN_ROOT: `${wf}/../..`,
+            COLLIE_FORGE_API: api,
+          },
+        });
+        expect((yield* host.ask({ op: "load", entry: `${wf}/posted-review.workflow.ts` })).ok).toBe(
+          true,
+        );
+        expect(
+          (yield* host.ask({
+            op: "start",
+            id: "posted-review",
+            runId: "r1",
+            input: {
+              target: mrTarget(PROJECT.gitlab, "30"),
+              head: HEAD,
+              approve: true,
+              again: true,
+            },
+          })).ok,
+        ).toBe(true);
+        const completed = yield* host.until(
+          { op: "poll", id: "posted-review", runId: "r1" },
+          (reply) => reply.status === "complete" || reply.status === "failed",
+        );
+        expect(completed.value).toContain("approved");
+        expect(completed.status).toBe("complete");
+        yield* host.stop;
+      }),
+    ),
+  180_000,
+);

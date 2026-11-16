@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import * as Str from "effect/String";
 import { Effect, FileSystem } from "effect";
 import { redact } from "../src/redact";
 import { slackApi } from "../src/slack";
@@ -24,7 +25,7 @@ const machine = (lines: string | null, bot?: string) =>
   });
 
 const signedIn = (token: string, user: string, team: string) =>
-  `SLACK_USER_TOKEN=${token}\nSLACK_USER_ID=${user}\nSLACK_TEAM_ID=${team}\n`;
+  `SLACK_USER_TOKEN=${token}\nSLACK_USER_ID=${user}\nSLACK_TEAM_ID=${team}\nSLACK_USER_SCOPES=chat:write,channels:read,groups:read,reactions:write,reactions:read,channels:history,groups:history,search:read\n`;
 
 const FIX = "Open Desktop to renew Slack, or sign in again";
 const SIGN_IN = "Sign in to Slack in Desktop Settings › Connections";
@@ -84,6 +85,25 @@ test("a Machine's slack Connection is the human's sign-in, read from Slack's ans
       expect(yield* read(signedIn(USER_TOKEN, "U456", "T123"))).toEqual({
         state: "broken",
         detail: "Slack auth.test: token_expired",
+        fix: FIX,
+      });
+      fake.refuse(null);
+      expect(
+        yield* read(
+          Str.replace(
+            /^SLACK_USER_SCOPES=.*$/m,
+            "SLACK_USER_SCOPES=chat:write,channels:read,groups:read",
+          )(signedIn(USER_TOKEN, "U456", "T123")),
+        ),
+      ).toMatchObject({
+        state: "broken",
+        detail: expect.stringContaining("reactions:write"),
+        fix: expect.stringContaining("Sign in again"),
+      });
+      fake.refuse("missing_scope");
+      expect(yield* read(signedIn(USER_TOKEN, "U456", "T123"))).toMatchObject({
+        state: "broken",
+        detail: "Slack auth.test: missing_scope",
         fix: FIX,
       });
     }),

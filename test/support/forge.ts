@@ -117,6 +117,8 @@ export const FakeMr = Schema.Struct({
   body: Schema.optionalKey(Schema.String),
   author: Schema.optionalKey(Schema.String),
   assignees: Schema.optionalKey(Schema.Array(Schema.String)),
+  /** The logins its review is requested of. */
+  reviewers: Schema.optionalKey(Schema.Array(Schema.String)),
   head: Schema.optionalKey(Schema.String),
   diff: Schema.optionalKey(Schema.String),
   interdiff: Schema.optionalKey(Schema.String),
@@ -303,6 +305,8 @@ export const ForgeModel = Schema.Struct({
   refusesIssueWrite: Schema.optionalKey(Schema.Finite),
   /** The shas each sha descends from. */
   ancestry: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String))),
+  /** Commits the forge no longer has, as after a force push and garbage collection. */
+  gone: Schema.optionalKey(Schema.Array(Schema.String)),
   /** Repositories gh cannot read, by `owner/repo`. */
   unreadable: Schema.optionalKey(Schema.Array(Schema.String)),
   /** The deploy API does not answer. */
@@ -1055,6 +1059,28 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
           ),
         ),
       );
+    const reviewing = /^merge_requests\?(.*)$/.exec(route);
+    if (reviewing) {
+      const query = new URLSearchParams(reviewing[1]);
+      return json(
+        pageOf(
+          route,
+          Arr.map(
+            Arr.filter(
+              model.mrs,
+              (one) =>
+                one.state === "open" &&
+                (one.reviewers ?? []).includes(query.get("reviewer_username") ?? ""),
+            ),
+            (one) => ({
+              web_url: `https://${one.project}/-/merge_requests/${one.iid}`,
+              title: one.title ?? "",
+              author: { username: one.author ?? "" },
+            }),
+          ),
+        ),
+      );
+    }
     const byBranch = /^projects\/([^/]+)\/merge_requests\?(.*)$/.exec(route);
     if (byBranch) {
       const path = decodeURIComponent(byBranch[1]!);
@@ -1254,6 +1280,7 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under): Ans
     const base = /merge_base\?refs\[\]=([^&]+)&refs\[\]=(.+)$/.exec(route);
     if (base) {
       const [, merged = "", live = ""] = base;
+      if ((model.gone ?? []).includes(merged)) return no();
       const carries = live === merged || (model.ancestry?.[live] ?? []).includes(merged);
       return json({ id: carries ? merged : "0000000" });
     }
@@ -1340,7 +1367,10 @@ function glabOnMr(
   if (rest === "approvals") {
     const rules = rulesOf(mr);
     const named = mr.approvers ?? [...new Set(Arr.flatMap(rules, (rule) => rule.approvers))];
-    const approvers = named.length === 0 && mr.approved === true ? ["a-reviewer"] : named;
+    const others = named.length === 0 && mr.approved === true ? ["a-reviewer"] : named;
+    const approvers = (model.approved ?? []).includes(keyOf("gitlab", mr))
+      ? [...others, model.login ?? "me"]
+      : others;
     const required = mr.required ?? Math.max(0, ...Arr.map(rules, (rule) => rule.required));
     return json({
       approvals_required: required,
@@ -1375,7 +1405,13 @@ function glabOnMr(
 }
 
 /** `gh api` on one pull request: its comments and reviews, a reply and the merge. */
-function ghOnPull(pull: FakeMr, kind: string, rest: string, args: ReadonlyArray<string>): Answer {
+function ghOnPull(
+  model: ForgeModel,
+  pull: FakeMr,
+  kind: string,
+  rest: string,
+  args: ReadonlyArray<string>,
+): Answer {
   const url = `https://${pull.project}/pull/${pull.iid}`;
   const method = flag(args, "-X") ?? "GET";
   if (kind === "pulls" && pipe(rest, Str.startsWith("files?")))
@@ -1427,7 +1463,7 @@ function ghOnPull(pull: FakeMr, kind: string, rest: string, args: ReadonlyArray<
     );
   if (kind === "pulls" && pipe(rest, Str.startsWith("reviews?")))
     return pagesOf(
-      Arr.map(pull.reviews ?? [], (one) => ({
+      Arr.map(approvedAs(model, pull), (one) => ({
         id: one.id,
         html_url: `${url}#pullrequestreview-${one.id}`,
         user: userOf(one.author, one.bot),
@@ -1441,6 +1477,15 @@ function ghOnPull(pull: FakeMr, kind: string, rest: string, args: ReadonlyArray<
     return mergeAnswer("github", pull, args);
   return no();
 }
+
+/** A pull request's reviews, with the login's own approval once the fake approved it. */
+const approvedAs = (model: ForgeModel, pull: FakeMr): ReadonlyArray<FakeReview> =>
+  (model.approved ?? []).includes(keyOf("github", pull))
+    ? [
+        ...(pull.reviews ?? []),
+        { id: 1, author: model.login ?? "me", state: "APPROVED", at: "2026-11-11T10:00:00Z" },
+      ]
+    : (pull.reviews ?? []);
 
 /** A pull request as GitHub's GraphQL answers the panel's query. */
 const ghPullNode = (model: ForgeModel, pull: FakeMr) => ({
@@ -1458,7 +1503,14 @@ const ghPullNode = (model: ForgeModel, pull: FakeMr) => ({
   isCrossRepository: pull.fork === true,
   baseRefName: pull.targetBranch ?? "",
   reviewDecision: decisionOf(model, pull),
-  comments: { totalCount: 0 },
+  comments: {
+    totalCount: 0,
+    nodes: Arr.flatMap(pull.comments ?? [], (one) =>
+      one.kind === "system" || one.thread !== undefined
+        ? []
+        : [{ databaseId: one.id, body: one.body }],
+    ),
+  },
   updatedAt: pull.updatedAt ?? null,
   url: `https://${pull.project}/pull/${pull.iid}`,
   autoMergeRequest: pull.autoMerge === true ? { enabledAt: "2026-10-01T00:00:00Z" } : null,
@@ -1684,6 +1736,36 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
       args,
     );
   }
+  const searched = /^search\/issues\?(.*)$/.exec(route);
+  if (searched) {
+    const words = Str.split(new URLSearchParams(searched[1]).get("q") ?? "", " ");
+    const requested = Option.getOrUndefined(
+      Arr.findFirst(words, (word) => pipe(word, Str.startsWith("review-requested:"))),
+    );
+    return json({
+      items: pageOf(
+        route,
+        Arr.map(
+          Arr.filter(
+            model.mrs,
+            (one) =>
+              one.state === "open" &&
+              words.includes("is:pr") &&
+              words.includes("is:open") &&
+              requested !== undefined &&
+              (one.reviewers ?? []).includes(
+                pipe(requested, Str.slice("review-requested:".length)),
+              ),
+          ),
+          (one) => ({
+            html_url: `https://${one.project}/pull/${one.iid}`,
+            title: one.title ?? "",
+            user: { login: one.author ?? "" },
+          }),
+        ),
+      ),
+    });
+  }
   const asked = route === "graphql" ? ghGraphql(model, args) : undefined;
   if (asked !== undefined) return asked;
   const pulls = /^repos\/([^/]+\/[^/]+)\/pulls\?(.*)$/.exec(route);
@@ -1761,10 +1843,10 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
       flag(args, "-X") === "POST"
     )
       return {
-        ...ghOnPull(pull, kind, rest, args),
+        ...ghOnPull(model, pull, kind, rest, args),
         noted: { key: keyOf("github", pull), body: field(args, "body") ?? "" },
       };
-    return pull === undefined ? no() : ghOnPull(pull, kind, rest, args);
+    return pull === undefined ? no() : ghOnPull(model, pull, kind, rest, args);
   }
   if (route === "graphql")
     return model.protectionDown === true
@@ -1828,6 +1910,7 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>): A
   const compare = /\/compare\/([^.]+)\.\.\.(.+)$/.exec(route);
   if (compare) {
     const [, merged = "", live = ""] = compare;
+    if ((model.gone ?? []).includes(merged)) return no();
     const status =
       merged === live
         ? "identical"

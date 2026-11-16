@@ -7,6 +7,34 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import { redact } from "./redact";
 
+export const SLACK_USER_SCOPES = [
+  "chat:write",
+  "channels:read",
+  "groups:read",
+  "reactions:write",
+  "reactions:read",
+  "channels:history",
+  "groups:history",
+  "search:read",
+];
+export const missingSlackScopes = (scopes: string) =>
+  Arr.filter(SLACK_USER_SCOPES, (scope) => !Str.split(scopes, ",").includes(scope));
+const Message = Schema.Struct({
+  ts: Schema.String,
+  text: Schema.String,
+  thread_ts: Schema.optionalKey(Schema.String),
+  reactions: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ name: Schema.String, users: Schema.Array(Schema.String) })),
+  ),
+});
+export const slackMessageRef = (link: string) => {
+  const match =
+    /^https:\/\/[^/]+\.slack\.com\/archives\/([CG][A-Z0-9]+)\/p(\d{10})(\d{6})(?:\?.*)?$/.exec(
+      Str.trim(link),
+    );
+  return match ? { channel: match[1]!, ts: `${match[2]}.${match[3]}` } : null;
+};
+
 const SlackTokenOwner = Schema.Struct({
   team: Schema.String,
   user: Schema.String,
@@ -66,7 +94,13 @@ const slackCall = (token: string | null, client?: HttpClient.HttpClient) => {
     Effect.gen(function* () {
       const url = `https://slack.com/api/${method}`;
       const request = (
-        ["conversations.list", "chat.getPermalink"].includes(method)
+        [
+          "conversations.list",
+          "chat.getPermalink",
+          "conversations.history",
+          "search.messages",
+          "reactions.get",
+        ].includes(method)
           ? HttpClientRequest.get(url).pipe(HttpClientRequest.setUrlParams(parameters))
           : HttpClientRequest.post(url).pipe(HttpClientRequest.bodyUrlParams(parameters))
       ).pipe((request) =>
@@ -110,6 +144,76 @@ export const slackApi = (token: string, client?: HttpClient.HttpClient) => {
   const call = slackCall(token, client);
   return {
     tokenOwner: () => call("auth.test", SlackTokenOwner),
+    message: (channel: string, ts: string) =>
+      call("conversations.history", Schema.Struct({ messages: Schema.Array(Message) }), {
+        channel,
+        oldest: ts,
+        latest: ts,
+        inclusive: "true",
+        limit: "1",
+      }).pipe(
+        Effect.flatMap((answer) => {
+          const message = Option.getOrUndefined(
+            Arr.findFirst(answer.messages, (one) => one.ts === ts),
+          );
+          return message === undefined
+            ? Effect.fail("Slack message was not found")
+            : Effect.succeed(message);
+        }),
+      ),
+    search: (query: string) =>
+      Effect.gen(function* () {
+        const matches: Array<{ channel: string; ts: string; text: string; thread_ts?: string }> =
+          [];
+        let page = 1;
+        let pages = 1;
+        do {
+          const answer = yield* call(
+            "search.messages",
+            Schema.Struct({
+              messages: Schema.Struct({
+                paging: Schema.Struct({ pages: Schema.Finite }),
+                matches: Schema.Array(
+                  Schema.Struct({
+                    ...Message.fields,
+                    channel: Schema.Struct({ id: Schema.String }),
+                  }),
+                ),
+              }),
+            }),
+            { query, count: "100", page: String(page), highlight: "false" },
+          );
+          matches.push(
+            ...Arr.map(answer.messages.matches, (one) => ({ ...one, channel: one.channel.id })),
+          );
+          pages = answer.messages.paging.pages;
+        } while (++page <= pages);
+        return matches;
+      }),
+    reconcile: (channel: string, ts: string, wanted: ReadonlyArray<string>) =>
+      Effect.gen(function* () {
+        const owner = yield* call("auth.test", SlackTokenOwner);
+        const got = yield* call("reactions.get", Schema.Struct({ message: Message }), {
+          channel,
+          timestamp: ts,
+          full: "true",
+        });
+        for (const name of wanted) {
+          if (
+            Arr.some(
+              got.message.reactions ?? [],
+              (one) => one.name === name && one.users.includes(owner.user_id),
+            )
+          )
+            continue;
+          yield* call("reactions.add", Schema.Struct({}), { channel, timestamp: ts, name }).pipe(
+            Effect.catchIf(
+              (reason) => reason === "Slack reactions.add: already_reacted",
+              () => Effect.succeed({}),
+            ),
+          );
+        }
+      }),
     post: (channel: string, text: string) =>
       call("chat.postMessage", Schema.Struct({ channel: Schema.String, ts: Schema.String }), {
         channel,

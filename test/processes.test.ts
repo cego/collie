@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
-import { Clock, Effect, Fiber, FileSystem, PlatformError, Stream } from "effect";
+import { Clock, Effect, Fiber, FileSystem, PlatformError, Schedule, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
@@ -24,6 +24,45 @@ test("a process's command and start time read alone are what reading it whole sa
       expect(yield* startedOf(process.pid)).toBe(whole.started);
     }),
   ));
+
+test.skipIf(process.platform !== "linux")(
+  "a zombie is not running, whether proc or ps is read",
+  () => {
+    // The child waits on stdin, which is closed only once the shell has become a sleep that
+    // never reaps it, so the child is certain to stay a zombie.
+    const parent = Bun.spawn(
+      ["sh", "-c", "cat >/dev/null <&0 & echo $!; exec sleep 30 >/dev/null"],
+      { stdin: "pipe", stdout: "pipe" },
+    );
+    return runEffect(
+      Effect.gen(function* () {
+        const pid = Number(
+          Str.trim(yield* Effect.promise(() => new Response(parent.stdout).text())),
+        );
+        const fs = yield* FileSystem.FileSystem;
+        const until = <A>(
+          read: Effect.Effect<A, PlatformError.PlatformError>,
+          done: (value: A) => boolean,
+        ) =>
+          read.pipe(
+            Effect.filterOrFail(done),
+            Effect.retry({ times: 100, schedule: Schedule.spaced("10 millis") }),
+          );
+        yield* until(
+          fs.readFileString(`/proc/${parent.pid}/comm`),
+          (comm) => Str.trim(comm) === "sleep",
+        );
+        yield* Effect.promise(() => Promise.resolve(parent.stdin.end()));
+        yield* until(fs.readFileString(`/proc/${pid}/stat`), Str.includes(") Z "));
+        expect(yield* processOf(pid)).toBeNull();
+        const withoutProc = FileSystem.makeNoop({ exists: () => Effect.succeed(false) });
+        expect(
+          yield* processOf(pid).pipe(Effect.provideService(FileSystem.FileSystem, withoutProc)),
+        ).toBeNull();
+      }).pipe(Effect.ensuring(Effect.sync(() => parent.kill()))),
+    );
+  },
+);
 
 test("a process that is not running has no start time", () =>
   runEffect(Effect.map(startedOf(2 ** 22 + 1), (started) => expect(started).toBeNull())));

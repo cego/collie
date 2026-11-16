@@ -2,6 +2,8 @@
 import { pipe } from "effect/Function";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { Effect, FileSystem, Path, Redacted } from "effect";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
@@ -18,7 +20,7 @@ export const signedInToSlack = (env: Pick<PluginEnv, "home" | "raw">, user: stri
     yield* fs.makeDirectory((yield* Path.Path).dirname(file), { recursive: true });
     yield* fs.writeFileString(
       file,
-      `SLACK_USER_TOKEN=xoxe.xoxp-1-user-fixture\nSLACK_USER_ID=${user}\nSLACK_TEAM_ID=T123\n`,
+      `SLACK_USER_TOKEN=xoxe.xoxp-1-user-fixture\nSLACK_USER_ID=${user}\nSLACK_TEAM_ID=T123\nSLACK_USER_SCOPES=chat:write,channels:read,groups:read,reactions:write,reactions:read,channels:history,groups:history,search:read\n`,
       { mode: 0o600 },
     );
   }).pipe(Effect.orDie);
@@ -34,6 +36,9 @@ export const botLeftOver = (env: Pick<PluginEnv, "home" | "raw">, left: boolean)
   }).pipe(Effect.orDie);
 
 export const fakeSlack = () => {
+  let after = (_method: string): Effect.Effect<void> => Effect.void;
+  let messages: Array<{ channel: string; ts: string; text: string; thread_ts?: string }> = [];
+  const reacted = new Map<string, Set<string>>();
   const calls: Array<{ method: string; parameters: Record<string, string> }> = [];
   const authorized: Array<{ method: string; by: "bot" | "user" | null }> = [];
   let refused: string | null = null;
@@ -56,7 +61,8 @@ export const fakeSlack = () => {
         refresh_token: `xoxe-1-refresh-${issued}`,
         expires_in: 43200,
         token_type: "user",
-        scope: "chat:write,channels:read,groups:read",
+        scope:
+          "chat:write,channels:read,groups:read,reactions:write,reactions:read,channels:history,groups:history,search:read",
       };
       return Response.json(
         parameters.grant_type === "refresh_token"
@@ -92,6 +98,50 @@ export const fakeSlack = () => {
         user_id: "U234",
         bot_id: "B345",
       });
+    if (method === "search.messages")
+      return Response.json({
+        ok: true,
+        messages: {
+          paging: { pages: 1 },
+          matches: Arr.map(messages, (one) => ({ ...one, channel: { id: one.channel } })),
+        },
+      });
+    if (method === "conversations.history")
+      return Response.json({
+        ok: true,
+        messages: Arr.filter(
+          messages,
+          (one) => one.channel === parameters.channel && one.ts === parameters.latest,
+        ),
+      });
+    if (method === "reactions.get") {
+      const message = Option.getOrUndefined(
+        Arr.findFirst(
+          messages,
+          (one) => one.channel === parameters.channel && one.ts === parameters.timestamp,
+        ),
+      );
+      return message
+        ? Response.json({
+            ok: true,
+            message: {
+              ...message,
+              reactions: Arr.map(
+                [...(reacted.get(`${message.channel}:${message.ts}`) ?? [])],
+                (name) => ({ name, users: ["U456"] }),
+              ),
+            },
+          })
+        : Response.json({ ok: false, error: "message_not_found" });
+    }
+    if (method === "reactions.add") {
+      const key = `${parameters.channel}:${parameters.timestamp}`;
+      const set = reacted.get(key) ?? new Set<string>();
+      if (set.has(parameters.name!)) return Response.json({ ok: false, error: "already_reacted" });
+      set.add(parameters.name!);
+      reacted.set(key, set);
+      return Response.json({ ok: true });
+    }
     if (method === "conversations.list" && by === "user")
       return Response.json({
         ok: true,
@@ -121,7 +171,15 @@ export const fakeSlack = () => {
   };
   const client = HttpClient.make((request) => {
     const method = Str.split(new URL(request.url).pathname, "/").at(-1)!;
-    const verb = ["conversations.list", "chat.getPermalink"].includes(method) ? "GET" : "POST";
+    const verb = [
+      "conversations.list",
+      "chat.getPermalink",
+      "conversations.history",
+      "search.messages",
+      "reactions.get",
+    ].includes(method)
+      ? "GET"
+      : "POST";
     if (request.method !== verb)
       return Effect.succeed(
         HttpClientResponse.fromWeb(request, Response.json({ ok: false, error: "unknown_method" })),
@@ -134,24 +192,30 @@ export const fakeSlack = () => {
       Rec.fromEntries(request.method === "GET" ? request.urlParams : new URLSearchParams(body)),
       (value) => (Redacted.isRedacted(value) ? Redacted.value(value) : value),
     );
-    return Effect.succeed(
-      HttpClientResponse.fromWeb(
-        request,
-        answer(
-          method,
-          parameters,
-          pipe(request.headers.authorization ?? "", Str.startsWith("Bearer xoxb-"))
-            ? "bot"
-            : /^Bearer (xoxe\.)?xoxp-/.test(request.headers.authorization ?? "")
-              ? "user"
-              : null,
-        ),
+    const response = HttpClientResponse.fromWeb(
+      request,
+      answer(
+        method,
+        parameters,
+        pipe(request.headers.authorization ?? "", Str.startsWith("Bearer xoxb-"))
+          ? "bot"
+          : /^Bearer (xoxe\.)?xoxp-/.test(request.headers.authorization ?? "")
+            ? "user"
+            : null,
       ),
     );
+    return after(method).pipe(Effect.as(response));
   });
   return {
     client,
     calls,
+    messages: (given: typeof messages) => {
+      messages = given;
+    },
+    reactions: () => Arr.flatMap([...reacted.values()], (one) => [...one]),
+    after: (hook: typeof after) => {
+      after = hook;
+    },
     /** Which kind of token authorized each call, in step with `calls`. */
     authorized,
     /** Fields laid over each code exchange's answer, until replaced. */

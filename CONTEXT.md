@@ -24,7 +24,7 @@
 
 **Harness catalogue** — The models and efforts each Harness installed on a Machine says it offers, read from the Harness itself by that Machine's host: each model's id, name, description, the efforts it takes, its default effort and whether the Harness hides it. A Harness that is not installed is absent. One that cannot be read says why, and its catalogue is Collie's own table instead. The `models.<harness>` setting adds a model a Harness hides. Read again at most every 30 minutes. `collie models`, chat and Desktop read the same catalogue.
 
-**Connection** — A service a Workflow uses and a Machine is logged in to: GitLab, GitHub, Linear, Helle or Slack. Slack is the human signed in as themselves: it posts notifications and a release's approval request as them, and Collie has no bot. Its reading is `ok`, `absent` (not set up), or `broken` (set up but not working). An `ok` reading names the account; another reading names its fix. For Linear, the account is the configured MCP server's name; finding that configuration does not verify OAuth. Desktop combines the Machines' readings and names a Machine whose login could be given to one that lacks it. This is a service login, separate from an **SSH connection** that carries traffic between computers.
+**Connection** — A service a Workflow uses and a Machine is logged in to: GitLab, GitHub, Linear, Helle or Slack. Slack is the human's own hand: it posts notifications and approval requests, reads a merge request's message, and reacts as them; Collie has no bot. Its reading is `ok`, `absent` (not set up), or `broken` (set up but not working). An `ok` reading names the account; another reading names its fix. For Linear, the account is the configured MCP server's name; finding that configuration does not verify OAuth. Desktop combines the Machines' readings and names a Machine whose login could be given to one that lacks it. This is a service login, separate from an **SSH connection** that carries traffic between computers.
 
 **Subscription** — The paid plan a Harness's login draws its usage from: `claude` (Claude Pro, Max or a team seat, through Claude Code's login) or `chatgpt` (ChatGPT, through Codex's login). It belongs to an account, not to a Machine. Machines logged in to the same account share one Subscription. Each of those Machines reads it for itself. An account is known by its id, never by its email alone, because one email can hold a personal plan and a team seat: Claude's by its organization and account, ChatGPT's by its account id and the login's email, because that id is the workspace's and every seat in it shares it. `pi` and `opencode` draw on the one their model's provider names (`anthropic/…`, `openai-codex/…`). Any other provider draws on nothing Collie reads. Not model-call usage, which Collie records as telemetry.
 
@@ -501,6 +501,21 @@ runs Collie. One per park, three per Run, one at a time per Machine; never for a
 **Short of memory**, or something it awaits that ends by itself. A Check Collie runs for it
 is shown the same way. A Run can have several at once, and each front door says the one it
 ranks first.
+
+**Watch** — A Run waiting, with no agent and no forge read of its own, until its merge
+request changes in a way that matters: a new head that has stood 5 minutes, a comment that
+is not Collie's, or the head's pipeline ending; a running pipeline is waited for 30 minutes
+at most. Merged or closed ends it. The merge watch judges it on each round from what it
+already read, and wakes the Run. Its card waits on the author, which is never overdue. A
+question asked while watching shares the Watch's name, and a wake withdraws it.
+
+**Follow-through** — A `review` of a merge request that, with `review.follow_through` on,
+follows it until it merges or closes: one Run per merge request and forge login, a signed
+note per round whose findings changed, a **Watch** between rounds, and a **Decision** to
+approve the reviewed head as the one thing it asks.
+
+With the setting on, a GitLab review request starts it automatically, except on the login's
+own merge request. Automatic and manual starts share the same Run.
 
 **Working** — A Task something is actually doing: a Run the host holds that has not
 settled, or a **Reopened** Run whose agent herdr reports working. A Run whose question a
