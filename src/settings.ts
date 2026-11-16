@@ -322,7 +322,7 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     group: "Agents",
     label: "Close an idle agent after",
     description:
-      "An agent of a finished Run that has been idle this long since the Run finished is closed, unless something still needs it. 0 never closes one.",
+      "How long an agent of a finished Run is idle before cleanup judges it. It is closed only where core proves nobody is viewing or typing into it, which core cannot yet, so it is kept. 0 never judges one.",
     unit: "minutes",
   }),
   of("agent_profile", "json", D.agentProfile, {

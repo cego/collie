@@ -546,8 +546,8 @@ that is how its steps ended. Derived from the delivery ledger and core's agent s
 nothing records it. Its card is in Working while that agent works and in Needs you while
 it is blocked, then stands on its own facts again. Steering reaches a finished Run's
 agents for as long as one is alive; a gone pane is the Follow-up Run's job (ADR-0041).
-A finished Run's agent is closed once it has been idle for an hour since the Run finished
-(**Cleanup**), so a Run can be Reopened only until then.
+**Cleanup** keeps a finished Run's idle agent while core cannot prove nobody is viewing or
+typing into it, so a Run can be Reopened until a Stop ends its agents.
 
 **Landed** — What a Task's work has done once everything it owes is settled and none of its
 Runs is still going. A Task owes each merge request its Runs carry, and a branch with none.

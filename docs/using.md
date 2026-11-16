@@ -735,8 +735,8 @@ card stands on its own facts again — Ready to ship, Waiting on you or Finished
 chat is told once that it finished what it was told. Nothing records it: the delivery
 ledger says what was sent and when, core says what the agent is doing, the step glyphs
 still show the Workflow's steps as they ended, and `run show` still says `succeeded`. A
-Run can be Reopened only until its agents close, an hour after it finished by default
-([Cleanup](#cleanup)). **Waiting on you** is work that ended without landing, and that nobody has
+Run can be Reopened until a Stop ends its agents: [Cleanup](#cleanup) keeps them while
+core cannot prove nobody is viewing or typing into them. **Waiting on you** is work that ended without landing, and that nobody has
 asked you about: an implement that succeeded and whose merge request is open, a plan that
 is ready to implement, a Run that failed, was stopped or was abandoned with a branch or a
 merge request behind it and has neither been resumed nor disposed of. A Task stays here
