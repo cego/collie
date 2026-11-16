@@ -1,4 +1,4 @@
-//! Code blocks coloured by rune-kit's built-in scanners where they know the language, else by
+//! Code blocks coloured by rune-kit's built-in lexers where they know the language, else by
 //! syntect with `two-face`'s grammars. Scopes become rune-kit's token kinds, so the kit's theme
 //! colours both alike.
 
@@ -97,7 +97,7 @@ pub fn knows(lang: &str) -> bool {
     SYNTAXES.find_syntax_by_token(lang).is_some()
 }
 
-/// rune-kit's scanners for a language they know, else syntect's grammars (ADR-draft D2).
+/// rune-kit's lexers for a language they know, else syntect's grammars (ADR-draft D2).
 pub fn colours(lang: Option<&str>, code: &str) -> Vec<Highlight> {
     if lang.is_some_and(rune_kit::syntax::known) {
         rune_kit::syntax::builtin(lang, code)
