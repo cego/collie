@@ -15,7 +15,7 @@ import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import { CommandLine } from "effect/process";
 import type { VerifySpec } from "./verify-spec";
-import { checkProof, owedLocally, owesNothingHere } from "./check-proof";
+import { checkProof, owedLocally, owesNothingHere, unstableWhy } from "./check-proof";
 import {
   passed,
   ranOneTest,
@@ -411,7 +411,7 @@ function approvedSetGaps(got: Collected): string[] {
     else if (Arr.some(runs, (v) => v.result === "fail" || v.expect === "fail"))
       gaps.push(`${spec.name} failed`);
     else if (Arr.some(runs, (v) => v.result === "unstable"))
-      gaps.push(`${spec.name} ran on a tree that moved under it`);
+      gaps.push(`${spec.name} ${unstableWhy(runs)}`);
     else gaps.push(`${spec.name} last passed on a different tree`);
   }
   return gaps;

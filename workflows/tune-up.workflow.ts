@@ -304,6 +304,9 @@ const Harnessed = Schema.Struct({
     }),
   ),
   warmup: Schema.Int,
+  limit: BenchmarkPlan.fields.limit.annotate({
+    description: "Seconds for all commands in one sample, or one tree's prepare; defaults to 600",
+  }),
   samples: Schema.optionalKey(
     Schema.Int.annotate({
       description: "samples per side, where the Run's own are too few to prove this plan",
@@ -323,9 +326,7 @@ const Repaired = Schema.Struct({
 /** A benchmark plan as the host measures by it, and why it is the plan now. */
 const Planned = Schema.Struct({
   // measure judges the plan, so warmup stays as Harness wrote it.
-  plan: BenchmarkPlan.mapFields(
-    flow(Struct.omit(["limit"]), (fields) => ({ ...fields, harness: Harness, warmup: Schema.Int })),
-  ),
+  plan: BenchmarkPlan.mapFields((fields) => ({ ...fields, harness: Harness, warmup: Schema.Int })),
   reason: text,
 });
 type Plan = typeof Planned.Type.plan;
@@ -1289,6 +1290,7 @@ export default defineWorkflow({
         commands: harnessed.commands,
         metrics: Arr.map(harnessed.metrics, Struct.omit(["counter"])),
         warmup: harnessed.warmup,
+        limit: harnessed.limit,
         samples: Math.max(budget.samples, harnessed.samples ?? 0),
         threshold: budget.threshold,
         tolerance: budget.tolerance,
