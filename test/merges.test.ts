@@ -112,6 +112,44 @@ const seeded = Effect.fn("merges.seeded")(function* () {
   };
 });
 
+test("the merge watch settles hidden history without looking for an interactive host", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { stateDir, run } = yield* seeded();
+      let hostLookups = 0;
+      const states = new Map<string, MrState>();
+      yield* settleMerges({
+        stateDir,
+        cwd: stateDir,
+        runs: [run],
+        views: [],
+        run: gitlab("merged"),
+        record: () => Effect.die("the MR is already recorded"),
+        stop: () => Effect.die("completed work"),
+        now: epochMs("2026-09-19T10:00:00Z"),
+        checked: new Map(),
+        states,
+        panels: new Map(),
+        making: new Set(),
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          exists: (path) =>
+            path === `${stateDir}/host.db`
+              ? Effect.sync(() => {
+                  hostLookups++;
+                  return false;
+                })
+              : fs.exists(path),
+        }),
+      );
+      expect(states.get(`${GITLAB}!65`)).toBe("merged");
+      expect((yield* readDispositions(run.dir)).at(-1)?.kind).toBe("merged");
+      expect(hostLookups).toBe(0);
+    }),
+  ));
+
 test("a closed forge refresh settles superseded work after its checkout disappeared", () =>
   runWithForge(
     Effect.gen(function* () {

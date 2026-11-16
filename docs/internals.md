@@ -109,6 +109,10 @@ advance. The lease is restored only while live, including after errors or cancel
 The answer keeps the board's read-your-writes coverage and updated readiness and merge-request facts.
 Slice boundaries hold for at most 250 ms.
 
+Background merge and cleanup checks read historical cards without interactive offers.
+Their settlement decisions still use the same merge states and outstanding work, but do
+not open clients back to the host for actions that only a front door displays.
+
 Physical file operations and commands release only the requesting lease's background hold while they wait.
 They retain its scheduler priority and original deadline. The hold returns after all overlapping
 waits finish, only while the lease remains live. Errors and cancellation use the same cleanup.
