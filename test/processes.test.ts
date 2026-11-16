@@ -40,7 +40,10 @@ test.skipIf(process.platform !== "linux")(
           Str.trim(yield* Effect.promise(() => new Response(parent.stdout).text())),
         );
         const fs = yield* FileSystem.FileSystem;
-        const until = <A>(read: Effect.Effect<A, unknown>, done: (value: A) => boolean) =>
+        const until = <A>(
+          read: Effect.Effect<A, PlatformError.PlatformError>,
+          done: (value: A) => boolean,
+        ) =>
           read.pipe(
             Effect.filterOrFail(done),
             Effect.retry({ times: 100, schedule: Schedule.spaced("10 millis") }),
@@ -49,7 +52,7 @@ test.skipIf(process.platform !== "linux")(
           fs.readFileString(`/proc/${parent.pid}/comm`),
           (comm) => Str.trim(comm) === "sleep",
         );
-        yield* Effect.promise(async () => parent.stdin.end());
+        yield* Effect.promise(() => Promise.resolve(parent.stdin.end()));
         yield* until(fs.readFileString(`/proc/${pid}/stat`), Str.includes(") Z "));
         expect(yield* processOf(pid)).toBeNull();
         const withoutProc = FileSystem.makeNoop({ exists: () => Effect.succeed(false) });
