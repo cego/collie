@@ -27,7 +27,6 @@ import {
 import { LinkDelivery, readLinkDeliveries } from "./run-links";
 import { appendLogLine } from "./run-log";
 import { readReplies, recordReply } from "./replies";
-import { hostname } from "node:os";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import {
   Cache,
@@ -175,6 +174,7 @@ import { nothingToLandFile } from "./standing";
 import { AwaitingJson, AwaitingSchema, overdueLine } from "./awaiting";
 import {
   autoMergingHere,
+  whatItSaid,
   forgeHere,
   mrIdIn,
   prepareMergeRequest,
@@ -184,6 +184,8 @@ import {
   shell as runShell,
 } from "./mr";
 import { redact } from "./redact";
+import { leaksIn, marker, ownRepository, refusal } from "./public-text";
+import { releasesOf } from "./releases";
 import { reportOf, type Recorded } from "./report";
 import { outcomeRecordsOf, type OutcomeRecords } from "./outcomes";
 import {
@@ -923,8 +925,6 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly existing?: string;
     /** Whether \`existing\` merges itself once green, so a push to it is a merge. */
     readonly autoMerge?: boolean;
-    /** The command lines an agent runs, written by the forge's adapter. */
-    readonly commands?: { readonly create: string; readonly comment: string };
   }
 
   /** What the host lends a workflow. Hold and stop are read fresh on every replay. */
@@ -1029,6 +1029,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       /** The branch a new merge request targets, where it is not the default branch. */
       readonly onto?: string | undefined;
     }) => Effect.Effect<MrReady>;
+    readonly publish: (options: { readonly runId: string; readonly title: string; readonly file: string; readonly onto?: string | undefined; readonly pushOnly?: boolean | undefined; readonly skipCi?: boolean | undefined }) => Effect.Effect<{ readonly url: string }, WorkflowError>;
     /**
      * The checkout's branch's open merge request where it merges itself once green, else null.
      * Fails, saying why, where the forge cannot be read: not knowing is not a no.
@@ -1943,6 +1944,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     severity: string;
     title: string;
     detail?: string;
+    internal?: boolean;
     /** A reviewer's answer to the implementer's reason for disputing this finding. */
     rebuttal?: string;
     /** Why a synthesis dropped this finding; only a dropped entry carries one. */
@@ -2005,6 +2007,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   export interface Synthesis extends ReviewOutput {
     summary: string;
+    public_summary?: string;
     dropped: Finding[];
     fixed: Fixed[];
   }
@@ -2109,6 +2112,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     evidence: CheckEvidence,
   ): FinalFix;
   export function renderReview(synthesis: Synthesis): string;
+  export function renderPublicReview(synthesis: SynthesisReport): string;
   export function formatFindings(findings: ReadonlyArray<Finding>): string;
 
   /** The prose a human reads, and the findings a card counts, where both are looked for. */
@@ -2183,6 +2187,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   export interface SynthesisReport extends ReviewReport {
     readonly summary: string;
+    readonly public_summary?: string;
     readonly dropped: ReadonlyArray<Finding>;
     readonly fixed: ReadonlyArray<Fixed>;
   }
@@ -2397,13 +2402,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** Text with every credential-shaped value replaced, before it is published. */
   export function redact(text: string): string;
 
-  /** What was actually collected, and by whom, for a merge request to say what it proved. */
+  /** Recorded evidence for prompts, or repository commands and results for public text. */
   export function renderEvidence(got: {
     readonly verifications: ReadonlyArray<Verification>;
     readonly final: Snapshot;
     /** The latest \`final\` of these is named with its verdicts. */
     readonly measurements?: ReadonlyArray<Measurement>;
-  }): string;
+  }, audience?: "internal" | "public"): string;
 
   /** Where a reference a Run's Outputs give may point: its own directory, its checkout, and a planning Run's. */
   export function evidenceRoots(own: string, cwd: string, workSource: string): string[];
@@ -4110,6 +4115,17 @@ export const hostLayer = (options: {
             Effect.map((env) => ({ herdr: new Herdr(env), env })),
             Effect.orDie,
           );
+      /** Why Public text bound for `project` is refused, or null; Collie's own repository takes any. */
+      const publicRefusal = <E, R>(text: string, project: Effect.Effect<string | null, E, R>) =>
+        Effect.gen(function* () {
+          const leaks = leaksIn(text);
+          if (leaks.length === 0) return null;
+          const { env } = yield* placing;
+          const bound = yield* project;
+          return bound === COLLIE_REPOSITORY || bound === ownRepository(releasesOf(env.raw))
+            ? null
+            : refusal(leaks);
+        });
       /** What resolving a Run's reviewed branch needs, as a build of the review's findings is placed (ADR-0054). */
       const reviewing = (runId: string) =>
         Effect.gen(function* () {
@@ -4579,10 +4595,17 @@ export const hostLayer = (options: {
               yield* unstopped(asked.runId, "files no issue");
               const here = yield* issueCheckout(asked.runId, asked.on);
               yield* checkIssueText(here, `${asked.title}\n${asked.body}`);
+              const title = redact(asked.title);
+              const body = redact(asked.body);
+              const refused = yield* publicRefusal(
+                `${title}\n${body}`,
+                Effect.succeed(here.project),
+              );
+              if (refused !== null) return yield* new WorkflowError({ reason: refused });
               const filed = yield* here.forge.fileIssue(
                 here.project,
-                redact(asked.title),
-                redact(asked.body),
+                title,
+                body,
                 here.cwd,
                 runShell,
               );
@@ -4596,10 +4619,13 @@ export const hostLayer = (options: {
               yield* unstopped(asked.runId, "comments on no issue");
               const here = yield* issueCheckout(asked.runId, asked.on);
               yield* checkIssueText(here, asked.body);
+              const body = redact(asked.body);
+              const refused = yield* publicRefusal(body, Effect.succeed(here.project));
+              if (refused !== null) return yield* new WorkflowError({ reason: refused });
               const commented = yield* here.forge.commentIssue(
                 here.project,
                 asked.number,
-                redact(asked.body),
+                body,
                 here.cwd,
                 runShell,
               );
@@ -4999,12 +5025,15 @@ export const hostLayer = (options: {
               const ref = mr === null ? null : mrRefOf(mr);
               if (mr === null || ref === null)
                 return { posted: false, why: "this Run recorded no merge request to share" };
+              const details = yield* forgeOf(ref).details(ref, asked.cwd, runShell);
+              if (details._tag !== "Details") return { posted: false, why: details.reason };
+              const title = redact(details.title);
+              const refused = yield* publicRefusal(title, Effect.succeed(ref.project));
+              if (refused !== null) return { posted: false, why: refused };
               const { env } = yield* placing;
               const slack = options.slack ?? slackApi;
               const api = slack(yield* slackUserToken(env, slack));
-              const details = yield* forgeOf(ref).details(ref, asked.cwd, runShell);
-              if (details._tag !== "Details") return { posted: false, why: details.reason };
-              const posted = yield* api.post(asked.channel, `<${mr}|${slackText(details.title)}>`);
+              const posted = yield* api.post(asked.channel, `<${mr}|${slackText(title)}>`);
               const link = yield* api.permalink(posted.channel, posted.ts).pipe(Effect.result);
               return link._tag === "Success"
                 ? { posted: true, link: link.success }
@@ -5132,12 +5161,141 @@ export const hostLayer = (options: {
               return yield* forgeOf(ref).startPipeline(ref, head, asked.cwd, runShell);
             }),
           ).pipe(Effect.orDie),
+        publish: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const place = yield* host.place(asked.runId);
+              const cwd = place.cwd;
+              const ready = yield* host.mr({ cwd, onto: asked.onto });
+              const fail = (reason: string) => new WorkflowError({ reason });
+              if (asked.skipCi && !asked.pushOnly)
+                return yield* fail("--skip-ci requires --push-only");
+              if (!asked.pushOnly && !asked.file)
+                return yield* fail("a merge request needs --file");
+              if (!ready.ok) return yield* fail(ready.reason);
+              if (!ready.branch) return yield* fail("a detached checkout cannot be published");
+              if (ready.autoMerge)
+                return yield* fail(
+                  "this branch's merge request merges automatically; turn off auto-merge before publishing",
+                );
+              const here = yield* forgeHere(
+                cwd,
+                runShell,
+                (yield* loadDefaults(options.userDir ?? dir)).gitlabHost,
+              );
+              if (!here.ok) return yield* fail(here.reason);
+              const path = yield* Path.Path;
+              const file = asked.pushOnly
+                ? ""
+                : yield* fs
+                    .readFileString(path.resolve(cwd, asked.file))
+                    .pipe(Effect.mapError(() => fail(`there is no ${asked.file} to publish`)));
+              const title = redact(asked.title);
+              const body = redact(file);
+              const existing = ready.existing ? mrRefOf(ready.existing) : null;
+              const panel =
+                existing === null ? null : yield* here.forge.details(existing, cwd, runShell);
+              if (
+                ready.existing &&
+                (panel === null || panel._tag !== "Details" || !panel.targetBranch)
+              )
+                return yield* fail("the existing merge request's target branch could not be read");
+              const target =
+                (panel?._tag === "Details" ? panel.targetBranch : asked.onto) ??
+                Str.trim(
+                  (yield* runShell(
+                    "git",
+                    ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+                    cwd,
+                  )).stdout,
+                );
+              if (!target)
+                return yield* fail("origin's default branch could not be read; name --onto");
+              const remote = `refs/remotes/origin/${target}`;
+              const tracked = yield* runShell("git", ["rev-parse", "--verify", remote], cwd);
+              const base = yield* runShell(
+                "git",
+                ["merge-base", "--", tracked.code === 0 ? remote : target, "HEAD"],
+                cwd,
+              );
+              if (base.code !== 0 || !Str.trim(base.stdout))
+                return yield* fail(whatItSaid(base) || `cannot find the merge base with ${target}`);
+              const commits = yield* runShell(
+                "git",
+                ["log", "--format=%h%x00%s%x00%B%x00", `${Str.trim(base.stdout)}..HEAD`],
+                cwd,
+              );
+              if (commits.code !== 0) return yield* fail(whatItSaid(commits));
+              const texts = [
+                { where: "title", text: title },
+                { where: ready.existing ? "note" : "description", text: body },
+              ];
+              const parts = Str.split(commits.stdout, "\0");
+              for (let i = 0; i + 2 < parts.length; i += 3)
+                texts.push({
+                  where: `commit ${Str.trim(parts[i]!)} ${parts[i + 1]}`,
+                  text: parts[i + 2]!,
+                });
+              const refused: string[] = [];
+              for (const one of texts) {
+                const reason = yield* publicRefusal(one.text, Effect.succeed(here.project));
+                if (reason !== null) refused.push(`${one.where}: ${reason}`);
+              }
+              if (refused.length) return yield* fail(Arr.join(refused, "\n"));
+              if (!asked.pushOnly && !ready.existing && !Str.trim(title))
+                return yield* fail("a new merge request needs --title");
+              const pushed = yield* runShell(
+                "git",
+                [
+                  "push",
+                  "-u",
+                  "origin",
+                  "HEAD",
+                  ...(asked.skipCi && here.forge.name === "gitlab" ? ["-o", "ci.skip"] : []),
+                ],
+                cwd,
+              );
+              if (pushed.code !== 0) return yield* fail(whatItSaid(pushed));
+              if (asked.pushOnly) return { url: ready.existing ?? "" };
+              const marked = `${body}\n\n${marker(asked.runId)}`;
+              if (ready.existing) {
+                const ref = mrRefOf(ready.existing);
+                if (ref === null) return yield* fail(`cannot read ${ready.existing}`);
+                const posted = yield* here.forge.post(ref, marked, false, cwd, runShell);
+                if (!posted.ok) return yield* fail(posted.message);
+                return { url: ready.existing };
+              }
+              const opened = yield* here.forge.create(
+                {
+                  project: here.project,
+                  branch: ready.branch,
+                  title,
+                  body: marked,
+                  assignee: ready.assignee,
+                  onto: asked.onto,
+                },
+                cwd,
+                runShell,
+              );
+              if (!opened.ok) return yield* fail(opened.reason);
+              return { url: opened.url };
+            }).pipe(
+              Effect.mapError((error) =>
+                Schema.is(WorkflowError)(error)
+                  ? error
+                  : new WorkflowError({ reason: String(error) }),
+              ),
+            ),
+          ),
         note: (asked) =>
           under(
             Effect.gen(function* () {
               const ref = mrRefOf(yield* mergeRequestOf(fs, dir, asked.runId));
               if (ref === null) return { ok: false, message: "this Run has no merge request" };
-              return yield* forgeOf(ref).post(ref, asked.body, false, asked.cwd, runShell);
+              const body = redact(asked.body);
+              const refused = yield* publicRefusal(body, Effect.succeed(ref.project));
+              if (refused !== null) return { ok: false, message: refused };
+              return yield* forgeOf(ref).post(ref, body, false, asked.cwd, runShell);
             }),
           ).pipe(Effect.orDie),
         claim: <E, R>(asked: {
@@ -5408,7 +5566,7 @@ export const hostLayer = (options: {
               return yield* new WorkflowError({
                 reason: `${mr} has no comment ${asked.comment} to reply to`,
               });
-            const signature = `Posted by Collie's Run ${asked.runId} on `;
+            const signature = marker(asked.runId);
             const record = (body: string, at: string) =>
               under(
                 recordReply(runDir(dir, asked.runId), {
@@ -5441,7 +5599,10 @@ export const hostLayer = (options: {
                 yield* record(posted.body, posted.at);
               return "already" as const;
             }
-            const body = redact(`${asked.body}\n\n${signature}${hostname()}.`);
+            const said = redact(asked.body);
+            const refused = yield* publicRefusal(said, Effect.succeed(ref.project));
+            if (refused !== null) return yield* new WorkflowError({ reason: refused });
+            const body = `${said}\n\n${signature}`;
             const replied = yield* under(
               forgeOf(ref).reply(ref, comment, body, asked.cwd, runShell),
             );
@@ -5619,18 +5780,34 @@ export const hostLayer = (options: {
         post: (asked) =>
           under(
             fs.readFileString(asked.file).pipe(
+              Effect.map(redact),
               Effect.flatMap((body) =>
                 Effect.flatMap(loadDefaults(options.userDir ?? dir), (defaults) =>
-                  postNote(
-                    {
-                      target: asked.target,
-                      cwd: asked.cwd,
+                  Effect.gen(function* () {
+                    const refused = yield* publicRefusal(
                       body,
-                      approve: asked.approve === true,
-                      gitlabHost: defaults.gitlabHost,
-                    },
-                    runShell,
-                  ),
+                      Effect.suspend(() => {
+                        const project = parseMrTarget(asked.target)?.project ?? null;
+                        return project !== null
+                          ? Effect.succeed(project)
+                          : Effect.map(
+                              forgeHere(asked.cwd, runShell, defaults.gitlabHost),
+                              (here) => (here.ok ? here.project : null),
+                            );
+                      }),
+                    );
+                    if (refused !== null) return { ok: false, message: refused };
+                    return yield* postNote(
+                      {
+                        target: asked.target,
+                        cwd: asked.cwd,
+                        body: `${body}\n\n${marker(asked.runId)}`,
+                        approve: asked.approve === true,
+                        gitlabHost: defaults.gitlabHost,
+                      },
+                      runShell,
+                    );
+                  }),
                 ),
               ),
               Effect.orElseSucceed(() => ({

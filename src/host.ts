@@ -2581,6 +2581,31 @@ const frontDoorHandlers = (
               ),
             ),
           ),
+        publish: ({ runId, title, file, onto, pushOnly, skipCi, request }, { client }) =>
+          once(
+            runDir(dir, runId),
+            {
+              operation: "publish",
+              request,
+              ...whoOf(client),
+              asked: {
+                title,
+                file,
+                onto: onto ?? null,
+                pushOnly: pushOnly ?? false,
+                skipCi: skipCi ?? false,
+              },
+              result: Schema.Struct({ url: Schema.String }),
+            },
+            Effect.gen(function* () {
+              yield* known(runId);
+              const published = yield* (yield* Host)
+                .publish({ runId, title, file, onto, pushOnly, skipCi })
+                .pipe(Effect.mapError((error) => new HostRefused({ reason: error.reason })));
+              if (!pushOnly) yield* registry.mergeRequest(runId, published.url);
+              return published;
+            }),
+          ).pipe(Effect.provideContext(hosted)),
         withdrawNote: ({ runId, note, request }, { client }) =>
           once(
             runDir(dir, runId),
