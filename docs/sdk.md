@@ -744,6 +744,14 @@ fix — and the message says whether the approval landed. Its refusal is its mes
 merge request, no CLI or login for its forge, or one assigned to whoever is running this —
 whose findings are theirs to fix rather than to post to themselves.
 
+Every host operation that sends **Public text** (`CONTEXT.md`) checks it first: `host.post`,
+`host.note`, `host.reply`, `host.fileIssue`, `host.commentIssue` and
+`host.shareForApproval`, whose text is the merge request's title. Text that names Collie, a
+Run or its id, a `collie` command, a plan ticket or Collie's own paths and vocabulary is
+refused, naming each phrase and why; it is never rewritten. Each refuses in its usual way:
+a message, a `why`, or a `WorkflowError`. A target in the repository the installation's
+releases come from takes any text. The phrases are data in `src/public-text.ts`.
+
 `mrForgeFacts(target)` is pure: for an `mr:` target it gives the forge's name and noun and
 the `diff`, `view` and `checkout` command lines a prompt hands a reviewer, written by that
 forge's adapter, and null for any other target. `target_repo` is still filled in for a
@@ -784,14 +792,15 @@ and `noun` is `merge request` or `pull request`; `provider` is `gitlab` or `gith
 its forge's adapter writes it, and `branch` the checkout's branch, empty on a detached
 one: the facts a Clearance names. `existing` is the URL of this branch's
 open one, or empty, and `autoMerge` whether it merges itself once green — a step that
-pushes to it should not run. `commands.create` and `commands.comment` are the command
-lines an agent runs to open one (with `<title>` and `<file>` left to fill in) or to note on
-`existing`, written by the forge's adapter so a prompt names no CLI of its own.
+pushes to it should not run. Agents publish with
+[`collie run publish`](cli.md#publish-a-runs-merge-request). The host checks the title,
+file, and commit messages before pushing and opening or noting the merge request.
 One question rather than two,
 because a step that cannot reach its forge has
 nothing to fill in — check it before you start an agent, and say the reason where it is no.
 Once one is open, `host.mergeRequest(runId, url)` records it as a fact of the Run: its card
-links it, waits on it, and follows what the forge says of it.
+links it, waits on it, and follows what the forge says of it. The publish command records
+the URL itself.
 
 `host.integrate(runId, cwd)` fetches the default branch and, where it has moved, merges it
 into the branch checked out at `cwd` with a merge commit: never a rebase, never a push.
@@ -833,6 +842,9 @@ agent starts on a skill the work cannot do without.
 Run just filed: a forge's open listing can lag a filing by seconds.
 `host.fileIssue({ runId, title, body })` returns the filed issue's `number` and `url`.
 `host.commentIssue({ runId, number, body })` comments on one there.
+Each takes `on: "collie"` to ask Collie's own repository, github.com/cego/collie, instead
+of the Run's checkout, with the Machine's GitHub login. Its text is checked the same way,
+with no checkout of the Run's exempted.
 
 Before filing or commenting, the host redacts credential-shaped values with the
 Conversation's redaction. It refuses text naming another checkout under the Projects
@@ -967,10 +979,10 @@ Call it inside a journaled Activity after the operator agrees to share.
 The shipped release workflow asks the operator to share the address themselves when Slack is unavailable.
 
 `host.reply({ runId, cwd, comment, body })` replies to the comment with id `comment` on
-the merge request the Run recorded, posting `body` as it is, in the comment's thread where
-it has one. It never resolves a thread. It answers `posted`, or `already` where the forge
+the merge request the Run recorded, posting `body` with only a hidden marker,
+`<!-- collie:<run> -->`, after it, in the comment's thread where it has one. It never resolves a thread. It answers `posted`, or `already` where the forge
 reads the comment as answered — as after a restart that posted the reply before its
-Activity was journaled — and fails with `WorkflowError` when the forge refuses. Take each
+Activity was journaled, a reply it finds by that marker — and fails with `WorkflowError` when the forge refuses. Take each
 reply inside an Activity of its own. `host.reviewHead({ runId, cwd, commits })` reads the
 merge request's `head` as the forge reports it, which of `commits` it `carries` once
 origin is fetched, and the ids of its external comments still `open`. `settleAnswers`
@@ -1443,6 +1455,15 @@ it, each with its own fix. A module of your own can import it the same way.
 write. Hand one to `agentWork` and what comes back is its own type — the same contract the
 shipped steps are held to, not a copy of it.
 
+`SynthesisSchema` accepts an optional `public_summary` for the MR's audience. A finding's
+optional `internal: true` marks a concern about Collie's own process. `renderReview`
+retains the complete review and fixed history for `review.md`; `renderPublicReview` uses
+the public summary and non-internal live findings, in severity order. With no public findings, it says there is
+nothing to fix. Older Outputs use `summary` as the public summary and unmarked findings
+remain public. The shipped review workflow writes this rendering to `public-review.md`
+beside `review.md`, then passes that file to `host.post` for the Public text check.
+Approval still follows every live finding, including internal ones.
+
 A review's `verdict` of `findings` means it found some. A fix's means it left some
 unresolved, each listed in `findings`. What it fixed goes in `fixed`, and what it disputes
 goes in `disputed`. With nothing left unresolved its verdict is `clean`. The fix contract's
@@ -1531,7 +1552,10 @@ is no flag to ask for it.
 `host.approved(runId)` is the Run's checks as they stand now, for a prompt to name what the
 work will be held to — `renderApproved` writes it out — and
 `renderEvidence(host.evidence(...))` is what was actually collected and by whom, with the latest `final` Measurement, for a
-merge request to say what it proved. `redact(text)` takes every credential-shaped value out
+prompt to say what was proved. Use `renderEvidence(evidence, "public")` for published text:
+it lists repository commands and results, preserving earlier-tree and expected-failure qualifiers,
+and omits private check labels, collectors, and measurement records.
+`redact(text)` takes every credential-shaped value out
 of text you publish yourself, as Collie does before it files an issue. `renderRecordedChecks` writes the same journal for a
 reviewer — the latest of each check, by whom, whether on the tree in front of it, when,
 whether the same command was seen failing on an earlier tree, and the baseline — so a review reads what was run rather than running it again. The list can grow while the Run works, since an
@@ -1877,7 +1901,8 @@ it. Implement's `Built` carries them as an optional `criteria` list.
 `unmetCriteria(ticket, criteria, answers)` turns each criterion left unanswered or not met
 into a blocking finding against the ticket; an `after merge` answer is neither.
 `afterMergeAnswers(criteria, answers)` is each criterion answered `after merge`, which
-shipped `implement` names in its merge request as not settled by the Run. `answerFor(criterion, answers)` is the
+shipped `implement` names in its merge request under **Open questions**, without ticket filenames.
+`answerFor(criterion, answers)` is the
 answer a criterion has: one to its whole wording, where a copy that dropped the criterion's
 formatting still counts, so an answer to earlier wording does not answer an amended criterion. Shipped
 `implement` hands what is unmet back to the builder before any reviewer is launched, and

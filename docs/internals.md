@@ -834,18 +834,18 @@ one `replySchemas` record, and the test asserts its table covers every key of it
 adding a decoded call without a row turns that test red rather than going unchecked.
 The one exception is `agent explain --json`, which herdr's schema gives only as `explain:
 true`, so there is nothing to check its struct against. `promptBox` reads one field of it,
-the `prompt_box_body` rule's `evidence.region_preview`; the pinned 0.9.3 answers it
+the `prompt_box_body` rule's `evidence.region_preview`; the pinned 0.9.5 answers it
 (`herdr agent explain --file <screen> --agent claude --json` checks a binary without a
 server), and a reply without it reads as a box nobody can see, which asks a
 human rather than pressing Enter.
 
 `machine list --json` is the third: a bare array of saved machines. Its struct,
 `HerdrMachine` in `src/peers-model.ts`, is what Desktop decodes too, and
-`test/herdr-contract.test.ts` holds it to what the pinned 0.9.3 prints.
+`test/herdr-contract.test.ts` holds it to what the pinned 0.9.5 prints.
 
 `session list --json` is the second: it answers with a bare `{ sessions }` rather than an
 envelope, so it is not in the socket schema either. The host reads it to find every running
-session on the Machine (the pinned 0.9.3 has the command), and an answer it cannot decode
+session on the Machine (the pinned 0.9.5 has the command), and an answer it cannot decode
 reads as the one session the host inherited. Each
 session's agents come from `agent list` with that session's `HERDR_SOCKET_PATH`, and its
 changes from `events.subscribe` on its socket: pane lifecycle events and each agent pane's
@@ -870,7 +870,7 @@ Where a checkout goes is Collie's own setting, `worktrees_directory`
 
 One gotcha the engine works around rather than reports: `tab create --cwd` and
 `pane split --cwd` echo the directory back but leave the pane's shell in the workspace
-directory (probed against herdr 0.8.2; not yet probed against the pinned 0.9.3). So every
+directory (probed against herdr 0.8.2; not yet probed against the pinned 0.9.5). So every
 pane the engine opens is `cd`-ed into
 `run.record.cwd` explicitly before its agent starts, and that `cd` is what puts a run's
 tabs in one workspace and its work in another directory. Keep both: the `--cwd` is
@@ -1279,8 +1279,10 @@ the attempt, cannot be told from Collie's, and is taken as the merge the go aske
 
 The interface decodes the library's issues into the shared issue shape. Filing an issue
 uses the returned number and URL. An issue or review write that fails is not sent again,
-apart from the single resend after a 401; its reason asks the caller to inspect the issue
-or merge request before retrying, since a lost answer may have followed a successful write.
+apart from the single resend after a 401. An issue write with no answer, or a 5xx, and any
+failed review, says to inspect the issue or merge request before retrying, since a lost answer
+may have followed a successful write; one the forge refused with a 4xx, or never sent for want
+of a login, says only why.
 
 The Host service chooses the forge of the Run's recorded checkout. Before publishing,
 it applies Conversation redaction and checks text against other checkouts, including
@@ -1669,7 +1671,7 @@ Collie's native desktop is built from the release tag by `desktop-native`, which
 `.github/workflows/rune-bundle.yml` on Linux and macOS. The Rune shell and compiled
 TypeScript core share the existing stable identity, `dk.cego.collie.desktop`, and the
 existing installer and update artifact names. The installed product is named **Collie**.
-`desktop-rune/scripts/bundle.ts` supplies the official brand icons, USTAR update archives,
+`desktop/scripts/bundle.ts` supplies the official brand icons, USTAR update archives,
 and metadata the old app's updater accepts, so its next update replaces the webview app in
 place. Credentials, saved Machines, conversations and settings keep their existing paths.
 See [the cutover decision](adr/0067-collie-replaces-the-webview-desktop-in-place.md).
@@ -1715,8 +1717,8 @@ Tests live in `test/`, with a fake herdr and shared fixtures under `test/support
 `herdr.ts` is the only boundary, an end-to-end test drives the real engine against that
 fake.
 
-`check` runs `check:static`, which is formatting, lint, and type checking in parallel, then
-tests after all three pass. Keeping those phases separate avoids CPU contention with the subprocess-heavy tests.
+`check` runs `check:static`, which is formatting, lint, type checking and the generated Rust
+types' freshness (`rune-types:check`) in parallel, then tests after all four pass. Keeping those phases separate avoids CPU contention with the subprocess-heavy tests.
 The individual scripts in `package.json` still work for focused feedback.
 
 Lint enables Effect's correctness, effect-native, and strict presets. Effect findings
@@ -1730,20 +1732,11 @@ Typechecking runs tsrs, a Rust port of TypeScript 7.1, with `--fast`: it reports
 diagnostics are off in `tsconfig.json`, so typechecking needs no Effect plugin; lint
 reports them.
 
-`lint:vue` prepares Nuxt's declarations and projects Vue scripts and template expressions
-through Vue's compiler before running the same rules. Diagnostics map back to the Vue
-source. Static attribute and slot names are excluded because their generated JavaScript
-bindings are not expressions written by the author. Both lint commands run in CI through
-`lint` and `check:static`.
-
 An exception names the missing equivalent or compatibility boundary where it applies.
 Examples include callback string replacements, synchronous process-exit cleanup,
 Ed25519 signing, erased errors from authored workflows, and the public `HostApi.usage()`
 method. Numeric schemas require finite values; measurement ratios and interval bounds
-retain infinity where the statistical model requires it. Electrobun's Cottontail config
-loader cannot parse Effect's modules, so its signing-config helper remains native.
-Pinned Hutch also starts build hooks in Cottontail. Their small native launchers run the
-Effect implementations under Bun, preserving environment, output, and exit status.
+retain infinity where the statistical model requires it.
 
 Workflow and cluster modules remain architectural dependencies under ADR-0014, so their unstable-API rule is
 disabled. Vendored lint sources and author workflow fixtures keep their separate
@@ -1757,9 +1750,9 @@ Root tests import Desktop modules and libraries, so the root `bun install` insta
 Desktop's dependencies too, frozen to `desktop/bun.lock`. After changing Desktop's
 dependencies, run `bun install` in `desktop/` first: the root install refuses a stale
 Desktop lockfile. CI relies on that one install before its root gate.
-The core's TypeScript is checked by `cd desktop && bun run typecheck`. The Rune
-workspace has its own format, clippy, tests and bundle jobs; the required CI gate includes
-both native platform bundles. The removed Nuxt app needs no Vue compiler or lint plugin.
+CI's `desktop` job checks the core's TypeScript (`cd desktop && bun run typecheck`) and
+the Rune workspace's format, clippy and tests; the required CI gate also includes both
+native platform bundles.
 
 A test leaves nothing behind. `test/support/hosts.ts`, a preload, gives each test file a
 temporary root of its own, `TMPDIR` inside it, and removes it when the file ends. Every
@@ -1867,7 +1860,7 @@ the suite changes substantially.
 Missing or stale entries cannot skip a test; deleting the scratch file restores the seed.
 
 CI runs `bun run check` in two halves. The `static` job runs `bun run check:static`
-(format check, lint and typecheck), then the build, smoke and contract check. The `suite`
+(format check, lint, typecheck and the Rust-types check), then the build, smoke and contract check. The `suite`
 job is a matrix of three shards, each running `bun run test --shard=i/3` on a runner of its
 own. Bun splits the files by their recorded durations, and no shard restores a timings
 cache: each balances on the committed seed alone, so all three split a commit's files
@@ -2028,7 +2021,7 @@ its time.
   says as `invalid_state`; each act's result carries the Run's revision after it, which the
   caller's next frame is at least. A request without `parts` is sent whole records, their
   minutes said, on every change and tick, as an older Desktop expects.
-  The native view keeps records subscribed after they close (`desktop-rune/board/src/record.rs`
+  The native view keeps records subscribed after they close (`desktop/board/src/record.rs`
   owns their lifetime): the open one, the last 8 opened and a
   card pointed at for 150 ms, at most 16 MB of frames as Desktop weighs them, the least
   recently opened going first and never the open one. A kept record opened again has its
@@ -2137,11 +2130,10 @@ its time.
 The native app's Settings has **Record timing** (off by default), which appends view and
 core marks to `record-timing.log` in the existing desktop state directory, one JSON line
 each. `bench/record-open/summarize.ts` summarises those logs; `desktop/README.md` describes
-the workflow. `bench/desktop-start/` retains the isolated host fixture for startup measurements.
-
-The Nuxt/CDP benchmark driver was retired with the webview app. Its reusable fixture,
-statistics, comparison and log analysis remain in `bench/record-open/`. Historical browser
-measurements are not measurements of the native renderer.
+the workflow. `bench/desktop-start/run.ts --rune` measures a native bundle's start against
+the same isolated host fixture. `bench/record-open/` holds the fixture, statistics,
+comparison and log analysis; browser measurements taken before the native app are not
+measurements of it.
 
 ### Test-suite measurements, 26 October 2026
 

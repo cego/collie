@@ -74,6 +74,7 @@ import {
 } from "./compaction";
 import {
   processOf,
+  processAbsent,
   readsSessions,
   sessionOf,
   stillRunning,
@@ -1376,6 +1377,8 @@ const stopCodex = (
       left: [],
       noted: target.noted,
     });
+    if (server === null && !(yield* processAbsent(target.pid)))
+      return refused(`pid ${target.pid} is live but its process identity could not be read`);
     if (server === null)
       return yield* survivors(
         target.pid,
@@ -1556,10 +1559,28 @@ const survivors = (
         left: noted,
         noted,
       } satisfies Stopped;
+    const absent = yield* processAbsent(root).pipe(
+      Effect.repeat({
+        until: Boolean,
+        schedule: Schedule.spaced(50).pipe(Schedule.while(({ now }) => now < deadline)),
+      }),
+    );
+    if (!absent)
+      return yield* new Cause.UnknownError(root, `server process ${root} is not proven absent`);
     const remaining = Effect.gen(function* () {
       return sessions
         ? yield* sessionOf(root)
-        : yield* Effect.filter(noted, (one) => stillRunning(one));
+        : yield* Effect.filter(noted, (one) =>
+            Effect.gen(function* () {
+              const now = yield* processOf(one.pid);
+              if (now !== null) return now.started === one.started;
+              if (yield* processAbsent(one.pid)) return false;
+              return yield* new Cause.UnknownError(
+                one.pid,
+                `process ${one.pid} could not be inspected`,
+              );
+            }),
+          );
     });
     for (const one of yield* remaining) if (proven(one)) yield* once(one);
     const until = Math.max(deadline, (yield* Clock.currentTimeMillis) + SURVIVOR_GRACE_MS);
@@ -1596,7 +1617,7 @@ const survivors = (
       Effect.succeed<Stopped>({
         state: "failed",
         turns,
-        reason: `its server exited, but its child processes could not be inspected (${reason(cause)})`,
+        reason: `its server or child processes could not be proven stopped (${reason(cause)})`,
         signalled,
         left: noted,
         noted,

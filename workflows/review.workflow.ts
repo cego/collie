@@ -31,6 +31,7 @@ import {
   forecast,
   panelOf,
   remainingDisputes,
+  renderPublicReview,
   settleRound,
   splitDisputed,
   step,
@@ -267,6 +268,7 @@ export default defineWorkflow({
       let rallied = 0;
       let seen: { readonly at: number; readonly keys: ReadonlyArray<string> } | null = null;
       let settled = "";
+      let postRefusal = "";
       // A dispute is carried into the next review rather than re-argued, as in implement.
       let disputed: ReadonlyArray<Finding> = [];
       for (;;) {
@@ -303,6 +305,7 @@ export default defineWorkflow({
               prompt: Arr.join(
                 [
                   "What next?",
+                  ...(postRefusal === "" ? [] : [postRefusal]),
                   ...(settled === "" ? [] : [`The rally stopped: ${settled}.`]),
                   ...(unfixable === ""
                     ? []
@@ -319,6 +322,7 @@ export default defineWorkflow({
             { round: asks },
           );
           settled = "";
+          postRefusal = "";
           if (chosen === FIX) {
             fixing = true;
             rallied = 0;
@@ -330,17 +334,20 @@ export default defineWorkflow({
         if (chosen === DONE) return `${synthesis.findings.length} finding(s), not posted`;
 
         if (chosen === POST) {
+          const file = `${place.dir}/public-review.md`;
+          yield* fs.writeFileString(file, renderPublicReview(synthesis)).pipe(Effect.orDie);
           const posted = yield* host.post({
             runId: run.id,
             target: asked.target,
             cwd: place.cwd,
-            file: `${place.dir}/${REVIEW_FILE}`,
+            file,
             // A review that found nothing still live to fix is one the forge should count.
             approve: split.live.length === 0,
           });
           yield* host.record(run.id, posted.message);
           // A note that did not land is not an answer, so the menu comes back.
           if (posted.ok) return posted.message;
+          postRefusal = posted.message;
           continue;
         }
 

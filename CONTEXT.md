@@ -54,6 +54,11 @@ restart ([ADR-0046](docs/adr/0046-an-attachment-is-uploaded-once-and-belongs-to-
 
 **Output** — A structured JSON file an agent writes to the Run directory for one operation (e.g. a review verdict + findings). It is decoded against the Workflow's schema before anything believes it, and one that does not decode buys one repair. One still unusable after its repair parks the Run at its Step, and a resume reads the file again before giving one more repair. Workflows read Outputs, never terminal text. Collie waits for it against the agent's idle time only: while herdr reports the agent working or blocked, a question it asked is open on the Run, or a `collie verify` it asked for waits while its Machine is **Short of memory**, the budget does not run (ADR-0062). When the budget runs out, the Run is parked and keeps waiting: an Output written later is collected without a resume (ADR-0062, amended 2026-10-19).
 
+Managed server health has a separate readiness deadline. A terminal reporting
+working or blocked does not pause that deadline while its server remains unhealthy.
+A health park keeps collecting usable Output. Recovery requires proof that the
+owned predecessor is Quiet and preserves unresolved Delivery receipts.
+
 **Herd** — One herdr session: every workspace in it. On a Machine whose
 `terminal_backend` is `core`, one herdr-core session instead: every terminal in it. The
 scope of the board, the conversation, proposals, the budget and elections. Keyed by
@@ -305,6 +310,10 @@ from: its question tool never shows the agent as blocked. When core loses an inc
 Run still running — its holder lost, `hc server stop`, a reboot — the host starts the next
 one: a fresh terminal under the same name, in the same checkout, resuming the harness
 session recorded at launch. An incarnation Collie ended is never started again.
+
+A managed server can exit while its terminal remains listed. That terminal's status
+does not prove the worker alive. Replacement still requires the recorded ownership
+and Quiet checks, and never repeats a completed Step.
 
 **Drift** — A recorded evidence–Intent mismatch. `rule` drift Collie establishes itself;
 `semantic` drift is judged against bounded actual evidence. Nothing passes on an absence.
@@ -774,7 +783,9 @@ not one: a **Stage Run** asks for no Go, because its rollback takes it back.
 
 **Fan-in** — Combining several parallel Outputs into one: an operation handed the other operations' Output files, which reconciles them itself. Nothing unions findings for it.
 
-**Synthesis** — What the fan-in over reviewers writes, or a lone reviewer writes itself: one review of the change, deduplicated across models, disagreements settled from the diff, plus a `summary` and the findings it `dropped` with a reason for each. It is rendered to `review.md`, which is what a human reads and what a review may post. It is the loop's gate: the fix sees the Synthesis, never the raw reviews.
+**Synthesis** — What the fan-in over reviewers writes, or a lone reviewer writes itself: one review of the change, deduplicated across models, disagreements settled from the diff, plus a `summary` and the findings it `dropped` with a reason for each. The complete review is rendered to `review.md` for the human and the loop. A review posts its public rendering: `public_summary` for the MR's audience and findings not marked `internal`. An older Output uses its `summary` as the public summary. Internal findings still count against approval. The fix sees the Synthesis, never the raw reviews.
+
+**Public text** — What Collie sends outside Collie in the human's name: MR/PR notes, replies, titles and descriptions, commit messages, and issue comments outside Collie's own repository. It reads as the human's, for that repository's audience. It never names Collie, a Run, a step, an agent, a card or a `collie` command, and never states a rule only Collie's process has. The host checks it before sending it, and marks Collie's own posts only with a hidden HTML comment ([ADR-draft-public-text-reads-as-the-humans](docs/adr/draft-public-text-reads-as-the-humans.md)).
 
 **Disputed** — A finding the implementer declined, with its reason. The reviewers are shown the reason, and a disputed finding no longer drives the loop, so the Run converges and the human decides. A reviewer who can answer the reason raises it again with a `rebuttal`, which puts the finding back in front of the implementer.
 

@@ -7,7 +7,7 @@ import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Struct from "effect/Struct";
 import * as Rec from "effect/Record";
-import { DateTime, Effect, FileSystem, Option, Path, Schema } from "effect";
+import { DateTime, Effect, FileSystem, Option, Path, Schema, Semaphore } from "effect";
 import type { ForgeFacts } from "./board";
 import { readEnv } from "./env";
 import {
@@ -54,6 +54,7 @@ export type MrPanels = Map<string, { readonly at: number; readonly panel: MrPane
  * `MERGE_POLL_MS` old or a front door asked for it fresh.
  */
 export const watchedMr = Effect.fn("Merges.watchedMr")(function* <R>(opts: {
+  readonly stateDir: string;
   readonly panels: MrPanels;
   readonly target: string;
   readonly cwd: string;
@@ -66,8 +67,33 @@ export const watchedMr = Effect.fn("Merges.watchedMr")(function* <R>(opts: {
   const id = yield* mrIdIn(opts.target, opts.cwd, opts.run);
   const known = id === null ? undefined : opts.panels.get(id);
   if (known !== undefined && !opts.fresh && known.at + MERGE_POLL_MS > opts.now) return known.panel;
-  const panel = yield* forgeOf(ref).details(ref, opts.cwd, opts.run);
+  const fs = yield* FileSystem.FileSystem;
+  const cwd = (yield* fs.exists(opts.cwd).pipe(Effect.orElseSucceed(() => false)))
+    ? opts.cwd
+    : opts.stateDir;
+  const resolved = id === null ? ref : mrRefOf(`mr:${id}`)!;
+  const panel = yield* forgeOf(resolved).details(resolved, cwd, opts.run);
   if (id !== null) opts.panels.set(id, { at: opts.now, panel });
+  if (id !== null) {
+    const states = yield* readMrStates(opts.stateDir);
+    const facts = yield* readForge(opts.stateDir);
+    const now = DateTime.formatIso(DateTime.makeUnsafe(opts.now));
+    if (panel._tag === "Details") {
+      const state = stateOf(panel.state);
+      const known = states.get(id);
+      states.set(
+        id,
+        state === "merged" && (known === "on-stage" || known === "in-prod") ? known : state,
+      );
+      facts.set(id, { ...panelFacts(panel), read: now, asked: now });
+    } else {
+      facts.set(id, {
+        ...(facts.get(id) ?? { checks: { state: "unknown" }, head: null }),
+        asked: now,
+      });
+    }
+    yield* writeMrStates(opts.stateDir, states, facts).pipe(Effect.orDie);
+  }
   return panel;
 });
 
@@ -125,10 +151,10 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
   /** The Run directories whose landing attempt this host process is making now. */
   making: ReadonlySet<string>;
 }) {
+  const fs = yield* FileSystem.FileSystem;
   // What an earlier host learned, under this one's own answers: a fresh host's empty memory
   // must not ask production again about what an earlier one already saw land there.
-  for (const [label, state] of yield* readMrStates(opts.stateDir))
-    if (!opts.states.has(label)) opts.states.set(label, state);
+  for (const [label, state] of yield* readMrStates(opts.stateDir)) opts.states.set(label, state);
   const forge = new Map(yield* readForge(opts.stateDir));
   let asked = false;
   const watched: Array<Watched> = [];
@@ -201,19 +227,29 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
     if (abandoned) continue;
     const label = mrLabel(mr);
     if (mrRefOf(mr) === null) continue;
-    const at =
+    const checkout =
       Option.getOrUndefined(Arr.findFirst(opts.runs, (run) => run.id === owner))?.cwd ?? opts.cwd;
-    const id = yield* mrIdIn(mr, at, opts.run);
+    const at = (yield* fs.exists(checkout))
+      ? checkout
+      : (yield* fs.exists(opts.cwd))
+        ? opts.cwd
+        : opts.stateDir;
+    const id = yield* mrIdIn(mr, checkout, opts.run);
     if (id === null) continue;
     const dirs = Arr.map(runs, (run) => runDir(opts.stateDir, run));
     if (
       opts.states.get(id) !== "in-prod" &&
-      (opts.checked.get(id) ?? 0) + MERGE_POLL_MS <= opts.now
+      Math.max(
+        opts.checked.get(id) ?? 0,
+        epochMs(forge.get(id)?.asked ?? forge.get(id)?.read ?? "") || 0,
+      ) +
+        MERGE_POLL_MS <=
+        opts.now
     ) {
       // Stamped before asking: a forge that cannot be asked is not asked again every tick.
       opts.checked.set(id, opts.now);
       asked = true;
-      const answered = yield* forgeAnswer(mr, at, opts.run, (panel) =>
+      const answered = yield* forgeAnswer(`mr:${id}`, at, opts.run, (panel) =>
         opts.panels.set(id, { at: opts.now, panel }),
       );
       const now = DateTime.formatIso(DateTime.makeUnsafe(opts.now));
@@ -481,6 +517,15 @@ const forgeAnswer = Effect.fn("Merges.forgeAnswer")(function* <R>(
     const tier = yield* forge.liveTier(ref, panel.mergedSha, cwd, run);
     state = tier === "production" ? "in-prod" : tier === "staging" ? "on-stage" : "merged";
   }
+  return {
+    state,
+    facts: panelFacts(panel),
+    by: forge.name,
+    mergedAt: panel.mergedAt,
+  };
+});
+
+const panelFacts = (panel: Extract<MrPanel, { _tag: "Details" }>): ForgeFacts => {
   const facts: ForgeFacts = {
     checks: panel.checks ?? { state: "unknown" },
     head: (panel.head ?? "") === "" ? null : panel.head!,
@@ -488,13 +533,21 @@ const forgeAnswer = Effect.fn("Merges.forgeAnswer")(function* <R>(
     source: panel.sourceBranch,
     target: panel.targetBranch,
   };
-  return {
-    state,
-    facts: panel.mergeable === undefined ? facts : { ...facts, mergeable: panel.mergeable },
-    by: forge.name,
-    mergedAt: panel.mergedAt,
-  };
-});
+  return panel.mergeable === undefined ? facts : { ...facts, mergeable: panel.mergeable };
+};
+
+const writing = Semaphore.makeUnsafe(1);
+
+const newerEntry = (known: Entry | undefined, incoming: Entry): Entry => {
+  const read = epochMs(known?.read ?? "") || -Infinity;
+  const next = epochMs(incoming.read ?? "") || -Infinity;
+  const kept = read > next ? known! : incoming;
+  const asked =
+    (epochMs(known?.asked ?? "") || 0) > (epochMs(incoming.asked ?? "") || 0)
+      ? known?.asked
+      : (incoming.asked ?? known?.asked);
+  return asked === undefined ? kept : { ...kept, asked };
+};
 
 /**
  * Merged over what is there, never a replacement: every board pane keeps only what it has
@@ -512,16 +565,21 @@ export const writeMrStates = Effect.fn("Merges.write")(function* (
   const entries = new Map(yield* readEntries(stateDir));
   for (const [label, state] of states) {
     const facts = forge.get(label) ?? factsOf(entries.get(label));
-    entries.set(label, facts === null ? { state } : { state, ...facts });
+    entries.set(
+      label,
+      newerEntry(entries.get(label), facts === null ? { state } : { state, ...facts }),
+    );
   }
   for (const [label, facts] of forge)
-    if (!states.has(label)) entries.set(label, { ...entries.get(label), ...facts });
+    if (!states.has(label))
+      entries.set(label, newerEntry(entries.get(label), { ...entries.get(label), ...facts }));
   yield* fs.makeDirectory(path.dirname(file), { recursive: true });
   yield* fs.writeFileString(
-    file,
+    `${file}.next`,
     `${yield* Schema.encodeEffect(StatesJson)(Rec.fromEntries(entries)).pipe(Effect.orDie)}\n`,
   );
-});
+  yield* fs.rename(`${file}.next`, file);
+}, writing.withPermits(1));
 
 /** What the last watch wrote, or nothing: a host that never watched has never asked a forge. */
 const readEntries = Effect.fn("Merges.readEntries")(function* (stateDir: string) {

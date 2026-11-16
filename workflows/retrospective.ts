@@ -213,7 +213,7 @@ export const restartsOf = (
 export interface AskingRun {
   readonly runId: string;
   readonly workflow: string;
-  readonly status: "pending" | "suspended" | "complete" | "failed";
+  readonly status: "pending" | "suspended" | "complete" | "ended" | "failed";
   readonly mr: string | null;
   readonly merged: boolean;
   readonly questions: ReadonlyArray<{ readonly name: string; readonly answer: string | null }>;

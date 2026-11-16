@@ -15,7 +15,7 @@ import {
   Stream,
   SubscriptionRef,
 } from "effect";
-import { createCliRenderer } from "@opentui/core";
+import { createCliRenderer, type CliRenderer } from "@opentui/core";
 import { render, useKeyboard, useRenderer } from "@opentui/solid";
 import { createSignal, ErrorBoundary, onMount, Show, type Accessor } from "solid-js";
 import { reason } from "../naming";
@@ -88,6 +88,13 @@ export interface Bridge<E, R> {
   onReady?: (dispatch: (command: Command) => void) => void;
 }
 
+/** Gives the pane its terminal back, once the renderer has finished restoring it. */
+export const closeRenderer = (renderer: Pick<CliRenderer, "destroy" | "closed">) =>
+  Effect.sync(() => renderer.destroy()).pipe(
+    Effect.andThen(Effect.tryPromise(() => renderer.closed)),
+    Effect.ignore({ log: "Warn" }),
+  );
+
 /**
  * A flow that asks a human questions, in a renderer of its own. This is what the popup
  * panes run: `pickFlow` and its siblings are still a sequence of `menu`/`ask` calls, and
@@ -104,7 +111,7 @@ export function runFlow<A, E, R>(
     const { prompts, pending } = signalPrompts();
     const renderer = yield* Effect.acquireRelease(
       Effect.promise(() => createCliRenderer({ exitOnCtrlC: false })),
-      (r) => Effect.sync(() => r.destroy()),
+      closeRenderer,
     );
     yield* Effect.promise(() =>
       render(
@@ -392,7 +399,7 @@ export function runApp<E, R>(
     bridge.onReady?.(driven.dispatch);
     const renderer = yield* Effect.acquireRelease(
       Effect.promise(() => createCliRenderer({ exitOnCtrlC: false })),
-      (r) => Effect.sync(() => r.destroy()),
+      closeRenderer,
     );
     // A throw inside a render would otherwise take the pane down with it, and the text
     // view — the escape hatch this whole thing keeps alive — would never be reached

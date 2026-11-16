@@ -69,6 +69,12 @@ export const listIssues = (
     return listed.ok ? { ok: true as const, issues: listed.value } : listed;
   });
 
+/** Whether a failed write may still have been applied: no answer came, or the forge failed itself. */
+const mayHaveLanded = (
+  login: ForgeLogin,
+  failed: { readonly reason: string; readonly status?: number },
+) => (failed.status === undefined ? failed.reason !== login.notReady : failed.status >= 500);
+
 export const createIssue = (
   login: ForgeLogin,
   project: string,
@@ -87,7 +93,9 @@ export const createIssue = (
       ? { ok: true as const, number: filed.value.number, url: filed.value.url }
       : {
           ok: false as const,
-          reason: `${filed.reason}; inspect the repository's issues before retrying`,
+          reason: mayHaveLanded(login, filed)
+            ? `${filed.reason}; inspect the repository's issues before retrying`
+            : filed.reason,
         };
   });
 
@@ -120,7 +128,12 @@ export const commentIssue = (
     );
     return noted.ok
       ? { ok: true, reason: "" }
-      : { ok: false, reason: `${noted.reason}; inspect the issue before retrying` };
+      : {
+          ok: false,
+          reason: mayHaveLanded(login, noted)
+            ? `${noted.reason}; inspect the issue before retrying`
+            : noted.reason,
+        };
   });
 
 export const postReview = (
