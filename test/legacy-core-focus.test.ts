@@ -13,7 +13,7 @@ test(
       Effect.gen(function* () {
         const run = yield* hostedRun(world, "keep old terminal identities historical");
         const name = "legacy-implementer";
-        yield* new Herdr(env).agentLaunch({
+        const liveId = yield* new Herdr(env).agentLaunch({
           name,
           argv: ["claude"],
           cwd: world.project,
@@ -25,12 +25,12 @@ test(
           {
             role: "implementer",
             agent: name,
-            paneId: "1-9",
+            paneId: liveId,
             workspaceId: "w1",
             runId: run.id,
             workflow: "proof",
             at: "2026-09-09T09:00:00Z",
-            incarnation: { terminalId: "old-herdr-terminal", agentSession: null },
+            incarnation: { terminalId: liveId, agentSession: null },
           },
         ).pipe(Effect.provide(recordsAt(world.state)));
         const client = yield* connect(world.state);
