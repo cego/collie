@@ -1905,6 +1905,8 @@ It runs even when a dependency failed, and fails unless each succeeded.
 The native jobs cache Cargo dependencies, keyed by platform, compiler, manifests and lockfile.
 Each job keeps its own cache, shared with the same job in the release workflow where applicable.
 Workspace crates are rebuilt, and all checks, tests, bundle builds and signing checks still run on cache hits.
+Ghostty honors the `ZIG_LOCAL_CACHE_DIR` supplied by CI's Zig setup, so Zig can reuse its
+compiled inputs across Cargo profiles and CI runs while still checking them for changes.
 No test results or finished release archives are reused.
 Linux media bundling resolves package ownership in one `dpkg-query` call for the complete
 library closure. A missing owner still fails the bundle, including when the command returns partial results.
