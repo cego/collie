@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "bun src/bun/index.ts",
-    "build": "bun ../desktop-rune/scripts/bundle.ts",
+    "build": "bun scripts/bundle.ts",
     "typecheck": "tsrs --noEmit --fast",
     "test": "bun test"
   },
@@ -19,7 +19,7 @@
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "1.8.0",
-    "@types/bun": "1.4.2",
-    "tsrs": "0.23.0-ts7.1.0-beta"
+    "@types/bun": "1.4.4",
+    "tsrs": "0.25.0-ts7.1.0-beta"
   }
 }

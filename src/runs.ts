@@ -28,7 +28,7 @@ import type { AskedFact, Execution, UsageWait } from "./flow";
 import type { ShippingGo } from "./shipping";
 
 /** Where a Run is, in the words every board and listing uses. */
-export type RunState = "running" | "waiting" | "succeeded" | "failed" | "stopped";
+export type RunState = "running" | "waiting" | "succeeded" | "ended" | "failed" | "stopped";
 
 /** A question a Run is waiting on a human for. */
 export interface Asked {
@@ -115,6 +115,8 @@ export const textOf = (value: Schema.Json): string =>
 const stateOf = (view: RunView): RunState => {
   const stopped = view.controls.includes(STOP);
   switch (view.status.status) {
+    case "ended":
+      return "ended";
     case "complete":
       return "succeeded";
     case "failed":
@@ -141,7 +143,7 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
   parent: view.parent,
   outcome: view.outcome,
   created: view.created,
-  finished: null,
+  finished: view.status.status === "ended" ? view.status.at : null,
   state: stateOf(view),
   settled: {
     inputs: Rec.fromEntries(
@@ -191,12 +193,14 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
   note:
     view.parked ??
     (view.awaiting === null ? null : awaitingLine(view.awaiting)) ??
-    (view.status.status === "failed"
-      ? Arr.join(
-          Arr.filter([view.status.reason, view.diagnostic], (part) => part !== null),
-          " — ",
-        )
-      : view.diagnostic),
+    (view.status.status === "ended"
+      ? "Ended; outcome unavailable without its terminal result"
+      : view.status.status === "failed"
+        ? Arr.join(
+            Arr.filter([view.status.reason, view.diagnostic], (part) => part !== null),
+            " — ",
+          )
+        : view.diagnostic),
   summary: view.status.status === "complete" ? resultText(view.status.value) : null,
   engine: {
     questions: Arr.map(view.waiting, (one) => ({
@@ -232,6 +236,7 @@ const executionOf = (view: RunView): Execution => {
     case "suspended":
       return "suspended";
     case "complete":
+    case "ended":
       return "completed";
     case "failed":
       return "failed";
@@ -263,7 +268,10 @@ export const findRun = (
 
 /** Whether a Run has ended, which a question it is waiting on is not. */
 export const settled = (run: Pick<RunFacts, "state">): boolean =>
-  run.state === "succeeded" || run.state === "failed" || run.state === "stopped";
+  run.state === "succeeded" ||
+  run.state === "ended" ||
+  run.state === "failed" ||
+  run.state === "stopped";
 
 /** Where this Machine's live Runs work, or null where the host could not be asked. */
 export const liveCheckouts = (

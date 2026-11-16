@@ -294,7 +294,7 @@ export function laneOf(facts: LaneFacts): FlowLane {
     if (one.failed !== null && one.failed.at >= retried) return "failed";
     if (run.state === "stopped") return "stopped";
     if (run.state === "failed") return "failed";
-    if (run.state === "succeeded") return "done";
+    if (run.state === "succeeded" || run.state === "ended") return "done";
     if (Arr.some(questionsFor(one.key), (asked) => asked.open)) return "needs-you";
     if (facts.wakes !== null) return "waiting";
     return "running";
@@ -965,6 +965,7 @@ export function linkSaid(child: {
 export const linkState = (state: RunState): FlowState => {
   switch (state) {
     case "succeeded":
+    case "ended":
       return "done";
     case "running":
       return "running";

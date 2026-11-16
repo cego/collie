@@ -1,6 +1,6 @@
 // The Rune spike's updates: Desktop's own `updates.ts` checks, downloads and verifies a release
 // as today, through the stdio stand-in's Updater, which stages the verified tar and its
-// signature where the Rune shell installs them at its next launch (desktop-rune/update).
+// signature where the Rune shell installs them at its next launch (desktop/update).
 
 import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
 import * as Str from "effect/String";
@@ -9,7 +9,7 @@ import { electrobunUpdater } from "../desktop/src/bun/electrobun-updater";
 import { restartToUpdate, updatesOf } from "../desktop/src/bun/updates";
 import { runEffect } from "./support/effect";
 
-const FIXTURES = new URL("../desktop-rune/fixtures/update/", import.meta.url).pathname;
+const FIXTURES = new URL("../desktop/fixtures/update/", import.meta.url).pathname;
 const OS = process.platform === "darwin" ? "macos" : "linux";
 const PLATFORM = `${OS}-${process.arch}`;
 const ARCHIVE = `stable-${PLATFORM}-collie-desktop.tar.zst`;
@@ -62,7 +62,7 @@ const VersionJson = Schema.fromJsonString(
 );
 
 let install = "";
-let standIn: typeof import("../desktop-rune/core/platform");
+let standIn: typeof import("../desktop/core/platform");
 beforeAll(() =>
   runEffect(
     Effect.gen(function* () {
@@ -82,7 +82,7 @@ beforeAll(() =>
       Bun.env.COLLIE_RUNE_VERSION = `${install}/collie-desktop/version.json`;
       Bun.env.COLLIE_RUNE_STAGED = `${install}/.update/collie-desktop.tar`;
       Bun.env.COLLIE_RUNE_USER_DATA = `${install}/data`;
-      standIn = yield* Effect.promise(() => import("../desktop-rune/core/platform"));
+      standIn = yield* Effect.promise(() => import("../desktop/core/platform"));
     }),
   ),
 );

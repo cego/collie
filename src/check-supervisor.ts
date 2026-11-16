@@ -54,7 +54,19 @@ export const supervise = Effect.fn("CheckSupervisor.supervise")(function* ([
   let already = 0;
   const files = checkFiles(outputs, id);
   const whole = (path: string, data: Uint8Array) =>
-    fs.writeFile(`${path}.new`, data).pipe(Effect.andThen(fs.rename(`${path}.new`, path)));
+    fs.writeFile(`${path}.new`, data).pipe(
+      Effect.andThen(fs.rename(`${path}.new`, path)),
+      Effect.tapError(() => fs.remove(`${path}.new`, { force: true }).pipe(Effect.ignore)),
+    );
+  // Its stderr needs no disk to reach the host, and lands in the check's log and tail.
+  const finish = (path: string, data: Uint8Array) =>
+    whole(path, data).pipe(
+      Effect.catch((error) =>
+        Effect.sync(() =>
+          relays.stderr.write(`collie: could not write ${path}: ${error.message}\n`),
+        ),
+      ),
+    );
   const take = (name: Name, chunk: Uint8Array) =>
     Effect.gen(function* () {
       kept[name] = Buffer.concat([kept[name], chunk]).subarray(-KEPT_BYTES);
@@ -94,7 +106,7 @@ export const supervise = Effect.fn("CheckSupervisor.supervise")(function* ([
       }),
     ),
   );
-  yield* whole(files.stdout, kept.stdout);
-  yield* whole(files.stderr, kept.stderr);
-  yield* whole(files.exit, Buffer.from(String(exit)));
+  yield* finish(files.stdout, kept.stdout);
+  yield* finish(files.stderr, kept.stderr);
+  yield* finish(files.exit, Buffer.from(String(exit)));
 });

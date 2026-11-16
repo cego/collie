@@ -7,6 +7,7 @@ import {
   parseFixOutput,
   parseReviewOutput,
   parseSynthesis,
+  renderPublicReview,
   renderReview,
   settleFinalFix,
   splitDisputed,
@@ -18,6 +19,8 @@ import {
 } from "../src/output";
 import type { YamlMap } from "../src/yaml";
 import type { Verification } from "../src/verify";
+import review522 from "./fixtures/public-text/mr-522-synthesis.json";
+import { leaksIn } from "../src/public-text";
 
 // The tree the last fix is judged on, and what the journal says about it. A check is a
 // verification name; whether it passed is read from here, never from the fix's Output.
@@ -221,6 +224,51 @@ test("a clean review says so in one line, and never mentions the process", () =>
   expect(rendered).toBe(
     "A one-file change to the CLI. Nothing wrong with it.\n\nNothing to fix.\n",
   );
+});
+
+test("the public rendering of the !522 review keeps the repository comment rule and hides process findings", () => {
+  const synthesis = synth(JSON.stringify(review522));
+  const rendered = renderPublicReview(synthesis);
+  expect(rendered).toStartWith(review522.public_summary);
+  expect(rendered).toContain("**Minor**");
+  expect(rendered).toContain("Remove redundant comments");
+  expect(rendered).toContain("ai-instructions/company-instructions/workflow/workflow.md");
+  expect(rendered).not.toContain("Record failing-first evidence");
+  expect(rendered).not.toContain("**Major**");
+  expect(leaksIn(rendered)).toEqual([]);
+  expect(renderReview(synthesis)).toContain("Record failing-first evidence");
+  expect(renderReview(synthesis)).toStartWith(review522.summary);
+});
+
+test("a review with only internal findings posts a nothing-to-change note", () => {
+  const synthesis = synth(
+    JSON.stringify({
+      ...review522,
+      public_summary: "Updates profile verification. No runtime regression was found.",
+      findings: [review522.findings[0]],
+    }),
+  );
+  expect(renderPublicReview(synthesis)).toBe(
+    "Updates profile verification. No runtime regression was found.\n\nNothing to fix.\n",
+  );
+  expect(leaksIn(renderPublicReview(synthesis))).toEqual([]);
+});
+
+test("fixed process findings stay in the complete review instead of returning in the public note", () => {
+  const synthesis = synth(
+    JSON.stringify({
+      verdict: "clean",
+      summary: "The failing-first evidence is now recorded.",
+      public_summary: "Updates profile verification. No runtime regression was found.",
+      fixed: [
+        { title: "Record failing-first evidence", note: "collie verify recorded the failure." },
+      ],
+    }),
+  );
+  const rendered = renderPublicReview(synthesis);
+  expect(rendered).not.toContain("Fixed since last review");
+  expect(leaksIn(rendered)).toEqual([]);
+  expect(renderReview(synthesis)).toContain("Record failing-first evidence");
 });
 
 test("findings format as a readable list for the fix prompt", () => {

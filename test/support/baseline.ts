@@ -47,7 +47,6 @@ import { exec } from "./command";
 import { fastForward, runEffect } from "./effect";
 import { FakeBin } from "./bin";
 import {
-  CLI,
   FORGE_HOST,
   PROJECT,
   forgeOnPath as modelOnPath,
@@ -92,8 +91,10 @@ import {
 import { readStepLines } from "../../src/steps";
 import { measuresOf } from "../../src/outcomes";
 import { redact } from "../../src/redact";
+import { leaksIn } from "../../src/public-text";
 import { slackApi } from "../../src/slack";
 import { botLeftOver, fakeSlack, signedInToSlack } from "./slack";
+import leakingReview from "../fixtures/public-text/mr-522-note-1839712.md" with { type: "text" };
 import { INTENT_FILE, IntentSchema, amend, seedIntent, writeIntent } from "../../src/intent";
 import selfImprove from "../../workflows/self-improve.workflow";
 import { invocationFor } from "../../workflows/staging";
@@ -443,6 +444,7 @@ const EXECUTION = {
   running: "running",
   waiting: "suspended",
   succeeded: "completed",
+  ended: "completed",
   failed: "failed",
   stopped: "stopped",
 } as const;
@@ -2070,7 +2072,7 @@ scenario(
         expect(mr).toContain(`final Measurement ${final.id}: bench.count gain`);
         expect(mr).toContain("bench.size no-change");
         expect(mr).toContain(
-          "Where the evidence names a `final` Measurement, put its id and each metric's verdict in the description.",
+          "For measurements, report the measured results and metric verdicts in ordinary terms.",
         );
       }),
     ),
@@ -2614,6 +2616,85 @@ for (const name of ["gitlab", "github"] as const) {
           expect(message).not.toContain("approve");
           expect(Rec.values(model.notes ?? {})).toHaveLength(1);
           expect(model.approved ?? []).toEqual([]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `a ${name} review publishes its public note while keeping an internal blocker unapproved`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const runId = `r-review-${name}-internal`;
+          const internal = {
+            ...SYNTHESIS,
+            summary: "New test evidence is incomplete.",
+            public_summary: "Updates profile verification. No runtime regression was found.",
+            findings: [
+              {
+                severity: "blocker",
+                title: "Record test reproduction evidence",
+                file: "src/a.ts",
+                detail: "No failing execution was recorded for the new test.",
+                internal: true,
+              },
+            ],
+          };
+          const { model } = yield* posted(runId, internal);
+          expect(Rec.values(model.notes ?? {}).flat()).toEqual([
+            `Updates profile verification. No runtime regression was found.\n\nNothing to fix.\n${signed(runId)}`,
+          ]);
+          expect(model.approved ?? []).toEqual([]);
+          expect(yield* readText(`${runDir(dir, runId)}/review.md`)).toContain(
+            "Record test reproduction evidence",
+          );
+          expect(yield* findingsIn(runDir(dir, runId))).toEqual(internal.findings);
+          const prompt = yield* asked(runId, "review-1");
+          expect(prompt).toContain("For an MR no Run built");
+          expect(prompt).toContain("public_summary");
+          expect(prompt).toContain('"internal": true');
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `a ${name} review refuses a leaking public summary and brings back the menu with the reason`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge } = yield* reviewing();
+          const review = {
+            entry: shipped("review"),
+            runId: `r-review-${name}-leaking-summary`,
+            input: { target },
+          };
+          yield* rig.queueOutputs([
+            {
+              ...SYNTHESIS,
+              verdict: "clean",
+              summary: "This Run found no product issue.",
+              public_summary: "Check with collie verify before merging.",
+              findings: [],
+            },
+          ]);
+          yield* parked({ ...review, decision: "post-1" });
+          const rows = yield* answeredThen({
+            ...review,
+            decision: "post-1",
+            value: `Post to ${noun}`,
+            until: "post-2",
+          });
+          expect(
+            Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === "post-2"))?.prompt,
+          ).toContain('"collie verify"');
+          expect(optionsOf(rows, "post-2")).toContain(`Post to ${noun}`);
+          const model = yield* forge.model();
+          expect(model.notes ?? {}).toEqual({});
+          expect(model.approved ?? []).toEqual([]);
+          yield* answered({ ...review, decision: "post-2", value: "Don't post" });
+          yield* bin.restore();
         }),
       ),
     120_000,
@@ -3826,7 +3907,7 @@ for (const feature of [false, true])
           ).toBe("done");
           const opening = yield* asked(child, "mr");
           expect(opening).toContain(OPENED.mr_url);
-          expect(opening).toContain("Do **not** open a second merge request");
+          expect(opening).toContain("no second one is opened");
           yield* bin.restore();
         }),
       ),
@@ -4111,7 +4192,7 @@ scenario(
         expect(opening).toBeGreaterThan(checked);
         const prompt = yield* asked(child, "mr");
         expect(prompt).toContain(OPENED.mr_url);
-        expect(prompt).toContain("Do **not** open a second merge request");
+        expect(prompt).toContain("no second one is opened");
         expect((yield* ran(parent))._tag).toBe("Failure");
         expect(yield* launchesAt(dir, parent.runId)).toHaveLength(1);
         yield* bin.restore();
@@ -4248,7 +4329,7 @@ for (const changed of [
           expect(yield* asked(child, "fix-1")).toContain(missing.title);
           const prompt = yield* asked(child, "mr");
           expect(prompt).toContain(OPENED.mr_url);
-          expect(prompt).toContain("Do **not** open a second merge request");
+          expect(prompt).toContain("no second one is opened");
           yield* bin.restore();
         }),
       ),
@@ -5173,7 +5254,11 @@ scenario(
           },
         ]);
         yield* approve("r-after-merge", ["unit"]);
-        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+        yield* rig.queueOutputs([
+          { ...BUILT, assumptions: ["Should empty registries be counted?"] },
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
         const result = yield* ran({
           entry: shipped("implement"),
           runId: "r-after-merge",
@@ -5186,10 +5271,11 @@ scenario(
           false,
         );
         const opening = yield* asked("r-after-merge", "mr");
-        expect(opening).toContain(
-          "- 01-first.md: after merge: The nightly deploy counts each registry once.",
-        );
-        expect(opening).toContain("- 01-first.md: after merge: The dashboard shows it.");
+        expect(opening).toContain("- after merge: The nightly deploy counts each registry once.");
+        expect(opening).toContain("- after merge: The dashboard shows it.");
+        expect(opening).toContain("Should empty registries be counted?");
+        expect(opening).not.toContain("01-first.md");
+        expect(yield* runLog("r-after-merge")).toContain("01-first.md");
       }),
     ),
   120_000,
@@ -5358,7 +5444,7 @@ scenario(
           "Raise as blocking an `after merge` answer to a criterion this Run could have shown",
         );
         expect(yield* asked("r-answered-later", "mr")).toContain(
-          "- 01-first.md: **Counted.** Every registry is counted once. — after merge: only the deploy shows it",
+          "- **Counted.** Every registry is counted once. — after merge: only the deploy shows it",
         );
       }),
     ),
@@ -6681,7 +6767,7 @@ const changeRunOpening = (runId: string, options: Readonly<Record<string, string
     });
     yield* bin.restore();
     return Arr.filter(Str.split(yield* asked(runId, "mr"), "\n"), (line) =>
-      pipe(line, Str.includes("glab mr create")),
+      pipe(line, Str.includes(`collie run publish ${runId}`)),
     );
   });
 
@@ -6691,7 +6777,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         expect(yield* changeRunOpening("r-impl-stacked", { stacked: "." })).toEqual([
-          'glab mr create --assignee tester --target-branch mk/one-registry --title "<title>" --description "<title>" --yes',
+          'collie run publish r-impl-stacked --onto mk/one-registry --title "<title>" --file <file> --request-id <request>',
         ]);
       }),
     ),
@@ -6704,7 +6790,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         expect(yield* changeRunOpening("r-impl-unstacked", {})).toEqual([
-          'glab mr create --assignee tester --title "<title>" --description "<title>" --yes',
+          'collie run publish r-impl-unstacked --title "<title>" --file <file> --request-id <request>',
         ]);
       }),
     ),
@@ -8356,7 +8442,7 @@ scenario(
           "nuxi: its CI job nuxi-job failed",
           `https://${PROJECT.gitlab}/-/jobs/101`,
           CI_LOG(101),
-          "without `ci.skip`",
+          `collie run publish ${runId} --push-only --request-id <request>`,
         ])
           expect(prompt).toContain(text);
         const [proof, ...more] = yield* ciRecords(runId);
@@ -8404,7 +8490,7 @@ scenario(
         });
         yield* bin.restore();
         expect(said(result)).toBe(CI_MR);
-        const line = `nuxi: job nuxi-job also fails at ${pipe(CI_BASE, Str.slice(0, 12))}, where this branch leaves its target branch, so it failed before this Run's changes`;
+        const line = `nuxi: job nuxi-job also fails at ${pipe(CI_BASE, Str.slice(0, 12))}, where this branch leaves its target branch, so it failed before this branch's changes`;
         expect(Arr.join(yield* ciNotes(forge), "\n")).toContain(line);
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(line);
@@ -8445,7 +8531,7 @@ scenario(
         });
         yield* bin.restore();
         expect(said(result)).toBe(CI_MR);
-        const line = `nuxi: job nuxi-job failed on ${pipe(head, Str.slice(0, 12))}, then passed when retried — a Flake, so this Run has not settled it.`;
+        const line = `nuxi: job nuxi-job failed on ${pipe(head, Str.slice(0, 12))}, then passed when retried — a flake, so it is not settled.`;
         expect(Arr.join(yield* ciNotes(forge), "\n")).toContain(line);
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(line);
@@ -10349,7 +10435,7 @@ for (const name of ["gitlab", "github"] as const) {
   );
 
   scenario(
-    `implement opens a ${noun} on a ${name} checkout with that forge's own command`,
+    `implement opens a ${noun} on a ${name} checkout through the host`,
     () =>
       runEffect(
         Effect.gen(function* () {
@@ -10368,8 +10454,9 @@ for (const name of ["gitlab", "github"] as const) {
           yield* bin.restore();
           expect(said(result)).toBe(OPENED.mr_url);
           const prompt = yield* asked(runId, "mr");
-          expect(prompt).toContain(`${CLI[name]} ${name === "gitlab" ? "mr" : "pr"} create`);
-          expect(prompt).toContain("--assignee tester");
+          expect(prompt).toContain(`collie run publish ${runId}`);
+          expect(prompt).toContain("- Assignee: `tester`");
+          expect(prompt).not.toMatch(/glab mr create|gh pr create/);
           expect(prompt).not.toMatch(new RegExp(`\\b${DELIVERY[name].other}\\b`));
           // Branch naming and readiness asked this forge alone.
           expect(yield* other.calls()).toEqual([]);
@@ -10400,17 +10487,14 @@ for (const name of ["gitlab", "github"] as const) {
           });
           yield* bin.restore();
           const prompt = yield* asked(runId, "mr");
-          expect(prompt).toContain(
-            name === "gitlab"
-              ? "glab api --hostname gitlab.example.com --method POST 'projects/group%2Fapp/merge_requests/31/notes' -F body=@<file>"
-              : "gh pr comment 31 --repo owner/repo --body-file <file>",
-          );
+          expect(prompt).toContain(`collie run publish ${runId}`);
+          expect(prompt).not.toMatch(/glab api|gh pr comment/);
           expect(prompt).toContain(
             name === "gitlab"
               ? "https://gitlab.example.com/group/app/-/merge_requests/31"
               : "https://github.com/owner/repo/pull/31",
           );
-          expect(prompt).toContain(`Do **not** open a second ${noun}`);
+          expect(prompt).toContain(`An existing ${noun} gets the note; no second one is opened.`);
         }),
       ),
     120_000,
@@ -10888,7 +10972,7 @@ scenario(
           `pipeline: started https://${PROJECT.gitlab}/-/pipelines/${one!.id} on ${sha12(head)}`,
         );
         const mr = flat(yield* asked(runId, "mr"));
-        expect(mr).toContain("Collie starts the head's pipeline");
+        expect(mr).toContain("Collie starts a missing head pipeline");
         expect(mr).toContain("Never start one yourself");
         expect(flat(yield* asked(runId, "review-1"))).toContain(
           "the Merge request step starts and proves it once the merge request is open",
@@ -13070,7 +13154,7 @@ const POSTED = { posted: true, link: "https://example.slack.com/archives/D123/p1
 /** The replies Collie posted on the merge request, in order. */
 const repliesOf = (model: ForgeModel) => Rec.values(model.replies ?? {}).flat();
 
-const signed = (runId: string) => `\n\nPosted by Collie's Run ${runId} on ${hostname()}.`;
+const signed = (runId: string) => `\n\n<!-- collie:${runId} -->`;
 
 /** Collie's own Checks: `check`, left to CI's `test` job, counting any local run. */
 const ownCheck = (runId: string) =>
@@ -16177,6 +16261,153 @@ for (const name of ["gitlab", "github"] as const) {
               on,
             })),
           ).toEqual([{ comment: commentUrl(name, 47), kind: "disputed", body, on: mr }]);
+        }),
+      ),
+    120_000,
+  );
+
+  for (const operation of ["post", "note", "share"] as const)
+    scenario(
+      `public text on ${name}: ${operation} redacts credentials before checking and sending`,
+      () =>
+        runEffect(
+          Effect.gen(function* () {
+            const { bin, forge, changed } = yield* releasable(name);
+            const fs = yield* FileSystem.FileSystem;
+            const runId = `r-redacted-${operation}-${name}`;
+            const body = "Verified glpat-run-67a6e669abcdef.";
+            const file = `${rig.root}/redacted-review.md`;
+            yield* fs.writeFileString(file, body);
+            yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
+            yield* fs.writeFileString(`${runDir(dir, runId)}/merge-request`, `${mr}\n`);
+            yield* changed({ title: body });
+            slack = fakeSlack();
+            yield* signedInToSlack(hostOf().env, "U456").pipe(Effect.orDie);
+            const sent = yield* session(
+              Effect.gen(function* () {
+                const host = yield* Host;
+                if (operation === "share")
+                  return yield* host.shareForApproval({
+                    runId,
+                    cwd: rig.projectDir,
+                    channel: "C123",
+                  });
+                return yield* operation === "post"
+                  ? host.post({ runId, target, cwd: rig.projectDir, file })
+                  : host.note({ runId, cwd: rig.projectDir, body });
+              }),
+            );
+            const model = yield* forge.model();
+            yield* bin.restore();
+            if (operation === "share") {
+              expect(sent).toEqual({ posted: true, link: expect.any(String) });
+              expect(
+                Arr.map(
+                  Arr.filter(slack.calls, (call) => call.method === "chat.postMessage"),
+                  (call) => call.parameters.text,
+                ),
+              ).toEqual([`<${mr}|Verified &lt;gitlab token&gt;.>`]);
+            } else {
+              expect(sent).toMatchObject({ ok: true });
+              expect(Rec.values(model.notes ?? {}).flat()).toEqual([
+                `Verified <gitlab token>.${operation === "post" ? signed(runId) : ""}`,
+              ]);
+            }
+          }),
+        ),
+      120_000,
+    );
+
+  scenario(
+    `public text on ${name}: the !522 review note is refused before it reaches the merge request`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge } = yield* releasable(name);
+          const fs = yield* FileSystem.FileSystem;
+          const runId = `r-leak-review-${name}`;
+          const file = `${rig.root}/review-${name}.md`;
+          yield* fs.writeFileString(file, leakingReview);
+          const posted = yield* session(
+            Effect.flatMap(Host, (host) =>
+              host.post({ runId, target, cwd: rig.projectDir, file, approve: false }),
+            ),
+          );
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(posted.ok).toBe(false);
+          for (const phrase of ["this Run", "collie verify", "review-step", "Tautologies"])
+            expect(posted.message).toContain(`"${phrase}"`);
+          expect(model.notes ?? {}).toEqual({});
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `public text on ${name}: a note or reply naming Collie's process reaches no one`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const comment = { id: 47, author: "bob", at: "2026-10-20T11:00:00Z", body: "rename it" };
+          const { bin, forge } = yield* releasable(name, { comments: [comment] });
+          const runId = `r-leak-reply-${name}`;
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
+          yield* fs.writeFileString(`${runDir(dir, runId)}/merge-request`, `${mr}\n`);
+          const [noted, replied] = yield* session(
+            Effect.gen(function* () {
+              const host = yield* Host;
+              return [
+                yield* host.note({
+                  runId,
+                  cwd: rig.projectDir,
+                  body: "This Run left it unsettled.",
+                }),
+                yield* host
+                  .reply({
+                    runId,
+                    cwd: rig.projectDir,
+                    comment: "47",
+                    body: "Not changed: the review-step rule keeps it.",
+                    kind: "disputed",
+                  })
+                  .pipe(Effect.flip),
+              ] as const;
+            }),
+          );
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(noted).toEqual({ ok: false, message: expect.stringContaining('"This Run"') });
+          expect(replied.reason).toContain('"review-step"');
+          expect(model.notes ?? {}).toEqual({});
+          expect(repliesOf(model)).toEqual([]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `public text on ${name}: an MR title naming Collie's process is not shared to Slack`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, changed } = yield* releasable(name);
+          yield* changed({ title: "Fix what run-67a6e669 found" });
+          slack = fakeSlack();
+          yield* signedInToSlack(hostOf().env, "U456").pipe(Effect.orDie);
+          const runId = `r-leak-share-${name}`;
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
+          yield* fs.writeFileString(`${runDir(dir, runId)}/merge-request`, `${mr}\n`);
+          const shared = yield* session(
+            Effect.flatMap(Host, (host) =>
+              host.shareForApproval({ runId, cwd: rig.projectDir, channel: "C123" }),
+            ),
+          );
+          yield* bin.restore();
+          expect(shared).toEqual({ posted: false, why: expect.stringContaining('"run-67a6e669"') });
+          expect(slack.calls).toEqual([]);
         }),
       ),
     120_000,
@@ -21932,6 +22163,31 @@ for (const fixed of [true, false])
   );
 
 scenario(
+  "a tune-up keeps its harness sample deadline through calibration and repair",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const commit = yield* harnessCommit({ "bench/bench.sh": NOISY_BENCH });
+        const runId = "r-tune-deadline";
+        yield* rig.queueOutputs([
+          TUNE_DISCOVERED,
+          { ...tunePlan(commit, [STEADY_PRIMARY], UNBUILDABLE(3)), limit: 7200 },
+          repaired(
+            { ...tunePlan(commit, [STEADY_PRIMARY]), limit: 10800 },
+            "bound the complete gate",
+          ),
+          EXHAUSTED,
+        ]);
+        expect((yield* tunedUp(runId, { samples: 4 }))._tag).toBe("Success");
+        const measured = yield* calibrations(runId);
+        expect(Arr.map(measured, (one) => one.result._tag)).toEqual(["Failed", "Judged"]);
+        expect(Arr.map(measured, (one) => one.plan.limit)).toEqual([7200, 10800]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "a tune-up whose harness is broken is repaired by the tuner, calibrates and goes on to its Cycles",
   () =>
     runEffect(
@@ -21955,6 +22211,7 @@ scenario(
           "Failed",
           "Judged",
         ]);
+        expect(Arr.map(yield* calibrations(runId), (one) => one.plan.limit)).toEqual([600, 600]);
       }),
     ),
   120_000,
@@ -22696,7 +22953,7 @@ scenario(
         );
         expect(body).toContain("| bench.count | primary | 7 | 3 |");
         const [table, evidence] = Str.split(body, "<details>");
-        expect(table).toContain(final!.id);
+        expect(table).toContain(final!.candidate.head_sha);
         for (const metric of ["bench.count", "bench.size"])
           for (const side of ["base", "candidate"] as const) {
             const line = Option.getOrUndefined(
@@ -22721,7 +22978,7 @@ scenario(
           final!.base.commit,
           final!.base.head_sha,
           final!.candidate.head_sha,
-          runId,
+          "sh bench/bench.sh",
         ])
           expect(evidence).toContain(text);
         expect(body).not.toContain(SECRET);
@@ -22754,6 +23011,10 @@ scenario(
         const measured = yield* finals(runId);
         expect(Arr.map(measured, (one) => one.base.commit)).toEqual([moved, original]);
         expect(verdictsOf(measured[0]!)).toEqual(["bench.count gain", "bench.size no-change"]);
+        const body = yield* readText(`${runDir(dir, runId)}/handoffs/tune-up-merge-request.md`);
+        expect(leaksIn(body)).toEqual([]);
+        expect(body).not.toMatch(/\(by (?:collie|agent)\)|- unit:/);
+        expect(body).toContain(original);
         expect(Arr.map(measured, (one) => one.candidate.head_sha)).toEqual([
           yield* headOf(),
           yield* headOf(),
@@ -22830,7 +23091,10 @@ scenario(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const runId = "r-tune-ci-fixed";
+        const runId = "run-67a6e669";
+        dir = `${rig.root}/.collie/state`;
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.makeDirectory(dir, { recursive: true });
         const { bin, forge } = yield* tuneForge;
         yield* cycling(runId, [
           fasterTo(3),
@@ -22854,9 +23118,42 @@ scenario(
         expect(yield* runLog(runId)).toContain(`performance proved on ${head}`);
         // The merge request is told the whole replacement evidence, not only its table.
         const noted = Arr.join(yield* ciNotes(forge), "\n");
-        expect(noted).toContain(`Samples of \`final\` Measurement ${measured[1]!.id}`);
+        expect(noted).toContain("Samples of the final benchmark");
+        expect(noted).toContain("- bench.count, candidate: 2, 2, 2, 2");
         expect(noted).toContain(head);
         expect(noted).toContain("#### Reproduce");
+        expect(noted).toContain("sh bench/bench.sh");
+        expect(leaksIn(noted)).toEqual([]);
+        expect(noted).not.toMatch(/\(by (?:collie|agent)\)|- unit:/);
+        expect(noted).not.toContain("ci-fix-1");
+        expect(noted).not.toContain(runId);
+        expect(noted).not.toContain(dir);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a tune-up reports a refused CI-fix note instead of silently completing",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-tune-note-refused";
+        const { bin, forge } = yield* tuneForge;
+        yield* cycling(runId, [
+          fasterTo(3),
+          cleanedUp(),
+          TUNE_REVIEWED,
+          openedFailing(forge),
+          ciFixedTo(forge, 2),
+          { ...TUNE_REVIEWED, summary: "Collie checked it." },
+        ]);
+        yield* leftToCi(runId, ["nuxi"]);
+        const result = yield* tunedUp(runId, { samples: 4, cycles: 1 });
+        yield* bin.restore();
+        expect(result._tag).toBe("Failure");
+        expect(reasonOf(result)).toContain('"Collie"');
+        expect(yield* ciNotes(forge)).toEqual([]);
       }),
     ),
   120_000,
@@ -23119,10 +23416,31 @@ scenario(
         expect(readme).toContain(`collie measure --run ${runId} --base ${final!.base.commit}`);
 
         const body = yield* readText(`${runDir(dir, runId)}/handoffs/tune-up-merge-request.md`);
-        expect(Str.split(body, "<details>")[0]).toContain(final!.id);
-        expect(body).toContain(archive);
+        expect(Str.split(body, "<details>")[0]).toContain(final!.candidate.head_sha);
+        expect(leaksIn(body)).toEqual([]);
+        expect(body).not.toContain(archive);
         expect(body).toContain("measured with it applied in a scratch tree");
         expect(body).not.toContain("Accepted tradeoffs");
+        const reproduction = pipe(
+          body,
+          Str.match(/#### Reproduce\s+```sh\n([\s\S]*?)\n```/),
+          Option.map((match) => match[1]),
+          Option.getOrUndefined,
+        );
+        expect(reproduction).toBeDefined();
+        const checkout = `${rig.root}/reproduce`;
+        expect(
+          (yield* exec(["git", "worktree", "add", "--detach", checkout, "HEAD"], {
+            cwd: rig.projectDir,
+          })).exitCode,
+        ).toBe(0);
+        try {
+          const replayed = yield* exec(["sh", "-ec", reproduction!], { cwd: checkout });
+          expect(replayed.exitCode).toBe(0);
+          expect(replayed.stdout).toMatch(/"count":\s*3/);
+        } finally {
+          yield* exec(["git", "worktree", "remove", "--force", checkout], { cwd: rig.projectDir });
+        }
       }),
     ),
   180_000,
@@ -23375,7 +23693,7 @@ const ISSUE = "https://linear.app/acme/issue/PERF-1";
 /** One issue filed in the fake tracker, carrying the marker its prompt gave. */
 const FILED = () => ({
   writes: [],
-  sh: `${MARKED} && echo "${ISSUE} $marker" >> '${tracker()}'`,
+  sh: `marker=$(grep -o '<!-- collie:external-[0-9a-f]* -->' "$PROMPT_PATH" | head -n 1); [ -n "$marker" ] && echo "${ISSUE} $marker" >> '${tracker()}'`,
   output: { url: ISSUE },
 });
 
@@ -23483,8 +23801,10 @@ scenario(
             Arr.some(driving.asked, (row) => pipe(row.prompt, Str.includes(KNOWN.title))),
           ).toBe(false);
           expect(yield* externalPrompts(runId)).toEqual([`${pooling}-search`, `${pooling}-create`]);
-          expect(yield* asked(runId, `${pooling}-create`)).toContain(`collie:${pooling}`);
-          expect(yield* trackerLines()).toEqual([`${ISSUE} collie:${pooling}`]);
+          const creating = yield* asked(runId, `${pooling}-create`);
+          expect(creating).toContain(`hidden HTML comment \`<!-- collie:${pooling} -->\``);
+          expect(creating).not.toContain("- Key:");
+          expect(yield* trackerLines()).toEqual([`${ISSUE} <!-- collie:${pooling} -->`]);
           const log = yield* runLog(runId);
           const proved = Option.getOrElse(
             pipe(log, Str.indexOf("performance proved on")),
@@ -23549,7 +23869,7 @@ scenario(
             `${key}-create`,
             `${key}-recheck`,
           ]);
-          expect(yield* trackerLines()).toEqual([`${ISSUE} collie:${key}`]);
+          expect(yield* trackerLines()).toEqual([`${ISSUE} <!-- collie:${key} -->`]);
           expect(yield* runLog(runId)).toContain(`external ${key}: posted ${ISSUE}`);
         }),
       ),
