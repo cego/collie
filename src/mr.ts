@@ -174,7 +174,7 @@ export function postNote<R>(
           ok: false,
           message: `could not sign the review: the forge did not report the login and reviewed head`,
         };
-      const signature = `Review by Collie for @${me} · ${runId} round ${round} at ${head}`;
+      const signature = `<!-- collie:${runId} round ${round} at ${head} by ${me} -->`;
       const found = yield* forge.findNote(mr, signature, options.cwd, run);
       if (!found.ok)
         return { ok: false, message: `could not read the review before posting: ${found.reason}` };
@@ -471,13 +471,6 @@ export function prepareMergeRequest<R>(
       branch: branch === "HEAD" ? "" : branch,
       existing: found.open?.url ?? "",
       autoMerge: found.open?.autoMerge ?? false,
-      commands: forge.commands({
-        project,
-        branch,
-        assignee: assignee ?? "",
-        existing: found.open?.iid ?? null,
-        onto: opts.onto,
-      }),
     };
   });
 }

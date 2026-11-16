@@ -25,7 +25,6 @@ import {
   formatFindings,
   findingsIn,
   leaveReview,
-  renderReview,
   forgeOfRef,
   handOffWork,
   mrForgeFacts,
@@ -36,6 +35,7 @@ import {
   forecast,
   panelOf,
   remainingDisputes,
+  renderPublicReview,
   settleRound,
   splitDisputed,
   step,
@@ -323,6 +323,7 @@ export default defineWorkflow({
       let rallied = 0;
       let seen: { readonly at: number; readonly keys: ReadonlyArray<string> } | null = null;
       let settled = "";
+      let postRefusal = "";
       // A dispute is carried into the next review rather than re-argued, as in implement.
       let disputed: ReadonlyArray<Finding> = [];
       for (;;) {
@@ -380,6 +381,7 @@ export default defineWorkflow({
               prompt: Arr.join(
                 [
                   "What next?",
+                  ...(postRefusal === "" ? [] : [postRefusal]),
                   ...(settled === "" ? [] : [`The rally stopped: ${settled}.`]),
                   ...(unfixable === ""
                     ? []
@@ -396,6 +398,7 @@ export default defineWorkflow({
             { round: asks },
           );
           settled = "";
+          postRefusal = "";
           if (chosen === FIX) {
             fixing = true;
             rallied = 0;
@@ -454,6 +457,7 @@ export default defineWorkflow({
             if (!approved.ok) return yield* new WorkflowError({ reason: approved.message });
             return `${posted.message}; ${approved.message}`;
           }
+          postRefusal = posted.message;
           continue;
         }
 
@@ -557,19 +561,17 @@ const reviewNote = (
   previous: ReadonlyArray<Finding> | undefined,
   head: string,
 ): string => {
-  if (previous === undefined) return renderReview(review);
+  if (previous === undefined) return renderPublicReview(review);
   const published = Arr.filter(previous, (one) => Boolean(one.note));
-  if (previous.length > 0 && published.length === 0) return renderReview(review);
-  const added = Arr.filter(
-    review.findings,
-    (one) => !Arr.some(published, (old) => old.id === one.id),
-  );
-  const changed = Arr.filter(review.findings, (one) =>
+  if (previous.length > 0 && published.length === 0) return renderPublicReview(review);
+  const shown = Arr.filter(review.findings, (one) => one.internal !== true);
+  const added = Arr.filter(shown, (one) => !Arr.some(published, (old) => old.id === one.id));
+  const changed = Arr.filter(shown, (one) =>
     Arr.some(published, (old) => old.id === one.id && old.status !== one.status),
   );
   if (added.length === 0 && changed.length === 0) return "";
   const stillOpen = Arr.filter(
-    review.findings,
+    shown,
     (one) =>
       one.status === "open" &&
       Arr.some(published, (old) => old.id === one.id && old.status === "open"),
@@ -580,7 +582,7 @@ const reviewNote = (
         ...(added.length === 0 ? [] : [formatFindings(added)]),
         ...Arr.map(changed, (one) => `- ${one.id}: ${one.status}`),
         ...Arr.map(stillOpen, (one) => `- ${one.id}: still open`),
-        ...(Arr.every(review.findings, (one) => one.status === "fixed" || one.status === "obsolete")
+        ...(Arr.every(shown, (one) => one.status === "fixed" || one.status === "obsolete")
           ? [`all findings fixed at \`${head}\``]
           : []),
       ],

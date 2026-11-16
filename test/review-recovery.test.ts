@@ -113,7 +113,7 @@ for (const [name, action] of [
           const notes = Rec.values((yield* forge.model()).notes ?? {}).flat();
           expect(notes).toHaveLength(1);
           expect(Str.split(notes[0] ?? "", "\n").at(-1)).toBe(
-            `Review by Collie for @tester · ${runId} round 1 at ${HEAD}`,
+            `<!-- collie:${runId} round 1 at ${HEAD} by tester -->`,
           );
           expect(
             Arr.filter(

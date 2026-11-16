@@ -86,11 +86,8 @@ export type ScrollMemory = ReadonlyMap<string, number>;
 /** Terminal fills the record and has no position of its own. */
 const UNSCROLLED = "terminal";
 
-export const rememberScroll = (
-  memory: ScrollMemory,
-  tab: string,
-  position: number,
-): ScrollMemory => (tab === UNSCROLLED ? memory : new Map(memory).set(tab, position));
+export const rememberScroll = (memory: ScrollMemory, tab: string, position: number): ScrollMemory =>
+  tab === UNSCROLLED ? memory : new Map(memory).set(tab, position);
 
 /** The position to show a tab at, 0 on its first visit; null for Terminal. */
 export const scrollToRestore = (memory: ScrollMemory, tab: string): number | null =>
