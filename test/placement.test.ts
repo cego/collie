@@ -3055,39 +3055,43 @@ test(
   120_000,
 );
 
-test(
-  "a fresh start on the branch of a closed Task is a Task of its own",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const task = yield* aTask;
-        yield* rig.queueOutputs([{ verdict: "clean" }, { verdict: "clean" }]);
-        const review = yield* hosted(
-          Effect.gen(function* () {
-            const registry = yield* Registry;
-            const [chains, , targeted] = yield* loaded(registry, [
-              `${fixtures}/chains.workflow.ts`,
-              `${fixtures}/builds.workflow.ts`,
-              `${fixtures}/targeted.workflow.ts`,
-            ]);
-            yield* builtByAChild(registry, chains!, task.id);
-            yield* writeTask({ ...task, closed_at: "2026-09-24T00:00:00.000Z" });
-            const started = yield* start(targeted!, {
-              request: "r-review",
-              text: { target: `branch:master...${LOGIN}/add-a-picker` },
-              taskLabel: "Project | Review",
-            });
-            if (started._tag === "Failure") return yield* Effect.die(started.failure);
-            return yield* finished(started.success.runId);
-          }),
-        );
+for (const [closed, given] of [
+  ["closed", { closed_at: "2026-09-24T00:00:00.000Z" }],
+  ["kept in a Herdr 1 workspace", { workspace: "w-herdr" }],
+] as const)
+  test(
+    `a fresh start on the branch of a Task ${closed} is a Task of its own`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const task = yield* aTask;
+          yield* rig.queueOutputs([{ verdict: "clean" }, { verdict: "clean" }]);
+          const review = yield* hosted(
+            Effect.gen(function* () {
+              const registry = yield* Registry;
+              const [chains, , targeted] = yield* loaded(registry, [
+                `${fixtures}/chains.workflow.ts`,
+                `${fixtures}/builds.workflow.ts`,
+                `${fixtures}/targeted.workflow.ts`,
+              ]);
+              yield* builtByAChild(registry, chains!, task.id);
+              yield* writeTask({ ...task, ...given });
+              const started = yield* start(targeted!, {
+                request: "r-review",
+                text: { target: `branch:master...${LOGIN}/add-a-picker` },
+                taskLabel: "Project | Review",
+              });
+              if (started._tag === "Failure") return yield* Effect.die(started.failure);
+              return yield* finished(started.success.runId);
+            }),
+          );
 
-        expect(review?.task).not.toBe("task-1");
-        expect(review?.task).not.toBeNull();
-      }).pipe(Effect.provide(recordsAt(dir()))),
-    ),
-  120_000,
-);
+          expect(review?.task).not.toBe("task-1");
+          expect(review?.task).not.toBeNull();
+        }).pipe(Effect.provide(recordsAt(dir()))),
+      ),
+    120_000,
+  );
 
 test(
   "forgetting a Run removes its row, its launches and what the engine kept of it, and leaves a claim alone",

@@ -126,8 +126,8 @@ export const readTask = (id: string) => Tasks.use((tasks) => tasks.get(id));
 
 export const listTasks = Tasks.use((tasks) => tasks.list);
 
-/** Whether a Task is open: Cleanup has not closed it. */
-export const isOpen = (task: TaskRecord) => task.closed_at === undefined;
+/** Whether a Task is open: Cleanup has not closed it, nor was it kept in a Herdr 1 workspace. */
+export const isOpen = (task: TaskRecord) => task.workspace === null && task.closed_at === undefined;
 
 /** The Task whose workspace this is, which is what "the current Task" means. */
 export const taskOfWorkspace = (workspaceId: string | null) =>
