@@ -51,6 +51,8 @@ What Discover found:
    - the journeys and cases (cold, warm) it measures;
    - the commands each sample runs, in order, from the checkout's root, with no shell;
    - a prepare command run once per tree before its samples, or null;
+   - `limit`, a positive number of seconds bounding all commands in one sample, and each
+     tree's prepare. It defaults to 600; allow enough time for the complete workload;
    - the metrics, each with its direction (`lower` or `higher` is better) and role: exactly
      one `primary`, the rest `guardrail`. The host reads `<command>.wall_ms`,
      `<command>.cpu_ms` and `<command>.peak_kb`, and every number in a JSON object a
