@@ -142,7 +142,8 @@ test(
               said: "Longer than usual",
             });
             expect(after.flow.notice).toBe("B is taking longer than usual: 25 min, usually 12.");
-            expect(after.card.sentence).toBe(before.card.sentence);
+            expect(before.card.sentence).toBe("Starting, but silent for 23 minutes.");
+            expect(after.card.sentence).toBe("Starting, but silent for 25 minutes.");
             expect(sectionOf(after.card)).toBe(sectionOf(before.card));
           }).pipe(Effect.provide(made.layer));
         }).pipe(
