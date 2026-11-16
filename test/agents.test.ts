@@ -128,7 +128,6 @@ beforeEach(() =>
   runLive(
     Effect.gen(function* () {
       rig = yield* Rig.make();
-      core = yield* rig.startCore();
       const fs = yield* FileSystem.FileSystem;
       dir = `${rig.root}/host`;
       clearing = {};
@@ -138,7 +137,7 @@ beforeEach(() =>
   ),
 );
 
-afterEach(() => runEffect(rig.close()));
+afterEach(() => runLive(rig.close()));
 
 /** What the agent is asked for: two fields, one of them a judgment with words about it. */
 const Verdict = Schema.Struct({
@@ -266,8 +265,16 @@ test(
 );
 
 /** Every wait in here is on a clock that moves many times faster than the wall's. */
+/** Each test's core runs on its test's clock, so a turn takes no real time. */
 const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
-  runLive(fastForward(effect));
+  runLive(
+    fastForward(
+      Effect.suspend(() => rig.startCore()).pipe(
+        Effect.tap((served) => Effect.sync(() => (core = served))),
+        Effect.andThen(effect),
+      ),
+    ),
+  );
 
 /** One host's lifetime: a fresh engine on the same directory is what a restart is. */
 const session = <A, E>(
