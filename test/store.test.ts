@@ -117,6 +117,8 @@ test("reports are imported once on upgrade and remain authoritative after restar
         yield* sql`DROP INDEX collie_runs_reports`;
         yield* sql`ALTER TABLE collie_runs DROP COLUMN report_pending`;
         yield* sql`ALTER TABLE collie_runs DROP COLUMN report`;
+        yield* sql`DROP TABLE collie_step_times`;
+        yield* sql`DROP TABLE collie_controls`;
         yield* sql`DROP TABLE collie_run_activity`;
         yield* sql`DROP TABLE collie_run_facts`;
         yield* sql`DROP TABLE collie_run_lines`;
