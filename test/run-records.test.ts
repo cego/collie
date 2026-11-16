@@ -341,7 +341,7 @@ test("a Run's controls are imported once from the state directory's files and wr
         ],
         awaited: [{ key: "run-a.1", data: "" }],
         relaunch: '{"agent":"build"}',
-        checks: [{ run: "run-a", key: "c1", data: '{"id":"c1","run":"run-a"}' }],
+        checks: [{ run: "", key: "c1", data: '{"id":"c1","run":"run-a"}' }],
       });
 
       expect(yield* rollbackAt(stateDir)).toBe("rolled-back");

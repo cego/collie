@@ -83,7 +83,7 @@ export const NOTIFIED = "notified";
 export const AWAITED = "awaited";
 /** What a Run's agent on core was started with, keyed by agent (`relaunch/<run>/<agent>.json`). */
 export const RELAUNCH = "relaunch";
-/** A check the host runs for a Run, keyed by the check's id (`running-checks/<id>.json`). */
+/** A check the host runs, keyed by its id under no Run (`running-checks/<id>.json`); its Run is in its record. */
 export const RUNNING_CHECK = "running-check";
 
 /** A Run directory's records: the Run, and what its records' names start with. */

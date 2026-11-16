@@ -280,9 +280,7 @@ export const importRunRecords = Effect.fn("RecordsImport.runRecords")(function* 
     const rows =
       control.control === NOTIFIED
         ? Arr.map(textLines(data), (line) => ({ ...control, key: line, data: "" }))
-        : control.control === RUNNING_CHECK
-          ? [{ ...control, run: Option.getOrElse(runOfCheck(data), () => ""), data }]
-          : [{ ...control, data }];
+        : [{ ...control, data }];
     for (const row of rows)
       yield* sql`
         INSERT OR REPLACE INTO collie_controls (control, run, key, data)
@@ -290,12 +288,6 @@ export const importRunRecords = Effect.fn("RecordsImport.runRecords")(function* 
       `;
   }
 });
-
-const runOfCheck = (text: string) =>
-  Option.map(
-    Schema.decodeOption(Schema.fromJsonString(Schema.Struct({ run: Schema.String })))(text),
-    (check) => check.run,
-  );
 
 const ROOT_CONTROL = new RegExp(`^(${Arr.join([...LEGACY_CONTROLS, NOTIFIED], "|")})\\.(.+)$`);
 const AWAITED_DIR = new RegExp(`^${AWAITED}\\.(.+)$`);
