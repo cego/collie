@@ -59,6 +59,9 @@ working or blocked does not pause that deadline while its server remains unhealt
 A health park keeps collecting usable Output. Recovery requires proof that the
 owned predecessor is Quiet and preserves unresolved Delivery receipts.
 
+**Finding status** — `open`, `fixed`, `disputed` or `obsolete`, for one finding with a stable
+id, anchored to the head it was judged at and the note that posted it.
+
 **Herd** — One herdr session: every workspace in it. On a Machine whose
 `terminal_backend` is `core`, one herdr-core session instead: every terminal in it. The
 scope of the board, the conversation, proposals, the budget and elections. Keyed by

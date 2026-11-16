@@ -173,7 +173,7 @@ let controls = 0;
 
 export const openHost = Effect.fn("HostTest.open")(function* (
   state: string,
-  options?: { readonly crashAt?: CrashPoint },
+  options?: { readonly crashAt?: CrashPoint; readonly env?: Readonly<Record<string, string>> },
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const scope = yield* Effect.scope;
@@ -191,6 +191,7 @@ export const openHost = Effect.fn("HostTest.open")(function* (
     COLLIE_HOST: asCommand(command),
     COLLIE_HOST_CRASH_AT: options?.crashAt,
     ...(yield* suiteEnv),
+    ...options?.env,
   };
   const child = yield* spawner.spawn(
     ChildProcess.make(executable, [...prefix, "host", "--dir", state], {
@@ -541,6 +542,7 @@ export const workspace = Effect.fn("HostTest.workspace")(function* (prefix: stri
   yield* fs.writeFileString(`${world.home}/.bunfig.toml`, testBunfig);
   for (const name of [
     "proof.workflow.ts",
+    "posted-review.workflow.ts",
     "named-like-an-agent.workflow.ts",
     "plain.workflow.ts",
     "paths.workflow.ts",
