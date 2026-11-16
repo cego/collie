@@ -19,6 +19,7 @@ import {
   prepareMergeRequest,
   linearIssues,
   mrTarget,
+  mrIdIn,
   postNote,
   projectFromRemote,
   resolveAssignee,
@@ -63,6 +64,39 @@ test("a host's forge is GitHub on github.com, GitLab on the Flock's GitLab or a 
   expect(forgeOfHost("code.example.com")).toBeNull();
   expect(forgeOfHost("bitbucket.org", "gitlab.cego.dk")).toBeNull();
 });
+
+test("settled commit and Run references do not inspect a checkout to find a merge request", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const calls: string[] = [];
+      const run = (command: string, args: string[]) => {
+        calls.push(`${command} ${args.join(" ")}`);
+        return Effect.succeed({ code: 1, stdout: "" });
+      };
+      for (const ref of [
+        "6cca5bdad3f87d9aec3ebeef1086c6b419952015",
+        "run-9284fbdb",
+        "vm-mk/run-9284fbdb",
+        "",
+        "branch:main",
+      ])
+        expect(yield* mrIdIn(ref, "/removed-checkout", run)).toBeNull();
+      expect(calls).toEqual([]);
+    }),
+  ));
+
+test("legacy merge request references still resolve against their checkout", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const run = runner({
+        "git remote get-url origin": { stdout: "git@gitlab.example.com:group/app.git\n" },
+      });
+      for (const ref of ["42", "!42", "mr:42", "app!42", "group/app!42"])
+        expect(yield* mrIdIn(ref, "/legacy-reference-checkout", run)).toBe(
+          "gitlab.example.com/group/app!42",
+        );
+    }),
+  ));
 
 test("a checkout's forge is its origin's, else its upstream's, whatever else it has", () =>
   runEffect(

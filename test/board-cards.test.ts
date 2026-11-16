@@ -3,6 +3,7 @@ import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import { DateTime, Effect, FileSystem, Option, Queue, Stream } from "effect";
 import { TestClock } from "effect/testing";
+import { ChildProcessSpawner } from "effect/process";
 import { buildBoard, type KeptCards } from "../src/board";
 import { shareBoard } from "../src/board-stream";
 import { readEnv } from "../src/env";
@@ -12,9 +13,82 @@ import { epochMs } from "../src/time";
 import { runEffect } from "./support/effect";
 import { madeRun } from "./support/records";
 import { VERIFYING_FILE } from "../src/verify";
+import { appendCard, buildCard } from "../src/cards";
+import { recordDisposition } from "../src/disposition";
 
 const RUNS = 500;
 const NOW = epochMs("2026-10-30T10:00:00Z");
+
+test.each(["merged", "abandoned"] as const)(
+  "a %s Task does not investigate its old pushed branch while drawing",
+  (kind) =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped();
+        const at = "2026-10-30T10:00:00Z";
+        const mr = "https://github.com/cego/collie/pull/1";
+        const run = yield* madeRun(dir, {
+          state: "failed",
+          branch: "feature",
+          mr,
+          created: at,
+          finished: at,
+        });
+        yield* appendCard(
+          run.dir,
+          buildCard({
+            run: run.id,
+            kind: "final",
+            step: "finish",
+            iteration: 1,
+            at,
+            intentVersion: 1,
+            revision: { branch: "feature", head_sha: "abc", fingerprint: "f1", dirty: false },
+            changes: { files: [], commits: [] },
+            requested: { goal: null, constraints: [] },
+            verifications: [],
+            claims: [],
+            missing: [],
+            inspect: [],
+            links: {},
+            drift: [],
+            deliveries: [],
+            narrative: null,
+            aligned: "unverified",
+            crossRun: "none",
+            significance: {
+              mrTouched: false,
+              pendingChoice: false,
+              driftUnresolved: false,
+              pendingProposal: false,
+              correctionUnacknowledged: false,
+              blockingDrift: false,
+              correctionSent: false,
+              intentChanged: false,
+              ended: "failed",
+            },
+          }),
+        );
+        yield* recordDisposition(run.dir, { at, by: "human", kind, ref: mr, note: null });
+        const commands: string[] = [];
+        const spawner = ChildProcessSpawner.make((command) => {
+          commands.push(command._tag === "StandardCommand" ? command.command : "pipeline");
+          return Effect.die(new Error("drawing settled work must not start a command"));
+        });
+        const views = yield* buildBoard({
+          env: readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" }),
+          runs: [run],
+          registered: [],
+          now: NOW,
+          offers: () => Effect.succeed([]),
+        }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+        expect(views[0]?.landed).toBe(true);
+        expect(views[0]?.drift).toBeNull();
+        expect(commands).toEqual([]);
+      }),
+    ),
+);
 
 /** Planners that ran for an hour to `finished`, their plans ready: each card asks for its offer. */
 const planners = (count: number, finished = "2026-10-27T10:00:00Z") =>
