@@ -21,6 +21,7 @@ const SHIPPED = [
   "release",
   "renovate",
   "review",
+  "review-improve",
   "self-improve",
   "stage",
   "tune-up",

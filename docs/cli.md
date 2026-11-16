@@ -647,6 +647,7 @@ checkout. Anywhere else it has to carry `--input workspace=<absolute path>` or
 checkouts under the [Projects root](../CONTEXT.md) to choose from. Every Input the workflow
 declares has to be given too, an optional one as an explicit empty string
 (`--input plan=`): the prompt then says it was not given rather than leaving it out.
+An Input hinted `internal` is the exception: Collie sets it, so a start never asks for it.
 
 `--input workspace=` is the host's, not the workflow's, and it says where the checkout
 comes from. `new` asks herdr for it, so the run gets a worktree workspace of its own

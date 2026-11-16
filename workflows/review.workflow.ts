@@ -149,7 +149,7 @@ export default defineWorkflow({
   output: Schema.String,
   agents: { roles: { implementer: IMPLEMENTER, reviewer: REVIEWER } },
   path: [reviewRound, menu],
-  hints: { target: "diff-target", improving: "internal" },
+  hints: { target: "diff-target", slack: "internal", improving: "internal" },
   follows: FOLLOW,
   // A review proves it wrote a review a human can read; nobody chooses that.
   outcome: { fixed: "review" },
