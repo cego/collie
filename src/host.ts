@@ -312,7 +312,7 @@ import { AgentEntrySchema, everyRegistered, REGISTERED } from "./registry";
 import { listTasks, readTask, taskKeptIn, TASKS, TaskSchema } from "./task";
 import { epochMs, nowIso } from "./time";
 import { appendLog } from "./oversight";
-import { VERIFYING, verifyingOf } from "./verify";
+import { decodeVerifying, VERIFYING, verifyingOf } from "./verify";
 import { reason } from "./naming";
 import { editString, globFiles, grepFiles, readPart, writeWhole } from "./host-files";
 import { receive, uploadsDir } from "./uploads";
@@ -4374,6 +4374,13 @@ const onLeftoversRun = (dir: string) => (leftover: Leftover, outcome: LeftoverEn
     yield* appendLog(at, line).pipe(Effect.ignore);
   });
 
+/** A CI wait runs only in the host that started it, so a starting host has none. */
+const endCiWaits = Effect.gen(function* () {
+  for (const row of yield* RunRecords.use((records) => records.everyControl(VERIFYING)))
+    if (decodeVerifying(row.data)?.pass === "ci")
+      yield* RunRecords.use((records) => records.setControl(VERIFYING, row.run, null));
+});
+
 /**
  * One host, for as long as it owns this directory. It runs until it is interrupted:
  * every resource it holds — the socket, the registrations, the SQLite client and the
@@ -4422,6 +4429,7 @@ export const serve = (named: string): Effect.Effect<void, never, PlatformService
           ...(Option.isSome(handedOver) &&
             handedOver.value.build === BUILD && { handedOver: handedOver.value }),
         }).pipe(Effect.provideContext(checkRecords));
+        yield* endCiWaits.pipe(Effect.provideContext(checkRecords));
         const sweep = fresh
           ? Effect.void
           : checks.left.pipe(
