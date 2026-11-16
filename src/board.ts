@@ -1205,6 +1205,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
   const wall = yield* Clock.currentTimeMillis;
   const now = opts.now ?? wall;
   const quietMs = opts.quietMs ?? DEFAULT_QUIET_MS;
+  const machine = opts.env.machine ?? machineName();
   const all = newestFirst(opts.runs ?? (yield* listRuns(opts.env)));
   const tasks = new Map(Arr.map(opts.tasks ?? (yield* listTasks), (task) => [task.id, task]));
   const registered = opts.registered ?? (yield* everyRegistered);
@@ -1358,7 +1359,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
         const ledgers = new Map(
           yield* Effect.forEach(everyRun, (run) =>
             Effect.map(
-              ledgerOf(run, id, cardOf, opts.env.machine ?? machineName(), paired, runsById),
+              ledgerOf(run, id, cardOf, machine, paired, runsById),
               (lines) => [run.id, lines] as const,
             ),
           ),
@@ -1804,7 +1805,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                 usage: waits.usage,
                 check: running,
                 awaiting: waits.awaiting !== null,
-                machine: opts.env.machine ?? machineName(),
+                machine,
                 // A check's minutes are counted on the clock its Flow is said by.
                 now: wall,
                 sleeping:
