@@ -77,6 +77,10 @@ export const reconcileReviewSlack = (options: {
         Arr.map(reactions, (one) => `:${one}:`),
         " ",
       );
+    const lacking = (missing: ReadonlyArray<string>, reason: string) => {
+      const said = `Slack missing ${named(missing)}: ${reason}; sign in again in Desktop Settings › Connections`;
+      return { said, trouble: said };
+    };
     const outcome = yield* Effect.gen(function* () {
       const api = yield* options.api;
       if (state.message === undefined) {
@@ -128,16 +132,11 @@ export const reconcileReviewSlack = (options: {
       }
       if ("why" in state.message)
         return { said: state.message.why, trouble: `No Slack reaction: ${state.message.why}` };
-      yield* api.reconcile(state.message.channel, state.message.ts, state.wanted);
-      return { said: `Slack: ${named(state.wanted)}`, trouble: undefined };
-    }).pipe(
-      Effect.catch((failure) => {
-        const { reason, missing } =
-          typeof failure === "string" ? { reason: failure, missing: state.wanted } : failure;
-        const said = `Slack missing ${named(missing)}: ${reason}; sign in again in Desktop Settings › Connections`;
-        return Effect.succeed({ said, trouble: said });
-      }),
-    );
+      return yield* api.reconcile(state.message.channel, state.message.ts, state.wanted).pipe(
+        Effect.as({ said: `Slack: ${named(state.wanted)}`, trouble: undefined }),
+        Effect.catch(({ missing, reason }) => Effect.succeed(lacking(missing, reason))),
+      );
+    }).pipe(Effect.catch((reason) => Effect.succeed(lacking(state.wanted, reason))));
     state.trouble = outcome.trouble;
     yield* keep();
     return outcome.said;
