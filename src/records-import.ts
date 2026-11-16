@@ -390,8 +390,8 @@ export class LaterMigration extends Data.TaggedError("LaterMigration")<{
 }> {}
 
 /**
- * Undoes `RUN_RECORDS_MIGRATION` for a host that is not running: every Run's records and
- * controls are written back where an older build reads them, each Run's files dated by when
+ * Undoes `RUN_RECORDS_MIGRATION` for a host that is not running: every Run's records,
+ * controls and the usual Step times are written back where an older build reads them, each Run's files dated by when
  * it last did work, a legacy file the host has since removed is removed, and only then are
  * the tables and the migration's record dropped, in one transaction, so a later upgrade
  * imports the files again. Refused while a later migration is recorded, since a re-upgrade
@@ -457,6 +457,15 @@ export const rollbackRunRecords = Effect.fn("RecordsImport.rollback")(function* 
   ]);
   for (const { file } of yield* legacyControls(stateDir))
     if (!set.has(file)) yield* fs.remove(file).pipe(orMissing<void>(undefined));
+  yield* write(
+    "",
+    path.join(stateDir, "step-durations.json"),
+    yield* Schema.encodeEffect(KeptStepTimes)(
+      yield* sql<(typeof KeptStepTimes.Type)[number]>`
+        SELECT workflow, step, run, key, at, ms FROM collie_step_times ORDER BY at DESC
+      `,
+    ).pipe(Effect.orDie),
+  );
   for (const { run, at } of yield* sql<{ run: string; at: number }>`
     SELECT run, at FROM collie_run_activity
   `)

@@ -48,7 +48,8 @@ kept in `collie_step_times` in the write that appends its Step line, and each St
 latest ten there, so reading the usual times (`stepSamples`) reads ten rows a Step and no
 Step line, and they outlive the Runs they came from; no file of them is kept. The migration
 computes them from the imported Step lines, adds the samples an older build kept in
-`step-durations.json` for Runs it had already retired, and leaves that file for that build. A board build reads each journal or fact it
+`step-durations.json` for Runs it had already retired, and leaves that file for that build;
+a rollback writes the kept times back to it. A board build reads each journal or fact it
 uses, and activity, for all of its Runs in one query, the first time it reads it for any of
 them (`readAhead`): it makes as many queries for five Runs as for two. A Run's last line of a
 kind (its final card, its latest hold or stop) is read through the `kind` index, which an

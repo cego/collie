@@ -2994,7 +2994,8 @@ Steps, its audit trail, its Intent and its steering cards, are rows in the state
 directory's `host.db`; a build from before that kept them as files in the Run's
 directories and does not read the rows. `rollback` writes every Run's records back to
 those files, each dated by when its Run last did work, removes the file of a fact the host
-has since removed, then drops the records' tables, so the next upgrade imports the files
+has since removed, writes each Step's usual times back to `step-durations.json`, then
+drops the records' tables, so the next upgrade imports the files
 again. A state directory a later build has migrated further is refused with
 `invalid_state`, naming that migration, and changes nothing: roll that build back first. It needs the state directory
 (this installation's by default) to have no host: with one running it is `invalid_state`,
