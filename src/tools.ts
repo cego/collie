@@ -28,7 +28,7 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
 import type { PlatformServices } from "./platform";
-import { Clock, Effect, Layer, Result, Schema, flow as Schemaflow } from "effect";
+import { Clock, Effect, Result, Schema, flow as Schemaflow } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { ChildProcessSpawner } from "effect/process";
 import type { PluginEnv } from "./env";
@@ -40,7 +40,6 @@ import {
   workspaceCwdFromPanes,
 } from "./operations";
 import { recordsReadLayer } from "./records";
-import { RunRecords } from "./run-records";
 import { projectsRoot } from "./projects";
 import type { Action } from "./actions";
 import type { Launched } from "./launches";
@@ -148,23 +147,6 @@ const said = <E, R>(effect: Effect.Effect<string, E, R>) =>
     Effect.catch((cause) => Effect.succeed(`Collie could not read that: ${String(cause)}`)),
   );
 
-/** `effect` over the records its caller holds, the host's own; elsewhere over `host.db` read-only. */
-const withRunRecords = <A, E, R>(env: PluginEnv, effect: Effect.Effect<A, E, R>) =>
-  Effect.serviceOption(RunRecords).pipe(
-    Effect.flatMap((held) =>
-      Effect.provide(
-        effect,
-        Option.match(held, {
-          onSome: (records) => Layer.succeed(RunRecords, records),
-          onNone: () =>
-            Layer.effect(RunRecords)(RunRecords.use(Effect.succeed)).pipe(
-              Layer.provide(recordsReadLayer(env.stateDir)),
-            ),
-        }),
-      ),
-    ),
-  );
-
 const toolDoor = Effect.fn("Tools.door")(function* (env: PluginEnv) {
   if (env.asker !== undefined) return env.asker;
   const run = env.raw.COLLIE_RUN;
@@ -252,7 +234,8 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
           selected,
           input,
           "collie_run",
-          (run) => said(withRunRecords(env, runAnswer(env, run, reads))),
+          (run) =>
+            said(runAnswer(env, run, reads).pipe(Effect.provide(recordsReadLayer(env.stateDir)))),
           reads?.related ?? reads?.runs,
         ),
       ),
