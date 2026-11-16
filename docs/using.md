@@ -3966,6 +3966,10 @@ every ten minutes, whether or not a pane is open. A sweep removes:
   Follow-up, and Collie never launches the agent again for that Run.
 - **Worktrees** Collie made, once they are **Settled** (see
   [What a run does to your repository](#what-a-run-does-to-your-repository)).
+- **Build caches** in a worktree Collie made, such as a Cargo `target`, once no Run that has
+  not ended works in that worktree, even while the worktree itself is kept. A build cache
+  is a directory git ignores that holds a `CACHEDIR.TAG`. Nothing else in the worktree is
+  touched ([ADR-draft-a-worktrees-build-cache-goes-once-no-live-run-works-in-it](adr/draft-a-worktrees-build-cache-goes-once-no-live-run-works-in-it.md)).
 - **Staged module generations** under `~/.cache/collie/entries`, once unused for 7 days.
   Loading a module again counts as using it, and one that is needed after it went is
   staged again.
