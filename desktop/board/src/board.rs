@@ -148,7 +148,7 @@ pub struct Board {
     pub width: f32,
     /// The columns last drawn, so a change of them lands at once rather than springing.
     pub columns: std::cell::Cell<usize>,
-    /// A fixed now for tests; the wall clock otherwise.
+    /// A fixed now for tests, which a timed flock retry never reaches; the wall clock otherwise.
     pub clock: Option<f64>,
     /// Minutes east of UTC, for a test; this computer's own otherwise.
     pub utc_offset: Option<i32>,
@@ -349,6 +349,10 @@ impl App {
         let Some(core) = self.core.clone() else {
             return;
         };
+        // A fixed now never reaches the retry's time.
+        if self.board.clock.is_some() {
+            return;
+        }
         let (slot, counter) = (
             self.board.flock_stop.clone(),
             self.board.flock_attempt.clone(),
