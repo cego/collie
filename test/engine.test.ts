@@ -172,6 +172,69 @@ test(
 );
 
 test(
+  "a hold read where the Run does not suspend leaves a later wait on a question asleep",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { wf, state } = yield* workspace("collie-engine-hold-peek-");
+        // Reads its hold the way an idle agent's reminder does: often, and without suspending.
+        const entry = `${wf}/peeks.workflow.ts`;
+        yield* fs.writeFileString(
+          entry,
+          `import { Host, Run, ask, defineWorkflow } from "collie";
+import { Effect, Schedule, Schema } from "effect";
+
+export default defineWorkflow({
+  id: "peeks",
+  title: "Wait out a hold without suspending, then ask",
+  input: Schema.Struct({ note: Schema.String }),
+  hints: { note: "goal" },
+  output: Schema.String,
+  run: () =>
+    Effect.gen(function* () {
+      const host = yield* Host;
+      const runId = (yield* Run).id;
+      const first = yield* ask({ name: "first", prompt: "First?" });
+      yield* host.held(runId).pipe(
+        Effect.tap((held) => (held ? host.record(runId, "peeked") : Effect.void)),
+        Effect.repeat({ until: (held) => !held, schedule: Schedule.spaced("100 millis") }),
+      );
+      yield* host.record(runId, "released");
+      const second = yield* ask({ name: "second", prompt: "Second?" });
+      return first + "," + second;
+    }),
+});
+`,
+        );
+        const host = yield* openHost(state);
+        yield* host.ask({ op: "load", entry });
+        yield* host.ask({ op: "start", id: "peeks", runId: "r1", input: { note: "peek" } });
+        yield* host.until({ op: "waiting", runId: "r1" }, (reply) =>
+          (reply.diagnostics ?? []).includes("first"),
+        );
+        yield* host.ask({ op: "hold", runId: "r1" });
+        yield* host.ask({ op: "answer", id: "peeks", runId: "r1", decision: "first", value: "a" });
+        yield* until(
+          () => events(state, "r1"),
+          (log) => Arr.filter(log, (line) => line === "peeked").length >= 3,
+        );
+        yield* host.ask({ op: "release", id: "peeks", runId: "r1" });
+        yield* host.until({ op: "waiting", runId: "r1" }, (reply) =>
+          (reply.diagnostics ?? []).includes("second"),
+        );
+        yield* host.until({ op: "poll", id: "peeks", runId: "r1" }, suspended);
+        // Long enough for a stray wake, polling every quarter second, to have resumed it.
+        yield* Effect.sleep("2 seconds");
+        const log = yield* events(state, "r1");
+        expect(Arr.filter(log, (line) => line === "released")).toHaveLength(1);
+        yield* host.stop;
+      }).pipe(Effect.scoped),
+    ),
+  120_000,
+);
+
+test(
   "two stop and resume cycles keep the run's work and it still completes",
   () =>
     runEffect(
