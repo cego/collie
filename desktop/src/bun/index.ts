@@ -30,12 +30,7 @@ import { CommandLine } from "effect/process";
 import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as RpcServer from "effect/rpc/RpcServer";
-import Electrobun, {
-  BrowserView,
-  BrowserWindow,
-  Utils,
-  Updater,
-} from "../../../desktop-rune/core/platform";
+import Electrobun, { BrowserView, BrowserWindow, Utils, Updater } from "../../core/platform";
 import {
   type Channel,
   heldUntilListened,
@@ -309,14 +304,7 @@ const main = Effect.gen(function* () {
       return local.desktop.models().pipe(
         Effect.map((catalogues) => listedIn(catalogues, harness)),
         Effect.catchCause(() => Effect.succeed(null)),
-        Effect.flatMap((read) =>
-          read === null
-            ? own
-            : Result.match(read, {
-                onSuccess: (models) => Effect.succeed(models),
-                onFailure: (why) => Effect.fail(why),
-              }),
-        ),
+        Effect.flatMap((read) => (read === null ? own : Effect.fromResult(read))),
       );
     });
   const lists = yield* harnessLists({

@@ -154,6 +154,13 @@ recorded missing claims can read its ancestry on replay without changing that re
 The parent keeps its terminal status and finishing revision
 ([ADR-draft-a-finished-delivery-names-the-way-back-to-work](adr/draft-a-finished-delivery-names-the-way-back-to-work.md)).
 
+The merge request step calls [`collie run publish`](cli.md#publish-a-runs-merge-request).
+The host checks the title, description or note, and commit messages before pushing.
+It opens a merge request or notes the existing one and records its URL.
+Descriptions name repository commands and results; open questions omit internal ticket names.
+The Run's record retains the ticket names and assumptions.
+Tune-up uses the same publishing command after its measurements and checks finish.
+
 **What happens:** one implementer agent builds, a commit per ticket. It reviews what it
 built with the same pass `review` runs — one complete review — and loops on the findings for
 at most four review and fix rounds. Every commit is pushed, so the reviewers read the change
@@ -170,9 +177,9 @@ names the blockers too. **Hand back** reads the ticket again, goes on with no bu
 nothing is unmet any more, and otherwise hands it back with two tries fresh. **Stop** parks
 the Run with that reason, before any review. A resume asks the builder again under a new
 operation and reads its new Output. An unattended Run waits on either question. A ticket's `## After merge` outcomes are not criteria:
-the merge request names them under **Not settled by the run**. A criterion only CI, a merge
+the merge request names them under **Open questions**. A criterion only CI, a merge
 or a deploy can show may be answered `after merge: <reason>`: it does not end the Run, the
-reviewer blocks one the Run could have shown, and the merge request names the ticket, the
+reviewer blocks one the Run could have shown, and the merge request names the
 criterion and the reason under the same heading
 ([ADR-draft-a-criterion-is-what-the-run-can-show-before-its-merge-request](adr/draft-a-criterion-is-what-the-run-can-show-before-its-merge-request.md)).
 The builder records each new test failing before the code that makes it pass, never offers a
@@ -266,8 +273,8 @@ them go onto the merge request as one note from Collie. Nobody is asked along
 the way: the human verifies the work in the merge request, before it lands. Where a failed check's
 output names the tests that failed (bun test's does), the gate reruns each of those tests
 once, alone, on the same tree. A test that then passes is a **Flake**: it is not handed to a
-fix and never counts as a pass, and the merge request names it under **Not settled by the
-run**. A test the branch adds or changes is never a Flake: one that fails, then passes alone,
+fix and never counts as a pass, and the merge request names it under **Open questions**.
+A test the branch adds or changes is never a Flake: one that fails, then passes alone,
 is still the Run's own and goes to the fixes, its finding saying it passed alone, and it is
 not run at the base. A failed check whose output names no tests is re-run whole once instead, since a check
 that fails and then passes is a flake. The gate then hands
@@ -725,9 +732,12 @@ new external comment, or a reply in a thread after Collie's, starts a comment ro
 `answer-<n>`: the agent checks each against the code, fixes what holds test first and
 pushes with a plain push, and disputes what it judges wrong, with a reason. Collie then
 replies to each comment on the forge, linking it: "Fixed in `<sha>`: …" once the merge
-request's head carries that commit, or "Not changed: …" with the reason. Each reply ends
-with a line naming the Run and its Machine ("Posted by Collie's Run … on …"), so a reviewer
-can tell it from your own words though it is posted as your login. The host records every
+request's head carries that commit, or "Not changed: …" with the reason. A reply reads as
+yours: nothing on the page names Collie. Its raw text ends with a hidden marker,
+`<!-- collie:<run> -->`, by which Collie finds its own reply after a crash and chat tells you
+which replies a Run posted. The host refuses a reply, note, review, issue or Slack share
+that names Collie or its process (Public text, in `CONTEXT.md`), and says which phrase it
+found; nothing is rewritten, and Collie's own repository takes any text. The host records every
 reply on the Run, where `collie run show`, the drawer and Desktop's record list it, and a
 reply that disputes a comment reaches the board and chat as News; nothing waits for you. It
 never resolves a thread, and a restart never posts a reply twice. A comment a round left out,
@@ -1276,7 +1286,9 @@ with no Discover or Harness Output fails the Run, naming the files it looked for
    of its own, each with the `why` it rests on: a `threshold` or `tolerance`, an `absolute`
    slack in its own units for a value near zero, or `exact` for a deterministic count such
    as a correctness check's mismatches (see [`collie measure`](cli.md#measure)). It may ask
-   for more `samples` than the Run's. The Run's `samples`, `threshold` and `tolerance`
+   for more `samples` than the Run's. A positive `limit` bounds all commands in one sample
+   and each tree's prepare, in seconds; it defaults to 600. The Run's `wall_time` still
+   governs when a new Cycle may start. The Run's `samples`, `threshold` and `tolerance`
    complete it. The plan is recorded before anything is measured by it, and a later change
    is a new plan with its reason.
 3. **Calibrate.** The host measures the base, the merge base with the harness commits on
@@ -1368,10 +1380,12 @@ with no Discover or Harness Output fails the Run, naming the files it looked for
    is `handoffs/tune-up-merge-request.md`, which Collie writes from the Measurements, with
    credential-shaped values taken out: the base and candidate table with each metric's
    ratio and interval, any tradeoff you accepted under **Accepted tradeoffs**, apart from
-   the verdicts, the commands and harness commits and where the archive is, the guardrails
+   the verdicts, the commands and harness commits, the guardrails
    and Cycles not kept, the checks and the review, the opportunities left, what to monitor after
    deploying, and, collapsed, every sample of the `final` Measurement, the frozen plan,
-   every plan and `final` Measurement, the commands to reproduce it and the Run id.
+   every plan and `final` Measurement, and the repository's commands to reproduce it.
+   Run ids and archive paths stay in the Run's record. A CI fix posts the replacement
+   evidence as a note; a refusal fails the Run with the host's reason.
 10. **External report**, at whichever end the Run reaches, after the merge request or with
     its findings alone. Discover and each Cycle hand on what only another repository could
     change, and Collie writes each to `handoffs/tune-up-external.md`: the owning repository
@@ -1382,7 +1396,8 @@ with no Discover or Harness Output fails the Run, naming the files it looked for
     `Post` only, its question showing the finding. A finding with no known team asks for the
     team in your own words first. Post has the tuner search Linear, read-only, for the issue
     carrying the key's marker and for open issues asking for the same change, and file one
-    issue carrying the marker only where it found none. A finding that already matched an
+    issue carrying the marker in a hidden HTML comment only where it found none.
+    Searches still recognise earlier issues whose marker was visible. A finding that already matched an
     issue when it was found is recorded as `existing` and not asked. Your answer and the
     issue's URL go in the Run's log. A host restarted while an issue was being filed never
     files blind: it searches again, records the issue it finds, and otherwise asks again,

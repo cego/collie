@@ -11,6 +11,27 @@ there is a command for it.
 For the vocabulary, see [`CONTEXT.md`](../CONTEXT.md). For what each workflow is for, see
 [Workflows](workflows.md).
 
+## Publish a Run's merge request
+
+`collie run publish <run> --title "<title>" --file <path> --request-id <request>` asks the
+host to check, push, and open the branch's merge request. Use `--onto <branch>` for a
+target other than the default branch. The file must be on the Run's Machine.
+
+The host checks the title, file, and full commit messages before pushing. A refusal names
+the leaked phrase and its location, including the commit's short SHA. Reword locally and
+retry with a new request id. Collie's own repository keeps its internal vocabulary.
+
+When the branch already has an open merge request, the file becomes a note and `--title`
+is optional. The host adds a hidden marker and records the returned URL on the Run.
+Repeating a successful request id returns its result without publishing again.
+`--json` returns `mr_url` and `pushed`. Auto-merge must be off before publishing.
+
+Earlier build and fix steps use `collie run publish <run> --push-only --request-id <request>`.
+This checks commit messages and pushes without opening a merge request or posting a note.
+It needs neither `--title` nor `--file`, and returns `pushed` in JSON.
+Add `--skip-ci` to skip GitLab CI for a review push; GitHub ignores this flag.
+CI fixes omit `--skip-ci` so their pipeline runs. `--skip-ci` requires `--push-only`.
+
 ## Global flags
 
 Put these before the subcommand:
@@ -1755,6 +1776,8 @@ the result; changing any byte makes it about an earlier tree.
 That pair is the point: a pass on a tree that changed while the command ran says nothing
 about either tree, so such a result is `unstable` and never `pass`. So is a tree too large
 to fingerprint at all, because two unmeasured trees are not one tree.
+A tree git cannot stage or write is unmeasured too. Collie tries once more before it says
+so, and the snapshot keeps git's message as `unmeasured`, so the record says why.
 
 Reading the tree writes nothing in the checkout. Collie's status of a checkout runs with
 `GIT_OPTIONAL_LOCKS=0`, so it never holds `index.lock` and a commit made beside it is never
@@ -1825,6 +1848,10 @@ still running after its SIGTERM and SIGKILL refuses the verify with `invalid_sta
 the check and its pid; `collie cleanup --apply` tries to end it again and reports what is
 left. Once the command is spawned, it prints `"<name>" started, pid <pid>`: a wait after
 that line is the command's own. Each of these lines is also written to the Run's log.
+
+A check whose exit status, output or record cannot be written, as on a full disk, gives no
+verdict: `collie verify` is refused with `invalid_state`, naming the check and what could
+not be written, and nothing is recorded for it.
 
 `--expect fail` is how a bug is proved to exist. A regression test that exits non-zero on
 the tree before the fix is the evidence, so that record is a `pass`; the same command
@@ -1903,9 +1930,11 @@ file, or a checkout behind its remote, does not reach a new run: push the edit t
 the run starts from, or name the checks with `--verify` or `collie run intent verification`
 ([ADR-draft-a-runs-checks-are-read-where-its-checkout-starts](adr/draft-a-runs-checks-are-read-where-its-checkout-starts.md)).
 
-Collie's own `.collie/verify.json` leaves its one check, `check` (`bun run check`), to CI's
-`test` job, which passes only when the jobs running that script's two halves did: its
-implement Runs and Releases wait for the job rather than run the suite again.
+Collie's own `.collie/verify.json` has two checks. `static` (`bun run check:static`) is run by
+the gate on the final tree, so a head with an unformatted file or stale Rust types never
+reaches a merge request. `check` (`bun run check`) is left to CI's `test` job, which passes
+only when the jobs running that script's two halves did: its implement Runs and Releases
+wait for the job rather than run the suite again.
 
 A file that is there and does not decode is an error naming it and the ref it was read at, never an empty set, and
 the start is refused as `invalid_input`, so a typo is never quietly replaced by an agent's
@@ -2339,6 +2368,12 @@ The `measurement-tree` kind is a base tree [`collie measure`](#measure) made, wh
 is its directory. It is kept while its Run has not ended, and, whatever its Run's state,
 while a Measurement is running on this Machine. Once neither holds, a sweep removes it with
 git's record of the worktree.
+
+The `build-cache` kind is a git-ignored directory holding a signed `CACHEDIR.TAG`, such as a
+Cargo `target`, in a worktree Collie made; its target is that directory. It is kept while a
+Run that has not ended works in that worktree, with "<run> still works in this checkout",
+and judged again just before a sweep removes it
+([ADR-draft-a-worktrees-build-cache-goes-once-no-live-run-works-in-it](adr/draft-a-worktrees-build-cache-goes-once-no-live-run-works-in-it.md)).
 
 ## Usage
 

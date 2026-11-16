@@ -70,7 +70,8 @@ worth raising; name the file it is about and say why the change puts it wrong.
 
 You may be the only reviewer of this change, in which case your review is the review the
 human reads: write `summary` — two sentences, what this change does and what is wrong with
-it — `dropped`: findings you withdraw with a `reason`, or `[]` where there are none, and
+it — and `public_summary` for the MR's audience, describing only repository concerns in
+ordinary words. Write `dropped`: findings you withdraw with a `reason`, or `[]` where there are none, and
 `fixed`: each finding of the review above that you verified was corrected, as
 `{"file": "path", "title": "its title", "note": "how it was fixed"}`, alongside the fields
 below. Write them whether or not anyone else is reviewing; they cost a line and they are
@@ -100,7 +101,14 @@ only targeted checks — the test file or command that confirms or refutes a fin
 never the whole suite.
 
 Each check says whether a failing run of the same command was recorded on an earlier tree.
-A new test that was never seen failing is a finding: nothing shows it can fail.
+The failing-first rule applies only to checks recorded for a Run that built this change.
+For those checks, a new test never seen failing is an internal finding: nothing shows it can fail.
+For an MR no Run built, raise no finding about missing failing-first evidence.
+
+Mark a finding `"internal": true` when it exists only because of Collie's own process,
+such as missing Run evidence or a Tautology phrased in Collie's terms. Keep it in the
+review; it still blocks approval. Public findings about test strength or comments use
+ordinary words and cite the target repository's own testing or comment convention.
 
 Where you run something to check a finding, run it through the collector so the result
 is bound to the tree you checked it on: `collie verify -- <command>`; Collie records the result
@@ -184,6 +192,12 @@ The human is watching a rally, not a new list every time.
 - Each finding is one or two plain sentences, with the `file` and `line` it is at. Say
   what goes wrong and what it costs. Never say which model or which skill found it.
 - `summary` is two sentences: what this change does, and what is wrong with it.
+- `public_summary` is for the MR's audience, in the human's voice, describing only
+  repository concerns. It names no Collie process. With no public concern, say so.
+- Mark findings that exist only because of Collie's process `"internal": true` and keep
+  them in `findings`. Public findings use ordinary words and cite the repository's own
+  convention for concerns about test strength or comments. Classifying a finding as
+  internal never withdraws it or clears it for approval.
 - A finding that arrives with a `"rebuttal"` keeps it word for word. It answers a
   dispute the implementer has already made, and dropping it would end that argument
   without anyone deciding it.
@@ -195,9 +209,9 @@ The human is watching a rally, not a new list every time.
   it from the diff yourself. Otherwise `false`, with the finding that says why.
 
 Then write the Output JSON: `{"verdict": "clean" | "findings", "summary": "two
-sentences", "findings": [{"file": "path", "line": 12, "severity": "blocker|major|minor",
+sentences", "public_summary": "for the MR's audience", "findings": [{"file": "path", "line": 12, "severity": "blocker|major|minor",
 "title": "one line", "detail": "what goes wrong and what it costs", "rebuttal": "kept
-from the reviewer that wrote it"}], "dropped": [{"file": "path", "severity": "minor",
+from the reviewer that wrote it", "internal": false}], "dropped": [{"file": "path", "severity": "minor",
 "title": "what one reviewer raised", "reason": "why it did not survive"}],
 "fixed": [{"file": "path", "title": "what the last review raised", "note": "how it was
 fixed"}]}`, plus the one outcome field where the outcome names one.

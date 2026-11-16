@@ -83,11 +83,12 @@ work is not a reason to leave it out or to dispute it. Where the spec conflicts 
 or with the code, choose, and record the choice and why under `assumptions` in your Output:
 the human reads each one in the merge request before it lands.
 
-Push before you finish: `git push -u origin HEAD -o ci.skip` on GitLab, or
-`git push -u origin HEAD` on GitHub, onto the branch the work
-source named where there is one. The reviewers read the merge request when there is one,
+Push before you finish: `collie run publish {{run.id}} --push-only --skip-ci --request-id <request>`.
+The host checks every commit message before pushing. On a text refusal, reword locally,
+amending only your own unpushed commits, and retry with a new request id. Never bypass
+the command. The reviewers read the merge request when there is one,
 and a merge request shows the remote — so anything you want reviewed has to be on the
-remote before the review step runs. `ci.skip` because this state is for the reviewers;
+remote before the review step runs. `--skip-ci` skips GitLab CI because this state is for the reviewers;
 the `mr` step's push is the one that should build.
 
 If the push fails — no remote, no permission, a protected branch, a rejected
@@ -168,8 +169,7 @@ fix was implementer-reported, not re-reviewed — so report exactly what you did
 checks said is not read from you: each `checks` entry names a verification, and Collie
 reads its result from the journal, on the tree as it stands.
 
-Push the fixups before you finish — `git push -u origin HEAD -o ci.skip` on GitLab,
-or `git push -u origin HEAD` on GitHub — every
+Push the fixups before you finish — `collie run publish {{run.id}} --push-only --skip-ci --request-id <request>` — every
 iteration: the next round reviews the remote, and a fix it cannot see is a finding it
 raises again. A push that fails is reported as `"pushed": false`, not fatal.
 
@@ -202,7 +202,7 @@ A `collie verify` you started in the background is reported to you when it ends,
 so you may end your turn waiting on it. Never end a turn waiting on any other
 background job.
 
-Push without `ci.skip` — `git push -u origin HEAD` — so the pipeline runs on your commit:
+Push through `collie run publish {{run.id}} --push-only --request-id <request>` so the pipeline runs on your commit:
 Collie waits on the job again on the new head commit. A round that pushes no new commit
 parks the Run. A push that fails is reported as `"pushed": false`, not fatal.
 
@@ -223,8 +223,8 @@ Meet each one, or, where it cannot be met, say plainly why. The ticket's whole l
 
 Build what is missing test first, with {{skill:tdd}}, and run the typecheck and the test
 files you touched, each through `collie verify -- <command>`,
-and never the whole suite: it is the gate's. Commit to this branch and push it, as in the build: `git push -u origin HEAD -o ci.skip`
-on GitLab, or `git push -u origin HEAD` on GitHub. A push that fails is reported as
+and never the whole suite: it is the gate's. Commit to this branch and push it, as in the build:
+`collie run publish {{run.id}} --push-only --skip-ci --request-id <request>`. A push that fails is reported as
 `"pushed": false`, not fatal.
 
 A `collie verify` you started in the background is reported to you when it ends,
@@ -262,8 +262,8 @@ A `collie verify` you started in the background is reported to you when it ends,
 so you may end your turn waiting on it. Never end a turn waiting on any other
 background job.
 
-Push the merge — `git push -u origin HEAD -o ci.skip` on GitLab, or
-`git push -u origin HEAD` on GitHub. A push that fails is reported as `"pushed": false`,
+Push the merge — `collie run publish {{run.id}} --push-only --skip-ci --request-id <request>`.
+A push that fails is reported as `"pushed": false`,
 not fatal.
 
 Then write your Output: `commits` names each commit you made, and `findings` anything
@@ -278,13 +278,10 @@ What was actually verified, and by whom — `by collie` is a command Collie ran 
 
 {{evidence}}
 
-Say that in the description, in one line: which verifications passed on the branch as it
-stands, and the outcome this run was held to — the one at the top of this prompt, or
-unclassified where it is empty. Where the evidence names a `final` Measurement, put its id and
-each metric's verdict in the description. An Output that says the tests pass is a claim; these are not. Then list each
-verification this run is held to with its command, exactly as written at the top of this
-prompt: a model may have chosen them, and the human reading the merge request is who
-checks that they prove the work.
+Describe the evidence using the repository's own commands and results. Include which
+commands passed and which checks still await their pipeline jobs. Do not copy verification
+names, Run ids, outcome labels, "by collie", "by agent" or "left to CI" wording.
+For measurements, report the measured results and metric verdicts in ordinary terms.
 
 {{unreviewed}}
 
@@ -294,10 +291,8 @@ what that fix changed. Where findings were left open as non-blocking, list them 
 
 {{unsettled}}
 
-Where the list above is not empty, the Run could not settle these, and the human reads
-them before the merge request lands. Open the merge request anyway, and put each one, as
-written, in the description under this heading:
-**Not settled by the run**
+Where the list above is not empty, put each question in the description under
+**Open questions**. Use plain wording without ticket file names or internal process terms.
 
 - Forge: {{mr.forge}}
 - Assignee: `{{mr.assignee}}`
@@ -314,10 +309,10 @@ A `collie verify` you started in the background is reported to you when it ends,
 so you may end your turn waiting on it. Never end a turn waiting on any other
 background job.
 
-Push anything the earlier steps have not pushed yet, this time **without** `ci.skip`:
-yours is the push that runs the pipeline, and the state a human will look at.
-Where your push sends nothing, because an earlier push with `ci.skip` already carried this
-head, Collie starts the head's pipeline once you are done. Never start one yourself, and
+The host checks the title, description or note, and every commit message before it pushes.
+If it refuses, reword the named text locally, amending only your own unpushed commits,
+and retry with a new request id. Do not bypass the command. It pushes without `ci.skip`;
+Collie starts a missing head pipeline once you are done. Never start one yourself, and
 never report a missing or skipped pipeline as a finding.
 Merge only when a message of its own asks you to merge this merge request: the human typing
 in this pane, or a Delivery from the human, from chat for the human, or from another agent
@@ -331,24 +326,16 @@ update a merge request.
 Collie has already looked at this branch's open {{mr.noun}} above, and at whether it merges
 itself once green: a push is only asked of you where it does not.
 
-**When this branch already has an open {{mr.noun}}** (the line above is not empty), that
-one is being fixed: push, and post the final change and evidence on it as a note, written
-to a file in `{{run.dir}}` first:
+Write the description, or a note when the branch already has an open {{mr.noun}}, to a
+file in `{{run.dir}}`. Publish with this command, filling in the title for a new request
+and the file path:
 
 ```
-{{mr.comment}}
+{{mr.publish}} --title "<title>" --file <file> --request-id <request>
 ```
 
-Do **not** open a second {{mr.noun}} for the same branch. Report its URL as `mr_url`
-exactly as if you had opened it.
-
-**Otherwise**, write the description to a file in `{{run.dir}}` and open the {{mr.noun}}
-with this command, filling in a title and that file, and where a second line asks for
-`<iid>`, the number at the end of the URL the first one printed:
-
-```
-{{mr.create}}
-```
+An existing {{mr.noun}} gets the note; no second one is opened. Report the returned URL
+as `mr_url`, and `pushed: true` after success.
 
 Fill the repository's template yourself before sending the description.
 
