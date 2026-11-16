@@ -4028,6 +4028,8 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
+        // Its turn ends with the harness's error, not as an idle that is reminded.
+        core.reportedOnly([agentFor("r1")]);
         yield* rig.queueOutputs([null]);
         yield* session(
           Effect.gen(function* () {
