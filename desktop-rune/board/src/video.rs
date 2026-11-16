@@ -137,6 +137,8 @@ mod tests {
         runtime.state.mute(false);
         assert!(!runtime.state.state().muted);
         runtime.state.play();
+        // Rune anchors resumed headless playback on its first drawn frame.
+        runtime.frame(0.0);
         runtime.frame(3.0);
         assert!(runtime.state.state().ended);
         runtime.state.play();
