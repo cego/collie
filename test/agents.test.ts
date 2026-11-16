@@ -8617,7 +8617,11 @@ test("Claude skill selection is refreshed on recovery and preserves new local ch
         "kibana-dashboards": "name-only",
         "elastic-audit": "off",
       });
-      yield* session(halted("r1"), { collectMs: 30_000 });
+      // Halted by a host that runs no work: one that did would recover r1 before the skills change.
+      yield* halted("r1").pipe(
+        Effect.provide(agentsLayer(hostOf()).pipe(Layer.provideMerge(foundationLayer({ dir })))),
+        Effect.scoped,
+      );
       const fs = yield* FileSystem.FileSystem;
       yield* fs.makeDirectory(`${rig.projectDir}/.claude`, { recursive: true });
       yield* fs.writeFileString(

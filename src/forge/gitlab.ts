@@ -5,7 +5,17 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import { stripVTControlCharacters } from "node:util";
-import { DateTime, Effect, FileSystem, Option, Path, Redacted, Result, Schema } from "effect";
+import {
+  DateTime,
+  Effect,
+  FileSystem,
+  Option,
+  Order,
+  Path,
+  Redacted,
+  Result,
+  Schema,
+} from "effect";
 import { CommandLine } from "effect/process";
 import {
   mrWords,
@@ -29,6 +39,7 @@ import type {
   FromBranch,
   FromBranchList,
   BaseJobRead,
+  TargetJobRead,
   FailedAttempt,
   JobRead,
   JobState,
@@ -52,6 +63,9 @@ import {
   createIssue,
   commentIssue,
   postReview,
+  approveReview,
+  findReviewNote,
+  reviewChanges,
   viewerLogin,
   myMergeRequests,
 } from "./threads";
@@ -817,22 +831,36 @@ function failedAttempt(
   cwd: string,
 ): Effect.Effect<FailedAttempt, never, ForgeHttp> {
   return Effect.gen(function* () {
-    const unread: FailedAttempt = { url: null, tests: [] };
+    const unread: FailedAttempt = { url: null, tests: [], jobs: null };
     const reached = projectRest(ref, cwd);
     if (!reached.ok) return unread;
     const attempt = yield* reached.rest(AttemptJob, `jobs/${id}`);
     if (!attempt.ok) return unread;
     const url = attempt.value.web_url ?? null;
     const jobs = yield* pipelineJobs(reached, cwd, attempt.value.pipeline.id);
-    if (!jobs.ok) return { url, tests: [] };
-    const traces = yield* Effect.forEach(
-      Arr.filter(jobs.value, (one) => one.status === "failed"),
-      (one) => requestText(reached.login, cwd, `${reached.project}/jobs/${one.id}/trace`),
+    if (!jobs.ok) return { url, tests: [], jobs: null };
+    const failed = Arr.filter(jobs.value, (one) => one.status === "failed");
+    const traces = yield* Effect.forEach(failed, (one) =>
+      requestText(reached.login, cwd, `${reached.project}/jobs/${one.id}/trace`),
     );
-    const tests = Arr.flatMap(traces, (trace) =>
-      trace.ok ? failedTestsIn(plainTrace(trace.value)) : [],
+    const named = Arr.map(traces, (trace) =>
+      trace.ok ? failedTestsIn(plainTrace(trace.value)) : null,
     );
-    return { url, tests: Arr.dedupeWith(tests, (a, b) => a.name === b.name && a.file === b.file) };
+    const tests = Arr.flatMap(named, (one) => one ?? []);
+    // A retried job is its newest attempt.
+    const newest = pipe(
+      jobs.value,
+      Arr.sortWith((one) => -one.id, Order.Number),
+      Arr.dedupeWith((a, b) => a.name === b.name),
+    );
+    return {
+      url,
+      tests: Arr.dedupeWith(tests, (a, b) => a.name === b.name && a.file === b.file),
+      jobs: Arr.flatMap(newest, (one) => {
+        const at = failed.indexOf(one);
+        return at === -1 ? [] : [{ name: one.name, tests: named[at]! }];
+      }),
+    };
   });
 }
 
@@ -881,7 +909,47 @@ function baseJob(
         ok: false,
         reason: `could not list the jobs of pipeline ${pipeline.id}: ${found.reason}`,
       };
-    return { ok: true, at: pipeline.sha, state: found.value.state, url: found.value.url };
+    return {
+      ok: true,
+      at: pipeline.sha,
+      state: found.value.state,
+      url: found.value.url,
+      id: found.value.id,
+    };
+  });
+}
+
+/** The job named `name` in the newest pipeline on the merge request's target branch. */
+function targetJob(
+  ref: MrRef,
+  name: string,
+  cwd: string,
+): Effect.Effect<TargetJobRead, never, ForgeHttp> {
+  return Effect.gen(function* () {
+    const where = whereOf(ref);
+    const reached = projectRest(ref, cwd);
+    if (!reached.ok) return reached;
+    const mr = yield* reached.rest(MrBase, `merge_requests/${ref.iid}`);
+    if (!mr.ok) return { ok: false, reason: `could not read ${where}: ${mr.reason}` };
+    const branch = mr.value.target_branch;
+    if (!branch) return { ok: false, reason: `GitLab would not say what ${where} targets` };
+    const listed = yield* reached.rest(
+      Pipelines,
+      `pipelines?ref=${encodeURIComponent(branch)}&per_page=1`,
+    );
+    if (!listed.ok)
+      return { ok: false, reason: `could not list the pipelines on ${branch}: ${listed.reason}` };
+    const pipeline = listed.value[0];
+    if (pipeline === undefined)
+      return { ok: true, branch, at: null, state: "missing", url: null, id: null };
+    const found = yield* jobIn(reached, cwd, pipeline.id, name);
+    if (!found.ok)
+      return {
+        ok: false,
+        reason: `could not list the jobs of pipeline ${pipeline.id}: ${found.reason}`,
+      };
+    const { state, url, id } = found.value;
+    return { ok: true, branch, at: pipeline.sha, state, url, id };
   });
 }
 
@@ -1346,6 +1414,19 @@ function clone<R>(
 
 export const gitlab: Forge = {
   name: "gitlab",
+  reviewChanges: (ref, previous, head, cwd, run) =>
+    Effect.gen(function* () {
+      const project = ref.project ?? (yield* projectHere(cwd, run));
+      if (project === null) return { ok: false, reason: `${whereOf(ref)} names no GitLab project` };
+      return yield* reviewChanges(
+        glabLoginTo(hostOf(project) ?? "gitlab.com"),
+        project,
+        ref,
+        previous,
+        head,
+        cwd,
+      );
+    }),
   issues: (project, cwd, _run, numbers) =>
     listIssues(glabLoginTo(hostOf(project) ?? "gitlab.com"), project, cwd, numbers),
   fileIssue: (project, title, body, cwd) =>
@@ -1374,6 +1455,7 @@ export const gitlab: Forge = {
   protects,
   job,
   baseJob,
+  targetJob,
   retryJob,
   failedAttempt,
   startPipeline,
@@ -1418,7 +1500,32 @@ export const gitlab: Forge = {
   readReview,
   reply,
   merge,
-  post: (ref, body, approve, cwd, run) =>
+  approve: (ref, head, cwd, run) =>
+    Effect.gen(function* () {
+      const project = ref.project ?? (yield* projectHere(cwd, run));
+      if (project === null)
+        return { ok: false, message: `${whereOf(ref)} names no GitLab project` };
+      return yield* approveReview(
+        glabLoginTo(hostOf(project) ?? "gitlab.com"),
+        project,
+        ref,
+        head,
+        cwd,
+      );
+    }),
+  findNote: (ref, signature, cwd, run) =>
+    Effect.gen(function* () {
+      const project = ref.project ?? (yield* projectHere(cwd, run));
+      if (project === null) return { ok: false, reason: `${whereOf(ref)} names no GitLab project` };
+      return yield* findReviewNote(
+        glabLoginTo(hostOf(project) ?? "gitlab.com"),
+        project,
+        ref,
+        signature,
+        cwd,
+      );
+    }),
+  post: (ref, body, cwd, run) =>
     Effect.gen(function* () {
       const project = ref.project ?? (yield* projectHere(cwd, run));
       if (project === null)
@@ -1428,7 +1535,6 @@ export const gitlab: Forge = {
         project,
         ref,
         body,
-        approve,
         cwd,
       );
     }),

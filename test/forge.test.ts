@@ -80,6 +80,183 @@ for (const name of ["gitlab", "github"] as const) {
   const host = FORGE_HOST[name];
 
   describe(`the ${name} forge`, () => {
+    test("a re-review reads only the interdiff of a descendant head", () =>
+      runEffect(
+        Effect.gen(function* () {
+          const fake = fakeForge(
+            name,
+            model(name, {
+              mrs: [mr(name, { interdiff: "@@ -1 +1 @@\n-old()\n+guard()" })],
+              ancestry: { [HEAD]: [MERGED] },
+            }),
+          );
+          const diff = yield* FORGES[name]
+            .reviewChanges(ref(name), MERGED, HEAD, "/w", fake.run)
+            .pipe(Effect.provide(fake.layer));
+          expect(diff).toEqual({
+            ok: true,
+            value: `Interdiff ${MERGED}..${HEAD}:\n\nsrc/a.ts\n@@ -1 +1 @@\n-old()\n+guard()`,
+          });
+        }),
+      ));
+
+    if (name === "gitlab")
+      for (const flag of ["collapsed", "too_large"])
+        test(`refuses a re-review when GitLab marks a file ${flag}`, () => {
+          const fake = fakeForge(name, model(name, { ancestry: { [HEAD]: [MERGED] } }));
+          const layer = forgeHttpTest(fake.run, (url, init) =>
+            Str.includes("/repository/compare?")(url)
+              ? Promise.resolve(
+                  Response.json({
+                    compare_timeout: false,
+                    diffs: [{ new_path: "src/omitted.ts", diff: "", [flag]: true }],
+                  }),
+                )
+              : fake.fetch(url, init),
+          );
+          return runEffect(
+            Effect.gen(function* () {
+              const diff = yield* forge.reviewChanges(ref(name), MERGED, HEAD, "/w", fake.run);
+              expect(diff.ok).toBe(false);
+              if (!diff.ok) {
+                expect(diff.reason).toContain("incomplete");
+                expect(diff.reason).toContain("src/omitted.ts");
+              }
+            }).pipe(Effect.provide(layer)),
+          );
+        });
+
+    test("pins approval to the reviewed head", () => {
+      const fake = fakeForge(name, model(name));
+      return runEffect(
+        Effect.gen(function* () {
+          expect((yield* forge.approve(ref(name), HEAD, "/w", fake.run)).ok).toBe(true);
+          expect(
+            Arr.map(
+              Arr.filter(fake.requests, (one) => one.method === "POST"),
+              (one) => one.body,
+            ),
+          ).toEqual([name === "gitlab" ? { sha: HEAD } : { event: "APPROVE", commit_id: HEAD }]);
+          expect(fake.model().approved ?? []).toHaveLength(1);
+        }).pipe(Effect.provide(fake.layer)),
+      );
+    });
+
+    test("refuses an approval after the reviewed head has changed", () => {
+      const fake = fakeForge(name, model(name, { mrs: [mr(name, { head: MERGED })] }));
+      return runEffect(
+        Effect.gen(function* () {
+          const approved = yield* forge.approve(ref(name), HEAD, "/w", fake.run);
+          expect(approved.ok).toBe(false);
+          expect(approved.message).toContain("SHA does not match HEAD");
+          expect(fake.model().approved ?? []).toEqual([]);
+        }).pipe(Effect.provide(fake.layer)),
+      );
+    });
+
+    if (name === "github")
+      test("withdraws an approval if a push races with GitHub accepting it", () => {
+        const fake = fakeForge(name, model(name));
+        const layer = forgeHttpTest(fake.run, (url, init) =>
+          fake.fetch(url, init).then((response) => {
+            if (Str.endsWith("/reviews")(url) && init?.method === "POST")
+              fake.set({ ...fake.model(), mrs: [mr(name, { head: MERGED })] });
+            return response;
+          }),
+        );
+        return runEffect(
+          Effect.gen(function* () {
+            const approved = yield* forge.approve(ref(name), HEAD, "/w", fake.run);
+            expect(approved.ok).toBe(false);
+            expect(approved.message).toContain("SHA does not match HEAD");
+            expect(approved.message).toContain("approval withdrawn");
+            expect(fake.model().approved ?? []).toEqual([]);
+            expect(Arr.filter(fake.requests, (one) => one.method === "POST")).toHaveLength(1);
+            expect(Arr.filter(fake.requests, (one) => one.method === "PUT")).toHaveLength(1);
+          }).pipe(Effect.provide(layer)),
+        );
+      });
+
+    if (name === "github")
+      test("reports a still-active approval and its review id when a racing push cannot be dismissed", () => {
+        const fake = fakeForge(name, model(name));
+        const dismissals: string[] = [];
+        const layer = forgeHttpTest(fake.run, (url, init) => {
+          if (Str.endsWith("/dismissals")(url)) {
+            dismissals.push(url);
+            return Promise.resolve(new Response("Forbidden", { status: 403 }));
+          }
+          return fake.fetch(url, init).then((response) => {
+            if (Str.endsWith("/reviews")(url) && init?.method === "POST")
+              fake.set({ ...fake.model(), mrs: [mr(name, { head: MERGED })] });
+            return response;
+          });
+        });
+        return runEffect(
+          Effect.gen(function* () {
+            const approved = yield* forge.approve(ref(name), HEAD, "/w", fake.run);
+            expect(approved.ok).toBe(false);
+            expect(fake.model().approved ?? []).toHaveLength(1);
+            expect(approved.message).toContain("SHA does not match HEAD");
+            expect(approved.message).toContain("approval may still be active");
+            expect(approved.message).toContain("review 1");
+            expect(approved.message).toContain("403");
+            expect(dismissals).toHaveLength(1);
+            expect(dismissals[0]).toEndWith("/pulls/30/reviews/1/dismissals");
+            expect(Arr.filter(fake.requests, (one) => one.method === "POST")).toHaveLength(1);
+          }).pipe(Effect.provide(layer)),
+        );
+      });
+
+    test("finds only the note whose last line signs this Run, round and head", () => {
+      const signature = `<!-- collie:run-one round 1 at ${HEAD} by me -->`;
+      const fake = fakeForge(
+        name,
+        model(name, {
+          mrs: [
+            mr(name, {
+              comments: [
+                {
+                  id: 1,
+                  author: "me",
+                  at: "2026-11-11T09:00:00Z",
+                  body: `Findings\n\n${signature}`,
+                },
+              ],
+            }),
+          ],
+        }),
+      );
+      return runEffect(
+        Effect.gen(function* () {
+          expect(yield* forge.findNote(ref(name), signature, "/w", fake.run)).toEqual({
+            ok: true,
+            value: true,
+          });
+          expect(
+            yield* forge.findNote(
+              ref(name),
+              Str.replace("run-one", "run-two")(signature),
+              "/w",
+              fake.run,
+            ),
+          ).toEqual({ ok: true, value: false });
+          expect(
+            yield* forge.findNote(
+              ref(name),
+              Str.replace("round 1", "round 2")(signature),
+              "/w",
+              fake.run,
+            ),
+          ).toEqual({ ok: true, value: false });
+          expect(yield* forge.findNote(ref(name), "Findings", "/w", fake.run)).toEqual({
+            ok: true,
+            value: false,
+          });
+        }).pipe(Effect.provide(fake.layer)),
+      );
+    });
+
     test("opens a merge request with its complete description and destination", () =>
       runEffect(
         Effect.gen(function* () {
@@ -606,22 +783,22 @@ for (const name of ["gitlab", "github"] as const) {
         }),
       ));
 
-    for (const approve of [false, true])
-      test(`posts one review note over HTTP from a cold login, approval ${approve}`, () => {
-        const fake = fakeForge(name, model(name));
-        return runEffect(
-          Effect.gen(function* () {
-            const posted = yield* forge.post(ref(name), "Clean", approve, "/w", fake.run);
-            expect(posted.ok).toBe(true);
-            expect(Rec.values(fake.model().notes ?? {})).toEqual([["Clean"]]);
-            expect(fake.model().approved ?? []).toHaveLength(approve ? 1 : 0);
-            expect(Arr.filter(fake.requests, (one) => one.method === "POST")).toHaveLength(
-              approve ? 2 : 1,
-            );
-            expect(fake.calls).toEqual([...READ_ONCE[name]]);
-          }).pipe(Effect.provide(fake.layer)),
-        );
-      });
+    test("posts one review note over HTTP without approving", () => {
+      const fake = fakeForge(name, model(name));
+      return runEffect(
+        Effect.gen(function* () {
+          const posted = yield* forge.post(ref(name), "Clean", "/w", fake.run);
+          expect(posted.ok).toBe(true);
+          expect(Rec.values(fake.model().notes ?? {})).toEqual([["Clean"]]);
+          expect(fake.model().approved ?? []).toEqual([]);
+          expect(Arr.filter(fake.requests, (one) => one.method === "POST")).toHaveLength(1);
+          expect(fake.calls).toEqual([...READ_ONCE[name]]);
+          expect(
+            (yield* forge.post({ project: PROJECT[name], iid: "99" }, "LGTM", "/w", fake.run)).ok,
+          ).toBe(false);
+        }).pipe(Effect.provide(fake.layer)),
+      );
+    });
 
     for (const [failure, fault] of [
       ["5xx", { status: 503 }],
@@ -636,10 +813,10 @@ for (const name of ["gitlab", "github"] as const) {
         });
         return runEffect(
           Effect.gen(function* () {
-            const posted = yield* forge.post(ref(name), "Clean", true, "/w", fake.run);
-            expect(posted.ok).toBe(true);
-            expect(posted.message).toContain("and did not approve it");
-            expect(posted.message).toContain("before approving again");
+            expect((yield* forge.post(ref(name), "Clean", "/w", fake.run)).ok).toBe(true);
+            const approved = yield* forge.approve(ref(name), HEAD, "/w", fake.run);
+            expect(approved.ok).toBe(false);
+            expect(approved.message).toContain("did not approve");
             expect(Rec.values(fake.model().notes ?? {})).toEqual([["Clean"]]);
             expect(fake.model().approved ?? []).toEqual([]);
             expect(Arr.filter(fake.requests, (one) => one.method === "POST")).toHaveLength(2);
@@ -647,41 +824,19 @@ for (const name of ["gitlab", "github"] as const) {
         );
       });
 
-    test("posts one note, and approves only where asked, saying what landed", () =>
-      runEffect(
+    test("reports an approval the forge refuses, with the note still posted", () => {
+      const fake = fakeForge(name, model(name, { refusesApproval: true }));
+      return runEffect(
         Effect.gen(function* () {
-          const fake = fakeForge(name, model(name));
-          const noted = yield* forge
-            .post(ref(name), "LGTM", false, "/w", fake.run)
-            .pipe(Effect.provide(fake.layer));
-          expect(noted.ok).toBe(true);
-          expect(noted.message).not.toContain("approved");
-          expect(fake.model().approved ?? []).toEqual([]);
-          const approved = yield* forge
-            .post(ref(name), "Clean", true, "/w", fake.run)
-            .pipe(Effect.provide(fake.layer));
-          expect(approved.message).toContain("and approved it");
-          expect(Rec.values(fake.model().notes ?? {})).toEqual([["LGTM", "Clean"]]);
-          expect(fake.model().approved?.length).toBe(1);
-          const missed = yield* forge
-            .post({ project: PROJECT[name], iid: "99" }, "LGTM", false, "/w", fake.run)
-            .pipe(Effect.provide(fake.layer));
-          expect(missed.ok).toBe(false);
-        }),
-      ));
-
-    test("reports an approval the forge refuses, with the note still posted", () =>
-      runEffect(
-        Effect.gen(function* () {
-          const fake = fakeForge(name, model(name, { refusesApproval: true }));
-          const posted = yield* forge
-            .post(ref(name), "Clean", true, "/w", fake.run)
-            .pipe(Effect.provide(fake.layer));
-          expect(posted.ok).toBe(true);
-          expect(posted.message).toContain("and did not approve it");
+          yield* forge.post(ref(name), "Clean", "/w", fake.run);
+          const approved = yield* forge.approve(ref(name), HEAD, "/w", fake.run);
+          expect(approved.ok).toBe(false);
+          expect(approved.message).toContain("did not approve");
+          expect(approved.message).toContain("403 Forbidden");
           expect(Rec.values(fake.model().notes ?? {})).toEqual([["Clean"]]);
-        }),
-      ));
+        }).pipe(Effect.provide(fake.layer)),
+      );
+    });
 
     test("lists my merge requests over HTTP from a cold login", () => {
       const fake = fakeForge(
@@ -1514,7 +1669,7 @@ test(
             });
             expect(
               (yield* FORGES[name]
-                .post(ref(name), "LGTM", false, "/", shell)
+                .post(ref(name), "LGTM", "/", shell)
                 .pipe(Effect.provide(forgeHttpOnPath))).ok,
             ).toBe(true);
             expect(Rec.values((yield* onPath.model()).notes ?? {})).toEqual([["LGTM"]]);
@@ -1858,7 +2013,58 @@ for (const name of ["gitlab", "github"] as const) {
             base: { at: BASE, jobs: [{ name: "lint", state: "passed" }] },
             target: { at: TIP, jobs: failed },
           }),
-        ).toEqual({ ok: true, at: BASE, state: "missing", url: null });
+        ).toEqual({ ok: true, at: BASE, state: "missing", url: null, id: null });
+      }),
+    ));
+
+  test(`the ${name} forge reads a job on the target branch's newest commit, its failed tests by its id, and says when it cannot`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const TIP = pipe("c", Str.repeat(40));
+        const log = "test/a.test.ts:\n(fail) a thing works [1.00ms]\n";
+        const fake = (over: Partial<FakeMr>, rest: Partial<ForgeModel> = {}) =>
+          fakeForge(
+            name,
+            model(name, { mrs: [mr(name, { targetBranch: "main", ...over })], ...rest }),
+          );
+        const read = (one: ReturnType<typeof fake>) =>
+          forge
+            .targetJob(ref(name), "nuxi-typecheck", "/w", one.run)
+            .pipe(Effect.provide(one.layer));
+        const red = fake({
+          jobs: [{ name: "nuxi-typecheck", state: "passed" }],
+          target: {
+            at: TIP,
+            jobs: [
+              { name: "lint", state: "passed" },
+              { name: "nuxi-typecheck", state: "failed", trace: log },
+            ],
+          },
+        });
+        const id = name === "github" ? "6030/2002" : "2002";
+        expect(yield* read(red)).toEqual({
+          ok: true,
+          branch: "main",
+          at: TIP,
+          state: "failed",
+          url:
+            name === "github"
+              ? "https://github.com/owner/repo/actions/runs/6030/job/2002"
+              : "https://gitlab.example.com/group/app/-/jobs/2002",
+          id,
+        });
+        expect(
+          (yield* forge.failedAttempt(ref(name), id, "/w", red.run).pipe(Effect.provide(red.layer)))
+            .tests,
+        ).toEqual([{ name: "a thing works", file: "test/a.test.ts" }]);
+        expect(
+          yield* read(fake({ target: { at: TIP, jobs: [{ name: "lint", state: "failed" }] } })),
+        ).toMatchObject({ ok: true, branch: "main", state: "missing", id: null });
+        for (const rest of [{ installed: false }, { loggedIn: [] }]) {
+          const unread = yield* read(fake({ target: { at: TIP, jobs: [] } }, rest));
+          expect(unread.ok).toBe(false);
+          expect("reason" in unread ? unread.reason : "").not.toBe("");
+        }
       }),
     ));
 
@@ -3111,6 +3317,207 @@ describe("GitHub's pull request reads over HTTP", () => {
           state: "merged",
           mergedSha: MERGED,
           mergedAt: "2026-10-15T08:00:00Z",
+        });
+      }),
+    ));
+});
+
+describe("GitHub's merge where the base branch requires a merge queue", () => {
+  const github = FORGES.github;
+  const queueing = (over: Partial<FakeMr> = {}) =>
+    fakeForge(
+      "github",
+      model("github", {
+        mergeMethod: "SQUASH",
+        mergeQueues: ["main"],
+        mrs: [mr("github", { targetBranch: "main", mergedSha: MERGED, ...over })],
+      }),
+    );
+  /**
+   * The merge at HEAD, `queue` doing what the queue does once the merge waits on it: after
+   * its requests for the merge method, the queue, the pull request and, unless `queued`, the
+   * enqueue.
+   */
+  const mergeQueued = (
+    fake: ReturnType<typeof fakeForge>,
+    queue: (pull: FakeMr) => FakeMr = (pull) => pull,
+    queued = false,
+  ) =>
+    Effect.gen(function* () {
+      const merging = yield* Effect.forkChild(github.merge(ref("github"), HEAD, "/w", fake.run));
+      yield* Effect.yieldNow.pipe(
+        Effect.repeat({
+          until: () =>
+            fake.requests.length >= (queued ? 3 : 4) || merging.pollUnsafe() !== undefined,
+        }),
+      );
+      fake.set({ ...fake.model(), mrs: Arr.map(fake.model().mrs, queue) });
+      while (merging.pollUnsafe() === undefined) {
+        yield* TestClock.adjust("30 seconds");
+        yield* Effect.yieldNow;
+      }
+      return yield* Fiber.join(merging);
+    }).pipe(Effect.provide(Layer.merge(fake.layer, TestClock.layer())));
+  const mergedByQueue = (pull: FakeMr): FakeMr => {
+    const { queued: _, ...rest } = pull;
+    return {
+      ...rest,
+      state: "merged",
+      mergedBy: "github-merge-queue",
+      mergedAt: "2026-10-20T12:30:00Z",
+    };
+  };
+  const merges = (fake: ReturnType<typeof fakeForge>) =>
+    Arr.filter(fake.requests, (one) => one.method === "PUT");
+
+  test("enqueues the asked head, never merges through REST, and answers the queue's merge", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fake = queueing();
+        expect(yield* mergeQueued(fake, mergedByQueue)).toEqual({
+          _tag: "Merged",
+          merged: MERGED,
+        });
+        expect(fake.model().enqueued).toEqual([{ key: `${PROJECT.github}#30`, head: HEAD }]);
+        expect(merges(fake)).toEqual([]);
+      }),
+    ));
+
+  test("a merge seen while queued that is not the queue's at the asked head is someone else's", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const at = "2026-10-20T12:30:00Z";
+        const other = (head: string, mergedBy: string) => (pull: FakeMr) => ({
+          ...mergedByQueue(pull),
+          head,
+          mergedBy,
+        });
+        expect(yield* mergeQueued(queueing(), other("0ther", "github-merge-queue"))).toEqual({
+          _tag: "AlreadyMerged",
+          merged: MERGED,
+          head: "0ther",
+          by: "github-merge-queue",
+          at,
+        });
+        expect(yield* mergeQueued(queueing(), other(HEAD, "alice"))).toEqual({
+          _tag: "AlreadyMerged",
+          merged: MERGED,
+          head: HEAD,
+          by: "alice",
+          at,
+        });
+      }),
+    ));
+
+  test("a pull request the queue removes is refused with GitHub's reason", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fake = queueing();
+        const answer = yield* mergeQueued(fake, (pull) => {
+          const { queued: _, ...rest } = pull;
+          return { ...rest, dequeuedFor: "a required status check failed" };
+        });
+        expect(answer._tag).toBe("Refused");
+        if (answer._tag === "Refused")
+          expect(answer.reason).toContain("a required status check failed");
+        expect(fake.model().mrs[0]?.state).toBe("open");
+      }),
+    ));
+
+  test("a pull request still queued after two hours is dequeued and refused as timed out", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fake = queueing();
+        const answer = yield* mergeQueued(fake);
+        expect(answer._tag).toBe("Refused");
+        if (answer._tag === "Refused") expect(answer.reason).toContain("after 2 hours");
+        expect(fake.model().dequeued).toEqual([`${PROJECT.github}#30`]);
+        expect(fake.model().mrs[0]?.queued).toBeUndefined();
+      }),
+    ));
+
+  test("a pull request GitHub will not dequeue after two hours is still waited on until the queue merges it", () => {
+    const fake = queueing({ queued: HEAD });
+    fake.set({ ...fake.model(), refusesDequeue: true });
+    return runEffect(
+      Effect.gen(function* () {
+        const merging = yield* Effect.forkChild(github.merge(ref("github"), HEAD, "/w", fake.run));
+        yield* TestClock.adjust("2 hours");
+        for (const _ of Arr.range(1, 4)) {
+          yield* TestClock.adjust("30 seconds");
+          yield* Effect.yieldNow;
+        }
+        expect(merging.pollUnsafe()).toBeUndefined();
+        expect(fake.model().mrs[0]?.queued).toBe(HEAD);
+        fake.set({ ...fake.model(), mrs: Arr.map(fake.model().mrs, mergedByQueue) });
+        while (merging.pollUnsafe() === undefined) {
+          yield* TestClock.adjust("30 seconds");
+          yield* Effect.yieldNow;
+        }
+        expect(yield* Fiber.join(merging)).toEqual({ _tag: "Merged", merged: MERGED });
+      }).pipe(Effect.provide(Layer.merge(fake.layer, TestClock.layer()))),
+    );
+  });
+
+  test("a pull request already queued at the head is waited on, not enqueued again", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fake = queueing({ queued: HEAD });
+        expect(yield* mergeQueued(fake, mergedByQueue, true)).toEqual({
+          _tag: "Merged",
+          merged: MERGED,
+        });
+        expect(fake.model().enqueued).toBeUndefined();
+        expect(merges(fake)).toEqual([]);
+      }),
+    ));
+
+  test("a base branch without a queue merges through REST at the head by the repository's method", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fake = fakeForge(
+          "github",
+          model("github", {
+            mergeMethod: "SQUASH",
+            mergeQueues: ["release"],
+            mrs: [mr("github", { targetBranch: "main", mergedSha: MERGED })],
+          }),
+        );
+        expect(
+          yield* github.merge(ref("github"), HEAD, "/w", fake.run).pipe(Effect.provide(fake.layer)),
+        ).toEqual({ _tag: "Merged", merged: MERGED });
+        expect(fake.model().merges).toMatchObject([
+          {
+            sha: HEAD,
+            method: "squash",
+            fields: [`sha=${HEAD}`, "merge_method=squash"],
+          },
+        ]);
+        expect(fake.model().enqueued).toBeUndefined();
+      }),
+    ));
+
+  test("a pull request with its checks passed and its approvals in reads as mergeable", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fake = queueing({
+          checks: [{ name: "test", state: "passed" }],
+          reviews: [
+            {
+              id: 901,
+              author: "ann",
+              state: "APPROVED",
+              at: "2026-10-20T10:00:00Z",
+            },
+          ],
+        });
+        const review = yield* github
+          .readReview(ref("github"), "/w", fake.run)
+          .pipe(Effect.provide(fake.layer));
+        expect(review).toMatchObject({
+          ok: true,
+          approved: true,
+          mergeable: { state: "mergeable", said: "mergeable" },
         });
       }),
     ));

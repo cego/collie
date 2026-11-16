@@ -1068,6 +1068,10 @@ row raise the same `recovery-failing:<machine>` News. The claim, start and judge
 `healed` recovery lines under one `recoveryId`, so a restarted host neither starts a second
 Heal for the park nor loses one.
 
+Completed Heals from before issue reporting remain readable after an upgrade, with their
+original findings unchanged. New healer output still requires the issue-report fields;
+accepting an older recorded result does not waive that requirement for new work.
+
 A judged Heal whose finding says `collie_defect` is reported on Collie's own repository,
 github.com/cego/collie, whatever project the parked Run is in, by the host with its
 GitHub login. The issue the healer named, else an open issue carrying the key's
@@ -1932,8 +1936,8 @@ the gate skips it, its missing local pass is no gap, and prompts list it as
 `<name>: left to CI (job <job>), do not run it`. Once the merge request is open, the run
 waits for that job on the merge request's head commit, read through the forge, and records
 its pass as a verification of the check, with the job's URL. A failed job is first read
-where the branch leaves its target branch: failed there too, it is reported as failing
-before the run's changes, and left unproved. Otherwise it is retried once, and a pass on
+where the branch leaves its target branch: failed there too, with the same failed jobs and
+tests in its pipeline, it is reported as failing before the run's changes, and left unproved. Otherwise it is retried once, and a pass on
 the retry is reported as a Flake, unless the failed attempt's logs name a failed test of
 the branch's own: one whose file the branch adds or changes, or whose name holds a string
 a line the branch adds holds. That job is failed, as is one the forge says was retried

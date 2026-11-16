@@ -4,43 +4,60 @@ import { Effect, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import markdown from "./heal.md" with { type: "text" };
 
-const said = {
-  summary: Schema.optionalKey(Schema.String),
-  blocker: Schema.optionalKey(Schema.String),
-  next_action: Schema.optionalKey(Schema.String),
-  report: Schema.optionalKey(
-    Schema.Struct({
-      installation: Schema.String,
-      run: Schema.String,
-      id: Schema.String,
-      revision: Schema.Int,
-      step: Schema.String,
-    }),
-  ),
-  diagnosis: Schema.String,
-  actions: Schema.Array(Schema.String),
-  finding: Schema.Struct({
-    collie_defect: Schema.Boolean,
-    key: Schema.String,
-    root_cause: Schema.String,
-    fix: Schema.String,
-    regression: Schema.String,
-    title: Schema.String,
-    observed: Schema.String,
-    expected: Schema.String,
-    issue: Schema.NullOr(Schema.Int).annotate({
-      description: "the cego/collie issue about the same cause, whatever its key, or null",
-    }),
+const finding = {
+  collie_defect: Schema.Boolean,
+  key: Schema.String,
+  root_cause: Schema.String,
+  fix: Schema.String,
+  regression: Schema.String,
+};
+const report = {
+  title: Schema.String,
+  observed: Schema.String,
+  expected: Schema.String,
+  issue: Schema.NullOr(Schema.Int).annotate({
+    description: "the cego/collie issue about the same cause, whatever its key, or null",
   }),
 };
-const Healed = Schema.Union([
-  Schema.Struct({
-    ...said,
-    result: Schema.Literal("resumed"),
-    needs_person: Schema.optionalKey(Schema.String),
-  }),
-  Schema.Struct({ ...said, result: Schema.Literal("escalate"), needs_person: Schema.String }),
-]);
+const outputWith = <Fields extends Schema.Struct.Fields>(fields: Fields) => {
+  const said = {
+    summary: Schema.optionalKey(Schema.String),
+    blocker: Schema.optionalKey(Schema.String),
+    next_action: Schema.optionalKey(Schema.String),
+    report: Schema.optionalKey(
+      Schema.Struct({
+        installation: Schema.String,
+        run: Schema.String,
+        id: Schema.String,
+        revision: Schema.Int,
+        step: Schema.String,
+      }),
+    ),
+    diagnosis: Schema.String,
+    actions: Schema.Array(Schema.String),
+    finding: Schema.Struct(fields),
+  };
+  return Schema.Union([
+    Schema.Struct({
+      ...said,
+      result: Schema.Literal("resumed"),
+      needs_person: Schema.optionalKey(Schema.String),
+    }),
+    Schema.Struct({ ...said, result: Schema.Literal("escalate"), needs_person: Schema.String }),
+  ]);
+};
+
+/** Fresh agent output must include the evidence an issue report needs. */
+export const Healed = outputWith({ ...finding, ...report });
+// Completed executions predate issue reporting. Read their durable exits as recorded;
+// only agentWork below validates new output, so this never relaxes a new healer's proof.
+const RecordedHeal = outputWith({
+  ...finding,
+  title: Schema.optionalKey(report.title),
+  observed: Schema.optionalKey(report.observed),
+  expected: Schema.optionalKey(report.expected),
+  issue: Schema.optionalKey(report.issue),
+});
 const content = contentOf(markdown);
 const heal = step({
   id: "heal",
@@ -58,7 +75,7 @@ export default defineWorkflow({
   description:
     "Started by the host for a park its own recovery could not clear, before it needs you.",
   input: Schema.Struct({ run: Schema.String, park: Schema.String }),
-  output: Healed,
+  output: RecordedHeal,
   agents: { effort: "high" },
   path: [heal],
   hints: { run: "goal" },

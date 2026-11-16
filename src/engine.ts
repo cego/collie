@@ -158,7 +158,7 @@ import {
 } from "./metrics";
 import { ForgeHttp, forgeHttpLayer } from "./forge/http";
 import { EngineTouches, engineTouchesLayer, touching } from "./engine-touches";
-import { ciJob } from "./ci-job";
+import { ciJob, sharedFailure, takeTarget } from "./ci-job";
 import { land, LandingSchema, readLanding, takeOver } from "./landing";
 import {
   carried,
@@ -854,6 +854,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export interface Posted {
     readonly ok: boolean;
     readonly message: string;
+    readonly signature?: string;
   }
 
   /** A pipeline job's state; \`missing\` is a pipeline without it. */
@@ -878,11 +879,32 @@ export const SDK_DECLARATIONS = `declare module "collie" {
         readonly url: string | null;
         /** The command that prints its log, where there is such a job. */
         readonly log: string | null;
-        /** It failed where the branch leaves its target too: not this Run's to fix. */
-        readonly before?: { readonly at: string; readonly url: string | null };
+        /** It failed where the branch leaves its target too, or with \`branch\` on that branch's newest commit: not this Run's to fix. */
+        readonly before?: {
+          readonly at: string;
+          readonly url: string | null;
+          readonly branch?: string;
+          /** The failed jobs compared, each failing there too. */
+          readonly jobs: ReadonlyArray<string>;
+        };
         /** Missing because the merge request conflicts with its target branch. */
         readonly conflicts?: true;
       };
+  /** A failed job's same job failed on the target branch's newest commit, with the failed tests it shares. */
+  export interface TargetFailure {
+    readonly job: string;
+    readonly branch: string;
+    readonly at: string;
+    readonly url: string | null;
+    readonly tests: ReadonlyArray<FailedTest>;
+    /** The failed jobs compared, each failing there too; null where the failure is the Run's own. */
+    readonly jobs: ReadonlyArray<string> | null;
+  }
+  /** What a Release that saw a failure its target shared does once that target passes. */
+  export type TakeTarget =
+    | { readonly _tag: "Moved"; readonly head: string }
+    | { readonly _tag: "Retried" }
+    | { readonly _tag: "Take" };
 
   /** What asking for a pipeline on a merge request's head came to. */
   export type PipelineStart =
@@ -1017,8 +1039,27 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly target: string;
       readonly cwd: string;
       readonly file: string;
-      /** Approve the merge request too: a review with nothing live left to fix. */
-      readonly approve?: boolean;
+      readonly head: string;
+      readonly round: number;
+    }) => Effect.Effect<Posted>;
+    /** Reads the target's head before review. Take it inside an Activity. */
+    readonly reviewedHead: (options: {
+      readonly target: string;
+      readonly cwd: string;
+    }) => Effect.Effect<string>;
+    readonly reviewChanges: (options: {
+      readonly target: string;
+      readonly cwd: string;
+      readonly previous: string;
+      readonly head: string;
+    }) => Effect.Effect<string, WorkflowError>;
+    /** Approves once per Run and round; an interrupted attempt returns an uncertain outcome. */
+    readonly approveReview: (options: {
+      readonly runId: string;
+      readonly round: number;
+      readonly target: string;
+      readonly cwd: string;
+      readonly head: string;
     }) => Effect.Effect<Posted>;
     /** This Run's checks as they stand now, which anyone may add to. */
     readonly approved: (runId: string) => Effect.Effect<ReadonlyArray<VerifySpec>>;
@@ -1050,8 +1091,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
      * which must be cwd's HEAD. A pass is recorded once per tree as the check's \`ci\`
      * Verification. With wait, a pending or running job is read again every 30 s for up to 2
      * hours. Anything else is why it is unproved, naming the check, the job and the commit.
-     * With settle, a failed job is read where the branch leaves its target, and is retried
-     * once and waited on where it did not fail there too.
+     * With settle, a failed job is read on the target branch's newest commit, then where the
+     * branch leaves its target, and is retried once and waited on where its failed jobs and
+     * tests did not fail there too.
      */
     readonly ciJob: (options: {
       readonly runId: string;
@@ -1060,6 +1102,17 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly wait?: boolean;
       readonly settle?: boolean;
     }) => Effect.Effect<CiJob>;
+    /** This Run's CI failure on its merge request's head where its target branch's newest commit shares it, else null. */
+    readonly targetFailure: (options: {
+      readonly runId: string;
+      readonly cwd: string;
+    }) => Effect.Effect<TargetFailure | null>;
+    /** What a Release that saw a failure its target shared at \`head\` does now: Moved, Retried or Take. */
+    readonly takeTarget: (options: {
+      readonly runId: string;
+      readonly cwd: string;
+      readonly head: string;
+    }) => Effect.Effect<TakeTarget>;
     /**
      * A pipeline on cwd's HEAD, through the forge of the merge request the Run recorded,
      * unless that head has one that was not skipped. GitLab starts the merge request's, and
@@ -1880,6 +1933,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
    * list: Collie fills these in, and anything else is the caller's to give.
    */
   export type Source =
+    | "run-id"
     | "run-dir"
     | "plan-dir"
     | "diff-target"
@@ -1949,6 +2003,10 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export const EXCLUSIVE_STRATEGIES: ReadonlyArray<string>;
 
   export interface Finding {
+    id?: string;
+    status?: "open" | "fixed" | "disputed" | "obsolete";
+    head?: string;
+    note?: string;
     file?: string;
     line?: number;
     severity: string;
@@ -2080,6 +2138,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** Minor is the one severity not worth blocking on; anything else fails closed. */
   export function isBlocking(finding: Finding): boolean;
   export function findingKey(finding: Pick<Finding, "file" | "title">): string;
+  export function sameFinding(left: Finding, right: Finding): boolean;
   export function blockingKeys(findings: ReadonlyArray<Finding>): string[];
   /** Whether a blocking finding says where and why, so it can be acted on. */
   export function substantiated(finding: Finding): boolean;
@@ -2121,7 +2180,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     fix: FixReport,
     evidence: CheckEvidence,
   ): FinalFix;
-  export function renderReview(synthesis: Synthesis): string;
+  export function renderReview(synthesis: SynthesisReport): string;
   export function renderPublicReview(synthesis: SynthesisReport): string;
   export function formatFindings(findings: ReadonlyArray<Finding>): string;
 
@@ -3543,6 +3602,10 @@ export const freezeApproved = Effect.fn("Engine.freezeApproved")(function* (opti
 });
 
 const approvedOf = (dir: string, runId: string) => approvedIn(evidenceDir(dir, runId));
+const ciJobsOfIn = (dir: string, runId: string) =>
+  Effect.map(approvedOf(dir, runId), (approved) =>
+    Arr.flatMap(approved, (spec) => (spec.ci === undefined ? [] : [spec.ci])),
+  );
 
 /** Where a host keeps what a Run claimed, so a resume knows whose the claim was. */
 const claimPath = (dir: string, runId: string) => `${runDir(dir, runId)}/helle.json`;
@@ -5196,6 +5259,33 @@ export const hostLayer = (options: {
               );
             }),
           ).pipe(Effect.orDie),
+        targetFailure: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const ref = mrRefOf(yield* mergeRequestOf(fs, dir, asked.runId));
+              if (ref === null) return null;
+              return yield* sharedFailure(
+                ref,
+                yield* ciJobsOfIn(dir, asked.runId),
+                asked.cwd,
+                runShell,
+              );
+            }),
+          ).pipe(Effect.orDie),
+        takeTarget: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const ref = mrRefOf(yield* mergeRequestOf(fs, dir, asked.runId));
+              if (ref === null) return { _tag: "Take" } as const;
+              return yield* takeTarget(
+                ref,
+                yield* ciJobsOfIn(dir, asked.runId),
+                asked.head,
+                asked.cwd,
+                runShell,
+              );
+            }),
+          ).pipe(Effect.orDie),
         startPipeline: (asked) =>
           under(
             Effect.gen(function* () {
@@ -5308,7 +5398,7 @@ export const hostLayer = (options: {
               if (ready.existing) {
                 const ref = mrRefOf(ready.existing);
                 if (ref === null) return yield* fail(`cannot read ${ready.existing}`);
-                const posted = yield* here.forge.post(ref, marked, false, cwd, runShell);
+                const posted = yield* here.forge.post(ref, marked, cwd, runShell);
                 if (!posted.ok) return yield* fail(posted.message);
                 return { url: ready.existing };
               }
@@ -5342,7 +5432,7 @@ export const hostLayer = (options: {
               const body = redact(asked.body);
               const refused = yield* publicRefusal(body, Effect.succeed(ref.project));
               if (refused !== null) return { ok: false, message: refused };
-              return yield* forgeOf(ref).post(ref, body, false, asked.cwd, runShell);
+              return yield* forgeOf(ref).post(ref, body, asked.cwd, runShell);
             }),
           ).pipe(Effect.orDie),
         claim: <E, R>(asked: {
@@ -5848,8 +5938,8 @@ export const hostLayer = (options: {
                       {
                         target: asked.target,
                         cwd: asked.cwd,
-                        body: `${body}\n\n${marker(asked.runId)}`,
-                        approve: asked.approve === true,
+                        body,
+                        review: { runId: asked.runId, head: asked.head, round: asked.round },
                         gitlabHost: defaults.gitlabHost,
                       },
                       runShell,
@@ -5862,6 +5952,56 @@ export const hostLayer = (options: {
                 message: `there is no ${asked.file} to post`,
               })),
             ),
+          ),
+        reviewedHead: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const ref = parseMrTarget(asked.target);
+              if (ref === null) return "";
+              const details = yield* forgeOf(ref).details(ref, asked.cwd, runShell);
+              return details._tag === "Details" ? (details.head ?? "") : "";
+            }),
+          ),
+        reviewChanges: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const ref = parseMrTarget(asked.target);
+              if (ref === null) return "";
+              const changes = yield* forgeOf(ref).reviewChanges(
+                ref,
+                asked.previous,
+                asked.head,
+                asked.cwd,
+                runShell,
+              );
+              if (!changes.ok) return yield* new WorkflowError({ reason: changes.reason });
+              return changes.value;
+            }),
+          ),
+        approveReview: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const ref = parseMrTarget(asked.target);
+              if (ref === null)
+                return { ok: false, message: `${asked.target} is not a merge request` };
+              const claimed = yield* fs
+                .writeFileString(
+                  `${runDir(dir, asked.runId)}/approval-${asked.round}.attempt`,
+                  `${asked.target}\n${asked.head}\n`,
+                  { flag: "wx" },
+                )
+                .pipe(
+                  Effect.as(true),
+                  Effect.catchReason("PlatformError", "AlreadyExists", () => Effect.succeed(false)),
+                  Effect.orDie,
+                );
+              if (!claimed)
+                return {
+                  ok: false,
+                  message: `approval outcome is uncertain for ${asked.target} at ${asked.head}: an earlier attempt exists for round ${asked.round}; approval or dismissal may already have applied; inspect the forge before starting another review`,
+                };
+              return yield* forgeOf(ref).approve(ref, asked.head, asked.cwd, runShell);
+            }),
           ),
       });
       let herdSocket = options.herd?.socketPath ?? null;
@@ -9967,7 +10107,11 @@ const makeRegistry: (
             }),
             (offer) =>
               offer.kind === "follow-up"
-                ? unfilled(offer, row.project, inputsFor(offer, { runDir: where, facts, input }))
+                ? unfilled(
+                    offer,
+                    row.project,
+                    inputsFor(offer, { runId: row.run, runDir: where, facts, input }),
+                  )
                 : unbound(offer, row.project),
           ),
         ),
@@ -10015,19 +10159,25 @@ const makeRegistry: (
       // What the offer said Collie fills in, filled from the Run it is about. The
       // caller's own values win: an offer names where a value comes from, and a caller
       // that has a better one for the same field is not overruled by a default.
-      const filled = { ...inputsFor(offer, { runDir: where, facts, input }), ...options.input };
+      const filled = {
+        ...inputsFor(offer, { runId: row.run, runDir: where, facts, input }),
+        ...options.input,
+      };
       // Held to what its parent was, grants included, where the parent had anything.
       const inherited = yield* approvedOf(dir, row.run);
-      const carried: Record<string, string> = {};
+      const launch = Rec.map(
+        Rec.filter(filled, (_, name) => name in RESERVED_INPUTS),
+        (value) => (Predicate.isString(value) ? value : asJsonText(value)),
+      );
       if (offer.kind === "follow-up" && facts.branch !== null) {
-        carried.branch = facts.branch;
+        launch.branch = facts.branch;
         if (offer.workflow === generation.id && facts.outcome !== "unspecified")
-          carried.outcome = facts.outcome;
+          launch.outcome ??= facts.outcome;
         if (offer.workflow === generation.id) {
           const previous = yield* decodeStrings(row.options ?? "{}").pipe(
             Effect.orElseSucceed((): Record<string, string> => ({})),
           );
-          if (previous.risks !== undefined) carried.risks = previous.risks;
+          if (previous.risks !== undefined) launch.risks ??= previous.risks;
         }
       }
       const startedWith: Readonly<Record<string, Schema.Json>> = input;
@@ -10050,14 +10200,14 @@ const makeRegistry: (
         generation: starting,
         request: options.request,
         project: row.project,
-        input: filled,
+        input: Rec.filter(filled, (_, name) => !(name in RESERVED_INPUTS)),
         task: row.task,
         parent: row.run,
         verify: inherited,
         attachments: options.attachments,
         started: options.started,
         // A follow-up carries on the parent's work, so it is on the parent's branch.
-        options: carried,
+        options: launch,
       });
     }, invoking.withPermits(1)),
 

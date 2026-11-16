@@ -7,7 +7,8 @@ import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import * as Rec from "effect/Record";
 import { Effect, Fiber, FileSystem, Path, Schedule } from "effect";
-import { ciJob } from "../src/ci-job";
+import { ciJob, takeTarget } from "../src/ci-job";
+import { mrRefOf } from "../src/board-model";
 import { recheckPark, rememberCiTarget } from "../src/park-recheck";
 import type { MrForge } from "../src/board-model";
 import type { Runner } from "../src/mr";
@@ -173,6 +174,80 @@ test("a CI park with no pipeline stays uncleared until the named job exists", ()
     }),
   ));
 
+test("a target-red park clears only once every recorded job passed on the target branch's newest commit", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const recheck = (state: FakeJob["state"]) =>
+        Effect.gen(function* () {
+          const { asked, at, root, forge } = yield* waiting("failed", MR, undefined, {
+            target: {
+              at: pipe_("c", Str.repeat(40)),
+              jobs: [
+                { name: "nuxi-typecheck", state },
+                { name: "lint", state: "passed" },
+              ],
+            },
+          });
+          yield* rememberCiTarget(`${root}/runs/r1`, {
+            head: at,
+            job: "nuxi-typecheck",
+            mr: MR,
+            cwd: asked.cwd,
+          });
+          return yield* recheckPark(
+            {
+              runId: "r1",
+              cwd: asked.cwd,
+              branch: "feature",
+              mr: MR,
+              park: { cause: "target-red", kind: "rechecks" },
+            },
+            root,
+            { sessionList: () => Effect.die("CI rechecks must not ask herdr") },
+          ).pipe(Effect.provide(forgeHttpTest(asked.run, forge.fetch)));
+        });
+      for (const state of ["failed", "pending", "running"] as const)
+        expect(yield* recheck(state)).toMatchObject({ cleared: false, error: false });
+      const cleared = yield* recheck("passed");
+      expect(cleared).toMatchObject({ cleared: true, error: false });
+      expect(cleared.note).toContain("main");
+    }),
+  ));
+
+test("a Release parked on its target's failure takes the target, retries where its head has it already, and does neither where its head moved", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const decide = (tip: (at: string) => string, head?: string) =>
+        Effect.gen(function* () {
+          const { asked, at, forge } = yield* waiting("failed", MR, head, {
+            target: { at: "", jobs: [{ name: "nuxi-typecheck", state: "passed" }] },
+          });
+          const model = forge.model();
+          forge.set({
+            ...model,
+            mrs: Arr.map(model.mrs, (one) => ({
+              ...one,
+              target: { at: tip(at), jobs: one.target?.jobs ?? [] },
+            })),
+          });
+          const took = yield* takeTarget(
+            mrRefOf(MR)!,
+            ["nuxi-typecheck"],
+            at,
+            asked.cwd,
+            asked.run,
+          ).pipe(Effect.provide(forgeHttpTest(asked.run, forge.fetch)));
+          return { took, retried: retries(forge.requests).length };
+        });
+      expect(yield* decide(() => TIP)).toEqual({ took: { _tag: "Take" }, retried: 0 });
+      expect(yield* decide((at) => at)).toEqual({ took: { _tag: "Retried" }, retried: 1 });
+      expect(yield* decide((at) => at, "elsewhere")).toEqual({
+        took: { _tag: "Moved", head: "elsewhere" },
+        retried: 0,
+      });
+    }),
+  ));
+
 /** Its runner, committing in the checkout on every call, as a commit made while the job is read. */
 const committing =
   (asked: { readonly cwd: string; readonly run: Runner }): Runner =>
@@ -334,15 +409,21 @@ const retries = (requests: ReadonlyArray<FakeRequest>) =>
 test("a failed job that also fails where the branch leaves its target is reported, and not retried", () =>
   runEffect(
     Effect.gen(function* () {
+      const failing = trace(["test/old-thing.test.ts", "an old thing works"]);
       const { asked, at, forge } = yield* waiting("failed", MR, undefined, {
-        base: { at: BASE, jobs: [{ name: "nuxi-typecheck", state: "failed" }] },
+        jobs: [{ name: "nuxi-typecheck", state: "failed", trace: failing }],
+        base: { at: BASE, jobs: [{ name: "nuxi-typecheck", state: "failed", trace: failing }] },
       });
       expect(yield* read({ ...asked, settle: true }, forge)).toEqual({
         unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${pipe_(at, Str.slice(0, 12))} is failed`,
         state: "failed",
         url: `https://${PROJECT.gitlab}/-/jobs/1`,
         log: LOG,
-        before: { at: BASE, url: `https://${PROJECT.gitlab}/-/jobs/1001` },
+        before: {
+          at: BASE,
+          url: `https://${PROJECT.gitlab}/-/jobs/1001`,
+          jobs: ["nuxi-typecheck"],
+        },
       });
       expect(retries(forge.requests)).toEqual([]);
     }),
@@ -410,6 +491,127 @@ const trace = (...files: ReadonlyArray<readonly [string, string]>) =>
     ],
     "\r\n",
   );
+const TIP = pipe_("c", Str.repeat(40));
+const TARGET_JOB = `https://${PROJECT.gitlab}/-/jobs/2001`;
+const SHARED = "a shared thing works";
+
+test("a failed job whose every failed test fails on the target branch's newest commit too is the target's, and not retried", () =>
+  runEffect(
+    Effect.gen(function* () {
+      {
+        const { asked, at, forge } = yield* waiting("failed", MR, undefined, {
+          jobs: [
+            {
+              name: "nuxi-typecheck",
+              state: "failed",
+              retried: "passed",
+              trace: trace(["test/a.test.ts", SHARED]),
+            },
+          ],
+          base: { at: BASE, jobs: [{ name: "nuxi-typecheck", state: "passed" }] },
+          target: {
+            at: TIP,
+            jobs: [
+              {
+                name: "nuxi-typecheck",
+                state: "failed",
+                trace: trace(["test/a.test.ts", SHARED], ["test/a.test.ts", "another"]),
+              },
+            ],
+          },
+        });
+        expect(yield* read({ ...asked, settle: true }, forge)).toEqual({
+          unproved: `nuxi is left to CI and unproved: job nuxi-typecheck on ${pipe_(at, Str.slice(0, 12))} is failed`,
+          state: "failed",
+          url: `https://${PROJECT.gitlab}/-/jobs/1`,
+          log: LOG,
+          before: { at: TIP, url: TARGET_JOB, branch: "main", jobs: ["nuxi-typecheck"] },
+        });
+        expect(retries(forge.requests)).toEqual([]);
+      }
+    }),
+  ));
+
+test("a failed job naming no failed test, or beside a job the target branch's newest commit passes, is not the target's and is retried", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const shared = trace(["test/a.test.ts", SHARED]);
+      for (const jobs of [
+        [{ name: "nuxi-typecheck", state: "failed" as const, retried: "passed" as const }],
+        [
+          {
+            name: "nuxi-typecheck",
+            state: "failed" as const,
+            retried: "passed" as const,
+            trace: shared,
+          },
+          { name: "lint", state: "failed" as const, trace: trace(["test/c.test.ts", "own"]) },
+        ],
+      ]) {
+        const { asked, forge } = yield* waiting("failed", MR, undefined, {
+          jobs,
+          target: {
+            at: TIP,
+            jobs: [
+              { name: "nuxi-typecheck", state: "failed", trace: shared },
+              { name: "lint", state: "passed" },
+            ],
+          },
+        });
+        expect(yield* read({ ...asked, settle: true }, forge)).toMatchObject({
+          proved: { pass: "ci", name: "nuxi" },
+          retried: true,
+        });
+        expect(retries(forge.requests)).toHaveLength(1);
+      }
+    }),
+  ));
+
+test("a failed job whose failed tests the target branch shares only in part is retried as before, and names the target's tests", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const own = trace(["test/a.test.ts", SHARED], ["test/c.test.ts", "this branch's thing"]);
+      const partly = yield* waiting("failed", MR, undefined, {
+        jobs: [{ name: "nuxi-typecheck", state: "failed", retried: "failed", trace: own }],
+        target: {
+          at: TIP,
+          jobs: [
+            { name: "nuxi-typecheck", state: "failed", trace: trace(["test/a.test.ts", SHARED]) },
+          ],
+        },
+      });
+      const result = yield* read({ ...partly.asked, settle: true }, partly.forge);
+      expect(result).toMatchObject({ state: "failed" });
+      expect("before" in result).toBe(false);
+      expect("unproved" in result ? result.unproved : "").toContain(
+        `"${SHARED}" also fails on main at ${pipe_(TIP, Str.slice(0, 12))}`,
+      );
+      expect(retries(partly.forge.requests)).toHaveLength(1);
+    }),
+  ));
+
+test("a failed job whose job on the target branch is pending, running or missing is retried as before", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const own = trace(["test/a.test.ts", SHARED]);
+      for (const there of [
+        [{ name: "nuxi-typecheck", state: "pending" as const }],
+        [{ name: "nuxi-typecheck", state: "running" as const }],
+        [{ name: "lint", state: "failed" as const }],
+      ]) {
+        const { asked, forge } = yield* waiting("failed", MR, undefined, {
+          jobs: [{ name: "nuxi-typecheck", state: "failed", retried: "passed", trace: own }],
+          target: { at: TIP, jobs: there },
+        });
+        expect(yield* read({ ...asked, settle: true }, forge)).toMatchObject({
+          proved: { pass: "ci", name: "nuxi" },
+          retried: true,
+        });
+        expect(retries(forge.requests)).toHaveLength(1);
+      }
+    }),
+  ));
+
 const OWN_FILE = "test/new-thing.test.ts";
 const SCENARIO = "a retried pass of the branch's own scenario is a failed job";
 const BRANCH = {
@@ -650,8 +852,8 @@ test("a GitHub job missing right after its retry is waited on, and its pass is a
             { name: "test", state: "passed" },
           ],
         });
-        // The job's read and `baseJob` each read the pull request before the retry.
-        const stages = thenLater(forge, forge, rerunning, rerun);
+        // The job's read, `targetJob` and `baseJob` each read the pull request before the retry.
+        const stages = thenLater(forge, forge, forge, rerunning, rerun);
         expect(yield* read({ ...asked, spec: GATE, settle: true }, stages)).toMatchObject({
           proved: { pass: "ci", name: "nuxi", job: { name: "test" } },
           retried: true,
@@ -694,6 +896,152 @@ const ATTEMPT = `https://${PROJECT.github}/actions/runs/4031/job/2`;
 const GH_LOG = "gh run view 4031 --log-failed --repo owner/repo";
 const reruns = (requests: ReadonlyArray<FakeRequest>) =>
   Arr.filter(requests, (one) => pipe_(one.url, Str.endsWith("/rerun-failed-jobs")));
+
+const notExcused = (name: MrForge, head: ReadonlyArray<FakeJob>, base: ReadonlyArray<FakeJob>) =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, forge } = yield* waiting(
+        "failed",
+        name === "gitlab" ? MR : PULL,
+        undefined,
+        {
+          jobs: Arr.map(head, (job) => ({ ...job, retried: "failed" as const })),
+          base: { at: BASE, jobs: base },
+        },
+        name,
+      );
+      const spec = name === "gitlab" ? NUXI : GATE;
+      const result = yield* read({ ...asked, spec, settle: true }, forge);
+      expect(result).toMatchObject({ state: "failed" });
+      expect("before" in result).toBe(false);
+      expect((name === "gitlab" ? retries : reruns)(forge.requests)).toHaveLength(1);
+    }),
+  );
+const OLD_TEST = ["test/old-thing.test.ts", "an old thing works"] as const;
+const AGGREGATE = { name: "test", state: "failed", trace: githubLog("") } as const;
+const CHECKED = { name: "nuxi-typecheck", state: "failed", trace: trace() } as const;
+
+test("a GitHub failure whose run has a failed job that passes where the branch leaves its target is the Run's own", () =>
+  notExcused(
+    "github",
+    [
+      AGGREGATE,
+      { name: "suite (1)", state: "failed", trace: githubLog("", NEW_TEST) },
+      { name: "desktop-rune", state: "failed", trace: githubLog("", "the rune types are current") },
+    ],
+    [
+      AGGREGATE,
+      { name: "suite (1)", state: "failed", trace: githubLog("", NEW_TEST) },
+      { name: "desktop-rune", state: "passed" },
+    ],
+  ));
+
+test("a failure whose failed jobs name no test is the Run's own, though the same jobs fail where the branch leaves its target", () => {
+  const jobs = [
+    CHECKED,
+    { name: "static", state: "failed", trace: "error: format differs\n" },
+  ] as const;
+  return notExcused("gitlab", jobs, jobs);
+});
+
+test("a failure naming a test that does not fail where the branch leaves its target is the Run's own", () =>
+  notExcused(
+    "gitlab",
+    [CHECKED, { name: "suite (1)", state: "failed", trace: trace(OLD_TEST, [OWN_FILE, NEW_TEST]) }],
+    [CHECKED, { name: "suite (1)", state: "failed", trace: trace(OLD_TEST) }],
+  ));
+
+test("a checked job that failed alone naming no test is the Run's own, though it fails where the branch leaves its target", () =>
+  notExcused(
+    "gitlab",
+    [CHECKED],
+    [CHECKED, { name: "suite (1)", state: "failed", trace: trace(OLD_TEST) }],
+  ));
+
+test("a failure naming a test that fails where the branch leaves its target only in a job that passes here is the Run's own", () =>
+  notExcused(
+    "gitlab",
+    [CHECKED, { name: "suite (1)", state: "failed", trace: trace(OLD_TEST) }],
+    [
+      CHECKED,
+      {
+        name: "suite (1)",
+        state: "failed",
+        trace: trace(["test/other.test.ts", "another thing works"]),
+      },
+      { name: "suite (2)", state: "failed", trace: trace(OLD_TEST) },
+    ],
+  ));
+
+test("a GitHub failure whose shared job's log cannot be read where the branch leaves its target is the Run's own", () =>
+  notExcused(
+    "github",
+    [
+      AGGREGATE,
+      { name: "suite (1)", state: "failed", trace: githubLog("", "an old thing settles") },
+      { name: "suite (2)", state: "failed", trace: githubLog("", "an old thing settles") },
+    ],
+    [
+      AGGREGATE,
+      { name: "suite (1)", state: "failed" },
+      { name: "suite (2)", state: "failed", trace: githubLog("", "an old thing settles") },
+    ],
+  ));
+
+test("a failure in a job that failed where the branch leaves its target only in an attempt retried there to a pass is the Run's own", () =>
+  notExcused(
+    "gitlab",
+    [CHECKED, { name: "suite (1)", state: "failed", trace: trace(OLD_TEST) }],
+    [
+      CHECKED,
+      {
+        name: "suite (1)",
+        state: "passed",
+        attempts: [{ id: 902, state: "failed", trace: trace(OLD_TEST) }],
+      },
+    ],
+  ));
+
+test("a GitHub failure whose tests fail in other shards where the branch leaves its target is reported, and not rerun", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const one = { name: "suite (1)", state: "failed" } as const;
+      const two = { name: "suite (2)", state: "failed" } as const;
+      const { asked, at, forge } = yield* waiting(
+        "failed",
+        PULL,
+        undefined,
+        {
+          jobs: [
+            AGGREGATE,
+            { ...one, trace: githubLog("", NEW_TEST) },
+            { ...two, trace: githubLog("", "an old thing settles") },
+          ],
+          base: {
+            at: BASE,
+            jobs: [
+              AGGREGATE,
+              { ...one, trace: githubLog("", "an old thing settles") },
+              { ...two, trace: githubLog("", NEW_TEST) },
+            ],
+          },
+        },
+        "github",
+      );
+      expect(yield* read({ ...asked, spec: GATE, settle: true }, forge)).toEqual({
+        unproved: `nuxi is left to CI and unproved: job test on ${pipe_(at, Str.slice(0, 12))} is failed`,
+        state: "failed",
+        url: `https://${PROJECT.github}/actions/runs/4031/job/1`,
+        log: GH_LOG,
+        before: {
+          at: BASE,
+          url: `https://${PROJECT.github}/actions/runs/5031/job/1001`,
+          jobs: ["suite (1)", "suite (2)"],
+        },
+      });
+      expect(reruns(forge.requests)).toEqual([]);
+    }),
+  ));
 
 for (const name of ["gitlab", "github"] as const)
   test(`a ${name} retried pass of an own test in an explicitly selected Bun file proves nothing`, () =>

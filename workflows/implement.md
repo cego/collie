@@ -188,8 +188,8 @@ this Run leaves to CI failed in its pipeline on the merge request's head:
 {{findings}}
 
 Each one names the job, its URL, and the command that prints its log. Collie compared each
-with the same job where this branch leaves its target branch, and retried it once: it
-passed there and failed again here, so it is this branch's to fix. Read the log, fix the
+with the same job where this branch leaves its target branch, and retried it once: it did
+not fail there the same way, and failed again here, so it is this branch's to fix. Read the log, fix the
 cause test first with {{skill:tdd}}, and commit the fix to this branch. Where you are sure
 the failure is not this branch's, change nothing and record it under `disputed` with your
 reason; the merge request names it for the human.
