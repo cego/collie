@@ -16729,6 +16729,7 @@ for (const name of ["gitlab", "github"] as const) {
             yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
             yield* fs.writeFileString(`${runDir(dir, runId)}/merge-request`, `${mr}\n`);
             yield* changed({ title: body });
+            const head = (yield* forge.model()).mrs[0]?.head ?? "";
             slack = fakeSlack();
             yield* signedInToSlack(hostOf().env, "U456").pipe(Effect.orDie);
             const sent = yield* session(
@@ -16746,7 +16747,7 @@ for (const name of ["gitlab", "github"] as const) {
                       target,
                       cwd: rig.projectDir,
                       file,
-                      head: REVIEW_HEAD,
+                      head,
                       round: 1,
                     })
                   : host.note({ runId, cwd: rig.projectDir, body });
@@ -16766,7 +16767,7 @@ for (const name of ["gitlab", "github"] as const) {
               expect(sent).toMatchObject({ ok: true });
               expect(Rec.values(model.notes ?? {}).flat()).toEqual([
                 operation === "post"
-                  ? `Review at ${REVIEW_HEAD}\n\nVerified <gitlab token>.\n\n<!-- collie:${runId} round 1 at ${REVIEW_HEAD} by tester -->`
+                  ? `Review at ${head}\n\nVerified <gitlab token>.\n\n<!-- collie:${runId} round 1 at ${head} by tester -->`
                   : "Verified <gitlab token>.",
               ]);
             }
