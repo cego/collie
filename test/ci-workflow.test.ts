@@ -16,6 +16,11 @@ const workflowSchema = Schema.Struct({
     Schema.Union([
       Schema.Struct({
         needs: Schema.optionalKey(Schema.Union([Schema.String, Schema.Array(Schema.String)])),
+        strategy: Schema.optionalKey(
+          Schema.Struct({
+            matrix: Schema.Struct({ shard: Schema.optionalKey(Schema.Array(Schema.Finite)) }),
+          }),
+        ),
         steps: Schema.Array(
           Schema.Struct({
             run: Schema.optionalKey(Schema.String),
@@ -81,23 +86,39 @@ test("Collie's own check is left to the CI job whose needs run each part of it",
     }),
   ));
 
-test("CI requires the same native desktop builds that the release publishes", () =>
+test("CI shards enumerate every partition using the matrix's total", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { jobs } = yield* workflow("ci");
+      const suite = jobs.suite;
+      expect(suite !== undefined && "steps" in suite).toBe(true);
+      if (suite === undefined || !("steps" in suite)) return;
+      const shards = suite.strategy?.matrix.shard ?? [];
+      expect(shards.length).toBeGreaterThan(1);
+      expect(shards).toEqual(Array.from({ length: shards.length }, (_, i) => i + 1));
+      expect(commands(suite)).toContain(
+        "bun run test --shard=${{ matrix.shard }}/${{ strategy.job-total }}",
+      );
+    }),
+  ));
+
+test("CI requires the Mac runner and the same native desktop builds that the release publishes", () =>
   runEffect(
     Effect.gen(function* () {
       const ci = yield* workflow("ci");
       const release = yield* workflow("release");
       const native = yield* workflow("rune-bundle");
       for (const pipeline of [ci, release])
-        expect(pipeline.jobs["desktop-native"]).toEqual({
+        expect(pipeline.jobs["desktop-bundle"]).toEqual({
           uses: "./.github/workflows/rune-bundle.yml",
         });
-      for (const name of ["desktop", "desktop-native"]) {
+      for (const name of ["macos", "desktop-checks", "desktop-bundle"]) {
         expect(ci.jobs.test?.needs).toContain(name);
         expect(Arr.join(commands(ci.jobs.test), "\n")).toContain(
           `test "\${{ needs.${name}.result }}" = success`,
         );
       }
-      const desktop = ci.jobs.desktop;
+      const desktop = ci.jobs["desktop-checks"];
       const inDesktop =
         desktop !== undefined && "steps" in desktop
           ? Arr.flatMap(desktop.steps, (step) =>
@@ -112,7 +133,7 @@ test("CI requires the same native desktop builds that the release publishes", ()
           "cargo test --workspace",
         ]),
       );
-      expect(release.jobs.release?.needs).toContain("desktop-native");
+      expect(release.jobs.release?.needs).toContain("desktop-bundle");
       for (const platform of ["linux", "macos"])
         expect(commands(native.jobs[platform])).toContain("bun run desktop/scripts/bundle.ts");
       expect(commands(native.jobs.macos)).toContain("sh tools/verify-mac-app.sh desktop/dist");

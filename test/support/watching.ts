@@ -208,8 +208,9 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
     Arr.filter((cmd) => cmd === "agent start"),
   );
 
+  // Five-minute forge polls need fewer clock steps; every intervening timer still fires.
   const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices | Scope.Scope>) =>
-    runLive(fastForward(Effect.scoped(Effect.suspend(() => ((toasts.length = 0), effect)))));
+    runLive(fastForward(Effect.scoped(Effect.suspend(() => ((toasts.length = 0), effect))), 250));
 
   const settingOn = (on: boolean) =>
     FileSystem.FileSystem.pipe(

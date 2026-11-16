@@ -170,6 +170,8 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
         runs: opts.runs,
         includeHistory: true,
         now: opts.now,
+        // Settlement needs work facts, not interactive offers from this host's own socket.
+        offers: () => Effect.succeed([]),
       })
     : [];
   for (const view of [

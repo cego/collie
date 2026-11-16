@@ -92,6 +92,8 @@ import { runFacts } from "./support/records";
 import { agentName } from "../src/naming";
 import {
   controlDir,
+  installControls,
+  lostServer,
   readControl,
   withControlLock,
   type AgentContext,
@@ -1384,6 +1386,41 @@ class StaleWorkingTerminal extends FakeHerdr {
     return super.agentStart(...args);
   }
 }
+
+test("a server whose command line is empty during exec keeps its identity for recovery", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const managed = yield* managedCodex;
+      const host = hostOf();
+      const deps = {
+        stateDir: host.env.stateDir,
+        ports: managed.ports,
+        configured: host.compactAtTokens,
+        herdr: host.herdr,
+        log: () => Effect.void,
+      };
+      yield* installControls(deps, {
+        agent: agentFor("r1"),
+        harness: "codex",
+        cwd: rig.projectDir,
+        runLog: `${dir}/agents/r1/agents.log`,
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          readFileString: (path, encoding) =>
+            Arr.some(managed.children, (child) => path === `/proc/${child.pid}/cmdline`)
+              ? Effect.succeed("")
+              : fs.readFileString(path, encoding),
+        }),
+      );
+      expect((yield* readControl(deps.stateDir, agentFor("r1")))?.started).toBeString();
+      managed.state.reachable = false;
+      managed.children[0]!.kill();
+      yield* Effect.promise(() => managed.children[0]!.exited);
+      expect(yield* lostServer(deps, agentFor("r1"))).toContain("has exited");
+    }).pipe(Effect.scoped),
+  ));
 
 test.each([false, true])(
   "a managed Codex server that dies while its terminal stays working is recovered once (host replay: %p)",
