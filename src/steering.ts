@@ -175,10 +175,10 @@ export interface DeliveriesApi {
    * `unknown` still has the entry blocking that causal key.
    */
   readonly ofRun: (run: string) => Effect.Effect<ReadonlyArray<Delivery>>;
-  /** `ofRun` for each of these Runs, in one read; a Run with none is absent. */
-  readonly ofRuns: (
+  /** The newest line of each delivery about each of these Runs, as written, in one read. */
+  readonly newestOf: (
     runs: ReadonlyArray<string>,
-  ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<Delivery>>>;
+  ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<string>>>;
   /** This incarnation's deliveries of one piece of work, newest state each, in the order first written. */
   readonly about: (
     incarnation: string,
@@ -258,7 +258,7 @@ export const deliveriesLayer = Layer.effect(Deliveries)(
           Effect.orDie,
         ),
       ofRun: (run) => newest(run).pipe(Effect.map(deliveriesIn), Effect.orDie),
-      ofRuns: (runs) =>
+      newestOf: (runs) =>
         runs.length === 0
           ? Effect.succeed(new Map())
           : sql<{ readonly run: string; readonly line: string }>`
@@ -270,9 +270,9 @@ export const deliveriesLayer = Layer.effect(Deliveries)(
               ORDER BY newest.run, newest.first
             `.pipe(
               Effect.map((rows) => {
-                const byRun = new Map<string, Delivery[]>();
+                const byRun = new Map<string, string[]>();
                 for (const row of rows)
-                  byRun.set(row.run, [...(byRun.get(row.run) ?? []), ...deliveriesIn([row])]);
+                  byRun.set(row.run, [...(byRun.get(row.run) ?? []), row.line]);
                 return byRun;
               }),
               Effect.orDie,
@@ -352,11 +352,13 @@ export const deliveriesAhead = Effect.fn("Steering.deliveriesAhead")(function* (
   runs: ReadonlyArray<string>,
 ) {
   const ids = new Set(runs);
-  const all = yield* Effect.cached(deliveries.ofRuns(runs));
+  const all = yield* Effect.cached(deliveries.newestOf(runs));
   return {
     ...deliveries,
     ofRun: (run) =>
-      ids.has(run) ? Effect.map(all, (got) => got.get(run) ?? []) : deliveries.ofRun(run),
+      ids.has(run)
+        ? Effect.map(all, (got) => deliveriesIn(Arr.map(got.get(run) ?? [], (line) => ({ line }))))
+        : deliveries.ofRun(run),
   } satisfies DeliveriesApi;
 });
 

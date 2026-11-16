@@ -88,6 +88,10 @@ const readsFor = (runs: number) =>
           calls.n++;
           return launches.of(runs);
         },
+        recordsOf: (runs) => {
+          calls.n++;
+          return launches.recordsOf(runs);
+        },
         lastOrderedOf: (runs) => {
           calls.n++;
           return launches.lastOrderedOf(runs);
@@ -103,9 +107,9 @@ const readsFor = (runs: number) =>
           calls.n++;
           return deliveries.ofRun(run);
         },
-        ofRuns: (runs) => {
+        newestOf: (runs) => {
           calls.n++;
-          return deliveries.ofRuns(runs);
+          return deliveries.newestOf(runs);
         },
       }),
     );

@@ -147,6 +147,10 @@ export interface LaunchesApi {
   readonly of: (
     runs: ReadonlyArray<string>,
   ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<Launched>>>;
+  /** Each of these Runs' launch records as written, oldest first; a Run with none is absent. */
+  readonly recordsOf: (
+    runs: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<string>>>;
   /** Every launch of these agents, whichever Run. */
   readonly byAgent: (agents: ReadonlyArray<string>) => Effect.Effect<ReadonlyArray<Launched>>;
   /** Every harness session a launch recorded. */
@@ -200,6 +204,20 @@ export const launchesLayer = Layer.effect(Launches)(
                 for (const row of rows)
                   for (const one of decoded([row]))
                     byRun.set(row.run, [...(byRun.get(row.run) ?? []), one]);
+                return byRun;
+              }),
+              Effect.orDie,
+            ),
+      recordsOf: (runs) =>
+        runs.length === 0
+          ? Effect.succeed(new Map())
+          : sql<{ readonly run: string; readonly record: string }>`
+              SELECT run, record FROM collie_launches WHERE run IN ${sql.in(runs)} ${inOrder}
+            `.pipe(
+              Effect.map((rows) => {
+                const byRun = new Map<string, string[]>();
+                for (const row of rows)
+                  byRun.set(row.run, [...(byRun.get(row.run) ?? []), row.record]);
                 return byRun;
               }),
               Effect.orDie,
@@ -304,7 +322,7 @@ export const launchesAhead = Effect.fn("Launches.ahead")(function* (
   runs: ReadonlyArray<string>,
 ) {
   const ids = new Set(runs);
-  const all = yield* Effect.cached(launches.of(runs));
+  const all = yield* Effect.cached(launches.recordsOf(runs));
   const last = yield* Effect.cached(launches.lastOrderedOf(runs));
   return {
     ...launches,
@@ -313,7 +331,12 @@ export const launchesAhead = Effect.fn("Launches.ahead")(function* (
         ? Effect.map(
             all,
             (got) =>
-              new Map(Arr.flatMap(some, (run) => (got.has(run) ? [[run, got.get(run)!]] : []))),
+              new Map(
+                Arr.flatMap(some, (run) => {
+                  const launched = decoded(Arr.map(got.get(run) ?? [], (record) => ({ record })));
+                  return launched.length === 0 ? [] : [[run, launched]];
+                }),
+              ),
           )
         : launches.of(some),
     lastOrdered: (run) =>
