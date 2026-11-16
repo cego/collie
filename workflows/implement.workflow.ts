@@ -1096,7 +1096,7 @@ export default defineWorkflow({
           input,
           obstacle:
             recovery.entry === "Review"
-              ? `Recover the existing implementation. Review the whole requested outcome, including the current work source ${asked.plan} and any added requirements; an unbuilt requirement is a blocking finding for the builder. Previous head: ${recovery.previous || "unrecorded"}. Commits since that head:\n${recovery.commits || "(none or unavailable)"}\nThe parent's original requirements and review associations are in ${parentDir}/reviews.jsonl. Read its open findings at ${parentDir}/findings.json, and its spec at ${parentDir}/plan where present.`
+              ? `Recover the existing implementation. Review the whole requested outcome, including the current work source ${asked.plan} and any added requirements; an unbuilt requirement is a blocking finding for the builder. Previous head: ${recovery.previous || "unrecorded"}. Commits since that head:\n${recovery.commits || "(none or unavailable)"}\nThe original requirements and review associations this recovery weighed are in ${place.dir}/recovery-reviews.jsonl. Read its open findings at ${parentDir}/findings.json, and its spec at ${parentDir}/plan where present.`
               : "",
         });
       }

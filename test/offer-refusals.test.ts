@@ -2,6 +2,7 @@ import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { readDispositions } from "../src/disposition";
+import { hostRecords } from "./support/records";
 import { MR_STATES_FILE } from "../src/merges";
 import { currentEnv } from "../src/env";
 import { connect, type HostClient } from "../src/host";
@@ -282,7 +283,7 @@ test(
           expect(listed.envelope.ok).toBe(true);
           client = yield* connect(world.state);
           yield* until(
-            () => readDispositions(`${world.state}/runs/${runId}`),
+            () => hostRecords(world.state, readDispositions(`${world.state}/runs/${runId}`)),
             (lines) => Arr.some(lines, (line) => line.kind === "merged"),
           );
           const merged = `${MR} is merged`;

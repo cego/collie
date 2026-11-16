@@ -24,6 +24,7 @@ import { herdOf } from "../src/steering";
 import { newsPath, pending, read as readNews } from "../src/news";
 import { collie, proves, type World } from "./support/world";
 import { until } from "./support/host";
+import { hostRecords } from "./support/records";
 
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const reportReader = Option.getOrUndefined(
@@ -210,7 +211,12 @@ test(
           const park = Arr.findFirst(lines, (line) => line.kind === "halt");
           expect(park._tag).toBe("Some");
           const healStart = Arr.findFirst(
-            yield* readAudit(`${world.state}/runs/${heals[0]!.runId}`).pipe(Effect.orDie),
+            yield* hostRecords(
+              world.state,
+              readAudit(`${world.state}/runs/${heals[0]!.runId}`).pipe(
+                Effect.provideService(FileSystem.FileSystem, yield* FileSystem.FileSystem),
+              ),
+            ).pipe(Effect.orDie),
             (line) => line.operation === "start",
           );
           expect(healStart._tag === "Some" && healStart.value).toMatchObject({

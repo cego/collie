@@ -45,7 +45,7 @@ import { VerifySpecSchema } from "../src/verify-spec";
 import { exec, startDetached } from "./support/command";
 import { fastForward, runEffect, suiteEnv } from "./support/effect";
 import { stopHost, until } from "./support/host";
-import { recordsAt } from "./support/records";
+import { hostRecords, recordsAt } from "./support/records";
 import { Rig } from "./support/recorder";
 
 const root = new URL("../", import.meta.url).pathname;
@@ -773,9 +773,10 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* ownerOf(state)).toBeNull();
         expect(running).toEqual([false, false]);
         expect(yield* withinTheGrace(ended)).toBe(true);
-        const recorded = yield* readVerifications(evidenceDir(state, runId)).pipe(
-          Effect.orElseSucceed(() => []),
-        );
+        const recorded = yield* hostRecords(
+          state,
+          readVerifications(evidenceDir(state, runId)),
+        ).pipe(Effect.orElseSucceed(() => []));
         expect(Arr.filter(recorded, (one) => one.name === "held")).toEqual([]);
         expect(yield* fs.readFileString(`${state}/host.log`)).toContain(
           `ended check held of ${runId}`,
@@ -883,9 +884,10 @@ test.skipIf(process.platform !== "linux")(
         );
         expect(refused.reason).toContain("stopped");
         expect(yield* Effect.forEach(check, stillRunning)).toEqual([false, false]);
-        const recorded = yield* readVerifications(evidenceDir(state, runId)).pipe(
-          Effect.orElseSucceed(() => []),
-        );
+        const recorded = yield* hostRecords(
+          state,
+          readVerifications(evidenceDir(state, runId)),
+        ).pipe(Effect.orElseSucceed(() => []));
         expect(Arr.filter(recorded, (one) => one.name === "held" && one.result === "pass")).toEqual(
           [],
         );
@@ -961,7 +963,7 @@ const releasedOnce = (state: string, runId: string, notes: string) =>
         () => client.status({ runId }),
         (status) => status.status === "complete",
       );
-      const recorded = yield* readVerifications(evidenceDir(state, runId));
+      const recorded = yield* hostRecords(state, readVerifications(evidenceDir(state, runId)));
       return Arr.filter(recorded, (one) => one.name === "held");
     }),
   ).pipe(Effect.orDie);
@@ -1108,7 +1110,7 @@ const handedRecorded = (state: string, runId: string, notes: string) =>
         () => client.status({ runId }),
         (status) => status.status === "complete",
       );
-      const recorded = yield* readVerifications(evidenceDir(state, runId));
+      const recorded = yield* hostRecords(state, readVerifications(evidenceDir(state, runId)));
       return {
         recorded: Arr.filter(recorded, (one) => one.name === "handed"),
         runs: yield* notedIn(notes, "count"),
@@ -1284,7 +1286,7 @@ test.skipIf(process.platform !== "linux")(
           },
         });
         expect(yield* notedIn(notes, "count")).toHaveLength(1);
-        const recorded = yield* readVerifications(evidenceDir(state, runId));
+        const recorded = yield* hostRecords(state, readVerifications(evidenceDir(state, runId)));
         expect(Arr.filter(recorded, (one) => one.name === "handed")).toHaveLength(1);
       }),
     ),

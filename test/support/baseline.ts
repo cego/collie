@@ -1,4 +1,4 @@
-import { launchesAt } from "./records";
+import { launchesAt, overHost } from "./records";
 // The shipped workflows as modules, run the way a user's own module is run.
 //
 // Nothing here is special-cased for being shipped, and every scenario runs twice: as
@@ -11,6 +11,7 @@ import { launchesAt } from "./records";
 // happens: what is asked of whom, in what order, and what the answer starts next.
 
 import * as Arr from "effect/Array";
+import { RunRecords } from "../../src/run-records";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
@@ -44,7 +45,7 @@ import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import * as SqlClient from "effect/sql/SqlClient";
 import { Rig, FakeHerdr } from "./recorder";
 import { exec } from "./command";
-import { fastForward, runEffect } from "./effect";
+import { fastForward, runEffect as runShared } from "./effect";
 import { FakeBin } from "./bin";
 import {
   FORGE_HOST,
@@ -134,11 +135,9 @@ import { VerifySpecSchema } from "../../src/verify-spec";
 import { findingsIn } from "../../src/output";
 import { FINGERPRINT_MAX_BYTES, collect, fingerprint, readVerifications } from "../../src/verify";
 import { inputsFor, offersFrom } from "../../src/offers";
-import { Store, storeLayer } from "../../src/store";
+import { Store } from "../../src/store";
 import { readStageProof, type ShippingGo } from "../../src/shipping";
 import { recordsAt, type Records } from "../../src/records";
-import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
-import * as Reactivity from "effect/reactivity/Reactivity";
 import { registerAgent, scopeFor } from "../../src/registry";
 import { deliveriesOf, SENT_STATES } from "../../src/steering";
 import { fixtures, until } from "./host";
@@ -167,6 +166,11 @@ type Shipped = keyof typeof UNRELATED;
 
 let rig: Rig;
 let dir: string;
+
+/** A scenario's effect, reading and writing a Run's records where the host it drives does. */
+const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices | Records | Scope.Scope>) =>
+  runShared(effect.pipe(overHost(() => dir)));
+
 let forgeApi = "";
 const forgeFaces = new Map<
   MrForge,
@@ -319,6 +323,13 @@ type SessionServices =
   | FileSystem.FileSystem
   | Path.Path
   | ChildProcessSpawner.ChildProcessSpawner;
+
+/** Forgets a journal of these Runs, as a host that never wrote it would have none. */
+const forgetJournal = (runs: ReadonlyArray<string>, journal: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`DELETE FROM collie_run_lines WHERE journal = ${journal} AND run IN ${sql.in(runs)}`;
+  }).pipe(Effect.orDie);
 
 const session = <A, E>(run: Effect.Effect<A, E, SessionServices>, override?: HostOverride) =>
   Clock.clockWith((clock) =>
@@ -479,19 +490,7 @@ const laneNow = (runId: string, state?: RunState) => session(laneIn(runId, state
 
 /** A lane read from the Store alone, with no engine to pick the Run's messages up again. */
 const laneRead = (runId: string) =>
-  laneIn(runId).pipe(
-    Effect.provide(
-      storeLayer().pipe(
-        Layer.provide(
-          SqliteClient.layer({ filename: `${dir}/host.db` }).pipe(
-            Layer.orDie,
-            Layer.provideMerge(Reactivity.layer),
-          ),
-        ),
-      ),
-    ),
-    Effect.scoped,
-  );
+  laneIn(runId).pipe(Effect.provide(recordsAt(dir)), Effect.scoped);
 
 const nodeIn = (lane: FlowLane, id: string) =>
   Option.getOrUndefined(Arr.findFirst(lane.nodes, (node) => node.id === id));
@@ -4366,6 +4365,7 @@ scenario("repeated recovery retains the original bug reproduction without changi
         yield* fs.makeDirectory(runDir(dir, child), { recursive: true });
         yield* fs.writeFileString(`${runDir(dir, child)}/recovery-parent`, from);
       }
+      yield* fs.makeDirectory(evidenceDir(dir, current), { recursive: true });
       yield* fs.writeFileString(`${evidenceDir(dir, current)}/approved.json`, asApproved([spec]));
       const evidence = session(
         Effect.flatMap(Host, (host) => host.evidence(current, rig.projectDir)),
@@ -4678,6 +4678,7 @@ scenario(
           options: { outcome: "bug" },
         };
         yield* stalled(options);
+        yield* fs.makeDirectory(runDir(dir, child), { recursive: true });
         yield* fs.writeFileString(`${runDir(dir, child)}/recovery-parent`, parent.runId);
         const cached = () =>
           session(
@@ -4816,11 +4817,20 @@ for (const changed of [
         Effect.gen(function* () {
           const { bin, forge, plan, parent } = yield* reviewedRecovery();
           const fs = yield* FileSystem.FileSystem;
-          if (changed === "unreadable review record")
-            yield* fs.writeFileString(
-              `${runDir(dir, parent.runId)}/reviews.jsonl`,
-              "broken record\nbroken record\n",
+          if (changed === "unreadable review record") {
+            yield* session(
+              forgetJournal([parent.runId], "reviews.jsonl").pipe(
+                Effect.andThen(
+                  RunRecords.use((records) =>
+                    records.append(parent.runId, "reviews.jsonl", [
+                      "broken record",
+                      "broken record",
+                    ]),
+                  ),
+                ),
+              ),
             );
+          }
           let consumed = 2;
           if (changed === "later blocking review") {
             const review = {
@@ -4870,8 +4880,7 @@ for (const changed of [
               "# The spec\n\nAlso implement the missing export.\n",
             );
           if (changed === "old record" || changed === "green pipeline alone") {
-            yield* fs.remove(`${runDir(dir, parent.runId)}/reviews.jsonl`, { force: true });
-            yield* fs.remove(`${runDir(dir, "r-current-review")}/reviews.jsonl`, { force: true });
+            yield* session(forgetJournal([parent.runId, "r-current-review"], "reviews.jsonl"));
           }
           const child = "r-rechecked-recovery";
           if (changed === "Intent") {
@@ -8023,11 +8032,10 @@ once(
         expect(synthesis).toContain("the guard is missing");
         expect(synthesis).toContain(`${dir}/agents/r-impl-build-panel/build.review-1.json`);
         expect(synthesis).toContain(`${dir}/agents/r-impl-build-panel/build.review-2.json`);
-        const fs = yield* FileSystem.FileSystem;
-        const reviews = yield* fs
-          .readFileString(`${runDir(dir, "r-impl-build-panel")}/reviews.jsonl`)
-          .pipe(Effect.orElseSucceed(() => ""));
-        expect(reviews).toBe("");
+        const reviews = yield* session(
+          RunRecords.use((records) => records.lines("r-impl-build-panel", "reviews.jsonl")),
+        );
+        expect(reviews).toEqual([]);
       }),
     ),
   120_000,
@@ -10545,10 +10553,12 @@ scenario(
         expect(yield* fs.exists(`${dir}/agents/r-impl-own-red/mr.prompt.md`)).toBe(false);
         // Its output names no tests, so nothing is run at the base.
         expect(yield* git("rev-parse", "--abbrev-ref", "HEAD")).toBe("feature");
-        const journal = yield* fs.readFileString(
-          `${evidenceDir(dir, "r-impl-own-red")}/steering/verifications.jsonl`,
+        const journal = yield* session(
+          RunRecords.use((records) =>
+            records.lines("r-impl-own-red", "evidence/steering/verifications.jsonl"),
+          ),
         );
-        expect(journal).not.toContain(base);
+        expect(Arr.join(journal, "\n")).not.toContain(base);
       }),
     ),
   120_000,
@@ -17143,7 +17153,7 @@ for (const name of ["gitlab", "github"] as const) {
           const fixed = `${commentUrl(name, 41)}\n\nFixed in \`${pipe(fix, Str.slice(0, 8))}\`: renamed it${signed(runId)}`;
           const disputed = `${commentUrl(name, 42)}\n\nNot changed: a map costs more here${signed(runId)}`;
           expect(Arr.map(repliesOf(model), (one) => one.body)).toEqual([fixed, disputed]);
-          const recorded = yield* readReplies(runDir(dir, runId));
+          const recorded = yield* session(readReplies(runDir(dir, runId)));
           expect(
             Arr.map(recorded, ({ comment, kind, body, mr: on }) => ({ comment, kind, body, on })),
           ).toEqual([
@@ -17232,7 +17242,7 @@ for (const name of ["gitlab", "github"] as const) {
             Effect.gen(function* () {
               const host = yield* Host;
               const first = yield* host.reply(asked);
-              yield* fs.remove(`${runDir(dir, runId)}/replies.jsonl`);
+              yield* forgetJournal([runId], "replies.jsonl");
               return [first, yield* host.reply(asked), yield* host.reply(asked)];
             }),
           );
@@ -17242,12 +17252,15 @@ for (const name of ["gitlab", "github"] as const) {
           const body = `${commentUrl(name, 47)}\n\nNot changed: the name is the domain's${signed(runId)}`;
           expect(Arr.map(repliesOf(model), (one) => one.body)).toEqual([body]);
           expect(
-            Arr.map(yield* readReplies(runDir(dir, runId)), ({ comment, kind, body, mr: on }) => ({
-              comment,
-              kind,
-              body,
-              on,
-            })),
+            Arr.map(
+              yield* session(readReplies(runDir(dir, runId))),
+              ({ comment, kind, body, mr: on }) => ({
+                comment,
+                kind,
+                body,
+                on,
+              }),
+            ),
           ).toEqual([{ comment: commentUrl(name, 47), kind: "disputed", body, on: mr }]);
         }),
       ),
@@ -17444,15 +17457,15 @@ for (const name of ["gitlab", "github"] as const) {
               const first = yield* host.reply(ask("48", "Not changed: the name is the domain's"));
               yield* at("2026-10-20T13:00:00Z");
               const second = yield* host.reply(ask("49", "Not changed: this one too"));
-              yield* fs.remove(`${runDir(dir, runId)}/replies.jsonl`);
+              yield* forgetJournal([runId], "replies.jsonl");
               return [first, second, yield* host.reply(ask("49", "Not changed: this one too"))];
             }),
           );
           yield* bin.restore();
           expect(said).toEqual(["posted", "posted", "already"]);
-          expect(Arr.map(yield* readReplies(runDir(dir, runId)), (one) => one.body)).toEqual([
-            `Not changed: this one too${signed(runId)}`,
-          ]);
+          expect(
+            Arr.map(yield* session(readReplies(runDir(dir, runId))), (one) => one.body),
+          ).toEqual([`Not changed: this one too${signed(runId)}`]);
         }),
       ),
     120_000,
@@ -17494,9 +17507,9 @@ for (const name of ["gitlab", "github"] as const) {
           );
           yield* bin.restore();
           expect(said).toEqual(["posted", "already"]);
-          expect(Arr.map(yield* readReplies(runDir(dir, runId)), (one) => one.comment)).toEqual([
-            commentUrl(name, 520),
-          ]);
+          expect(
+            Arr.map(yield* session(readReplies(runDir(dir, runId))), (one) => one.comment),
+          ).toEqual([commentUrl(name, 520)]);
         }),
       ),
     120_000,

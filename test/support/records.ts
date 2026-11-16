@@ -11,6 +11,8 @@ import { readLaunches, runAgents } from "../../src/launches";
 import { recordsAt, recordsReadLayer, type Records } from "../../src/records";
 import { everyRegistered } from "../../src/registry";
 import { deliveriesOf, readLedger } from "../../src/steering";
+import { RunRecords, type RunRecordsApi } from "../../src/run-records";
+import { platformLayer } from "../../src/platform";
 
 export function runFacts(over: Partial<RunFacts> = {}): RunFacts {
   const id = over.id ?? "r1";
@@ -115,3 +117,28 @@ export const launchedAt = (stateDir: string, run: string, operation: string) =>
       Option.getOrThrow(Arr.findFirst(launches, (one) => one.operation === operation)),
     ),
   );
+
+/**
+ * A Run's records as the host on `stateDir()`, whichever directory that is when asked, keeps
+ * them: for a test whose own reads and writes must meet its host's, not `runEffect`'s empty ones.
+ */
+export const hostRunRecords = (stateDir: () => string) =>
+  new Proxy({} as RunRecordsApi, {
+    get:
+      (_, method) =>
+      (...args: ReadonlyArray<unknown>) =>
+        Effect.gen(function* () {
+          yield* (yield* FileSystem.FileSystem).makeDirectory(stateDir(), { recursive: true });
+          return yield* RunRecords.use(
+            (records) =>
+              // SAFETY: every RunRecords method answers with an Effect.
+              Reflect.apply(Reflect.get(records, method), records, args) as Effect.Effect<unknown>,
+          ).pipe(Effect.provide(recordsAt(stateDir())));
+        }).pipe(Effect.orDie, Effect.provide(platformLayer)),
+  });
+
+/** `effect` with a Run's records read and written where the host on `stateDir()` keeps them. */
+export const overHost =
+  (stateDir: () => string) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.provideService(effect, RunRecords, hostRunRecords(stateDir));

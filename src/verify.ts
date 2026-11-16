@@ -22,7 +22,8 @@ import { CheckProcesses, type CheckOf } from "./check-processes";
 import { logged } from "./check-supervisor";
 import type { VerifySpec } from "./intent";
 import { failedAlone, failedTests, ranAlone, rerunArgv } from "./bun-tests";
-import { appendJournal, readJournal } from "./journal";
+import { appendRunJournal, readRunJournal, runJournal } from "./journal";
+import type { RunRecords } from "./run-records";
 import { shell, type Ran } from "./mr";
 import { nowIso, epochMs } from "./time";
 import { CurrentStep, type StepPlace } from "./steps";
@@ -70,7 +71,11 @@ export const noVerdict =
       state: true,
     });
 
-type Services = FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner;
+type Services =
+  | FileSystem.FileSystem
+  | Path.Path
+  | ChildProcessSpawner.ChildProcessSpawner
+  | RunRecords;
 
 const git = (args: string[], cwd: string) => shell("git", args, cwd);
 
@@ -440,16 +445,14 @@ export function staleAgainst(record: Verification, now: Snapshot): boolean {
   return !sameTree(record.end, now);
 }
 
-export const verificationsPath = Effect.fn("Verify.verificationsPath")(function* (runDir: string) {
-  const path = yield* Path.Path;
-  return path.join(runDir, "steering", "verifications.jsonl");
-});
+export const verificationsPath = (runDir: string) =>
+  runJournal(runDir, "steering/verifications.jsonl");
 
 export const appendVerification = Effect.fn("Verify.append")(function* (
   runDir: string,
   record: Verification,
 ) {
-  yield* appendJournal(yield* verificationsPath(runDir), VerificationJson, record);
+  yield* appendRunJournal(verificationsPath(runDir), VerificationJson, record);
 });
 
 /**
@@ -508,7 +511,7 @@ export const verifyingIn = (
   );
 
 export const readVerifications = Effect.fn("Verify.read")(function* (runDir: string) {
-  return yield* readJournal(yield* verificationsPath(runDir), VerificationJson);
+  return yield* readRunJournal(verificationsPath(runDir), VerificationJson);
 });
 
 /**
@@ -760,7 +763,15 @@ const settleCheck = Effect.fn("Verify.settleCheck")(function* (
       ? loggedRecord
       : { ...loggedRecord, step: spec.step.step, place: spec.step.place };
   yield* appendVerification(spec.evidence, kept).pipe(
-    Effect.mapError(noVerdict(check.name, "record", "written")),
+    Effect.catchDefect((defect) =>
+      Effect.fail(
+        noVerdict(
+          check.name,
+          "record",
+          "written",
+        )(defect instanceof Error ? defect : new Error(String(defect))),
+      ),
+    ),
   );
   return kept;
 });

@@ -8,6 +8,7 @@
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
+import { addressOf, RunRecords } from "./run-records";
 
 export interface Journal<A> {
   readonly lines: A[];
@@ -78,4 +79,56 @@ export const appendJournal = Effect.fn("Journal.append")(function* <A>(
     `${yield* Schema.encodeEffect(json)(line).pipe(Effect.orDie)}\n`,
     { flag: "a" },
   );
+});
+
+/** A Run's journal, kept in the host's database. */
+export interface RunJournal {
+  readonly run: string;
+  readonly name: string;
+}
+
+/** The journal `path` of the Run whose directory is `dir`, as an older build kept it there. */
+export const runJournal = (dir: string, path: string): RunJournal => {
+  const at = addressOf(dir);
+  return { run: at.run, name: `${at.prefix}${path}` };
+};
+
+const textsAt = (at: RunJournal) => RunRecords.use((records) => records.lines(at.run, at.name));
+
+export const readRunJournalWhole = Effect.fn("Journal.readRunWhole")(function* <A>(
+  at: RunJournal,
+  json: Schema.Codec<A, string, never, never>,
+): Effect.fn.Return<Journal<A>, never, RunRecords> {
+  const decode = Schema.decodeUnknownOption(json);
+  // A line at a time, so a long journal is read in the scheduler's turns.
+  return tally(
+    yield* Effect.forEach(yield* textsAt(at), (text) => Effect.sync(() => decode(text))),
+  );
+});
+
+export const readRunJournal = <A>(at: RunJournal, json: Schema.Codec<A, string, never, never>) =>
+  readRunJournalWhole(at, json).pipe(Effect.map((journal) => journal.lines));
+
+/** The last matching record, without decoding the history before it. */
+export const findLastRunJournal = Effect.fn("Journal.findLastRun")(function* <A>(
+  at: RunJournal,
+  json: Schema.Codec<A, string, never, never>,
+  matches: (record: A) => boolean,
+) {
+  const lines = yield* textsAt(at);
+  const decode = Schema.decodeUnknownOption(json);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const read = yield* Effect.sync(() => decode(lines[i]));
+    if (read._tag === "Some" && matches(read.value)) return read;
+  }
+  return Option.none<A>();
+});
+
+export const appendRunJournal = Effect.fn("Journal.appendRun")(function* <A>(
+  at: RunJournal,
+  json: Schema.Codec<A, string, never, never>,
+  line: A,
+) {
+  const text = yield* Schema.encodeEffect(json)(line).pipe(Effect.orDie);
+  yield* RunRecords.use((records) => records.append(at.run, at.name, [text]));
 });

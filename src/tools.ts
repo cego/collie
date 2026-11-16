@@ -39,6 +39,7 @@ import {
   runFacts,
   workspaceCwdFromPanes,
 } from "./operations";
+import { recordsReadLayer } from "./records";
 import { projectsRoot } from "./projects";
 import type { Action } from "./actions";
 import type { Launched } from "./launches";
@@ -233,7 +234,8 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
           selected,
           input,
           "collie_run",
-          (run) => said(runAnswer(env, run, reads)),
+          (run) =>
+            said(runAnswer(env, run, reads).pipe(Effect.provide(recordsReadLayer(env.stateDir)))),
           reads?.related ?? reads?.runs,
         ),
       ),

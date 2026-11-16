@@ -13,7 +13,8 @@ import { TestClock } from "effect/testing";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { exec } from "./support/command";
-import { runEffect } from "./support/effect";
+import { runEffect as runShared } from "./support/effect";
+import { overHost } from "./support/records";
 import { Agents, agentsLayer } from "../src/agents";
 import { Children, Host } from "../src/sdk";
 import { foundationLayer, loadEntry, runDir, type Herd } from "../src/engine";
@@ -61,6 +62,9 @@ import { loggedGit } from "./support/bin";
 
 let rig: Rig;
 let dir: string;
+/** A test's effect, whose own reads of a Run's records meet its host's. */
+const runEffect = <A, E>(effect: Parameters<typeof runShared<A, E>>[0]) =>
+  runShared(effect.pipe(overHost(() => dir)));
 let toasts: string[];
 
 beforeEach(() =>

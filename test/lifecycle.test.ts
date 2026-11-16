@@ -25,6 +25,9 @@ import { MachineUnreachable } from "../src/peers-model";
 import { runDir, type RunView } from "../src/engine";
 import { readAudit } from "../src/audit";
 import { readDispositions } from "../src/disposition";
+import { recordsReadLayer } from "../src/records";
+import { RunRecords } from "../src/run-records";
+import { hostRecords } from "./support/records";
 import { events, stopHost, until } from "./support/host";
 import { collie, proves as provesWith, save, type World } from "./support/world";
 
@@ -522,7 +525,9 @@ test(
           // A retry is the same grant, recorded once under the request it was given.
           expect((yield* grant(...e2e)).envelope.ok).toBe(true);
           const grants = Arr.filter(
-            yield* readAudit(runDir(world.state, runId)),
+            yield* readAudit(runDir(world.state, runId)).pipe(
+              Effect.provide(recordsReadLayer(world.state)),
+            ),
             (one) => one.operation === "grant",
           );
           expect(Arr.map(grants, (one) => one.request)).toEqual(["g-e2e"]);
@@ -817,14 +822,16 @@ test(
           "true",
         ]);
         expect(recorded.envelope.ok).toBe(true);
-        const journal = yield* fs
-          .readFileString(`${world.state}/evidence/${started.runId}/steering/verifications.jsonl`)
-          .pipe(Effect.orDie);
+        const journal = yield* journalOf(
+          world,
+          started.runId,
+          "evidence/steering/verifications.jsonl",
+        ).pipe(Effect.orDie);
         expect(journal).toContain(`"name":"unit"`);
         expect(journal).toContain(`"result":"pass"`);
         // A card counts what it counts from the metrics, whichever kind of Run it was.
         expect(
-          yield* fs.readFileString(`${world.state}/evidence/${started.runId}/metrics.jsonl`),
+          yield* journalOf(world, started.runId, "evidence/metrics.jsonl").pipe(Effect.orDie),
         ).toContain(`"kind":"verification"`);
 
         // What a failing command said is shown as it ran, so nobody has to run it again to
@@ -930,15 +937,22 @@ const counted = (world: World) =>
     };
   });
 
+/** A Run's journal as the host on the world's state recorded it, a line each. */
+const journalOf = (world: World, runId: string, journal: string) =>
+  hostRecords(
+    world.state,
+    RunRecords.use((records) => records.lines(runId, journal)),
+  ).pipe(Effect.map((lines) => Arr.join(lines, "\n")));
+
 /** What a Run has recorded: its verifications and the logs `collie verify` wrote. */
 const recordsOf = (world: World, runId: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const evidence = `${world.state}/evidence/${runId}`;
     return {
-      journal: yield* fs
-        .readFileString(`${evidence}/steering/verifications.jsonl`)
-        .pipe(Effect.orElseSucceed(() => "")),
+      journal: yield* journalOf(world, runId, "evidence/steering/verifications.jsonl").pipe(
+        Effect.orElseSucceed(() => ""),
+      ),
       logs: yield* fs.readDirectory(`${evidence}/verify`).pipe(Effect.orElseSucceed(() => [])),
     };
   });
@@ -1162,10 +1176,16 @@ test(
             })
             .pipe(Effect.orDie);
           expect(line).toMatchObject({ kind: "abandoned", ref: "gitlab.cego.dk/cego/web!8" });
-          expect(yield* readDispositions(runDir(world.state, web.runId))).toMatchObject([
-            { kind: "abandoned", ref: "gitlab.cego.dk/cego/web!8" },
-          ]);
-          expect(yield* readDispositions(runDir(world.state, fan.runId))).toEqual([]);
+          expect(
+            yield* hostRecords(world.state, readDispositions(runDir(world.state, web.runId))).pipe(
+              Effect.orDie,
+            ),
+          ).toMatchObject([{ kind: "abandoned", ref: "gitlab.cego.dk/cego/web!8" }]);
+          expect(
+            yield* hostRecords(world.state, readDispositions(runDir(world.state, fan.runId))).pipe(
+              Effect.orDie,
+            ),
+          ).toEqual([]);
 
           const refused = yield* client
             .dispose({

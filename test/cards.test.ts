@@ -8,6 +8,7 @@ import { Effect, FileSystem, Option, Path } from "effect";
 import { expect, test } from "bun:test";
 import {
   appendCard,
+  cardsPath,
   buildCard,
   finishedOnRecord,
   inspectFor,
@@ -22,6 +23,7 @@ import {
   type SignificanceFacts,
 } from "../src/cards";
 import type { Verification } from "../src/verify";
+import { RunRecords } from "../src/run-records";
 import { runEffect } from "./support/effect";
 
 const revision = { branch: "feat/picker", head_sha: "abc", fingerprint: "f1", dirty: false };
@@ -277,11 +279,11 @@ test("the newest card per slice is what a reader sees, and the journal keeps the
       yield* appendCard(dir, base({ id: "old-final", kind: "final", at: "t9" }));
       yield* appendCard(dir, base({ id: "new-final", kind: "final", at: "t4" }));
       yield* appendCard(dir, base({ id: "followup", kind: "followup", at: "t5" }));
-      yield* fs.writeFileString(
-        `${dir}/steering/cards.jsonl`,
-        '\n{"kind":"final","at":"t6"}\n{incomplete',
-        { flag: "a" },
-      );
+      yield* (yield* RunRecords).append(cardsPath(dir).run, cardsPath(dir).name, [
+        "",
+        '{"kind":"final","at":"t6"}',
+        "{incomplete",
+      ]);
       expect(yield* finishedOnRecord(dir)).toBe("t4");
       expect(yield* readFinalCard(dir)).toEqual(
         Option.some(base({ id: "new-final", kind: "final", at: "t4" })),

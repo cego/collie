@@ -23,7 +23,8 @@ import type { ChildProcessSpawner } from "effect/process";
 import { AwaitingJson } from "./awaiting";
 import { CheckProcesses, type CheckOf } from "./check-processes";
 import type { PluginEnv } from "./env";
-import { appendJournal, readJournal } from "./journal";
+import { appendRunJournal, readRunJournal, runJournal } from "./journal";
+import type { RunRecords } from "./run-records";
 import { ensureLockDir, withLock } from "./lock";
 import { judge, MeasurementRefused } from "./measurement-verdict";
 import {
@@ -83,10 +84,10 @@ export const machineLockOf = (stateDir: string) => `${measurementsDir(stateDir)}
 /** Every base tree a Run's Measurements were taken on, Cleanup's to remove. */
 export const baseTreesDir = (stateDir: string, runId: string) =>
   `${measurementsDir(stateDir)}/trees/${runId}`;
-const journalOf = (evidence: string) => `${evidence}/measurements.jsonl`;
+const journalOf = (evidence: string) => runJournal(evidence, "measurements.jsonl");
 
 export const readMeasurements = (evidence: string) =>
-  readJournal(journalOf(evidence), MeasurementLine);
+  readRunJournal(journalOf(evidence), MeasurementLine);
 
 export interface MeasureAsk {
   readonly runId: string;
@@ -100,7 +101,11 @@ export interface MeasureAsk {
   readonly reason?: string;
 }
 
-type Services = FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner;
+type Services =
+  | FileSystem.FileSystem
+  | Path.Path
+  | ChildProcessSpawner.ChildProcessSpawner
+  | RunRecords;
 
 const git = (args: ReadonlyArray<string>, cwd: string) => shell("git", [...args], cwd);
 
@@ -620,9 +625,7 @@ const taking = Effect.fn("Measurement.taking")(function* (
         started,
         at: yield* nowIso,
       };
-      yield* appendJournal(journalOf(opts.evidence), MeasurementLine, measurement).pipe(
-        Effect.orDie,
-      );
+      yield* appendRunJournal(journalOf(opts.evidence), MeasurementLine, measurement);
       return { measurement, ran: true };
     });
 

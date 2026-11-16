@@ -9,7 +9,8 @@ import { connect } from "../src/host";
 import { readAudit } from "../src/audit";
 import { runDir } from "../src/engine";
 import { appendLine } from "../src/steering";
-import { deliveredTo, recordsAt, registeredAt } from "./support/records";
+import { readVerifications } from "../src/verify";
+import { deliveredTo, hostRecords, recordsAt, registeredAt } from "./support/records";
 import { runEffect } from "./support/effect";
 import { stopHost, until } from "./support/host";
 import { type Side, twoMachines } from "./support/peers";
@@ -18,6 +19,15 @@ const encodeValue = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
   Result.getOrThrow,
 );
+
+/** The Run's audit trail, as its host on `state` recorded it. */
+const trailOf = (state: string, runId: string) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) =>
+    hostRecords(
+      state,
+      readAudit(runDir(state, runId)).pipe(Effect.provideService(FileSystem.FileSystem, fs)),
+    ),
+  );
 
 /** An attended Run held at its question, and the agent its build step left in a pane. */
 const attendedAgent = Effect.fn("attendedAgent")(function* (side: Side) {
@@ -56,10 +66,14 @@ test(
             });
             expect(fromPane.envelope.ok).toBe(true);
             expect(
-              yield* fs.readFileString(
-                `${first.world.state}/evidence/${runId}/steering/verifications.jsonl`,
+              Arr.map(
+                yield* hostRecords(
+                  first.world.state,
+                  readVerifications(`${first.world.state}/evidence/${runId}`),
+                ),
+                (one) => one.name,
               ),
-            ).toContain(`"name":"from-pane"`);
+            ).toContain("from-pane");
 
             const plain = yield* first.cli(["verify", "--", "true"], {
               HERDR_PANE_ID: "not-an-agent",
@@ -106,7 +120,7 @@ test(
                 { HERDR_PANE_ID: "not-an-agent" },
               )).envelope.ok,
             ).toBe(true);
-            const trail = yield* readAudit(runDir(first.world.state, runId));
+            const trail = yield* trailOf(first.world.state, runId);
             expect(
               Option.getOrUndefined(Arr.findFirst(trail, (line) => line.request === "from-agent"))
                 ?.actor,
@@ -252,7 +266,7 @@ test(
                 told.envelope.data,
               ).pipe(Effect.orDie)).text,
             ).toContain("deliver: applied");
-            const remote = yield* readAudit(runDir(second.world.state, there.runId));
+            const remote = yield* trailOf(second.world.state, there.runId);
             expect(
               Option.getOrUndefined(Arr.findFirst(remote, (one) => one.operation === "deliver"))
                 ?.actor,

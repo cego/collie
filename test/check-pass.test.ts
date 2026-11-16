@@ -10,6 +10,8 @@ import { memoryWaitOf } from "../src/memory-wait";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
+import { recordsAt } from "./support/records";
+import type { RunRecords } from "../src/run-records";
 
 let rig: Rig;
 let dir: string;
@@ -65,14 +67,20 @@ const agentRan = (argv: ReadonlyArray<string> = [], expect: "pass" | "fail" = "p
     expect,
   }).pipe(Effect.orDie);
 
-const journal = () => readVerifications(evidenceDir(dir, runId)).pipe(Effect.orDie);
+const journal = () =>
+  readVerifications(evidenceDir(dir, runId)).pipe(Effect.provide(recordsAt(dir)), Effect.orDie);
 
 /** The host's check of `unit`, for the gate unless asked otherwise, once `before` has run inside that host. */
 const gate = <A>(
   before: Effect.Effect<
     A,
     never,
-    FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | Store | Host
+    | FileSystem.FileSystem
+    | Path.Path
+    | ChildProcessSpawner.ChildProcessSpawner
+    | Store
+    | Host
+    | RunRecords
   >,
   asked: { readonly pass?: "gate"; readonly expect?: "fail" } = { pass: "gate" },
 ) =>
@@ -142,7 +150,7 @@ test("a pass collected in another environment is not relied on", () =>
 test("a pass recorded before this host started is not relied on", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* agentRan();
+      yield* agentRan().pipe(Effect.provide(recordsAt(dir)));
       yield* ranAgain(yield* gate(Effect.void));
     }),
   ));

@@ -9060,7 +9060,7 @@ const makeRegistry: (
       Schema.decodeOption(Schema.fromJsonString(RunReport))(row.report ?? ""),
     );
     const linkNotices = yield* readLinkDeliveries(runDir(dir, row.run)).pipe(
-      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.provideContext(bun),
     );
     const admitted = {
       requestedBy: placing?.requestedBy,
@@ -9143,7 +9143,7 @@ const makeRegistry: (
         outcome === "performance"
           ? finalMeasurementLine(
               yield* readMeasurements(evidenceDir(dir, row.run)).pipe(
-                Effect.provideService(FileSystem.FileSystem, fs),
+                Effect.provideContext(bun),
                 Effect.orElseSucceed((): ReadonlyArray<Measurement> => []),
               ),
             )

@@ -14,7 +14,7 @@ import { resetExecutors } from "../src/executors";
 import { runDir } from "../src/engine";
 import { holdsBudgetOf, memoryWaitOf, waitLine } from "../src/memory-wait";
 import { readVerifications } from "../src/verify";
-import { deliveredTo, registeredAt, launchOf } from "./support/records";
+import { deliveredTo, hostRecords, registeredAt, launchOf } from "./support/records";
 import { evidenceDir } from "../src/engine";
 import { exec } from "./support/command";
 import { stopHost, until } from "./support/host";
@@ -100,7 +100,7 @@ test(
             );
           const waiting = () => memoryWaitOf(runDir(world.state, runId));
           const ran = () =>
-            readVerifications(evidenceDir(world.state, runId)).pipe(
+            hostRecords(world.state, readVerifications(evidenceDir(world.state, runId))).pipe(
               Effect.orElseSucceed(() => []),
               Effect.map((all) => all.length),
             );

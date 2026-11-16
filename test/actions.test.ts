@@ -376,7 +376,7 @@ test(
             at: "2026-09-23T12:00:00Z",
             by: "human",
             note: null,
-          }).pipe(Effect.orDie);
+          }).pipe(Effect.provide(recordsAt(world.state)), Effect.orDie);
 
           // The follow-up is gone, and the action is shown as the reason it cannot be taken.
           const offers = yield* client.offers({ runId }).pipe(Effect.orDie);

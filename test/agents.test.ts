@@ -79,7 +79,8 @@ import { FixOutputSchema, SynthesisSchema } from "../src/output";
 import { Triage } from "../workflows/retrospective";
 import { seedIntent, writeIntent } from "../src/intent";
 import { appendLine, herdOf, reconcile } from "../src/steering";
-import { deliveredTo, ledgerOf, recordsAt, registeredAt } from "./support/records";
+import { deliveredTo, ledgerOf, overHost, recordsAt, registeredAt } from "./support/records";
+import type { RunRecords } from "../src/run-records";
 import { Store, type DecisionRow } from "../src/store";
 import type { AuditLine } from "../src/audit";
 import { listTasks, readTask, taskKeptIn, withTaskLock, writeTask } from "../src/task";
@@ -259,9 +260,12 @@ test(
   30_000,
 );
 
-/** Every wait in here is on a clock that moves many times faster than the wall's. */
-const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
-  runLive(fastForward(effect));
+/**
+ * Every wait in here is on a clock that moves many times faster than the wall's, and a Run's
+ * records are where the host on `dir` keeps them.
+ */
+const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices | RunRecords>) =>
+  runLive(fastForward(effect).pipe(overHost(() => dir)));
 
 /** One host's lifetime: a fresh engine on the same directory is what a restart is. */
 const session = <A, E>(
@@ -1023,6 +1027,7 @@ test("a reused agent herdr still lists but no longer runs is started again in pl
 
 const cardsOf = (runId: string) =>
   readCards(runDir(dir, runId)).pipe(
+    Effect.provide(recordsAt(dir)),
     Effect.orDie,
     Effect.map((cards) =>
       Arr.map(
@@ -1087,9 +1092,12 @@ test(
         yield* session(started("r1"));
         expect(yield* cardsOf("r1")).toEqual([`review:review:wrote ${outputPath("r1")}`]);
         // The boundary before the work, once: no Herd here, so the judgement says so.
-        expect(Arr.map(yield* readDrift(runDir(dir, "r1")), (line) => line.kind)).toEqual([
-          "skipped",
-        ]);
+        expect(
+          Arr.map(
+            yield* readDrift(runDir(dir, "r1")).pipe(Effect.provide(recordsAt(dir))),
+            (line) => line.kind,
+          ),
+        ).toEqual(["skipped"]);
       }),
     ),
   120_000,
@@ -2598,7 +2606,7 @@ const reminders = Effect.map(
 );
 
 const halts = (runId: string) =>
-  Effect.map(readMetrics(evidenceDir(dir, runId)), (lines) =>
+  Effect.map(readMetrics(evidenceDir(dir, runId)).pipe(Effect.provide(recordsAt(dir))), (lines) =>
     Arr.filter(lines, (line) => line.kind === "halt"),
   );
 
@@ -2611,7 +2619,7 @@ test("a reminder counts as recovered once the Output decodes, including after it
       expect(yield* reminders).toHaveLength(1);
       expect(sent(yield* rig.calls(), "not usable")).toBe(1);
       const recovery = Arr.filter(
-        yield* readMetrics(evidenceDir(dir, "r1")),
+        yield* readMetrics(evidenceDir(dir, "r1")).pipe(Effect.provide(recordsAt(dir))),
         (line) => line.kind === "recovery",
       );
       expect(recovery.at(-1)).toMatchObject({
@@ -2671,7 +2679,7 @@ test(
         );
         expect(yield* read(outputPath("r1"))).toBe("");
         const reminded = Arr.filter(
-          yield* readMetrics(evidenceDir(dir, "r1")),
+          yield* readMetrics(evidenceDir(dir, "r1")).pipe(Effect.provide(recordsAt(dir))),
           (line) => line.kind === "recovery" && line.action === "reminded",
         );
         expect(Arr.map(reminded, (line) => line.outcome)).toEqual(["still-absent", "still-absent"]);
@@ -5314,6 +5322,8 @@ test("a definition's own preference sits under a scope's, and parallel scopes ke
       ).pipe(Effect.orDie);
       const { workflow, layer } = entry.make("prefers@1");
       const none = Effect.die("this workflow starts no child");
+      // Executed without the host's start, which is what makes the Run's directory.
+      yield* (yield* FileSystem.FileSystem).makeDirectory(runDir(dir, "r1"), { recursive: true });
       // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Loaded workflows erase the author-declared error schema; this test inspects the captured result.
       yield* workflow.execute({ runId: "r1", input: {} }).pipe(
         Effect.provide(
@@ -5355,6 +5365,8 @@ test("a definition's preference for a role reaches that role's work, under a sco
       ).pipe(Effect.orDie);
       const { workflow, layer } = entry.make("prefers-roles@1");
       const none = Effect.die("this workflow starts no child");
+      // Executed without the host's start, which is what makes the Run's directory.
+      yield* (yield* FileSystem.FileSystem).makeDirectory(runDir(dir, "r1"), { recursive: true });
       // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Loaded workflows erase the author-declared error schema; this test inspects the captured result.
       yield* workflow.execute({ runId: "r1", input: {} }).pipe(
         Effect.provide(
@@ -5401,6 +5413,8 @@ test("each seat of a panel is its own agent, persona and instructions; the role'
       ).pipe(Effect.orDie);
       const { workflow, layer } = entry.make("panel@1");
       const none = Effect.die("this workflow starts no child");
+      // Executed without the host's start, which is what makes the Run's directory.
+      yield* (yield* FileSystem.FileSystem).makeDirectory(runDir(dir, "r1"), { recursive: true });
       // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Loaded workflows erase the author-declared error schema; this test inspects the captured result.
       yield* workflow.execute({ runId: "r1", input: {} }).pipe(
         Effect.provide(
@@ -6928,7 +6942,7 @@ test("a reused agent is compacted before its next piece of work, and a new one i
       // Once, at the boundary between the two: the agent had just started for the first.
       expect(asked).toHaveLength(1);
       const context = Arr.filter(
-        yield* readMetrics(evidenceDir(dir, "r1")),
+        yield* readMetrics(evidenceDir(dir, "r1")).pipe(Effect.provide(recordsAt(dir))),
         (line) => line.kind === "context",
       );
       expect(Arr.map(context, (line) => [line.subject, line.value])).toEqual([
@@ -7234,7 +7248,7 @@ test("a boundary whose context cannot be sampled records no context line, never 
         Effect.scoped,
         Effect.orDie,
       );
-      const lines = yield* readMetrics(evidenceDir(dir, "r1"));
+      const lines = yield* readMetrics(evidenceDir(dir, "r1")).pipe(Effect.provide(recordsAt(dir)));
       expect(Arr.filter(lines, (line) => line.kind === "context")).toEqual([]);
     }),
   ));

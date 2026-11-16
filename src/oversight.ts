@@ -8,7 +8,7 @@ import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
 import type { PlatformServices } from "./platform";
-import { Clock, Context, Effect, FileSystem, Path, Schema } from "effect";
+import { Cause, Clock, Context, Effect, FileSystem, Path, Schema } from "effect";
 import { appendLogLine } from "./run-log";
 import { reportFields } from "./narrative-model";
 import type { ChildProcessSpawner } from "effect/process";
@@ -72,6 +72,7 @@ import { shell } from "./mr";
 import { pendingFor, proposalsOf, record as recordProposal } from "./proposals";
 import { appendLine, deliveriesOf, newestById, overrideActive, readLedger } from "./steering";
 import type { Records } from "./records";
+import { RunRecords, runOfDir } from "./run-records";
 import { capabilitiesOf } from "./steering-caps";
 import { externalSubmissions } from "./compactors";
 import { controlDir } from "./compaction";
@@ -239,7 +240,12 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
     narrative: what.narrative ?? null,
     ...reportFields(what),
   });
-  yield* appendCard(at.runDir, card).pipe(Effect.ignore({ log: "Unhandled" }));
+  // A card is a reading of the Run; failing to keep one must not fail the Run.
+  yield* appendCard(at.runDir, card).pipe(
+    Effect.catchDefect((defect) =>
+      Effect.logError(`${at.runId}'s card was not recorded`, Cause.die(defect)),
+    ),
+  );
   return card;
 });
 
@@ -1008,7 +1014,7 @@ export const settleAtFinish = Effect.fn("Oversight.settleAtFinish")(function* (a
 });
 
 /** Which checkpoints have a card already, so a restart does not card them twice. */
-const cardedPath = (runDir: string) => `${runDir}/steering/carded`;
+const CARDED = "steering/carded";
 
 /**
  * A card per ticket an agent has said it finished, while its work is still going: a
@@ -1019,26 +1025,21 @@ export const cardCheckpoints = Effect.fn("Oversight.cardCheckpoints")(function* 
   at: Watched,
   step: string,
 ): Effect.fn.Return<ReadonlyArray<Card>, never, Services> {
-  const fs = yield* FileSystem.FileSystem;
+  const records = yield* RunRecords;
+  const run = runOfDir(at.runDir);
   const found = yield* readCheckpoints(at.runDir).pipe(Effect.orElseSucceed(() => []));
   const done = Arr.filter(found, (one) => one.checkpoint.status === "done");
   if (done.length === 0) return [];
-  yield* fs.makeDirectory(`${at.runDir}/steering`, { recursive: true }).pipe(Effect.ignore);
-  const carded = new Set(
-    lines(yield* fs.readFileString(cardedPath(at.runDir)).pipe(Effect.orElseSucceed(() => ""))),
-  );
+  const carded = new Set(yield* records.lines(run, CARDED));
   const written: Card[] = [];
   for (const { file, checkpoint } of done) {
     const key = `${file}@${checkpoint.at}`;
     if (carded.has(key)) continue;
     // Together: a watch interrupted between the two would leave a ticket marked but never carded.
     const card = yield* Effect.uninterruptible(
-      fs
-        .writeFileString(cardedPath(at.runDir), `${key}\n`, { flag: "a" })
-        .pipe(
-          Effect.ignore({ log: "Unhandled" }),
-          Effect.andThen(writeCard(at, { kind: "slice", step, claims: checkpoint.claims })),
-        ),
+      records
+        .append(run, CARDED, [key])
+        .pipe(Effect.andThen(writeCard(at, { kind: "slice", step, claims: checkpoint.claims }))),
     );
     written.push(card);
   }

@@ -48,6 +48,7 @@ import {
   startCheck,
   type Verification,
 } from "../src/verify";
+import { RunRecords } from "../src/run-records";
 import { runEffect } from "./support/effect";
 import { exec, startDetached } from "./support/command";
 import { until } from "./support/host";
@@ -1709,16 +1710,20 @@ for (const stream of ["stdout", "stderr"] as const)
 test("a check whose Verification cannot be appended gives no verdict", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       const one = yield* world;
-      yield* fs.makeDirectory(`${one.root}/evidence/steering/verifications.jsonl`, {
-        recursive: true,
-      });
-      const refused = yield* collected(one, "true", { cwd: one.notes }).pipe(Effect.flip);
+      const records = yield* RunRecords;
+      const refused = yield* collected(one, "true", { cwd: one.notes }).pipe(
+        Effect.provideService(RunRecords, {
+          ...records,
+          append: () => Effect.die(new Error("disk full")),
+        }),
+        Effect.flip,
+      );
 
       expect(refused._tag).toBe("VerifyRefused");
       expect(refused.state).toBe(true);
       expect(refused.why).toContain('"streams" gave no verdict');
       expect(refused.why).toContain("record");
+      expect(refused.why).toContain("disk full");
     }),
   ));

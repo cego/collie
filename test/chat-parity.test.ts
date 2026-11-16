@@ -41,7 +41,7 @@ import { boardLines, buildBoard } from "../src/board";
 import { Flow, SECTIONS, sortBoard, recordIn } from "../src/board-model";
 import { encodeVerifying } from "../src/verify";
 import { memoryWaitOf, waitForMemory } from "../src/memory-wait";
-import { madeRun } from "./support/records";
+import { hostRecords, madeRun, recordsAt } from "./support/records";
 import { task } from "./support/task";
 import { runEffect } from "./support/effect";
 import { epochMs } from "../src/time";
@@ -367,6 +367,7 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["mcp", { route: "shell" }],
   ["host", { route: "shell" }],
   ["host restart", { route: "shell" }],
+  ["host rollback", { route: "shell" }],
   ["bridge", { route: "shell" }],
   ["machine list", { route: "shell" }],
   ["machine connect", { route: "shell" }],
@@ -864,6 +865,8 @@ test("collie_run answers from related Runs without polling unrelated live execut
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-related-answer-" });
       const run = yield* madeRun(dir, { id: "r-parent", state: "succeeded" });
       const child = yield* madeRun(dir, { id: "r-child", parent: run.id });
+      // The records a host on `dir` would have made, which collie_run reads.
+      yield* Effect.provide(Effect.void, recordsAt(dir));
       const reads = {
         runs: Effect.die("unrelated live executions were polled"),
         related: Effect.succeed([run, child]),
@@ -939,7 +942,7 @@ test(
         });
         expect(said).toContain("disposition: failed");
         expect(said).toContain(`cannot name ${run.id}, the Run it is recorded on`);
-        expect(yield* readDispositions(run.dir)).toEqual([]);
+        expect(yield* hostRecords(world.state, readDispositions(run.dir))).toEqual([]);
       }),
     ),
   // A host, and a Run of it that finishes.
@@ -1093,7 +1096,7 @@ test(
           ],
         });
         expect(said).toContain(`cannot name ${run.id}, the Run it is recorded on`);
-        expect(yield* readDispositions(run.dir)).toEqual([]);
+        expect(yield* hostRecords(world.state, readDispositions(run.dir))).toEqual([]);
       }),
     ),
   60_000,

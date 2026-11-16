@@ -33,6 +33,7 @@ import { appState as homeState } from "../../src/flows";
 import { Herdr } from "../../src/herdr";
 import { followBoard } from "../../src/lifecycle";
 import { scopeFor } from "../../src/registry";
+import { recordsReadLayer } from "../../src/records";
 import { focus } from "../support/focus";
 import { collie, proves } from "../support/world";
 import { epochMs } from "../../src/time";
@@ -2066,6 +2067,7 @@ test(
               schedule: Schedule.spaced("250 millis"),
               times: 40,
             }),
+            Effect.provide(recordsReadLayer(env.stateDir)),
           );
           // The host is left for `proves` to stop once this scope has closed: stopped here,
           // the board followed above reconnects and starts another that outlives the test.

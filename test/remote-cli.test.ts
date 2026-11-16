@@ -12,7 +12,8 @@ import { appendDrift } from "../src/drift";
 import { readCards } from "../src/cards";
 import { readIntent } from "../src/intent";
 import { appendLine } from "../src/steering";
-import { ledgerOf, recordsAt, registeredAt } from "./support/records";
+import { hostRecords, ledgerOf, recordsAt, registeredAt } from "./support/records";
+import { recordsReadLayer } from "../src/records";
 import { readAudit } from "../src/audit";
 import { encodeVerifying, readVerifications, VERIFYING_FILE } from "../src/verify";
 import { runEffect } from "./support/effect";
@@ -69,13 +70,13 @@ test(
               subject: "remote-slice",
               value: 1,
               note: "done",
-            });
+            }).pipe(Effect.provide(recordsAt(second.world.state)));
             yield* appendDrift(dir, {
               kind: "skipped",
               at: "2026-10-12T00:00:00Z",
               run: runId,
               reason: "remote drift",
-            });
+            }).pipe(Effect.provide(recordsAt(second.world.state)));
             yield* first.lists([second]);
             expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
             const caller = yield* connect(first.world.state);
@@ -97,7 +98,7 @@ test(
               expect(
                 encode((yield* first.cli([...prefix, "run", "drift", runId])).envelope),
               ).toContain("remote drift");
-              const cards = yield* readCards(dir);
+              const cards = yield* hostRecords(second.world.state, readCards(dir));
               expect(cards.length).toBeGreaterThan(0);
               expect(
                 encode((yield* first.cli([...prefix, "run", "cards", runId])).envelope),
@@ -245,10 +246,18 @@ test(
                 },
               },
             });
-            expect(Arr.map(yield* readVerifications(evidence), (one) => one.name)).toContain(
-              "remote-check",
-            );
-            expect(yield* readVerifications(evidenceDir(first.world.state, runId))).toEqual([]);
+            expect(
+              Arr.map(
+                yield* hostRecords(second.world.state, readVerifications(evidence)),
+                (one) => one.name,
+              ),
+            ).toContain("remote-check");
+            expect(
+              yield* hostRecords(
+                first.world.state,
+                readVerifications(evidenceDir(first.world.state, runId)),
+              ),
+            ).toEqual([]);
             expect(
               (yield* first.cli(["--machine", "second", "run", "report"])).envelope,
             ).toMatchObject({
@@ -259,7 +268,9 @@ test(
                 ],
               },
             });
-            const audit = yield* readAudit(dir);
+            const audit = yield* readAudit(dir).pipe(
+              Effect.provide(recordsReadLayer(second.world.state)),
+            );
             expect(
               Option.getOrUndefined(Arr.findFirst(audit, (one) => one.request === "remote-intent"))
                 ?.actor.origin,

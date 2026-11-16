@@ -2387,7 +2387,9 @@ const frontDoorHandlers = (
           });
         };
       /** A file operation's failure as the host's refusal, in its own words. */
-      const refusedPlainly = <A, E, R extends PlatformServices>(effect: Effect.Effect<A, E, R>) =>
+      const refusedPlainly = <A, E, R extends PlatformServices | Records>(
+        effect: Effect.Effect<A, E, R>,
+      ) =>
         effect.pipe(
           Effect.mapError((cause) =>
             Schema.is(RequestConflict)(cause) || Schema.is(HostRefused)(cause)

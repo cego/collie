@@ -6,7 +6,7 @@ import { defaultBase, classifyWorkSource } from "./inputs";
 import { readIntent } from "./intent";
 import { isBlocking, SynthesisSchema, FindingSchema } from "./output";
 import { readVerifications, sameAsked, sameTree, treeOf, type Verification } from "./verify";
-import { appendJournal, readJournalWhole } from "./journal";
+import { appendRunJournal, readRunJournalWhole, runJournal } from "./journal";
 import { readCards, readFinalCard } from "./cards";
 import { shell } from "./mr";
 import { nowIso } from "./time";
@@ -112,7 +112,7 @@ export const recordReview = Effect.fn("Recovery.recordReview")(function* (
     !sameTree(now, scope)
   )
     return;
-  yield* appendJournal(`${dir}/reviews.jsonl`, ReviewedJson, {
+  yield* appendRunJournal(runJournal(dir, "reviews.jsonl"), ReviewedJson, {
     ...scope,
     base,
     review,
@@ -185,11 +185,19 @@ export const recoveryFrom = Effect.fn("Recovery.from")(
       current = { ...current, head: remote, fingerprint: Str.trim(tree.stdout) };
     }
     const readings = yield* Effect.forEach(options.candidates, (dir) =>
-      readJournalWhole(`${dir}/reviews.jsonl`, ReviewedJson),
+      readRunJournalWhole(runJournal(dir, "reviews.jsonl"), ReviewedJson),
     );
     const records = Arr.sort(
       Arr.flatMap(readings, (one) => one.lines),
       Order.mapInput(Str.Order, (one: typeof ReviewedWork.Type) => one.at),
+    );
+    // For the recovering agent, who cannot read the host's database.
+    yield* (yield* FileSystem.FileSystem).writeFileString(
+      `${options.dir}/recovery-reviews.jsonl`,
+      Arr.join(
+        [...(yield* Effect.forEach(records, (one) => Schema.encodeEffect(ReviewedJson)(one))), ""],
+        "\n",
+      ),
     );
     const final = yield* readFinalCard(options.parent);
     const prior = Arr.findLast(records, (one) => one.source === options.source);

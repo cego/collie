@@ -9,6 +9,7 @@ import { readAudit } from "../src/audit";
 import { fileTime, nowIso } from "../src/time";
 import { connect, frontDoor, socketOf } from "../src/host";
 import { proves } from "./support/world";
+import { memoryRecords } from "./support/effect";
 
 const at = (hour: number) => `2099-10-14T${pipe_(String(hour), Str.padStart(2, "0"))}:00:00.000Z`;
 const b64 = (text: string) => Buffer.from(text).toString("base64");
@@ -128,7 +129,9 @@ test(
           expect(yield* fs.exists(`${user}/config.json`)).toBe(false);
 
           // Both are recorded under the Actor that asked.
-          const audited = yield* readAudit(`${world.state}/definitions`);
+          const audited = yield* readAudit(`${world.state}/definitions`).pipe(
+            Effect.provide(memoryRecords),
+          );
           expect(Arr.map(audited, (line) => line.operation)).toContain("definitions");
           expect(
             Option.getOrUndefined(Arr.findFirst(audited, (line) => line.request === "share-1"))

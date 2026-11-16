@@ -17,7 +17,13 @@ import * as Rec from "effect/Record";
 import type { PlatformServices } from "./platform";
 import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import type { Constraint, Intent, RuleSpec } from "./intent";
-import { appendJournal, readJournal } from "./journal";
+import {
+  appendJournal,
+  appendRunJournal,
+  readJournal,
+  readRunJournal,
+  runJournal,
+} from "./journal";
 import { shell } from "./mr";
 import { isRecord, isString } from "./schema";
 import { nowIso } from "./time";
@@ -56,17 +62,14 @@ export const DriftLineSchema = Schema.Union([SkippedSchema, DriftReportSchema]);
 export type DriftLine = Schema.Schema.Type<typeof DriftLineSchema>;
 const LineJson = Schema.fromJsonString(DriftLineSchema);
 
-export const driftPath = Effect.fn("Drift.path")(function* (runDir: string) {
-  const path = yield* Path.Path;
-  return path.join(runDir, "steering", "drift.jsonl");
-});
+export const driftPath = (runDir: string) => runJournal(runDir, "steering/drift.jsonl");
 
 export const readDrift = Effect.fn("Drift.read")(function* (runDir: string) {
-  return yield* readJournal(yield* driftPath(runDir), LineJson);
+  return yield* readRunJournal(driftPath(runDir), LineJson);
 });
 
 export const appendDrift = Effect.fn("Drift.append")(function* (runDir: string, line: DriftLine) {
-  yield* appendJournal(yield* driftPath(runDir), LineJson, line);
+  yield* appendRunJournal(driftPath(runDir), LineJson, line);
 });
 
 /** Only reports, newest state per id: the journal is append-only, so the last line wins. */

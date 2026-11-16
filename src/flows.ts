@@ -36,6 +36,7 @@ import { reachOf, savedFirst } from "./reach";
 import { parseSetting, settingText } from "./settings";
 import { herdDir, machineHerd } from "./steering";
 import { liveFor, markedOf, type Ledgers } from "./live";
+import { RunRecords } from "./run-records";
 import { isStale, layers, loadDefinitions, type Definitions, type Provenance } from "./definitions";
 import { selfCommand, type PluginEnv } from "./env";
 import { Herdr, type AgentInfo, type WorkspaceInfo } from "./herdr";
@@ -867,6 +868,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     (yield* Effect.gen(function* () {
       const { runApp } = yield* Effect.promise(() => import("./ui/bridge"));
       const app = appState(session, env);
+      const records = yield* RunRecords;
       /**
        * The board's own dispatch, once it is running. A confirmed `navigate` puts its
        * target on screen through this and through nothing else: the board never calls a
@@ -885,7 +887,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
         // are what change it after that.
         filter: opening,
         origin,
-        load: (focus) => app.load(focus),
+        load: (focus) => app.load(focus).pipe(Effect.provideService(RunRecords, records)),
         act: (command, prompts) => runCommand(session, env, command, prompts, navigate),
         // A picture only where every human attached can see one; otherwise no mark.
         logo: (yield* everyViewerPaints())

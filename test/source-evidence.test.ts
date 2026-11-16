@@ -4,6 +4,7 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
 import { connect } from "../src/host";
 import { readVerifications } from "../src/verify";
+import { hostRecords } from "./support/records";
 import { evidenceDir, runDir } from "../src/engine";
 import { exec } from "./support/command";
 import { until } from "./support/host";
@@ -92,9 +93,10 @@ test(
             (view) => view?.status.status === "complete",
           );
           const late = yield* verify("late", ["--", "/bin/true"]);
-          const sourced = yield* readVerifications(evidenceDir(world.state, source)).pipe(
-            Effect.orDie,
-          );
+          const sourced = yield* hostRecords(
+            world.state,
+            readVerifications(evidenceDir(world.state, source)),
+          ).pipe(Effect.orDie);
           const settled = (runId: string) =>
             Effect.map(
               until(

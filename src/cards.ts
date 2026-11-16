@@ -18,7 +18,7 @@ import { pipe as pipe_ } from "effect/Function";
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { Significance, mrWords, readMrRef } from "./board-model";
 import { forgeOf } from "./forge/forge";
-import { appendJournal, findLastJournal, readJournal } from "./journal";
+import { appendRunJournal, findLastRunJournal, readRunJournal, runJournal } from "./journal";
 import { redact } from "./redact";
 import { sameTree, type Verification } from "./verify";
 import { ProducerReport, reportFields } from "./narrative-model";
@@ -85,25 +85,18 @@ export const CardSchema = Schema.Struct({
 export type Card = Schema.Schema.Type<typeof CardSchema>;
 const CardJson = Schema.fromJsonString(CardSchema);
 
-export const cardsPath = Effect.fn("Cards.path")(function* (runDir: string) {
-  const path = yield* Path.Path;
-  return path.join(runDir, "steering", "cards.jsonl");
-});
+export const cardsPath = (runDir: string) => runJournal(runDir, "steering/cards.jsonl");
 
 export const appendCard = Effect.fn("Cards.append")(function* (runDir: string, card: Card) {
-  yield* appendJournal(yield* cardsPath(runDir), CardJson, card);
+  yield* appendRunJournal(cardsPath(runDir), CardJson, card);
 });
 
 export const readCards = Effect.fn("Cards.read")(function* (runDir: string) {
-  return yield* readJournal(yield* cardsPath(runDir), CardJson);
+  return yield* readRunJournal(cardsPath(runDir), CardJson);
 });
 
 export const readFinalCard = Effect.fn("Cards.final")(function* (runDir: string) {
-  return yield* findLastJournal(
-    yield* cardsPath(runDir),
-    CardJson,
-    (card) => card.kind === "final",
-  );
+  return yield* findLastRunJournal(cardsPath(runDir), CardJson, (card) => card.kind === "final");
 });
 
 /**

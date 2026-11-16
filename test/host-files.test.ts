@@ -119,7 +119,9 @@ test(
             expect(yield* fs.exists(`${world.state}/runs/planted.txt`)).toBe(false);
           }
 
-          const trail = yield* readAudit(`${world.state}/files`);
+          const trail = yield* readAudit(`${world.state}/files`).pipe(
+            Effect.provide(memoryRecords),
+          );
           expect(
             Arr.map(trail, ({ operation, actor }) => [operation, actor.origin, actor.said]),
           ).toEqual([
@@ -207,7 +209,9 @@ test(
             bytes,
           );
 
-          const trail = yield* readAudit(`${world.state}/uploads`);
+          const trail = yield* readAudit(`${world.state}/uploads`).pipe(
+            Effect.provide(memoryRecords),
+          );
           // As each arrived, and as what this host already held.
           expect(Arr.map(trail, ({ operation, actor }) => [operation, actor.said])).toEqual([
             ["upload", "upload"],

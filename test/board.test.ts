@@ -72,7 +72,8 @@ import { factsOfView, type RunFacts } from "../src/runs";
 import type { RunView } from "../src/engine";
 import type { TaskRecord } from "../src/task";
 import { memoryRecords, runEffect } from "./support/effect";
-import { madeRun } from "./support/records";
+import { hostRecords, madeRun, recordsAt } from "./support/records";
+import { RunRecords } from "../src/run-records";
 import { exec } from "./support/command";
 import { collie, proves } from "./support/world";
 import { stopHost, until } from "./support/host";
@@ -144,7 +145,7 @@ test(
           );
           expect(finished?.branch).not.toBeNull();
           const cards = yield* until(
-            () => readCards(`${world.state}/runs/${started.runId}`).pipe(Effect.orDie),
+            () => hostRecords(world.state, readCards(`${world.state}/runs/${started.runId}`)),
             (cards) => Arr.some(cards, (card) => card.kind === "final"),
           );
           const ended = cards.at(-1)!.revision.head_sha;
@@ -180,7 +181,9 @@ test(
               .pipe(Effect.orDie))?.status.status,
           ).toBe("failed");
           expect(
-            (yield* readCards(`${world.state}/runs/${started.runId}`)).at(-1)?.revision.head_sha,
+            (yield* hostRecords(world.state, readCards(`${world.state}/runs/${started.runId}`))).at(
+              -1,
+            )?.revision.head_sha,
           ).toBe(ended);
           const env = readEnv({
             HERDR_PLUGIN_ROOT: world.install,
@@ -235,13 +238,18 @@ test(
           expect(checked?.branch).toBe(finished?.branch);
           expect(checked?.cwd).toBe(cwd);
           expect(yield* current.launches({ run: child.runId }).pipe(Effect.orDie)).toHaveLength(0);
-          const records = yield* readVerifications(`${world.state}/evidence/${child.runId}`);
+          const records = yield* hostRecords(
+            world.state,
+            readVerifications(`${world.state}/evidence/${child.runId}`),
+          );
           expect(records[0]?.end.head_sha).toBe(head);
           expect(
             (yield* current.run({ runId: started.runId }).pipe(Effect.orDie))?.status.status,
           ).toBe("failed");
           expect(
-            (yield* readCards(`${world.state}/runs/${started.runId}`)).at(-1)?.revision.head_sha,
+            (yield* hostRecords(world.state, readCards(`${world.state}/runs/${started.runId}`))).at(
+              -1,
+            )?.revision.head_sha,
           ).toBe(ended);
           const listed = yield* current.offers({ runId: started.runId }).pipe(Effect.orDie);
           expect(listed[0]?.title).toContain("Checks");
@@ -263,9 +271,12 @@ test(
             status: "failed",
             reason: "A review is required",
           });
-          expect(yield* readVerifications(`${world.state}/evidence/${stale.runId}`)).toHaveLength(
-            0,
-          );
+          expect(
+            yield* hostRecords(
+              world.state,
+              readVerifications(`${world.state}/evidence/${stale.runId}`),
+            ),
+          ).toHaveLength(0);
         }),
       ["recovery.workflow.ts"],
     ),
@@ -1267,7 +1278,13 @@ test("what the host writes about a finished Run does not move when it ended", ()
       yield* writtenAt(`${run.dir}/log`, old);
       // The diff kept for its drawer and the trail of who disposed of it.
       yield* writtenAt(`${run.dir}/diff.json`, "2026-09-14T10:04:00Z");
-      yield* writtenAt(`${run.dir}/operations.jsonl`, "2026-09-14T10:04:00Z");
+      yield* recordAudit(run.dir, {
+        operation: "disposition",
+        request: "d-1",
+        origin: "board",
+        result: Schema.String,
+        value: "abandoned",
+      });
 
       const [view] = yield* board(env, [run]);
       expect(view!.ended).toBe(epochMs(old));
@@ -4092,17 +4109,14 @@ test("a Verification recorded before passes were still reads, as a plain check",
     Effect.gen(function* () {
       const { dir } = yield* scratch();
       const run = yield* madeRun(dir);
-      const fs = yield* FileSystem.FileSystem;
       const {
         pass: _pass,
         round: _round,
         ...old
       } = { ...checked("test", "abc"), pass: "gate", round: 1 };
-      yield* fs.makeDirectory(`${run.evidence}/steering`, { recursive: true });
-      yield* fs.writeFileString(
-        `${run.evidence}/steering/verifications.jsonl`,
-        `${yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(old).pipe(Effect.orDie)}\n`,
-      );
+      yield* (yield* RunRecords).append(run.id, "evidence/steering/verifications.jsonl", [
+        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(old).pipe(Effect.orDie),
+      ]);
       const [read] = yield* readVerifications(run.evidence);
       expect(read?.name).toBe("test");
       expect(read?.pass).toBeUndefined();
@@ -4126,7 +4140,7 @@ test(
             ...checked("lint", "abc"),
             run: runId,
             pass: "gate",
-          });
+          }).pipe(Effect.provide(recordsAt(world.state)));
           yield* fs.writeFileString(
             `${run.dir}/verifying`,
             encodeVerifying({
@@ -4329,7 +4343,7 @@ test(
             ...checked("unit", "abc"),
             run: runId,
             log,
-          });
+          }).pipe(Effect.provide(recordsAt(world.state)));
           yield* fs.remove(marker);
           const followed = yield* Fiber.join(following);
 
@@ -4984,7 +4998,7 @@ const waitingIn = (
   ) => Effect.Effect<
     Partial<Parameters<typeof buildBoard>[0]>,
     never,
-    FileSystem.FileSystem | Path.Path
+    FileSystem.FileSystem | Path.Path | RunRecords
   >,
   over: Partial<RunFacts> = {},
 ) =>

@@ -9,6 +9,7 @@ import { expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem, Schema, flow, Result } from "effect";
 import { evidenceDir, runDir } from "../src/engine";
 import { readMeasurements } from "../src/measurement";
+import { hostRecords } from "./support/records";
 import type { BenchmarkPlan, Measurement } from "../src/measurement-model";
 import { memoryWaitOf } from "../src/memory-wait";
 import { epochMs } from "../src/time";
@@ -134,7 +135,9 @@ const measuring = (
   });
 
 const recorded = (world: World, runId: string) =>
-  readMeasurements(evidenceDir(world.state, runId)).pipe(Effect.orElseSucceed(() => []));
+  hostRecords(world.state, readMeasurements(evidenceDir(world.state, runId))).pipe(
+    Effect.orElseSucceed(() => []),
+  );
 
 const linesOf = (world: World, file: string) =>
   FileSystem.FileSystem.pipe(

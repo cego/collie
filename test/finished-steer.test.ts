@@ -3,6 +3,7 @@
 // status nothing rewrites.
 
 import type { Records } from "../src/records";
+import { RunRecords } from "../src/run-records";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -203,7 +204,9 @@ test(
           () => finishedOnRecord(dir),
           (at) => at !== null,
         );
-        const history = yield* fs.readFileString(yield* cardsPath(dir)).pipe(Effect.orDie);
+        const cards = cardsPath(dir);
+        const cardLines = RunRecords.use((records) => records.lines(cards.run, cards.name));
+        const history = yield* cardLines;
         yield* stopHost(world.state);
         yield* fs.remove(`${world.user}/told.workflow.ts`).pipe(Effect.orDie);
         yield* fs.remove(`${dir}/terminal.json`).pipe(Effect.orDie);
@@ -234,7 +237,7 @@ test(
           "outcome unavailable",
         );
         expect(yield* fs.exists(`${dir}/terminal.json`)).toBe(false);
-        expect(yield* fs.readFileString(yield* cardsPath(dir))).toBe(history);
+        expect(yield* cardLines).toEqual(history);
       }),
     ),
   120_000,

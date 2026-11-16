@@ -8,7 +8,14 @@ import { pipe as pipe_ } from "effect/Function";
 import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { FrontDoor, RequestConflict, Where } from "./board-model";
 import { voiceOf, type Voice } from "./proposals";
-import { appendJournal, readJournal } from "./journal";
+import {
+  appendJournal,
+  appendRunJournal,
+  readJournal,
+  readRunJournal,
+  runJournal,
+} from "./journal";
+import { runOfDir } from "./run-records";
 import { nowIso } from "./time";
 
 export const ScheduledBy = Schema.Struct({ name: Schema.String, occurrence: Schema.String });
@@ -74,7 +81,13 @@ const sameJson = Schema.toEquivalence(Schema.Json);
 export const AUDIT_FILE = "operations.jsonl";
 const fileOf = (runDir: string) => `${runDir}/${AUDIT_FILE}`;
 
-export const readAudit = (runDir: string) => readJournal(fileOf(runDir), AuditJson);
+/** A Run's trail is a journal in the host's database; any other trail is its own file. */
+const ofRun = (dir: string) => runOfDir(dir.slice(0, dir.lastIndexOf("/"))) === "runs";
+
+export const readAudit = Effect.fn("Audit.read")(function* (dir: string) {
+  if (ofRun(dir)) return yield* readRunJournal(runJournal(dir, AUDIT_FILE), AuditJson);
+  return yield* readJournal(fileOf(dir), AuditJson);
+});
 
 /** Keeps a trail's newest `keep` lines, for one that is written too often to keep whole. */
 export const trimAudit = Effect.fn("Audit.trim")(function* (runDir: string, keep: number) {
@@ -134,7 +147,9 @@ export const recordAudit = Effect.fn("Audit.record")(function* <A, I extends Sch
   if (line.reason !== undefined) full = { ...full, reason: line.reason };
   if (line.asked !== undefined) full = { ...full, asked: line.asked };
   if (line.requested !== undefined) full = { ...full, requested: line.requested };
-  yield* appendJournal(fileOf(runDir), AuditJson, full);
+  yield* ofRun(runDir)
+    ? appendRunJournal(runJournal(runDir, AUDIT_FILE), AuditJson, full)
+    : appendJournal(fileOf(runDir), AuditJson, full);
 });
 
 /**
