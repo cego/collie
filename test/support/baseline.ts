@@ -16668,7 +16668,14 @@ for (const name of ["gitlab", "github"] as const) {
                     channel: "C123",
                   });
                 return yield* operation === "post"
-                  ? host.post({ runId, target, cwd: rig.projectDir, file })
+                  ? host.post({
+                      runId,
+                      target,
+                      cwd: rig.projectDir,
+                      file,
+                      head: REVIEW_HEAD,
+                      round: 1,
+                    })
                   : host.note({ runId, cwd: rig.projectDir, body });
               }),
             );
@@ -16685,7 +16692,9 @@ for (const name of ["gitlab", "github"] as const) {
             } else {
               expect(sent).toMatchObject({ ok: true });
               expect(Rec.values(model.notes ?? {}).flat()).toEqual([
-                `Verified <gitlab token>.${operation === "post" ? signed(runId) : ""}`,
+                operation === "post"
+                  ? `Review at ${REVIEW_HEAD}\n\nVerified <gitlab token>.\n\n<!-- collie:${runId} round 1 at ${REVIEW_HEAD} by tester -->`
+                  : "Verified <gitlab token>.",
               ]);
             }
           }),
@@ -16705,7 +16714,7 @@ for (const name of ["gitlab", "github"] as const) {
           yield* fs.writeFileString(file, leakingReview);
           const posted = yield* session(
             Effect.flatMap(Host, (host) =>
-              host.post({ runId, target, cwd: rig.projectDir, file, approve: false }),
+              host.post({ runId, target, cwd: rig.projectDir, file, head: REVIEW_HEAD, round: 1 }),
             ),
           );
           const model = yield* forge.model();
