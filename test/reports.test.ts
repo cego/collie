@@ -117,7 +117,17 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           const localOutputs = `${first.world.home}/outputs.json`;
           const farOutputs = `${second.world.home}/outputs.json`;
           yield* fs.writeFileString(localOutputs, encode([null]));
-          yield* fs.writeFileString(farOutputs, encode([{ verdict: "done" }]));
+          const built = { verdict: "done" };
+          // OpenCode's reporter writes the session it opened beside the prompt.
+          const openedSession = {
+            writes: [],
+            sh: 'printf ses_requester > "${PROMPT_PATH%.prompt.md}.session"',
+            output: built,
+          };
+          yield* fs.writeFileString(
+            farOutputs,
+            encode([harness === "opencode" ? openedSession : built]),
+          );
           expect(
             (yield* first.cli(["machine", "list"], {
               ...launch,
