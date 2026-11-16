@@ -7,7 +7,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Clock, DateTime, Effect, FileSystem } from "effect";
 import type { TaskView } from "../src/board-model";
 import { buildBoard } from "../src/board";
-import { judge, retentionSweeper, stateSweeper, sweepingWith } from "../src/cleanup";
+import { judge, retentionSweeper, settlingOf, stateSweeper, sweepingWith } from "../src/cleanup";
+import { writeMrStates } from "../src/merges";
 import { Herdr } from "../src/herdr";
 import { makeRunModel } from "../src/run-model";
 import type { RunFacts } from "../src/runs";
@@ -30,6 +31,73 @@ beforeEach(() =>
   ),
 );
 afterEach(() => runEffect(rig.close()));
+
+test("cleanup settles hidden history without looking for an interactive host", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const run = yield* madeRun(rig.stateDir, {
+        state: "succeeded",
+        branch: "mk/history",
+        mr: "https://github.com/o/r/pull/5",
+      });
+      let hostLookups = 0;
+      const settling = settlingOf({
+        stateDir: rig.stateDir,
+        runs: [run],
+        views: [],
+        tasks: [],
+        sessions: [],
+        protect: [],
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          exists: (path) =>
+            path === `${rig.stateDir}/host.db`
+              ? Effect.sync(() => {
+                  hostLookups++;
+                  return false;
+                })
+              : fs.exists(path),
+        }),
+      );
+      yield* writeMrStates(
+        rig.stateDir,
+        new Map([["github.com/o/r#5", "open"]]),
+        new Map([
+          [
+            "github.com/o/r#5",
+            {
+              checks: { state: "unknown" },
+              head: null,
+              read: "2026-11-16T10:00:00Z",
+            },
+          ],
+        ]),
+      );
+      const open = yield* settling;
+      expect(open.owedOn.size).toBe(1);
+      expect(open.landedOn.size).toBe(0);
+      yield* writeMrStates(
+        rig.stateDir,
+        new Map([["github.com/o/r#5", "merged"]]),
+        new Map([
+          [
+            "github.com/o/r#5",
+            {
+              checks: { state: "unknown" },
+              head: null,
+              read: "2026-11-16T11:00:00Z",
+            },
+          ],
+        ]),
+      );
+      const merged = yield* settling;
+      expect(merged.owedOn.size).toBe(0);
+      expect([...merged.landedOn.values()]).toEqual([{ why: "merged in o/r#5", heads: [] }]);
+      expect(hostLookups).toBe(0);
+    }),
+  ));
 
 test(
   "the sweep judges from the model as from disk, reading only the files of Runs it removes",
