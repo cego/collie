@@ -62,6 +62,11 @@ A Tautology is a finding. It is a `blocker` where it is the only proof of a crit
 promised check, which is then unproved, and a `minor` otherwise, with comments grouped as
 your comment rules say.
 
+A test this branch adds with no recorded failing run (`collie verify --expect fail`, or a
+failing record of it before the change that makes it pass) is `major`: never seen failing,
+it may be a Tautology. Where it is also the only proof of a criterion, the Tautology rule
+above makes it a `blocker`.
+
 Where a finding is one instance of a class of bug, list every instance of it in the diff
 in that finding, or say there is no other.
 

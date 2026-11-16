@@ -115,6 +115,65 @@ fn agents_asked(asked: &Asked) -> Vec<Option<String>> {
         .collect()
 }
 
+fn rect(runtime: &Runtime<App>, key: &str) -> [f32; 4] {
+    runtime
+        .elements()
+        .iter()
+        .find(|e| e.key.as_deref() == Some(key))
+        .unwrap_or_else(|| panic!("no {key}"))
+        .rect
+}
+
+#[test]
+fn the_steps_pane_uses_the_remaining_height_and_refits_with_the_window_and_chat() {
+    let harness = Harness::new();
+    let (mut runtime, asked) = on_flow(&harness);
+    let mut at = 1000.0;
+    let mut layout = |runtime: &mut Runtime<App>, size, chat_width| {
+        runtime.set_viewport(size, 1.0);
+        runtime.state.nav.chat.set_open(true);
+        runtime.state.nav.chat.set_width(chat_width);
+        for _ in 0..4 {
+            runtime.invalidate();
+            runtime.frame(at);
+            at += 1000.0;
+        }
+        let [_, top, _, height] = rect(runtime, "terminal-grid");
+        let [work_x, _, work_width, _] = rect(runtime, "inspector-work");
+        let [open_x, _, open_width, _] = rect(runtime, "inspector-terminal");
+        assert!(
+            open_x >= work_x && open_x + open_width <= work_x + work_width,
+            "the terminal control must fit within its work pane"
+        );
+        let [_, panel_top, _, panel_height] = rect(runtime, "tabpanel-flow");
+        assert!(height > 100.0, "pane must remain usable: {height}");
+        assert!(
+            (panel_top + panel_height - top - height).abs() < 40.0,
+            "pane leaves unused space or extends below the record: grid {:?}, panel {:?}",
+            rect(runtime, "terminal-grid"),
+            rect(runtime, "tabpanel-flow")
+        );
+        runtime.state.terminal.as_ref().unwrap().size()
+    };
+    let tall = layout(&mut runtime, (1800.0, 1400.0), 400.0);
+    let short = layout(&mut runtime, (1800.0, 850.0), 400.0);
+    assert!(
+        short.1 < tall.1,
+        "rows must follow the available height: {short:?} {tall:?}"
+    );
+    let narrow = layout(&mut runtime, (1800.0, 850.0), 650.0);
+    assert!(
+        narrow.0 < short.0,
+        "columns must follow the chat divider: {narrow:?} {short:?}"
+    );
+    layout(&mut runtime, (1000.0, 850.0), 400.0);
+    assert_eq!(
+        asked.lock().unwrap().len(),
+        1,
+        "resizing must keep the pane attached"
+    );
+}
+
 #[test]
 fn a_working_steps_terminal_part_draws_its_agents_pane_inside_the_flow_tab() {
     let harness = Harness::new();

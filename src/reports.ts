@@ -1,9 +1,9 @@
 import * as Arr from "effect/Array";
-import { Effect, FileSystem, Layer, Option, Queue, Schedule, Schema, flow, Result } from "effect";
+import { Effect, FileSystem, Layer, Option, Queue, Schedule } from "effect";
 import type { PluginEnv } from "./env";
-import { Registry, owesReport, runDir, type CrashPoint, type RunView } from "./engine";
+import { Registry, owesReport, type CrashPoint, type RunView } from "./engine";
 import { Store } from "./store";
-import { RunReport } from "./board-model";
+import type { RunReport } from "./board-model";
 import { Agents } from "./agents";
 import { readLaunches } from "./launches";
 import { asks, asksRun, isSettled } from "./lifecycle";
@@ -18,8 +18,6 @@ import { isJsonObject, isString } from "./schema";
 import type { Asker } from "./proposals";
 import { notifyRunLink, owedRunLinks, resendRunLink } from "./run-link-delivery";
 import type { Peer } from "./peers-model";
-
-const encodeReport = flow(Schema.encodeResult(Schema.fromJsonString(RunReport)), Result.getOrThrow);
 
 export const reportsLayer = (opts: {
   env: PluginEnv;
@@ -39,12 +37,7 @@ export const reportsLayer = (opts: {
       const env = { ...opts.env, hostStamp: opts.stamp, pairs: false };
       const herdr = new Herdr(env);
       const ownMachine = { installation: opts.installation, name: machineName() };
-      const write = (run: string, report: RunReport) =>
-        Effect.gen(function* () {
-          const file = `${runDir(env.stateDir, run)}/report.json`;
-          yield* fs.writeFileString(`${file}.tmp`, encodeReport(report));
-          yield* fs.rename(`${file}.tmp`, file);
-        });
+      const write = store.reported;
 
       const close = (view: RunView) =>
         Effect.gen(function* () {
@@ -185,16 +178,12 @@ export const reportsLayer = (opts: {
             const closed = yield* close(view);
             yield* write(view.runId, { ...report, closed: closed.done, closure: closed.note });
           }
-        }).pipe(
-          Effect.catch((cause) =>
-            Effect.logWarning(`${view.runId}'s report could not be finished: ${String(cause)}`),
-          ),
-        );
+        });
 
       const sweep = Effect.gen(function* () {
         if (!(yield* fs.exists(socketOf(env.stateDir)))) return;
         const views = yield* Effect.forEach(
-          Arr.filter(yield* store.runs, owesReport),
+          Arr.filter(yield* store.reportsPending, owesReport),
           (row) => registry.view(row.run),
           { concurrency: 4 },
         );
@@ -267,13 +256,7 @@ export const reportsLayer = (opts: {
           }
           yield* Effect.logInfo(`${peer.name} is linked: ${sent} notices and reports sent again`);
           return false;
-        }).pipe(
-          Effect.catch((cause) =>
-            Effect.logWarning(
-              `notices and reports not sent again to ${peer.name}: ${String(cause)}`,
-            ).pipe(Effect.as(false)),
-          ),
-        );
+        });
 
       // Each linked peer is owed a resend until nothing is left, or its link drops again.
       const due = new Map<string, Peer>();

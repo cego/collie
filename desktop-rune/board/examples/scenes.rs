@@ -49,9 +49,59 @@ fn asking(app: &mut App) {
     record_with(app, "asking");
 }
 
+fn step(app: &mut App) {
+    use base64::Engine;
+    use collie_desktop_terminal::view::Tab;
+    for line in FLOCK.lines() {
+        let mut item: Value = serde_json::from_str(line).unwrap();
+        if let Some(tasks) = item["message"]["tasks"].as_array_mut() {
+            for task in tasks.iter_mut().filter(|task| task["run"] == "r1") {
+                task["name"] = json!("Use the available Step space");
+                task["agents"] = json!([{"name": "builder", "role": "implementer", "status": "working", "now": null, "run": "r1"}]);
+            }
+        }
+        app.apply(serde_json::from_value(item).unwrap());
+    }
+    let harness = Harness::<App>::new();
+    app.core = Some(harness.core.clone());
+    app.go_to = Some(Box::new(|_, machine, _| {
+        let mut tab = Tab::new(None, machine, 100, 30);
+        tab.shown(
+            serde_json::from_value(json!({"_tag": "Opened", "at": {
+            "session": null, "workspace": "Layout preview", "tab": null, "pane": "test"}}))
+            .unwrap(),
+        );
+        let bytes = base64::engine::general_purpose::STANDARD.encode(
+            "\x1b[?2004h$ bun run typecheck\r\nTypecheck passed.\r\n\r\n$ bun test test/desktop-terminal.test.ts\r\nAll checks passed.\r\n\r\n$ ");
+        tab.shown(serde_json::from_value(json!({"_tag": "Frame", "bytes": bytes})).unwrap());
+        tab
+    }));
+    let nodes: Vec<Value> = [("Build", "done"), ("Review", "done"), ("Checks", "running"), ("Merge request", "expected")]
+        .into_iter().map(|(title, state)| json!({"id": title, "title": title, "state": state,
+            "agent": "builder", "kind": "agent", "description": "Collie runs every check on the tree.",
+            "declared": true, "offPath": false, "attempts": [], "questions": [], "runs": [], "log": 1})).collect();
+    let flow = json!({"lanes": [{"run": "r1", "workflow": "implement", "title": "Implement",
+        "machine": "Build box", "execution": "running", "declared": true, "actions": [], "nodes": nodes}],
+        "current": {"run": "r1", "node": "Checks"}});
+    app.open_record(
+        "inst-build".into(),
+        "r1".into(),
+        "Build box".into(),
+        Some("flow"),
+    );
+    harness.fake.push("runDetail", Ok(detail(&flow)));
+    harness.settle(app);
+    app.nav.chat.set_open(true);
+}
+
 type Scene = (&'static str, fn(&mut App));
 
-const SCENES: &[Scene] = &[("board", board), ("record", record), ("asking", asking)];
+const SCENES: &[Scene] = &[
+    ("board", board),
+    ("record", record),
+    ("asking", asking),
+    ("step", step),
+];
 
 fn main() {
     rune::App::new(AppSpec {

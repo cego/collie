@@ -1,5 +1,7 @@
-import { agentWork, contentOf, defineWorkflow, step } from "collie";
-import { Schema } from "effect";
+import * as Arr from "effect/Array";
+import { Host, Run, agentWork, contentOf, defineWorkflow, step } from "collie";
+import { Effect, Schema } from "effect";
+import * as Activity from "effect/workflow/Activity";
 import markdown from "./heal.md" with { type: "text" };
 
 const said = {
@@ -11,6 +13,12 @@ const said = {
     root_cause: Schema.String,
     fix: Schema.String,
     regression: Schema.String,
+    title: Schema.String,
+    observed: Schema.String,
+    expected: Schema.String,
+    issue: Schema.NullOr(Schema.Int).annotate({
+      description: "the cego/collie issue about the same cause, whatever its key, or null",
+    }),
   }),
 };
 const Healed = Schema.Union([
@@ -44,11 +52,34 @@ export default defineWorkflow({
   hints: { run: "goal" },
   heals: true,
   run: ({ input }) =>
-    agentWork({
-      operation: "heal",
-      role: "healer",
-      instructions: content.template("heal", { run: Schema.String, park: Schema.String }),
-      input: { run: input.run, park: input.park },
-      output: Healed,
-    }).pipe(heal),
+    Effect.gen(function* () {
+      const host = yield* Host;
+      const run = yield* Run;
+      const issues = yield* Activity.make({
+        name: "collie-issues",
+        success: Schema.String,
+        execute: host.issues(run.id, undefined, "collie").pipe(
+          Effect.map((open) =>
+            open.length === 0
+              ? "None."
+              : Arr.join(
+                  Arr.map(open, ({ number, title }) => `- #${number} ${title}`),
+                  "\n",
+                ),
+          ),
+          Effect.catch((refused) => Effect.succeed(`Unavailable: ${refused.reason}.`)),
+        ),
+      });
+      return yield* agentWork({
+        operation: "heal",
+        role: "healer",
+        instructions: content.template("heal", {
+          run: Schema.String,
+          park: Schema.String,
+          issues: Schema.String,
+        }),
+        input: { run: input.run, park: input.park, issues },
+        output: Healed,
+      }).pipe(heal);
+    }),
 });

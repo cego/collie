@@ -92,7 +92,8 @@ here are in [`src/README.md`](src/README.md).
 - **Parks, recovery, the Heal** → [ADR-draft-a-run-recovers-where-it-parks](docs/adr/draft-a-run-recovers-where-it-parks.md),
   [`docs/cli.md`](docs/cli.md#stop-and-resume), `src/park-cause.ts`, `src/park-recovery.ts`,
   `src/heal.ts`, `healerBound` in `src/host.ts`, `workflows/heal.workflow.ts`,
-  `test/recovery.test.ts`, `test/heal.test.ts`.
+  `test/recovery.test.ts`, `test/heal.test.ts`; a Heal's defect filed on cego/collie:
+  `src/heal-report.ts`, `healParks` in `src/park-recovery.ts`, `test/heal-report.test.ts`.
 - **Settings** → [ADR-0043](docs/adr/0043-a-shared-setting-is-its-latest-edit.md), `src/settings.ts`,
   `setSetting` and `takeShared` in `src/config.ts`. The user Layer's files are shared by the same rule:
   [ADR-0061](docs/adr/0061-a-users-definitions-are-the-flocks.md),
@@ -217,6 +218,12 @@ While you iterate, run what covers what you touched, each through `collie verify
 Tests are unit tests only: they call the code through its own interface, with fakes at
 its edges. No Playwright and no test that drives a built app or a browser — a behaviour
 of the view is covered by testing the logic it renders.
+
+For native UI inspection, operate Rune headlessly with its built-in CLI: `--snap out.png`
+captures a screen, `--tree out.json` includes the accessibility tree, and `--script input.json`
+replays clicks and keyboard input. Use the fake-core scenes and isolated HOME/state described
+in [`desktop-rune/README.md`](desktop-rune/README.md); Lavapipe renders on a VM without a GPU.
+These tools inspect the native app without installing it or restarting the human's app.
 
 ## Invariants
 

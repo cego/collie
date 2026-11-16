@@ -5,8 +5,8 @@ The Rune spike, which no release ships, builds and adapts the code below.
 --------------------------------------------------------------------------------
 Ghostty (libghostty-vt)
 https://github.com/ghostty-org/ghostty
-Pinned as the submodule vendor/ghostty at 291fd050b9e9c293c8adb6a140742649b7e42d3a,
-built with Zig 0.16.0 (its minimum_zig_version).
+Pinned as the submodule vendor/ghostty at cf3a8a6594eec899fe6335465668c60f2281ce9c,
+built with Zig 0.17.1 (upstream requires at least 0.17.0).
 License: MIT
 
 MIT License

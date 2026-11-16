@@ -5,7 +5,7 @@
 use collie_desktop_board::board::answers::{
     Answering, Condition, Now, Sitting, answer_key, card_question,
 };
-use collie_desktop_board::board::cards::{CardMr, card_flow, card_mrs};
+use collie_desktop_board::board::cards::{CardAction, CardMr, card_actions, card_flow, card_mrs};
 use collie_desktop_board::board::model::{
     Flock, Shown, apply_item, placed, reaching, reaching_said,
 };
@@ -194,6 +194,33 @@ fn mr(project: &str, iid: u32, more: Value) -> Value {
         one[key] = value.clone();
     }
     one
+}
+
+#[test]
+fn a_fan_out_cards_offers_keep_each_owning_run_and_unavailable_reason() {
+    let offers = json!([
+        {"id": "release", "title": "Release app!12", "run": "r-app"},
+        {"id": "stage", "title": "Stage app!12", "run": "r-app",
+            "unavailable": "a Stage is still going"},
+        {"id": "release", "title": "Release api!7", "run": "r-api"},
+        {"id": "stage", "title": "Stage api!7", "run": "r-api"}
+    ]);
+    for primary in [Value::Null, offers[0].clone()] {
+        let card: Task = serde_json::from_value(task(
+            "fan",
+            "done",
+            json!({"offer": primary, "offers": offers}),
+        ))
+        .unwrap();
+        let shown: Vec<Value> = card_actions(&card)
+            .into_iter()
+            .filter_map(|action| match action {
+                CardAction::Offer(offer) => Some(serde_json::to_value(offer).unwrap()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(shown, offers.as_array().unwrap().as_slice());
+    }
 }
 
 fn card(id: &str, line: &str, label: &str, url: &str) -> CardMr {

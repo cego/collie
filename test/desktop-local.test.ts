@@ -10,6 +10,8 @@ import {
   Config,
   Deferred,
   Effect,
+  Fiber,
+  FileSystem,
   Option,
   Queue,
   Schedule,
@@ -21,6 +23,7 @@ import {
 import {
   type BoardMessage,
   type BoardSnapshot,
+  BRIDGE_READY,
   PROTOCOL,
   recordIn,
   type Toasted,
@@ -39,7 +42,8 @@ import {
   syncNow,
 } from "../desktop/src/bun/machine";
 import type { FlockItem } from "../desktop/src/shared/flock";
-import { fastForward, suiteEnv } from "./support/effect";
+import { TestClock } from "effect/testing";
+import { fastForward, runEffect, suiteEnv } from "./support/effect";
 import { root, stopHost } from "./support/host";
 import { proves } from "./support/world";
 
@@ -491,6 +495,44 @@ test("a bridge starts in the home directory, never Desktop's app folder an updat
     }).pipe(Effect.scoped),
   ));
 
+test("a bridge waiting on an SSO login is not held to the readiness deadline, and one that never says it is ready is", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const go = `${yield* fs.makeTempDirectoryScoped({ prefix: "collie-sso-" })}/go`;
+      // The deadline starts at a moment the test cannot see, so the clock passes it again and again.
+      const pastDeadline = TestClock.adjust("121 seconds").pipe(
+        Effect.andThen(TestClock.withLive(Effect.sleep("25 millis"))),
+      );
+      const heard = yield* Deferred.make<string>();
+      const signingIn = yield* openBridge(
+        [
+          "/bin/sh",
+          "-c",
+          `echo 'Waiting for SSO login for mk@vm-mk' >&2; until [ -e '${go}' ]; do sleep 0.05; done; echo ${BRIDGE_READY}; exec cat >/dev/null`,
+        ],
+        undefined,
+        (said) => Deferred.succeed(heard, said).pipe(Effect.asVoid),
+      ).pipe(Effect.forkScoped);
+      yield* Deferred.await(heard);
+      yield* pastDeadline.pipe(Effect.repeat({ times: 40 }));
+      yield* fs.writeFileString(go, "");
+      yield* Fiber.join(signingIn);
+
+      const silent = yield* openBridge(["/bin/sh", "-c", "exec cat >/dev/null"]).pipe(
+        Effect.flip,
+        Effect.forkScoped,
+      );
+      const failed = yield* Fiber.join(silent).pipe(
+        Effect.raceFirst(pastDeadline.pipe(Effect.forever)),
+      );
+      expect(failed).toEqual({
+        state: "unreachable",
+        reason: "the bridge did not become ready within 2 minutes",
+      });
+    }).pipe(Effect.provide(TestClock.layer())),
+  ));
+
 test("a Machine's build asks for an upgrade only where it is an older release, and for a newer Desktop only outside the window", () => {
   const at = (over: Partial<BoardSnapshot>) => ({ ...snapshot("vm"), ...over });
   expect(buildVerdict(at({ build: "0.30.2" }), "0.31.0")).toBe("upgrade");
@@ -892,7 +934,7 @@ test("Sync now on a Machine behind on settings, definitions or credentials syncs
     Effect.gen(function* () {
       const did: string[] = [];
       const steps = (failed: string | null, definitions: string | null = null) => ({
-        reopen: Effect.die("not reopened"),
+        reopen: Effect.sync(() => void did.push("reopen")),
         sync: Effect.sync(() => void did.push("sync")).pipe(Effect.as(failed)),
         syncDefinitions: Effect.sync(() => void did.push("definitions")).pipe(
           Effect.as(definitions),
@@ -906,36 +948,43 @@ test("Sync now on a Machine behind on settings, definitions or credentials syncs
       });
       const vm = { profile: "p-vm", name: "vm" };
       expect(yield* syncNow(vm, ["credentials"], steps(null))).toEqual({
-        said: "vm: settings synced; definitions synced; the GitLab token given; Helle's token not given: ssh: connection reset",
+        said: "vm: settings synced; definitions synced; the GitLab token given; Helle's token not given: ssh: connection reset; reopening its connection",
         failed: true,
       });
       expect(yield* syncNow(vm, ["settings"], steps("host refused"))).toEqual({
-        said: "vm: settings didn't sync: host refused; definitions synced; the GitLab token given; Helle's token not given: ssh: connection reset",
+        said: "vm: settings didn't sync: host refused; definitions synced; the GitLab token given; Helle's token not given: ssh: connection reset; reopening its connection",
         failed: true,
       });
       expect(
         yield* syncNow(vm, ["settings"], { ...steps(null), give: Effect.succeed([]) }),
-      ).toEqual({ said: "vm: settings synced; definitions synced", failed: false });
+      ).toEqual({
+        said: "vm: settings synced; definitions synced; reopening its connection",
+        failed: false,
+      });
       expect(
         yield* syncNow(vm, ["definitions"], {
           ...steps(null, "no such operation"),
           give: Effect.succeed([]),
         }),
       ).toEqual({
-        said: "vm: settings synced; definitions didn't sync: no such operation",
+        said: "vm: settings synced; definitions didn't sync: no such operation; reopening its connection",
         failed: true,
       });
       expect(did).toEqual([
         "sync",
         "definitions",
         "give",
+        "reopen",
         "sync",
         "definitions",
         "give",
+        "reopen",
         "sync",
         "definitions",
+        "reopen",
         "sync",
         "definitions",
+        "reopen",
       ]);
     }),
   ));

@@ -271,6 +271,32 @@ test("a rerun passes only where bun exits 0 having run exactly one test, and it 
     }),
   ));
 
+test("a rerun records its test as the branch's own where the branch adds its file since the default branch", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const git = (...args: string[]) => exec(["git", ...args], { cwd: rig.projectDir });
+      yield* fs.makeDirectory(`${rig.projectDir}/test`, { recursive: true });
+      yield* fs.writeFileString(`${rig.projectDir}/${NESTED.file}`, "// on the default branch\n");
+      yield* git("add", "-A");
+      yield* git("commit", "-qm", "an old test");
+      yield* git("branch", "-M", "main");
+      yield* git("checkout", "-qb", "feature");
+      const added = { file: "test/added.test.ts", name: "settles on its first try" };
+      yield* fs.writeFileString(`${rig.projectDir}/${added.file}`, "// the branch's\n");
+      yield* git("add", "-A");
+      yield* git("commit", "-qm", "a new test");
+      const bin = yield* fakeBun(" 1 pass\n 0 fail", 0);
+      const [own, untouched] = yield* inHost((host) =>
+        Effect.forEach([added, NESTED], (test) =>
+          host.verify({ runId, name: "unit", cwd: rig.projectDir, pass: "rerun", test }),
+        ),
+      ).pipe(Effect.ensuring(bin.restore()));
+      expect(own).toMatchObject({ pass: "rerun", test: added, result: "pass", own: true });
+      expect(untouched).toMatchObject({ pass: "rerun", test: NESTED, result: "pass", own: false });
+    }),
+  ));
+
 const ODD = `import { describe, expect, test } from "bun:test";
 describe("outer [x]", () => {
   describe("it's $HOME *", () => {

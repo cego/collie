@@ -56,6 +56,7 @@ const SpecSchema = Schema.Struct({
   step: Schema.NullOr(Schema.Struct({ step: Schema.String, place: Schema.NullOr(StepPlace) })),
   log: Schema.optionalKey(Schema.String),
   test: Schema.optionalKey(FailedTestSchema),
+  own: VerificationSchema.fields.own,
   environment: Schema.optionalKey(Schema.String),
 });
 type CheckSpec = typeof SpecSchema.Type;

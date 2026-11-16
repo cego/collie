@@ -31,6 +31,18 @@ export default defineWorkflow({
           error: WorkflowError,
           execute: host.fileIssue({ runId: run.id, title: "Problem", body: input.text }),
         });
+      if (input.operation === "file-on-collie")
+        return yield* Activity.make({
+          name: "file-on-collie",
+          success: Schema.Struct({ number: Schema.Int, url: Schema.String }),
+          error: WorkflowError,
+          execute: host.fileIssue({
+            runId: run.id,
+            title: "Problem",
+            body: input.text,
+            on: "collie",
+          }),
+        });
       if (input.operation === "comment") {
         yield* Activity.make({
           name: "comment",

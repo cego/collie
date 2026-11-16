@@ -11,6 +11,7 @@ import { decodeProposalLineOption } from "./proposals";
 import { decodeRegisterOption, encodeAgentEntry } from "./registry";
 import { LEDGER_FILE } from "./steering";
 import { decodeTaskOption } from "./task";
+import { RunReport } from "./board-model";
 
 /**
  * Nothing there, or a file where a directory would be, is no records. Any other failure
@@ -29,6 +30,20 @@ const orMissing =
 
 const isJson = (text: string) =>
   Option.isSome(Schema.decodeOption(Schema.fromJsonString(Schema.Unknown))(text));
+
+export const importReports = Effect.fn("RecordsImport.reports")(function* (stateDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const sql = yield* SqlClient.SqlClient;
+  const decode = Schema.decodeOption(Schema.fromJsonString(RunReport));
+  for (const row of yield* sql<{ run: string }>`SELECT run FROM collie_runs`) {
+    const raw = yield* fs
+      .readFileString(path.join(stateDir, "runs", row.run, "report.json"))
+      .pipe(orMissing(""));
+    if (Option.isSome(decode(raw)))
+      yield* sql`UPDATE collie_runs SET report = ${raw} WHERE run = ${row.run}`;
+  }
+});
 
 /** A journal's lines, less a torn last one: the append a crash cut short. */
 const journalLines = (raw: string) => {

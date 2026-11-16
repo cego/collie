@@ -17,6 +17,7 @@ import {
   type FlockChat,
   newRequest,
   reach,
+  readable,
   type Reached,
   reasonOf,
   writable,
@@ -163,6 +164,9 @@ const takingFiles = (reaching: Effect.Effect<Reached, HostRefused>) =>
       }),
   );
 
+const readingFiles = (machine: ChatMachine) =>
+  machine.board._tag === "Live" ? takingFiles(reach(machine)) : readable(machine);
+
 /** How many lines a read gives when it is not told. */
 const READ_LINES = 2000;
 /** The most of a text file a read takes, so one with no newlines is not read whole. */
@@ -182,7 +186,7 @@ const numbered = (lines: ReadonlyArray<string>, from: number) =>
   );
 
 const read = Effect.fn("FileTools.read")(function* (
-  machine: Reached,
+  machine: Pick<Reached, "name" | "door">,
   path: string,
   input: typeof ReadInput.Type,
 ) {
@@ -221,11 +225,11 @@ const read = Effect.fn("FileTools.read")(function* (
 });
 
 /** A line a host answered that starts with one of its paths, named by its Machine. */
-const onMachine = (machine: ChatMachine, line: string) =>
+const onMachine = (machine: Pick<ChatMachine, "name">, line: string) =>
   pipe_(line, Str.startsWith("/")) ? `${machine.name}:${line}` : line;
 
 const answered = (
-  machine: ChatMachine,
+  machine: Pick<ChatMachine, "name">,
   lines: ReadonlyArray<string>,
   omitted: number,
   none: string,
@@ -254,11 +258,7 @@ const answer = Effect.fn("FileTools.answer")(function* (
       if (Result.isFailure(asked)) return text(`collie_read: ${asked.failure}`);
       const at = where(asked.success.file_path);
       if (Result.isFailure(at)) return text(at.failure);
-      return yield* read(
-        yield* takingFiles(reach(at.success.machine)),
-        at.success.path,
-        asked.success,
-      );
+      return yield* read(yield* readingFiles(at.success.machine), at.success.path, asked.success);
     }
     case "collie_glob": {
       const asked = decodeStrict(GlobInput)(input);
@@ -266,7 +266,7 @@ const answer = Effect.fn("FileTools.answer")(function* (
       const at = where(asked.success.path);
       if (Result.isFailure(at)) return text(at.failure);
       const { path } = at.success;
-      const machine = yield* takingFiles(reach(at.success.machine));
+      const machine = yield* readingFiles(at.success.machine);
       const found = yield* machine.door.glob({ pattern: asked.success.pattern, path });
       return answered(machine, found.paths, found.omitted, "No files found.");
     }
@@ -276,7 +276,7 @@ const answer = Effect.fn("FileTools.answer")(function* (
       const at = where(asked.success.path);
       if (Result.isFailure(at)) return text(at.failure);
       const { path } = at.success;
-      const machine = yield* takingFiles(reach(at.success.machine));
+      const machine = yield* readingFiles(at.success.machine);
       const one = asked.success;
       const found = yield* machine.door.grep({
         pattern: one.pattern,
