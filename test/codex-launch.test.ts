@@ -1,8 +1,9 @@
 // A Codex agent's launch at the Agents service: the App Server Collie starts for it is the
 // stand-in in `support/codex-server.ts`, run as a real process, and what is asserted is what
-// a human could see of that process and of the `agent start` herdr was asked for.
+// a human could see of that process and of the terminal core was asked to run.
 
 import { Herdr } from "../src/herdr";
+import { isString } from "../src/schema";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -141,8 +142,12 @@ const mcpOverrides = (argv: ReadonlyArray<string>) =>
   Arr.flatMap(argv, (arg, at) =>
     argv[at - 1] === "-c" && pipe_(arg, Str.startsWith("mcp_servers.")) ? [arg] : [],
   );
-const agentStartArgs = (calls: ReadonlyArray<Call>) =>
-  Option.getOrUndefined(Arr.findFirst(calls, (call) => call.cmd === "agent start"))?.argv ?? [];
+/** The argv core was asked to run the agent's terminal with. */
+const agentStartArgs = (calls: ReadonlyArray<Call>) => {
+  const argv = Option.getOrUndefined(Arr.findFirst(calls, (call) => call.cmd === "terminal.run"))
+    ?.params?.argv;
+  return Arr.isArray(argv) ? Arr.filter(argv, isString) : [];
+};
 
 const withProfile = (profile: AgentProfile) =>
   FileSystem.FileSystem.pipe(

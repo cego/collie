@@ -205,7 +205,7 @@ test(
                 Arr.map(present.tasks, (one) => one.name),
               ),
             ),
-          ).toEqual(["Plain"]);
+          ).toEqual(["Hi"]);
           // `age` is reckoned when a board is built, and a tick may build one between the two.
           const ageless = (tasks: ReadonlyArray<TaskView> = []) =>
             Arr.map(tasks, (task) => ({ ...task, age: null }));
@@ -257,14 +257,14 @@ const readsOnlyOnTicks = (drawer: boolean) =>
           );
           yield* Deferred.await(opened);
         }
-        const log = `${(yield* Path.Path).dirname(world.state)}/herdr-calls.jsonl`;
+        const log = `${(yield* Path.Path).dirname(world.state)}/core-calls.jsonl`;
         const lists = Effect.map(
           Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(log)),
           (text) =>
-            Arr.filter(Str.split(text, "\n"), (line) => /"cmd":"(agent|pane) list"/.test(line))
-              .length,
+            Arr.filter(Str.split(text, "\n"), (line) => /"cmd":"terminal\.list"/.test(line)).length,
         ).pipe(Effect.orDie);
         const before = yield* lists;
+        expect(before).toBeGreaterThan(0);
         const since = yield* Clock.currentTimeMillis;
         for (const kind of [
           "merged",
@@ -300,13 +300,13 @@ const readsOnlyOnTicks = (drawer: boolean) =>
   );
 
 test(
-  "a write under the state directory rebuilds the board on herdr's last reading of its agents",
+  "a write under the state directory rebuilds the board on core's last reading of its agents",
   () => readsOnlyOnTicks(false),
   120_000,
 );
 
 test(
-  "a Run's open drawer follows the board's reading of herdr, and reads none of its own",
+  "a Run's open drawer follows the board's reading of core, and reads none of its own",
   () => readsOnlyOnTicks(true),
   120_000,
 );

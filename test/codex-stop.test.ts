@@ -1184,7 +1184,8 @@ test("a start core never admits parks naming its agent, and the next launch unde
       expect(servers).toHaveLength(2);
       expect(signalled).toHaveLength(1);
       expect(signalled[0]).toBeLessThan(servers[1]!);
-      expect(yield* agentStarts()).toEqual(["codex", "codex"]);
+      // The refused start never reached core.
+      expect(yield* agentStarts()).toEqual(["codex"]);
       const log = yield* agentsLog();
       expect(
         Option.getOrElse(pipe_(log, Str.indexOf(`${agent}: quiet`)), () => -1),

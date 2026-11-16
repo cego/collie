@@ -4,6 +4,7 @@
 // `support/codex-server.ts` serves it on the agent's thread.
 
 import { Herdr } from "../src/herdr";
+import { isString } from "../src/schema";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -113,9 +114,10 @@ const spend = (ms: number) =>
 
 /** The text of every prompt typed into an agent, in the order typed. */
 const typed = (calls: ReadonlyArray<Call>) =>
-  Arr.map(
-    Arr.filter(calls, (call) => call.cmd === "agent prompt"),
-    (call) => call.argv?.[3] ?? "",
+  Arr.filterMap(calls, (call) =>
+    call.cmd === "terminal.send" && isString(call.params?.text)
+      ? Result.succeed(call.params.text)
+      : Result.failVoid,
   );
 const typedCount = (about: string) =>
   rig.calls().pipe(

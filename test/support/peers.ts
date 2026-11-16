@@ -1,6 +1,6 @@
 import * as Cause from "effect/Cause";
 // Two Machines on one computer, as a pairing test needs them: two installations, each with
-// its state directory, its own fake herdr and its own `collie`, and the fake `ssh` on the
+// its state directory, its own `collie`, and the fake `ssh` on the
 // first's PATH, whose sessions run as a login on the second would and whose forwards reach
 // the second's loopback. Nothing above the
 // sockets is faked: both hosts are the shipped `collie host`, started by the CLI as an
@@ -129,7 +129,7 @@ export const twoMachines = <A, E>(
         );
         const coreLog = `${dir}/core-calls.jsonl`;
         const env = {
-          PATH: `${tripwire.binDir}:${bin}:/usr/bin:/bin`,
+          PATH: `${bin}:${tripwire.binDir}:/usr/bin:/bin`,
           SHELL: shell,
           HOME: world.home,
           COLLIE_ROOT: world.install,

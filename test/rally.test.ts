@@ -129,9 +129,7 @@ test("a rally that reviews clean stops there, with no fix and no second review",
       const result = yield* rally("r-clean", 3);
       expect(said(result)).toBe("clean after 1 round(s), 0 non-blocking left");
       // One agent, one prompt: nothing reviewed again and nothing was asked to fix.
-      expect(
-        Arr.filter(yield* rig.calls(), (call) => (call.argv ?? [])[1] === "prompt"),
-      ).toHaveLength(1);
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.send")).toHaveLength(1);
     }),
   ));
 

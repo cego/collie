@@ -29,7 +29,8 @@ import { runDir } from "../src/engine";
 import { frontDoor, ownerOf, socketOf } from "../src/host";
 import { until } from "./support/host";
 import { recordsAt } from "./support/records";
-import { collie, proves, type World } from "./support/world";
+import { blockedAtItsPrompt, collie, proves, type World } from "./support/world";
+import type { FakeHc } from "./support/fake-hc";
 
 const encode = Schemaflow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
@@ -48,13 +49,13 @@ const cli = (world: World, args: ReadonlyArray<string>) => collie(world, args);
 /** A world whose fake agents answer each prompt in turn with these Outputs. */
 const flowing = <A, E>(
   prefix: string,
-  body: (world: World) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
+  body: (world: World, core: FakeHc) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
   answers: number,
   modules: ReadonlyArray<string> = ["stepped.workflow.ts"],
 ) =>
   proves(
     prefix,
-    (world) =>
+    (world, core) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         yield* fs
@@ -64,7 +65,7 @@ const flowing = <A, E>(
           )
           .pipe(Effect.orDie);
         yield* fs.makeDirectory(gatesOf(world), { recursive: true }).pipe(Effect.orDie);
-        return yield* body(world);
+        return yield* body(world, core);
       }),
     modules,
   );
@@ -147,7 +148,7 @@ test.each(["working", "blocked"])(
   (status) =>
     flowing(
       "collie-flow-live-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
           const started = yield* collie(world, [
             "run",
@@ -159,8 +160,15 @@ test.each(["working", "blocked"])(
             `gates=${gatesOf(world)}`,
           ]);
           const { runId } = yield* Schema.decodeUnknownEffect(RunId)(started.envelope.data);
+          if (status === "blocked") yield* blockedAtItsPrompt(core);
           // The node names its agent before the host has polled that agent's status.
-          const flow = yield* until_(world, runId, (one) => nodeOf(one, "build")?.primary != null);
+          const flow = yield* until_(
+            world,
+            runId,
+            (one) =>
+              nodeOf(one, "build")?.primary != null &&
+              (status !== "blocked" || nodeOf(one, "build")?.wait === "stalled"),
+          );
           const build = nodeOf(flow, "build")!;
           expect(build).toMatchObject({
             primary: "terminal",

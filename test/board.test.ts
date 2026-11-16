@@ -2856,7 +2856,7 @@ test(
           const tasks = (yield* Schema.decodeUnknownEffect(
             Schema.Struct({ tasks: Schema.Array(Schema.Struct({ name: Schema.String })) }),
           )(printed.envelope.data).pipe(Effect.orDie)).tasks;
-          expect(Arr.map(tasks, (one) => one.name)).toEqual(["Plain"]);
+          expect(Arr.map(tasks, (one) => one.name)).toEqual(["Hi"]);
         }),
       ["plain.workflow.ts"],
     ),

@@ -105,7 +105,7 @@ const entry = (over: Partial<AgentEntry> = {}): AgentEntry => ({
   runId: "r1",
   workflow: "implement",
   at: "2026-09-09T09:00:00Z",
-  incarnation: { terminalId: "term-1", agentSession: null },
+  incarnation: { terminalId: "term-1", agentSession: null, backend: "core" },
   ...over,
 });
 
