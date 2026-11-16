@@ -1068,6 +1068,10 @@ row raise the same `recovery-failing:<machine>` News. The claim, start and judge
 `healed` recovery lines under one `recoveryId`, so a restarted host neither starts a second
 Heal for the park nor loses one.
 
+Completed Heals from before issue reporting remain readable after an upgrade, with their
+original findings unchanged. New healer output still requires the issue-report fields;
+accepting an older recorded result does not waive that requirement for new work.
+
 A judged Heal whose finding says `collie_defect` is reported on Collie's own repository,
 github.com/cego/collie, whatever project the parked Run is in, by the host with its
 GitHub login. The issue the healer named, else an open issue carrying the key's
