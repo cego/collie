@@ -106,7 +106,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `store.ts`             | Rows beside Effect's: request claims, run identity, generations, questions                                                  |
 | `store-writes.ts`      | Told the Runs each write to `host.db` names, for the Run model                                                              |
 | `records.ts`           | Collie's own records in `host.db`: the host's layer, a read-only one, one at a directory                                    |
-| `run-records.ts`       | A Run's own journals, facts and last activity as rows in `host.db`, by the name an older build's file had                   |
+| `run-records.ts`       | A Run's journals, facts, last activity and controls as rows in `host.db`, read for a whole board in one batch               |
 | `records-import.ts`    | The record files a host's first migrations import once, and `collie host rollback` writing a Run's records back             |
 | `release.ts`           | Whether an installation is a release or a development checkout, and placing the release a runner carries                    |
 | `releases.ts`          | The newest published release, and a release's runner downloaded and verified against the release key                        |
@@ -163,7 +163,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `question-standard.ts` | Whether an agent's question is to standard, its repair and shortfall, and its solutions (pure)                              |
 | `codex.ts`             | Codex's App Server as a client: thread identity, its context, its compactions and its turns                                 |
 | `collecting.ts`        | Which agents Collie is collecting an Output from now, by Run and agent                                                      |
-| `controls.ts`          | The Hold and Stop an operator sets over a Run, one file each, and whether one is set                                        |
+| `controls.ts`          | The Hold and Stop an operator sets over a Run, as control rows, and whether one is set                                      |
 | `processes.ts`         | Where a process's command, start time and session are read, and proven before anything signals it                           |
 | `check-processes.ts`   | A check's processes from spawn to gone: marked, recorded, ended with the host, or handed to the newer build replacing it    |
 | `check-supervisor.ts`  | The process a check runs under: holds its pipes, writes its log, its streams' ends and its exit status to its files         |

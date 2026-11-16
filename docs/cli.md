@@ -2402,7 +2402,7 @@ answering, say — is in `keep` with that reason, never removed.
 The `check` kind is a check's processes that no host is collecting, such as a child that left
 its group, or one a starting host could not end. Its target is the check's id, and its
 reason names the Run, the check, its pid and how long it has run; it frees 0 bytes. It is
-proved by the check's record under `running-checks/`, or by the marker in its environment
+proved by the check's running-check record in `host.db`, or by the marker in its environment
 naming this installation and the check, which is read only from `/proc`. A process proved by
 neither, or marked for another state directory, is never listed. A sweep ends it with SIGTERM, then SIGKILL if that leaves
 it running, because a check's result is thrown away
@@ -2993,8 +2993,10 @@ same and prints what it did.
 Steps, its audit trail, its Intent and its steering cards, are rows in the state
 directory's `host.db`; a build from before that kept them as files in the Run's
 directories and does not read the rows. `rollback` writes every Run's records back to
-those files, removes the file of a fact the host has since removed, then drops the
-records' tables, so the next upgrade imports the files again. It needs the state directory
+those files, each dated by when its Run last did work, removes the file of a fact the host
+has since removed, then drops the records' tables, so the next upgrade imports the files
+again. A state directory a later build has migrated further is refused with
+`invalid_state`, naming that migration, and changes nothing: roll that build back first. It needs the state directory
 (this installation's by default) to have no host: with one running it is `invalid_state`,
 and it changes nothing. A state directory whose records were never moved into `host.db`
 is left alone and said so. `data` under `--json` is `{ "dir", "done" }`, with `done`
@@ -3049,7 +3051,7 @@ its own merge watch and News. A client that subscribes is told the latest board 
 covers every change seen before it subscribed, so it reads its own writes: at once when no
 build is owed, or once the build under way or owed is done. It builds again when a Run is recorded, from any door, when
 one of its records in `host.db` is written, when a file under one of a Run's own directories is
-written (`runs/<id>`, `agents/<id>`, `evidence/<id>`, or a control file named for it), when a
+written (`runs/<id>`, `agents/<id>` or `evidence/<id>`), when a
 file anywhere else under its state directory is written that a build or a Run's record read,
 or that is in a directory one listed, when herdr pushes an
 event from any of its sessions (a pane opening or closing, or an agent's status changing),

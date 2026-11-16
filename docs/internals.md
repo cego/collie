@@ -198,8 +198,13 @@ the tables, 25, imported every Run's journal and fact files under `runs/` and `e
 once, and each Run's last activity from those files' modification times, and left the files
 in place. A torn last line was dropped and a corrupt one kept, so a reader that fails closed
 still does. `collie host rollback` undoes it for an older build: with no host running, it
-writes every row back to its file, then drops the tables and the records of this migration and any later one, so the
-next upgrade imports the files again ([CLI](cli.md#the-local-workflow-host)).
+writes every row back to its file, dated by when its Run last did work, then drops this
+migration's tables and its record, so the next upgrade imports the files again. It refuses
+while a later build's migration is recorded, since dropping this one beneath it would never
+import again ([CLI](cli.md#the-local-workflow-host)). The controls the host sets over a Run,
+the relaunch records and the running checks' records are rows of `collie_controls` beside
+them, imported from and rolled back to the files an older build kept. A board build reads each
+journal, fact and activity it uses for all its Runs in one query.
 
 `patches/effect@4.1.4.patch` prevents a conditional SQL activity reset from replaying the
 interrupt that suspended it. The existing transaction protects the reply check and cleanup;
@@ -207,7 +212,7 @@ a stale reset leaves newer replies and interrupts intact. Remove the patch only 
 upstream release passes `test/effect-sql-reset.test.ts` and the release-set scenarios.
 
 Once it answers, a starting host ends every check a previous host left running in its
-state directory: one recorded under `running-checks/`, or a process marked with this
+state directory: one with a running-check record in `host.db`, or a process marked with this
 installation's id. A host that has just made that id looks for none, since no process can
 carry it. Each gets SIGTERM, then SIGKILL two seconds later, and is never adopted unless it
 was handed over. The Run's log and `host.log` name the check and the host that left it, and
@@ -241,7 +246,7 @@ goes leaves it writing: those three files answer each reason a host could not ta
 check it did not start, which are that its output went to the old host's pipe, that only a
 parent reads an exit status, and that its starting tree was in the old host's memory, where
 `<id>.json` now keeps it. The host that ran it finishes it from what it kept; another host
-finishes it from those files. They go with its record, `running-checks/<id>.json`.
+finishes it from those files. They go with its running-check record.
 
 Recovery re-enters the module as it is now. Completed Activities are reused, a question
 already asked is still asked, and an agent already launched is reattached to. There is no
@@ -1064,7 +1069,7 @@ naming the session (`default` when unset). All of it goes through `src/herdr.ts`
   call whose repair goes as a Delivery), so the call after it is posted whatever it holds.
 - **Stop** at the Run's end is `terminal.kill`.
 - **Resume.** What each agent was started with, less its credentials and its Run's
-  authority, is kept in `relaunch/<run>/<agent>.json` under the state directory until it is
+  authority, is kept as the Run's relaunch control in `host.db`, one per agent, until it is
   ended. The host follows core's events, and on subscribing and on each terminal that ends,
   starts again every agent of a running Run that `terminal.list` no longer has: a new
   `terminal.run` under its name, in its cwd, with its harness's resume of the recorded
