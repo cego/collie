@@ -5,7 +5,7 @@
 // request has not been merged by anyone.
 
 import { readStageProof, type ShippingAction } from "./shipping";
-import { lastOrdered } from "./launches";
+import { lastOrdered, Launches, launchesAhead } from "./launches";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -1152,7 +1152,12 @@ const nextChange = (then: number, now: number) => {
 export const buildBoard = Effect.fn("Board.build")(function* (opts: BoardOptions) {
   const runs = newestFirst(opts.runs ?? (yield* listRuns(opts.env)));
   const records = yield* RunRecords;
+  const ahead = yield* launchesAhead(
+    yield* Launches,
+    Arr.map(runs, (run) => run.id),
+  );
   return yield* drawBoard({ ...opts, runs }, records).pipe(
+    Effect.provideService(Launches, ahead),
     Effect.provideService(
       RunRecords,
       readAhead(

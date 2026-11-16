@@ -298,6 +298,29 @@ export const launchesLayer = Layer.effect(Launches)(
   }),
 );
 
+/** `launches` for one pass over these Runs, as `readAhead` reads their records. */
+export const launchesAhead = Effect.fn("Launches.ahead")(function* (
+  launches: LaunchesApi,
+  runs: ReadonlyArray<string>,
+) {
+  const ids = new Set(runs);
+  const all = yield* Effect.cached(launches.of(runs));
+  const last = yield* Effect.cached(launches.lastOrderedOf(runs));
+  return {
+    ...launches,
+    of: (some) =>
+      Arr.every(some, (run) => ids.has(run))
+        ? Effect.map(
+            all,
+            (got) =>
+              new Map(Arr.flatMap(some, (run) => (got.has(run) ? [[run, got.get(run)!]] : []))),
+          )
+        : launches.of(some),
+    lastOrdered: (run) =>
+      ids.has(run) ? Effect.map(last, (got) => got.get(run) ?? null) : launches.lastOrdered(run),
+  } satisfies LaunchesApi;
+});
+
 /** Every agent this Run has launched, oldest first, in the order they were launched. */
 export const readLaunches = Effect.fn("Launches.read")(function* (runId: string) {
   return (yield* (yield* Launches).of([runId])).get(runId) ?? [];
