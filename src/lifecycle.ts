@@ -341,7 +341,12 @@ const openAndWake = (
 ) =>
   Effect.gen(function* () {
     const listed = named(yield* herdrMachines(env), name);
-    const machine = listed ?? (target === undefined ? undefined : { label: name, target });
+    const paired =
+      listed === undefined && Arr.some(yield* peersOf(env.stateDir), (peer) => peer.name === name);
+    // A pairing core does not keep has no saved target: ssh resolves its name.
+    const machine =
+      listed ??
+      (target !== undefined || paired ? { label: name, target: target ?? name } : undefined);
     if (machine === undefined) return yield* notListed(name);
     const opened = yield* openConnection(env.stateDir, machine, { said });
     let added = false;
@@ -349,7 +354,7 @@ const openAndWake = (
       yield* new Herdr(env)
         .machineDial(name)
         .pipe(Effect.mapError(coreRefused(name)), Effect.provide(Path.layer));
-    else if (Arr.some(yield* peersOf(env.stateDir), (peer) => peer.name === name)) {
+    else if (paired) {
       yield* addToCore(env, name, machine.target, opened.path);
       added = true;
     }
