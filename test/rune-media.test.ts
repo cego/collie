@@ -1,10 +1,6 @@
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
-import {
-  bundleLinuxMedia,
-  MEDIA_PLUGINS,
-  mediaDependencies,
-} from "../desktop/scripts/linux-media";
+import { bundleLinuxMedia, MEDIA_PLUGINS, mediaDependencies } from "../desktop/scripts/linux-media";
 import { shell } from "../src/mr";
 import { runEffect } from "./support/effect";
 import * as Arr from "effect/Array";
