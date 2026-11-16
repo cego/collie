@@ -191,7 +191,21 @@ go's own check has read the merge request ready, which includes the forge saying
 merge. A merge the forge refuses anyway is read once more at that head: no longer ready, as
 when another merge left it in conflict with its target branch, the go no longer holds, the
 claim is given back and the Run goes back to D3's wait. Only a refusal while the forge still
-says it is ready fails the Run. The tag follows the repository's own conventions:
+says it is ready fails the Run.
+
+Where the target branch requires a merge queue, Collie's merge adds the merge request
+to the queue at the head the go was given for, and waits on it. It reads the merge
+request every 30 seconds for up to two hours, until the queue merges it or removes it.
+A merge the queue made is Collie's merge, read back like any other. A merge request
+the queue removes is refused with the forge's reason, and is read once more as above.
+One still queued after two hours is taken out of the queue and refused as timed out,
+so nothing merges while the Run is not watching. This is not setting the merge request
+to merge itself later: the queue proves the head merged onto the current target before
+it lands, and the Run waits for its answer. (Amended 2026-11-13: four merge requests,
+each proved against an older target, merged within two minutes and turned the target
+red.)
+
+The tag follows the repository's own conventions:
 
 - the next version, chosen from the change since the previous tag;
 - a release commit, where the repository makes one;

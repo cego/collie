@@ -521,11 +521,20 @@ directory, or this repository's checkout of another branch — is left as it is 
 over, and the run's log says whose it is (ADR-draft-an-occupied-branch-checkout-path-is-passed-over).
 When all three are held, the run does not start, and its refusal names each path, what
 holds it, and asks you to free one and retry; a refused attempt leaves no new branch
-behind. A fresh checkout is a fresh checkout, so the first thing the implementer does
-there is install the project's dependencies. Where the run cannot be given a worktree, it
+behind. Where the run cannot be given a worktree, it
 does not start and says which branch it could not be given one for, in git's own words:
 working in the directory you started it from is what two runs sharing a checkout — and a
 stash stack — looks like, which is the thing this exists to prevent.
+
+A project names the command that brings a checkout's installed dependencies to its
+lockfile in `.collie/dependencies.json`, in the same shape as a Measurement's `prepare`:
+`{ "executable": "bun", "argv": ["install", "--frozen-lockfile"] }`. Collie runs it in
+every checkout it places for a run — cut, reused, taken over or a roaming one — reading the
+file from that checkout's own tree, since that head's lockfile is the one to satisfy, and
+the run's log says which command it ran. A command that fails refuses the start with the
+command and what it printed, and a file that does not decode refuses it naming the file.
+A project without the file is placed exactly as before, and its agents install what they
+need themselves.
 
 ### A run that roams across branches
 
@@ -716,7 +725,9 @@ carrying a deploy: it stays under Working and says what it waits for and on whom
 nothing in News. Once such a wait outlasts its patience — 2 hours where nobody acts, 2 days
 where a person does — it parks, and the card goes to Needs you. A parked card carries one
 more line naming its [**Park cause**](../CONTEXT.md) and what that cause lets Collie do —
-`Parked: ci-job-absent · Collie rechecks`, or `· needs you` — and the drawer's **parked**
+`Parked: ci-job-absent · Collie rechecks`,
+`Parked: target-red · Collie rechecks` for a CI failure its target branch shares too,
+or `· needs you` — and the drawer's **parked**
 section adds why a person is needed; `collie run show` gives the same as `park` with its
 `cause` and `kind`. Recheck parks stay quiet while Collie checks their facts and resumes
 those whose cause clears. After three automatic tries for the same cause, another park
@@ -2855,7 +2866,9 @@ board closing and the terminal being detached.
 Before every ticket after the first, and before every review round, `implement` fetches the
 default branch. Where it has moved, Collie merges it into the Run's branch with a merge
 commit and records `integrated <branch>@<sha>` in the Run's log. It never rebases and never
-force-pushes. A checkout with uncommitted changes is left alone and handed back for the
+force-pushes. A merge also runs the project's [`.collie/dependencies.json`](#what-a-run-does-to-your-repository)
+command, so the checkout has the merged head's dependencies; a command that fails parks
+the Run with what it printed, and a resume runs it again before the merge counts. A checkout with uncommitted changes is left alone and handed back for the
 builder to commit, and an unchanged default branch is skipped. A conflict at a ticket
 boundary is the builder's next work: that ticket's prompt names the conflicted files and has
 the merge finished first. Before a review, a merge step finishes it. Work goes on only from

@@ -209,6 +209,8 @@ pub enum Cause {
     IdleBudget,
     #[serde(rename = "ci-job-absent")]
     CiJobAbsent,
+    #[serde(rename = "target-red")]
+    TargetRed,
     #[serde(rename = "forge-unavailable")]
     ForgeUnavailable,
     #[serde(rename = "herdr-unavailable")]

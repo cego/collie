@@ -99,6 +99,7 @@ test(
             yield* stopHost(second.world.state);
             yield* resetter(advertised).pipe(Scope.provide(blocking));
             yield* first.ssh.maps({ [advertised]: moved });
+            yield* first.ssh.configuredForwards(true);
             yield* second.cli(["machine", "list"], { ...extra, COLLIE_PEER_PORT: String(moved) });
 
             const waiting = yield* until(

@@ -247,7 +247,7 @@ test("the host's handle gives up on a master that never answers", () =>
     }),
   ));
 
-test("the host's handle only asks an open master, and cancels its forward when its scope closes", () =>
+test("the host's handle forwards and cancels only its own port despite SSH config forwards", () =>
   runEffect(
     Effect.gen(function* () {
       const { state, ssh, fake } = yield* rig;
@@ -257,6 +257,7 @@ test("the host's handle only asks an open master, and cancels its forward when i
       expect(refused._tag).toBe("HostRefused");
       expect(Arr.every(yield* fake.calls, (line) => pipe(line, Str.startsWith("mux ")))).toBe(true);
 
+      yield* fake.configuredForwards(true);
       yield* opens(state, ssh);
       expect(yield* handle.check).toBe(true);
       const far = yield* Effect.acquireRelease(
@@ -285,6 +286,7 @@ test("the host's handle only asks an open master, and cancels its forward when i
       const spec = `127.0.0.1:${local}:127.0.0.1:${farPort}`;
       expect(calls).toContain(`mux forward ${spec} mk@vm-mk`);
       expect(calls.at(-1)).toBe(`mux cancel ${spec} mk@vm-mk`);
+      expect(Arr.some(calls, (line) => pipe(line, Str.startsWith("configured ")))).toBe(false);
       expect(Arr.filter(calls, (line) => pipe(line, Str.startsWith("master")))).toHaveLength(1);
       expect(
         Arr.some(

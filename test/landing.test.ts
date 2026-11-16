@@ -196,6 +196,40 @@ for (const forge of ["gitlab", "github"] as const) {
     ));
 }
 
+test("github: an attempt left while queued settles as landed once the queue merges it at its head", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const queued = yield* landing("github", {
+        state: "merged",
+        mergedBy: "github-merge-queue",
+        mergedAt: "2026-10-20T11:40:00Z",
+      });
+      yield* writeLanding(queued.runDir, attempt("github"));
+      expect(yield* queued.merge()).toEqual({ _tag: "Merged", sha: MERGED });
+      expect(yield* readLanding(queued.runDir)).toEqual(
+        attempt("github", { state: "landed", sha: MERGED }),
+      );
+      expect(queued.seen).toEqual([]);
+    }),
+  ));
+
+test("gitlab: an attempt left settles as merged outside the Run when a user named as GitHub's queue merged it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const named = yield* landing("gitlab", {
+        state: "merged",
+        mergedBy: "github-merge-queue",
+        mergedAt: "2026-10-20T11:40:00Z",
+      });
+      yield* writeLanding(named.runDir, attempt("gitlab"));
+      expect((yield* named.merge())._tag).toBe("MergedOutside");
+      expect(yield* readLanding(named.runDir)).toMatchObject({
+        state: "withdrawn",
+        why: "merged outside this Run by github-merge-queue",
+      });
+    }),
+  ));
+
 test("a Run that recorded no merge request is refused, and the forge is not asked", () =>
   runEffect(
     Effect.gen(function* () {

@@ -7,7 +7,10 @@ import * as Option from "effect/Option";
 import { Effect, Schema, flow } from "effect";
 import { Judgement, type Limits } from "./measurement-verdict";
 
-const Command = Schema.Struct({ executable: Schema.String, argv: Schema.Array(Schema.String) });
+export const Command = Schema.Struct({
+  executable: Schema.String,
+  argv: Schema.Array(Schema.String),
+});
 
 /** What a Run measures with, frozen: a changed plan is a new comparison. */
 export const BenchmarkPlan = Schema.Struct({
