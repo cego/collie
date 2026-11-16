@@ -2,6 +2,7 @@
 //! and a verified update offers Restart now and Later on every page.
 
 mod support;
+use support::clock::FrameAt;
 
 use collie_desktop_board::App;
 use collie_desktop_board::calls::testing::Harness;
@@ -24,7 +25,7 @@ fn started(harness: &Harness<App>) -> Runtime<App> {
 fn heard(harness: &Harness<App>, runtime: &mut Runtime<App>, value: Value, at: f64) {
     harness.fake.push("updates", Ok(value));
     settle(harness, runtime);
-    runtime.frame(at);
+    runtime.frame_at(at);
 }
 
 #[test]
@@ -68,7 +69,7 @@ fn later_puts_the_notice_away_until_the_toolbar_brings_it_back() {
     heard(&harness, &mut runtime, news("Ready", "1.3.0"), at);
     runtime.state.open_page(Page::Usage);
     runtime.invalidate();
-    runtime.frame(at + 100.0);
+    runtime.frame_at(at + 100.0);
     assert!(!shown(&runtime, "update-notice"));
 
     tap(&mut runtime, "update-toolbar", &mut at);
@@ -101,7 +102,7 @@ fn restart_is_asked_once_however_often_it_is_pressed_and_never_without_a_press()
     tap(&mut runtime, "update-restart", &mut at);
     runtime.state.restart_to_update();
     runtime.invalidate();
-    runtime.frame(at);
+    runtime.frame_at(at);
     let tree = runtime.accessibility_json();
     let restarting = within(&tree)
         .into_iter()
@@ -134,7 +135,7 @@ fn a_refused_restart_is_said_in_the_notice_and_can_be_pressed_again() {
         )),
     );
     settle(&harness, &mut runtime);
-    runtime.frame(at);
+    runtime.frame_at(at);
     assert!(said(
         &runtime,
         "Collie did not restart: the download is unsigned, so it was refused"
@@ -157,7 +158,7 @@ fn a_refused_restart_stays_said_after_later_until_put_off_again() {
     settle(&harness, &mut runtime);
     runtime.state.update_later();
     runtime.invalidate();
-    runtime.frame(at);
+    runtime.frame_at(at);
     assert!(!shown(&runtime, "update-notice"));
     assert!(shown(&runtime, "update-toolbar"));
 }
@@ -178,7 +179,7 @@ fn a_restart_refused_after_later_brings_the_notice_back_to_say_why() {
         Err(collie_desktop_board::calls::CallError("offline".into())),
     );
     settle(&harness, &mut runtime);
-    runtime.frame(at);
+    runtime.frame_at(at);
     assert!(shown(&runtime, "update-notice"));
     assert!(said(&runtime, "Collie did not restart: offline"));
 }
@@ -197,7 +198,7 @@ fn the_notice_stands_over_a_record_the_open_chat_and_every_page_and_takes_no_foc
         .state
         .open_record("i-pc".into(), "r1".into(), "mk-pc".into(), None);
     settle(&harness, &mut runtime);
-    runtime.frame(150.0);
+    runtime.frame_at(150.0);
     assert!(shown(&runtime, "record"));
     assert!(shown(&runtime, "chat-log"));
     assert!(shown(&runtime, "update-notice"));
@@ -211,7 +212,7 @@ fn the_notice_stands_over_a_record_the_open_chat_and_every_page_and_takes_no_foc
     ] {
         runtime.state.open_page(page);
         settle(&harness, &mut runtime);
-        runtime.frame(at);
+        runtime.frame_at(at);
         assert!(shown(&runtime, "update-notice"), "{page:?}");
     }
     assert!(runtime.state.chat.composer.focused);
@@ -241,7 +242,7 @@ fn a_download_is_said_in_the_toolbar_and_a_failed_check_only_in_settings() {
     assert!(!shown(&runtime, "update-notice"));
     runtime.state.open_page(Page::Settings);
     settle(&harness, &mut runtime);
-    runtime.frame(300.0);
+    runtime.frame_at(300.0);
     assert!(said(&runtime, "Could not check for updates: offline"));
 }
 

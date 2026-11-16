@@ -126,7 +126,7 @@ fn selected_bytes(runtime: &mut Runtime<App>, harness: &Harness<App>, id: &str, 
         std::thread::park_timeout(std::time::Duration::from_millis(1));
     }
     runtime.update(|_, _| {});
-    runtime.frame(300.0);
+    runtime.frame_at(300.0);
 }
 
 #[test]
@@ -393,7 +393,7 @@ fn long_text_exposes_its_limit_and_failed_open_and_save_leave_binary_material_un
     runtime
         .resolve_file_dialog(Some(std::env::temp_dir()))
         .unwrap();
-    runtime.frame(400.0);
+    runtime.frame_at(400.0);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while runtime
         .state
@@ -423,7 +423,7 @@ fn long_text_exposes_its_limit_and_failed_open_and_save_leave_binary_material_un
             .contains("Save failed")
     );
     runtime.update(|_, _| {});
-    runtime.frame(500.0);
+    runtime.frame_at(500.0);
     assert!(
         runtime
             .accessibility_json()
@@ -508,7 +508,7 @@ fn an_older_host_keeps_legacy_record_tabs_and_explains_the_catalogue_upgrade() {
             .contains("Upgrade this Machine")
     );
     runtime.update(|app, _| app.show_tab("summary"));
-    runtime.frame(300.0);
+    runtime.frame_at(300.0);
     assert!(keys(&runtime).contains(&"tab-summary".into()));
     assert!(keys(&runtime).contains(&"tab-evidence".into()));
     assert!(harness.fake.asked_of("artefactSeen").is_empty());
@@ -523,7 +523,7 @@ fn picker_import_is_fenced_by_the_record_opening_and_transfer_failure_never_mark
     runtime
         .resolve_file_dialog(Some(std::path::PathBuf::from("/local/report.md")))
         .unwrap();
-    runtime.frame(250.0);
+    runtime.frame_at(250.0);
     let asked = &harness.fake.asked_of("artefactImport")[0];
     assert_eq!(asked["installation"], "inst-build");
     assert_eq!(asked["runId"], "r1");
@@ -553,7 +553,7 @@ fn picker_import_is_fenced_by_the_record_opening_and_transfer_failure_never_mark
     runtime
         .resolve_file_dialog(Some(std::path::PathBuf::from("/local/stale.md")))
         .unwrap();
-    runtime.frame(400.0);
+    runtime.frame_at(400.0);
     assert_eq!(harness.fake.asked_of("artefactImport").len(), before);
 }
 
@@ -623,7 +623,7 @@ fn transferred_bytes_that_do_not_match_the_revision_digest_are_refused_and_never
     let tree = runtime.accessibility_json().to_string();
     assert!(tree.contains("does not match this revision"));
     assert!(!tree.contains("evil"));
-    runtime.frame(600.0);
+    runtime.frame_at(600.0);
     assert!(harness.fake.asked_of("artefactSeen").is_empty());
 }
 

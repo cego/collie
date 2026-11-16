@@ -129,15 +129,13 @@ fn rect(runtime: &Runtime<App>, key: &str) -> [f32; 4] {
 fn the_steps_pane_uses_the_remaining_height_and_refits_with_the_window_and_chat() {
     let harness = Harness::new();
     let (mut runtime, asked) = on_flow(&harness);
-    let mut at = 1000.0;
-    let mut layout = |runtime: &mut Runtime<App>, size, chat_width| {
+    let layout = |runtime: &mut Runtime<App>, size, chat_width| {
         runtime.set_viewport(size, 1.0);
         runtime.state.nav.chat.set_open(true);
         runtime.state.nav.chat.set_width(chat_width);
         for _ in 0..4 {
             runtime.invalidate();
-            runtime.frame_at(at);
-            at += 1000.0;
+            runtime.frame(1.0);
         }
         let [_, top, _, height] = rect(runtime, "terminal-grid");
         let [work_x, _, work_width, _] = rect(runtime, "inspector-work");
