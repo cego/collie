@@ -1,5 +1,5 @@
 // The Rune spike's shell services: a notification the main process asks the stdio stand-in for
-// reaches the Rust side as one request. Needs cargo, which the `desktop` CI job has.
+// reaches the Rust side as one request. Needs cargo, which the `desktop-checks` CI job has.
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";

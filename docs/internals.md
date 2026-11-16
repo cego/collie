@@ -1701,7 +1701,7 @@ number the default branch already has twice is reported and left as it is.
 `test/docs-links.test.ts` fails on a plain-text `ADR-NNNN` or `ADR-draft-<slug>` in the
 docs, `src`, `workflows`, `test` or `desktop` that names no ADR file.
 
-Collie's native desktop is built from the release tag by `desktop-native`, which calls
+Collie's native desktop is built from the release tag by `desktop-bundle`, which calls
 `.github/workflows/rune-bundle.yml` on Linux and macOS. The Rune shell and compiled
 TypeScript core share the existing stable identity, `dk.cego.collie.desktop`, and the
 existing installer and update artifact names. The installed product is named **Collie**.
@@ -1784,7 +1784,7 @@ Root tests import Desktop modules and libraries, so the root `bun install` insta
 Desktop's dependencies too, frozen to `desktop/bun.lock`. After changing Desktop's
 dependencies, run `bun install` in `desktop/` first: the root install refuses a stale
 Desktop lockfile. CI relies on that one install before its root gate.
-CI's `desktop` job checks the core's TypeScript (`cd desktop && bun run typecheck`) and
+CI's `desktop-checks` job checks the core's TypeScript (`cd desktop && bun run typecheck`) and
 the Rune workspace's format, clippy and tests; the required CI gate also includes both
 native platform bundles.
 

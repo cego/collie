@@ -56,7 +56,7 @@ jobs:
 
   # The required check. Never skipped, which a required check would read as passing.
   test:
-    needs: [static, suite, macos, desktop, desktop-native]
+    needs: [static, suite, macos, desktop-checks, desktop-bundle]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -65,8 +65,8 @@ jobs:
           test "${{ needs.static.result }}" = success
           test "${{ needs.suite.result }}" = success
           test "${{ needs.macos.result }}" = success
-          test "${{ needs.desktop.result }}" = success
-          test "${{ needs.desktop-native.result }}" = success
+          test "${{ needs.desktop-checks.result }}" = success
+          test "${{ needs.desktop-bundle.result }}" = success
 
   # The runner built and smoked on a Mac, and the installers' signature check run with the
   # Mac's own LibreSSL. Not the whole suite: a Mac-only defect past these is when to add it.
@@ -87,12 +87,12 @@ jobs:
         env:
           COLLIE_OPENSSL: /usr/bin/openssl
 
-  desktop-native:
+  desktop-bundle:
     uses: ./.github/workflows/rune-bundle.yml
 
   # The native view tests draw on lavapipe, Mesa's software Vulkan. libghostty-vt builds from the
   # vendor/ghostty submodule with the Zig it pins, and bindgen needs libclang.
-  desktop:
+  desktop-checks:
     runs-on: ubuntu-latest
     env:
       VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
@@ -119,6 +119,7 @@ jobs:
       - uses: Swatinem/rust-cache@2201cc584a476d1b508be977bbe4b7d1c7a52e9c # v2.9.3
         with:
           workspaces: desktop
+          shared-key: desktop
       - run: cargo fmt --all --check
         working-directory: desktop
       - run: cargo clippy --workspace --all-targets -- -D warnings
