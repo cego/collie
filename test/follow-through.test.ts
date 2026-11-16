@@ -644,7 +644,7 @@ for (const id of ["review", "second-look"])
               const posted = yield* notesOf(forge);
               expect(posted).toHaveLength(1);
               expect(Str.split(posted[0]!, "\n").at(-1)).toBe(
-                `Review by Collie for @mk · ${runId} round 1 at ${first}`,
+                `<!-- collie:${runId} round 1 at ${first} by mk -->`,
               );
               expect(Arr.map(yield* asked(runId), (row) => row.decision)).toEqual([]);
               expect(yield* host.agentStarts).toHaveLength(1);
@@ -668,7 +668,7 @@ for (const id of ["review", "second-look"])
               expect(notes).toHaveLength(2);
               expect(notes[1]).toContain(`all findings fixed at \`${second}\``);
               expect(Str.split(notes[1]!, "\n").at(-1)).toBe(
-                `Review by Collie for @mk · ${runId} round 2 at ${second}`,
+                `<!-- collie:${runId} round 2 at ${second} by mk -->`,
               );
               expect(yield* host.agentStarts).toHaveLength(2);
               const { views } = yield* board;
@@ -1656,8 +1656,8 @@ for (const id of ["review", "second-look"])
               );
               const notes = yield* notesOf(forge);
               expect(signatures(notes)).toEqual([
-                `Review by Collie for @mk · ${runId} round 1 at ${first}`,
-                `Review by Collie for @mk · ${runId} round 3 at ${third}`,
+                `<!-- collie:${runId} round 1 at ${first} by mk -->`,
+                `<!-- collie:${runId} round 3 at ${third} by mk -->`,
               ]);
               expect(notes[1]).toContain("F3: fixed — validate the redirect");
               expect(yield* host.agentStarts).toHaveLength(3);
@@ -2094,10 +2094,7 @@ for (const id of ["review", "second-look"]) {
                   yield* notesOf(forge),
                   (note) => Str.split(" at ")(Str.split(note, "\n").at(-1) ?? "")[0],
                 ),
-              ).toEqual([
-                `Review by Collie for @mk · ${runId} round 1`,
-                `Review by Collie for @mk · ${runId} round 2`,
-              ]);
+              ).toEqual([`<!-- collie:${runId} round 1`, `<!-- collie:${runId} round 2`]);
               expect(yield* host.agentStarts).toHaveLength(2);
             }),
           );

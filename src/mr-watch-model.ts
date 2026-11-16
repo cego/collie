@@ -63,6 +63,7 @@ export type Verdict =
 const TERMINAL = new Set(["passed", "failed"]);
 
 const SIGNATURES = [
+  /^<!-- collie:(\S+)(?: [^>]*)? -->$/,
   /^Review by Collie for @\S+ · (\S+) round \d+ at [0-9a-f]+$/,
   /^Posted by Collie's Run (\S+) on /,
 ];
