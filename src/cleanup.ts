@@ -641,6 +641,7 @@ export const stateSweeper = (stateDir: string, rows: ReadonlySet<string>): Sweep
       if (rel.length !== 2) return null;
       if (top === "runs" && name === ".seq")
         return yield* quiet(target, "nothing reads it any more");
+      if (owned(name)) return null;
       if (top === "agents") {
         if (pipe(name, Str.endsWith(".json")) || name === "deliveries.log") return null;
         const inside = yield* fs
@@ -649,7 +650,7 @@ export const stateSweeper = (stateDir: string, rows: ReadonlySet<string>): Sweep
         // Imported into host.db, and left for a later release to delete (D5).
         if (inside.includes(LEDGER_FILE)) return null;
       }
-      return owned(name) ? null : yield* quiet(target, rowless);
+      return yield* quiet(target, rowless);
     });
 
   /** Every entry this sweeper might judge. */
