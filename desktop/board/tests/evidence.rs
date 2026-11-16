@@ -2,12 +2,14 @@
 //! opens under its row on a press, Enter or Space, read from `runFile` on demand, as
 //! `EvidenceText.vue` does.
 
+mod support;
 use collie_desktop_board::calls::CallError;
 use collie_desktop_board::calls::testing::Harness;
 use collie_desktop_board::{App, view};
 use collie_desktop_terminal::view::Tab;
 use rune::{Env, Key, KeyEvent, Mods, Runtime};
 use serde_json::{Value, json};
+use support::clock::FrameAt;
 
 const FLOCK: &str = include_str!("../../fixtures/flock.ndjson");
 
@@ -52,22 +54,25 @@ fn shown(runtime: &Runtime<App>, key: &str) -> bool {
     keys(runtime).iter().any(|k| k == key)
 }
 
+/// Presses `key` where it rests, once what moves has landed.
 fn tap(runtime: &mut Runtime<App>, key: &str, at: f64) {
+    runtime.settle_all();
+    runtime.frame(0.0);
     let (x, y) = runtime
         .find(key)
         .unwrap_or_else(|| panic!("no {key} in {:?}", keys(runtime)));
     runtime.pointer_move(x, y);
-    runtime.frame(at);
+    runtime.frame_at(at);
     runtime.pointer_down(x, y);
-    runtime.frame(at + 50.0);
+    runtime.frame_at(at + 50.0);
     runtime.pointer_up(x, y);
-    runtime.frame(at + 100.0);
+    runtime.frame_at(at + 100.0);
 }
 
 fn settle(runtime: &mut Runtime<App>, harness: &Harness<App>, at: f64) {
     harness.settle(&mut runtime.state);
     runtime.update(|_, _| {});
-    runtime.frame(at);
+    runtime.frame_at(at);
 }
 
 /// Build box's r1 open on Evidence, with a check, a kept log and a handoff note.
@@ -190,7 +195,7 @@ fn enter_and_space_open_and_close_a_row() {
             key,
             mods: Mods::default(),
         });
-        runtime.frame(at);
+        runtime.frame_at(at);
     };
     // A press opens it and leaves it focused, for the keys to close and open again.
     tap(&mut runtime, "check-v1", 200.0);

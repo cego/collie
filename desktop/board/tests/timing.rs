@@ -1,11 +1,13 @@
 //! Desktop's marks taken by the Rune app: `desktopTiming`'s cases from
 //! `test/desktop-record.test.ts`, then the marks the board reads off its drawn frames.
 
+mod support;
 use collie_desktop_board::timing::{Mark, Timing};
 use collie_desktop_board::{App, frame_drawn, view};
 use collie_desktop_protocol::generated::AguiEvent;
 use collie_desktop_terminal::view::Tab;
 use rune::{Env, Runtime};
+use support::clock::FrameAt;
 
 const FLOCK: &str = include_str!("../../fixtures/flock.ndjson");
 
@@ -111,7 +113,7 @@ fn open(runtime: &mut Runtime<App>, key: &str, at: f64) {
     runtime.frame(1.0);
     let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
     runtime.pointer_move(x, y);
-    runtime.frame(at);
+    runtime.frame_at(at);
     for _ in 0..2 {
         runtime.pointer_down(x, y);
         runtime.frame(0.05);
@@ -124,11 +126,11 @@ fn open(runtime: &mut Runtime<App>, key: &str, at: f64) {
 fn tap(runtime: &mut Runtime<App>, key: &str, at: f64) {
     let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
     runtime.pointer_move(x, y);
-    runtime.frame(at);
+    runtime.frame_at(at);
     runtime.pointer_down(x, y);
-    runtime.frame(at + 50.0);
+    runtime.frame_at(at + 50.0);
     runtime.pointer_up(x, y);
-    runtime.frame(at + 100.0);
+    runtime.frame_at(at + 100.0);
 }
 
 #[test]
@@ -148,7 +150,7 @@ fn a_key_sent_to_the_pane_and_the_frame_after_its_output_mark_the_echo() {
     open(&mut runtime, "card-b2", 100.0);
     // A card opens on its first tab; its pane is on Terminal.
     runtime.update(|app, _| app.show_tab("terminal"));
-    runtime.frame(150.0);
+    runtime.frame_at(150.0);
     runtime.update(|board, _| board.terminal.as_ref().unwrap().keyed_at.set(Some(600.0)));
     assert_eq!(
         frame_drawn(&runtime, 605.0),
@@ -168,7 +170,7 @@ fn keys_before_presentation_keep_the_first_timestamp_until_its_echo_is_drawn() {
     open(&mut runtime, "card-b2", 100.0);
     // A card opens on its first tab; its pane is on Terminal.
     runtime.update(|app, _| app.show_tab("terminal"));
-    runtime.frame(150.0);
+    runtime.frame_at(150.0);
     tap(&mut runtime, "terminal-grid", 200.0);
     let key = || rune::KeyEvent {
         key: rune::Key::Text("a".into()),
@@ -323,11 +325,11 @@ fn each_frame_of_a_scrolled_diff_is_marked() {
     let lines: String = (0..400).map(|n| format!("+line {n}\n")).collect();
     let patch = format!("diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -0,0 +1,400 @@\n{lines}");
     runtime.update(move |board, _| board.diff_read(1, &patch));
-    runtime.frame(1000.0);
+    runtime.frame_at(1000.0);
     assert_eq!(frame_drawn(&runtime, 1000.0), []);
     runtime.pointer_move(600.0, 500.0);
     runtime.wheel(600.0, 500.0, -200.0);
-    runtime.frame(1016.0);
+    runtime.frame_at(1016.0);
     let marked = frame_drawn(&runtime, 1016.0);
     assert_eq!(marked, [mark("frame", 1016.0, "diff:1")]);
     assert_eq!(frame_drawn(&runtime, 1400.0), [], "settled");

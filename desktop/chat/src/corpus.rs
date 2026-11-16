@@ -10,7 +10,7 @@ use std::path::Path;
 type Row = (String, &'static str, &'static str);
 
 /// rune-kit's colouring stops here, whichever highlighter is plugged in.
-const COLOURED: usize = 32 * 1024;
+const COLOURED: usize = 128 * 1024;
 
 pub fn constructs(src: &str) -> Vec<Row> {
     let mut found = Vec::new();
@@ -50,7 +50,7 @@ pub fn constructs(src: &str) -> Vec<Row> {
                     continue;
                 };
                 if code.len() > COLOURED {
-                    found.push(("code over 32 KiB".into(), "plain past 32 KiB", "same"));
+                    found.push(("code over 128 KiB".into(), "plain past 128 KiB", "same"));
                 }
                 if lang == "mermaid" {
                     if !rune_kit::mermaid::supported(&code) {

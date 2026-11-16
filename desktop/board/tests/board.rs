@@ -119,7 +119,10 @@ fn cards_in(runtime: &Runtime<App>, key: &str) -> Vec<String> {
         .collect()
 }
 
+/// Presses `key` where it rests, as a person waits for a panel to land before pressing in it.
 fn press(runtime: &mut Runtime<App>, key: &str) {
+    runtime.settle_all();
+    runtime.frame(0.0);
     let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
     runtime.pointer_move(x, y);
     runtime.frame(1.0);
@@ -130,6 +133,8 @@ fn press(runtime: &mut Runtime<App>, key: &str) {
 }
 
 fn double_press(runtime: &mut Runtime<App>, key: &str) {
+    runtime.settle_all();
+    runtime.frame(0.0);
     let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
     runtime.pointer_move(x, y);
     runtime.frame(1.0);

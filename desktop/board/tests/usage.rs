@@ -2,6 +2,7 @@
 //! and the page asking the fake core.
 
 mod support;
+use support::clock::FrameAt;
 
 use collie_desktop_board::App;
 use collie_desktop_board::calls::testing::Harness;
@@ -394,7 +395,7 @@ fn opening_the_page_asks_each_machine_and_draws_a_meter_per_window_of_the_live_o
     ]);
     harness.fake.answer("usage", Ok(answer));
     settle(&harness, &mut runtime);
-    runtime.frame(100.0);
+    runtime.frame_at(100.0);
     let tree = runtime.elements();
     let section = tree
         .iter()
@@ -432,7 +433,7 @@ fn the_page_shows_the_reading_the_minutely_ask_brings() {
     app.ask_usage_when_due(0.0);
     let mut runtime = runtime(app);
     settle(&harness, &mut runtime);
-    runtime.frame(100.0);
+    runtime.frame_at(100.0);
     assert!(said(&runtime, "Session: 10%"));
     harness.fake.will_answer("usage", Ok(fresh(64)));
     runtime.update(|app, _| app.ask_usage_when_due(30_000.0));
@@ -443,7 +444,7 @@ fn the_page_shows_the_reading_the_minutely_ask_brings() {
     );
     runtime.update(|app, _| app.ask_usage_when_due(61_000.0));
     settle(&harness, &mut runtime);
-    runtime.frame(300.0);
+    runtime.frame_at(300.0);
     assert!(
         said(&runtime, "Session: 64%"),
         "a minute on, the fresh reading"

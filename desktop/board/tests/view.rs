@@ -1,12 +1,14 @@
 //! The board as Rune builds it from the test Flock (`fixtures/flock.ndjson`), read through
 //! its accessibility tree, without a window.
 
+mod support;
 use collie_desktop_board::{App, view};
 use collie_desktop_protocol::generated::TerminalPayload;
 use collie_desktop_terminal::view::Tab;
 use rune::{Env, Runtime};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
+use support::clock::FrameAt;
 
 const FLOCK: &str = include_str!("../../fixtures/flock.ndjson");
 
@@ -98,11 +100,11 @@ fn the_board_says_its_sections_in_order_with_their_cards_by_name() {
 fn tap(runtime: &mut Runtime<App>, key: &str, at: f64) {
     let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
     runtime.pointer_move(x, y);
-    runtime.frame(at);
+    runtime.frame_at(at);
     runtime.pointer_down(x, y);
-    runtime.frame(at + 50.0);
+    runtime.frame_at(at + 50.0);
     runtime.pointer_up(x, y);
-    runtime.frame(at + 100.0);
+    runtime.frame_at(at + 100.0);
 }
 
 /// A card is opened by a second press; the first selects it. It is scrolled to first.
@@ -112,7 +114,7 @@ fn open(runtime: &mut Runtime<App>, key: &str, at: f64) {
     runtime.frame(1.0);
     let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
     runtime.pointer_move(x, y);
-    runtime.frame(at);
+    runtime.frame_at(at);
     for _ in 0..2 {
         runtime.pointer_down(x, y);
         runtime.frame(0.05);
@@ -155,7 +157,7 @@ fn a_cards_record_reaches_its_pane_only_on_terminal_and_back_leaves_it_for_the_b
         "opening a card attaches no pane"
     );
     runtime.update(|app, _| app.show_tab("terminal"));
-    runtime.frame(200.0);
+    runtime.frame_at(200.0);
     let asked_for = asked.lock().unwrap().clone();
     assert_eq!(
         asked_for,

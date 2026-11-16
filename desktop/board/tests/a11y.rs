@@ -64,13 +64,12 @@ fn focused(runtime: &Runtime<App>) -> Option<String> {
         .and_then(|node| node["key"].as_str().map(String::from))
 }
 
-fn press(runtime: &mut Runtime<App>, key: Key, at: &mut f64) {
+fn press(runtime: &mut Runtime<App>, key: Key) {
     runtime.key(KeyEvent {
         key,
         mods: Mods::default(),
     });
-    *at += 100.0;
-    runtime.frame(*at);
+    runtime.frame(0.1);
 }
 
 #[test]
@@ -118,10 +117,9 @@ fn a_card_a_flow_node_and_the_chat_log_say_what_they_are() {
 #[test]
 fn the_flow_map_is_one_tab_stop_at_the_current_step() {
     let mut runtime = runtime();
-    let mut at = 0.0;
     let mut stops = Vec::new();
     for _ in 0..60 {
-        press(&mut runtime, Key::Tab, &mut at);
+        press(&mut runtime, Key::Tab);
         let Some(key) = focused(&runtime) else {
             continue;
         };
@@ -145,13 +143,14 @@ fn arrows_move_about_the_flow_map_as_flow_key_does() {
     ];
     for (keys, lands) in moves {
         let mut runtime = runtime();
-        let mut at = 0.0;
+        let mut tabs = 0;
         while focused(&runtime).as_deref() != Some("flow-build-run-build") {
-            press(&mut runtime, Key::Tab, &mut at);
-            assert!(at < 6000.0, "Tab never reached the Flow map");
+            press(&mut runtime, Key::Tab);
+            tabs += 1;
+            assert!(tabs < 60, "Tab never reached the Flow map");
         }
         for key in keys {
-            press(&mut runtime, key.clone(), &mut at);
+            press(&mut runtime, key.clone());
         }
         assert_eq!(focused(&runtime).as_deref(), Some(lands), "{keys:?}");
     }
@@ -172,9 +171,9 @@ fn a_new_current_step_and_a_step_that_asks_are_announced_politely() {
     };
     assert_eq!(announced(&runtime), "");
     runtime.update(|board, _| board.flow.as_mut().unwrap().set(flow("after")));
-    runtime.frame(100.0);
+    runtime.frame(0.1);
     assert_eq!(announced(&runtime), "Review, expected");
     runtime.update(|board, _| board.flow.as_mut().unwrap().set(flow("asking")));
-    runtime.frame(200.0);
+    runtime.frame(0.1);
     assert_eq!(announced(&runtime), "Review, needs you, Asked 1 min ago");
 }

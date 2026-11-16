@@ -1,6 +1,7 @@
 //! The Workflows page: what a host read, as a tree and in full, asked of the fake core.
 
 mod support;
+use support::clock::FrameAt;
 
 use collie_desktop_board::App;
 use collie_desktop_board::calls::CallError;
@@ -85,7 +86,7 @@ fn opening_the_page_reads_this_computers_definitions_and_shows_one_chosen_in_ful
     assert!(said(&runtime, "Reading…"));
     harness.fake.answer("definitions", Ok(definitions()));
     settle(&harness, &mut runtime);
-    runtime.frame(100.0);
+    runtime.frame_at(100.0);
     assert!(said(&runtime, "Read from mk-pc"));
     assert!(said(&runtime, "Workflows · 1"));
     assert!(said(&runtime, "Would not load"));
@@ -120,7 +121,7 @@ fn a_read_that_fails_says_why_and_no_machine_says_none_is_connected() {
         Err(CallError("mk-pc's host did not answer".into())),
     );
     settle(&harness, &mut runtime);
-    runtime.frame(100.0);
+    runtime.frame_at(100.0);
     assert!(said(&runtime, "mk-pc's host did not answer"));
     let mut alone = App::default();
     alone.core = Some(harness.core.clone());

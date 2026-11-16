@@ -163,14 +163,17 @@ fn inline_code_that_is_only_a_web_url_is_a_link_to_it_and_a_script_url_is_not() 
     };
     let link = &line.links[0];
     assert_eq!(link.2, "https://example.com/a/");
-    assert_eq!(
-        &line.text[link.0..link.1].trim_matches('\u{202f}'),
-        &"example.com/a"
-    );
+    // Inline code is drawn padded, as a left-to-right isolate.
+    let code = |s: &str| {
+        s.trim_matches(['\u{202f}', '\u{2066}', '\u{2069}'])
+            .to_string()
+    };
+    assert_eq!(code(&line.text[link.0..link.1]), "example.com/a");
     assert!(
         line.spans
             .iter()
-            .any(|(s, e, style)| *style == Style::Code && &line.text[*s..*e] == "example.com/a")
+            .any(|(s, e, style)| *style == Style::Code
+                && code(&line.text[*s..*e]) == "example.com/a")
     );
     assert_eq!(line.links.len(), 1, "the script URL is no link");
     assert!(line.text.contains("javascript:alert(1)"));

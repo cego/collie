@@ -1,6 +1,6 @@
 //! Times each highlighter over the largest code block in a corpus of agent messages and over a
-//! 10,000-line TypeScript block, whole and cut to the 32 KiB rune-kit's Markdown colours.
-//! The built-in scanners stop at 32 KiB on their own.
+//! 10,000-line TypeScript block, whole and cut to the 128 KiB rune-kit's Markdown colours.
+//! The built-in lexers stop at 128 KiB on their own.
 //!
 //! `cargo run --release -p collie-desktop-chat --example highlight-cost -- <corpus dir>`
 
@@ -61,12 +61,12 @@ fn main() {
         })
         .collect();
     // What rune-kit's Markdown hands either highlighter at most.
-    let cut = &long[..long[..32 * 1024].rfind('\n').unwrap() + 1];
+    let cut = &long[..long[..128 * 1024].rfind('\n').unwrap() + 1];
     println!("| Highlighter | Block | Best of 5 | Spans |\n|---|---|---|---|");
     for (what, lang, code) in [
         ("largest corpus block", lang.as_str(), block.as_str()),
         ("10,000 lines", "ts", long.as_str()),
-        ("its first 32 KiB", "ts", cut),
+        ("its first 128 KiB", "ts", cut),
     ] {
         timed(&format!("rune-kit built-in, {what}"), lang, code, builtin);
         timed(&format!("syntect + two-face, {what}"), lang, code, syntect);
