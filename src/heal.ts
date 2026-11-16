@@ -9,11 +9,13 @@ import { configValue, readConfig } from "./config";
 import { HealFinding, type Metric } from "./metrics";
 import { PARK_CAUSES, type ParkCause } from "./park-cause";
 import { LAYERS } from "./definitions-model";
+import { ProducerReport } from "./narrative-model";
 
 export const HEALS_PER_RUN = 3;
 
 /** What a Heal hands back: a claim the host reads for words, never for its judgement. */
 const HealSaid = {
+  ...ProducerReport.fields,
   diagnosis: Schema.String,
   actions: Schema.Array(Schema.String),
   finding: HealFinding,

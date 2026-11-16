@@ -23,6 +23,11 @@ icon!(
     r#"<rect x="2.5" y="2.5" width="4" height="4" rx="1" stroke="currentColor" stroke-width="1.2" fill="none"/><rect x="9.5" y="9.5" width="4" height="4" rx="1" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M4.5 6.5V9.5C4.5 10.6 5.4 11.5 6.5 11.5H9.5" stroke="currentColor" stroke-width="1.2" fill="none"/>"#
 );
 icon!(
+    ARTEFACTS,
+    "collie-artefacts",
+    r#"<path d="M4 2.5H9.5L12.5 5.5V13.5H4Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/><path d="M9.5 2.5V5.5H12.5" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/><circle cx="7.5" cy="9" r="1.6" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M8.7 10.2L10.2 11.7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>"#
+);
+icon!(
     MACHINES,
     "collie-machines",
     r#"<rect x="2.5" y="2.5" width="11" height="4.5" rx="1" stroke="currentColor" stroke-width="1.2" fill="none"/><rect x="2.5" y="9" width="11" height="4.5" rx="1" stroke="currentColor" stroke-width="1.2" fill="none"/><circle cx="5" cy="4.75" r=".8" fill="currentColor"/><circle cx="5" cy="11.25" r=".8" fill="currentColor"/>"#

@@ -658,10 +658,14 @@ impl App {
         let Some(core) = self.core.clone() else {
             return;
         };
+        let serial = self.record.open.as_ref().map(|record| record.serial);
         core.request(
             "openLink",
             OpenLinkPayload { url },
-            |app: &mut App, done: Result<serde_json::Value, _>| {
+            move |app: &mut App, done: Result<serde_json::Value, _>| {
+                if app.record.open.as_ref().map(|record| record.serial) != serial {
+                    return;
+                }
                 if let Err(why) = done {
                     app.record.notice = Some(Notice {
                         said: why.to_string(),

@@ -19,6 +19,7 @@ import { appendJournal, readJournal } from "./journal";
 import type { Metrics } from "./board-model";
 import { epochMs } from "./time";
 import { ParkCause } from "./park-cause";
+import { ProducerReport } from "./narrative-model";
 
 export const RecoveryAction = Schema.Literals(["reminded", "rechecked", "resumed", "healed"]);
 export type RecoveryAction = typeof RecoveryAction.Type;
@@ -71,6 +72,7 @@ export const Publication = Schema.Literals([
 export type Publication = typeof Publication.Type;
 
 export const MetricSchema = Schema.Struct({
+  ...ProducerReport.fields,
   at: Schema.String,
   kind: Schema.Literals([
     "context",

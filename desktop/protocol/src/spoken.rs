@@ -26,13 +26,42 @@ fn through<T: DeserializeOwned + Serialize>(value: Value) -> serde_json::Result<
 pub fn retyped(tag: &str, part: Part, value: Value) -> serde_json::Result<Value> {
     match (tag, part) {
         // A stream ends with void, as `flock`'s payload is.
-        ("flock" | "say", Part::Done) | ("flock", Part::Payload) => through::<()>(value),
+        ("flock" | "say" | "runDetail", Part::Done) | ("flock", Part::Payload) => {
+            through::<()>(value)
+        }
         ("flock", Part::Chunk) => through::<FlockItem>(value),
         ("syncNow", Part::Payload) => through::<SyncNowPayload>(value),
         ("syncNow", Part::Done) => through::<SyncNowSuccess>(value),
         ("syncNow", Part::Error) => through::<ActionFailed>(value),
         ("say", Part::Payload) => through::<SayPayload>(value),
         ("say", Part::Chunk) => through::<AguiEvent>(value),
+        ("runDetail", Part::Payload) => through::<crate::generated::RunDetailPayload>(value),
+        ("runDetail", Part::Chunk) => through::<crate::generated::KeptRecord>(value),
+        ("runDetail", Part::Error) => through::<ActionFailed>(value),
+        ("artefacts", Part::Payload) => through::<crate::generated::ArtefactsPayload>(value),
+        ("artefacts", Part::Done) => through::<crate::generated::ArtefactCollection>(value),
+        ("artefactSearch", Part::Payload) => {
+            through::<crate::generated::ArtefactSearchPayload>(value)
+        }
+        ("artefactSearch", Part::Done) => through::<crate::generated::FlockArtefacts>(value),
+        ("artefactRead", Part::Payload) => through::<crate::generated::ArtefactReadPayload>(value),
+        ("artefactRead", Part::Done) => through::<crate::generated::RunFile>(value),
+        ("artefactSeen", Part::Payload) => through::<crate::generated::ArtefactSeenPayload>(value),
+        ("artefactSeen", Part::Done) => through::<crate::generated::Artefact>(value),
+        ("artefactRegister", Part::Payload) => {
+            through::<crate::generated::ArtefactRegisterPayload>(value)
+        }
+        ("artefactImport", Part::Payload) => {
+            through::<crate::generated::ArtefactImportPayload>(value)
+        }
+        ("artefactRegister" | "artefactImport", Part::Done) => {
+            through::<crate::generated::ArtefactRegistered>(value)
+        }
+        (
+            "artefacts" | "artefactSearch" | "artefactRead" | "artefactSeen" | "artefactRegister"
+            | "artefactImport",
+            Part::Error,
+        ) => through::<ActionFailed>(value),
         _ => Err(serde::de::Error::custom(format!(
             "{tag}'s {part:?} has no Rust type"
         ))),

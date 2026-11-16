@@ -11,6 +11,7 @@ import * as AiError from "effect/ai/AiError";
 import * as Tool from "effect/ai/Tool";
 import * as Toolkit from "effect/ai/Toolkit";
 import { ActionSchema } from "./actions";
+import { RegisterArtefact } from "./artefact-model";
 import {
   ASKED_KINDS,
   headerSentence,
@@ -73,6 +74,12 @@ export const ProposeInput = Schema.Struct({
  */
 const SettleSchema = Schema.Union([
   Schema.Struct({
+    ...RegisterArtefact.fields,
+    kind: Schema.Literal("artefact_register"),
+    run: Schema.String,
+    artefactKind: RegisterArtefact.fields.kind,
+  }),
+  Schema.Struct({
     kind: Schema.Literal("confirm"),
     proposal: Schema.String,
     /** The hash of exactly those actions, as `collie_receipts` lists it beside the id. */
@@ -88,9 +95,24 @@ const SettleSchema = Schema.Union([
   }),
   /** A finished Run's report acknowledged, for every board in the Flock. */
   Schema.Struct({ kind: Schema.Literal("seen"), run: Schema.String }),
+  Schema.Struct({
+    kind: Schema.Literal("artefact_seen"),
+    run: Schema.String,
+    id: Schema.String,
+    revision: Schema.Int,
+  }),
+  Schema.Struct({ kind: Schema.Literal("artefact_unseen"), run: Schema.String, id: Schema.String }),
 ]);
 export type Settle = Schema.Schema.Type<typeof SettleSchema>;
-export const SETTLE_KINDS = ["confirm", "decline", "disposition", "seen"] as const;
+export const SETTLE_KINDS = [
+  "artefact_register",
+  "confirm",
+  "decline",
+  "disposition",
+  "seen",
+  "artefact_seen",
+  "artefact_unseen",
+] as const;
 
 const AskedInput = Schema.Struct({
   actions: Schema.Array(Schema.Union([ActionSchema, SettleSchema])),
@@ -199,7 +221,42 @@ const collieTool = <const Name extends string, P extends Schema.Constraint>(
     .annotate(Tool.Title, options.title)
     .annotate(Tool.Readonly, options.readOnly);
 
+/** Whether a `collie_artefacts` call searches across Runs rather than reading one Run's material. */
+export const searchesArtefacts = (input: {
+  readonly run?: string;
+  readonly query?: string;
+  readonly kind?: string;
+  readonly role?: string;
+  readonly unseen?: boolean;
+  readonly cursor?: string;
+  readonly limit?: number;
+}) =>
+  input.run === undefined ||
+  Arr.some(
+    [input.query, input.kind, input.role, input.unseen, input.cursor, input.limit],
+    (given) => given !== undefined,
+  );
+
 export const CollieTools = Toolkit.make(
+  collieTool("collie_artefacts", {
+    readOnly: true,
+    title: "A Run's retained material",
+    description:
+      "List a Run's attachments, plan, evidence and handoffs without marking them seen. Without run, or with query, kind, role, unseen, cursor or limit, search retained material across Runs and Machines instead: by words in a title, description, URL or source path (not file contents); run then filters to one Run, as <installation>:<run> or <machine>:<run> where the bare id is on two Machines; a page names each Machine not searched and Runs not yet indexed, and next is the cursor for more. Give id to inspect metadata; give id and revision to read an immutable part as base64. refresh reconciles source files. Use collie_do artefact_seen with the inspected revision or artefact_unseen to change the receipt. To hand over a file you made, collie_do artefact_register with run and an absolute path: the host keeps a copy and follows later changes; a retry with the same path returns the same artefact.",
+    parameters: Schema.Struct({
+      run: Schema.optionalKey(Schema.String),
+      id: Schema.optionalKey(Schema.String),
+      revision: Schema.optionalKey(Schema.Int),
+      offset: Schema.optionalKey(Schema.Int),
+      refresh: Schema.optionalKey(Schema.Boolean),
+      query: Schema.optionalKey(Schema.String),
+      kind: Schema.optionalKey(Schema.String),
+      role: Schema.optionalKey(Schema.String),
+      unseen: Schema.optionalKey(Schema.Boolean),
+      cursor: Schema.optionalKey(Schema.String),
+      limit: Schema.optionalKey(Schema.Int),
+    }),
+  }),
   collieTool("collie_herd", {
     readOnly: true,
     title: "The Herd",
@@ -403,6 +460,8 @@ export type ToolName = keyof typeof CollieTools.tools;
 
 /** What each tool says it takes when it refuses what it was given. */
 export const TAKES: Record<ToolName, string> = {
+  collie_artefacts:
+    'It takes {"run":"<run id>","id":"<optional artefact id>","revision":1,"offset":0,"refresh":false}, or to search {"query":"<words>","run":"<optional run>","kind":"<optional>","role":"<optional>","unseen":true,"cursor":"<optional>","limit":50}.',
   collie_herd: 'It takes nothing, or {"machine": "<name>"}.',
   collie_run: `It takes {"run": "<run id>"}, or nothing at all for the board's selection.`,
   collie_workspaces: "It takes nothing.",

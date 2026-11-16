@@ -27,6 +27,7 @@ import { listTasks } from "./task";
 import { nowIso } from "./time";
 import { sweep, sweeping, type Sweeper } from "./cleanup";
 import { keepDiffs } from "./run-detail";
+import { Artefacts } from "./artefacts";
 
 /** The Runs still going whose drift was escalated to the human, by constraint. */
 const escalatedDrift = Effect.fn("SideJobs.escalatedDrift")(function* (
@@ -250,6 +251,14 @@ export const sideJobs = <E, R>(opts: {
   return Effect.flatMap(Effect.cachedWithTTL(liveHerds(herdr, env), SESSIONS_EVERY), (herds) =>
     Effect.all(
       [
+        every(
+          "30 seconds",
+          Effect.gen(function* () {
+            const catalogue = yield* Artefacts;
+            const { runs } = yield* opts.board;
+            yield* catalogue.pass(runs);
+          }),
+        ),
         every(
           MERGES_EVERY,
           Effect.gen(function* () {
