@@ -767,7 +767,11 @@ const agentStarts = () =>
         ),
       ),
     );
-type Reached = Effect.Effect<boolean, never, WorkflowEngine.WorkflowEngine | FileSystem.FileSystem>;
+type Reached = Effect.Effect<
+  boolean,
+  never,
+  WorkflowEngine.WorkflowEngine | Agents | FileSystem.FileSystem
+>;
 const suspended: Reached = Effect.gen(function* () {
   const engine = yield* WorkflowEngine.WorkflowEngine;
   const id = yield* work.executionId({ runId: "r1", input: { skip: false } });
@@ -832,8 +836,29 @@ test(
           Effect.map((starts) => starts.length > 1),
           Effect.orElseSucceed(() => false),
         );
+        // What the host does once core reports the terminal gone.
+        let reported = false;
+        const lossReported = Effect.suspend(() =>
+          reported
+            ? Effect.void
+            : ((reported = true),
+              Effect.flatMap(Agents, (agents) =>
+                agents.resumeLost("r1", {
+                  running: Effect.succeed(true),
+                  authority: Effect.succeed({ created: null, roaming: false, started: null }),
+                  questions: {
+                    ask: () => Effect.void,
+                    asked: Effect.succeed([]),
+                    close: () => Effect.void,
+                  },
+                }),
+              )),
+        );
         yield* until(
-          Effect.map(Effect.all([suspended, restarted]), (one) => Arr.some(one, Boolean)),
+          Effect.andThen(
+            lossReported,
+            Effect.map(Effect.all([suspended, restarted]), (one) => Arr.some(one, Boolean)),
+          ),
           { stopMs: 25_000 },
           true,
         );

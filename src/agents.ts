@@ -3459,6 +3459,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
 
   /** The agents the host is starting again after core lost them, until each has started. */
   const comingBack = new Map<string, Deferred.Deferred<void>>();
+  /** Why the host could not start a lost agent again, until its collection parks on it. */
+  const refusedStarts = new Map<string, string>();
   /** Agents whose step went in with their launch, so their turn began unwatched. */
   const givenAtLaunch = new Set<string>();
   const resuming = Semaphore.makeUnsafe(1);
@@ -3683,10 +3685,17 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
                     relaunch(runId, agent, launches, { agents: listing.value, listedAt }, run),
                   ).pipe(
                     Effect.catch((cause) =>
-                      log(
-                        runId,
-                        `${agent}: could not be started again on core (${isParked(cause) ? cause.reason : reason(cause)})`,
-                      ).pipe(Effect.as([])),
+                      Effect.sync(() => {
+                        if (isParked(cause)) refusedStarts.set(agent, cause.reason);
+                      }).pipe(
+                        Effect.andThen(
+                          log(
+                            runId,
+                            `${agent}: could not be started again on core (${isParked(cause) ? cause.reason : reason(cause)})`,
+                          ),
+                        ),
+                        Effect.as([]),
+                      ),
                     ),
                   )),
                 );
@@ -3764,6 +3773,13 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         if (yield* fs.exists(usageWaitPath(ask)).pipe(Effect.orElseSucceed(() => true)))
           return false;
         const agent = yield* nameFor(ask);
+        const refused = refusedStarts.get(agent);
+        if (refused !== undefined) {
+          refusedStarts.delete(agent);
+          // Resumed, it is started again with its step, as one ended on purpose is.
+          yield* fs.remove(startedPath(ask.runId, agent), { force: true }).pipe(Effect.ignore);
+          return yield* new AgentParked({ operation: ask.operation, reason: refused });
+        }
         const lost = yield* lostServer(compactionDeps(host, ask.runId), agent);
         if (onlyDeadServer && lost === null) return false;
         const completed = waitForOutput(ask.output, unless ?? null, {
