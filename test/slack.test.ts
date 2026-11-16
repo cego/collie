@@ -61,6 +61,30 @@ test("a missing_scope reaction asks for a re-sign-in instead of failing the revi
     }),
   ));
 
+test("a refused reaction names only the reactions Slack lacks, not the ones it holds", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fake = fakeSlack();
+      const target = "https://gitlab.cego.dk/mk/collie/-/merge_requests/7";
+      fake.messages([{ channel: "C456", ts: "1794474000.000001", text: `Review ${target}` }]);
+      const file = `${yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()}/slack.json`;
+      const reconcile = (wanted: ReadonlyArray<string>) =>
+        reconcileReviewSlack({
+          file,
+          url: target,
+          created: Effect.succeed("2026-11-11T08:00:00Z"),
+          wanted,
+          api: Effect.succeed(slackApi("xoxp-fixture", fake.client)),
+        });
+      yield* reconcile(["eyes"]);
+      fake.refuse("token_expired", "reactions.add");
+      expect(yield* reconcile(["memo"])).toBe(
+        "Slack missing :memo:: Slack reactions.add: token_expired; sign in again in Desktop Settings › Connections",
+      );
+      expect(fake.reactions()).toEqual(["eyes"]);
+    }),
+  ));
+
 test("a user token reads its workspace and user; invalid_auth refuses without logging it", () =>
   runEffect(
     Effect.gen(function* () {

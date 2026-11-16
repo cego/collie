@@ -190,8 +190,9 @@ export const slackApi = (token: string, client?: HttpClient.HttpClient) => {
         } while (++page <= pages);
         return matches;
       }),
-    reconcile: (channel: string, ts: string, wanted: ReadonlyArray<string>) =>
-      Effect.gen(function* () {
+    reconcile: (channel: string, ts: string, wanted: ReadonlyArray<string>) => {
+      const missing = new Set(wanted);
+      return Effect.gen(function* () {
         const owner = yield* call("auth.test", SlackTokenOwner);
         const got = yield* call("reactions.get", Schema.Struct({ message: Message }), {
           channel,
@@ -200,20 +201,21 @@ export const slackApi = (token: string, client?: HttpClient.HttpClient) => {
         });
         for (const name of wanted) {
           if (
-            Arr.some(
+            !Arr.some(
               got.message.reactions ?? [],
               (one) => one.name === name && one.users.includes(owner.user_id),
             )
           )
-            continue;
-          yield* call("reactions.add", Schema.Struct({}), { channel, timestamp: ts, name }).pipe(
-            Effect.catchIf(
-              (reason) => reason === "Slack reactions.add: already_reacted",
-              () => Effect.succeed({}),
-            ),
-          );
+            yield* call("reactions.add", Schema.Struct({}), { channel, timestamp: ts, name }).pipe(
+              Effect.catchIf(
+                (reason) => reason === "Slack reactions.add: already_reacted",
+                () => Effect.succeed({}),
+              ),
+            );
+          missing.delete(name);
         }
-      }),
+      }).pipe(Effect.mapError((reason) => ({ reason, missing: [...missing] })));
+    },
     post: (channel: string, text: string) =>
       call("chat.postMessage", Schema.Struct({ channel: Schema.String, ts: Schema.String }), {
         channel,

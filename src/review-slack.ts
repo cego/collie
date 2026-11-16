@@ -12,7 +12,6 @@ const Correlation = Schema.Union([
 const State = Schema.Struct({
   wanted: Schema.Array(Schema.String),
   message: Schema.optionalKey(Correlation),
-  /** What the card says beside the wait, while Slack lacks a wanted reaction. */
   trouble: Schema.optional(Schema.String),
 });
 const StateJson = Schema.fromJsonString(State);
@@ -73,10 +72,11 @@ export const reconcileReviewSlack = (options: {
         yield* fs.rename(`${options.file}.new`, options.file);
       }).pipe(Effect.orDie);
     yield* keep();
-    const reactions = Arr.join(
-      Arr.map(state.wanted, (one) => `:${one}:`),
-      " ",
-    );
+    const named = (reactions: ReadonlyArray<string>) =>
+      Arr.join(
+        Arr.map(reactions, (one) => `:${one}:`),
+        " ",
+      );
     const outcome = yield* Effect.gen(function* () {
       const api = yield* options.api;
       if (state.message === undefined) {
@@ -129,10 +129,12 @@ export const reconcileReviewSlack = (options: {
       if ("why" in state.message)
         return { said: state.message.why, trouble: `No Slack reaction: ${state.message.why}` };
       yield* api.reconcile(state.message.channel, state.message.ts, state.wanted);
-      return { said: `Slack: ${reactions}`, trouble: undefined };
+      return { said: `Slack: ${named(state.wanted)}`, trouble: undefined };
     }).pipe(
-      Effect.catch((reason) => {
-        const said = `Slack missing ${reactions}: ${reason}; sign in again in Desktop Settings › Connections`;
+      Effect.catch((failure) => {
+        const { reason, missing } =
+          typeof failure === "string" ? { reason: failure, missing: state.wanted } : failure;
+        const said = `Slack missing ${named(missing)}: ${reason}; sign in again in Desktop Settings › Connections`;
         return Effect.succeed({ said, trouble: said });
       }),
     );
