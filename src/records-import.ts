@@ -28,6 +28,7 @@ import {
   RUN_RECORDS_MIGRATION_ID,
   RUNNING_CHECK,
   TEXT_JOURNALS,
+  keepStepTimes,
   trimStepTimes,
 } from "./run-records";
 
@@ -288,16 +289,15 @@ export const importRunRecords = Effect.fn("RecordsImport.runRecords")(function* 
         VALUES (${row.control}, ${row.run}, ${row.key}, ${row.data})
       `;
   }
-  // An older build kept each Step's last ten times here, past the Runs that cleanup retired;
-  // a Run still admitted gives its own from its Step lines.
+  yield* keepStepTimes(null);
+  // An older build kept each Step's last ten times here, past the Runs that cleanup retired.
   const kept = yield* fs
     .readFileString(path.join(stateDir, "step-durations.json"))
     .pipe(orMissing(""));
   for (const one of Option.getOrElse(Schema.decodeOption(KeptStepTimes)(kept), () => []))
     yield* sql`
-      INSERT INTO collie_step_times (workflow, step, at, ms)
-      SELECT ${one.workflow}, ${one.step}, ${one.at}, ${Math.round(one.ms)}
-      WHERE NOT EXISTS (SELECT 1 FROM collie_runs WHERE run = ${one.run})
+      INSERT OR IGNORE INTO collie_step_times (run, key, workflow, step, at, ms)
+      VALUES (${one.run}, ${one.key}, ${one.workflow}, ${one.step}, ${one.at}, ${Math.round(one.ms)})
     `;
   yield* trimStepTimes;
 });
@@ -308,6 +308,7 @@ const KeptStepTimes = Schema.fromJsonString(
       workflow: Schema.String,
       step: Schema.String,
       run: Schema.String,
+      key: Schema.String,
       at: Schema.String,
       ms: Schema.Finite,
     }),

@@ -45,7 +45,7 @@ import {
   importRunRecords,
 } from "./records-import";
 import { StoreWrites } from "./store-writes";
-import { keepStepTimes, RUN_RECORDS_MIGRATION } from "./run-records";
+import { RUN_RECORDS_MIGRATION } from "./run-records";
 import { RequestConflict, RunReport, type Solution } from "./board-model";
 import { nowIso } from "./time";
 import { Observed, WatchCursor, Woke } from "./mr-watch-model";
@@ -682,10 +682,13 @@ const migrations = (imports: {
     yield* sql`CREATE INDEX collie_controls_run ON collie_controls (run)`;
     yield* sql`
       CREATE TABLE collie_step_times (
+        run TEXT NOT NULL,
+        key TEXT NOT NULL,
         workflow TEXT NOT NULL,
         step TEXT NOT NULL,
         at TEXT NOT NULL,
-        ms INTEGER NOT NULL
+        ms INTEGER NOT NULL,
+        PRIMARY KEY (run, key)
       )
     `;
     yield* imports.runRecords;
@@ -1213,10 +1216,6 @@ function makeStore(
                 yield* sql`DELETE FROM collie_narratives WHERE run = ${run}`.pipe(Effect.orDie);
                 yield* sql`DELETE FROM collie_narrative_work WHERE run = ${run}`.pipe(Effect.orDie);
                 yield* sql`DELETE FROM collie_watches WHERE run = ${run}`.pipe(Effect.orDie);
-                yield* keepStepTimes(run).pipe(
-                  Effect.provideService(SqlClient.SqlClient, sql),
-                  Effect.orDie,
-                );
                 yield* sql`DELETE FROM collie_run_lines WHERE run = ${run}`.pipe(Effect.orDie);
                 yield* sql`DELETE FROM collie_run_facts WHERE run = ${run}`.pipe(Effect.orDie);
                 yield* sql`DELETE FROM collie_run_activity WHERE run = ${run}`.pipe(Effect.orDie);

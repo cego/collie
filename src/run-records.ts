@@ -211,13 +211,13 @@ const stepSamplesOf = `WITH leaves AS (
     SELECT run, key, min(seq) AS seq FROM collie_run_lines
     WHERE journal = '${STEPS}' AND kind = 'enter' AND (?1 IS NULL OR run = ?1) GROUP BY run, key
   ), timed AS (
-    SELECT leaves.workflow, json_extract(e.line, '$.step.id') AS step, leaves.at,
+    SELECT leaves.run, leaves.key, leaves.workflow, json_extract(e.line, '$.step.id') AS step, leaves.at,
       CAST(round((julianday(leaves.at) - julianday(json_extract(e.line, '$.at'))) * 86400000) AS INTEGER) AS ms
     FROM leaves
     JOIN entered ON entered.run = leaves.run AND entered.key = leaves.key
     JOIN collie_run_lines e ON e.run = entered.run AND e.journal = '${STEPS}' AND e.seq = entered.seq
     WHERE leaves.nth = 1
-  ), samples AS (SELECT workflow, step, at, ms FROM timed WHERE ms >= 0)`;
+  ), samples AS (SELECT run, key, workflow, step, at, ms FROM timed WHERE ms >= 0)`;
 
 /**
  * `records` for one pass over these Runs: the first read of a journal, a fact, a control's
@@ -269,14 +269,15 @@ export const readAhead = (records: RunRecordsApi, runs: ReadonlyArray<string>): 
 };
 
 /**
- * Keeps a Run's Step times past its records, for the usual times its workflow's next Runs
- * are measured against: each Step keeps its latest ten.
+ * Keeps `run`'s Step times, or every Run's for null, as written, for the usual times its
+ * workflow's Runs are measured against; they outlive the Run, and each Step keeps its latest ten.
  */
-export const keepStepTimes = (run: string) =>
+export const keepStepTimes = (run: string | null) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql.unsafe(
-      `${stepSamplesOf} INSERT INTO collie_step_times (workflow, step, at, ms) SELECT workflow, step, at, ms FROM samples`,
+      `${stepSamplesOf} INSERT OR REPLACE INTO collie_step_times (run, key, workflow, step, at, ms)
+        SELECT run, key, workflow, step, at, ms FROM samples`,
       [run],
     );
     yield* trimStepTimes;
@@ -373,6 +374,8 @@ export const runRecordsLayer = Layer.effect(RunRecords)(
                   VALUES (${run}, ${journal}, ${++seq}, ${line})
                 `;
               yield* worked(run, journal);
+              if (journal === STEPS)
+                yield* keepStepTimes(run).pipe(Effect.provideService(SqlClient.SqlClient, sql));
             }).pipe(sql.withTransaction, Effect.andThen(moved(run)), Effect.orDie),
       fact: (run, name) => readFact(run, name).pipe(Effect.orDie),
       factsOf: (runs, name) =>
@@ -415,20 +418,9 @@ export const runRecordsLayer = Layer.effect(RunRecords)(
               Effect.map((rows) => new Map(Arr.map(rows, (row) => [row.run, row.at] as const))),
               Effect.orDie,
             ),
-      stepSamples: sql
-        .unsafe<{ readonly workflow: string; readonly step: string; readonly ms: number }>(
-          `${stepSamplesOf}, every AS (
-            SELECT workflow, step, at, ms FROM samples
-            UNION ALL SELECT workflow, step, at, ms FROM collie_step_times
-          ), ranked AS (
-            SELECT workflow, step, ms,
-              row_number() OVER (PARTITION BY workflow, step ORDER BY at DESC) AS nth
-            FROM every
-          )
-          SELECT workflow, step, ms FROM ranked WHERE nth <= ${STEP_SAMPLES}`,
-          [null],
-        )
-        .pipe(Effect.orDie),
+      stepSamples: sql<{ readonly workflow: string; readonly step: string; readonly ms: number }>`
+        SELECT workflow, step, ms FROM collie_step_times
+      `.pipe(Effect.orDie),
       touch: (run) => worked(run, "").pipe(Effect.andThen(moved(run)), Effect.orDie),
       control: (control, run, key = "") =>
         sql<{ readonly data: string }>`
