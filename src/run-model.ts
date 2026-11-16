@@ -27,8 +27,6 @@ import { workSourceOf } from "./strategies";
 
 /** A path under a Run's own directories, by its Run. */
 const OWN_DIR = /^(?:runs|agents|evidence)\/([^/]*)/;
-/** A control file beside them, `<control>.<id>`, by what follows its first dot. */
-const CONTROL_FILE = /^[^/.]*\.([^/]*)$/;
 /** Marks a recursive listing's key in the cache of directory listings. */
 const RECURSIVE = "\0recursive";
 
@@ -164,19 +162,14 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     if (facts && at > (factual.get(run) ?? 0)) factual.set(run, at);
   };
 
-  /**
-   * `run/<id>` for a path under a Run's own directories or one of its control files,
-   * `<control>.<id>` beside them; `shared` for the rest of the state directory.
-   */
+  /** `run/<id>` for a path under a Run's own directories; `shared` for the rest of the state directory. */
   const underDir = Str.startsWith(`${dir}/`);
   const below = Str.slice(dir.length + 1);
   const groupOf = (path: string) => {
     if (!underDir(path)) return null;
     const rest = below(path);
     const own = OWN_DIR.exec(rest);
-    if (own !== null) return `run/${own[1]}`;
-    const control = CONTROL_FILE.exec(rest);
-    return control !== null && revisions.has(control[1]!) ? `run/${control[1]}` : "shared";
+    return own !== null ? `run/${own[1]}` : "shared";
   };
   /** Each group's reads, built when the group is first read. */
   const groups = new Map<string, ReturnType<typeof readsOf>>();
