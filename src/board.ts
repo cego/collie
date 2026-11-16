@@ -13,7 +13,7 @@ import * as Rec from "effect/Record";
 import { Clock, Effect, FileSystem, Option, Path, Result, Schema, flow } from "effect";
 import { readAudit } from "./audit";
 import { planDirOf } from "./run-detail";
-import { RunRecords } from "./run-records";
+import { readAhead, RunRecords } from "./run-records";
 import { openReports, readDrift } from "./drift";
 import { describeAction } from "./lines";
 import type { PickItem } from "./inputs";
@@ -69,6 +69,7 @@ import {
   Answered,
   flowActions,
   mrId,
+  mrIdProject,
   waitsOnOf,
   mrLabel,
   mrWords,
@@ -1008,7 +1009,8 @@ const ledgerOf = Effect.fn("Board.ledgerOf")(function* (
           ? line.successor.work.mr
           : line.ref === ""
             ? null
-            : yield* mrIdIn(line.ref, run.cwd, shell);
+            : (mrId(line.ref, { project: carried === null ? null : mrIdProject(carried) }) ??
+              (yield* mrIdIn(line.ref, run.cwd, shell)));
       const local = yield* Effect.forEach(
         refRuns(line.ref, machine),
         Effect.fnUntraced(function* (word) {
@@ -1153,7 +1155,21 @@ const nextChange = (then: number, now: number) => {
  * Herd-wide on purpose: the board is one board per Herd (ADR-0009), and a workspace is a
  * filter over it rather than a board of its own.
  */
-export const buildBoard = Effect.fn("Board.build")(function* (opts: {
+export const buildBoard = Effect.fn("Board.build")(function* (opts: BoardOptions) {
+  const runs = newestFirst(opts.runs ?? (yield* listRuns(opts.env)));
+  const records = yield* RunRecords;
+  return yield* drawBoard({ ...opts, runs }).pipe(
+    Effect.provideService(
+      RunRecords,
+      readAhead(
+        records,
+        Arr.map(runs, (run) => run.id),
+      ),
+    ),
+  );
+});
+
+interface BoardOptions {
   env: PluginEnv;
   /** What herdr says is alive, so a card can say who is on it. */
   alive?: ReadonlyArray<AgentInfo>;
@@ -1181,7 +1197,9 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   head?: (run: RunFacts) => Effect.Effect<string | null>;
   /** Cards from the last build, reused where nothing they were derived from moved. */
   cards?: KeptCards;
-}) {
+}
+
+const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions) {
   const { stateDir } = opts.env;
   const fs = yield* FileSystem.FileSystem;
   const { boundary } = yield* Foreground;
@@ -1533,7 +1551,6 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
               )
             : null;
         const open = openReports(yield* readDrift(leader.dir).pipe(Effect.orElseSucceed(() => [])));
-        const movement = yield* branchMovement(leader);
         const task = leader.task === null ? null : (tasks.get(leader.task) ?? null);
         const { name, project } = namesOf(task?.label ?? "", leader);
         const started = Arr.filter(
@@ -1564,6 +1581,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           disposed: disposition !== null,
           asking: decision !== null,
         });
+        const movement = landed ? null : yield* branchMovement(leader);
         /** A merge request's checks and readiness, read in the Run `merging`. */
         const judged = Effect.fnUntraced(function* (
           id: string | null,

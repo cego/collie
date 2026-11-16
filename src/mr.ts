@@ -19,6 +19,7 @@ import {
   mrPath,
   mrTarget,
   parseMrTarget,
+  readMrRef,
 } from "./board-model";
 import { FORGES, forgeOf, forgeOfHost, type Forge } from "./forge/forge";
 import type { ForgeHttp } from "./forge/http";
@@ -290,6 +291,9 @@ export function mrIdIn<R>(
   return Effect.gen(function* () {
     const id = mrId(mr);
     if (id !== null) return id;
+    const said = Str.trim(mr);
+    if (readMrRef(said, { project: null }) === null && readMrRef(`mr:${said}`) === null)
+      return null;
     const known = checkouts.get(cwd);
     const project = known ?? (yield* projectHere(cwd, run));
     if (project !== null) checkouts.set(cwd, project);

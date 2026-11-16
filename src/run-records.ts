@@ -219,6 +219,47 @@ const stepSamplesOf = `WITH leaves AS (
   ), samples AS (SELECT workflow, step, at, ms FROM timed WHERE ms >= 0)`;
 
 /**
+ * `records` for one pass over these Runs: the first read of a journal, a fact or activity for
+ * any of them reads it for all of them, in one query, and the pass reads that.
+ */
+export const readAhead = (records: RunRecordsApi, runs: ReadonlyArray<string>): RunRecordsApi => {
+  const ids = new Set(runs);
+  const once = <A>(read: (name: string) => Effect.Effect<A>) => {
+    const reads = new Map<string, Effect.Effect<A>>();
+    return (name: string) =>
+      Effect.suspend(() => {
+        const known = reads.get(name);
+        if (known !== undefined) return known;
+        return Effect.flatMap(Effect.cached(read(name)), (read) => {
+          reads.set(name, read);
+          return read;
+        });
+      });
+  };
+  const journal = once((name) => records.linesOf(runs, name));
+  const fact = once((name) => records.factsOf(runs, name));
+  const activity = once(() => records.activity(runs));
+  return {
+    ...records,
+    lines: (run, name) =>
+      ids.has(run)
+        ? Effect.map(journal(name), (all) => all.get(run) ?? [])
+        : records.lines(run, name),
+    fact: (run, name) =>
+      ids.has(run)
+        ? Effect.map(fact(name), (all) => all.get(run) ?? null)
+        : records.fact(run, name),
+    activity: (some) =>
+      Arr.every(some, (run) => ids.has(run))
+        ? Effect.map(
+            activity(""),
+            (all) => new Map(Arr.filter([...all], ([run]) => some.includes(run))),
+          )
+        : records.activity(some),
+  };
+};
+
+/**
  * Keeps a Run's Step times past its records, for the usual times its workflow's next Runs
  * are measured against: each Step keeps its latest ten.
  */
