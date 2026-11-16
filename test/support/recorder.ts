@@ -4,7 +4,6 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import {
-  Clock,
   Config,
   Effect,
   Exit,
@@ -96,7 +95,6 @@ export class Rig {
       const pathValue = yield* Config.String("PATH").pipe(Config.withDefault(""));
       const rig = new Rig(root, path, pathValue, yield* armTripwire(root));
       yield* rig.setup();
-      yield* rig.startCore().pipe(Effect.orDie);
       return rig;
     });
   }
@@ -163,10 +161,7 @@ export class Rig {
     };
     return Effect.gen(function* () {
       const scope = yield* Scope.make();
-      // A process of its own: its turns take real time, whatever clock the test runs on.
-      const served = yield* serveFakeHc(socketPath, logPath, scope, queuePath).pipe(
-        Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()),
-      );
+      const served = yield* serveFakeHc(socketPath, logPath, scope, queuePath);
       keep(scope, served);
       return served;
     });
