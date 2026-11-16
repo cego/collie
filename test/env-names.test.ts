@@ -46,7 +46,6 @@ test("a front door and its host find the state directory COLLIE_STATE_DIR names"
 test("Herdr 1's names for the root and the state directory are not read", () =>
   expectHosted(
     (dir) => ({
-      COLLIE_ROOT: ROOT,
       HERDR_PLUGIN_ROOT: "/nonexistent/herdr-root",
       HERDR_PLUGIN_STATE_DIR: dir,
     }),

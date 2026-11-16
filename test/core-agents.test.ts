@@ -4,6 +4,7 @@
 
 import { launchedAt } from "./support/records";
 import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -229,6 +230,32 @@ test("a Run on a core Machine launches, prompts, reads and stops its Claude agen
       expect(read).toBeGreaterThan(sent);
       expect(killed).toBeGreaterThan(read);
       expect(Arr.filter(onCore, (call) => call.cmd === "terminal.get")).toEqual([]);
+    }),
+  ));
+
+test("an agent on core is started with Collie's own names for its root and state directory, and no Herdr 1 name", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const core = yield* rig.startCore();
+      yield* quietConfig;
+      yield* rig.queueOutputs([{ verdict: "clean" }]);
+      const env = coreOnly(core);
+      yield* session(
+        Effect.gen(function* () {
+          yield* work.execute({ runId: "r1", input: {} }).pipe(Effect.result);
+          yield* (yield* Agents).halt("r1");
+        }),
+        env,
+      );
+      const launched = Option.getOrUndefined(
+        Arr.findFirst(yield* rig.calls(), (call) => call.cmd === "terminal.run"),
+      )?.params?.env;
+      const names = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.String))(launched);
+      expect(names).toMatchObject({
+        COLLIE_STATE_DIR: rig.pluginEnv(env).stateDir,
+        COLLIE_ROOT: rig.pluginEnv(env).pluginRoot,
+      });
+      expect(Arr.filter(Rec.keys(names), Str.startsWith("HERDR_"))).toEqual([]);
     }),
   ));
 
