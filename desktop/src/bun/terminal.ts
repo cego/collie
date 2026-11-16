@@ -148,7 +148,6 @@ export const attachCore = Effect.fn("Desktop.attachCore")(function* (
           Effect.andThen(hc.send(one.channel, Kind.CREDIT, u32(one.bytes))),
           Effect.ignore,
         );
-  // xterm.js scrolls a core terminal's history itself, and types its own mouse reports.
   const send = (command: TerminalCommand): Effect.Effect<void> => {
     switch (command.type) {
       case "terminal.input":
@@ -160,8 +159,6 @@ export const attachCore = Effect.fn("Desktop.attachCore")(function* (
         return hc
           .send(channel.id, Kind.RESIZE, cells(command.cols, command.rows))
           .pipe(Effect.ignore);
-      default:
-        return Effect.void;
     }
   };
   return {

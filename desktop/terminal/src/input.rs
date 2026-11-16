@@ -1,10 +1,7 @@
-//! What the human does in a pane's terminal, as herdr's controller is told it, and the little
-//! the view reads off a line it draws: where its links are (`desktop/src/shared/terminal-input.ts`).
+//! What the human does in a pane's terminal, and the little the view reads off a line it
+//! draws: where its links are (`desktop/src/shared/terminal-input.ts`).
 
-use collie_desktop_protocol::generated::{
-    At, Button, Command, Direction, TerminalMouse, TerminalMouseAction, TerminalMouseType,
-    TerminalScroll, TerminalScrollType,
-};
+use collie_desktop_protocol::generated::At;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Held {
@@ -31,11 +28,6 @@ pub struct Screen {
     pub rows: u16,
 }
 
-/// herdr's modifier bits: Shift 1, Ctrl 2, Alt 4.
-fn modifiers_of(held: Held) -> i64 {
-    i64::from(held.shift) | i64::from(held.ctrl) << 1 | i64::from(held.alt) << 2
-}
-
 /// The zero-based cell under the pointer, kept inside the screen.
 pub fn cell_at(pointer: &Pointer, screen: &Screen) -> (i64, i64) {
     let clamp = |at: f64, size: u16| (at.floor() as i64).clamp(0, i64::from(size) - 1);
@@ -51,55 +43,7 @@ pub fn cell_at(pointer: &Pointer, screen: &Screen) -> (i64, i64) {
     )
 }
 
-/// A line of wheel is this many pixels of its delta.
-const WHEEL_LINE: f64 = 40.0;
-
-/// A wheel turn, as a scroll of the pane's own history at the cell under the pointer.
-pub fn scroll_of(delta_y: f64, pointer: &Pointer, screen: &Screen) -> Option<Command> {
-    if delta_y == 0.0 {
-        return None;
-    }
-    let (column, row) = cell_at(pointer, screen);
-    Some(Command::TerminalScroll(TerminalScroll {
-        r#type: TerminalScrollType::TerminalScroll,
-        direction: if delta_y < 0.0 {
-            Direction::Up
-        } else {
-            Direction::Down
-        },
-        lines: ((delta_y.abs() / WHEEL_LINE).round() as i64).max(1),
-        column,
-        row,
-        modifiers: modifiers_of(pointer.held),
-    }))
-}
-
-/// A press, release or drag of the mouse button a window event numbers as `button`, or none
-/// for a button herdr has no name for.
-pub fn mouse_of(
-    action: TerminalMouseAction,
-    button: u8,
-    pointer: &Pointer,
-    screen: &Screen,
-) -> Option<Command> {
-    let button = match button {
-        0 => Button::Left,
-        1 => Button::Middle,
-        2 => Button::Right,
-        _ => return None,
-    };
-    let (column, row) = cell_at(pointer, screen);
-    Some(Command::TerminalMouse(TerminalMouse {
-        r#type: TerminalMouseType::TerminalMouse,
-        action,
-        button,
-        column,
-        row,
-        modifiers: modifiers_of(pointer.held),
-    }))
-}
-
-/// A mouse report xterm.js writes itself; herdr is sent `terminal.mouse` instead.
+/// A mouse report xterm.js writes itself.
 pub fn is_mouse_report(text: &str) -> bool {
     let Some(report) = text.strip_prefix("\u{1b}[") else {
         return false;

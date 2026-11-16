@@ -338,32 +338,15 @@ export const WentToPane = Schema.Struct({
 });
 export type WentToPane = typeof WentToPane.Type;
 
-const Cell = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 const Positive = Schema.Int.check(Schema.isGreaterThan(0));
 
-/** What the human does in a pane's terminal, in herdr's controller's own words. */
+/** What the human does in a pane's terminal. */
 export const TerminalCommand = Schema.Union([
   Schema.Struct({ type: Schema.Literal("terminal.input"), text: Schema.String }),
   Schema.Struct({
     type: Schema.Literal("terminal.resize"),
     cols: Positive,
     rows: Positive,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("terminal.scroll"),
-    direction: Schema.Literals(["up", "down"]),
-    lines: Positive,
-    column: Cell,
-    row: Cell,
-    modifiers: Cell,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("terminal.mouse"),
-    action: Schema.Literals(["down", "up", "drag", "move"]),
-    button: Schema.Literals(["left", "right", "middle"]),
-    column: Cell,
-    row: Cell,
-    modifiers: Cell,
   }),
 ]);
 export type TerminalCommand = typeof TerminalCommand.Type;

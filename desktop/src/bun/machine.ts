@@ -501,7 +501,7 @@ export const collieSaid = (collie: ReadonlyArray<string>, args: ReadonlyArray<st
   );
 
 const Roster = Schema.Struct({
-  backend: Schema.Literals(["herdr", "core"]),
+  backend: Schema.Literal("core"),
   roster: Schema.Array(HerdrMachine),
 });
 

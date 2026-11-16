@@ -1195,8 +1195,6 @@ pub struct TerminalSendPayload {
 pub enum Command {
     TerminalInput(TerminalInput),
     TerminalResize(TerminalResize),
-    TerminalScroll(TerminalScroll),
-    TerminalMouse(TerminalMouse),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1222,68 +1220,6 @@ pub struct TerminalResize {
 pub enum TerminalResizeType {
     #[serde(rename = "terminal.resize")]
     TerminalResize,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TerminalScroll {
-    pub r#type: TerminalScrollType,
-    pub direction: Direction,
-    pub lines: i64,
-    pub column: i64,
-    pub row: i64,
-    pub modifiers: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum TerminalScrollType {
-    #[serde(rename = "terminal.scroll")]
-    TerminalScroll,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum Direction {
-    #[serde(rename = "up")]
-    Up,
-    #[serde(rename = "down")]
-    Down,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TerminalMouse {
-    pub r#type: TerminalMouseType,
-    pub action: TerminalMouseAction,
-    pub button: Button,
-    pub column: i64,
-    pub row: i64,
-    pub modifiers: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum TerminalMouseType {
-    #[serde(rename = "terminal.mouse")]
-    TerminalMouse,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum TerminalMouseAction {
-    #[serde(rename = "down")]
-    Down,
-    #[serde(rename = "up")]
-    Up,
-    #[serde(rename = "drag")]
-    Drag,
-    #[serde(rename = "move")]
-    Move,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum Button {
-    #[serde(rename = "left")]
-    Left,
-    #[serde(rename = "right")]
-    Right,
-    #[serde(rename = "middle")]
-    Middle,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
