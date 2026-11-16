@@ -89,8 +89,8 @@ test("migrate up: the first host imports every legacy record once, as written, a
         mr: "https://example.com/o/r/-/merge_requests/7",
         approved: "[]",
         steering: [
-          { name: "steering/progress/01-a.json", data: '{"ticket":"01"}' },
           { name: "steering/externals.run-a-implementer", data: "2" },
+          { name: "steering/progress/01-a.json", data: '{"ticket":"01"}' },
         ],
         missing: null,
       });
