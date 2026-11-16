@@ -33,7 +33,7 @@ import {
 } from "../src/board-model";
 import { appendStepLine, type StepLine, type StepMeta } from "../src/steps";
 import { machineName } from "../src/peers";
-import { nothingToLandFile } from "../src/standing";
+import { NOTHING_TO_LAND } from "../src/standing";
 import { writeStageProof } from "../src/shipping";
 import {
   Answered,
@@ -59,9 +59,12 @@ import {
   appendVerification,
   encodeVerifying,
   readVerifications,
+  VERIFYING,
+  verifyingOf,
   type Verification,
 } from "../src/verify";
 import { checkSentence, followLog } from "../src/checks";
+import { MEMORY_WAIT } from "../src/memory-wait";
 import { encodeCheckRecord } from "../src/check-processes";
 import { readEnv } from "../src/env";
 import type { AgentInfo } from "../src/herdr";
@@ -73,7 +76,7 @@ import { factsOfView, type RunFacts } from "../src/runs";
 import type { RunView } from "../src/engine";
 import type { TaskRecord } from "../src/task";
 import { memoryRecords, runEffect } from "./support/effect";
-import { hostRecords, madeRun, recordsAt } from "./support/records";
+import { hostRecords, hostRunRecords, madeRun, recordsAt } from "./support/records";
 import { RUNNING_CHECK, RunRecords } from "../src/run-records";
 import { exec } from "./support/command";
 import { collie, proves } from "./support/world";
@@ -1075,15 +1078,20 @@ test("a check Collie is running outranks what an idle agent last said", () =>
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
       const run = yield* madeRun(dir, { task: "task-1" });
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.writeFileString(`${run.dir}/verifying`, "typecheck-spilnu");
+      yield* marking(run, {
+        name: "typecheck-spilnu",
+        executable: "",
+        argv: [],
+        pass: "check",
+        revision: "",
+        started: "",
+      });
 
       const [view] = yield* board(env, [run], {
         alive: [agent("impl-1", "idle", "Code review findings application")],
         registered: [registered("impl-1", run.id)],
       });
 
-      // A marker in the old one-line shape still reads, as a name and nothing more.
       expect(view!.sentence).toBe("Running typecheck-spilnu.");
     }),
   ));
@@ -1182,7 +1190,7 @@ test("a Run is not quiet while its agent works, a check runs, or its agents writ
       const idle = yield* madeRun(dir, { id: "r-idle" });
       for (const run of [working, checking, writing, idle])
         yield* atTime(old, launched(dir, run.id, ["build"]));
-      yield* writtenAt(`${checking.dir}/verifying`, old);
+      yield* marking(checking, { started: old });
       yield* workedAt(writing.id, "2026-09-14T10:04:00Z");
 
       const views = yield* board(env, [working, checking, writing, idle], {
@@ -1520,14 +1528,14 @@ test("a Run that ended with nothing to file is finished, not waiting", () =>
 test("a Run that recorded it had nothing to land is finished, while another Run's branch still waits", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
+      const records = yield* RunRecords;
       const { dir, env } = yield* scratch();
       const succeeded = (id: string, task: string) =>
         madeRun(dir, { id, task, state: "succeeded", branch: `mk/${id}` });
       const nothing = yield* succeeded("r-nothing", "t-nothing");
-      yield* fs.writeFileString(nothingToLandFile(nothing.dir), "nothing to land\n");
+      yield* records.put(nothing.id, NOTHING_TO_LAND, "nothing to land\n");
       const shared = yield* succeeded("r-shared", "t-shared");
-      yield* fs.writeFileString(nothingToLandFile(shared.dir), "nothing to land\n");
+      yield* records.put(shared.id, NOTHING_TO_LAND, "nothing to land\n");
       const runs = [
         nothing,
         yield* succeeded("r-something", "t-something"),
@@ -1932,7 +1940,7 @@ test("an owed Task discloses a removed checkout and refreshes when it is restore
           root_pane_id: null,
         },
       });
-      const cards = { revision: () => 1, kept: new Map(), markers: new Map() };
+      const cards = { revision: () => 1, kept: new Map() };
       const read = () => board(env, [run], { ...unapproved(), cards });
       const [missing] = yield* read();
       expect(sectionOf(missing!)).toBe("waiting");
@@ -2125,7 +2133,7 @@ test("fresh green work preserves its declared Release title, revoked by a moved 
         expect.stringContaining("Release after review: Ready to release: mk/support!279"),
         expect.stringContaining("Release after review: Ready to release: mk/support!279"),
       ]);
-      const cards = { revision: () => 1, kept: new Map(), markers: new Map() };
+      const cards = { revision: () => 1, kept: new Map() };
       const cached = (now: string) =>
         board(env, [second], {
           mrStates: new Map([[M_ID, "open"]]),
@@ -3283,13 +3291,12 @@ test("a merge request whose target branch is another's source branch waits on it
     }),
   ));
 
-const waitingForMemory = (runDir: string) =>
+const waitingForMemory = (runId: string) =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
     const now = yield* Clock.currentTimeMillis;
-    yield* fs.makeDirectory(`${runDir}/memory-waits`, { recursive: true });
-    yield* fs.writeFileString(
-      `${runDir}/memory-waits/1-1.json`,
+    yield* (yield* RunRecords).setControl(
+      MEMORY_WAIT,
+      runId,
       yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
         what: 'collie verify "unit"',
         sentence: "waiting for memory on vm-mk: 2.1 of 62.0 GB available",
@@ -3298,6 +3305,7 @@ const waitingForMemory = (runDir: string) =>
         every: 15_000,
         asker: null,
       }).pipe(Effect.orDie),
+      "1-1.json",
     );
   }).pipe(Effect.orDie);
 
@@ -3314,7 +3322,7 @@ test("a fan-out's card says a Repo run waits for memory", () =>
         parent: "r-fan",
         repo: "web",
       });
-      yield* waitingForMemory(web.dir);
+      yield* waitingForMemory(web.id);
 
       const [view] = yield* board(env, [web, parent]);
 
@@ -3327,7 +3335,7 @@ test("a finished Run's card says a verify of it waits for memory", () =>
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
       const run = yield* madeRun(dir, { id: "r-done", task: "task-1", state: "succeeded" });
-      yield* waitingForMemory(run.dir);
+      yield* waitingForMemory(run.id);
 
       const [view] = yield* board(env, [run]);
 
@@ -3987,9 +3995,9 @@ const marking = Effect.fn("board.marking")(function* (
   run: RunFacts,
   over: Partial<Parameters<typeof encodeVerifying>[0]> = {},
 ) {
-  const fs = yield* FileSystem.FileSystem;
-  yield* fs.writeFileString(
-    `${run.dir}/verifying`,
+  yield* (yield* RunRecords).setControl(
+    VERIFYING,
+    run.id,
     encodeVerifying({
       name: "test",
       executable: "bun",
@@ -4152,8 +4160,9 @@ test(
             run: runId,
             pass: "gate",
           }).pipe(Effect.provide(recordsAt(world.state)));
-          yield* fs.writeFileString(
-            `${run.dir}/verifying`,
+          yield* hostRunRecords(() => world.state).setControl(
+            VERIFYING,
+            runId,
             encodeVerifying({
               name: "test",
               executable: "bun",
@@ -4317,9 +4326,10 @@ test(
           const log = `${run.evidence}/checks/unit.log`;
           yield* fs.makeDirectory(`${run.evidence}/checks`, { recursive: true });
           yield* fs.writeFileString(log, "compiling\n");
-          const marker = `${run.dir}/verifying`;
-          yield* fs.writeFileString(
-            marker,
+          const records = hostRunRecords(() => world.state);
+          yield* records.setControl(
+            VERIFYING,
+            runId,
             encodeVerifying({
               name: "unit",
               executable: "bun",
@@ -4355,7 +4365,7 @@ test(
             run: runId,
             log,
           }).pipe(Effect.provide(recordsAt(world.state)));
-          yield* fs.remove(marker);
+          yield* records.setControl(VERIFYING, runId, null);
           const followed = yield* Fiber.join(following);
 
           const none = yield* collie(world, ["run", "checks", runId, "--follow"]);
@@ -4534,9 +4544,9 @@ test("following a check hands on each line while the check is still running", ()
         () => Effect.succeed(Arr.join(said, "")),
         (text) => pipe(text, Str.includes("1 pass")),
       );
-      expect(yield* fs.exists(`${run.dir}/verifying`)).toBe(true);
+      expect(yield* verifyingOf(run.id)).not.toBeNull();
 
-      yield* fs.remove(`${run.dir}/verifying`);
+      yield* (yield* RunRecords).setControl(VERIFYING, run.id, null);
       expect(yield* Fiber.join(following)).toBeNull();
       expect(Arr.join(said, "")).toBe("1 pass\n");
     }),
@@ -4887,7 +4897,7 @@ test("an attended implement answered Finish keeps named Offers as CI becomes gre
         answered: [{ name: "next", prompt: "What next?", options: [], answer: "finish" }],
       });
       yield* appendVerification(implement.evidence, checked("test", M_HEAD));
-      const cards = { revision: () => 1, kept: new Map(), markers: new Map() };
+      const cards = { revision: () => 1, kept: new Map() };
       const read = (state: "running" | "passed") =>
         board(env, [implement], {
           cards,
@@ -5126,7 +5136,7 @@ test("a hold says who held it, as the card's held line does", () =>
 test("a wait for memory names the Machine short of it", () =>
   runEffect(
     Effect.gen(function* () {
-      const nodes = yield* waitingIn((run) => waitingForMemory(run.dir).pipe(Effect.as({})));
+      const nodes = yield* waitingIn((run) => waitingForMemory(run.id).pipe(Effect.as({})));
       expect(nodes[0]).toEqual({
         id: "build",
         state: "waiting",

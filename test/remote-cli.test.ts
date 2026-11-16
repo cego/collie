@@ -13,10 +13,10 @@ import { readCards } from "../src/cards";
 import { INTENT_FILE, readIntent } from "../src/intent";
 import { RunRecords } from "../src/run-records";
 import { appendLine } from "../src/steering";
-import { hostRecords, ledgerOf, recordsAt, registeredAt } from "./support/records";
+import { hostRecords, hostRunRecords, ledgerOf, recordsAt, registeredAt } from "./support/records";
 import { recordsReadLayer } from "../src/records";
 import { readAudit } from "../src/audit";
-import { encodeVerifying, readVerifications, VERIFYING_FILE } from "../src/verify";
+import { encodeVerifying, readVerifications, VERIFYING } from "../src/verify";
 import { runEffect } from "./support/effect";
 import { exec } from "./support/command";
 import { until } from "./support/host";
@@ -379,13 +379,14 @@ test(
             );
             yield* first.lists([second]);
             expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
-            const dir = runDir(second.world.state, runId);
+            const records = hostRunRecords(() => second.world.state);
             const evidence = evidenceDir(second.world.state, runId);
             yield* fs.makeDirectory(evidence, { recursive: true });
             const log = `${evidence}/live.log`;
             yield* fs.writeFileString(log, "");
-            yield* fs.writeFileString(
-              `${dir}/${VERIFYING_FILE}`,
+            yield* records.setControl(
+              VERIFYING,
+              runId,
               encodeVerifying({
                 name: "remote-live",
                 executable: "true",
@@ -423,8 +424,8 @@ test(
               () => fs.readFileString(stderr),
               (text) => pipe_(text, Str.includes("the remote line arrives")),
             );
-            expect(yield* fs.exists(`${dir}/${VERIFYING_FILE}`)).toBe(true);
-            yield* fs.remove(`${dir}/${VERIFYING_FILE}`);
+            expect(yield* records.control(VERIFYING, runId)).not.toBeNull();
+            yield* records.setControl(VERIFYING, runId, null);
             expect(Number(yield* handle.exitCode)).toBe(0);
             yield* Fiber.join(drain);
             expect(yield* Fiber.join(stdout)).toContain('"ended":null');

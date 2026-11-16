@@ -501,7 +501,8 @@ test(
             ),
           );
           yield* until(
-            () => memoryWaitOf(runDir(world.state, waiter)),
+            () =>
+              hostRecords(world.state, memoryWaitOf(waiter)).pipe(Effect.orElseSucceed(() => null)),
             (one) => one !== null,
           );
           expect((yield* recorded(world, waiter)).length).toBe(1);

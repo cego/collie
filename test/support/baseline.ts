@@ -129,11 +129,17 @@ import {
 import { declaredBy } from "../../src/discovery";
 import { readMeasurements } from "../../src/measurement";
 import type { BenchmarkPlan, Measurement } from "../../src/measurement-model";
-import { nothingToLandFile } from "../../src/standing";
+import { NOTHING_TO_LAND } from "../../src/standing";
 import { MERGE_REQUEST } from "../../src/oversight";
 import { VerifySpecSchema } from "../../src/verify-spec";
 import { findingsIn } from "../../src/output";
-import { FINGERPRINT_MAX_BYTES, collect, fingerprint, readVerifications } from "../../src/verify";
+import {
+  FINGERPRINT_MAX_BYTES,
+  collect,
+  fingerprint,
+  readVerifications,
+  VERIFYING,
+} from "../../src/verify";
 import { inputsFor, offersFrom } from "../../src/offers";
 import { Store } from "../../src/store";
 import { readStageProof, type ShippingGo } from "../../src/shipping";
@@ -4176,6 +4182,15 @@ open.exec("PRAGMA busy_timeout = 10000");
 open
   .query("INSERT INTO collie_run_facts (run, name, data) VALUES (?, ?, ?) ON CONFLICT (run, name) DO UPDATE SET data = excluded.data")
   .run(run, name, await Bun.file(from).text());
+`;
+
+/** A program that prints a control over a Run in a host's database, from outside the host. */
+const GET_CONTROL = `import { Database } from "bun:sqlite";
+const [db, control, run] = Bun.argv.slice(2);
+const open = new Database(db);
+open.exec("PRAGMA busy_timeout = 10000");
+const row = open.query("SELECT data FROM collie_controls WHERE control = ? AND run = ? AND key = ''").get(control, run);
+process.stdout.write(row?.data ?? "");
 `;
 
 /**
@@ -8659,9 +8674,10 @@ scenario(
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const count = `${rig.root}/runs`;
         const seen = `${rig.root}/markers`;
-        const marker = `${runDir(dir, "r-passes")}/verifying`;
+        const reader = `${rig.root}/get-control.ts`;
         yield* approve("r-passes", ["unit"]);
         const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(reader, GET_CONTROL);
         yield* freeze("r-passes", [
           {
             name: "unit",
@@ -8670,7 +8686,7 @@ scenario(
             // green after the fix.
             argv: [
               "-c",
-              `cat ${marker} >> ${seen}; echo >> ${seen}; echo >> ${count}; wc -l < ${count} | { read n; [ $n -ge 3 ]; }`,
+              `'${process.execPath}' '${reader}' '${dir}/host.db' ${VERIFYING} r-passes >> ${seen}; echo >> ${seen}; echo >> ${count}; wc -l < ${count} | { read n; [ $n -ge 3 ]; }`,
             ],
             cwd: rig.projectDir,
           },
@@ -8713,7 +8729,9 @@ scenario(
           ["fix", 1],
         ]);
         // Gone once nothing is running.
-        expect(yield* fs.exists(marker)).toBe(false);
+        expect(
+          yield* RunRecords.use((records) => records.control(VERIFYING, "r-passes")),
+        ).toBeNull();
       }),
     ),
   120_000,
@@ -11871,7 +11889,6 @@ scenario(
         expect(yield* runLog(runId)).toContain(said(result));
         // The build and its review, and no merge request.
         expect(yield* prompts()).toHaveLength(2);
-        const fs = yield* FileSystem.FileSystem;
         const declared = yield* loadEntry(shipped("implement")).pipe(
           Effect.map((described) => declaredByModule(described.metadata)),
           Effect.orDie,
@@ -11881,7 +11898,7 @@ scenario(
           succeeded: true,
           branch: "the-only-one",
           mrUrl: null,
-          nothingToLand: yield* fs.exists(nothingToLandFile(runDir(dir, runId))),
+          nothingToLand: (yield* factOf(runId, NOTHING_TO_LAND)) !== null,
           planIssues: 0,
           disposed: false,
           openFindings: 0,

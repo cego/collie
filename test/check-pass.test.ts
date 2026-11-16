@@ -191,7 +191,7 @@ const gateOnRig = <A>(
     ),
   );
 
-const waitingFor = () => memoryWaitOf(runDir(dir, runId));
+const waitingFor = () => memoryWaitOf(runId);
 
 test("a Check pass waits while its Machine is short of memory, runs nothing meanwhile, then runs", () =>
   runEffect(

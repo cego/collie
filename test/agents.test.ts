@@ -9186,7 +9186,7 @@ test("a Codex launch writes no autoMode or Claude skill overrides", () =>
   ));
 
 const waitsForMemory = (runId: string): Reached =>
-  Effect.map(memoryWaitOf(runDir(dir, runId)), (wait) => wait !== null);
+  Effect.map(memoryWaitOf(runId), (wait) => wait !== null).pipe(overHost(() => dir));
 
 const runLogOf = (runId: string) => read(`${dir}/agents/${runId}/agents.log`);
 
@@ -9242,7 +9242,7 @@ test(
             yield* until(waitsForMemory("r1"));
             yield* control(STOP, "r1", true);
             yield* until(suspended("r1"));
-            expect(yield* memoryWaitOf(runDir(dir, "r1"))).toBeNull();
+            expect(yield* memoryWaitOf("r1").pipe(overHost(() => dir))).toBeNull();
             yield* rig.memory(50);
             yield* spend(60_000);
           }),
@@ -9276,10 +9276,10 @@ test(
                 runId: "r1",
                 what: 'collie verify "unit"',
                 asker: agentFor("r1"),
-              }),
+              }).pipe(overHost(() => dir)),
             );
             // Setup IO can outlast the idle budget; finish the turns only once verify holds it.
-            yield* until(holdsBudgetOf(dir, "r1", agentFor("r1")));
+            yield* until(holdsBudgetOf("r1", agentFor("r1")).pipe(overHost(() => dir)));
             herdr.written = true;
             yield* until(parked("r2"));
             yield* spend(5_000);

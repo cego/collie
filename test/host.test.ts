@@ -40,7 +40,7 @@ import { restartHostAt } from "../src/lifecycle";
 import { registerAgent } from "../src/registry";
 import { signalProcess } from "../src/lock";
 import { groupOf, startedOf, stillRunning } from "../src/processes";
-import { readVerifications, verifyingIn } from "../src/verify";
+import { readVerifications, verifyingOf } from "../src/verify";
 import { VerifySpecSchema } from "../src/verify-spec";
 import { exec, startDetached } from "./support/command";
 import { fastForward, runEffect, suiteEnv } from "./support/effect";
@@ -802,7 +802,7 @@ test.skipIf(process.platform !== "linux")(
               (status) => status.status === "suspended",
             );
             expect(yield* checksAt(state)).toEqual([]);
-            expect(yield* verifyingIn(`${state}/runs/${runId}`)).toBeNull();
+            expect(yield* hostRecords(state, verifyingOf(runId))).toBeNull();
 
             yield* client.resume({ runId, request: "resume-1" });
             yield* until(
@@ -961,7 +961,7 @@ test.skipIf(process.platform !== "linux")(
         const { state, runId, notes } = killed;
         expect(killed.running).toEqual([true, true]);
         const run = `${state}/runs/${runId}`;
-        const stale = yield* verifyingIn(run);
+        const stale = yield* hostRecords(state, verifyingOf(runId));
         expect(stale).not.toBeNull();
         const [record] = yield* checksAt(state);
         yield* Effect.addFinalizer(() => stopHost(state).pipe(Effect.ignore));
@@ -979,7 +979,7 @@ test.skipIf(process.platform !== "linux")(
           `check held (pass gate) of ${runId}, left running by host ${killed.host} `,
         );
         expect(Arr.map(yield* checksAt(state), (one) => one.id)).not.toContain(record!.id);
-        expect((yield* verifyingIn(run))?.started).not.toBe(stale?.started);
+        expect((yield* hostRecords(state, verifyingOf(runId)))?.started).not.toBe(stale?.started);
 
         expect(yield* releasedOnce(state, runId, notes)).toHaveLength(1);
         expect(yield* notedIn(notes, "starts")).toHaveLength(2);
