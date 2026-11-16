@@ -19,6 +19,7 @@ import {
   LEGACY_FACT_PREFIXES,
   LEGACY_FACTS,
   LEGACY_JOURNALS,
+  parentOf,
   recordName,
   RUN_RECORDS_MIGRATION_ID,
   TEXT_JOURNALS,
@@ -197,7 +198,7 @@ const writtenIn = Effect.fn("RecordsImport.writtenIn")(function* (dir: string) {
 const localName = (area: (typeof AREAS)[number], name: string) => {
   const of = Arr.findFirst(AREAS, (one) => one !== "runs" && Str.startsWith(`${one}/`)(name));
   const owner = Option.getOrElse(of, () => "runs");
-  return owner !== area ? null : area === "runs" ? name : name.slice(area.length + 1);
+  return owner !== area ? null : area === "runs" ? name : Str.slice(area.length + 1)(name);
 };
 
 /** The files of a Run's directory in `area` that an older build kept a fact in, by name. */
@@ -214,7 +215,7 @@ const legacyFacts = Effect.fn("RecordsImport.legacyFacts")(function* (
   for (const prefix of LEGACY_FACT_PREFIXES) {
     const file = localName(area, prefix);
     if (file === null) continue;
-    const parent = file.slice(0, file.lastIndexOf("/"));
+    const parent = parentOf(file);
     for (const entry of yield* fs
       .readDirectory(`${dir}/${parent}`)
       .pipe(orMissing<ReadonlyArray<string>>([])))

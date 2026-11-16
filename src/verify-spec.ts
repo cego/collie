@@ -14,6 +14,7 @@ import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
 import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { CommandLine } from "effect/process";
+import { addressOf, RunRecords } from "./run-records";
 
 /**
  * Exactly what Collie runs for a check, bound argument by argument: the wrapper is part
@@ -36,15 +37,36 @@ const ApprovedJson = Schema.fromJsonString(Schema.Array(VerifySpecSchema));
 const decodeApproved = Schema.decodeUnknownEffect(ApprovedJson);
 export const encodeApproved = flow(Schema.encodeResult(ApprovedJson), Result.getOrThrow);
 
-/** Where a Run's checks are frozen, in its evidence directory. */
-export const approvedFile = (evidenceDir: string) => `${evidenceDir}/approved.json`;
+/** Where a Run's checks are frozen: its record, by the evidence directory that names it. */
+const approvedAt = (evidenceDir: string) => {
+  const { run, prefix } = addressOf(evidenceDir);
+  return { run, name: `${prefix}approved.json` };
+};
+const decodeOrNone = (raw: string | null) =>
+  raw === null
+    ? Effect.succeed<ReadonlyArray<VerifySpec>>([])
+    : decodeApproved(raw).pipe(Effect.orElseSucceed((): ReadonlyArray<VerifySpec> => []));
 
-/** The checks a Run was started with, frozen in its evidence directory; none where unreadable. */
+/** The checks a Run was started with, frozen with its evidence; none where unreadable. */
 export const approvedIn = (evidenceDir: string) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    return yield* decodeApproved(yield* fs.readFileString(approvedFile(evidenceDir)));
-  }).pipe(Effect.orElseSucceed((): ReadonlyArray<VerifySpec> => []));
+  RunRecords.use((records) => {
+    const at = approvedAt(evidenceDir);
+    return records.fact(at.run, at.name);
+  }).pipe(Effect.flatMap(decodeOrNone));
+
+/** Freezes the Run's checks as `change` makes them of the frozen ones; null where none are. */
+export const updateApproved = (
+  evidenceDir: string,
+  change: (frozen: ReadonlyArray<VerifySpec> | null) => ReadonlyArray<VerifySpec>,
+) =>
+  RunRecords.use((records) => {
+    const at = approvedAt(evidenceDir);
+    return records.update(at.run, at.name, (raw) =>
+      Effect.map(decodeOrNone(raw), (frozen) =>
+        encodeApproved(change(raw === null ? null : frozen)),
+      ),
+    );
+  }).pipe(Effect.flatMap(decodeOrNone));
 
 /** `--verify` values, each one verify.json entry as JSON; the first that is not one is named. */
 export function givenVerifications(

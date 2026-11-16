@@ -359,7 +359,7 @@ test(
         yield* writeIntent(
           `${state}/runs/run-a`,
           seedIntent("run-a", { goal: "Find out why run-c and run-f failed" }),
-        );
+        ).pipe(Effect.provide(recordsAt(state)));
         yield* recordAudit(`${state}/runs/run-a`, {
           operation: "deliver",
           request: "steer-1",

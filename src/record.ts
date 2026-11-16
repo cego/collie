@@ -2,6 +2,7 @@
 // (ADR-draft-a-runs-record-is-read-from-its-hosts-run-model D3–D5): what its Task's Runs
 // cost to read, its Flow first, and a frame only when what it carries moved.
 
+import { RunRecords } from "./run-records";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import {
@@ -68,7 +69,12 @@ const fingerprint = flow(
   Result.getOrThrow,
 );
 
-type Needs = FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | Launches;
+type Needs =
+  | FileSystem.FileSystem
+  | Path.Path
+  | ChildProcessSpawner.ChildProcessSpawner
+  | Launches
+  | RunRecords;
 
 /** A part of the record, and the fields it fills when it comes. */
 interface Part {
@@ -208,7 +214,7 @@ export const recordFrames = (
           return kept.diff;
         });
       const context = yield* Effect.context<
-        Path.Path | ChildProcessSpawner.ChildProcessSpawner | Launches
+        Path.Path | ChildProcessSpawner.ChildProcessSpawner | Launches | RunRecords
       >();
       // A part that fails ends the stream, as a whole record that failed always has.
       const part = <E>(

@@ -1,6 +1,6 @@
 // The replies a Run posted to reviewers in its human's name, recorded by its host as posted.
 
-import { Effect, Path, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { RunReply } from "./board-model";
 import { appendRunJournal, readRunJournal, runJournal } from "./journal";
 

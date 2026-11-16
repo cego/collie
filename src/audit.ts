@@ -15,7 +15,7 @@ import {
   readRunJournal,
   runJournal,
 } from "./journal";
-import { runOfDir } from "./run-records";
+import { parentOf, runOfDir } from "./run-records";
 import { nowIso } from "./time";
 
 export const ScheduledBy = Schema.Struct({ name: Schema.String, occurrence: Schema.String });
@@ -82,7 +82,7 @@ export const AUDIT_FILE = "operations.jsonl";
 const fileOf = (runDir: string) => `${runDir}/${AUDIT_FILE}`;
 
 /** A Run's trail is a journal in the host's database; any other trail is its own file. */
-const ofRun = (dir: string) => runOfDir(dir.slice(0, dir.lastIndexOf("/"))) === "runs";
+const ofRun = (dir: string) => runOfDir(parentOf(dir)) === "runs";
 
 export const readAudit = Effect.fn("Audit.read")(function* (dir: string) {
   if (ofRun(dir)) return yield* readRunJournal(runJournal(dir, AUDIT_FILE), AuditJson);

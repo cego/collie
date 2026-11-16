@@ -146,7 +146,7 @@ import {
   readIntent,
   amend,
   verificationGrant,
-  writeIntentHeld,
+  updateIntent,
   propagate as propagateIntent,
 } from "./intent";
 import { ChangedIntent } from "./intent-model";
@@ -353,7 +353,6 @@ import { Store } from "./store";
 import type { Woke } from "./mr-watch-model";
 import { SESSIONS_EVERY, agentsIn, focusPane, herdChanges, liveHerds } from "./herds";
 import {
-  withDirLock,
   currentPid,
   ensureLockDir,
   holderLives,
@@ -3720,10 +3719,8 @@ const frontDoorHandlers = (
                         registry.grant({ runId, name: change.name, command: change.command }),
                       )
                     : undefined;
-                const updated = yield* withDirLock(
-                  runDir(env.stateDir, runId),
+                const updated = yield* updateIntent(runDir(env.stateDir, runId), (current) =>
                   Effect.gen(function* () {
-                    const current = yield* readIntent(runDir(env.stateDir, runId));
                     if (current === null) return null;
                     if (expected !== undefined && current.version !== expected)
                       return yield* new HostRefused({
@@ -3743,7 +3740,7 @@ const frontDoorHandlers = (
                       change.kind === "verification" &&
                       Arr.some(current.history, (one) => one.by === actorName(amendedBy))
                     )
-                      return current;
+                      return null;
                     const wanted =
                       change.kind === "verification"
                         ? verificationGrant(current, change.name, change.command)
@@ -3755,9 +3752,7 @@ const frontDoorHandlers = (
                       yield* nowIso,
                       voiceOf(amendedBy),
                     );
-                    if (amended !== current)
-                      yield* writeIntentHeld(runDir(env.stateDir, runId), amended);
-                    return amended;
+                    return amended === current ? null : amended;
                   }),
                 ).pipe(Effect.result);
                 if (updated._tag === "Failure") {
@@ -3785,19 +3780,17 @@ const frontDoorHandlers = (
                     yield* registry.views(null),
                     (view) => view.parent === runId && !terminalStatus(view.status),
                   )) {
-                    const note = yield* withDirLock(
-                      runDir(env.stateDir, child.runId),
-                      Effect.gen(function* () {
-                        const current = yield* readIntent(runDir(env.stateDir, child.runId)).pipe(
-                          Effect.orElseSucceed(() => null),
-                        );
-                        if (current === null) return null;
-                        const carried = propagateIntent(next, current);
-                        yield* writeIntentHeld(runDir(env.stateDir, child.runId), carried.intent);
-                        return `  ${child.runId}: propagated${carried.conflicts.length ? ` (${Arr.join(carried.conflicts, "; ")})` : ""}`;
-                      }),
-                    ).pipe(Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })));
-                    if (note !== null) propagated.push(note);
+                    yield* updateIntent(runDir(env.stateDir, child.runId), (current) => {
+                      if (current === null) return Effect.succeed(null);
+                      const carried = propagateIntent(next, current);
+                      propagated.push(
+                        `  ${child.runId}: propagated${carried.conflicts.length ? ` (${Arr.join(carried.conflicts, "; ")})` : ""}`,
+                      );
+                      return Effect.succeed(carried.intent);
+                    }).pipe(
+                      Effect.catchTag("IntentUnreadable", () => Effect.void),
+                      Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
+                    );
                   }
                 const answer = { version: next?.version ?? null, propagated };
                 return approved === undefined ? answer : { ...answer, approved };

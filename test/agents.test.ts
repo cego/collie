@@ -73,7 +73,7 @@ import { Collecting } from "../src/collecting";
 import { holdsBudgetOf, memoryWaitOf, waitForMemory } from "../src/memory-wait";
 import type { UsageReading } from "../src/usage-model";
 import { isoAt } from "../src/time";
-import { readCards } from "../src/cards";
+import { readCards, writeCheckpoint } from "../src/cards";
 import { readDrift } from "../src/drift";
 import { FixOutputSchema, SynthesisSchema } from "../src/output";
 import { Triage } from "../workflows/retrospective";
@@ -1046,13 +1046,12 @@ const cardsOf = (runId: string) =>
 test("finished work leaves a card of what it wrote, and a ticket it said it finished one of its own", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const progress = `${runDir(dir, "r1")}/steering/progress`;
-      yield* fs.makeDirectory(progress, { recursive: true });
-      yield* fs.writeFileString(
-        `${progress}/01-parse.json`,
-        `{"ticket":"01-parse.md","status":"done","claims":["parses the file"],"at":"2026-09-25T00:00:00Z"}`,
-      );
+      yield* writeCheckpoint(runDir(dir, "r1"), {
+        ticket: "01-parse.md",
+        status: "done",
+        claims: ["parses the file"],
+        at: "2026-09-25T00:00:00Z",
+      });
       yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
       yield* session(started("r1"));
       expect(yield* cardsOf("r1")).toEqual([

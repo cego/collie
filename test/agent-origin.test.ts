@@ -59,7 +59,6 @@ test(
         "collie-verify-pane-",
         (first) =>
           Effect.gen(function* () {
-            const fs = yield* FileSystem.FileSystem;
             const { runId, agent } = yield* attendedAgent(first);
             const fromPane = yield* first.cli(["verify", "--name", "from-pane", "--", "true"], {
               HERDR_PANE_ID: agent.paneId,

@@ -34,6 +34,8 @@ export const Recovery = Schema.Struct({
   previous: Schema.String,
   commits: Schema.String,
   review: Schema.NullOr(SynthesisSchema),
+  /** The recovered Run and the Runs it recovered in turn, nearest first. */
+  lineage: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 export type Recovery = typeof Recovery.Type;
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);

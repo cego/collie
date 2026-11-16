@@ -4,6 +4,7 @@
 // rollback writes.
 
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { Clock, Context, Effect, Layer, Option } from "effect";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -66,7 +67,7 @@ export const LEGACY_FACT_PREFIXES: ReadonlyArray<string> = [
 /** A Run directory's records: the Run, and what its records' names start with. */
 export const addressOf = (dir: string) => {
   const run = runOfDir(dir);
-  const parent = runOfDir(dir.slice(0, Math.max(0, dir.length - run.length - 1)));
+  const parent = runOfDir(parentOf(dir));
   return { run, prefix: parent === "runs" || parent === "" ? "" : `${parent}/` };
 };
 
@@ -77,7 +78,12 @@ export const STEPS = "steps.jsonl";
 export const RUN_RECORDS = "collie/run-records";
 
 /** A Run's directory names its Run. */
-export const runOfDir = (dir: string) => dir.slice(dir.lastIndexOf("/") + 1);
+const lastSlash = (path: string) => Option.getOrElse(Str.lastIndexOf("/")(path), () => -1);
+
+export const runOfDir = (dir: string) => Str.slice(lastSlash(dir) + 1)(dir);
+
+/** The directory `path` is in; empty where it names none. */
+export const parentOf = (path: string) => Str.slice(0, Math.max(0, lastSlash(path)))(path);
 
 export interface RunRecordsApi {
   /** A journal's lines, oldest first. */
@@ -161,15 +167,15 @@ export const runRecordsLayer = Layer.effect(RunRecords)(
               ON CONFLICT (run) DO UPDATE SET at = max(at, excluded.at)
             `,
           );
-    const grouped = <A>(
-      rows: ReadonlyArray<{ readonly run: string }>,
-      value: (row: never) => A,
+    const grouped = <R extends { readonly run: string }, A>(
+      rows: ReadonlyArray<R>,
+      value: (row: R) => A,
     ) => {
       const byRun = new Map<string, A[]>();
       for (const row of rows) {
         const list = byRun.get(row.run);
-        if (list === undefined) byRun.set(row.run, [value(row as never)]);
-        else list.push(value(row as never));
+        if (list === undefined) byRun.set(row.run, [value(row)]);
+        else list.push(value(row));
       }
       return byRun;
     };

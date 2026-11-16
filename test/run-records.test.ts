@@ -2,9 +2,10 @@
 // (ADR-draft-a-runs-own-records-are-rows-in-the-hosts-database).
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Layer } from "effect";
+import * as Rec from "effect/Record";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import * as Reactivity from "effect/reactivity/Reactivity";
-import { RunRecords, runRecordsLayer } from "../src/run-records";
+import { parentOf, RunRecords, runRecordsLayer } from "../src/run-records";
 import { StoreWrites } from "../src/store-writes";
 import { runEffect } from "./support/effect";
 import { recordsAt } from "./support/records";
@@ -31,9 +32,9 @@ afterEach(() =>
 /** A Run's legacy files, as an older build left them. */
 const legacy = Effect.fn("test.legacy")(function* (files: Record<string, string>) {
   const fs = yield* FileSystem.FileSystem;
-  for (const [name, text] of Object.entries(files)) {
+  for (const [name, text] of Rec.toEntries(files)) {
     const file = `${stateDir}/${name}`;
-    yield* fs.makeDirectory(file.slice(0, file.lastIndexOf("/")), { recursive: true });
+    yield* fs.makeDirectory(parentOf(file), { recursive: true });
     yield* fs.writeFileString(file, text);
   }
 });
@@ -183,7 +184,7 @@ test("the first host imports when each Run last did work, less what was written 
         "runs/run-a/operations.jsonl": "{}\n",
       });
       const at = (name: string, ms: number) =>
-        fs.utimes(`${stateDir}/${name}`, new Date(ms), new Date(ms));
+        fs.utimes(`${stateDir}/${name}`, ms / 1000, ms / 1000);
       yield* at("runs/run-a/log.txt", 1_000_000);
       yield* at("agents/run-a/implement.json", 2_000_000);
       yield* at("runs/run-a/steering/seen.jsonl", 9_000_000);

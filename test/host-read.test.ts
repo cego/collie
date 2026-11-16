@@ -8,6 +8,7 @@ import { isSettled } from "../src/lifecycle";
 import { toolNamed } from "../src/tools";
 import { until } from "./support/host";
 import { hosted, hostedRun } from "./support/hosted";
+import { recordsAt } from "./support/records";
 
 test(
   "local answers preserve native answer content, offers and Flow after mutations",
@@ -86,7 +87,7 @@ test(
           expect(yield* client.read({ tool: "collie_run", input: { run: 3 } })).toContain(
             "InvalidInput",
           );
-        }),
+        }).pipe(Effect.provide(recordsAt(world.state))),
       [
         "offered.workflow.ts",
         "graded.workflow.ts",

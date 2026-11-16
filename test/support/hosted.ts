@@ -11,6 +11,7 @@ import { seedIntent, writeIntent, type Authority } from "../../src/intent";
 import { runDir } from "../../src/engine";
 import { isSettled } from "../../src/lifecycle";
 import { stopHost, until } from "./host";
+import { overHost } from "./records";
 import { proves, type World } from "./world";
 
 /** A Run that waits to be answered, and ones that end as soon as they start. */
@@ -69,7 +70,9 @@ export const hostedRun = Effect.fn("test.hostedRun")(function* (
   const dir = runDir(world.state, started.runId);
   yield* (yield* FileSystem.FileSystem).makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
   const intent = seedIntent(started.runId, { goal });
-  yield* writeIntent(dir, authority === undefined ? intent : { ...intent, authority });
+  yield* writeIntent(dir, authority === undefined ? intent : { ...intent, authority }).pipe(
+    overHost(() => world.state),
+  );
   return { id: started.runId, dir };
 });
 

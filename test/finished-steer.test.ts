@@ -209,7 +209,7 @@ test(
         const history = yield* cardLines;
         yield* stopHost(world.state);
         yield* fs.remove(`${world.user}/told.workflow.ts`).pipe(Effect.orDie);
-        yield* fs.remove(`${dir}/terminal.json`).pipe(Effect.orDie);
+        yield* RunRecords.use((records) => records.put(runId, "terminal.json", null));
         yield* recordDisposition(dir, {
           at: yield* nowIso,
           by: "mk",
@@ -236,7 +236,7 @@ test(
         expect(yield* toolNamed("collie_run")!.call(env, { run: runId })).toContain(
           "outcome unavailable",
         );
-        expect(yield* fs.exists(`${dir}/terminal.json`)).toBe(false);
+        expect(yield* RunRecords.use((records) => records.fact(runId, "terminal.json"))).toBeNull();
         expect(yield* cardLines).toEqual(history);
       }),
     ),

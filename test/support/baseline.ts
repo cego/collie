@@ -130,7 +130,7 @@ import { declaredBy } from "../../src/discovery";
 import { readMeasurements } from "../../src/measurement";
 import type { BenchmarkPlan, Measurement } from "../../src/measurement-model";
 import { nothingToLandFile } from "../../src/standing";
-import { mergeRequestFile } from "../../src/oversight";
+import { MERGE_REQUEST } from "../../src/oversight";
 import { VerifySpecSchema } from "../../src/verify-spec";
 import { findingsIn } from "../../src/output";
 import { FINGERPRINT_MAX_BYTES, collect, fingerprint, readVerifications } from "../../src/verify";
@@ -296,7 +296,7 @@ const children = Layer.succeed(Children)(
 );
 
 /** A host layer a test may wrap, for the one capability it has no service to answer with. */
-type HostOverride = Layer.Layer<Host, never, Host | PlatformServices | ForgeHttp>;
+type HostOverride = Layer.Layer<Host, never, Host | PlatformServices | ForgeHttp | RunRecords>;
 
 /** The host's own layers, placing checkouts through the rig's herdr. */
 const foundation = () => ({
@@ -3409,10 +3409,9 @@ scenario(
         const reviewed = yield* reviewedBranch();
         const fs = yield* FileSystem.FileSystem;
         yield* fs.makeDirectory(evidenceDir(dir, "r-fix-tree"), { recursive: true });
-        yield* fs.writeFileString(
-          `${evidenceDir(dir, "r-fix-tree")}/approved.json`,
-          asApproved([{ name: "unit", executable: "true", argv: [], cwd: "worktree" }]),
-        );
+        yield* freeze("r-fix-tree", [
+          { name: "unit", executable: "true", argv: [], cwd: "worktree" },
+        ]);
         const fixed = { verdict: "clean", findings: [], fixed: [], disputed: [], checks: [] };
         yield* rig.queueOutputs([
           SYNTHESIS,
@@ -4158,22 +4157,59 @@ const asJson = flow(
   Result.getOrThrow,
 );
 
+/** A Run's fact, as its host keeps it; null where it has none. */
+const factOf = (runId: string, name: string) =>
+  RunRecords.use((records) => records.fact(runId, name));
+const putFact = (runId: string, name: string, value: string) =>
+  RunRecords.use((records) => records.put(runId, name, value));
+
+/** Where a Run's checks are frozen, by its id. */
+const APPROVED = "evidence/approved.json";
+/** These checks, frozen for the Run where a start would freeze them. */
+const freeze = (runId: string, specs: Parameters<typeof asApproved>[0]) =>
+  putFact(runId, APPROVED, asApproved(specs));
+
+/** A program that sets a Run's fact in a host's database to a file's text, from outside the host. */
+const PUT_FACT = `import { Database } from "bun:sqlite";
+const [db, run, name, from] = Bun.argv.slice(2);
+const open = new Database(db);
+open.exec("PRAGMA busy_timeout = 10000");
+open
+  .query("INSERT INTO collie_run_facts (run, name, data) VALUES (?, ?, ?) ON CONFLICT (run, name) DO UPDATE SET data = excluded.data")
+  .run(run, name, await Bun.file(from).text());
+`;
+
+/**
+ * What an agent's turn writes and runs to set a Run's fact to `text`, as a process apart
+ * from the host does: the value and the program that records it, then the program run.
+ */
+const factSet = (runId: string, name: string, text: string) => {
+  const value = `${rig.root}/facts/${runId}/${name}`;
+  return {
+    writes: [
+      { path: `${rig.root}/put-fact.ts`, text: PUT_FACT },
+      { path: value, text },
+    ],
+    sh: factSetSh(runId, name, value),
+  };
+};
+const factSetSh = (runId: string, name: string, from: string) =>
+  `'${process.execPath}' '${rig.root}/put-fact.ts' '${dir}/host.db' '${runId}' '${name}' '${from}'`;
+
 /** What a human approved Collie to run for this Run, frozen where a start would freeze it. */
 const approve = (runId: string, names: ReadonlyArray<string>) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
       fs.makeDirectory(evidenceDir(dir, runId), { recursive: true }).pipe(
         Effect.andThen(
-          fs.writeFileString(
-            `${evidenceDir(dir, runId)}/approved.json`,
-            asApproved(
-              Arr.map(names, (name) => ({
-                name,
-                executable: "true",
-                argv: [],
-                cwd: rig.projectDir,
-              })),
-            ),
+          freeze(
+            runId,
+            Arr.map(names, (name) => ({
+              name,
+              executable: "true",
+              argv: [],
+              cwd: rig.projectDir,
+            })),
           ),
         ),
       ),
@@ -4362,11 +4398,10 @@ scenario("repeated recovery retains the original bug reproduction without changi
         [current, parent],
         [parent, original],
       ] as const) {
-        yield* fs.makeDirectory(runDir(dir, child), { recursive: true });
-        yield* fs.writeFileString(`${runDir(dir, child)}/recovery-parent`, from);
+        yield* putFact(child, "recovery-parent", from);
       }
       yield* fs.makeDirectory(evidenceDir(dir, current), { recursive: true });
-      yield* fs.writeFileString(`${evidenceDir(dir, current)}/approved.json`, asApproved([spec]));
+      yield* freeze(current, [spec]);
       const evidence = session(
         Effect.flatMap(Host, (host) => host.evidence(current, rig.projectDir)),
       );
@@ -4383,8 +4418,7 @@ scenario("repeated recovery retains the original bug reproduction without changi
           tickets: [],
         }),
       ).toEqual([]);
-      yield* fs.makeDirectory(runDir(dir, original), { recursive: true });
-      yield* fs.writeFileString(`${runDir(dir, original)}/recovery-parent`, current);
+      yield* putFact(original, "recovery-parent", current);
       expect((yield* evidence).verifications).toEqual([red, middle, green]);
     }),
   ),
@@ -4474,10 +4508,7 @@ for (const feature of [false, true])
             },
           ]);
           if (feature) {
-            const fs = yield* FileSystem.FileSystem;
-            const intent = outcomeSet(child, "feature");
-            yield* fs.makeDirectory(runDir(dir, child), { recursive: true });
-            yield* fs.writeFileString(intent.path, intent.text);
+            yield* writeIntent(runDir(dir, child), outcomeSet(child, "feature"));
           }
           const result = yield* recoveredRun(
             child,
@@ -4647,9 +4678,8 @@ scenario(
         const originalOutput = asJson({ ...BUILT, reproduced: "regression" });
         yield* fs.makeDirectory(`${dir}/agents/${original}`, { recursive: true });
         yield* fs.writeFileString(`${dir}/agents/${original}/01-work.md.json`, originalOutput);
-        yield* fs.writeFileString(`${runDir(dir, parent.runId)}/recovery-parent`, original);
-        yield* fs.makeDirectory(runDir(dir, original), { recursive: true });
-        yield* fs.writeFileString(`${runDir(dir, original)}/recovery-parent`, child);
+        yield* putFact(parent.runId, "recovery-parent", original);
+        yield* putFact(original, "recovery-parent", child);
         yield* approve(child, ["unit"]);
         const legacy = `${rig.root}/user/workflows/legacy-recovery.workflow.ts`;
         yield* fs.writeFileString(
@@ -4678,8 +4708,7 @@ scenario(
           options: { outcome: "bug" },
         };
         yield* stalled(options);
-        yield* fs.makeDirectory(runDir(dir, child), { recursive: true });
-        yield* fs.writeFileString(`${runDir(dir, child)}/recovery-parent`, parent.runId);
+        yield* putFact(child, "recovery-parent", parent.runId);
         const cached = () =>
           session(
             Effect.gen(function* () {
@@ -5096,10 +5125,9 @@ scenario(
         // What this Run will be held to, named before it starts rather than guessed at.
         expect(second).toContain(`- unit: true (in ${rig.projectDir})`);
         // And the card a slice landing leaves, whether or not the agent wrote its own.
-        const fs = yield* FileSystem.FileSystem;
-        expect(
-          yield* fs.readFileString(`${runDir(dir, "r-impl")}/steering/progress/01-first.json`),
-        ).toContain(`"status":"done"`);
+        expect(yield* factOf("r-impl", "steering/progress/01-first.json")).toContain(
+          `"status":"done"`,
+        );
         // Collie keeps progress, so the card has one entry per ticket and no second slug.
         expect(
           Arr.sortWith(
@@ -7912,7 +7940,7 @@ scenario(
         };
         yield* rig.queueOutputs([
           {
-            writes: [naming("r-impl-build-findings", ["unit"])],
+            ...naming("r-impl-build-findings", ["unit"]),
             output: { ...BUILT, verdict: "findings", findings: [finding] },
           },
           { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [finding] },
@@ -8231,17 +8259,14 @@ scenario(
         const count = `${rig.root}/runs`;
         yield* approve("r-impl-gate", ["unit"]);
         const fs = yield* FileSystem.FileSystem;
-        yield* fs.writeFileString(
-          `${evidenceDir(dir, "r-impl-gate")}/approved.json`,
-          asApproved([
-            {
-              name: "unit",
-              executable: "sh",
-              argv: ["-c", `echo >> ${count}; [ -f ${rig.root}/repaired ]`],
-              cwd: rig.projectDir,
-            },
-          ]),
-        );
+        yield* freeze("r-impl-gate", [
+          {
+            name: "unit",
+            executable: "sh",
+            argv: ["-c", `echo >> ${count}; [ -f ${rig.root}/repaired ]`],
+            cwd: rig.projectDir,
+          },
+        ]);
         const fix = {
           verdict: "clean",
           findings: [],
@@ -8358,21 +8383,24 @@ scenario(
   120_000,
 );
 
-/** The Intent `run intent set-outcome` leaves, written as an agent answers. */
-const outcomeSet = (runId: string, outcome: string) => ({
-  path: `${runDir(dir, runId)}/${INTENT_FILE}`,
-  text: flow(
-    Schema.encodeResult(Schema.fromJsonString(IntentSchema)),
-    Result.getOrThrow,
-  )(
-    amend(
-      seedIntent(runId, {}),
-      { kind: "set-outcome", outcome },
-      "human:kind",
-      "2026-10-26T00:00:00Z",
-    ),
-  ),
-});
+/** The Intent `run intent set-outcome` leaves. */
+const outcomeSet = (runId: string, outcome: string) =>
+  amend(
+    seedIntent(runId, {}),
+    { kind: "set-outcome", outcome },
+    "human:kind",
+    "2026-10-26T00:00:00Z",
+  );
+/** That Intent, recorded as an agent answers. */
+const outcomeSetBy = (runId: string, outcome: string) =>
+  factSet(
+    runId,
+    INTENT_FILE,
+    flow(
+      Schema.encodeResult(Schema.fromJsonString(IntentSchema)),
+      Result.getOrThrow,
+    )(outcomeSet(runId, outcome)),
+  );
 
 scenario(
   "a migration changed to a feature before its gate is proved as a feature and opens its merge request",
@@ -8387,7 +8415,7 @@ scenario(
         yield* approve(runId, ["unit"]);
         yield* rig.queueOutputs([
           BUILT,
-          { writes: [outcomeSet(runId, "feature")], output: CLEAN_SYNTHESIS },
+          { ...outcomeSetBy(runId, "feature"), output: CLEAN_SYNTHESIS },
           OPENED,
         ]);
         const result = yield* ran({
@@ -8434,7 +8462,7 @@ scenario(
             behavior_preserved: false,
           },
           {
-            writes: [outcomeSet(runId, "feature")],
+            ...outcomeSetBy(runId, "feature"),
             output: {
               verdict: "clean",
               fixed: [{ title: finding.title, file: finding.file }],
@@ -8485,7 +8513,7 @@ scenario(
         const runId = "r-kind-build";
         yield* approve(runId, ["unit"]);
         yield* rig.queueOutputs([
-          { writes: [outcomeSet(runId, "bug")], output: BUILT },
+          { ...outcomeSetBy(runId, "bug"), output: BUILT },
           BUILT,
           BUILT,
           BUILT,
@@ -8523,11 +8551,7 @@ scenario(
         ]);
         const runId = "r-kind-criteria";
         yield* approve(runId, ["unit"]);
-        yield* rig.queueOutputs([
-          { writes: [outcomeSet(runId, "bug")], output: BUILT },
-          BUILT,
-          BUILT,
-        ]);
+        yield* rig.queueOutputs([{ ...outcomeSetBy(runId, "bug"), output: BUILT }, BUILT, BUILT]);
         yield* stalled({
           entry: shipped("implement"),
           runId,
@@ -8593,18 +8617,14 @@ scenario(
         // Fails at the gate and on its recheck, then passes once the fix has run.
         const count = `${rig.root}/runs`;
         yield* approve("r-gate-fix", ["unit"]);
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.writeFileString(
-          `${evidenceDir(dir, "r-gate-fix")}/approved.json`,
-          asApproved([
-            {
-              name: "unit",
-              executable: "sh",
-              argv: ["-c", `echo >> ${count}; wc -l < ${count} | { read n; [ $n -ge 3 ]; }`],
-              cwd: rig.projectDir,
-            },
-          ]),
-        );
+        yield* freeze("r-gate-fix", [
+          {
+            name: "unit",
+            executable: "sh",
+            argv: ["-c", `echo >> ${count}; wc -l < ${count} | { read n; [ $n -ge 3 ]; }`],
+            cwd: rig.projectDir,
+          },
+        ]);
         const fix = {
           verdict: "clean",
           findings: [],
@@ -8644,22 +8664,19 @@ scenario(
         const marker = `${runDir(dir, "r-passes")}/verifying`;
         yield* approve("r-passes", ["unit"]);
         const fs = yield* FileSystem.FileSystem;
-        yield* fs.writeFileString(
-          `${evidenceDir(dir, "r-passes")}/approved.json`,
-          asApproved([
-            {
-              name: "unit",
-              executable: "sh",
-              // What the marker says while it runs, then: red at the gate and on the recheck,
-              // green after the fix.
-              argv: [
-                "-c",
-                `cat ${marker} >> ${seen}; echo >> ${seen}; echo >> ${count}; wc -l < ${count} | { read n; [ $n -ge 3 ]; }`,
-              ],
-              cwd: rig.projectDir,
-            },
-          ]),
-        );
+        yield* freeze("r-passes", [
+          {
+            name: "unit",
+            executable: "sh",
+            // What the marker says while it runs, then: red at the gate and on the recheck,
+            // green after the fix.
+            argv: [
+              "-c",
+              `cat ${marker} >> ${seen}; echo >> ${seen}; echo >> ${count}; wc -l < ${count} | { read n; [ $n -ge 3 ]; }`,
+            ],
+            cwd: rig.projectDir,
+          },
+        ]);
         const fix = {
           verdict: "clean",
           findings: [],
@@ -8710,16 +8727,13 @@ const leftToCi = (runId: string, jobs: ReadonlyArray<string>) =>
     Effect.flatMap((fs) =>
       fs.makeDirectory(evidenceDir(dir, runId), { recursive: true }).pipe(
         Effect.andThen(
-          fs.writeFileString(
-            `${evidenceDir(dir, runId)}/approved.json`,
-            asApproved([
-              { name: "unit", executable: "true", argv: [], cwd: rig.projectDir },
-              ...Arr.map(jobs, (job) => ({
-                ...counting(job, `${rig.root}/${job}-runs`),
-                ci: `${job}-job`,
-              })),
-            ]),
-          ),
+          freeze(runId, [
+            { name: "unit", executable: "true", argv: [], cwd: rig.projectDir },
+            ...Arr.map(jobs, (job) => ({
+              ...counting(job, `${rig.root}/${job}-runs`),
+              ci: `${job}-job`,
+            })),
+          ]),
         ),
       ),
     ),
@@ -9505,14 +9519,10 @@ scenario(
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const runId = "r-gate-once";
         yield* approve(runId, ["unit", "lint"]);
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.writeFileString(
-          `${evidenceDir(dir, runId)}/approved.json`,
-          asApproved([
-            counting("unit", `${rig.root}/unit-runs`),
-            counting("lint", `${rig.root}/lint-runs`),
-          ]),
-        );
+        yield* freeze(runId, [
+          counting("unit", `${rig.root}/unit-runs`),
+          counting("lint", `${rig.root}/lint-runs`),
+        ]);
         yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
         const result = yield* ran({
           entry: shipped("implement"),
@@ -9551,25 +9561,20 @@ scenario(
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const runId = "r-gate-fix-reruns";
         yield* approve(runId, ["unit", "lint"]);
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.writeFileString(
-          `${evidenceDir(dir, runId)}/approved.json`,
-          asApproved([
-            // Red at the gate and on the recheck, until the fix re-grants it.
-            counting("unit", `${rig.root}/unit-runs`, "false"),
-            counting("lint", `${rig.root}/lint-runs`),
-          ]),
-        );
+        yield* freeze(runId, [
+          // Red at the gate and on the recheck, until the fix re-grants it.
+          counting("unit", `${rig.root}/unit-runs`, "false"),
+          counting("lint", `${rig.root}/lint-runs`),
+        ]);
         const regranting = {
-          writes: [
-            {
-              path: `${evidenceDir(dir, runId)}/approved.json`,
-              text: asApproved([
-                { name: "unit", executable: "true", argv: [], cwd: rig.projectDir },
-                counting("lint", `${rig.root}/lint-runs`),
-              ]),
-            },
-          ],
+          ...factSet(
+            runId,
+            APPROVED,
+            asApproved([
+              { name: "unit", executable: "true", argv: [], cwd: rig.projectDir },
+              counting("lint", `${rig.root}/lint-runs`),
+            ]),
+          ),
           output: GATE_FIX,
         };
         yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, regranting, OPENED]);
@@ -9645,16 +9650,13 @@ const failingThen = (
     const fs = yield* FileSystem.FileSystem;
     yield* fs.writeFileString(`${rig.root}/printed`, `${options.printed}\n`);
     yield* approve(runId, ["unit"]);
-    yield* fs.writeFileString(
-      `${evidenceDir(dir, runId)}/approved.json`,
-      asApproved([
-        counting(
-          "unit",
-          `${rig.root}/unit-runs`,
-          `! { ${options.fails}; } || { cat ${rig.root}/printed >&2; exit 1; }`,
-        ),
-      ]),
-    );
+    yield* freeze(runId, [
+      counting(
+        "unit",
+        `${rig.root}/unit-runs`,
+        `! { ${options.fails}; } || { cat ${rig.root}/printed >&2; exit 1; }`,
+      ),
+    ]);
     return bin;
   });
 
@@ -9970,17 +9972,13 @@ scenario(
           rerun: ONE_PASSES,
         });
         // Names nothing at the gate, then the flaky one on its recheck.
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.writeFileString(
-          `${evidenceDir(dir, runId)}/approved.json`,
-          asApproved([
-            counting(
-              "unit",
-              `${rig.root}/unit-runs`,
-              `{ [ $n -eq 1 ] && echo broke >&2; } || cat ${rig.root}/printed >&2; exit 1`,
-            ),
-          ]),
-        );
+        yield* freeze(runId, [
+          counting(
+            "unit",
+            `${rig.root}/unit-runs`,
+            `{ [ $n -eq 1 ] && echo broke >&2; } || cat ${rig.root}/printed >&2; exit 1`,
+          ),
+        ]);
         yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
         const result = yield* ran({
           entry: shipped("implement"),
@@ -10096,13 +10094,10 @@ const stuck = (runId: string, names: ReadonlyArray<string>) =>
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
     yield* noGitlabMrs(bin);
     yield* approve(runId, [...names]);
-    const fs = yield* FileSystem.FileSystem;
-    yield* fs.writeFileString(
-      `${evidenceDir(dir, runId)}/approved.json`,
-      asApproved(
-        Arr.map(names, (name) =>
-          counting(name, `${rig.root}/${name}-runs`, `[ -f ${rig.root}/repaired ]`),
-        ),
+    yield* freeze(
+      runId,
+      Arr.map(names, (name) =>
+        counting(name, `${rig.root}/${name}-runs`, `[ -f ${rig.root}/repaired ]`),
       ),
     );
     return bin;
@@ -10249,7 +10244,7 @@ scenario(
         yield* ahead();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "" }]);
         const bin = yield* stuck(runId, ["unit"]);
-        const regranting = { writes: [naming(runId, ["unit"])], output: GATE_FIX };
+        const regranting = { ...naming(runId, ["unit"]), output: GATE_FIX };
         yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, regranting, OPENED]);
         const result = yield* ran({
           entry: shipped("implement"),
@@ -10275,14 +10270,10 @@ const heldUnproved = (runId: string) =>
     yield* ahead();
     const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
     yield* approve(runId, ["unit", "lint"]);
-    const fs = yield* FileSystem.FileSystem;
-    yield* fs.writeFileString(
-      `${evidenceDir(dir, runId)}/approved.json`,
-      asApproved([
-        counting("unit", `${rig.root}/unit-runs`),
-        counting("lint", `${rig.root}/lint-runs`, `[ -f ${rig.root}/repaired ]`),
-      ]),
-    );
+    yield* freeze(runId, [
+      counting("unit", `${rig.root}/unit-runs`),
+      counting("lint", `${rig.root}/lint-runs`, `[ -f ${rig.root}/repaired ]`),
+    ]);
     yield* rig.queueOutputs([
       BUILT,
       CLEAN_SYNTHESIS,
@@ -10372,18 +10363,15 @@ scenario(
         yield* fs.makeDirectory(`${rig.root}/v2`);
         yield* fs.writeFileString(tool, `#!/bin/sh\necho >> ${unitRuns}\n`);
         yield* fs.chmod(tool, 0o755);
-        yield* fs.writeFileString(
-          `${evidenceDir(dir, runId)}/approved.json`,
-          asApproved([
-            { name: "unit", executable: tool, argv: [], cwd: rig.projectDir },
-            // Upgrades unit's tool once, after unit has passed with the old one.
-            counting(
-              "lint",
-              `${rig.root}/lint-runs`,
-              `grep -Fqx '# v2' ${tool} || echo '# v2' >> ${tool}`,
-            ),
-          ]),
-        );
+        yield* freeze(runId, [
+          { name: "unit", executable: tool, argv: [], cwd: rig.projectDir },
+          // Upgrades unit's tool once, after unit has passed with the old one.
+          counting(
+            "lint",
+            `${rig.root}/lint-runs`,
+            `grep -Fqx '# v2' ${tool} || echo '# v2' >> ${tool}`,
+          ),
+        ]);
         yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
         const result = yield* ran({
           entry: shipped("implement"),
@@ -10412,15 +10400,11 @@ scenario(
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const runId = "r-gate-new-tree";
         yield* approve(runId, ["unit", "lint"]);
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.writeFileString(
-          `${evidenceDir(dir, runId)}/approved.json`,
-          asApproved([
-            counting("unit", `${rig.root}/unit-runs`),
-            // Leaves a file in the tree the first time, after unit has passed on the tree before it.
-            counting("lint", `${rig.root}/lint-runs`, `[ -f generated ] || echo > generated`),
-          ]),
-        );
+        yield* freeze(runId, [
+          counting("unit", `${rig.root}/unit-runs`),
+          // Leaves a file in the tree the first time, after unit has passed on the tree before it.
+          counting("lint", `${rig.root}/lint-runs`, `[ -f generated ] || echo > generated`),
+        ]);
         yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, GATE_FIX, OPENED]);
         const result = yield* ran({
           entry: shipped("implement"),
@@ -10461,19 +10445,15 @@ scenario(
         yield* repository();
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-red-base", ["unit"]);
-        const fs = yield* FileSystem.FileSystem;
         const count = `${rig.root}/runs`;
-        yield* fs.writeFileString(
-          `${evidenceDir(dir, "r-impl-red-base")}/approved.json`,
-          asApproved([
-            {
-              name: "unit",
-              executable: "sh",
-              argv: ["-c", `echo >> ${count}; wc -l < ${count} | { read n; [ $n -ge 3 ]; }`],
-              cwd: rig.projectDir,
-            },
-          ]),
-        );
+        yield* freeze("r-impl-red-base", [
+          {
+            name: "unit",
+            executable: "sh",
+            argv: ["-c", `echo >> ${count}; wc -l < ${count} | { read n; [ $n -ge 3 ]; }`],
+            cwd: rig.projectDir,
+          },
+        ]);
         yield* rig.queueOutputs([
           BUILT,
           CLEAN_SYNTHESIS,
@@ -10518,12 +10498,9 @@ scenario(
         yield* git("commit", "-qm", "break it");
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-own-red", ["unit"]);
-        yield* fs.writeFileString(
-          `${evidenceDir(dir, "r-impl-own-red")}/approved.json`,
-          asApproved([
-            { name: "unit", executable: "test", argv: ["!", "-f", "broken"], cwd: rig.projectDir },
-          ]),
-        );
+        yield* freeze("r-impl-own-red", [
+          { name: "unit", executable: "test", argv: ["!", "-f", "broken"], cwd: rig.projectDir },
+        ]);
         const fix = {
           verdict: "clean",
           findings: [],
@@ -10942,8 +10919,8 @@ scenario(
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-late-grant", ["unit"]);
         const fs = yield* FileSystem.FileSystem;
-        const approvedFile = `${evidenceDir(dir, "r-late-grant")}/approved.json`;
         const regrant = `${rig.root}/regranted.json`;
+        yield* fs.writeFileString(`${rig.root}/put-fact.ts`, PUT_FACT);
         yield* fs.writeFileString(
           regrant,
           asApproved([
@@ -10951,17 +10928,14 @@ scenario(
           ]),
         );
         // Its first run re-grants it, as a set_verification made meanwhile would, and fails.
-        yield* fs.writeFileString(
-          approvedFile,
-          asApproved([
-            {
-              name: "unit",
-              executable: "sh",
-              argv: ["-c", `cp ${regrant} ${approvedFile}; exit 1`],
-              cwd: rig.projectDir,
-            },
-          ]),
-        );
+        yield* freeze("r-late-grant", [
+          {
+            name: "unit",
+            executable: "sh",
+            argv: ["-c", `${factSetSh("r-late-grant", APPROVED, regrant)}; exit 1`],
+            cwd: rig.projectDir,
+          },
+        ]);
         yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
         yield* ran({
           entry: shipped("implement"),
@@ -11077,13 +11051,9 @@ exit 127`,
         const entry = shipped("implement");
         yield* stalled({ entry, runId, input: { plan, ...FINISH } });
         expect(yield* parkedWhy(runId)).toContain("gh is not installed");
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.writeFileString(
-          `${evidenceDir(dir, runId)}/approved.json`,
-          asApproved([
-            { name: "unit", executable: "sh", argv: ["-c", "exit 1"], cwd: rig.projectDir },
-          ]),
-        );
+        yield* freeze(runId, [
+          { name: "unit", executable: "sh", argv: ["-c", "exit 1"], cwd: rig.projectDir },
+        ]);
         yield* exec(
           ["git", "remote", "set-url", "upstream", "git@gitlab.example.com:team/project.git"],
           {
@@ -11619,7 +11589,7 @@ scenario(
         yield* bin.restore();
         expect(status.status).toBe("complete");
         expect(yield* asked(runId, "mr-2")).toContain(CI_MR);
-        expect(yield* readText(`${runDir(dir, runId)}/merge-request`)).toBe(`${CI_MR}\n`);
+        expect(yield* factOf(runId, MERGE_REQUEST)).toBe(`${CI_MR}\n`);
         expect(yield* unsettledOf(runId)).toHaveLength(MINOR_FINDINGS.length);
         expect(yield* ciNotes(forge)).toHaveLength(1);
       }),
@@ -12173,12 +12143,14 @@ const resumedUntilParked = (options: ShippedRun) =>
   );
 
 /** What `collie run intent verification` leaves for a Run: its checks, as the host keeps them. */
-const naming = (runId: string, names: ReadonlyArray<string>) => ({
-  path: `${evidenceDir(dir, runId)}/approved.json`,
-  text: asApproved(
-    Arr.map(names, (name) => ({ name, executable: "true", argv: [], cwd: rig.projectDir })),
-  ),
-});
+const naming = (runId: string, names: ReadonlyArray<string>) =>
+  factSet(
+    runId,
+    APPROVED,
+    asApproved(
+      Arr.map(names, (name) => ({ name, executable: "true", argv: [], cwd: rig.projectDir })),
+    ),
+  );
 
 scenario(
   "a Run with no checks builds without waiting, is asked to name them, and is held until one is",
@@ -12246,7 +12218,7 @@ scenario(
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         yield* approve("r-impl-named", []);
         yield* rig.queueOutputs([
-          { writes: [naming("r-impl-named", ["unit"])], output: BUILT },
+          { ...naming("r-impl-named", ["unit"]), output: BUILT },
           CLEAN_SYNTHESIS,
           OPENED,
         ]);
@@ -12283,7 +12255,7 @@ scenario(
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "" }]);
         yield* approve("r-impl-emptied", ["unit"]);
         yield* rig.queueOutputs([
-          { writes: [naming("r-impl-emptied", [])], output: BUILT },
+          { ...naming("r-impl-emptied", []), output: BUILT },
           CLEAN_SYNTHESIS,
           GATE_FIX,
           GATE_FIX,
@@ -13526,7 +13498,7 @@ const releaseHost = <E = never>(
   Layer.effect(Host)(
     Effect.gen(function* () {
       const host = yield* Host;
-      const services = yield* Effect.context<PlatformServices | ForgeHttp>();
+      const services = yield* Effect.context<PlatformServices | ForgeHttp | RunRecords>();
       let replies = 0;
       return Host.of({
         ...host,
@@ -13569,7 +13541,6 @@ const releaseHost = <E = never>(
           }),
         takeOverLanding: (asked) =>
           Effect.gen(function* () {
-            const fs = yield* FileSystem.FileSystem;
             const runs = yield* Effect.forEach(Rec.toEntries(ends), ([runId, ended]) =>
               Effect.map(readLanding(runDir(dir, runId)), (landing) => ({
                 runId,
@@ -13577,7 +13548,8 @@ const releaseHost = <E = never>(
                 ended,
               })),
             );
-            const mr = yield* fs.readFileString(`${runDir(dir, asked.runId)}/merge-request`);
+            const mr = yield* factOf(asked.runId, MERGE_REQUEST);
+            if (mr === null) return yield* Effect.die(`${asked.runId} has no merge request`);
             return yield* takeOver({
               runDir: runDir(dir, asked.runId),
               mr: Str.trim(mr),
@@ -13764,14 +13736,7 @@ const checkedBy = (runId: string, name: string, executable = "true", argv: strin
     Effect.flatMap((fs) =>
       fs
         .makeDirectory(evidenceDir(dir, runId), { recursive: true })
-        .pipe(
-          Effect.andThen(
-            fs.writeFileString(
-              `${evidenceDir(dir, runId)}/approved.json`,
-              asApproved([{ name, executable, argv, cwd: "worktree" }]),
-            ),
-          ),
-        ),
+        .pipe(Effect.andThen(freeze(runId, [{ name, executable, argv, cwd: "worktree" }]))),
     ),
     Effect.orDie,
   );
@@ -13949,10 +13914,7 @@ const ownCheck = (runId: string) =>
         .makeDirectory(evidenceDir(dir, runId), { recursive: true })
         .pipe(
           Effect.andThen(
-            fs.writeFileString(
-              `${evidenceDir(dir, runId)}/approved.json`,
-              asApproved([{ ...counting("check", `${rig.root}/check-runs`), ci: "test" }]),
-            ),
+            freeze(runId, [{ ...counting("check", `${rig.root}/check-runs`), ci: "test" }]),
           ),
         ),
     ),
@@ -14515,7 +14477,7 @@ scenario(
                 parent: "r-fan",
               });
               yield* fs.makeDirectory(runDir(dir, `r-fan.${repo}`), { recursive: true });
-              yield* fs.writeFileString(mergeRequestFile(runDir(dir, `r-fan.${repo}`)), one.url);
+              yield* putFact(`r-fan.${repo}`, MERGE_REQUEST, one.url);
             }
           }),
         );
@@ -17195,7 +17157,12 @@ for (const name of ["gitlab", "github"] as const) {
           const runId = `r-signed-${name}`;
           const fs = yield* FileSystem.FileSystem;
           yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
-          yield* fs.writeFileString(`${runDir(dir, runId)}/merge-request`, `${mr}\n`);
+          yield* putFact(
+            runId,
+            MERGE_REQUEST,
+            `${mr}
+`,
+          );
           const said = yield* session(
             Effect.gen(function* () {
               const host = yield* Host;
@@ -17230,7 +17197,12 @@ for (const name of ["gitlab", "github"] as const) {
           const runId = `r-lost-${name}`;
           const fs = yield* FileSystem.FileSystem;
           yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
-          yield* fs.writeFileString(`${runDir(dir, runId)}/merge-request`, `${mr}\n`);
+          yield* putFact(
+            runId,
+            MERGE_REQUEST,
+            `${mr}
+`,
+          );
           const asked = {
             runId,
             cwd: rig.projectDir,
@@ -17280,7 +17252,12 @@ for (const name of ["gitlab", "github"] as const) {
             const file = `${rig.root}/redacted-review.md`;
             yield* fs.writeFileString(file, body);
             yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
-            yield* fs.writeFileString(`${runDir(dir, runId)}/merge-request`, `${mr}\n`);
+            yield* putFact(
+              runId,
+              MERGE_REQUEST,
+              `${mr}
+`,
+            );
             yield* changed({ title: body });
             const head = (yield* forge.model()).mrs[0]?.head ?? "";
             slack = fakeSlack();
@@ -17365,7 +17342,12 @@ for (const name of ["gitlab", "github"] as const) {
           const runId = `r-leak-reply-${name}`;
           const fs = yield* FileSystem.FileSystem;
           yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
-          yield* fs.writeFileString(`${runDir(dir, runId)}/merge-request`, `${mr}\n`);
+          yield* putFact(
+            runId,
+            MERGE_REQUEST,
+            `${mr}
+`,
+          );
           const [noted, replied] = yield* session(
             Effect.gen(function* () {
               const host = yield* Host;
@@ -17410,7 +17392,12 @@ for (const name of ["gitlab", "github"] as const) {
           const runId = `r-leak-share-${name}`;
           const fs = yield* FileSystem.FileSystem;
           yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
-          yield* fs.writeFileString(`${runDir(dir, runId)}/merge-request`, `${mr}\n`);
+          yield* putFact(
+            runId,
+            MERGE_REQUEST,
+            `${mr}
+`,
+          );
           const shared = yield* session(
             Effect.flatMap(Host, (host) =>
               host.shareForApproval({ runId, cwd: rig.projectDir, channel: "C123" }),
@@ -17440,7 +17427,12 @@ for (const name of ["gitlab", "github"] as const) {
           const runId = `r-lost-thread-${name}`;
           const fs = yield* FileSystem.FileSystem;
           yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
-          yield* fs.writeFileString(`${runDir(dir, runId)}/merge-request`, `${mr}\n`);
+          yield* putFact(
+            runId,
+            MERGE_REQUEST,
+            `${mr}
+`,
+          );
           const ask = (comment: string, body: string) => ({
             runId,
             cwd: rig.projectDir,
@@ -17491,7 +17483,12 @@ for (const name of ["gitlab", "github"] as const) {
           const runId = `r-prefix-${name}`;
           const fs = yield* FileSystem.FileSystem;
           yield* fs.makeDirectory(runDir(dir, runId), { recursive: true });
-          yield* fs.writeFileString(`${runDir(dir, runId)}/merge-request`, `${mr}\n`);
+          yield* putFact(
+            runId,
+            MERGE_REQUEST,
+            `${mr}
+`,
+          );
           const ask = (id: number) => ({
             runId,
             cwd: rig.projectDir,

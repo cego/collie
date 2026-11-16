@@ -852,7 +852,7 @@ test(
           ),
         ).toEqual(detail!.flow!);
         expect(Arr.map(detail!.flow!.lanes, (lane) => lane.run)).toEqual([run.id]);
-      }),
+      }).pipe(Effect.provide(recordsAt(world.state))),
     ),
   // A host, and a Run of it waiting on its decision.
   60_000,

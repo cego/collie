@@ -4,7 +4,7 @@
 // its own work look more important by describing it that way.
 
 import * as Arr from "effect/Array";
-import { Effect, FileSystem, Option, Path } from "effect";
+import { Effect, FileSystem, Option } from "effect";
 import { expect, test } from "bun:test";
 import {
   appendCard,
@@ -16,6 +16,7 @@ import {
   readCards,
   readFinalCard,
   readCheckpoints,
+  writeCheckpoint,
   readiness,
   significance,
   verificationOn,
@@ -294,19 +295,20 @@ test("the newest card per slice is what a reader sees, and the journal keeps the
 test("a checkpoint is read as claims, and one nobody can decode is skipped", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-checkpoints-" });
-      const progress = path.join(dir, "steering", "progress");
-      yield* fs.makeDirectory(progress, { recursive: true });
-      yield* fs.writeFileString(
-        path.join(progress, "001-intent.json"),
-        `{"ticket":"001-intent.md","status":"done","claims":["the schema round trips"],"at":"t"}`,
+      const dir = "/state/runs/r-checkpoints";
+      yield* writeCheckpoint(dir, {
+        ticket: "001-intent.md",
+        status: "done",
+        claims: ["the schema round trips"],
+        at: "t",
+      });
+      yield* RunRecords.use((records) =>
+        records.put("r-checkpoints", "steering/progress/broken.json", "not json"),
       );
-      yield* fs.writeFileString(path.join(progress, "broken.json"), "not json");
 
       const found = yield* readCheckpoints(dir);
       expect(Arr.map(found, (entry) => entry.checkpoint.ticket)).toEqual(["001-intent.md"]);
       expect(found[0]?.checkpoint.claims).toEqual(["the schema round trips"]);
+      expect(found[0]?.file).toBe(`${dir}/steering/progress/001-intent.json`);
     }),
   ));

@@ -4,8 +4,9 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
 import { connect } from "../src/host";
 import { readVerifications } from "../src/verify";
-import { hostRecords } from "./support/records";
-import { evidenceDir, runDir } from "../src/engine";
+import { hostRecords, recordsAt } from "./support/records";
+import { RunRecords } from "../src/run-records";
+import { evidenceDir } from "../src/engine";
 import { exec } from "./support/command";
 import { until } from "./support/host";
 import { collie, proves } from "./support/world";
@@ -139,9 +140,9 @@ test(
             () => client.run({ runId: recovered }).pipe(Effect.orDie),
             (view) => (view?.waiting.length ?? 0) > 0,
           );
-          yield* fs
-            .writeFileString(`${runDir(world.state, recovered)}/recovery-parent`, carried)
-            .pipe(Effect.orDie);
+          yield* RunRecords.use((records) =>
+            records.put(recovered, "recovery-parent", carried),
+          ).pipe(Effect.provide(recordsAt(world.state)));
           yield* client
             .answer({ runId: recovered, decision: "done", value: "yes", request: "recovered-done" })
             .pipe(Effect.orDie);

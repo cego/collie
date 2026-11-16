@@ -845,7 +845,7 @@ test(
             ),
           ),
         ).toEqual(["preserve the public --json envelope"]);
-      }),
+      }).pipe(Effect.provide(recordsAt(world.state))),
     ),
   60_000,
 );
@@ -934,7 +934,7 @@ test(
 
         const replaced = yield* cli([...remember, "--replace"], env);
         expect(replaced.exit).toBe(0);
-      }),
+      }).pipe(Effect.provide(recordsAt(world.state))),
     ),
   60_000,
 );

@@ -29,7 +29,7 @@ import { Store } from "../src/store";
 import { writeTask } from "../src/task";
 import { socketOf } from "../src/host";
 import { reportsLayer } from "../src/reports";
-import { DEFAULT_AUTHORITY, IntentSchema } from "../src/intent";
+import { DEFAULT_AUTHORITY, writeIntent } from "../src/intent";
 import type { Peer } from "../src/peers-model";
 
 const ROOT = new URL("../", import.meta.url).pathname;
@@ -176,7 +176,7 @@ const REPORT: RunReport = {
   closed: true,
 };
 
-test("Run listings and related views use their supplied reader for intent and displayed controls", () =>
+test("Run listings and related views read intent from the Run's records and displayed controls from their supplied reader", () =>
   runEffect(
     hosted(
       Effect.gen(function* () {
@@ -184,7 +184,10 @@ test("Run listings and related views use their supplied reader for intent and di
         const fs = yield* FileSystem.FileSystem;
         const run = yield* started(yield* loaded("quiet"), "reader-snapshot", {});
         yield* settled(run.runId, "complete");
-        const intent = yield* Schema.encodeEffect(Schema.fromJsonString(IntentSchema))({
+        const before = yield* registry.view(run.runId);
+        expect(before?.options.outcome).not.toBe("performance");
+        expect(before?.controls).toEqual([]);
+        yield* writeIntent(runDir(dir(), run.runId), {
           version: 1,
           run: run.runId,
           goal: "Reader snapshot",
@@ -196,10 +199,6 @@ test("Run listings and related views use their supplied reader for intent and di
         });
         const reader: FileSystem.FileSystem = {
           ...fs,
-          readFileString: (path, encoding) =>
-            path === `${runDir(dir(), run.runId)}/intent.json`
-              ? Effect.succeed(intent)
-              : fs.readFileString(path, encoding),
           exists: (path) =>
             path === controlPath(dir(), HOLD, run.runId) ? Effect.succeed(true) : fs.exists(path),
         };
@@ -218,7 +217,7 @@ test("Run listings and related views use their supplied reader for intent and di
           controls: [HOLD],
         });
         const fresh = yield* registry.view(run.runId);
-        expect(fresh?.options.outcome).not.toBe("performance");
+        expect(fresh?.options.outcome).toBe("performance");
         expect(fresh?.controls).toEqual([]);
       }),
     ),

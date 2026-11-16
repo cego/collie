@@ -13,7 +13,7 @@ const usualOf = (samples: ReadonlyArray<number>) => {
 
 /** Each workflow's usual Step times, by Step id. */
 export const stepTimesByWorkflow = RunRecords.use((records) => records.stepSamples).pipe(
-  Effect.map((rows) => {
+  Effect.map((rows): ReadonlyMap<string, ReadonlyMap<string, number>> => {
     const byStep = new Map<string, Map<string, number[]>>();
     for (const row of rows) {
       const steps = byStep.get(row.workflow) ?? new Map<string, number[]>();
@@ -29,7 +29,7 @@ export const stepTimesByWorkflow = RunRecords.use((records) => records.stepSampl
       }
       byWorkflow.set(workflow, usual);
     }
-    return byWorkflow as ReadonlyMap<string, ReadonlyMap<string, number>>;
+    return byWorkflow;
   }),
 );
 

@@ -10,7 +10,8 @@ import { evidenceDir, runDir } from "../src/engine";
 import { appendMetric } from "../src/metrics";
 import { appendDrift } from "../src/drift";
 import { readCards } from "../src/cards";
-import { readIntent } from "../src/intent";
+import { INTENT_FILE, readIntent } from "../src/intent";
+import { RunRecords } from "../src/run-records";
 import { appendLine } from "../src/steering";
 import { hostRecords, ledgerOf, recordsAt, registeredAt } from "./support/records";
 import { recordsReadLayer } from "../src/records";
@@ -126,8 +127,10 @@ test(
             expect((yield* first.cli(change)).envelope.ok).toBe(true);
             expect(
               Option.getOrUndefined(
-                Option.map(Option.fromNullishOr(yield* readIntent(dir)), (present) =>
-                  Arr.filter(present.history, (one) => pipe_(one.change, Str.includes("goal"))),
+                Option.map(
+                  Option.fromNullishOr(yield* hostRecords(second.world.state, readIntent(dir))),
+                  (present) =>
+                    Arr.filter(present.history, (one) => pipe_(one.change, Str.includes("goal"))),
                 ),
               ),
             ).toHaveLength(1);
@@ -141,7 +144,7 @@ test(
             ).toBe(true);
             const added = Option.getOrUndefined(
               Arr.findFirst(
-                (yield* readIntent(dir))!.constraints,
+                (yield* hostRecords(second.world.state, readIntent(dir)))!.constraints,
                 (one) => one.text === "keep the evidence",
               ),
             )!;
@@ -149,7 +152,9 @@ test(
               (yield* first.cli(["run", "intent", "remove-constraint", runId, added.id])).envelope
                 .ok,
             ).toBe(true);
-            expect((yield* readIntent(dir))?.authority.auto_correct).toBe(false);
+            expect(
+              (yield* hostRecords(second.world.state, readIntent(dir)))?.authority.auto_correct,
+            ).toBe(false);
             yield* owner.declare({ frontDoor: "cli" });
             const invalidAuthority = yield* owner
               .changeIntent({
@@ -160,7 +165,10 @@ test(
               })
               .pipe(Effect.exit);
             expect(Exit.isFailure(invalidAuthority)).toBe(true);
-            expect((yield* readIntent(dir))?.authority.max_corrections_per_constraint).toBe(2);
+            expect(
+              (yield* hostRecords(second.world.state, readIntent(dir)))?.authority
+                .max_corrections_per_constraint,
+            ).toBe(2);
 
             expect(
               (yield* first.cli([
@@ -191,9 +199,9 @@ test(
               change: { ...replay.change, command: null },
               request: "withdraw-replay",
             });
-            const withdrawn = (yield* readIntent(dir))!;
+            const withdrawn = (yield* hostRecords(second.world.state, readIntent(dir)))!;
             yield* owner.changeIntent(replay);
-            expect(yield* readIntent(dir)).toEqual(withdrawn);
+            expect(yield* hostRecords(second.world.state, readIntent(dir))).toEqual(withdrawn);
             expect(Arr.map(withdrawn.authority.run_verification, (one) => one.name)).not.toContain(
               "replay",
             );
@@ -323,7 +331,9 @@ test(
             expect((yield* ledgerOf(second.world.state, terminal)).at(-1)).toMatchObject({
               kind: "override_cleared",
             });
-            yield* fs.writeFileString(`${dir}/intent.json`, "broken intent");
+            yield* RunRecords.use((records) =>
+              records.put(runId, INTENT_FILE, "broken intent"),
+            ).pipe(Effect.provide(recordsAt(second.world.state)));
             const held = yield* first.cli([
               "run",
               "intent",
@@ -370,7 +380,9 @@ test(
             yield* first.lists([second]);
             expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
             const dir = runDir(second.world.state, runId);
-            const log = `${evidenceDir(second.world.state, runId)}/live.log`;
+            const evidence = evidenceDir(second.world.state, runId);
+            yield* fs.makeDirectory(evidence, { recursive: true });
+            const log = `${evidence}/live.log`;
             yield* fs.writeFileString(log, "");
             yield* fs.writeFileString(
               `${dir}/${VERIFYING_FILE}`,

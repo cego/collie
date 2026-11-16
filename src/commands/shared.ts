@@ -96,6 +96,7 @@ const callerReaches = Effect.fn("collie.callerReaches")(function* (
   );
   if (Arr.some(trail, (line) => steered(line, view.runId))) return true;
   const intent = yield* readIntent(runDir(env.stateDir, caller)).pipe(
+    Effect.provide(recordsReadLayer(env.stateDir)),
     Effect.orElseSucceed(() => null),
   );
   if (pipe_(intent?.goal ?? "", Str.includes(view.runId))) return true;

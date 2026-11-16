@@ -80,7 +80,7 @@ import { stopHost, until } from "./support/host";
 import { Launched, orderLaunch, recordLaunch } from "../src/launches";
 import { epochMs } from "../src/time";
 import { seedIntent, writeIntent } from "../src/intent";
-import { approvedFile, encodeApproved } from "../src/verify-spec";
+import { updateApproved } from "../src/verify-spec";
 import { planDirOf } from "../src/run-detail";
 import { connect } from "../src/host";
 import { readCards } from "../src/cards";
@@ -4435,7 +4435,7 @@ test("a Run's checks are its Intent's as they stand, each passed as the command 
       ) => ({ name, executable, argv, cwd });
       const fs = yield* FileSystem.FileSystem;
       yield* fs.makeDirectory(`${repo}/packages/b`, { recursive: true });
-      yield* fs.writeFileString(approvedFile(run.evidence), encodeApproved([spec("test")]));
+      yield* updateApproved(run.evidence, () => [spec("test")]);
       // As Collie records it: the executable resolved, in the directory the check names.
       const ran = (name: string, result: "pass" | "fail" = "pass") => ({
         ...checked(name, head, result),
@@ -4482,10 +4482,9 @@ test("a Run whose gate relied on an agent's pass of the check's command reads as
         mr: PR,
         finished: "2026-09-14T09:30:00Z",
       });
-      yield* (yield* FileSystem.FileSystem).writeFileString(
-        approvedFile(run.evidence),
-        encodeApproved([{ name: "test", executable: "true", argv: [], cwd: "worktree" }]),
-      );
+      yield* updateApproved(run.evidence, () => [
+        { name: "test", executable: "true", argv: [], cwd: "worktree" },
+      ]);
       const agents = (name: string, argv: ReadonlyArray<string>) => ({
         ...checked(name, head),
         by: "agent" as const,

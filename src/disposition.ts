@@ -14,7 +14,7 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
-import { Effect, Path, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { Disposition } from "./board-model";
 import { appendRunJournal, readRunJournal, runJournal } from "./journal";
 

@@ -48,6 +48,7 @@ import { Herdr } from "../src/herdr";
 import { ownerOf } from "../src/host";
 import { BOARD_TERMINAL } from "../src/side-jobs";
 import { readIntent } from "../src/intent";
+import { recordsReadLayer } from "../src/records";
 import { confirmProposed, hostRunProposals, startRun } from "../src/lifecycle";
 import {
   append as appendNews,
@@ -276,7 +277,7 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
       (line) => Arr.some(line.targets, (target) => target.run === mine.id),
     ),
   );
-  const intent = yield* readIntent(mine.dir);
+  const intent = yield* readIntent(mine.dir).pipe(Effect.provide(recordsReadLayer(stateDir)));
   say(
     "a requested action is executed and attributed to chat",
     applied !== null &&
@@ -312,7 +313,7 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
       hash: one.content_hash,
       request: "probe-replay",
     });
-    const after = yield* readIntent(mine.dir);
+    const after = yield* readIntent(mine.dir).pipe(Effect.provide(recordsReadLayer(stateDir)));
     say(
       "a recorded execution cannot be replayed",
       !replay.ok && replay.error.details?.reason === "not_pending" && after?.version === 2

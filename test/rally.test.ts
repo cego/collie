@@ -13,8 +13,8 @@
 
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Layer, Schema, flow, Result } from "effect";
-import { VerifySpecSchema } from "../src/verify-spec";
+import { Effect, FileSystem, Layer } from "effect";
+import { updateApproved } from "../src/verify-spec";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { exec } from "./support/command";
 import { runEffect as runShared } from "./support/effect";
@@ -106,11 +106,6 @@ const rally = (runId: string, rounds: number) =>
     Effect.scoped,
     Effect.orDie,
   );
-
-const asApproved = flow(
-  Schema.encodeResult(Schema.fromJsonString(Schema.Array(VerifySpecSchema))),
-  Result.getOrThrow,
-);
 
 /** This suite starts no children; the service is here because a registration takes one. */
 const nothing = () => Effect.die("no children in this suite");
@@ -281,13 +276,10 @@ test("a command nobody approved is refused, whatever a workflow asks the host fo
       const fs = yield* FileSystem.FileSystem;
       yield* fs.makeDirectory(`${rig.projectDir}/sub`, { recursive: true });
       yield* fs.makeDirectory(evidenceDir(dir, "r-perm"), { recursive: true });
-      yield* fs.writeFileString(
-        `${evidenceDir(dir, "r-perm")}/approved.json`,
-        asApproved([
-          { name: "unit", executable: "true", argv: [], cwd: "." },
-          { name: "nested", executable: "true", argv: [], cwd: "sub" },
-        ]),
-      );
+      yield* updateApproved(evidenceDir(dir, "r-perm"), () => [
+        { name: "unit", executable: "true", argv: [], cwd: "." },
+        { name: "nested", executable: "true", argv: [], cwd: "sub" },
+      ]);
       const asked = yield* Effect.gen(function* () {
         yield* (yield* Store).admit({
           request: "req-perm",

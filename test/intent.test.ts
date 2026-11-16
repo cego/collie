@@ -31,6 +31,7 @@ import { runDir } from "../src/engine";
 import { isSettled } from "../src/lifecycle";
 import { MODULES, hosted } from "./support/hosted";
 import { until } from "./support/host";
+import { hostRecords } from "./support/records";
 
 let dir: string;
 
@@ -537,7 +538,10 @@ test(
             },
           })
           .pipe(Effect.orDie);
-        const seeded = yield* readIntent(runDir(world.state, started.runId));
+        const seeded = yield* hostRecords(
+          world.state,
+          readIntent(runDir(world.state, started.runId)),
+        );
         expect(seeded?.version).toBe(1);
         expect(seeded?.goal).toBe("greet whoever asks");
         // What was named at launch replaces the workspace's own entry with the same id.
@@ -560,7 +564,10 @@ test(
             parent: started.runId,
           })
           .pipe(Effect.orDie);
-        const inherited = yield* readIntent(runDir(world.state, child.runId));
+        const inherited = yield* hostRecords(
+          world.state,
+          readIntent(runDir(world.state, child.runId)),
+        );
         expect(inherited?.goal).toBe("greet whoever asks");
         expect(inherited?.parent?.run).toBe(started.runId);
         expect(
@@ -607,13 +614,15 @@ test(
 
           const changed = yield* setOutcome("feature", "feature").pipe(Effect.orDie);
           expect(changed.version).toBe(2);
-          const intent = yield* readIntent(runDir(world.state, runId));
+          const intent = yield* hostRecords(world.state, readIntent(runDir(world.state, runId)));
           expect(intent?.history.at(-1)?.change).toBe("outcome set to feature");
           expect((yield* client.run({ runId }).pipe(Effect.orDie))?.outcome).toBe("feature");
 
           const refused = yield* setOutcome("chore", "chore").pipe(Effect.flip);
           expect(String(refused.reason)).toStartWith("invalid_input:");
-          expect((yield* readIntent(runDir(world.state, runId)))?.version).toBe(2);
+          expect(
+            (yield* hostRecords(world.state, readIntent(runDir(world.state, runId))))?.version,
+          ).toBe(2);
 
           yield* setOutcome(null, "cleared").pipe(Effect.orDie);
           expect((yield* client.run({ runId }).pipe(Effect.orDie))?.outcome).toBe("unspecified");

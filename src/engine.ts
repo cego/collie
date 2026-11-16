@@ -236,7 +236,7 @@ import {
   checkDrift,
   familyOf,
   grantedToRun,
-  mergeRequestFile,
+  MERGE_REQUEST,
   appendLog,
   said,
   settleAtFinish,
@@ -248,10 +248,10 @@ import {
 import { evaluationDeps } from "./evaluator";
 import { budgetPath, herdOf, humanSubmits, machineHerd } from "./steering";
 import { recordsLayer, type Records } from "./records";
-import { RunRecords } from "./run-records";
+import { addressOf, RunRecords } from "./run-records";
 import { Steered } from "./delivery-queue";
 import type { JudgementDeps } from "./drift";
-import { finishedOnRecord, type Card } from "./cards";
+import { finishedOnRecord, writeCheckpoint, type Card } from "./cards";
 import { reason, taskTitleOf, unsafePathComponent } from "./naming";
 import { freshTaskLabel } from "./tasknames";
 import { attachmentRefusal, attachmentsDir, copyInto, listAttachments } from "./attachments";
@@ -348,10 +348,9 @@ import { CurrentStep, appendStepLine, readStepLines, type StepLine, type StepNot
 import { classifyGivenSet, classifyGivenTarget, classifyWorkSource, defaultBase } from "./inputs";
 import type { PlatformServices } from "./platform";
 import {
-  approvedFile,
+  updateApproved,
   approvedFrom,
   approvedIn,
-  encodeApproved,
   PROJECT_FILE,
   type VerifySpec,
 } from "./verify-spec";
@@ -1023,6 +1022,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly usageWait: (runId: string, wait: { readonly account: string; readonly resetsAt: string | null } | null) => Effect.Effect<void>;
     /** Records where the Run's work is among its Steps; \`step\` and \`forecast\` call it. */
     readonly step: (runId: string, note: { readonly kind: string } & Record<string, unknown>) => Effect.Effect<void>;
+    /** Records what an implementer says it has done with a ticket, carded while it works. */
+    readonly checkpoint: (runId: string, checkpoint: { readonly ticket: string; readonly status: "started" | "done"; readonly claims: ReadonlyArray<string> }) => Effect.Effect<void>;
     /** Why this Run parked its own work, shown beside its status; null clears it. No cause is \`unknown\`. */
     readonly parked: (runId: string, why: string | null, cause?: ParkCause) => Effect.Effect<void>;
     readonly asking: (runId: string, question: DecisionSpec, asker?: string) => Effect.Effect<void>;
@@ -3043,6 +3044,12 @@ const registrationOf = (definition: WorkflowDefinition, name: string): Registrat
   return { workflow, layer };
 };
 
+/** The Run a follow-up recovered the implementation of. */
+const RECOVERY_PARENT = "recovery-parent";
+
+/** How a Run that completed or failed ended, kept for when its module is gone. */
+const TERMINAL = "terminal.json";
+
 /**
  * A Run's ending, as the host tells it: what Oversight settles as it finishes, then the
  * toast. A suspension is not an ending, and a question or a stop says so for itself.
@@ -3050,11 +3057,11 @@ const registrationOf = (definition: WorkflowDefinition, name: string): Registrat
 const ended = (runId: string, status: typeof RunStatus.Type) =>
   Effect.gen(function* () {
     if (status.status === "complete" || status.status === "failed") {
-      const fs = yield* FileSystem.FileSystem;
-      const place = yield* (yield* Host).place(runId);
-      yield* fs
-        .writeFileString(`${place.dir}/terminal.json`, asJsonText(status))
-        .pipe(Effect.orDie);
+      // The host runs every Run with its records; a module's own Layer cannot ask for them.
+      const records = yield* Effect.serviceOption(RunRecords);
+      if (Option.isNone(records))
+        return yield* Effect.die(`${runId} ended with no records to keep it`);
+      yield* records.value.put(runId, TERMINAL, asJsonText(status));
     }
     const oversight = yield* Effect.serviceOption(Oversight);
     if (Option.isSome(oversight)) yield* oversight.value.finish(runId);
@@ -3591,7 +3598,6 @@ const decodeAskedAttachments = Schema.decodeUnknownOption(
 );
 
 /** Where a Run keeps the merge request it opened. */
-const mergeRequestPath = (dir: string, runId: string) => mergeRequestFile(runDir(dir, runId));
 
 /** Says why a Run's reviewed checkout was refused, in the Run's directory `dir`. */
 export const checkoutRefusedFile = (dir: string) => `${dir}/checkout-refused`;
@@ -3663,13 +3669,10 @@ const refusedCheckout = (o: {
   });
 
 /** The merge request a Run opened, or null where it recorded none. */
-const mergeRequestOf = (fs: FileSystem.FileSystem, dir: string, runId: string) =>
-  fs.readFileString(mergeRequestPath(dir, runId)).pipe(
-    Effect.map((url) => Str.trim(url) || null),
-    Effect.orElseSucceed(() => null),
+const recordedMergeRequest = (runId: string) =>
+  RunRecords.use((records) => records.fact(runId, MERGE_REQUEST)).pipe(
+    Effect.map((url) => (url === null ? null : Str.trim(url) || null)),
   );
-
-const approvedPath = (dir: string, runId: string) => approvedFile(evidenceDir(dir, runId));
 
 /** Where new work in `cwd` starts, or null where it has no such ref. */
 const startOf = (cwd: string) =>
@@ -3712,16 +3715,17 @@ export const freezeApproved = Effect.fn("Engine.freezeApproved")(function* (opti
   /** The set the start already settled; without it, the files are read here. */
   readonly approved?: ReadonlyArray<VerifySpec>;
 }) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = approvedPath(options.dir, options.runId);
-  if (yield* fs.exists(path).pipe(Effect.orElseSucceed(() => false))) return;
+  const evidence = evidenceDir(options.dir, options.runId);
+  const frozen = yield* RunRecords.use((records) =>
+    records.fact(options.runId, `${addressOf(evidence).prefix}approved.json`),
+  );
+  if (frozen !== null) return;
   const approved =
     options.approved ??
     (yield* approvedAt(options.project, options.userDir, yield* startOf(options.project)).pipe(
       Effect.orElseSucceed((): ReadonlyArray<VerifySpec> => []),
     ));
-  yield* fs.makeDirectory(evidenceDir(options.dir, options.runId), { recursive: true });
-  yield* fs.writeFileString(path, encodeApproved(approved));
+  yield* updateApproved(evidence, (was) => was ?? approved);
 });
 
 const approvedOf = (dir: string, runId: string) => approvedIn(evidenceDir(dir, runId));
@@ -4055,6 +4059,8 @@ export const hostLayer = (options: {
       const services = yield* Effect.context<Collecting>();
       const bun = yield* Effect.context<PlatformServices | Records>();
       const runRecords = yield* RunRecords;
+      const mergeRequestOf = (runId: string) =>
+        recordedMergeRequest(runId).pipe(Effect.provideService(RunRecords, runRecords));
       const under = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
         Effect.provideContext(effect, services);
       const parkReview = (reason: string) =>
@@ -4204,9 +4210,7 @@ export const hostLayer = (options: {
         let from = runId;
         while (from !== "" && !lineage.includes(from)) {
           lineage.unshift(from);
-          from = yield* fs
-            .readFileString(`${runDir(dir, from)}/recovery-parent`)
-            .pipe(Effect.orElseSucceed(() => ""));
+          from = (yield* runRecords.fact(from, RECOVERY_PARENT)) ?? "";
         }
         return lineage;
       });
@@ -4744,7 +4748,7 @@ export const hostLayer = (options: {
         readonly returnFailedCi?: boolean;
       }) =>
         Effect.gen(function* () {
-          const mr = yield* mergeRequestOf(fs, dir, asked.runId);
+          const mr = yield* mergeRequestOf(asked.runId);
           const ref = mr === null ? null : mrRefOf(mr);
           if (mr === null || ref === null)
             return yield* new WorkflowError({
@@ -4764,7 +4768,7 @@ export const hostLayer = (options: {
         });
       const unrecorded = "this Run recorded no merge request to read deployments of";
       const recordedRef = (runId: string) =>
-        Effect.map(mergeRequestOf(fs, dir, runId), (mr) => (mr === null ? null : mrRefOf(mr)));
+        Effect.map(mergeRequestOf(runId), (mr) => (mr === null ? null : mrRefOf(mr)));
       const readable = (asked: { readonly runId: string; readonly cwd: string }) =>
         Effect.gen(function* () {
           const { mr, ref, read } = yield* reviewRead({ ...asked, proved: "", seen: [] });
@@ -4829,12 +4833,8 @@ export const hostLayer = (options: {
             details.set(run, {
               repo: options.repo || ".",
               change: options.change || null,
-              ended:
-                (yield* set(STOP, run)) ||
-                (yield* fs
-                  .exists(`${runDir(dir, run)}/terminal.json`)
-                  .pipe(Effect.orElseSucceed(() => false))),
-              mr: yield* mergeRequestOf(fs, dir, run),
+              ended: (yield* set(STOP, run)) || (yield* runRecords.fact(run, TERMINAL)) !== null,
+              mr: yield* mergeRequestOf(run),
             });
           }
           const repo = (yield* optionsOf(asked.runId)).repo || ".";
@@ -5076,10 +5076,8 @@ export const hostLayer = (options: {
                 from !== null &&
                 (row.parent === id || (row.task !== null && row.task === from.task))
               )
-                yield* fs
-                  .writeFileString(`${runDir(dir, runId)}/recovery-parent`, id)
-                  .pipe(Effect.orDie);
-              return facts;
+                yield* runRecords.put(runId, RECOVERY_PARENT, id);
+              return { ...facts, lineage: Arr.reverse(yield* recoveryLineage(id)) };
             }),
           ),
         reviewedBranch,
@@ -5171,6 +5169,10 @@ export const hostLayer = (options: {
             Effect.provideService(FileSystem.FileSystem, fs),
             Effect.provideService(RunRecords, runRecords),
           ),
+        checkpoint: (runId, checkpoint) =>
+          Effect.flatMap(nowIso, (at) =>
+            writeCheckpoint(runDir(dir, runId), { ...checkpoint, at }),
+          ).pipe(Effect.provideService(RunRecords, runRecords)),
         record: (runId, event) =>
           // A replay writes its records again, as it re-enters every step: the log is what
           // the Run did each time it ran, not a deduplicated story.
@@ -5361,7 +5363,7 @@ export const hostLayer = (options: {
         shareForApproval: (asked) =>
           under(
             Effect.gen(function* () {
-              const mr = yield* mergeRequestOf(fs, dir, asked.runId);
+              const mr = yield* mergeRequestOf(asked.runId);
               const ref = mr === null ? null : mrRefOf(mr);
               if (mr === null || ref === null)
                 return { posted: false, why: "this Run recorded no merge request to share" };
@@ -5480,7 +5482,7 @@ export const hostLayer = (options: {
                   cwd: asked.cwd,
                   spec,
                   command: yield* commandOf({ ...own, cwd: asked.cwd }, spec),
-                  mr: yield* mergeRequestOf(fs, dir, asked.runId),
+                  mr: yield* mergeRequestOf(asked.runId),
                   wait: asked.wait ?? false,
                   settle: asked.settle ?? false,
                   run: runShell,
@@ -5492,7 +5494,7 @@ export const hostLayer = (options: {
         targetFailure: (asked) =>
           under(
             Effect.gen(function* () {
-              const ref = mrRefOf(yield* mergeRequestOf(fs, dir, asked.runId));
+              const ref = mrRefOf(yield* mergeRequestOf(asked.runId));
               if (ref === null) return null;
               return yield* sharedFailure(
                 ref,
@@ -5505,7 +5507,7 @@ export const hostLayer = (options: {
         takeTarget: (asked) =>
           under(
             Effect.gen(function* () {
-              const ref = mrRefOf(yield* mergeRequestOf(fs, dir, asked.runId));
+              const ref = mrRefOf(yield* mergeRequestOf(asked.runId));
               if (ref === null) return { _tag: "Take" } as const;
               return yield* takeTarget(
                 ref,
@@ -5519,7 +5521,7 @@ export const hostLayer = (options: {
         startPipeline: (asked) =>
           under(
             Effect.gen(function* () {
-              const ref = mrRefOf(yield* mergeRequestOf(fs, dir, asked.runId));
+              const ref = mrRefOf(yield* mergeRequestOf(asked.runId));
               if (ref === null)
                 return { _tag: "Failed", reason: "this Run has no merge request" } as const;
               const head = (yield* fingerprint(asked.cwd)).head_sha;
@@ -5657,7 +5659,7 @@ export const hostLayer = (options: {
         note: (asked) =>
           under(
             Effect.gen(function* () {
-              const ref = mrRefOf(yield* mergeRequestOf(fs, dir, asked.runId));
+              const ref = mrRefOf(yield* mergeRequestOf(asked.runId));
               if (ref === null) return { ok: false, message: "this Run has no merge request" };
               const body = redact(asked.body);
               const refused = yield* publicRefusal(body, Effect.succeed(ref.project));
@@ -5864,7 +5866,7 @@ export const hostLayer = (options: {
           Effect.gen(function* () {
             return yield* land({
               runDir: runDir(dir, asked.runId),
-              mr: yield* mergeRequestOf(fs, dir, asked.runId),
+              mr: yield* mergeRequestOf(asked.runId),
               head: asked.head,
               cwd: asked.cwd,
               run: runShell,
@@ -6255,8 +6257,7 @@ export const hostLayer = (options: {
             return carries;
           }).pipe(Effect.provideContext(services)),
         mergeRequest: (runId, url) =>
-          fs.makeDirectory(runDir(dir, runId), { recursive: true }).pipe(
-            Effect.andThen(fs.writeFileString(mergeRequestPath(dir, runId), `${url}\n`)),
+          runRecords.put(runId, MERGE_REQUEST, `${url}\n`).pipe(
             Effect.andThen(store.announce),
             Effect.orDie,
             Effect.andThen(
@@ -6450,7 +6451,7 @@ export const hostLayer = (options: {
           const rows = yield* store.runs;
           for (const row of rows) {
             if (row.parent === null) continue;
-            const opened = yield* mergeRequestOf(fs, dir, row.run);
+            const opened = yield* mergeRequestOf(row.run);
             if (opened === null || mrId(opened) !== id) continue;
             const options = yield* decodeStrings(row.options ?? "{}").pipe(
               Effect.orElseSucceed((): Record<string, string> => ({})),
@@ -6503,7 +6504,7 @@ export const hostLayer = (options: {
             agentsDir: `${dir}/agents/${runId}`,
             cwd,
             worktree,
-            mr: yield* mergeRequestOf(fs, dir, runId),
+            mr: yield* mergeRequestOf(runId),
             asking: Arr.some(yield* store.asked(runId), isUnanswered),
             held: yield* set(HOLD, runId),
             family:
@@ -7900,6 +7901,8 @@ const makeRegistry: (
     ));
   // Captured, so placing a Run asks git and herdr without its callers providing either.
   const bun = yield* Effect.context<PlatformServices | SecureRandom.SecureRandom | Records>();
+  const mergeRequestOf = (runId: string) =>
+    recordedMergeRequest(runId).pipe(Effect.provideContext(bun));
 
   /**
    * Every `diff-target` as `mr:`, `branch:` or `worktree`, since every reader decides from
@@ -8137,7 +8140,7 @@ const makeRegistry: (
     }));
     return yield* takeOver({
       runDir: runDir(dir, asked.runId),
-      mr: yield* mergeRequestOf(fs, dir, asked.runId),
+      mr: yield* mergeRequestOf(asked.runId),
       runs,
       cwd: asked.cwd,
       run: runShell,
@@ -8243,7 +8246,7 @@ const makeRegistry: (
       if (on === null || (branch !== null && on !== branch)) continue;
       if (!(yield* lineageIn(store)(row.run)).includes(planRun)) continue;
       branch = on;
-      const mr = yield* mergeRequestOf(fs, dir, row.run);
+      const mr = yield* mergeRequestOf(row.run);
       const id = mr === null ? null : yield* mrIdIn(mr, placedOf(row, {}).cwd, runShell);
       const state = id === null ? undefined : states.get(id);
       if (state !== undefined && state !== "open") return null;
@@ -8556,7 +8559,7 @@ const makeRegistry: (
         const cwd = placedOf(row, {}).cwd;
         const mrs = yield* Effect.forEach(
           [
-            yield* mergeRequestOf(fs, dir, row.run),
+            yield* mergeRequestOf(row.run),
             recorded === undefined ? null : pointedAt(recorded, given),
           ],
           (said) => mrIdOf(said, cwd),
@@ -9068,9 +9071,8 @@ const makeRegistry: (
       closes: placing?.closes,
       report,
       linkNotices: linkNotices.length === 0 ? undefined : linkNotices,
-      stepNotes: (yield* readStepSteering(runDir(dir, row.run)).pipe(
-        Effect.provideService(FileSystem.FileSystem, fs),
-      )).notes,
+      stepNotes: (yield* readStepSteering(runDir(dir, row.run)).pipe(Effect.provideContext(bun)))
+        .notes,
       runId: row.run,
       workflow: row.workflow,
       project: row.project,
@@ -9135,10 +9137,8 @@ const makeRegistry: (
         Effect.flatMap(Schema.decodeUnknownEffect(UsageWaitJson)),
         Effect.orElseSucceed(() => null),
       ),
-      mr: yield* mergeRequestOf(fs, dir, row.run),
-      landing: yield* readLanding(runDir(dir, row.run)).pipe(
-        Effect.provideService(FileSystem.FileSystem, fs),
-      ),
+      mr: yield* mergeRequestOf(row.run),
+      landing: yield* readLanding(runDir(dir, row.run)).pipe(Effect.provideContext(bun)),
       measurement:
         outcome === "performance"
           ? finalMeasurementLine(
@@ -9152,7 +9152,8 @@ const makeRegistry: (
     // Not registered here is not a verdict on the work: the rows are all still there,
     // and what is missing is the module, named so somebody can put it back.
     if (generation === undefined) {
-      const recorded = yield* fs.readFileString(`${runDir(dir, row.run)}/terminal.json`).pipe(
+      const recorded = yield* RunRecords.use((records) => records.fact(row.run, TERMINAL)).pipe(
+        Effect.provideContext(bun),
         Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(RunStatus))),
         Effect.orElseSucceed(() => null),
       );
@@ -9844,7 +9845,6 @@ const makeRegistry: (
   // same moment would otherwise mint one name for both and stage over each other.
   const registering = yield* Semaphore.make(1);
   // A grant is a read and a write of one file: two at once would each drop the other's.
-  const granting = yield* Semaphore.make(1);
   const invoking = yield* Semaphore.make(1);
 
   const mint = Effect.fn("Engine.Registry.mint")(function* (file: string) {
@@ -9953,7 +9953,7 @@ const makeRegistry: (
       succeeded: state.status === "complete",
       // Where the host placed it: a branch it inferred is as much the Run's as one named.
       branch: placedOf(row, options).branch,
-      mrUrl: yield* mergeRequestOf(fs, dir, runId),
+      mrUrl: yield* mergeRequestOf(runId),
       nothingToLand: yield* fs
         .exists(nothingToLandFile(where))
         .pipe(Effect.orElseSucceed(() => false)),
@@ -10504,13 +10504,10 @@ const makeRegistry: (
         }),
       ),
     mergeRequest: (runId: string, url: string) =>
-      fs
-        .makeDirectory(runDir(dir, runId), { recursive: true })
-        .pipe(
-          Effect.andThen(fs.writeFileString(mergeRequestPath(dir, runId), `${url}\n`)),
-          Effect.andThen(store.announce),
-          Effect.orDie,
-        ),
+      RunRecords.use((records) => records.put(runId, MERGE_REQUEST, `${url}\n`)).pipe(
+        Effect.provideContext(bun),
+        Effect.andThen(store.announce),
+      ),
     watch: (runId: string) =>
       store
         .watching(view(runId))
@@ -10903,19 +10900,12 @@ const makeRegistry: (
             reason: `${REFUSED_INPUT}: check "${options.name}" would run in "${at}", which is not inside run ${options.runId}`,
           });
       }
-      return yield* granting.withPermits(1)(
-        Effect.gen(function* () {
-          const kept = Arr.filter(
-            yield* approvedOf(dir, options.runId),
-            (spec) => spec.name !== options.name,
-          );
-          const next =
-            options.command === null ? kept : [...kept, { name: options.name, ...options.command }];
-          yield* fs.makeDirectory(evidenceDir(dir, options.runId), { recursive: true });
-          yield* fs.writeFileString(approvedPath(dir, options.runId), encodeApproved(next));
-          return next;
-        }).pipe(Effect.orDie),
-      );
+      return yield* updateApproved(evidenceDir(dir, options.runId), (frozen) => {
+        const kept = Arr.filter(frozen ?? [], (spec) => spec.name !== options.name);
+        return options.command === null
+          ? kept
+          : [...kept, { name: options.name, ...options.command }];
+      }).pipe(Effect.provideContext(bun));
     }),
 
     steer: Effect.fn("Engine.Registry.steer")(function* (options: {

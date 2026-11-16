@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { ConfigProvider, Effect, Exit, FileSystem, Path, Schema, flow, Result } from "effect";
+import { ConfigProvider, Effect, Exit, FileSystem, Path } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { Host } from "../src/sdk";
 import { controlPath, evidenceDir, foundationLayer, runDir, STOP } from "../src/engine";
 import { Store } from "../src/store";
 import { appendVerification, collect, readVerifications } from "../src/verify";
-import { VerifySpecSchema } from "../src/verify-spec";
+import { updateApproved } from "../src/verify-spec";
 import { memoryWaitOf } from "../src/memory-wait";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
@@ -17,11 +17,6 @@ let rig: Rig;
 let dir: string;
 let tool: string;
 const runId = "r-once";
-
-const asApproved = flow(
-  Schema.encodeResult(Schema.fromJsonString(Schema.Array(VerifySpecSchema))),
-  Result.getOrThrow,
-);
 
 beforeEach(() =>
   runEffect(
@@ -45,10 +40,9 @@ beforeEach(() =>
       yield* fs.writeFileString(tool, `#!/bin/sh\n[ ! -f ${rig.root}/red ]\n`);
       yield* fs.chmod(tool, 0o755);
       yield* fs.makeDirectory(evidenceDir(dir, runId), { recursive: true });
-      yield* fs.writeFileString(
-        `${evidenceDir(dir, runId)}/approved.json`,
-        asApproved([{ name: "unit", executable: tool, argv: [], cwd: "." }]),
-      );
+      yield* updateApproved(evidenceDir(dir, runId), () => [
+        { name: "unit", executable: tool, argv: [], cwd: "." },
+      ]).pipe(Effect.provide(recordsAt(dir)));
     }),
   ),
 );

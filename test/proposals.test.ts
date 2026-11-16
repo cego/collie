@@ -7,7 +7,7 @@ import type { Records } from "../src/records";
 import { recordsAt } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { Effect, FileSystem, Path, type Scope } from "effect";
+import { Effect, FileSystem, type Scope } from "effect";
 import type { PlatformServices } from "../src/platform";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
@@ -33,7 +33,8 @@ import { resetExecutors } from "../src/executors";
 import type { Action } from "../src/actions";
 import { carryOutProposal } from "../src/operations";
 import type { PluginEnv } from "../src/env";
-import { readIntent, seedIntent, writeIntent } from "../src/intent";
+import { INTENT_FILE, readIntent, seedIntent, writeIntent } from "../src/intent";
+import { RunRecords } from "../src/run-records";
 import { herdOf } from "../src/steering";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
@@ -460,8 +461,6 @@ test(
   () =>
     inHerd(({ world, env, herdFile }) =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
         const run = yield* hostedRun(world, "a picker");
         const proposal = yield* record(herdFile, {
           interpretation: "hold it",
@@ -474,7 +473,7 @@ test(
 
         // Corrupt after the proposal was written, which is the window that matters: the
         // version it was checked against is now unreadable rather than merely absent.
-        yield* fs.writeFileString(path.join(run.dir, "intent.json"), "{ not json");
+        yield* RunRecords.use((records) => records.put(run.id, INTENT_FILE, "{ not json"));
 
         const out = yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
         expect(out).toMatchObject({
