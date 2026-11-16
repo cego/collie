@@ -1,6 +1,6 @@
 # Native dependency review
 
-Reviewed 2026-11-12 for PR #398, against `desktop-rune/Cargo.lock` and Rune
+Reviewed 2026-11-12 for PR #398, against `desktop/Cargo.lock` and Rune
 `781e2b6d87cd5f32d6f4365956fad4baaf24ee50`. This records evidence and limits;
 it does not suppress advisories or claim the dependencies have been upgraded.
 

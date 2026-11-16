@@ -1,5 +1,5 @@
 // The Rune spike's shell services: a notification the main process asks the stdio stand-in for
-// reaches the Rust side as one request. Needs cargo, which the `desktop-rune` CI job has.
+// reaches the Rust side as one request. Needs cargo, which the `desktop` CI job has.
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -9,8 +9,8 @@ import { Effect } from "effect";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 
-const WORKSPACE = new URL("../desktop-rune/", import.meta.url).pathname;
-const STAND_IN = new URL("../desktop-rune/core/platform.ts", import.meta.url).pathname;
+const WORKSPACE = new URL("../desktop/", import.meta.url).pathname;
+const STAND_IN = new URL("../desktop/core/platform.ts", import.meta.url).pathname;
 const cargo = Bun.which("cargo");
 
 // The main process's side: the board's window takes the stand-in's stdout, then a Run asks.

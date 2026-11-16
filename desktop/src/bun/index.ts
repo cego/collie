@@ -30,12 +30,7 @@ import { CommandLine } from "effect/process";
 import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as RpcServer from "effect/rpc/RpcServer";
-import Electrobun, {
-  BrowserView,
-  BrowserWindow,
-  Utils,
-  Updater,
-} from "../../../desktop-rune/core/platform";
+import Electrobun, { BrowserView, BrowserWindow, Utils, Updater } from "../../core/platform";
 import {
   type Channel,
   heldUntilListened,
