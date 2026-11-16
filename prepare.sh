@@ -1,58 +1,17 @@
 #!/bin/sh
-# Everything that is safe to do again: link the plugin from this checkout, put the
-# runner and the `collie` shim in place, and link the operator skill. `setup.sh`,
-# `collie upgrade` and herdr's plugin build hook (through `install.sh`) all end
-# here, so a new prerequisite is added in one place and every entry point picks it
-# up at once.
-#
-# Keybindings are deliberately not here. Writing to a human's herdr config is not
-# something a plugin rebuild may do as a side effect of being rebuilt; `setup.sh`
-# owns those and nothing else touches them.
+# Puts the runner and its shim in place, links the operator skill, and updates workflow
+# skills. setup.sh and collie upgrade share these repeatable installation steps.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-PLUGIN_ID="cego.collie"
 
 # One line per step, in a shape `collie upgrade` can read back: a report has to be
 # able to say which steps ran, which were already in place and which were skipped.
 step() { printf 'prepare: %s: %s\n' "$1" "$2"; }
 
-# `herdr plugin link` below fires the build hook, which is `install.sh`, which ends
-# by calling this script. Exported, so that nested run sees it and stops there.
+# install.sh chains here after building; this guard prevents another build cycle.
 export COLLIE_PREPARING=1
-
-# `install.sh` chains here when it is run on its own — by herdr's build hook, say —
-# and the runner is then already built by the time we get here.
 runner_built="${COLLIE_RUNNER_FRESH:-}"
-
-# Whether x.y.z version $1 is at least $2, part by part as numbers.
-at_least() {
-  set -- "$1." "$2."
-  while [ -n "$2" ]; do
-    have=${1%%.*}
-    want=${2%%.*}
-    [ "${have:-0}" -gt "$want" ] && return 0
-    [ "${have:-0}" -lt "$want" ] && return 1
-    set -- "${1#*.}" "${2#*.}"
-  done
-}
-
-herdr_version=$(herdr --version 2>/dev/null | sed -n 's/^[^0-9]*\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -1) || true
-min_herdr=$(sed -n 's/^min_herdr_version = "\(.*\)"/\1/p' "$ROOT/herdr-plugin.toml" 2>/dev/null) || true
-
-if ! command -v herdr >/dev/null 2>&1; then
-  step plugin-link "skipped — herdr is not installed; see https://herdr.dev/docs/install/"
-elif [ -n "$herdr_version" ] && [ -n "$min_herdr" ] && ! at_least "$herdr_version" "$min_herdr"; then
-  step plugin-link "skipped — herdr $herdr_version is older than the $min_herdr Collie needs; collie doctor says how to upgrade"
-elif herdr plugin list 2>/dev/null | grep -q "$PLUGIN_ID .*\[local:$ROOT\]"; then
-  step plugin-link "already in place"
-else
-  herdr plugin link "$ROOT" >/dev/null
-  step plugin-link "done"
-  # The build hook that link just fired is what builds the runner, so building it
-  # again below would be a second compile reported as a change that did not happen.
-  if [ -x "$ROOT/bin/collie" ] && [ ! -f "$ROOT/placed.json" ]; then runner_built=1; fi
-fi
 
 if [ -n "$runner_built" ]; then
   step runner "done"
@@ -83,7 +42,7 @@ link_operator_skill() { # skills dir -> done | already in place | skipped — �
   link="$1/collie"
   if [ "$(readlink "$link" 2>/dev/null)" = "$ROOT/skills/collie" ]; then
     echo "already in place"
-  elif [ -L "$link" ] && grep -qx 'id = "cego.collie"' "$(readlink "$link")/../../herdr-plugin.toml" 2>/dev/null; then
+  elif [ -L "$link" ] && grep -Eq '"name"[[:space:]]*:[[:space:]]*"collie"' "$(readlink "$link")/../../package.json" 2>/dev/null; then
     # Another Collie installation's, as a clone install left it before its release was placed.
     ln -sfn "$ROOT/skills/collie" "$link"
     echo "done"

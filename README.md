@@ -2,7 +2,7 @@
 
 Running several coding agents at once turns into babysitting: one tab per agent, each
 waiting on you at a different moment, and no single place that says what needs a decision.
-Collie is the herdr plugin that takes that coordination off your hands. You pick a workflow,
+Collie takes that coordination off your hands. You pick a workflow,
 Collie opens the tabs, runs the agents, reviews their work, and brings you back only for the
 decisions that are yours. One board shows every task in the session: what needs you, what
 is working, what finished.
@@ -28,18 +28,18 @@ curl -fsSL https://github.com/cego/collie/releases/latest/download/install-deskt
 
 Before you run setup.sh, you need:
 
-- **herdr** installed and started once. See the [herdr install guide](https://herdr.dev/docs/install/).
 - **A `glab auth login` to `gitlab.cego.dk`**, so the workflows can open merge requests there.
 - **Claude Code**, logged in. The bundled workflows run their agents on it.
 
 Nothing from GitHub: the repository and its releases are public, and the install needs no
 git. To work on Collie itself, clone cego/collie anywhere and run its `prepare.sh`; see
 [Running a checkout of Collie](docs/using.md#running-a-checkout-of-collie). `collie onboard`
-installs herdr, Claude Code and Collie at a release instead, one reported step at a time; see
+installs Claude Code and Collie at a release instead, one reported step at a time; see
 [Onboarding a Machine](docs/using.md#onboarding-a-machine).
 
-The install links the plugin, puts `collie` on your PATH, installs
-the required skills, and runs `collie doctor`. Later, `collie upgrade` brings all of it up
+The install puts `collie` and its bundled herdr-core (`hc`) on your PATH, installs
+the required skills, and runs `collie doctor`. No separate Herdr installation is needed.
+Later, `collie upgrade` brings all of it up
 to date. Helle and a Linear MCP are optional; doctor tells you when a workflow you'd run
 needs one. See [Install](docs/using.md#install) and
 [Optional integrations](docs/using.md#optional-integrations) for the detail.
