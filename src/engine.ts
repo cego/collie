@@ -478,7 +478,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export const ParkCause: Schema.Codec<ParkCause, unknown, never, never>;
   export interface ReviewScope { readonly source: string; readonly requirements: string; readonly target: string; readonly head: string; readonly fingerprint: string; readonly outcome: string; readonly risks: string }
   export const ReviewScope: Schema.Codec<ReviewScope, unknown, never, never>;
-  export interface Recovery { readonly implementation: boolean; readonly reason: string; readonly previous: string; readonly commits: string; readonly review: SynthesisReport | null }
+  export interface Recovery { readonly implementation: boolean; readonly reason: string; readonly previous: string; readonly commits: string; readonly review: SynthesisReport | null; readonly lineage?: ReadonlyArray<string> }
   export const Recovery: Schema.Codec<Recovery, unknown, never, never>;
   import type { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
   import type { PlatformError } from "effect/PlatformError";
