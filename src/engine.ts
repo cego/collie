@@ -6104,11 +6104,7 @@ export const hostLayer = (options: {
                 return { ok: false, message: `${asked.target} is not a merge request` };
               const marker = `${runDir(dir, asked.runId)}/approval-${asked.attempt}.attempt`;
               const claimed = yield* fs
-                .writeFileString(
-                  marker,
-                  `${asked.target}\n${asked.head}\n`,
-                  { flag: "wx" },
-                )
+                .writeFileString(marker, `${asked.target}\n${asked.head}\n`, { flag: "wx" })
                 .pipe(
                   Effect.as(true),
                   Effect.catchReason("PlatformError", "AlreadyExists", () => Effect.succeed(false)),

@@ -602,12 +602,12 @@ export default defineWorkflow({
                         name: `follow-approve-${round}`,
                         success: Posted,
                         execute: host.approveReview({
-                    runId: run.id,
-                    attempt: `follow-approve-${round}`,
-                    target: asked.target,
-                    cwd: place.cwd,
-                    head,
-                  }),
+                          runId: run.id,
+                          attempt: `follow-approve-${round}`,
+                          target: asked.target,
+                          cwd: place.cwd,
+                          head,
+                        }),
                       })
                     : null;
                 if (approved !== null) {
