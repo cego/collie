@@ -53,3 +53,17 @@ test("a rig whose code never reaches herdr closes cleanly", () =>
       expect(Exit.isSuccess(yield* closing(rig))).toBe(true);
     }),
   ));
+
+test("a scoped rig whose code runs herdr fails when its scope closes", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const closed = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const rig = yield* Rig.scoped();
+          yield* exec(["sh", "-c", "herdr agent list"], { env: rig.env() });
+        }),
+      ).pipe(Effect.exit);
+      expect(Exit.isFailure(closed)).toBe(true);
+      expect(String(closed)).toContain("herdr agent list");
+    }),
+  ));
