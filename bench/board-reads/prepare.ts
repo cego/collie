@@ -56,6 +56,7 @@ for (const tool of ["gh", "glab", "herdr", "hc", "collie", "claude", "codex", "o
   );
   chmodSync(`${work}/bin/${tool}`, 0o755);
 }
-cpSync(snapshot, `${work}/state`, { recursive: true, verbatimSymlinks: true });
+// Keeping modification times: a build before Run records read when a Run worked from them.
+run(["cp", "-a", snapshot, `${work}/state`]);
 cpSync(views, `${work}/views.json`);
 run(["bun", "bench/board-reads/run.ts", "--open"]);
