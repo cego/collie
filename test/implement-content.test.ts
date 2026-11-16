@@ -8,6 +8,44 @@ import { runEffect } from "./support/effect";
 import { root } from "./support/host";
 import implement from "../workflows/implement.md" with { type: "text" };
 import { REVIEW } from "../workflows/reviewing";
+import tuneUp from "../workflows/tune-up.md" with { type: "text" };
+import { renderTemplate } from "../src/template";
+
+test.each([
+  ...Arr.map(
+    ["build", "fix", "ci-fix", "criteria", "merge"],
+    (section) => [implement, section] as const,
+  ),
+  [tuneUp, "ci-fix"] as const,
+])("early workflow pushes use the host commit check", (content, section) => {
+  const rendered = renderTemplate(contentOf(content).sections.get(section)!, {
+    run: { id: "run-12345678" },
+  }).text;
+  expect(rendered).toContain("collie run publish run-12345678 --push-only");
+  expect(rendered).not.toContain("git push");
+  expect(rendered).toContain("--request-id");
+  if (section === "ci-fix") expect(rendered).not.toContain("--skip-ci");
+  else expect(rendered).toContain("--skip-ci");
+});
+
+test.each([implement, tuneUp])(
+  "the rendered MR instructions publish through the host for new and existing requests",
+  (content) => {
+    for (const existing of ["", "https://github.com/team/app/pull/3"]) {
+      const rendered = renderTemplate(contentOf(content).sections.get("mr")!, {
+        run: { id: "run-12345678", dir: "/work/run" },
+        mr: { existing, publish: "collie run publish run-12345678" },
+      }).text;
+      expect(rendered).toContain("collie run publish run-12345678");
+      expect(rendered).not.toMatch(
+        /glab (?:mr (?:create|note)|api)|gh pr (?:create|comment)|git push/,
+      );
+      expect(rendered).toContain("repository's own commands and results");
+      expect(rendered).toContain("**Open questions**");
+      expect(rendered).not.toContain("Not settled by the run");
+    }
+  },
+);
 
 // Who asks for a merge is audit, never a reason to refuse (AGENTS.md invariant 1).
 

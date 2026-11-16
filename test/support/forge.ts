@@ -114,6 +114,7 @@ export const FakeMr = Schema.Struct({
   state: Schema.Literals(["open", "merged", "closed"]),
   draft: Schema.optionalKey(Schema.Boolean),
   title: Schema.optionalKey(Schema.String),
+  body: Schema.optionalKey(Schema.String),
   author: Schema.optionalKey(Schema.String),
   assignees: Schema.optionalKey(Schema.Array(Schema.String)),
   head: Schema.optionalKey(Schema.String),
@@ -292,6 +293,8 @@ export const ForgeModel = Schema.Struct({
   ),
   /** The status GitLab refuses a note on a merge request with. */
   refusesNote: Schema.optionalKey(Schema.Finite),
+  /** The status the forge refuses a new issue or an issue comment with. */
+  refusesIssueWrite: Schema.optionalKey(Schema.Finite),
   /** The shas each sha descends from. */
   ancestry: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String))),
   /** Repositories gh cannot read, by `owner/repo`. */
@@ -603,6 +606,8 @@ function issueApi(
   const project = `${forge === "github" ? "github.com" : flag(args, "--hostname")}/${path}`;
   if (flag(args, "-X") === "POST" && match[2] !== undefined && match[3] !== undefined) {
     if (Arr.some(model.mrs, (one) => one.project === project && one.iid === match[2])) return null;
+    if (model.refusesIssueWrite !== undefined)
+      return refused(`${model.refusesIssueWrite} Forbidden`);
     const noted = issueAnswer(forge, model, [
       "issue",
       "comment",
@@ -617,6 +622,8 @@ function issueApi(
       : { ...noted, ...json({ id: 1, body: field(args, "body") ?? "" }) };
   }
   if (flag(args, "-X") === "POST" && match[2] === undefined) {
+    if (model.refusesIssueWrite !== undefined)
+      return refused(`${model.refusesIssueWrite} Forbidden`);
     const filed = issueAnswer(forge, model, [
       "issue",
       "create",
@@ -2044,6 +2051,26 @@ export function answer(
     return { ran: said === undefined ? no().ran : ok(`${said}\n`).ran, model };
   }
   if (cmd !== CLI[forge]) return { ran: no(127).ran, model };
+  if (model.installed && args[0] === (forge === "github" ? "pr" : "mr") && args[1] === "create") {
+    const project =
+      forge === "github" ? `github.com/${flag(args, "--repo")}` : (flag(args, "--repo") ?? "");
+    const iid = String(Math.max(0, ...Arr.map(model.mrs, (one) => Number(one.iid))) + 1);
+    const made: FakeMr = {
+      project,
+      iid,
+      state: "open",
+      title: flag(args, "--title") ?? "",
+      body: flag(args, forge === "github" ? "--body" : "--description") ?? "",
+      assignees: [flag(args, "--assignee") ?? ""],
+      sourceBranch: flag(args, forge === "github" ? "--head" : "--source-branch") ?? "",
+      targetBranch: flag(args, forge === "github" ? "--base" : "--target-branch") ?? "main",
+    };
+    return {
+      ran: ok(`https://${project}/${forge === "github" ? "pull" : "-/merge_requests"}/${iid}\n`)
+        .ran,
+      model: { ...model, mrs: [...model.mrs, made] },
+    };
+  }
   const said = forge === "gitlab" ? glab(model, args, under) : gh(model, args);
   let after = model;
   if (said.oauth !== undefined) after = { ...after, oauth: said.oauth };

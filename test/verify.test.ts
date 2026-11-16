@@ -13,6 +13,7 @@ import {
   FINGERPRINT_MAX_BYTES,
   LOG_BYTES,
   TOO_LARGE,
+  UNMEASURED,
   appendVerification,
   collect,
   fingerprint,
@@ -28,7 +29,7 @@ import {
 } from "../src/verify";
 import type { VerifySpec } from "../src/intent";
 import { fileTime } from "../src/time";
-import { loggedGit } from "./support/bin";
+import { FakeBin, loggedGit } from "./support/bin";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { until } from "./support/host";
@@ -191,6 +192,59 @@ test("a command that leaves the tree alone passes; one that changes it is unstab
         "dirty:unstable",
       ]);
       expect(Arr.every(journal, (entry) => entry.by === "agent")).toBe(true);
+    }),
+  ));
+
+const GIT_REFUSED = "fatal: Unable to create index.lock: File exists.";
+
+/** A git that refuses `add` while the marker it returns exists, removing it on the first refusal where `once`. */
+const addRefusedWhileMarked = (once: boolean) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const aside = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-git-" });
+    const marker = `${aside}/refuse-add`;
+    const bin = yield* Effect.acquireRelease(FakeBin.make(`${aside}/bin`), (made) =>
+      made.restore(),
+    );
+    yield* bin.add(
+      "git",
+      `if [ "$1" = add ] && [ -e "${marker}" ]; then
+  echo "${GIT_REFUSED}" >&2
+  ${once ? `rm "${marker}"` : ":"}
+  exit 128
+fi
+exec "${Bun.which("git")}" "$@"`,
+    );
+    return marker;
+  });
+
+const touching = (marker: string) => ({
+  run: "r1",
+  name: "touch",
+  executable: "touch",
+  argv: [marker],
+  cwd: repo,
+  by: "agent" as const,
+});
+
+test("a tree git fails to stage once is measured on its second try, so the pass stands", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const marker = yield* addRefusedWhileMarked(true);
+      const got = yield* collect(`${repo}/.run`, touching(marker));
+      expect(got.result).toBe("pass");
+      expect(got.end.unmeasured).toBeUndefined();
+    }),
+  ));
+
+test("a tree git keeps failing to stage is unmeasured, and its snapshot keeps git's reason", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const marker = yield* addRefusedWhileMarked(false);
+      const got = yield* collect(`${repo}/.run`, touching(marker));
+      expect(got.result).toBe("unstable");
+      expect(got.end.fingerprint).toBe(UNMEASURED);
+      expect(got.end.unmeasured).toContain(GIT_REFUSED);
     }),
   ));
 

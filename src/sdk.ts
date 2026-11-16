@@ -199,6 +199,7 @@ export {
   formatFindings,
   isBlocking,
   remainingDisputes,
+  renderPublicReview,
   renderReview,
   settleFinalFix,
   settleRound,
@@ -770,22 +771,28 @@ export interface HostApi {
   readonly build: string;
   /** This Machine's Run report, for admissions at or after the ISO moment. */
   readonly report: (since: string) => Effect.Effect<Report, WorkflowError>;
-  /** Open issues on the forge of this Run's checkout, or with `numbers` those issues read one by one. */
+  /**
+   * Open issues on the forge of this Run's checkout, or with `numbers` those issues read one
+   * by one. `on: "collie"` asks Collie's own repository instead, as do filing and commenting.
+   */
   readonly issues: (
     runId: string,
     numbers?: ReadonlyArray<number>,
+    on?: "collie",
   ) => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
   /** Files redacted text on this Run's forge; another checkout's identity is refused. */
   readonly fileIssue: (options: {
     readonly runId: string;
     readonly title: string;
     readonly body: string;
+    readonly on?: "collie";
   }) => Effect.Effect<IssueRef, WorkflowError>;
   /** Comments with the same redaction and checkout safeguards as filing. */
   readonly commentIssue: (options: {
     readonly runId: string;
     readonly number: number;
     readonly body: string;
+    readonly on?: "collie";
   }) => Effect.Effect<void, WorkflowError>;
   /**
    * This Machine's Usage readings, one per Subscription (ADR-0049). Read it inside an
@@ -934,6 +941,14 @@ export interface HostApi {
     /** The branch a new merge request targets, where it is not the default branch. */
     readonly onto?: string | undefined;
   }) => Effect.Effect<MrReady>;
+  readonly publish: (options: {
+    readonly runId: string;
+    readonly title: string;
+    readonly file: string;
+    readonly onto?: string | undefined;
+    readonly pushOnly?: boolean | undefined;
+    readonly skipCi?: boolean | undefined;
+  }) => Effect.Effect<{ readonly url: string }, WorkflowError>;
   /**
    * The URL of the checkout's branch's open merge request where it merges itself once
    * green, else null: a push to it would be a merge (ADR-0050 D4). Read fresh each time.
@@ -1367,13 +1382,6 @@ export interface MrReady {
   readonly existing?: string;
   /** Whether `existing` merges itself once green, so a push to it is a merge. */
   readonly autoMerge?: boolean;
-  /** The command lines an agent runs, written by the forge's adapter. */
-  readonly commands?: {
-    /** Opens one, with `<title>`, `<file>` (the description file) and any `<iid>` left to fill in. */
-    readonly create: string;
-    /** Posts `<file>` as a note on `existing`; empty where there is none. */
-    readonly comment: string;
-  };
 }
 
 /** What became of a note: whether it landed, and the sentence a human reads either way. */

@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import * as Str from "effect/String";
 import { Effect, Exit, FileSystem, Option, Schedule, Schema } from "effect";
 import { treeRssMib, measureStart } from "../bench/desktop-start/start";
 import { world } from "../bench/record-open/world";
@@ -56,33 +55,6 @@ await child.exited;
         expect(printed.idle_rss_mib).toBeGreaterThan(0);
         const child = Number(yield* fs.readFileString(`${dir}/child.pid`));
         expect(() => process.kill(child, 0)).toThrow();
-      }),
-    ));
-
-  test("reads an app that keeps its state elsewhere, as the Rune shell keeps its core's", () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const dir = yield* fs.makeTempDirectoryScoped();
-        const app = `${dir}/app.ts`;
-        yield* fs.writeFileString(
-          app,
-          `import { appendFileSync, readFileSync } from "node:fs";
-const own = process.env.XDG_STATE_HOME + "/collie-desktop-rune-spike/state/collie-desktop";
-if (JSON.parse(readFileSync(own + "/settings.json", "utf8")).recordTiming === true)
-  appendFileSync(own + "/record-timing.log", JSON.stringify({ name: "board-usable", at: performance.timeOrigin + performance.now(), card: "" }) + "\\n");
-await Bun.sleep(30_000);
-`,
-        );
-        const line = yield* measureStart({
-          argv: [process.execPath, app],
-          env: { PATH: Bun.env.PATH },
-          desktopState: `${dir}/state`,
-          own: `${dir}/state/collie-desktop-rune-spike/state/collie-desktop`,
-          idle: "0 millis",
-        });
-        const printed = yield* Schema.decodeEffect(Started)(line);
-        expect(printed.board_usable_ms).toBeGreaterThanOrEqual(0);
       }),
     ));
 
@@ -171,63 +143,18 @@ process.exit(1);
       }),
     ));
 
-  describe.skipIf(process.platform !== "linux")("on Linux, where a build installs itself", () => {
-    // Like a build's launcher: it installs Desktop under its data home and starts nothing.
-    const build = (dir: string) =>
+  test("without a bundle's launcher it refuses and says how to name one", () =>
+    runEffect(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.writeFileString(
-          `${dir}/launcher`,
-          `#!/bin/sh
-echo "$HOME" > "${dir}/installed-for"
-mkdir -p "$XDG_DATA_HOME/dk.cego.collie.desktop/stable/app/bin"
-touch "$XDG_DATA_HOME/dk.cego.collie.desktop/stable/app/bin/launcher"
-`,
-          { mode: 0o755 },
-        );
-        return `${dir}/launcher`;
-      });
-    const harness = (args: ReadonlyArray<string>) =>
-      exec([process.execPath, `${repo}bench/desktop-start/run.ts`, ...args], {
-        cwd: repo,
-        env: Bun.env,
-      });
-
-    test("installs Desktop, untimed, under the home it keeps between samples", () =>
-      runEffect(
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const dir = yield* fs.makeTempDirectoryScoped();
-          const ran = yield* harness([
-            "--install",
-            "--app",
-            yield* build(dir),
-            "--home",
-            `${dir}/kept`,
-          ]);
-          expect(ran.exitCode).toBe(0);
-          expect(ran.stdout).toBe("");
-          expect(Str.trim(yield* fs.readFileString(`${dir}/installed-for`))).toBe(`${dir}/kept`);
-          expect(
-            yield* fs.exists(
-              `${dir}/kept/.local/share/dk.cego.collie.desktop/stable/app/bin/launcher`,
-            ),
-          ).toBe(true);
-        }),
-      ));
-
-    test("a sample never installs: without an install it refuses and says how", () =>
-      runEffect(
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const dir = yield* fs.makeTempDirectoryScoped();
-          const ran = yield* harness(["--app", yield* build(dir), "--home", `${dir}/kept`]);
-          expect(ran.exitCode).toBe(2);
-          expect(ran.stderr).toContain("--install");
-          expect(yield* fs.exists(`${dir}/installed-for`)).toBe(false);
-        }),
-      ));
-  });
+        const ran = yield* exec([process.execPath, `${repo}bench/desktop-start/run.ts`], {
+          cwd: repo,
+          env: Bun.env,
+        });
+        expect(ran.exitCode).toBe(2);
+        expect(ran.stderr).toContain("--rune");
+        expect(ran.stdout).toBe("");
+      }),
+    ));
 
   test("refuses to run its host in the user's own state directory", () =>
     runEffect(

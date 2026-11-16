@@ -100,10 +100,7 @@ export const openFolders = ({ all, listed, closed, filtering }: Folders): Readon
   filtering ? listed : Arr.filter(all, (folder) => !closed.has(folder));
 
 /** The folders the human has closed once the tree says which are open; none close while filtering. */
-export const closedFolders = (
-  folders: Folders,
-  open: ReadonlyArray<string>,
-): ReadonlySet<string> =>
+export const closedFolders = (folders: Folders, open: ReadonlyArray<string>): ReadonlySet<string> =>
   folders.filtering
     ? folders.closed
     : new Set(Arr.filter(folders.all, (folder) => !open.includes(folder)));

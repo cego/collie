@@ -283,7 +283,8 @@ else ([CLI](cli.md#verify)). The tree is fingerprinted
 before and after as its content — the Git tree the working tree would commit as, untracked
 files git is not ignoring included — so a commit of the same bytes keeps the result, and a
 result whose two snapshots differ is `unstable`, never `pass`. So is one where either snapshot says the tree was too
-large to look at: two unmeasured trees are not one tree.
+large to look at: two unmeasured trees are not one tree. So is one git could not write, after one more
+try; that snapshot keeps git's message as `unmeasured`.
 
 Collie will also run a verification itself, but only one of the run's checks, matched
 argument for argument. Anyone names one with `run intent verification` — a human, the

@@ -57,11 +57,10 @@ here are in [`src/README.md`](src/README.md).
   core's machines as the Machines, added with a `via` riding the SSH master: `machineList` in
   `src/herdr.ts`, `viaCommand` in `src/ssh-argv.ts`, `machineAdd` and `machineForget` in
   `src/lifecycle.ts`, `test/machines-core.test.ts`.
-- **Desktop**, its Flock chat, record and Diff tab → [`desktop/README.md`](desktop/README.md),
-  [`docs/using.md`](docs/using.md#collie-desktop), `test/desktop-*.test.ts`, `test/flock-*.test.ts`.
-- **Native desktop, bundle and update cutover** → [`desktop-rune/README.md`](desktop-rune/README.md),
-  [cutover ADR](docs/adr/0067-collie-replaces-the-webview-desktop-in-place.md),
-  `desktop-rune/scripts/bundle.ts`, `desktop-rune/update/`, `tools/rune-types.ts`,
+- **Desktop**, its Flock chat, record, Diff tab, bundle and update cutover →
+  [`desktop/README.md`](desktop/README.md), [`docs/using.md`](docs/using.md#collie-desktop),
+  `test/desktop-*.test.ts`, `test/flock-*.test.ts`, [cutover ADR](docs/adr/0067-collie-replaces-the-webview-desktop-in-place.md),
+  `desktop/scripts/bundle.ts`, `desktop/update/`, `tools/rune-types.ts`,
   `tools/rune-fixtures.ts`, `test/rune-types.test.ts`, `test/rune-contract.test.ts`.
 - **Agent launch profile** → [ADR-0060](docs/adr/0060-a-managed-agent-runs-with-the-operators-profile.md),
   [`docs/using.md`](docs/using.md#what-collies-agents-get), `src/profile.ts`, `src/agents.ts`,
@@ -69,8 +68,8 @@ here are in [`src/README.md`](src/README.md).
 - **Attachments** → [ADR-0046](docs/adr/0046-an-attachment-is-uploaded-once-and-belongs-to-the-run.md),
   `src/attachments.ts`, `src/uploads.ts`, `src/host-files.ts`, `test/attachments.test.ts`, `test/host-files.test.ts`;
   a file pasted or dropped on a pane: [ADR-0065](docs/adr/0065-a-file-given-to-a-pane-is-placed-on-its-machine.md),
-  `placeStaged` in `desktop/src/bun/carried.ts`, `desktop-rune/board/src/shell/files.rs`,
-  `test/desktop-place-files.test.ts`, `desktop-rune/board/tests/pane_files.rs`.
+  `placeStaged` in `desktop/src/bun/carried.ts`, `desktop/board/src/shell/files.rs`,
+  `test/desktop-place-files.test.ts`, `desktop/board/tests/pane_files.rs`.
 - **Usage, fallbacks** → [ADR-0049](docs/adr/0049-work-goes-to-an-agent-with-usage-left.md),
   [`docs/using.md`](docs/using.md#usage), `src/usage-model.ts`, `src/usage.ts`, `src/commands/usage.ts`,
   `resolveWithRoom` in `src/harness.ts`, `choose` in `src/agents.ts`, `test/usage-model.test.ts`,
@@ -92,7 +91,8 @@ here are in [`src/README.md`](src/README.md).
 - **Parks, recovery, the Heal** → [ADR-draft-a-run-recovers-where-it-parks](docs/adr/draft-a-run-recovers-where-it-parks.md),
   [`docs/cli.md`](docs/cli.md#stop-and-resume), `src/park-cause.ts`, `src/park-recovery.ts`,
   `src/heal.ts`, `healerBound` in `src/host.ts`, `workflows/heal.workflow.ts`,
-  `test/recovery.test.ts`, `test/heal.test.ts`.
+  `test/recovery.test.ts`, `test/heal.test.ts`; a Heal's defect filed on cego/collie:
+  `src/heal-report.ts`, `healParks` in `src/park-recovery.ts`, `test/heal-report.test.ts`.
 - **Settings** → [ADR-0043](docs/adr/0043-a-shared-setting-is-its-latest-edit.md), `src/settings.ts`,
   `setSetting` and `takeShared` in `src/config.ts`. The user Layer's files are shared by the same rule:
   [ADR-0061](docs/adr/0061-a-users-definitions-are-the-flocks.md),
@@ -205,14 +205,16 @@ binary still starts.
 While you iterate, run what covers what you touched, each through `collie verify`:
 
 - `bun run typecheck`;
+- `bun run format` (writes) or `bun run format:check`;
+- `bun run tools/rune-types.ts --check` after changing a Schema Desktop speaks;
 - `bun test <files>`, which runs the sources and takes no suite lock, and
   `bun test --parallel=N <files>` for more than a few;
 - `bun run scenario "<pattern>"` for baseline scenarios: it runs only the shard files whose
   scenarios match, in parallel, never all of them;
-- never the whole suite (`bun run test`, `bun run check`): that is the gate's, which runs
-  the Run's Checks on the final tree. Given one of the Run's Checks, `collie verify` runs
-  nothing: it answers with that Check's latest record on the tree, or refuses with
-  `invalid_state` and names the gate.
+- never `bun run check:static` or the whole suite (`bun run test`, `bun run check`): those
+  are the gate's, which runs the Run's Checks on the final tree. Given one of the Run's
+  Checks, `collie verify` runs nothing: it answers with that Check's latest record on the
+  tree, or refuses with `invalid_state` and names the gate.
 
 Tests are unit tests only: they call the code through its own interface, with fakes at
 its edges. No Playwright and no test that drives a built app or a browser — a behaviour
@@ -221,7 +223,7 @@ of the view is covered by testing the logic it renders.
 For native UI inspection, operate Rune headlessly with its built-in CLI: `--snap out.png`
 captures a screen, `--tree out.json` includes the accessibility tree, and `--script input.json`
 replays clicks and keyboard input. Use the fake-core scenes and isolated HOME/state described
-in [`desktop-rune/README.md`](desktop-rune/README.md); Lavapipe renders on a VM without a GPU.
+in [`desktop/README.md`](desktop/README.md); Lavapipe renders on a VM without a GPU.
 These tools inspect the native app without installing it or restarting the human's app.
 
 ## Invariants

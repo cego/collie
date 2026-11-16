@@ -3,5 +3,5 @@
 peer = false
 
 [test]
-# Not the Electrobun devkit's own tests under .hutch/.
+# Only the core's tests, not the Rust crates or vendor/.
 root = "test"
