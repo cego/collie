@@ -2,7 +2,7 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { homedir } from "node:os";
 import { Config, type Duration, Effect, Option, Path } from "effect";
-import { withoutLauncher } from "../../../src/env";
+import { withoutHerdrOne, withoutLauncher } from "../../../src/env";
 
 const BIN = Effect.runSync(
   Path.Path.pipe(
@@ -40,7 +40,7 @@ export const parseLoginEnv = (output: string) => {
 export const CHILD_CWD = homedir();
 
 /** Gives children the cleaned environment; Bun otherwise ignores changes made since it started. */
-export const childEnv = () => withoutLauncher(desktopEnv(), BIN);
+export const childEnv = () => withoutLauncher(withoutHerdrOne(desktopEnv()), BIN);
 
 // Children inherit the process environment, not an Effect Config.
 // oxlint-disable-next-line effecttsgo/process-env
