@@ -53,6 +53,7 @@ test("Collie's own check is left to the CI job whose needs run each part of it",
       const checks = yield* approvedFrom({ cwd: root, userDir });
       expect(checks).toEqual([
         { name: "check", executable: "bun", argv: ["run", "check"], cwd: "worktree", ci: "test" },
+        { name: "static", executable: "bun", argv: ["run", "check:static"], cwd: "worktree" },
       ]);
 
       const { jobs } = yield* workflow("ci");

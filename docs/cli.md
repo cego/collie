@@ -1905,9 +1905,11 @@ file, or a checkout behind its remote, does not reach a new run: push the edit t
 the run starts from, or name the checks with `--verify` or `collie run intent verification`
 ([ADR-draft-a-runs-checks-are-read-where-its-checkout-starts](adr/draft-a-runs-checks-are-read-where-its-checkout-starts.md)).
 
-Collie's own `.collie/verify.json` leaves its one check, `check` (`bun run check`), to CI's
-`test` job, which passes only when the jobs running that script's two halves did: its
-implement Runs and Releases wait for the job rather than run the suite again.
+Collie's own `.collie/verify.json` has two checks. `static` (`bun run check:static`) is run by
+the gate on the final tree, so a head with an unformatted file or stale Rust types never
+reaches a merge request. `check` (`bun run check`) is left to CI's `test` job, which passes
+only when the jobs running that script's two halves did: its implement Runs and Releases
+wait for the job rather than run the suite again.
 
 A file that is there and does not decode is an error naming it and the ref it was read at, never an empty set, and
 the start is refused as `invalid_input`, so a typo is never quietly replaced by an agent's
