@@ -120,6 +120,7 @@ and `failure`, never the secret. `data.build` is this Machine's build. A listene
 - `added`: whether core keeps a Machine this one dials; null for an incoming peer. A
   pairing core does not keep, including one made before the migration,
   is kept, and its human line says `not added to core: collie machine connect <name> adds it`.
+  Without `--target`, connect reaches it by its name, as ssh's own configuration resolves it.
 
 Each is null in an older Machine's answer. The human line puts the transport after the
 state, as `live	ssh (direct: <why>)` or `live	direct`, and a link not up as
