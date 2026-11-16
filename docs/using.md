@@ -1364,20 +1364,31 @@ It shows up as **Collie**, with the Collie mark — the dog on the white tile th
 shows, which reads on a dark taskbar too — in your app launcher, on its window, in the
 taskbar and at the top left of the board.
 
-Desktop then keeps itself up to date. It checks the latest release when it starts and every
-hour after, and downloads an update in the background. **Settings**, under **About**, shows
+Desktop then keeps itself up to date. It checks the latest release when it starts and once
+an hour has passed, by the clock, after; it looks each minute, so a check missed while the
+computer slept runs within a minute of waking. A check that could not reach the releases is
+tried again five minutes later. It offers only a version newer than its own and downloads it
+in the background. A check is given up after two minutes, a download after thirty and the
+fetch of its signature after one, so one that hangs never holds up the next or a restart. A version whose download does not verify is not fetched
+again; a signature that could not be fetched fails the check, which is tried again, rather
+than refusing the update. **Settings**, under **About**, shows
 Desktop's own version with **Check for updates**, which checks now and says what it found: "Collie 0.34.0
 is up to date", "Downloading 0.35.0", the ready notice below, or why the check failed. A
 check asked for while one runs joins it rather than downloading twice. It installs nothing until the
 tar it would install verifies against the same key, because Electrobun's bundle hash is
 not authentication. An update that is unsigned or does not match is thrown away and said
-so. One that verifies is announced as "Collie 0.33.0 is ready, restart Desktop", and
-**Restart Desktop** installs it. Desktop never restarts itself: an update that is ready when
+so. One that verifies is announced above whichever page is open, the board, a record or
+Settings, with the chat open or not: "Collie 0.33.0 is ready", with **Restart now** and
+**Later**. The notice takes no focus. **Later** puts it away until a newer version is ready;
+meanwhile the toolbar's **Update ready** brings it back, and Settings keeps **Restart
+Collie**. While an update downloads the toolbar says so. **Restart now** is asked once
+however often it is pressed, and a restart that did not happen says why in the notice.
+Desktop never restarts itself: an update that is ready when
 you quit is installed the next time you start Desktop. It updates itself the same way on a
 Mac. On Linux, [`collie upgrade`](cli.md#upgrading)
 on this computer also stages the same update for Desktop, verified the same way, so the CLI and
 Desktop move together; a running Desktop announces it within a minute. A ready update stays
-announced through later checks, even one that fails. A Desktop run from a checkout
+announced through later checks, even one that fails, and while a newer one downloads. A Desktop run from a checkout
 (`bun run start`, or any build that is not the stable channel) never updates itself, and
 **Settings** says so. The new
 Desktop then upgrades your released Machines to its version as they connect.

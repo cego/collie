@@ -13,7 +13,7 @@ use crate::calls::CallError;
 use crate::pages::usage::Level;
 use crate::{App, board_pane, chat_pane_in, icons, pages};
 use collie_desktop_terminal::view::Keyed;
-use rune::{Cx, El, Icon, Tx, row, text};
+use rune::{Cx, El, Icon, Tx, col, row, text};
 use rune_kit::shell::{PaneState, Sidebar, SidebarRow, SplitView, Toolbar};
 use rune_kit::{IconButton, Kit};
 use serde_json::{Value, json};
@@ -312,7 +312,15 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
     if let Some(tab) = &app.terminal {
         tab.set_scale(cx.env().scale);
     }
-    let main = page_pane(app, k, &mut layer);
+    let main = match crate::updates::notice(app, k) {
+        Some(notice) => col()
+            .grow(1.0)
+            .min_h(0.0)
+            .w_full()
+            .child(notice)
+            .child(page_pane(app, k, &mut layer)),
+        None => page_pane(app, k, &mut layer),
+    };
     let split = SplitView::new(main)
         .sidebar(
             &app.nav.sidebar,
@@ -324,12 +332,13 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
             |app: &mut App| &mut app.nav.chat,
             chat_pane_in(app, k, &mut layer),
         )
-        .toolbar(
-            Toolbar::new()
-                .title(app.nav.page.title())
-                .trailing(usage_button(app, k))
-                .trailing(chat_toggle),
-        )
+        .toolbar({
+            let mut toolbar = Toolbar::new().title(app.nav.page.title());
+            if let Some(update) = crate::updates::toolbar(app, k) {
+                toolbar = toolbar.trailing(update);
+            }
+            toolbar.trailing(usage_button(app, k)).trailing(chat_toggle)
+        })
         .titlebar_inset(cx.titlebar_inset())
         .reduced_motion(cx.is_reduced_motion())
         .build(k);

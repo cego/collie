@@ -7,11 +7,9 @@ use super::common::{Told, Tone, muted, panel, status, toasts, toned};
 use super::flock::{Fold, MachineRow, RowState, route_said, settled};
 use super::in_sync::{DesktopHolds, Verdict, build_of, flock_in_sync, in_sync, syncable};
 use super::onboard;
-use crate::calls::Stop;
 use crate::{App, Shown};
 use collie_desktop_protocol::generated::{
     AddMachinePayload, CredentialsSuccess, FlockItem, LostState, News, SyncNowSuccess,
-    UpdatesSuccess,
 };
 use rune::{El, TextEdit, col, el, text};
 use rune_kit::{Button, ButtonVariant, ControlSize, Dialog, Field, Kit, TextInput};
@@ -48,9 +46,6 @@ impl Adding {
 pub struct Machines {
     /// Every `flock` item folded, as the Machines page needs them.
     pub flock: Fold,
-    /// Desktop's own version, once `updates` has said it.
-    pub version: Option<String>,
-    stops: Vec<Stop>,
     pub cleanup: Cleanup,
     pub adding: Option<Adding>,
     /// The onboarding the dialog shows, by job.
@@ -82,7 +77,7 @@ impl Machines {
     /// What Desktop holds for every Machine, once its version and the board's `credentials` have said.
     fn holds(&self, app: &App) -> Option<DesktopHolds> {
         Some(DesktopHolds {
-            version: self.version.clone()?,
+            version: app.updates.heard.as_ref()?.version.clone(),
             credentials: credentials_held(app.board.credentials.as_ref()?),
         })
     }
@@ -146,22 +141,9 @@ fn told(app: &mut App) -> &mut Told {
 }
 
 impl App {
-    /// Hears Desktop's version, once, for the In sync verdicts.
+    /// Hears Desktop's version for the In sync verdicts.
     pub fn listen_machines(&mut self) {
-        let Some(core) = &self.core else { return };
-        if !self.pages.machines.stops.is_empty() {
-            return;
-        }
-        let updates = core.stream(
-            "updates",
-            (),
-            |app: &mut App, said: Result<UpdatesSuccess, _>| {
-                if let Ok(said) = said {
-                    app.pages.machines.version = Some(said.version);
-                }
-            },
-        );
-        self.pages.machines.stops = vec![updates];
+        self.listen_updates();
     }
 
     pub fn open_add_machine(&mut self) {
@@ -228,18 +210,13 @@ impl App {
     }
 
     pub fn check_for_updates(&mut self) {
-        let Some(core) = &self.core else { return };
-        core.request(
-            "checkForUpdates",
-            (),
-            |app: &mut App, news: Result<News, _>| {
-                let (said, ok) = match news {
-                    Ok(news) => news_said(&news),
-                    Err(why) => (why.0, false),
-                };
-                told(app).say(said, ok);
-            },
-        );
+        self.check_for_updates_then(|app, news| {
+            let (said, ok) = match news {
+                Ok(news) => news_said(news),
+                Err(why) => (why.to_string(), false),
+            };
+            told(app).say(said, ok);
+        });
     }
 }
 
