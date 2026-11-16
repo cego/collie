@@ -176,9 +176,9 @@ Selecting a Flow Step gives its detail and work the remaining record height. The
 details and action forms scroll independently. On a narrow record the details sit above
 the work. Resizing the window or Flock chat refits the terminal without reconnecting its pane.
 
-The terminal keeps today's transport: the `terminal` stream brings frames, and `terminalSend`
-carries input, resizes, scrolls and mouse presses. Leaving the Terminal tab interrupts the
-stream, which has the core send `terminal.release`.
+The `terminal` stream brings frames from core's attach channel; `terminalSend` carries
+input and resizes back over that channel. The view encodes mouse reports as input and
+scrolls its own history. Leaving the Terminal tab closes the attachment.
 
 **Go to pane** (`board/src/shell/panes.rs`, `open_terminal` in `record.rs`) asks for the agent at
 work under its own Run, as `askedFor` does: an agent of a Run under the card's is found only
@@ -233,7 +233,7 @@ and background are the app's text and surface, which the view sets (`Tab::set_su
   cells; block, bar, underline and the hollow block of an unfocused terminal.
 - `view.rs`: a row is found by what it shows, so output that scrolls repaints only its new
   rows. The mouse goes to a program that tracks it, every button (left, middle, right,
-  back, forward) as its own report, or to herdr's `terminal.mouse`; Shift selects past
+  back, forward) as its own report over core's input channel; Shift selects past
   tracking. A drag selects by cell, a double click by word, a triple click by line
   (libghostty's selection), and Ctrl+Shift+C or the platform's copy copies it. Pastes are
   bracketed when asked, focus is reported under mode 1004, a notch scrolls three lines of
@@ -249,15 +249,15 @@ and background are the app's text and surface, which the view sets (`Tab::set_su
 built with Zig 0.17.1; upstream requires at least 0.17.0. `THIRD-PARTY-NOTICES` names Ghostty (MIT)
 and the herdr-app code adapted (Apache-2.0): `ghostty-sys` and `terminal/src/vt.rs`.
 
-**Recordings.** `core/record-terminal.ts` opens the core's `openTerminal` on a pane, at 100 by
-30, types into it, and writes each event as NDJSON. It opens the pane directly rather than
-through a Run's lookup, so a scratch pane served. The fixtures are a herdr pane running
-`ls --color`, `vim` in a herdr pane, and a core attach's first paint. `vim` stands in for
-`htop`, whose screen never stops changing, so its recording never settles.
+**Recordings.** `core/record-terminal.ts` opens the core's `openTerminal` on a core terminal,
+at 100 by 30, types into it, and writes each event as NDJSON. It opens the terminal directly
+rather than through a Run's lookup, so a scratch terminal serves. The `ls --color` and `vim`
+fixtures were recorded from Herdr 1 panes and stay as rendering cases; `core-attach` is a core
+attach's first paint. `vim` stands in for `htop`, whose screen never stops changing, so its
+recording never settles.
 
 ```sh
-bun desktop/core/record-terminal.ts --pane <herdr pane> --out desktop/fixtures/terminal/x.ndjson --type 'ls --color\r'
-bun desktop/core/record-terminal.ts --core <core terminal> --out desktop/fixtures/terminal/core-attach.ndjson
+bun desktop/core/record-terminal.ts --core <core terminal> --out desktop/fixtures/terminal/core-attach.ndjson --type 'ls --color\r'
 ```
 
 **Throughput.** On vm-mk (Xeon Gold 6150, 24 cores), the VT state took a 50 MiB stream, the

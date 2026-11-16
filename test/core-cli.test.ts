@@ -11,7 +11,6 @@ import { connect } from "../src/host";
 import { readAudit } from "../src/audit";
 import { runDir } from "../src/engine";
 import { suiteEnv } from "./support/effect";
-import { serveFakeHc } from "./support/fake-hc";
 import { until } from "./support/host";
 import { collie, collieCommand, proves } from "./support/world";
 
@@ -33,26 +32,13 @@ test(
   () =>
     proves(
       "collie-core-cli-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          const log = yield* Config.String("FAKE_HERDR_LOG");
+          const log = core.logPath;
           const outputs = `${world.home}/outputs.json`;
           yield* fs.writeFileString(outputs, `[{ "verdict": "done" }]`);
-          yield* fs.writeFileString(
-            `${world.config}/config.json`,
-            `{ "terminal_backend": "core" }`,
-          );
-          const core = yield* serveFakeHc(
-            `${world.home}/hc.sock`,
-            log,
-            yield* Effect.scope,
-            outputs,
-          );
-          const start = yield* collie(world, ["run", "start", "attended", "--input", "work=x"], {
-            FAKE_HERDR_OUTPUTS: outputs,
-            HC_SOCKET: core.socketPath,
-          });
+          const start = yield* collie(world, ["run", "start", "attended", "--input", "work=x"]);
           const { runId } = yield* Schema.decodeUnknownEffect(
             Schema.Struct({ runId: Schema.String }),
           )(start.envelope.data);

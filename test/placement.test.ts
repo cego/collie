@@ -8,6 +8,7 @@
 // The host here is the real registry, engine and agents over a stand-in herdr, and the
 // repository is a real git one, so the worktree is one git actually made.
 
+import { Herdr, HerdrError } from "../src/herdr";
 import { recordsAt } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -28,7 +29,7 @@ import {
 } from "effect";
 import { ConnectionDeadline } from "../src/connections";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
-import { Rig, FakeHerdr } from "./support/recorder";
+import { Rig } from "./support/recorder";
 import { exec } from "./support/command";
 import { FakeBin } from "./support/bin";
 import { FORGE_HOST, forgeOnPath, serveForges, storedAnswers } from "./support/forge";
@@ -47,7 +48,7 @@ import {
 } from "../src/engine";
 import { Store } from "../src/store";
 import { readLaunches, recordLaunch } from "../src/launches";
-import { sweep, taskWorkspacesSweeper, worktreesSweeper } from "../src/cleanup";
+import { sweep, tasksSweeper, worktreesSweeper } from "../src/cleanup";
 import { listTasks } from "../src/task";
 import { task as taskView } from "./support/task";
 import { factsOfView } from "../src/runs";
@@ -68,12 +69,13 @@ const LOGIN = "mk";
 let rig: Rig;
 
 beforeEach(() =>
-  runEffect(
+  runLive(
     Effect.gen(function* () {
       rig = yield* Rig.make();
       helleUrl = HELLE_URL;
-      sessions = [rig.socketPath];
-      onCore = false;
+      coreGone = false;
+      // On the wall's clock: its agents' turns outlive this setup's fast-forward.
+      yield* rig.startCore();
       const fs = yield* FileSystem.FileSystem;
       yield* fs.makeDirectory(rig.projectDir, { recursive: true });
       yield* installFakeSkills(rig.root);
@@ -109,32 +111,25 @@ const gitRepo = Effect.fn("test.gitRepo")(function* (at: string) {
   yield* git("remote", "add", "upstream", "git@gitlab.example.com:group/app.git");
 });
 
-/** The sockets `session list` names, or null for a herdr that will not list them. */
-let sessions: ReadonlyArray<string> | null;
 let helleUrl = HELLE_URL;
-/** Whether this Machine runs on core, with no herdr session to reach. */
-let onCore = false;
-const env = () =>
-  rig.pluginEnv({
-    HERDR_SOCKET_PATH: onCore ? "" : rig.socketPath,
-    HERDR_PLUGIN_ROOT: ROOT,
+/** Whether core stops answering, as one that went away does. */
+let coreGone = false;
+const env = () => {
+  const given = {
+    COLLIE_ROOT: ROOT,
     GITLAB_USER_LOGIN: LOGIN,
     GITLAB_HOST: FORGE_HOST.gitlab,
     COLLIE_HELLE_URL: helleUrl,
-    FAKE_HERDR_SESSIONS:
-      sessions === null
-        ? ""
-        : JSON.stringify(
-            Arr.map(sessions, (socket, at) => ({ name: `s${at}`, socket_path: socket })),
-          ),
-  });
+  };
+  return rig.pluginEnv(coreGone ? { ...given, HC_SOCKET: `${rig.root}/gone.sock` } : given);
+};
 /** The state directory the host, its Tasks and its agents all share, as an install's do. */
 const dir = () => env().stateDir;
 
 const hostOf = (): AgentHost => ({
   dir: dir(),
   env: env(),
-  herdr: new FakeHerdr(env()),
+  herdr: new Herdr(env()),
   harness: "claude",
   model: "opus",
   permissions: "auto",
@@ -159,7 +154,7 @@ const hosted = <A, E>(
     Effect.provide(
       registryLayer(dir(), {
         placing: {
-          herdr: new FakeHerdr(env()),
+          herdr: new Herdr(env()),
           env: env(),
         },
         userDir: rig.userDir,
@@ -175,7 +170,7 @@ const hosted = <A, E>(
             dir: dir(),
             userDir: rig.userDir,
             placing: {
-              herdr: new FakeHerdr(env()),
+              herdr: new Herdr(env()),
               env: env(),
             },
           }),
@@ -188,12 +183,11 @@ const hosted = <A, E>(
 
 const worktreeOf = (branch: string) => `${rig.root}/.collie/worktrees/project/${LOGIN}/${branch}`;
 
-/** A Task whose workspace herdr has open, as a start inside one continues it. */
+/** An open Task in the project, as a start inside it continues it. */
 const aTask = Effect.gen(function* () {
-  yield* rig.addWorkspace("wT", "Project | Picker", rig.projectDir);
   const task: TaskRecord = {
     id: "task-1",
-    workspace: "wT",
+    workspace: null,
     label: "Project | Picker",
     cwd: rig.projectDir,
     created_at: "2026-09-23T00:00:00.000Z",
@@ -213,17 +207,11 @@ const approvedByOperator = FileSystem.FileSystem.pipe(
   Effect.orDie,
 );
 
-/** Which workspace each tab was opened in, and on which directory, in order. */
-const tabs = (calls: ReadonlyArray<Call>) =>
+/** The directory each agent was started in on core, in order. */
+const launchedIn = (calls: ReadonlyArray<Call>) =>
   Arr.map(
-    Arr.filter(calls, (call) => call.cmd === "tab create"),
-    (call) => {
-      const argv = call.argv ?? [];
-      return {
-        workspace: argv[argv.indexOf("--workspace") + 1] ?? "",
-        cwd: argv[argv.indexOf("--cwd") + 1] ?? "",
-      };
-    },
+    Arr.filter(calls, (call) => call.cmd === "terminal.run"),
+    (call) => call.params?.cwd,
   );
 
 const loaded = (registry: typeof Registry.Service, names: ReadonlyArray<string>) =>
@@ -387,7 +375,7 @@ const refusedWith = (result: Result.Result<unknown, { readonly reason: string }>
   Result.isFailure(result) ? result.failure.reason : "";
 
 test(
-  "a chained build is the same Task in the same workspace, on a worktree of its own",
+  "a chained build is the same Task, on a worktree of its own",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -428,21 +416,16 @@ test(
         expect(yield* FileSystem.FileSystem.pipe(Effect.flatMap((fs) => fs.exists(worktree)))).toBe(
           true,
         );
-        // Every agent opened in the Task's one workspace, each on its own Run's checkout.
-        expect(tabs(yield* rig.calls())).toEqual([
-          { workspace: "wT", cwd: rig.projectDir },
-          { workspace: "wT", cwd: worktree },
-        ]);
-        expect(yield* rig.cmds()).not.toContain("workspace create");
-        expect(yield* rig.cmds()).not.toContain("worktree create");
-        expect((yield* readTask("task-1"))?.workspace).toBe("wT");
+        // Each agent started on its own Run's checkout.
+        expect(launchedIn(yield* rig.calls())).toEqual([rig.projectDir, worktree]);
+        expect(yield* listTasks).toHaveLength(1);
       }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
 
 test(
-  "a child that is work of its own is a Task of its own, in a workspace opened on its checkout",
+  "a child that is work of its own is a Task of its own, on its checkout",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -470,16 +453,11 @@ test(
         const own = yield* readTask(views.child?.task ?? "");
         expect(own?.cwd).toBe(worktree);
         expect(own?.label).toBe("Project | Add a picker");
-        expect(own?.workspace).not.toBe("wT");
-        const created = Arr.filter(yield* rig.calls(), (call) => call.cmd === "workspace create");
-        expect(Arr.map(created, (call) => call.argv)).toEqual([
-          expect.arrayContaining(["--cwd", worktree, "--no-focus"]),
+        const launched = Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.run");
+        expect(Arr.map(launched, (call) => [call.params?.cwd, call.params?.labels])).toEqual([
+          [rig.projectDir, expect.objectContaining({ task: "task-1" })],
+          [worktree, expect.objectContaining({ task: own?.id })],
         ]);
-        expect(tabs(yield* rig.calls())).toEqual([{ workspace: "wT", cwd: rig.projectDir }]);
-        const agents = Arr.filter(yield* rig.calls(), (call) => call.cmd === "agent start");
-        expect(agents.at(-1)?.argv).toEqual(
-          expect.arrayContaining(["--pane", `${own?.workspace}-p1`]),
-        );
       }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
@@ -490,7 +468,6 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* rig.startSocket();
         const parentTask = yield* aTask;
         yield* rig.queueOutputs([{ verdict: "clean" }, { verdict: "clean" }]);
         const views = yield* hosted(
@@ -525,7 +502,7 @@ test(
           status: { status: "complete" },
         });
         expect(views.child?.task).not.toBe(parentTask.id);
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "workspace create")).toHaveLength(1);
+        expect(yield* listTasks).toHaveLength(2);
       }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
@@ -559,7 +536,7 @@ test(
         expect(outcome.rows).toEqual([]);
         expect(yield* fs.exists(`${rig.root}/.collie/worktrees`)).toBe(false);
         expect(yield* listTasks.pipe(Effect.provide(recordsAt(dir())))).toEqual([]);
-        expect(yield* rig.cmds()).toEqual([]);
+        expect(launchedIn(yield* rig.calls())).toEqual([]);
       }),
     ),
   120_000,
@@ -601,7 +578,7 @@ test(
         expect(refusedWith(outcome.separate)).toStartWith("invalid_input: workspace:");
         expect(refusedWith(outcome.separate)).toContain('"chains"');
         expect(outcome.rows).toEqual([]);
-        expect(yield* rig.cmds()).toEqual([]);
+        expect(launchedIn(yield* rig.calls())).toEqual([]);
       }),
     ),
   120_000,
@@ -727,11 +704,10 @@ test(
 );
 
 test(
-  "a fresh Task's workspace is rooted at the checkout its first Run was given",
+  "a fresh Task is rooted at the checkout its first Run was given, and its agent starts there",
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* rig.startSocket();
         yield* rig.queueOutputs([{ verdict: "clean" }]);
         const view = yield* hosted(
           Effect.gen(function* () {
@@ -754,22 +730,8 @@ test(
         expect(view.offers).toEqual(["keep-going"]);
         expect(view).toMatchObject({ cwd: worktree, workspace: null });
         const task = yield* readTask(view?.task ?? "");
-        expect(task).toMatchObject({ label: "Project | Picker", cwd: worktree });
-        const created = Arr.filter(yield* rig.calls(), (call) => call.cmd === "workspace create");
-        expect(Arr.map(created, (call) => call.argv)).toEqual([
-          expect.arrayContaining(["--cwd", worktree, "--no-focus"]),
-        ]);
-        // A start never takes the human away from what they are looking at.
-        expect(yield* rig.cmds()).not.toContain("workspace.focus");
-        // The first agent takes over the shell the workspace came with, rather than leaving
-        // it an empty first tab beside one of its own.
-        expect(tabs(yield* rig.calls())).toEqual([]);
-        const agentStart = Option.getOrUndefined(
-          Arr.findFirst(yield* rig.calls(), (call) => call.cmd === "agent start"),
-        );
-        expect(agentStart?.argv).toEqual(
-          expect.arrayContaining(["--pane", `${task?.workspace}-p1`]),
-        );
+        expect(task).toMatchObject({ label: "Project | Picker", cwd: worktree, workspace: null });
+        expect(launchedIn(yield* rig.calls())).toEqual([worktree]);
         expect(task?.root_pane ?? null).toBeNull();
       }).pipe(Effect.provide(recordsAt(dir()))),
     ),
@@ -777,7 +739,7 @@ test(
 );
 
 test(
-  "one request started twice at once is placed once: one worktree, one Task, one workspace",
+  "one request started twice at once is placed once: one worktree, one Task",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -798,8 +760,6 @@ test(
 
         expect(new Set(outcome.ids).size).toBe(1);
         expect(outcome.rows).toHaveLength(1);
-        const cmds = yield* rig.cmds();
-        expect(Arr.filter(cmds, (cmd) => cmd === "workspace create")).toHaveLength(1);
         expect(yield* listTasks.pipe(Effect.provide(recordsAt(dir())))).toHaveLength(1);
       }),
     ),
@@ -819,52 +779,23 @@ test(
         expect(view?.worktree?.path).toBe(view?.cwd);
         expect(view?.task).not.toBeNull();
         expect(view?.status.status).toBe("complete");
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "workspace create")).toHaveLength(1);
       }),
     ),
   120_000,
 );
 
 test(
-  "a start the host died after herdr opened its workspace is placed in that workspace",
+  "a start the host died after a Herdr 1 placement recorded its workspace keeps that workspace's Task",
   () =>
     runEffect(
       Effect.gen(function* () {
         yield* rig.queueOutputs([{ verdict: "clean" }]);
-        yield* rig.addWorkspace("wX", "Project | P", rig.projectDir);
         yield* claimCut({ workspace: "wX" });
 
         const view = yield* hosted(finished("run-cut"));
         expect(view?.status.status).toBe("complete");
         expect((yield* readTask(view?.task ?? ""))?.workspace).toBe("wX");
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "workspace create")).toEqual([]);
       }).pipe(Effect.provide(recordsAt(dir()))),
-    ),
-  120_000,
-);
-
-test(
-  "a start the host died opening a workspace for opens no second one, and keeps its claim",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* claimCut({ workspace: null });
-
-        const again = yield* hosted(
-          Effect.gen(function* () {
-            const registry = yield* Registry;
-            const [builds] = yield* loaded(registry, [`${fixtures}/builds.workflow.ts`]);
-            const ask = { request: "r1", text: { work: "Add a picker" }, taskLabel: "Project | P" };
-            return {
-              started: yield* start(builds!, ask),
-              row: yield* (yield* Store).run("run-cut"),
-            };
-          }),
-        );
-        expect(refusedWith(again.started)).toContain("may have been opened for run-cut");
-        expect(again.row?.checkout).toBeNull();
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "workspace create")).toEqual([]);
-      }),
     ),
   120_000,
 );
@@ -1728,28 +1659,14 @@ test(
             const next = yield* start(roams!, { request: "r2", text: { work: "next" } });
             if (next._tag === "Failure") return yield* Effect.die(next.failure);
             yield* finished(next.success.runId);
-            // herdr lists the repository's checkouts, as it would git's.
-            const state = `${rig.logPath}.state.json`;
-            const was = yield* Schema.decodeEffect(
-              Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
-            )(yield* fs.readFileString(state).pipe(Effect.orElseSucceed(() => "{}"))).pipe(
-              Effect.orDie,
-            );
-            const worktrees = Arr.map([roaming, `${roaming}-2`], (path) => ({
-              path,
-              branch: "",
-              open_workspace_id: null,
-            }));
-            yield* fs.writeFileString(state, asJson({ ...was, worktrees }));
             return Arr.map(yield* registry.views(null), (view) => factsOfView(dir(), view));
           }),
         );
-        const herdr = new FakeHerdr(env());
+        const herdr = new Herdr(env());
         const report = yield* sweep(
           [
             worktreesSweeper({
               herdr,
-              sessions: [herdr],
               stateDir: dir(),
               runs,
               registered: [],
@@ -2193,13 +2110,12 @@ test(
 );
 
 test(
-  "a roaming start is refused an ended Run's checkout while another session's agent works in it",
+  "a roaming start is refused an ended Run's checkout while an agent works in it",
   () =>
     runEffect(
       Effect.gen(function* () {
         const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
-        const other = `${rig.root}/other.sock`;
-        sessions = [rig.socketPath, other];
+        let at = "";
         const refused = yield* hosted(
           Effect.gen(function* () {
             const registry = yield* Registry;
@@ -2207,24 +2123,24 @@ test(
             const first = yield* start(roams!, { request: "r1", text: { work: "fail" } });
             if (first._tag === "Failure") return yield* Effect.die(first.failure);
             yield* finished(first.success.runId);
-            yield* rig.addPane("p-far", "t-far", roaming, "claude", null, null, "working", other);
+            at = yield* rig.addAgent("claude", roaming);
             return refusedWith(yield* start(roams!, { request: "r2", text: { work: "next" } }));
           }),
         );
 
-        expect(refused).toContain("agent claude in pane p-far works in it");
+        expect(refused).toContain(`agent claude in terminal ${at} works in it`);
       }),
     ),
   120_000,
 );
 
 test(
-  "a roaming start is refused an ended Run's checkout while herdr will not list its sessions",
+  "a roaming start is refused an ended Run's checkout while core will not list its agents",
   () =>
     runEffect(
       Effect.gen(function* () {
         const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
-        sessions = null;
+        coreGone = true;
         const refused = yield* hosted(
           Effect.gen(function* () {
             const registry = yield* Registry;
@@ -2237,18 +2153,19 @@ test(
         );
 
         expect(refused).toContain(`${roaming} is a checkout of`);
-        expect(refused).toContain("herdr would not list its sessions");
+        expect(refused).toContain("core would not say which agents work in it");
       }),
     ),
   120_000,
 );
 
 test(
-  "a roaming start is refused an ended Run's checkout while an agent no Run recorded works in it",
+  "a roaming start is refused an ended Run's checkout while an agent no Run recorded moved into it",
   () =>
     runEffect(
       Effect.gen(function* () {
         const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
+        let at = "";
         const refused = yield* hosted(
           Effect.gen(function* () {
             const registry = yield* Registry;
@@ -2257,20 +2174,21 @@ test(
             if (first._tag === "Failure") return yield* Effect.die(first.failure);
             yield* finished(first.success.runId);
             // Started in the repository, and moved into the checkout since.
-            yield* rig.addPane("p-moved", "t-moved", rig.projectDir, "claude", null, roaming);
+            at = yield* rig.addAgent("claude", rig.projectDir);
+            (yield* rig.startCore()).cd("claude", roaming);
             return refusedWith(yield* start(roams!, { request: "r2", text: { work: "next" } }));
           }),
         );
 
         expect(refused).toContain(`${roaming} is a checkout of`);
-        expect(refused).toContain("agent claude in pane p-moved works in it");
+        expect(refused).toContain(`agent claude in terminal ${at} works in it`);
       }),
     ),
   120_000,
 );
 
 test(
-  "a roaming start is refused an ended Run's checkout while a server of an agent herdr no longer lists may write in it",
+  "a roaming start is refused an ended Run's checkout while a server of an agent core no longer lists may write in it",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -2311,7 +2229,7 @@ test(
 );
 
 test(
-  "a stop closes the Run's agent and keeps its Task's workspace, and a resume starts the work again",
+  "a stop ends the Run's agent and keeps its Task, and a resume starts the work again",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -2331,7 +2249,7 @@ test(
             const runId = started.success.runId;
             yield* until(
               () => rig.cmds().pipe(Effect.orDie),
-              (cmds) => cmds.includes("agent prompt"),
+              (cmds) => cmds.includes("terminal.send"),
             );
             yield* registry.control({ runId, control: "stop", set: true });
             const stopped = yield* until(
@@ -2339,7 +2257,7 @@ test(
               (seen) => seen?.status.status === "suspended",
             );
             expect(stopped?.controls).toEqual(["stop"]);
-            expect(yield* rig.cmds()).toContain("pane close");
+            expect(yield* rig.cmds()).toContain("terminal.kill");
             yield* registry.control({ runId, control: "stop", set: false });
             return yield* finished(runId);
           }),
@@ -2347,65 +2265,9 @@ test(
 
         expect(view?.status.status).toBe("complete");
         const cmds = yield* rig.cmds();
-        // Only the agent's pane went; the Task's workspace is where it was.
-        expect(Arr.filter(cmds, (cmd) => cmd === "pane close")).toHaveLength(1);
-        expect(
-          Arr.filter(
-            cmds,
-            (cmd) => pipe_(cmd, Str.startsWith("workspace")) && cmd !== "workspace list",
-          ),
-        ).toEqual([]);
-        expect(Arr.filter(cmds, (cmd) => cmd === "agent start")).toHaveLength(2);
-        expect(Arr.map(tabs(yield* rig.calls()), (tab) => tab.workspace)).toEqual(["wT", "wT"]);
-      }).pipe(Effect.provide(recordsAt(dir()))),
-    ),
-  120_000,
-);
-
-test(
-  "a stop that closes the last pane in a Task's workspace leaves a shell there, and the resume takes it",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* rig.queueOutputs([null, { verdict: "clean" }]);
-        const view = yield* hosted(
-          Effect.gen(function* () {
-            const registry = yield* Registry;
-            const [builds] = yield* loaded(registry, [`${fixtures}/builds.workflow.ts`]);
-            const started = yield* start(builds!, {
-              request: "r1",
-              text: { work: "Add a picker" },
-              taskLabel: "Project | Picker",
-            });
-            if (started._tag === "Failure") return yield* Effect.die(started.failure);
-            const runId = started.success.runId;
-            yield* until(
-              () => rig.cmds().pipe(Effect.orDie),
-              (cmds) => cmds.includes("agent prompt"),
-            );
-            yield* registry.control({ runId, control: "stop", set: true });
-            yield* until(
-              () => registry.view(runId),
-              (seen) => seen?.status.status === "suspended",
-            );
-            yield* registry.control({ runId, control: "stop", set: false });
-            return yield* finished(runId);
-          }),
-        );
-
-        expect(view?.status.status).toBe("complete");
-        const task = yield* readTask(view?.task ?? "");
-        const calls = yield* rig.calls();
-        // The agent had the workspace's only pane, and herdr drops a workspace with its
-        // last pane: the stop opened a shell there before it closed the agent's.
-        const opened = tabs(calls);
-        expect(opened).toEqual([{ workspace: task?.workspace ?? "", cwd: expect.any(String) }]);
-        const cmds = Arr.map(calls, (call) => call.cmd);
-        expect(cmds.indexOf("tab create")).toBeLessThan(cmds.indexOf("pane close"));
-        // And the resumed agent took that shell over: that one tab is the only one opened.
-        expect(Arr.filter(cmds, (cmd) => cmd === "agent start")).toHaveLength(2);
-        expect(cmds.lastIndexOf("agent start")).toBeGreaterThan(cmds.indexOf("tab create"));
-        expect(task?.root_pane ?? null).toBeNull();
+        expect(Arr.filter(cmds, (cmd) => cmd === "terminal.kill")).toHaveLength(1);
+        expect(launchedIn(yield* rig.calls())).toHaveLength(2);
+        expect(view?.task).toBe(task.id);
       }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
@@ -2430,7 +2292,7 @@ test(
             if (started._tag === "Failure") return yield* Effect.die(started.failure);
             yield* until(
               () => rig.cmds().pipe(Effect.orDie),
-              (cmds) => cmds.includes("agent prompt"),
+              (cmds) => cmds.includes("terminal.send"),
             );
             return yield* registry.control({
               runId: started.success.runId,
@@ -2439,12 +2301,14 @@ test(
             });
           }),
           {
-            herdr: new FakeHerdr(
-              rig.pluginEnv({ FAKE_HERDR_FAIL: `{"pane close":"pane is busy"}` }),
-            ),
+            herdr: new (class extends Herdr {
+              override terminalKill() {
+                return Effect.fail(new HerdrError({ message: "terminal is busy", detail: "" }));
+              }
+            })(env()),
           },
         );
-        expect(Arr.join(stopped.left, "\n")).toContain("would not close (");
+        expect(Arr.join(stopped.left, "\n")).toContain("would not close (terminal is busy)");
       }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
@@ -2496,7 +2360,7 @@ test(
 );
 
 test(
-  "a Run that asks for a worktree workspace of its own gets one, and a fresh Task takes it as its own",
+  "a Run that asks for a worktree of its own gets one, and a fresh Task takes it as its own",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -2527,34 +2391,34 @@ test(
           }),
         );
 
-        // Inside a Task that already has a workspace, the one it asked for is its own.
-        expect(views.own).toMatchObject({ task: "task-1", branch: `${LOGIN}/add-a-picker` });
-        const own = views.own?.workspace ?? "";
-        expect(own).not.toBe("wT");
-        expect(own).not.toBe("");
-        // A fresh Task's workspace is that one: herdr opened it, and no second one is made.
+        // Inside a Task, the worktree it asked for is its own, and the Task stays its.
+        expect(views.own).toMatchObject({
+          task: "task-1",
+          branch: `${LOGIN}/add-a-picker`,
+          cwd: worktreeOf("add-a-picker"),
+        });
+        // A fresh Task is rooted at the worktree its Run was given.
         const fresh = yield* readTask(views.fresh?.task ?? "");
-        expect(views.fresh?.workspace).toBeNull();
+        expect(views.fresh?.cwd).toBe(worktreeOf("add-a-menu"));
         expect(fresh).toMatchObject({ label: "Project | Menu", cwd: views.fresh?.cwd });
-        expect(yield* rig.cmds()).not.toContain("workspace create");
-        // The fresh Task's agent takes over the shell herdr opened its workspace with.
-        expect(Arr.map(tabs(yield* rig.calls()), (tab) => tab.workspace)).toEqual([own]);
-        expect(fresh?.root_pane ?? null).toBeNull();
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "worktree create")).toHaveLength(2);
+        expect(launchedIn(yield* rig.calls())).toEqual([views.own?.cwd, views.fresh?.cwd]);
       }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
 
 test(
-  "a branch whose worktree herdr already has open is given that one, never a second",
+  "a branch git already has a worktree of is given that one, never a second",
   () =>
     runEffect(
       Effect.gen(function* () {
         const task = yield* aTask;
         const existing = `${rig.root}/elsewhere/add-a-picker`;
-        yield* rig.addWorkspace("wW", "add-a-picker", existing);
-        yield* rig.addWorktree(`${LOGIN}/add-a-picker`, existing, "wW");
+        const added = yield* exec(
+          ["git", "worktree", "add", "-q", "-b", `${LOGIN}/add-a-picker`, existing],
+          { cwd: rig.projectDir },
+        );
+        expect(added.stderr).toBe("");
         yield* rig.queueOutputs([{ verdict: "clean" }]);
         const view = yield* hosted(
           Effect.gen(function* () {
@@ -2571,10 +2435,8 @@ test(
           }),
         );
 
-        expect(view).toMatchObject({ cwd: existing, workspace: "wW" });
-        expect(yield* rig.cmds()).toContain("worktree open");
-        expect(yield* rig.cmds()).not.toContain("worktree create");
-        expect(yield* rig.cmds()).not.toContain("workspace create");
+        expect(view).toMatchObject({ cwd: existing, workspace: null });
+        expect(launchedIn(yield* rig.calls())).toEqual([existing]);
       }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
@@ -2635,10 +2497,10 @@ const chainedFrom = (options: {
           Effect.all({
             parent: registry.view(runId),
             child: registry.view(child),
-            tabs: rig.calls().pipe(Effect.map(tabs), Effect.orDie),
+            launched: rig.calls().pipe(Effect.map(launchedIn), Effect.orDie),
           }),
         (seen) =>
-          seen.tabs.length === 2 || (seen.parent !== null && isOver(seen.parent.status.status)),
+          seen.launched.length === 2 || (seen.parent !== null && isOver(seen.parent.status.status)),
       );
       return settled;
     }),
@@ -2738,7 +2600,7 @@ test(
 
 for (const chain of CHAINS) {
   test(
-    `${chain.name} chained into implement: one Task, one workspace, the build on its own worktree`,
+    `${chain.name} chained into implement: one Task, the build on its own worktree`,
     () =>
       runEffect(
         Effect.gen(function* () {
@@ -2780,12 +2642,8 @@ for (const chain of CHAINS) {
             workspace: null,
           });
           expect(seen.child?.options.workspace).toBeUndefined();
-          expect(seen.tabs).toEqual([
-            { workspace: "wT", cwd: rig.projectDir },
-            { workspace: "wT", cwd: worktree },
-          ]);
-          expect((yield* readTask("task-1"))?.workspace).toBe("wT");
-          expect(yield* rig.cmds()).not.toContain("workspace create");
+          expect(launchedIn(yield* rig.calls())).toEqual([rig.projectDir, worktree]);
+          expect(yield* listTasks).toHaveLength(1);
         }).pipe(Effect.provide(recordsAt(dir())), Effect.scoped),
       ),
     180_000,
@@ -2812,7 +2670,7 @@ for (const chain of CHAINS) {
           const status = seen.parent?.status;
           expect(status?.status === "failed" ? status.reason : "").toContain(container);
           expect(yield* fs.exists(`${rig.root}/.collie/worktrees`)).toBe(false);
-          expect(tabs(yield* rig.calls())).toEqual([{ workspace: "wT", cwd: container }]);
+          expect(launchedIn(yield* rig.calls())).toEqual([container]);
         }).pipe(Effect.provide(recordsAt(dir()))),
       ),
     180_000,
@@ -2824,7 +2682,6 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* rig.startSocket();
         yield* rig.queueOutputs([{ verdict: "clean" }]);
         const views = yield* hosted(
           Effect.gen(function* () {
@@ -2873,8 +2730,7 @@ test(
         expect(review?.task).toBe(build?.task);
         expect(hello?.task).not.toBe(build?.task);
         expect(there?.task).not.toBe(build?.task);
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "workspace create")).toHaveLength(3);
-        expect(yield* rig.cmds()).not.toContain("workspace.focus");
+        expect(new Set(Arr.map(views, (view) => view?.task)).size).toBe(3);
       }),
     ),
   120_000,
@@ -2928,7 +2784,6 @@ test(
         );
 
         expect(review).toMatchObject({ task: "task-1", parent: null });
-        expect(yield* rig.cmds()).not.toContain("workspace create");
       }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
@@ -2960,7 +2815,6 @@ test(
         );
 
         expect(release).toMatchObject({ task: "task-1", parent: null });
-        expect(yield* rig.cmds()).not.toContain("workspace create");
       }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
@@ -3009,7 +2863,6 @@ test(
         const { view } = yield* builtFromItsPlan(null);
 
         expect(view).toMatchObject({ branch: `${LOGIN}/add-a-picker`, task: "task-1" });
-        expect(yield* rig.cmds()).not.toContain("workspace create");
       }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
@@ -3029,7 +2882,7 @@ test(
 );
 
 test(
-  "a fresh start on a Finished Task's merge request joins it, and reopens its closed workspace",
+  "a fresh start on a closed Task's merge request joins it",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -3044,7 +2897,7 @@ test(
               `${fixtures}/releases.workflow.ts`,
             ]);
             yield* builtByAChild(registry, chains!, task.id, MR_URL);
-            yield* rig.closeWorkspace("wT", []);
+            yield* writeTask({ ...task, closed_at: "2026-09-24T00:00:00.000Z" });
             const started = yield* start(releases!, {
               request: "r-release",
               text: { mr: MR_TARGET },
@@ -3060,14 +2913,7 @@ test(
           parent: null,
           status: { status: "complete" },
         });
-        const created = Arr.filter(yield* rig.calls(), (call) => call.cmd === "workspace create");
-        expect(Arr.map(created, (call) => call.argv)).toEqual([
-          expect.arrayContaining(["--cwd", rig.projectDir, "--label", "Project | Picker"]),
-        ]);
-        const reopened = (yield* readTask("task-1"))?.workspace;
-        expect(reopened).not.toBe("wT");
-        const agents = Arr.filter(yield* rig.calls(), (call) => call.cmd === "agent start");
-        expect(agents.at(-1)?.argv).toEqual(expect.arrayContaining(["--pane", `${reopened}-p1`]));
+        expect(launchedIn(yield* rig.calls()).at(-1)).toBe(rig.projectDir);
       }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
@@ -3210,7 +3056,7 @@ test(
 );
 
 test(
-  "a fresh start on the branch of a Task whose workspace has closed is a Task of its own",
+  "a fresh start on the branch of a closed Task is a Task of its own",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -3225,7 +3071,7 @@ test(
               `${fixtures}/targeted.workflow.ts`,
             ]);
             yield* builtByAChild(registry, chains!, task.id);
-            yield* rig.closeWorkspace("wT", []);
+            yield* writeTask({ ...task, closed_at: "2026-09-24T00:00:00.000Z" });
             const started = yield* start(targeted!, {
               request: "r-review",
               text: { target: `branch:master...${LOGIN}/add-a-picker` },
@@ -3701,33 +3547,23 @@ test("a Connection deadline provided around the host is the one its start reads 
     }).pipe(Effect.scoped),
   ));
 
-/** This Machine set to core, with no herdr session open and `settings` beside the backend. */
-const aCoreMachine = (settings = "") =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    yield* rig.startCore();
-    onCore = true;
-    sessions = [];
-    yield* fs.makeDirectory(rig.userDir, { recursive: true });
-    yield* fs.writeFileString(
-      `${rig.userDir}/config.json`,
-      `{ "terminal_backend": "core"${settings === "" ? "" : `, ${settings}`} }`,
-    );
-  });
-
-/** herdr calls that make, list, focus, rename or close a workspace, a tab or a worktree. */
-const layoutCalls = (calls: ReadonlyArray<Call>) =>
-  Arr.filter(
-    calls,
-    (call) => call.transport !== "core" && /^(workspace|tab|worktree)[ .]/.test(call.cmd),
+/** This Machine's user settings. */
+const configured = (settings: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) =>
+      fs
+        .makeDirectory(rig.userDir, { recursive: true })
+        .pipe(Effect.andThen(fs.writeFileString(`${rig.userDir}/config.json`, `{ ${settings} }`))),
+    ),
+    Effect.orDie,
   );
 
 test(
-  "a mutating Run on a core Machine works in a checkout git made under the worktrees directory, its agent labelled with its Task, and herdr is asked for no workspace, tab or worktree",
+  "a mutating Run works in a checkout git made under the worktrees directory, its agent labelled with its Task",
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* aCoreMachine(`"worktrees_directory": "${rig.root}/trees"`);
+        yield* configured(`"worktrees_directory": "${rig.root}/trees"`);
         yield* rig.queueOutputs([{ verdict: "clean" }]);
         const view = yield* hosted(
           Effect.gen(function* () {
@@ -3748,29 +3584,23 @@ test(
         expect(view?.status.status).toBe("complete");
         const task = yield* readTask(view?.task ?? "");
         expect(task).toMatchObject({ label: "Project | Picker", cwd: worktree, workspace: null });
-        const calls = yield* rig.calls();
-        const launched = Arr.filter(
-          calls,
-          (call) => call.transport === "core" && call.cmd === "terminal.run",
-        );
+        const launched = Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.run");
         expect(Arr.map(launched, (call) => call.params)).toEqual([
           expect.objectContaining({
             cwd: worktree,
             labels: expect.objectContaining({ task: task?.id }),
           }),
         ]);
-        expect(layoutCalls(calls)).toEqual([]);
       }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,
 );
 
 test(
-  "a start on the branch of a core Task joins it until an hour after it is Finished, and begins a Task of its own after",
+  "a start on the branch of a Task joins it until an hour after it is Finished, and begins a Task of its own after",
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* aCoreMachine();
         yield* rig.queueOutputs([{ verdict: "clean" }]);
         const seen = new Map<string, number>();
         /** Cleanup's pass over the Tasks, with the first one Finished on the board. */
@@ -3778,12 +3608,9 @@ test(
           Effect.gen(function* () {
             return yield* sweep(
               [
-                taskWorkspacesSweeper({
-                  stateDir: dir(),
-                  sessions: [],
+                tasksSweeper({
                   tasks: yield* listTasks,
                   views: [taskView({ id: first, state: "done", landed: true })],
-                  runs: [],
                   seen,
                 }),
               ],
@@ -3822,7 +3649,6 @@ test(
         const after = yield* taskOf("targeted", "r3", review);
         expect(after).not.toBe("");
         expect(after).not.toBe(first);
-        expect(layoutCalls(yield* rig.calls())).toEqual([]);
       }).pipe(Effect.provide(recordsAt(dir()))),
     ),
   120_000,

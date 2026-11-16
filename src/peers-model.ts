@@ -14,7 +14,6 @@ export const HerdrMachine = Schema.Struct({
   enabled: Schema.Boolean,
 });
 export type HerdrMachine = typeof HerdrMachine.Type;
-export const HerdrMachines = Schema.fromJsonString(Schema.Array(HerdrMachine));
 
 /** The port a Machine a peer dials listens on. */
 export const PEER_PORT = 47217;

@@ -10,12 +10,13 @@
 // The agents are herdr's through the real dispatcher, the engine is Effect's over real
 // SQLite in a directory, and every second pass below is a second host on the same file.
 
+import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Layer, Path, Schema } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
-import { Rig, FakeHerdr } from "./support/recorder";
+import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { Agents, agentsLayer, type AgentHost } from "../src/agents";
 import { Children, Host } from "../src/sdk";
@@ -84,7 +85,7 @@ const ticket = (
 const hostOf = (): AgentHost => ({
   dir,
   env: rig.pluginEnv(),
-  herdr: new FakeHerdr(rig.pluginEnv()),
+  herdr: new Herdr(rig.pluginEnv()),
   harness: "claude",
   model: "opus",
   permissions: "auto",

@@ -1,7 +1,7 @@
 // A Run takes attachments by path (ADR-0046): the host copies each into the Run's own
 // directory before its first step or the steer it came with, every step's prompt lists
 // them, and a Run started from it gets copies. Driven through the CLI and host an
-// installation runs, with herdr faked.
+// installation runs, with core faked.
 
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -16,6 +16,7 @@ import { connect } from "../src/host";
 import { isSettled } from "../src/lifecycle";
 import { stopHost, until } from "./support/host";
 import { collie, proves, type World } from "./support/world";
+import type { FakeHc } from "./support/fake-hc";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const Payload = Schema.Struct({
@@ -25,8 +26,25 @@ const Payload = Schema.Struct({
 const payloadOf = (envelope: { readonly data?: unknown }) =>
   flow(Schema.decodeUnknownResult(Payload), Result.getOrThrow)(envelope.data);
 const CallLine = Schema.fromJsonString(
-  Schema.Struct({ cmd: Schema.String, argv: Schema.Array(Schema.String) }),
+  Schema.Struct({
+    cmd: Schema.String,
+    params: Schema.optionalKey(Schema.Struct({ text: Schema.optionalKey(Schema.String) })),
+  }),
 );
+const decodeCall = flow(Schema.decodeUnknownResult(CallLine), Result.getOrThrow);
+
+const sentBy = (core: FakeHc) =>
+  Effect.map(read(core.logPath), (log) =>
+    Arr.flatMap(
+      Arr.filter(Str.split(log, "\n"), (line) => line !== ""),
+      (line) => {
+        const call = decodeCall(line);
+        return call.cmd === "terminal.send" && call.params?.text !== undefined
+          ? [call.params.text]
+          : [];
+      },
+    ),
+  );
 
 /** A world whose fake agents answer each prompt with an Output, and stay alive. */
 const attending = <A, E>(
@@ -34,11 +52,12 @@ const attending = <A, E>(
   body: (
     world: World,
     cli: (args: ReadonlyArray<string>) => ReturnType<typeof collie>,
+    core: FakeHc,
   ) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
 ) =>
   proves(
     prefix,
-    (world) =>
+    (world, core) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const outputs = `${world.home}/outputs.json`;
@@ -51,8 +70,7 @@ const attending = <A, E>(
           ["late.png", "arrived later"],
         ])
           yield* fs.writeFileString(`${world.project}/${name}`, text!).pipe(Effect.orDie);
-        const extra = { FAKE_HERDR_OUTPUTS: outputs };
-        return yield* body(world, (args) => collie(world, args, extra)).pipe(
+        return yield* body(world, (args) => collie(world, args), core).pipe(
           Effect.ensuring(stopHost(world.state)),
         );
       }),
@@ -229,7 +247,7 @@ test(
 test(
   "a steer's file is copied, named in what the agent is told, and listed in the next step's prompt",
   () =>
-    attending("collie-attach-steer-", (world, cli) =>
+    attending("collie-attach-steer-", (world, cli, core) =>
       Effect.gen(function* () {
         const started = yield* cli(["run", "start", "attended", "--input", "work=the picker"]);
         const runId = payloadOf(started.envelope).runId!;
@@ -240,21 +258,8 @@ test(
         const copy = `${runDir(world.state, runId)}/attachments/late.png`;
         expect(yield* read(copy)).toBe("arrived later");
         const told = Option.getOrUndefined(
-          Arr.findLast(
-            Arr.map(
-              Arr.filter(
-                Arr.map(
-                  Arr.filter(
-                    Str.split(yield* read(Bun.env.FAKE_HERDR_LOG!), "\n"),
-                    (line) => line !== "",
-                  ),
-                  (line) => flow(Schema.decodeResult(CallLine), Result.getOrThrow)(line),
-                ),
-                (call) => call.cmd === "agent prompt",
-              ),
-              (call) => Arr.join(call.argv, " "),
-            ),
-            (text) => pipe(text, Str.includes("Their message is in")),
+          Arr.findLast(yield* sentBy(core), (text) =>
+            pipe(text, Str.includes("Their message is in")),
           ),
         );
         const kept = /Their message is in (\S+)\./.exec(told ?? "")?.[1] ?? "";
@@ -285,22 +290,13 @@ test(
 test(
   "a message over the paste budget is kept whole in the Run, and the agent is told where",
   () =>
-    attending("collie-attach-long-", (world, cli) =>
+    attending("collie-attach-long-", (world, cli, core) =>
       Effect.gen(function* () {
         const started = yield* cli(["run", "start", "attended", "--input", "work=the picker"]);
         const runId = payloadOf(started.envelope).runId!;
         yield* viewOf(world, runId, asking);
         const dir = `${runDir(world.state, runId)}/attachments`;
-        const told = Effect.map(read(Bun.env.FAKE_HERDR_LOG!), (log) =>
-          pipe(
-            Arr.map(
-              Arr.filter(Str.split(log, "\n"), (line) => line !== ""),
-              (line) => flow(Schema.decodeResult(CallLine), Result.getOrThrow)(line),
-            ),
-            Arr.filter((call) => call.cmd === "agent prompt"),
-            Arr.flatMap((call) => call.argv),
-          ),
-        );
+        const told = sentBy(core);
         const fileFor = (words: string) =>
           `${dir}/message-${pipe(new Bun.CryptoHasher("sha256").update(words).digest("hex"), Str.slice(0, 8))}.md`;
         const steer = (words: string, ...more: ReadonlyArray<string>) =>

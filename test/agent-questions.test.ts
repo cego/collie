@@ -1,6 +1,6 @@
 // A Claude agent's `AskUserQuestion`, put on its Run by the hook Collie installs, is
 // answered the way a Workflow's question is: from `collie run answer` and from the card,
-// in any words. The host here is a real one over a fake herdr.
+// in any words. The host here is a real one over a fake core.
 
 import { recordsAt, launchOf } from "./support/records";
 import * as Rec from "effect/Record";
@@ -23,6 +23,7 @@ import { piQuestionTool } from "../src/compactors";
 import { askWith, piTools } from "./support/pi";
 import { stopHost, until } from "./support/host";
 import { collie, proves, type World } from "./support/world";
+import type { FakeHc } from "./support/fake-hc";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
@@ -131,11 +132,12 @@ const SHORT_TWICE =
   "The agent gave 2 options and no recommendation; Collie asked for at least three options and exactly one recommended option.";
 
 /**
- * A host for this world over a fake herdr whose agent answers its prompts with `outputs`,
+ * A host for this world over a fake core whose agent answers its prompts with `outputs`,
  * and the env the board's actions are carried out in.
  */
 const hostedOver = Effect.fn("test.hostedOver")(function* (
   world: World,
+  core: FakeHc,
   outputs: ReadonlyArray<unknown>,
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -144,8 +146,7 @@ const hostedOver = Effect.fn("test.hostedOver")(function* (
   // The host a client spawns inherits this process's environment: it has to own this
   // world's state, never the operator's.
   const set = {
-    FAKE_HERDR_OUTPUTS: file,
-    HERDR_PLUGIN_STATE_DIR: world.state,
+    COLLIE_STATE_DIR: world.state,
     COLLIE_USER_DIR: world.config,
   };
   yield* Effect.acquireRelease(
@@ -163,11 +164,12 @@ const hostedOver = Effect.fn("test.hostedOver")(function* (
   );
   resetExecutors();
   const env = readEnv({
-    HERDR_PLUGIN_ROOT: world.install,
-    HERDR_PLUGIN_STATE_DIR: world.state,
+    COLLIE_ROOT: world.install,
+    COLLIE_STATE_DIR: world.state,
     COLLIE_USER_DIR: world.config,
     HOME: world.home,
     COLLIE_CWD: world.project,
+    HC_SOCKET: core.socketPath,
   });
   return { env, client: yield* connect(world.state).pipe(Effect.orDie) };
 });
@@ -177,10 +179,10 @@ test(
   () =>
     proves(
       "collie-agent-question-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          const { env, client } = yield* hostedOver(world, [null]);
+          const { env, client } = yield* hostedOver(world, core, [null]);
           const { runId } = yield* client
             .start({ project: world.project, id: "told", request: "start", input: { work: "it" } })
             .pipe(Effect.orDie);
@@ -215,7 +217,7 @@ test(
           );
           expect(carded).toMatchObject({ kind: "answer", state: "applied" });
 
-          const log = Bun.env.FAKE_HERDR_LOG ?? "";
+          const log = core.logPath;
           const prompts = yield* until(
             () => fs.readFileString(log).pipe(Effect.orElseSucceed(() => "")),
             (all) =>
@@ -283,10 +285,10 @@ test(
   () =>
     proves(
       "collie-agent-relay-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          const { env, client } = yield* hostedOver(world, [null]);
+          const { env, client } = yield* hostedOver(world, core, [null]);
           const { runId } = yield* client
             .start({ project: world.project, id: "told", request: "start", input: { work: "it" } })
             .pipe(Effect.orDie);
@@ -310,8 +312,7 @@ test(
           );
           expect(first).toMatchObject({ kind: "answer", state: "applied" });
           yield* until(
-            () =>
-              fs.readFileString(Bun.env.FAKE_HERDR_LOG ?? "").pipe(Effect.orElseSucceed(() => "")),
+            () => fs.readFileString(core.logPath).pipe(Effect.orElseSucceed(() => "")),
             (all) => pipe_(all, Str.includes("Your question Database is answered: first")),
           );
           // A question asked after the relay is recorded on a later pass than the one that sent it.
@@ -333,10 +334,10 @@ test(
   () =>
     proves(
       "collie-finished-question-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          const { env, client } = yield* hostedOver(world, [{ verdict: "built" }]);
+          const { env, client } = yield* hostedOver(world, core, [{ verdict: "built" }]);
           const { runId } = yield* client
             .start({ project: world.project, id: "told", request: "start", input: { work: "it" } })
             .pipe(Effect.orDie);
@@ -381,8 +382,7 @@ test(
           );
           expect(answered).toMatchObject({ kind: "answer", state: "applied" });
           yield* until(
-            () =>
-              fs.readFileString(Bun.env.FAKE_HERDR_LOG ?? "").pipe(Effect.orElseSucceed(() => "")),
+            () => fs.readFileString(core.logPath).pipe(Effect.orElseSucceed(() => "")),
             (all) => pipe_(all, Str.includes("Your question Region is answered: eu-west")),
           );
         }).pipe(Effect.provide(recordsAt(world.state)), Effect.ensuring(stopHost(world.state))),
@@ -415,10 +415,10 @@ test(
   () =>
     proves(
       "collie-agent-repair-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          const { client } = yield* hostedOver(world, [null]);
+          const { client } = yield* hostedOver(world, core, [null]);
           const { runId, launched, dir } = yield* launchedRun(world, client);
 
           const repair = toldBy(
@@ -493,8 +493,7 @@ test(
           ]);
           expect(picked.envelope).toMatchObject({ ok: true, data: { value: "2" } });
           yield* until(
-            () =>
-              fs.readFileString(Bun.env.FAKE_HERDR_LOG ?? "").pipe(Effect.orElseSucceed(() => "")),
+            () => fs.readFileString(core.logPath).pipe(Effect.orElseSucceed(() => "")),
             (all) =>
               pipe_(
                 all,
@@ -512,9 +511,9 @@ test(
   () =>
     proves(
       "collie-agent-short-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
-          const { client } = yield* hostedOver(world, [null]);
+          const { client } = yield* hostedOver(world, core, [null]);
           const { runId, dir } = yield* launchedRun(world, client);
 
           const first = toldBy(
@@ -556,10 +555,10 @@ test(
   () =>
     proves(
       "collie-agent-legacy-answer-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          const { client: previous } = yield* hostedOver(world, [null]);
+          const { client: previous } = yield* hostedOver(world, core, [null]);
           const { runId, dir } = yield* launchedRun(world, previous);
           yield* stopHost(world.state);
           expect(yield* ownerOf(world.state)).toBeNull();
@@ -593,8 +592,7 @@ test(
           ]);
           expect(answered.envelope).toMatchObject({ ok: true, data: { value: "2" } });
           const prompts = yield* until(
-            () =>
-              fs.readFileString(Bun.env.FAKE_HERDR_LOG ?? "").pipe(Effect.orElseSucceed(() => "")),
+            () => fs.readFileString(core.logPath).pipe(Effect.orElseSucceed(() => "")),
             (all) => pipe_(all, Str.includes("Your question Workers is answered:")),
           );
           expect(prompts).toContain("Your question Workers is answered: 2");
@@ -610,10 +608,10 @@ test(
   () =>
     proves(
       "collie-pi-repair-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          const { client } = yield* hostedOver(world, [null]);
+          const { client } = yield* hostedOver(world, core, [null]);
           const { runId, launched, dir } = yield* launchedRun(world, client);
           const self = [process.execPath, `${import.meta.dir}/../src/main.ts`];
           const file = `${world.state}/${launched.agent}.tools.ts`;

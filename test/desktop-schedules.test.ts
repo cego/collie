@@ -66,7 +66,7 @@ test("each last occurrence says what became of it", () => {
     said({ occurrence: at, outcome: { kind: "waiting-for-run", run: "run-0", status: "running" } }),
   ).toBe(`${at} waiting for run-0 (running)`);
   expect(said({ occurrence: at, outcome: { kind: "waiting-for-herdr" } })).toBe(
-    `${at} waiting for herdr`,
+    `${at} waiting for core`,
   );
   expect(said({ occurrence: at, outcome: { kind: "refused", reason: "needs_input: note" } })).toBe(
     `${at} refused: needs_input: note`,
@@ -176,13 +176,12 @@ describe("the main process reaches each Machine's host", () => {
             const desktop = yield* openBridge(bridgeCommand(command, "mk-pc"), {
               PATH: "/usr/bin:/bin",
               HOME: world.home,
-              HERDR_PLUGIN_ROOT: world.install,
-              HERDR_PLUGIN_STATE_DIR: world.state,
+              COLLIE_ROOT: world.install,
+              COLLIE_STATE_DIR: world.state,
               COLLIE_USER_DIR: world.config,
               COLLIE_HOST: asCommand(command),
               ...(yield* suiteEnv),
-              HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH ?? "",
-              FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG ?? "",
+              HC_SOCKET: Bun.env.HC_SOCKET ?? "",
             });
             const listed = yield* schedulesOn(mkPc, desktop);
             expect(listed).toMatchObject({

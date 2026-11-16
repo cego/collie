@@ -1,3 +1,4 @@
+import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -10,7 +11,7 @@ import { connect } from "../src/host";
 import { stopHost, until } from "./support/host";
 import { readDefinitions } from "../src/authoring";
 import { hosted } from "./support/hosted";
-import { Rig, FakeHerdr } from "./support/recorder";
+import { Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import { forgeOnPath, serveForges, FORGE_HOST } from "./support/forge";
 import { foundationLayer } from "../src/engine";
@@ -103,7 +104,7 @@ test(
             foundationLayer({
               dir: rig.stateDir,
               userDir: rig.userDir,
-              placing: { herdr: new FakeHerdr(env), env },
+              placing: { herdr: new Herdr(env), env },
             }).pipe(
               Layer.provide(
                 ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: api })),

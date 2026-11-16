@@ -1,3 +1,4 @@
+import { Herdr } from "../../src/herdr";
 import { launchesAt } from "./records";
 // The shipped workflows as modules, run the way a user's own module is run.
 //
@@ -42,7 +43,7 @@ import {
 } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import * as SqlClient from "effect/sql/SqlClient";
-import { Rig, FakeHerdr } from "./recorder";
+import { Rig } from "./recorder";
 import { exec } from "./command";
 import { fastForward, runEffect } from "./effect";
 import { FakeBin } from "./bin";
@@ -236,8 +237,8 @@ const once = (name: string, body: () => Promise<void>, timeout?: number) => {
 /** The installation is this checkout, so the shipped personas are the ones found. */
 const hostOf = (): AgentHost => ({
   dir,
-  env: rig.pluginEnv({ HERDR_PLUGIN_ROOT: ROOT, GITLAB_HOST: FORGE_HOST.gitlab }),
-  herdr: new FakeHerdr(rig.pluginEnv({ HERDR_PLUGIN_ROOT: ROOT, GITLAB_HOST: FORGE_HOST.gitlab })),
+  env: rig.pluginEnv({ COLLIE_ROOT: ROOT, GITLAB_HOST: FORGE_HOST.gitlab }),
+  herdr: new Herdr(rig.pluginEnv({ COLLIE_ROOT: ROOT, GITLAB_HOST: FORGE_HOST.gitlab })),
   harness: "claude",
   model: "opus",
   permissions: "auto",
@@ -3682,17 +3683,16 @@ scenario(
       Effect.gen(function* () {
         yield* rig.queueOutputs([SYNTHESIS, SYNTHESIS]);
         // The implementer of the Run this review was started from, live and registered as it.
-        yield* rig.addAgent("impl-live", "9-1");
-        const env = hostOf().env;
-        yield* registerAgent(scopeFor(env, rig.projectDir), {
+        const paneId = yield* rig.addAgent("impl-live").pipe(Effect.orDie);
+        yield* registerAgent(scopeFor(rig.projectDir), {
           role: "implementer",
           agent: "impl-live",
-          paneId: "9-1",
+          paneId,
           workspaceId: null,
           runId: "r-building",
           workflow: "implement",
           at: "2026-09-23T10:00:00Z",
-          incarnation: { terminalId: "term-impl-live", agentSession: null },
+          incarnation: { terminalId: paneId, agentSession: null },
         }).pipe(Effect.provide(recordsAt(dir)), Effect.orDie);
         const target = "branch:main...HEAD";
         yield* parked({
@@ -6580,19 +6580,17 @@ scenario(
           ],
           `${dir}/runs/r-planner/plan`,
         );
-        // Named for this pass: herdr's forgetting outlives the rig.
         const planner = `planner-${idOf("plan")}`;
-        yield* rig.addAgent(planner, "9-1");
-        const env = hostOf().env;
-        yield* registerAgent(scopeFor(env, rig.projectDir), {
+        const paneId = yield* rig.addAgent(planner).pipe(Effect.orDie);
+        yield* registerAgent(scopeFor(rig.projectDir), {
           role: "planner",
           agent: planner,
-          paneId: "9-1",
+          paneId,
           workspaceId: null,
           runId: "r-planner",
           workflow: "plan",
           at: "2026-09-23T10:00:00Z",
-          incarnation: { terminalId: `term-${planner}`, agentSession: null },
+          incarnation: { terminalId: paneId, agentSession: null },
         }).pipe(Effect.provide(recordsAt(dir)), Effect.orDie);
         yield* approve("r-planned", ["unit"]);
         yield* rig.queueOutputs([null, BUILT, CLEAN_SYNTHESIS, OPENED]);
@@ -6605,7 +6603,7 @@ scenario(
             fs.exists(`${agents}/01-first.md.prompt.md`).pipe(Effect.orElseSucceed(() => false)),
           (there) => there,
         );
-        rig.dropAgent(planner);
+        yield* rig.dropAgent(planner).pipe(Effect.orDie);
         yield* fs.writeFileString(`${agents}/01-first.md.json`, asJson(BUILT));
         const result = yield* Fiber.join(running);
         yield* bin.restore();
@@ -12108,7 +12106,7 @@ const parkRecheck = (runId: string, mr: string, cwd: string) =>
     return yield* recheckPark(
       { runId, cwd, branch: "feature", mr, park: { cause, kind: PARK_CAUSES[cause].kind } },
       dir,
-      { sessionList: () => Effect.die("a park recheck here must not ask herdr") },
+      { agentList: () => Effect.die("a park recheck here must not ask core") },
     );
   }).pipe(
     Effect.provide(

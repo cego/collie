@@ -57,13 +57,14 @@ import {
   type ProposalRecord,
 } from "../src/proposals";
 import type { Action } from "../src/actions";
-import { appendLine, herdOf } from "../src/steering";
-import { chatPath, HEARD_MAX, hear, writeChat } from "../src/chat";
+import { appendLine, machineHerd } from "../src/steering";
+import { CHAT_TERMINAL, chatPath, HEARD_MAX, hear, writeChat } from "../src/chat";
+import { connect as connectCore } from "../src/hc";
 import { selectionPath, writeSelection } from "../src/selection";
 import { newTask, writeTask } from "../src/task";
 import { hosted, hostedRun, settledRun } from "./support/hosted";
+import { SETUP, type FakeHc } from "./support/fake-hc";
 import { save, type World } from "./support/world";
-import { Herdr } from "../src/herdr";
 import { until } from "./support/host";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
@@ -88,6 +89,7 @@ let stateDir: string;
 let project: string;
 let env: PluginEnv;
 let KEY: string;
+let core: FakeHc;
 
 /** A Run the host is holding, waiting on its decision, with an Intent. */
 const aRun = (goal: string) => hostedRun(world, goal);
@@ -107,7 +109,8 @@ const inWorld = <A, E>(body: Effect.Effect<A, E, PlatformServices | Records | Sc
       stateDir = world.state;
       project = world.project;
       env = herd.env;
-      KEY = yield* herdOf(env.socketPath);
+      core = herd.core;
+      KEY = yield* machineHerd(env);
       return yield* body.pipe(Effect.provide(recordsAt(stateDir)));
     }),
   );
@@ -205,9 +208,8 @@ test("the Tasks a Run can be started into are something chat can read", () =>
       // `collie task list` is an operation a human has, so chat has to have one too —
       // and a Task with no Run yet is invisible in the Herd, which is the whole reason
       // this is not answered from the Run list.
-      const app = yield* workspaceOn(project, "app");
       const task = yield* newTask({
-        workspace: app.workspaceId,
+        workspace: null,
         label: "picker",
         cwd: project,
         herd: null,
@@ -245,7 +247,7 @@ test("with no host to ask, chat is told the Tasks are unknown, not that there ar
       });
       const tool = toolNamed("collie_workspaces")!;
       const said = yield* tool.call(
-        readEnv({ ...process.env, HERDR_PLUGIN_STATE_DIR: alone, PATH: "" }),
+        readEnv({ ...process.env, COLLIE_STATE_DIR: alone, PATH: "" }),
         {},
       );
       expect(said).toContain("the Tasks are unknown");
@@ -879,11 +881,9 @@ test("an action about something Collie was not shown comes back as a question", 
 test("a launch names the workspace it is for, and an unknown one is refused", () =>
   inWorld(
     Effect.gen(function* () {
-      // Resolved against what herdr actually has. With no herdr to ask there are no
-      // workspaces, so every name is refused — which is the honest answer, not a guess
-      // at the Home's own directory.
+      // A name that is no directory and no checkout is refused, not guessed at.
       expect(yield* workspaceNamed(env, "no-such-workspace")).toMatchObject({
-        error: expect.stringContaining("no workspace"),
+        error: expect.stringContaining('is named "no-such-workspace"'),
       });
       // And a request that names none is a launch where the caller already is.
       expect(yield* workspaceNamed(env, undefined)).toBeNull();
@@ -908,7 +908,7 @@ test("a start naming a repository finds its checkout under the Projects root, as
         error: `"engage" names 2 checkouts under ${root} (${root}/cego/engage, ${root}/forks/engage); say which`,
       });
       expect(yield* workspaceNamed(elsewhere, "no-such-repo")).toMatchObject({
-        error: expect.stringContaining("no workspace"),
+        error: expect.stringContaining('is named "no-such-repo"'),
       });
     }),
   ));
@@ -1387,8 +1387,8 @@ test("the definitions tool answers with the module an id runs, not the file belo
       // rather than whichever release the machine running the tests has installed.
       const shipped = readEnv({
         ...process.env,
-        HERDR_PLUGIN_ROOT: new URL("../", import.meta.url).pathname,
-        HERDR_PLUGIN_STATE_DIR: stateDir,
+        COLLIE_ROOT: new URL("../", import.meta.url).pathname,
+        COLLIE_STATE_DIR: stateDir,
         COLLIE_USER_DIR: `${stateDir}/user`,
         COLLIE_CWD: stateDir,
       });
@@ -1411,7 +1411,19 @@ test("the definitions tool answers with the module an id runs, not the file belo
   ));
 
 /** Native chat running Claude in session `s-1`, as a launch records it. */
+/** A chat running in core in session `s-1`, which the host keeps rather than starting another. */
 const chatting = Effect.fn("test.chatting")(function* () {
+  yield* Effect.scoped(
+    Effect.flatMap(connectCore(core.socketPath), (hc) =>
+      hc.call("terminal.run", {
+        name: CHAT_TERMINAL,
+        argv: ["claude"],
+        cwd: project,
+        [SETUP]: true,
+      }),
+    ),
+    // One the host started already is as good.
+  ).pipe(Effect.ignore);
   yield* writeChat(yield* chatPath(stateDir, KEY), {
     harness: "claude",
     agent: "collie-chat",
@@ -1565,6 +1577,33 @@ test("what collie_do does is recorded with the human's words from that turn", ()
         conversation: NATIVE,
         said: "stop the picker run, it is going nowhere",
       });
+    }),
+  ));
+
+test("a chat's hold of a Task holds every unfinished Run of it and none of another's", () =>
+  inWorld(
+    Effect.gen(function* () {
+      yield* chatting();
+      const client = yield* connect(world.state).pipe(Effect.orDie);
+      const start = (place: { readonly task?: string; readonly taskLabel?: string }) =>
+        Effect.gen(function* () {
+          const request = yield* (yield* SecureRandom.SecureRandom).uuidV4();
+          const started = yield* client
+            .start({ project: world.project, id: "proof", request, input: { note: "x" }, ...place })
+            .pipe(Effect.orDie);
+          return started.runId;
+        });
+      const first = yield* start({ taskLabel: "Project | Picker" });
+      const task = (yield* client.run({ runId: first }).pipe(Effect.orDie))?.task ?? "";
+      const second = yield* start({ task });
+      const other = yield* start({ taskLabel: "Project | Other" });
+
+      yield* call("collie_hold", { task });
+      const heldIn = (runId: string) =>
+        Effect.map(readAudit(runDir(world.state, runId)), (trail) =>
+          Arr.some(trail, (line) => line.operation === "hold"),
+        );
+      expect(yield* Effect.forEach([first, second, other], heldIn)).toEqual([true, true, false]);
     }),
   ));
 
@@ -1984,28 +2023,20 @@ test("a Run with a branch and no merge request shows its branch", () =>
       const said = yield* call("collie_run", { run: run.id });
       expect(said).toMatch(/Branch: \S+/);
       expect(said).not.toContain("Merge request:");
-      // Let the launch reach herdr before the world goes.
+      // Let the launch reach core before the world goes.
       const fs = yield* FileSystem.FileSystem;
       yield* until(
-        () => fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie),
-        (log) => pipe_(log, Str.includes(`"agent prompt"`)),
+        () => fs.readFileString(core.logPath).pipe(Effect.orDie),
+        (log) => pipe_(log, Str.includes(`"cmd":"terminal.send"`)),
       );
     }),
   ));
 
-/**
- * A herdr workspace on `cwd`, made for the directory, in this world's own herdr, which
- * the tools are pointed at from here on. The Projects root is the world's home.
- */
-const workspaceOn = (cwd: string, label: string) =>
+/** `cwd` made, and the Projects root the world's home from here on. */
+const directoryAt = (cwd: string) =>
   Effect.gen(function* () {
-    env = {
-      ...env,
-      binPath: Bun.env.HERDR_BIN_PATH ?? env.binPath,
-      raw: { ...env.raw, GITTE_CWD: world.home },
-    };
+    rootAtWorldHome();
     yield* (yield* FileSystem.FileSystem).makeDirectory(cwd, { recursive: true });
-    return yield* new Herdr(env).workspaceCreate({ cwd, label });
   }).pipe(Effect.orDie);
 
 /** The tools reading this world's Projects root, the world's home, rather than the desk's. */
@@ -2013,33 +2044,18 @@ const rootAtWorldHome = () => {
   env = { ...env, raw: { ...env.raw, GITTE_CWD: world.home } };
 };
 
-test("where work can start lists the workspaces, the Home as no checkout, open Tasks, the Projects root and each workflow's Inputs and description", () =>
+test("where work can start lists open Tasks, the Projects root and each workflow's Inputs and description", () =>
   inWorld(
     Effect.gen(function* () {
       yield* save(world.user, ["branches.workflow.ts"]);
-      const home = yield* workspaceOn(`${stateDir}/home`, "🐕 Collie");
-      const app = yield* workspaceOn(project, "app");
-      const open = yield* newTask({
-        workspace: app.workspaceId,
-        label: "picker",
-        cwd: project,
-        herd: null,
-      });
-      const gone = yield* newTask({
-        workspace: "w-gone",
-        label: "closed",
-        cwd: project,
-        herd: null,
-      });
+      yield* directoryAt(project);
+      const open = yield* newTask({ workspace: null, label: "picker", cwd: project, herd: null });
+      const gone = yield* newTask({ workspace: null, label: "closed", cwd: project, herd: null });
       yield* writeTask(open);
-      yield* writeTask(gone);
+      yield* writeTask({ ...gone, closed_at: "2026-11-16T00:00:00.000Z" });
 
       const said = yield* call("collie_workspaces");
-      expect(said).toContain(`- workspace ${app.workspaceId} (app): ${project}`);
-      expect(said).toContain(
-        `- workspace ${home.workspaceId} (🐕 Collie): ${stateDir}/home — the Home, Collie's own namespace, no checkout`,
-      );
-      expect(said).toContain(open.id);
+      expect(said).toContain(`- task ${open.id} (picker): ${project}`);
       expect(said).not.toContain(gone.id);
       expect(said).toContain(`Projects root: ${world.home}`);
       expect(said).toContain("a checkout under it is named by its directory name");
@@ -2084,27 +2100,31 @@ test("a start naming a path this Machine does not have is refused as no director
 test("a name that matches nothing says what was searched", () =>
   inWorld(
     Effect.gen(function* () {
-      yield* workspaceOn(project, "app");
+      yield* directoryAt(project);
       const refused = yield* workspaceNamed(env, "monorepo");
       const error = refused !== null && "error" in refused ? refused.error : "";
-      expect(error).toContain(
-        `no workspace id, label, directory or checkout under the Projects root ${world.home} is named "monorepo"`,
+      expect(error).toBe(
+        `no directory or checkout under the Projects root ${world.home} is named "monorepo"`,
       );
-      expect(error).toContain("app");
     }),
   ));
 
-test("a start rooted in Collie's own state is refused, whether named by the Home's label or its path", () =>
+test("a start rooted in Collie's own state is refused", () =>
   inWorld(
     Effect.gen(function* () {
-      yield* workspaceOn(`${stateDir}/home`, "🐕 Collie");
-      for (const named of ["🐕 Collie", `${stateDir}/home`]) {
-        const said = yield* call("collie_do", {
-          actions: [{ kind: "start", workflow: "proof", inputs: { note: "x" }, workspace: named }],
-        });
-        expect(said).toContain("Collie's own namespace, not a checkout");
-        expect(said).toContain("projects-root");
-      }
+      yield* directoryAt(`${stateDir}/home`);
+      const said = yield* call("collie_do", {
+        actions: [
+          {
+            kind: "start",
+            workflow: "proof",
+            inputs: { note: "x" },
+            workspace: `${stateDir}/home`,
+          },
+        ],
+      });
+      expect(said).toContain("Collie's own namespace, not a checkout");
+      expect(said).toContain("projects-root");
       expect(yield* listRuns(env)).toEqual([]);
     }),
   ));

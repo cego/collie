@@ -875,7 +875,7 @@ test.each(["major", "minor"] as const)(
         yield* git(["checkout", "-q", "-b", "feature"]);
         const head = yield* pushed("Task work");
         const forge = yield* host.gitlab(model(head));
-        yield* rig.addAgent("impl-live", "9-1");
+        const paneId = yield* rig.addAgent("impl-live");
         yield* rig.queueOutputs([review([{ ...F1, severity }])]);
         yield* host.session(
           forge,
@@ -896,15 +896,15 @@ test.each(["major", "minor"] as const)(
               task: "task-human",
               options: { branch: "feature" },
             });
-            yield* registerAgent(scopeFor(host.env(), rig.projectDir), {
+            yield* registerAgent(scopeFor(rig.projectDir), {
               role: "implementer",
               agent: "impl-live",
-              paneId: "9-1",
+              paneId,
               workspaceId: null,
               runId: building.runId,
               workflow: "placed",
               at: "2026-11-12T09:00:00Z",
-              incarnation: { terminalId: "term-impl-live", agentSession: null },
+              incarnation: { terminalId: paneId, agentSession: null },
             });
             yield* configured(true);
             yield* registry.load(`${ROOT}workflows/review-improve.workflow.ts`);

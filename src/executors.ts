@@ -25,7 +25,7 @@ export type Executor<K extends ActionKind> = (
    * says nothing about who consented.
    */
   by: Actor,
-  /** The asker's, so a workspace or pane is looked up in the herdr session it is in. */
+  /** The asker's, so what it names is looked up where the asker is. */
   env: PluginEnv,
 ) => Effect.Effect<ExecutionResult, never, PlatformServices | Records>;
 

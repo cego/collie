@@ -11,6 +11,7 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { connect } from "../src/host";
 import { readEnv } from "../src/env";
+import { Herdr } from "../src/herdr";
 import { resetExecutors } from "../src/executors";
 import { isSettled } from "../src/lifecycle";
 import { carryOutAsked } from "../src/run-actions";
@@ -106,23 +107,19 @@ test(
 );
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
-const FakeState = Schema.fromJsonString(
-  Schema.Struct({ agents: Schema.Array(Schema.Struct({ name: Schema.String })) }),
-);
 
 test(
-  "an agent's prompt, a delivery to it and everything sent to herdr carry the kind, never the value",
+  "an agent's prompt, a delivery to it and everything sent to core carry the kind, never the value",
   () =>
     proves(
       "collie-credentials-agent-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const outputs = `${world.home}/outputs.json`;
           yield* fs.writeFileString(outputs, encode([{ verdict: "built" }])).pipe(Effect.orDie);
           const set = {
-            FAKE_HERDR_OUTPUTS: outputs,
-            HERDR_PLUGIN_STATE_DIR: world.state,
+            COLLIE_STATE_DIR: world.state,
             COLLIE_USER_DIR: world.config,
           };
           yield* Effect.acquireRelease(
@@ -142,11 +139,12 @@ test(
           );
           resetExecutors();
           const env = readEnv({
-            HERDR_PLUGIN_ROOT: world.install,
-            HERDR_PLUGIN_STATE_DIR: world.state,
+            COLLIE_ROOT: world.install,
+            COLLIE_STATE_DIR: world.state,
             COLLIE_USER_DIR: world.config,
             HOME: world.home,
             COLLIE_CWD: world.project,
+            HC_SOCKET: core.socketPath,
           });
           const client = yield* connect(world.state).pipe(Effect.orDie);
           const started = yield* client
@@ -163,9 +161,7 @@ test(
             (one) => one !== null && isSettled(one),
           );
           expect(view?.status.status).toBe("complete");
-          const agent = (yield* Schema.decodeEffect(FakeState)(
-            yield* fs.readFileString(`${Bun.env.FAKE_HERDR_LOG}.state.json`).pipe(Effect.orDie),
-          ).pipe(Effect.orDie)).agents[0]!.name;
+          const agent = (yield* new Herdr(env).agentList().pipe(Effect.orDie))[0]!.name;
 
           const [delivered] = yield* carryOutAsked(
             env,
@@ -188,7 +184,7 @@ test(
             .pipe(Effect.orDie);
           expect(steered.redacted).toEqual(["<aws key id>"]);
 
-          const prompts = yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG!).pipe(Effect.orDie);
+          const prompts = yield* fs.readFileString(core.logPath).pipe(Effect.orDie);
           expect(
             yield* fs
               .readFileString(`${world.state}/agents/${started.runId}/build.prompt.md`)

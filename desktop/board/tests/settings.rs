@@ -1360,7 +1360,7 @@ fn connections_are_read_again_when_an_onboarding_such_as_linears_setup_ends() {
         "_tag": "Onboarding", "job": "job-linear",
         "machine": { "profile": "vm", "name": "vm" },
         "run": { "steps": [{ "step": "linear", "title": "Linear", "status": "done" }],
-            "asked": null, "ready": true, "reason": null, "at": 9 } }))
+            "ready": true, "reason": null, "at": 9 } }))
     .unwrap();
     runtime.state.apply(ended.clone());
     settle(&harness, &mut runtime, 1000.0);

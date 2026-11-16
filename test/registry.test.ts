@@ -53,18 +53,17 @@ const entry = (over: Partial<AgentEntry> = {}): AgentEntry => ({
   runId: "r1",
   workflow: "implement",
   at: "2026-09-09T09:00:00Z",
-  incarnation: { terminalId: "term-1", agentSession: null },
+  incarnation: { terminalId: "term-1", agentSession: null, backend: "core" },
   ...over,
 });
 
 const live = (of: AgentEntry): AgentInfo => ({
   name: of.agent,
   paneId: of.paneId,
-  workspaceId: of.workspaceId,
   status: "idle",
-  title: null,
-  terminalId: of.incarnation?.terminalId ?? null,
-  agentSession: null,
+  terminalId: of.incarnation?.terminalId ?? of.paneId,
+  cwd: "/project",
+  foregroundCwd: null,
 });
 
 const agents = (entries: ReadonlyArray<AgentEntry>) => Arr.map(entries, (one) => one.agent);
@@ -88,7 +87,7 @@ test("a registration tells the Run model the Runs of the agents it registered an
     }),
   ));
 
-test("an agent registered again is one entry, the newest; one herdr no longer lists is dropped from its register only", () =>
+test("an agent registered again is one entry, the newest; one core no longer lists is dropped from its register only", () =>
   runEffect(
     Effect.gen(function* () {
       const first = entry();

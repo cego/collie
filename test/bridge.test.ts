@@ -59,13 +59,12 @@ const bridged = Effect.fn("BridgeTest.bridged")(function* (
       env: {
         PATH: "/usr/bin:/bin",
         HOME: world.home,
-        HERDR_PLUGIN_ROOT: world.install,
-        HERDR_PLUGIN_STATE_DIR: world.state,
+        COLLIE_ROOT: world.install,
+        COLLIE_STATE_DIR: world.state,
         COLLIE_USER_DIR: world.config,
         COLLIE_HOST: asCommand(command),
         ...(yield* suiteEnv),
-        HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH,
-        FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG,
+        HC_SOCKET: Bun.env.HC_SOCKET ?? "",
         ...extra,
       },
       stdin: "pipe",
@@ -105,16 +104,17 @@ const environOf = (pid: number) =>
   );
 
 test(
-  "a bridge starts the host it pipes, and every operation on it is the front door it was started as",
+  "a bridge starts the host it pipes without the Herdr 1 socket it inherited, and every operation on it is the front door it was started as",
   () =>
     proves(
       "collie-bridge-",
       (world) =>
         Effect.gen(function* () {
-          const session = `${world.home}/herdr.sock`;
+          // A login that still carries Herdr 1's socket; the world's tripwire listens on it.
+          const legacy = { HERDR_SOCKET_PATH: `${world.home}/../herdr.sock` };
           expect(yield* ownerOf(world.state)).toBeNull();
           const desktop = yield* bridged(world, ["--as", "desktop", "--client", "mk-pc"], {
-            FAKE_HERDR_STATUS_SOCKET: session,
+            ...legacy,
             SSH_CONNECTION: "10.1.2.3 51234 10.0.0.2 22",
           });
           // The channel is what it was started as, whatever the front door says next.
@@ -125,8 +125,8 @@ test(
           const host = yield* ownerOf(world.state);
           expect(host).not.toBeNull();
           const environ = yield* environOf(host!.pid);
-          expect(environ).toContain(`HERDR_SOCKET_PATH=${session}`);
-          expect(environ).toContain(`HERDR_PLUGIN_STATE_DIR=${world.state}`);
+          expect(Arr.filter(environ, Str.startsWith("HERDR_SOCKET_PATH="))).toEqual([]);
+          expect(environ).toContain(`COLLIE_STATE_DIR=${world.state}`);
 
           const { runId } = yield* desktop.door.start({
             project: world.project,
@@ -136,9 +136,7 @@ test(
           });
           yield* desktop.door.control({ runId, control: "hold", set: true, request: "hold-1" });
 
-          const chat = yield* bridged(world, ["--as", "chat"], {
-            FAKE_HERDR_STATUS_SOCKET: session,
-          });
+          const chat = yield* bridged(world, ["--as", "chat"], legacy);
           yield* chat.door.control({ runId, control: "hold", set: false, request: "unhold-1" });
 
           const trail = yield* readAudit(runDir(world.state, runId));

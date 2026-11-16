@@ -43,8 +43,7 @@ const gatesOf = (world: World) => `${world.home}/gates`;
  * `collie` with the fake agents' answers, so a host it starts hands them out, on this
  * process's clock zone, so a time of day it says is one this test can say too.
  */
-const cli = (world: World, args: ReadonlyArray<string>) =>
-  collie(world, args, { FAKE_HERDR_OUTPUTS: outputsOf(world), TZ: "UTC" });
+const cli = (world: World, args: ReadonlyArray<string>) => collie(world, args);
 
 /** A world whose fake agents answer each prompt in turn with these Outputs. */
 const flowing = <A, E>(
@@ -150,19 +149,15 @@ test.each(["working", "blocked"])(
       "collie-flow-live-",
       (world) =>
         Effect.gen(function* () {
-          const started = yield* collie(
-            world,
-            [
-              "run",
-              "start",
-              "stepped",
-              "--input",
-              "mode=declared",
-              "--input",
-              `gates=${gatesOf(world)}`,
-            ],
-            { FAKE_HERDR_OUTPUTS: outputsOf(world), FAKE_HERDR_AGENT_STATUS: status },
-          );
+          const started = yield* collie(world, [
+            "run",
+            "start",
+            "stepped",
+            "--input",
+            "mode=declared",
+            "--input",
+            `gates=${gatesOf(world)}`,
+          ]);
           const { runId } = yield* Schema.decodeUnknownEffect(RunId)(started.envelope.data);
           // The node names its agent before the host has polled that agent's status.
           const flow = yield* until_(world, runId, (one) => nodeOf(one, "build")?.primary != null);

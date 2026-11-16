@@ -1,3 +1,4 @@
+import { Herdr } from "../../src/herdr";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import {
@@ -12,7 +13,7 @@ import {
   type Scope,
 } from "effect";
 import type { PlatformServices } from "../../src/platform";
-import { FakeHerdr, type Rig } from "./recorder";
+import { type Rig } from "./recorder";
 import { fastForward, runEffect as runLive } from "./effect";
 import { FakeBin } from "./bin";
 import { forgeOnPath, serveForges, type ForgeModel } from "./forge";
@@ -44,7 +45,7 @@ const asJson = flow(
 export const ROOT = new URL("../../", import.meta.url).pathname;
 
 export const watching = (rig: Rig, slack?: typeof slackApi) => {
-  const env = () => rig.pluginEnv({ HERDR_PLUGIN_ROOT: ROOT });
+  const env = () => rig.pluginEnv({ COLLIE_ROOT: ROOT });
   const dir = () => env().stateDir;
   const toasts: string[] = [];
 
@@ -85,13 +86,13 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
       Effect.provide(
         registryLayer(dir(), {
           userDir: rig.userDir,
-          placing: { herdr: new FakeHerdr(env()), env: env() },
+          placing: { herdr: new Herdr(env()), env: env() },
         }).pipe(
           Layer.provideMerge(
             agentsLayer({
               dir: dir(),
               env: env(),
-              herdr: new FakeHerdr(env()),
+              herdr: new Herdr(env()),
               harness: "claude",
               model: "opus",
               permissions: "auto",
@@ -105,7 +106,7 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
               dir: dir(),
               slack,
               userDir: rig.userDir,
-              placing: { herdr: new FakeHerdr(env()), env: env() },
+              placing: { herdr: new Herdr(env()), env: env() },
               toast: (title) => Effect.sync(() => toasts.push(title)),
             }),
           ),
@@ -185,7 +186,7 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
     yield* Effect.forkScoped(
       recoverParks({
         env: env(),
-        herdr: new FakeHerdr(env()),
+        herdr: new Herdr(env()),
         views: registry.views(null),
         reconnects: Effect.succeed(0),
         panels: new Map(),

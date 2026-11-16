@@ -3,6 +3,7 @@
 // item as `thread/items/list` read it back from codex-cli 0.166.0, live; the stand-in in
 // `support/codex-server.ts` serves it on the agent's thread.
 
+import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -16,7 +17,7 @@ import { foundationLayer } from "../src/engine";
 import { codexPort } from "../src/compactors";
 import { agentName } from "../src/naming";
 import { Store } from "../src/store";
-import { Rig, FakeHerdr, type Call } from "./support/recorder";
+import { Rig, type Call } from "./support/recorder";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { asRun, enveloped } from "./support/enveloped";
 import type { StandIn } from "./support/codex-server";
@@ -76,7 +77,7 @@ const config = () => `${rig.root}/codex-server.json`;
 const hostOf = (compactAtTokens = 1_000_000): AgentHost => ({
   dir,
   env: rig.pluginEnv(),
-  herdr: new FakeHerdr(rig.pluginEnv()),
+  herdr: new Herdr(rig.pluginEnv()),
   harness: "codex",
   model: "default",
   permissions: "auto",

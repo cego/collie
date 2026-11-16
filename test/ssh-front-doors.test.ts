@@ -71,19 +71,9 @@ const logged = (side: Side, from: number, ...kinds: ReadonlyArray<string>) =>
     ),
   );
 
-/** herdr's machines on `side`, with `second` at `target`. */
+/** Core's machines on `side`, with `second` at `target`. */
 const listsSecondAt = (side: Side, target: string | null) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    yield* fs.writeFileString(
-      `${side.herdrLog}.machines.json`,
-      encode(
-        target === null
-          ? []
-          : [{ id: "second", label: "second", target, session: "default", enabled: true }],
-      ),
-    );
-  }).pipe(Effect.orDie);
+  Effect.sync(() => side.core.roster(target === null ? [] : [{ name: "second", target }]));
 
 /** Every line of the log is the host's `-O` call or a front door's master or ride. */
 const onlyMuxFromTheHost = (side: Side) =>
@@ -220,7 +210,7 @@ test(
 );
 
 test(
-  "the host closes the connection of a Machine herdr lists at another target, and of one it forgot",
+  "the host closes the connection of a Machine core lists at another target, and of one it forgot",
   () =>
     runEffect(
       twoMachines(

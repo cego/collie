@@ -52,7 +52,7 @@ const silentEngine = (
     tell({
       _tag: "Open",
       socket,
-      env: readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" }),
+      env: readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" }),
       identity,
       model: { counter: new SharedArrayBuffer(4), epoch: "e", installation: "i" },
     });
@@ -197,11 +197,10 @@ test("a delayed board listing preserves the door's newer agent reading", () =>
       const agent: AgentInfo = {
         name: "r1-build",
         paneId: "p1",
-        workspaceId: null,
         status: "idle",
-        title: null,
-        terminalId: null,
-        agentSession: null,
+        terminalId: "p1",
+        cwd: dir,
+        foregroundCwd: null,
       };
       yield* registerAgent(
         { session: null, workspaceId: null, cwd: dir },

@@ -83,7 +83,7 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
     role: "live",
     agent,
     paneId: null,
-    workspaceId: env.workspaceId,
+    workspaceId: null,
     runId: "live",
     workflow: "live",
   });

@@ -2,6 +2,7 @@
 // stand-in in `support/codex-server.ts`, run as a real process, and what is asserted is what
 // a human could see of that process and of the `agent start` herdr was asked for.
 
+import { Herdr } from "../src/herdr";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -9,7 +10,7 @@ import * as Option from "effect/Option";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
 import { Effect, FileSystem, Schema, flow, Result } from "effect";
-import { Rig, FakeHerdr, type Call } from "./support/recorder";
+import { Rig, type Call } from "./support/recorder";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { agentWork, agentsLayer, type AgentHost } from "../src/agents";
 import { asRun, enveloped } from "./support/enveloped";
@@ -75,7 +76,7 @@ const agent = agentName("r1", "build", null, 1);
 const hostOf = (): AgentHost => ({
   dir,
   env: rig.pluginEnv(),
-  herdr: new FakeHerdr(rig.pluginEnv()),
+  herdr: new Herdr(rig.pluginEnv()),
   harness: "codex",
   model: "default",
   permissions: "auto",

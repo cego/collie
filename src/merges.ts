@@ -166,7 +166,7 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
   );
   const hidden = Arr.some(opts.runs, (run) => !shown.has(run.id))
     ? yield* (yield* Effect.promise(() => import("./board"))).buildBoard({
-        env: readEnv({ HERDR_PLUGIN_STATE_DIR: opts.stateDir, COLLIE_CWD: opts.cwd }),
+        env: readEnv({ COLLIE_STATE_DIR: opts.stateDir, COLLIE_CWD: opts.cwd }),
         runs: opts.runs,
         includeHistory: true,
         now: opts.now,

@@ -63,9 +63,9 @@ for (const [name, action] of [
           const env = {
             ...rig.env(),
             PATH: `${bin.dir}:${rig.env().PATH}`,
-            HERDR_PLUGIN_STATE_DIR: state,
+            COLLIE_STATE_DIR: state,
             COLLIE_USER_DIR: `${wf}/..`,
-            HERDR_PLUGIN_ROOT: `${wf}/../..`,
+            COLLIE_ROOT: `${wf}/../..`,
             COLLIE_FORGE_API: api,
           };
           const first = yield* openHost(state, { env });
@@ -150,9 +150,9 @@ test(
           env: {
             ...rig.env(),
             PATH: `${bin.dir}:${rig.env().PATH}`,
-            HERDR_PLUGIN_STATE_DIR: state,
+            COLLIE_STATE_DIR: state,
             COLLIE_USER_DIR: `${wf}/..`,
-            HERDR_PLUGIN_ROOT: `${wf}/../..`,
+            COLLIE_ROOT: `${wf}/../..`,
             COLLIE_FORGE_API: api,
           },
         });

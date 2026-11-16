@@ -400,7 +400,6 @@
     "test/desktop-scale.test.ts": 183,
     "test/desktop-attachments.test.ts": 182,
     "test/effect-sql-reset.test.ts": 180,
-    "test/herdr-release.test.ts": 179,
     "test/standing.test.ts": 178,
     "test/desktop-flow.test.ts": 177,
     "test/slack.test.ts": 177,

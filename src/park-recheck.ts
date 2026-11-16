@@ -64,7 +64,7 @@ export const recheckPark = (
   view: Pick<RunView, "park" | "cwd" | "runId" | "mr" | "branch"> &
     Partial<Pick<RunView, "input" | "strategies">>,
   stateDir: string,
-  herdr: Pick<Herdr, "sessionList">,
+  herdr: Pick<Herdr, "agentList">,
 ) =>
   Effect.gen(function* () {
     switch (view.park?.cause) {
@@ -157,9 +157,9 @@ export const recheckPark = (
         return read.ok ? reply(true, "forge answered") : reply(false, read.reason, true);
       }
       case "herdr-unavailable": {
-        const read = yield* herdr.sessionList().pipe(Effect.result);
+        const read = yield* herdr.agentList().pipe(Effect.result);
         return read._tag === "Success"
-          ? reply(true, "herdr answered")
+          ? reply(true, "core answered")
           : reply(false, String(read.failure), true);
       }
       default:

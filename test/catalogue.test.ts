@@ -134,8 +134,8 @@ describe("collie models", () => {
             cwd: root,
             env: {
               ...process.env,
-              HERDR_PLUGIN_ROOT: root,
-              HERDR_PLUGIN_STATE_DIR: state,
+              COLLIE_ROOT: root,
+              COLLIE_STATE_DIR: state,
               COLLIE_USER_DIR: `${dir}/config`,
               HOME: dir,
             },

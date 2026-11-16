@@ -8,7 +8,7 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Rec from "effect/Record";
 import { newerRelease, releasesOf, RELEASES } from "./releases";
-import manifest from "../herdr-plugin.toml";
+import manifest from "../package.json";
 import * as Result from "effect/Result";
 import { withNotice } from "./redact";
 import {
@@ -37,8 +37,8 @@ import { parseSetting, settingText } from "./settings";
 import { herdDir, machineHerd } from "./steering";
 import { liveFor, markedOf, type Ledgers } from "./live";
 import { isStale, layers, loadDefinitions, type Definitions, type Provenance } from "./definitions";
-import { selfCommand, type PluginEnv } from "./env";
-import { Herdr, type AgentInfo, type WorkspaceInfo } from "./herdr";
+import type { PluginEnv } from "./env";
+import { Herdr, type AgentInfo } from "./herdr";
 import { inferInput, type InputPrompts, type PickItem } from "./inputs";
 import type { Found } from "./discovery";
 import {
@@ -54,7 +54,6 @@ import {
   followRunDetail,
   runDetailNow,
   asks,
-  hostTaskOf,
   hostTasks,
   type DetailKey,
   invokeOffer,
@@ -81,13 +80,11 @@ import { scopeFor, type RegistryScope } from "./registry";
 import type { CompactionSettings } from "./compaction";
 import { statusLine } from "./disposition";
 import { selectionPath, writeSelection } from "./selection";
-import { everyViewerPaints } from "./outer";
 import type { TaskChoice, TaskRecord } from "./task";
 import { newRequestId } from "./operations";
 import { typedPaths } from "./attachments";
 import {
   answerFor,
-  openingFilter,
   rereads,
   runIdOf,
   type AppState,
@@ -100,7 +97,7 @@ import { shell } from "./mr";
 import { forgeOf } from "./forge/forge";
 import { forgeHttpLayer } from "./forge/http";
 import { parseMrTarget, readMrRef } from "./board-model";
-import { type ChildProcessSpawner, CommandLine } from "effect/process";
+import type { ChildProcessSpawner } from "effect/process";
 import {
   agentForKey,
   askingRun,
@@ -121,8 +118,6 @@ const CarriedSteps = Schema.Struct({ results: Schema.Array(StepResult) });
  */
 interface BoardSession extends RegistryScope {
   stateDir: string;
-  /** The Control Plane's own pane, which is what a temporary pane splits off. */
-  paneId?: string | null;
   userDir?: string;
   /** What this caller already knows about compaction; absent reads the config file. */
   compaction?: CompactionSettings;
@@ -175,49 +170,32 @@ export type FlowPrompts = InputPrompts;
 /**
  * Continue a Task: another Workflow, or another go at the same one, inside the Task
  * that work already belongs to. Explicit, because a fresh start is what everything
- * else is — inside a Task's own workspace that Task is meant, and from anywhere else
- * the human says which, because no label can say it for them.
+ * else is, and the human says which Task, because no label can say it for them.
  */
 export const continueFlow = Effect.fn("Flows.continueFlow")(function* (
   herdr: Herdr,
   env: PluginEnv,
   prompts: FlowPrompts,
 ) {
-  const here = yield* hostTaskOf(env, env.workspaceId);
-  const task =
-    here === null ? yield* pickTask(env, prompts) : ({ mode: "continue", task: here } as const);
+  const task = yield* pickTask(env, prompts);
   if (task === null) return 0;
   return yield* pickFlow(herdr, env, prompts, task);
 });
 
-/** The picker's own id for keeping the work in the workspace it was opened from. */
-const HERE = "here";
-
-/**
- * Which Task, when this is not one's workspace — or this workspace itself, kept as the
- * work's Task rather than given a workspace of its own. Null is the human backing out.
- */
+/** Which Task. Null is the human backing out. */
 const pickTask = Effect.fn("Flows.pickTask")(function* (env: PluginEnv, prompts: FlowPrompts) {
   const tasks = yield* hostTasks(env);
-  const kept =
-    env.workspaceId === null
-      ? []
-      : [{ id: HERE, title: "This workspace", subtitle: "keep the work here, beside you" }];
-  if (tasks.length === 0 && kept.length === 0) {
+  if (tasks.length === 0) {
     yield* bail(prompts, "No tasks yet: starting a workflow makes one.");
     return null;
   }
   const chosen = yield* prompts.menu(
-    [
-      ...kept,
-      ...Arr.map(tasks, (task) => ({ id: task.id, title: task.label, subtitle: task.cwd })),
-    ],
+    Arr.map(tasks, (task) => ({ id: task.id, title: task.label, subtitle: task.cwd })),
     {
       header: "Which task?",
       footer: "↑↓ move · type to filter · Enter choose · Esc cancel",
     },
   );
-  if (chosen?.id === HERE) return { mode: "here" } as const;
   const task = Option.getOrUndefined(Arr.findFirst(tasks, (one) => one.id === chosen?.id));
   return task === undefined ? null : ({ mode: "continue", task } as const);
 });
@@ -366,7 +344,7 @@ const startModule = Effect.fn("Flows.startModule")(function* (
     // A repository URL no checkout here has is cloned by the Run, as it always was.
     if (strategy === "goal" || (byUrl === null && strategy === "repository" && isUrl(words))) {
       rooted = true;
-      at = { ...env, cwd: root, workspaceId: null };
+      at = { ...env, cwd: root };
     } else {
       const placed = byUrl ?? (yield* routed(yield* routerDeps(env), words, candidates));
       if (placed === null) {
@@ -379,7 +357,7 @@ const startModule = Effect.fn("Flows.startModule")(function* (
         );
         return chosen === null ? null : { planInstead: words };
       }
-      at = { ...env, cwd: placed.path, workspaceId: null };
+      at = { ...env, cwd: placed.path };
       inferred.set(WORKSPACE, byUrl === null ? "your words" : `its remote, ${placed.project}`);
       if (strategy === "repository" && byUrl !== null) {
         text[launchInput.name] = placed.path;
@@ -838,9 +816,8 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
   };
   const session: ControlSession = {
     herdr,
-    ...scopeFor(env, env.cwd),
+    ...scopeFor(env.cwd),
     stateDir: env.stateDir,
-    paneId: env.paneId,
     pluginRoot: env.pluginRoot,
     releases: releasesOf(env.raw),
     userDir: env.userDir,
@@ -857,8 +834,6 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
         Effect.provideContext(platform),
       ),
   };
-  const origin = env.workspaceId;
-  const opening = openingFilter((yield* loadDefaults(env.userDir)).scope, origin);
   // An upgrade that leaves this board drawing the old build is an upgrade the human
   // believes happened and did not, so a rebuilt binary ends it, for the host to start the
   // new one.
@@ -881,16 +856,11 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
           dispatch = own;
         },
         stateDir: env.stateDir,
-        // Which of the Herd's work the board opens on, read once: `g` and a group row
-        // are what change it after that.
-        filter: opening,
-        origin,
+        // All the Herd's work: `g` and a group row are what narrow it after that.
+        filter: { kind: "all" },
+        origin: null,
         load: (focus) => app.load(focus),
         act: (command, prompts) => runCommand(session, env, command, prompts, navigate),
-        // A picture only where every human attached can see one; otherwise no mark.
-        logo: (yield* everyViewerPaints())
-          ? `${env.pluginRoot}/assets/brand/logos/collie-horizontal-light-512.png`
-          : undefined,
         // What the board has open, where chat can read it. Nothing to write it to without
         // a Herd.
         selected:
@@ -963,7 +933,7 @@ export function appState(session: ControlSession, env: PluginEnv) {
         ? null
         : yield* liveFor({
             stateDir: env.stateDir,
-            socketPath: env.socketPath,
+            herd: yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null)),
             ledgers: session.ledgers ?? ledgersOf(env),
             run: detail === null ? null : { id: detail.id, dir: detail.dir },
             runs: [],
@@ -1043,46 +1013,20 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
      */
     case "Jump": {
       const jump = command.jump;
-      // Where you went, in the words the row used; the ids stay inside this call.
-      const went = <E, R>(call: Effect.Effect<void, E, R>) =>
-        call.pipe(
-          Effect.as(`went to ${jump.label}`),
-          Effect.catch((cause) => Effect.succeed(`${jump.label}: ${reason(cause)}`)),
-        );
-      if (jump.kind === "none") return `${jump.label} — nothing to jump to`;
-      if (jump.kind === "workspace") {
-        return yield* went(session.herdr.workspaceFocus(jump.workspaceId));
-      }
-      if (jump.kind === "agent") return yield* went(session.herdr.agentFocus(jump.agent));
+      if (jump.kind === "agent") return attachLine(jump.agent);
+      if (jump.kind !== "run") return `${jump.label} — nothing to jump to`;
       const run = yield* runOf(jump.runId);
       if (!run) return `${jump.label} has gone`;
-      // A run is where its newest agent is; one that has started none is only reachable
-      // as the workspace it lives in.
       const agent = Option.getOrUndefined(
         Arr.findLast(
           yield* hostRegistered(env).pipe(Effect.orElseSucceed(() => [])),
           (entry) => entry.runId === run.id,
         ),
       );
-      if (agent) return yield* went(session.herdr.agentFocus(agent.agent));
-      const workspace =
-        run.workspace ??
-        (run.task === null
-          ? null
-          : (Option.getOrUndefined(
-              Arr.findFirst(
-                yield* hostTasks(env).pipe(Effect.orElseSucceed(() => [])),
-                (task) => task.id === run.task,
-              ),
-            )?.workspace ?? null));
-      if (!workspace) return `${jump.label} has no tab to jump to`;
-      return yield* went(session.herdr.workspaceFocus(workspace));
+      return agent ? attachLine(agent.agent) : `${jump.label} has no agent to attach to`;
     }
     case "FocusAgent":
-      return yield* session.herdr.agentFocus(command.agent).pipe(
-        Effect.as(`focused ${command.agent}`),
-        Effect.catch((cause) => Effect.succeed(`${command.agent}: ${reason(cause)}`)),
-      );
+      return attachLine(command.agent);
     // The Run itself, not the row the human pressed the key on: what these three need
     // is a run directory, and looking the row up again meant asking which of the board,
     // History and every workspace's group it was on — three views built to answer a
@@ -1113,37 +1057,7 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     case "OpenCheckOutput": {
       const run = yield* runOf(command.runId);
       if (!run) return `${command.runId} has gone`;
-      const workspace =
-        run.workspace ??
-        (run.task === null
-          ? null
-          : (Option.getOrUndefined(
-              Arr.findFirst(
-                yield* hostTasks(env).pipe(Effect.orElseSucceed(() => [])),
-                (task) => task.id === run.task,
-              ),
-            )?.workspace ?? null));
-      // The same state directory as this board's, whatever the pane's shell would default to.
-      const follow = yield* Effect.orDie(
-        Effect.fromResult(
-          CommandLine.join([
-            "env",
-            `HERDR_PLUGIN_STATE_DIR=${env.stateDir}`,
-            ...selfCommand(),
-            "run",
-            "checks",
-            run.id,
-            "--follow",
-          ]),
-        ),
-      );
-      return yield* session.herdr
-        .tabCreate({ label: "check output", cwd: run.cwd, focus: true, workspace })
-        .pipe(
-          Effect.flatMap((tab) => session.herdr.paneRun(tab.paneId, follow)),
-          Effect.as(`following ${run.id}'s check`),
-          Effect.catch((cause) => Effect.succeed(`${run.id}'s check output: ${reason(cause)}`)),
-        );
+      return `follow its check with: collie run checks ${run.id} --follow`;
     }
     case "Answer": {
       const answered = yield* answerRun(env, {
@@ -1438,7 +1352,7 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
     const rows = [...view.active, ...view.recent];
     const live = yield* liveFor({
       stateDir: env.stateDir,
-      socketPath: env.socketPath,
+      herd: yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null)),
       ledgers: session.ledgers ?? ledgersOf(env),
       run: null,
       runs: yield* Effect.gen(function* () {
@@ -1547,10 +1461,7 @@ const act = Effect.fn("Flows.act")(function* (
   if (/^[1-9]$/.test(key)) {
     const agent = agentForKey(view, key);
     if (!agent) return null;
-    return yield* session.herdr.agentFocus(agent.agent).pipe(
-      Effect.as(`focused ${agent.name} (${agent.agent})`),
-      Effect.catch((cause) => Effect.succeed(`${agent.agent}: ${reason(cause)}`)),
-    );
+    return attachLine(agent.agent);
   }
   // The text board acts on the newest run it drew rather than on a Selection, so this
   // is where "which run" is decided for it — the operations take the run itself.
@@ -1583,18 +1494,9 @@ export const stopRun = Effect.fn("Flows.stopRun")(function* (env: PluginEnv, run
   return stopped.ok ? stopped.human : stopped.error.message;
 });
 
-/** What herdr answers about the session right now: every agent, and every workspace. */
-interface SessionNow {
-  alive: AgentInfo[];
-  workspaces: WorkspaceInfo[];
-}
+/** Where the human reaches an agent's terminal from the board: core's own attach. */
+const attachLine = (agent: string) => `attach to ${agent} with: hc attach ${agent}`;
 
-/**
- * One read of both, per board load: the local board is built from it for its own
- * workspace's label and its agents and the wide board for every group, and two reads of
- * the register can disagree — which had the two boards reconciling one tab's label from
- * two different answers about the same agent.
- */
 /** The host's ledgers, asked of it: a board that cannot reach it marks nothing. */
 const ledgersOf = (env: PluginEnv): Ledgers => ({
   overridden: asks(env, (client) => client.overridden()).pipe(
@@ -1605,19 +1507,6 @@ const ledgersOf = (env: PluginEnv): Ledgers => ({
       Effect.map((read) => (read.ok ? (read.value ?? []) : [])),
     ),
   proposals: (herd) => hostProposals(env, herd).pipe(Effect.orElseSucceed(() => [])),
-});
-
-const liveOf = Effect.fn("Flows.liveOf")(function* (session: ControlSession) {
-  return yield* Effect.all(
-    { alive: session.herdr.agentList(), workspaces: session.herdr.workspaceList() },
-    { concurrency: "unbounded" },
-  ).pipe(
-    // A herdr that will not answer means "nothing verified live", not a crash.
-    Effect.orElseSucceed(() => ({
-      alive: [],
-      workspaces: [],
-    })),
-  );
 });
 
 /**
@@ -1674,22 +1563,13 @@ const scan = Effect.fn("Flows.scan")(function* (
   } satisfies Scanned;
 });
 
-const boardOf = Effect.fn("Flows.boardOf")(function* (
-  session: ControlSession,
-  scanned: Scanned,
-  seen?: SessionNow,
-) {
-  const live = seen ?? (yield* liveOf(session));
+const boardOf = Effect.fn("Flows.boardOf")(function* (session: ControlSession, scanned: Scanned) {
   const view = yield* buildView({
     ...session,
     stateDir: session.stateDir,
-    // The live label is how a run recorded against a since-recycled workspace id is
-    // kept out; without it the board falls back to the id alone.
-    workspaceLabel:
-      Option.getOrUndefined(
-        Arr.findFirst(live.workspaces, (w) => w.workspaceId === session.workspaceId),
-      )?.label ?? null,
-    alive: live.alive,
+    workspaceLabel: null,
+    // A core that will not answer means "nothing verified live", not a crash.
+    alive: yield* session.herdr.agentList().pipe(Effect.orElseSucceed((): AgentInfo[] => [])),
     worktrees: yield* reportedWorktrees(session.stateDir),
     pluginRoot: session.pluginRoot,
     ...(session.releases && { releases: session.releases }),

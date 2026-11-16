@@ -29,10 +29,7 @@ export function isDensity(value: string): value is Density {
 }
 export const SCOPES: ReadonlyArray<Scope> = ["local", "all"];
 
-/** What runs a Machine's agents: Herdr 1, or herdr-core. */
-export type TerminalBackend = "herdr" | "core";
 export const WORKTREES_DIRECTORY = "~/.collie/worktrees";
-export const TERMINAL_BACKENDS: ReadonlyArray<TerminalBackend> = ["herdr", "core"];
 export function isScope(value: string): value is Scope {
   return Arr.some(SCOPES, (scope) => scope === value);
 }
@@ -313,13 +310,6 @@ export const SETTINGS: ReadonlyArray<Setting> = [
     label: "Claude Code's auto-compact window",
     description: `Where Claude Code compacts by itself: a whole number of tokens from ${AUTO_COMPACT_LEAST} to ${AUTO_COMPACT_MOST}, or auto for the model's own window. Claude Code agents only, from the next one started.`,
     unit: "tokens",
-  }),
-  choice("terminal_backend", TERMINAL_BACKENDS, "herdr", {
-    group: "Agents",
-    label: "Terminal backend",
-    description:
-      "Where this Machine starts its next agents: herdr, or herdr-core. Agents already running finish where they started. This Machine only.",
-    machine: true,
   }),
   of("quiet_ms", "number", String(D.quietMs), {
     group: "Agents",

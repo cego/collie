@@ -11,11 +11,12 @@
 // buy: a check it says it ran is a claim, and only the verification journal — bound to the
 // tree the command ran on — turns it into proof.
 
+import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Layer, Schema, flow, Result } from "effect";
 import { VerifySpecSchema } from "../src/verify-spec";
-import { Rig, FakeHerdr } from "./support/recorder";
+import { Rig } from "./support/recorder";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { agentsLayer, type AgentHost } from "../src/agents";
@@ -57,7 +58,7 @@ afterEach(() => runEffect(rig.close()));
 const hostOf = (): AgentHost => ({
   dir,
   env: rig.pluginEnv(),
-  herdr: new FakeHerdr(rig.pluginEnv()),
+  herdr: new Herdr(rig.pluginEnv()),
   harness: "claude",
   model: "opus",
   permissions: "auto",

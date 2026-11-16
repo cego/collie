@@ -864,7 +864,6 @@ pub enum OnboardingTag {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Run {
     pub steps: Vec<RunStep>,
-    pub asked: Option<Asked>,
     pub ready: Option<bool>,
     pub reason: Option<String>,
     pub at: f64,
@@ -899,12 +898,6 @@ pub enum Status {
     NeedsHuman,
     #[serde(rename = "failed")]
     Failed,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Asked {
-    pub text: String,
-    pub yes: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -3312,13 +3305,6 @@ pub enum SkipItem {
 pub struct AddMachinePayload {
     pub target: String,
     pub label: String,
-    pub session: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AnswerHerdrPayload {
-    pub job: String,
-    pub yes: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -24,9 +24,7 @@ const attendedAgent = Effect.fn("attendedAgent")(function* (side: Side) {
   const fs = yield* FileSystem.FileSystem;
   const outputs = `${side.world.home}/outputs.json`;
   yield* fs.writeFileString(outputs, encodeValue([{ verdict: "done" }]));
-  const start = yield* side.cli(["run", "start", "attended", "--input", "work=identity"], {
-    FAKE_HERDR_OUTPUTS: outputs,
-  });
+  const start = yield* side.cli(["run", "start", "attended", "--input", "work=identity"]);
   const { runId } = yield* Schema.decodeUnknownEffect(Schema.Struct({ runId: Schema.String }))(
     start.envelope.data,
   ).pipe(Effect.orDie);
@@ -52,7 +50,7 @@ test(
             const fs = yield* FileSystem.FileSystem;
             const { runId, agent } = yield* attendedAgent(first);
             const fromPane = yield* first.cli(["verify", "--name", "from-pane", "--", "true"], {
-              HERDR_PANE_ID: agent.paneId,
+              COLLIE_AGENT: agent.agent,
             });
             expect(fromPane.envelope.ok).toBe(true);
             expect(
@@ -62,7 +60,7 @@ test(
             ).toContain(`"name":"from-pane"`);
 
             const plain = yield* first.cli(["verify", "--", "true"], {
-              HERDR_PANE_ID: "not-an-agent",
+              COLLIE_AGENT: "not-an-agent",
             });
             expect(plain.envelope.error).toMatchObject({
               code: "invalid_input",
@@ -70,7 +68,7 @@ test(
             });
 
             const named = yield* first.cli(["verify", "--run", "run-nobody", "--", "true"], {
-              HERDR_PANE_ID: agent.paneId,
+              COLLIE_AGENT: agent.agent,
             });
             expect(named.envelope.error?.code).toBe("run_not_found");
           }),
@@ -97,13 +95,13 @@ test(
             const words = "my exact words\n  and spacing";
             expect(
               (yield* first.cli(["run", "steer", runId, words, "--request-id", "from-agent"], {
-                HERDR_PANE_ID: agent.paneId,
+                COLLIE_AGENT: agent.agent,
               })).envelope,
             ).toMatchObject({ ok: true });
             expect(
               (yield* first.cli(
                 ["run", "steer", runId, "from a plain pane", "--request-id", "from-cli"],
-                { HERDR_PANE_ID: "not-an-agent" },
+                { COLLIE_AGENT: "not-an-agent" },
               )).envelope.ok,
             ).toBe(true);
             const trail = yield* readAudit(runDir(first.world.state, runId));
@@ -122,7 +120,7 @@ test(
               Option.getOrUndefined(Arr.findFirst(trail, (line) => line.request === "from-cli"))
                 ?.actor.origin,
             ).toBe("cli");
-            expect(yield* fs.readFileString(first.herdrLog)).toContain(
+            expect(yield* fs.readFileString(first.coreLog)).toContain(
               `From ${agent.agent} of ${runId} on `,
             );
             const atCap = Str.repeat(8 * 1024)("x");
@@ -138,23 +136,29 @@ test(
                   "--request-id",
                   "agent-at-cap",
                 ],
-                { HERDR_PANE_ID: agent.paneId },
+                { COLLIE_AGENT: agent.agent },
               )).envelope.ok,
             ).toBe(true);
             const message = `${runDir(first.world.state, runId)}/attachments/message-${pipe(new Bun.CryptoHasher("sha256").update(atCap).digest("hex"), Str.slice(0, 8))}.md`;
             expect(yield* fs.readFileString(message)).toBe(atCap);
             const calls = Arr.map(
               Arr.filter(
-                Str.split(yield* fs.readFileString(first.herdrLog), "\n"),
+                Str.split(yield* fs.readFileString(first.coreLog), "\n"),
                 (line) => line !== "",
               ),
               (line) =>
                 flow(
-                  Schema.decodeUnknownResult(Schema.Struct({ argv: Schema.Array(Schema.String) })),
+                  Schema.decodeUnknownResult(
+                    Schema.Struct({
+                      params: Schema.optionalKey(
+                        Schema.Struct({ text: Schema.optionalKey(Schema.String) }),
+                      ),
+                    }),
+                  ),
                   Result.getOrThrow,
                 )(JSON.parse(line)),
             );
-            const sentWords = Arr.flatMap(calls, (call) => call.argv);
+            const sentWords = Arr.map(calls, (call) => call.params?.text ?? "");
             const said = Option.getOrUndefined(
               Arr.findFirst(sentWords, (word) =>
                 pipe(word, Str.includes(`Their message is in ${message}.`)),
@@ -175,12 +179,12 @@ test(
                   "--request-id",
                   "human-at-cap",
                 ],
-                { HERDR_PANE_ID: "not-an-agent" },
+                { COLLIE_AGENT: "not-an-agent" },
               )).envelope.ok,
             ).toBe(true);
             const humanMessage = `${runDir(first.world.state, runId)}/attachments/message-${pipe(new Bun.CryptoHasher("sha256").update(humanAtCap).digest("hex"), Str.slice(0, 8))}.md`;
             expect(yield* fs.readFileString(humanMessage)).toBe(humanAtCap);
-            expect(yield* fs.readFileString(first.herdrLog)).toContain(
+            expect(yield* fs.readFileString(first.coreLog)).toContain(
               `Their message is in ${humanMessage}. Read it whole and act on it as theirs.`,
             );
           }),
@@ -208,10 +212,13 @@ test(
                 );
                 const outputs = `${side.world.home}/outputs.json`;
                 yield* fs.writeFileString(outputs, encodeValue([{ verdict: "done" }]));
-                const start = yield* side.cli(
-                  ["run", "start", "attended", "--input", "work=conversation"],
-                  { FAKE_HERDR_OUTPUTS: outputs },
-                );
+                const start = yield* side.cli([
+                  "run",
+                  "start",
+                  "attended",
+                  "--input",
+                  "work=conversation",
+                ]);
                 const { runId } = yield* Schema.decodeUnknownEffect(
                   Schema.Struct({ runId: Schema.String }),
                 )(start.envelope.data).pipe(Effect.orDie);
@@ -260,7 +267,7 @@ test(
               origin: "agent",
               from: { run: here.runId, agent: here.agent, machine: { name: machineName() } },
             });
-            const log = yield* fs.readFileString(second.herdrLog);
+            const log = yield* fs.readFileString(second.coreLog);
             expect(log).toContain(`From ${here.agent} of ${here.runId} on ${machineName()}.`);
             const kept =
               /Their message is in (\S+)\. Read it whole and act on it as that agent's\./.exec(
@@ -269,10 +276,10 @@ test(
             expect(yield* fs.readFileString(kept ?? "")).toBe(words);
             const replied = yield* second.cli(
               ["run", "steer", here.runId, "Here is the answer.", "--operation", here.agent],
-              { HERDR_PANE_ID: there.pane },
+              { COLLIE_AGENT: there.agent },
             );
             expect(replied.envelope).toMatchObject({ ok: true });
-            expect(yield* fs.readFileString(first.herdrLog)).toContain(
+            expect(yield* fs.readFileString(first.coreLog)).toContain(
               `From ${there.agent} of ${there.runId} on second.`,
             );
             for (const tool of ["collie_run", "collie_receipts"]) {

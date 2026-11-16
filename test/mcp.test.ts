@@ -14,7 +14,7 @@ import {
   Result,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import manifest from "../herdr-plugin.toml";
+import manifest from "../package.json";
 import type { JsonObject } from "../src/schema";
 import { rebuiltAnswer } from "../src/mcp";
 import { connect } from "../src/host";
@@ -63,10 +63,9 @@ const openServer = Effect.fn("McpTest.open")(function* (
       cwd: root,
       env: {
         HOME: dir,
-        HERDR_PLUGIN_ROOT: root,
+        COLLIE_ROOT: root,
         COLLIE_USER_DIR: `${dir}/config`,
-        HERDR_PLUGIN_STATE_DIR: `${dir}/state`,
-        HERDR_SOCKET_PATH: `${dir}/no-herdr.sock`,
+        COLLIE_STATE_DIR: `${dir}/state`,
         COLLIE_CWD: dir,
         ...(yield* suiteEnv),
         ...launchEnv,
@@ -215,9 +214,7 @@ test(
             const fs = yield* FileSystem.FileSystem;
             const outputs = `${first.world.home}/outputs.json`;
             yield* fs.writeFileString(outputs, encodeValue([{ verdict: "done" }]));
-            const started = yield* first.cli(["run", "start", "attended", "--input", "work=MCP"], {
-              FAKE_HERDR_OUTPUTS: outputs,
-            });
+            const started = yield* first.cli(["run", "start", "attended", "--input", "work=MCP"]);
             const { runId } = yield* Schema.decodeUnknownEffect(
               Schema.Struct({ runId: Schema.String }),
             )(started.envelope.data).pipe(Effect.orDie);

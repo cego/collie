@@ -34,7 +34,7 @@ import { Herdr } from "../../src/herdr";
 import { followBoard } from "../../src/lifecycle";
 import { scopeFor } from "../../src/registry";
 import { focus } from "../support/focus";
-import { collie, proves } from "../support/world";
+import { blockedAtItsPrompt, collie, proves } from "../support/world";
 import { epochMs } from "../../src/time";
 import type { UsageReading } from "../../src/usage-model";
 
@@ -2029,32 +2029,28 @@ test(
   () =>
     proves(
       "collie-home-drawn-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
-          const started = yield* collie(
-            world,
-            [
-              "run",
-              "start",
-              "agent",
-              "--input",
-              "target=worktree",
-              "--input",
-              `cwd=${world.project}`,
-              "--input",
-              "skip=false",
-            ],
-            { FAKE_HERDR_AGENT_STATUS: "blocked" },
-          );
+          const started = yield* collie(world, [
+            "run",
+            "start",
+            "agent",
+            "--input",
+            "target=worktree",
+            "--input",
+            `cwd=${world.project}`,
+            "--input",
+            "skip=false",
+          ]);
           expect(started.envelope.ok).toBe(true);
+          yield* blockedAtItsPrompt(core);
           const env = yield* currentEnv.pipe(Effect.orDie);
           const home = homeState(
             {
               herdr: new Herdr(env),
-              ...scopeFor(env, env.cwd),
+              ...scopeFor(env.cwd),
               stateDir: env.stateDir,
               userDir: env.userDir,
-              paneId: env.paneId,
               pluginRoot: env.pluginRoot,
               tasksOf: yield* followBoard(env),
             },

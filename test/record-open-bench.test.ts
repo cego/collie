@@ -154,7 +154,7 @@ describe("the record-open benchmark's guards", () => {
         expect(
           yield* refusal(
             { state: "/srv/collie/", socket: "/tmp/b/host.sock" },
-            { home, env: { HERDR_PLUGIN_STATE_DIR: "/srv/collie" } },
+            { home, env: { COLLIE_STATE_DIR: "/srv/collie" } },
           ),
         ).toMatch(/state directory/);
         expect(

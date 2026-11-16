@@ -73,12 +73,12 @@ import {
   writeIntentHeld,
   type Intent,
 } from "./intent";
-import { scopeKey } from "./registry";
+import { scopeFor, scopeKey } from "./registry";
 import { layers, loadDefinitions } from "./definitions";
 import { forkResolvedDefinition } from "./fork";
 import { upgrade } from "./operations";
 import { onboard } from "./onboard";
-import manifest from "../herdr-plugin.toml";
+import manifest from "../package.json";
 import { nowIso } from "./time";
 import {
   actorName,
@@ -393,16 +393,13 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         : repository !== null
           ? "error" in repository
             ? repository
-            : { found: { cwd: repository.path, workspaceId: null, label: named ?? "" } }
+            : { found: { cwd: repository.path, label: named ?? "" } }
           : yield* workspaceNamed(env, named);
       if (where !== null && "error" in where) return failed(where.error);
       const own =
         where === null ? null : yield* collieOwnRefusal(env, where.found.label, where.found.cwd);
       if (own !== null) return failed(own);
-      const rooted =
-        where === null
-          ? env
-          : { ...env, cwd: where.found.cwd, workspaceId: where.found.workspaceId };
+      const rooted = where === null ? env : { ...env, cwd: where.found.cwd };
       const fields = Rec.toEntries(action.inputs);
       const input = {
         text: Rec.fromEntries(Arr.filter(fields, ([name]) => !(name in RESERVED_INPUTS))),
@@ -427,7 +424,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         // the value it takes, exactly as a typed `run start` does.
         input,
         options: launch,
-        task: action.here === true ? { mode: "here" } : { mode: "new" },
+        task: { mode: "new" },
         title: action.title,
         verify: action.verify,
         attachments: action.attachments,
@@ -454,11 +451,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       const where = yield* workspaceNamed(env, action.workspace);
       if (where === null) return failed("update_defaults has to name a workspace");
       if ("error" in where) return failed(where.error);
-      const scope = {
-        session: env.socketPath,
-        workspaceId: where.found.workspaceId,
-        cwd: where.found.cwd,
-      };
+      const scope = scopeFor(where.found.cwd);
       const file = yield* defaultsPath(env.stateDir, scopeKey(scope));
       const current = (yield* readDefaults(file)) ?? EMPTY_DEFAULTS;
       if (action.change === "remove-constraint") {
@@ -467,7 +460,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         // tell the human a standing constraint was dropped that is still there.
         if (!Arr.some(current.constraints, (c) => c.id === action.text))
           return failed(
-            `no default constraint "${action.text}" in ${where.found.workspaceId}; remove one by the id \`collie_installation\` lists`,
+            `no default constraint "${action.text}" in ${where.found.label}; remove one by the id \`collie_installation\` lists`,
           );
         const next = {
           ...current,
@@ -525,22 +518,20 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       action.machine,
       elsewhereCleanup,
       Effect.gen(function* () {
-        const herdr = new Herdr(env);
-        // A Task whose workspace herdr no longer has, and that no Run belongs to, is work
-        // nobody can reach. A listing that could not be read keeps every Task.
-        const open = new Set(Arr.map(yield* herdr.workspaceList(), (one) => one.workspaceId));
+        // A closed Task that no Run belongs to is work nobody can reach. A listing that
+        // could not be read keeps every Task.
         const listing = yield* runViews(env, null);
         const owned = new Set(Arr.map(listing.runs, (run) => run.task));
         const gone =
           listing.unreadable === null
-            ? Arr.filter(yield* listTasks, (task) => !isOpen(task, open) && !owned.has(task.id))
+            ? Arr.filter(yield* listTasks, (task) => !isOpen(task) && !owned.has(task.id))
             : [];
         for (const task of gone) yield* removeTask(task.id);
         return {
           state: "applied" as const,
-          note: `forgot ${gone.length} Tasks whose workspace is gone`,
+          note: `forgot ${gone.length} closed Tasks`,
         };
-      }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
+      }),
     ),
   );
   const scheduleChange = (env: PluginEnv, by: Actor, change: ScheduleChange, machine?: string) =>

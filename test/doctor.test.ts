@@ -2,13 +2,14 @@
 // fixes it. Driven at the operation, with the outside world scripted through the
 // fake-PATH rig — the same seam the `upgrade` tests use.
 
+import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { DateTime, Effect, FileSystem, Option, Schema, flow, Result } from "effect";
 import { runEffect } from "./support/effect";
-import { FakeHerdr, Rig } from "./support/recorder";
+import { Rig } from "./support/recorder";
 import { installBaseline } from "./support/engine";
 import { installFakeSkills } from "./support/defs";
 import { FakeBin } from "./support/bin";
@@ -20,7 +21,7 @@ import { shell } from "../src/mr";
 import type { OpResult } from "../src/operations";
 import { writeConfigValue } from "../src/config";
 import { withGitlabHost } from "../src/commands/shared";
-import manifest from "../herdr-plugin.toml";
+import manifest from "../package.json";
 import hcPin from "../hc-pin.json";
 import { registerAgent, type AgentEntry } from "../src/registry";
 import { openHost } from "./support/host";
@@ -31,15 +32,6 @@ import { fakeSlack } from "./support/slack";
 let rig: Rig;
 let bin: FakeBin;
 
-const asSessions = flow(
-  Schema.encodeResult(
-    Schema.fromJsonString(
-      Schema.Array(Schema.Struct({ name: Schema.String, socket_path: Schema.String })),
-    ),
-  ),
-  Result.getOrThrow,
-);
-
 /**
  * The environment doctor sees. Its PATH is the stub directory alone: the developer's
  * own `claude` or `glab` would otherwise answer for one a test has removed.
@@ -48,25 +40,14 @@ function env(overrides: Record<string, string> = {}) {
   return rig.pluginEnv({ PATH: `${rig.root}/bin`, ...overrides });
 }
 
-/**
- * doctor against this rig: the fake herdr in-process, everything else on PATH, and the rig's
- * fake core.
- */
+/** doctor against this rig: everything on PATH, and the rig's fake core. */
 function report(overrides: Record<string, string> = {}, slack?: typeof slackApi) {
-  const pluginEnv = env({
-    FAKE_HERDR_PLUGINS: `cego.collie 0.1.0 [local:${rig.baselineDir}]`,
-    FAKE_HERDR_SESSIONS: asSessions([{ name: "default", socket_path: rig.socketPath }]),
-    ...overrides,
-  });
-  return doctor(pluginEnv, undefined, new FakeHerdr(pluginEnv), slack);
+  const pluginEnv = env(overrides);
+  return doctor(pluginEnv, undefined, new Herdr(pluginEnv), slack);
 }
 
 const healthy = Effect.fn("doctorTest.healthy")(function* () {
   const fs = yield* FileSystem.FileSystem;
-  yield* fs.writeFileString(
-    `${rig.baselineDir}/herdr-plugin.toml`,
-    'id = "cego.collie"\nmin_herdr_version = "0.7.5"\n',
-  );
   yield* fs.makeDirectory(`${rig.baselineDir}/bin`, { recursive: true });
   yield* fs.writeFileString(`${rig.baselineDir}/bin/collie`, "", { mode: 0o755 });
   yield* bin.add("collie", "exit 0");
@@ -84,7 +65,6 @@ const healthy = Effect.fn("doctorTest.healthy")(function* () {
   yield* freeSpace(50);
   yield* rig.memory(50);
   yield* hc(hcPin.version);
-  yield* writeConfigValue(rig.userDir, "terminal_backend", "core");
 });
 
 const hc = (version: string) =>
@@ -229,12 +209,9 @@ test("a healthy machine passes every check and says so", () =>
       expect(Arr.every(checks, (c) => c.ok)).toBe(true);
       // Every prerequisite, in one run.
       expect(Arr.map(checks, (c) => c.name)).toEqual([
-        "herdr",
-        "herdr server",
         "hc",
         "core",
         "herdr 1",
-        "plugin",
         "runner",
         "collie on PATH",
         "skills",
@@ -401,35 +378,15 @@ test("a core that answers passes with its version", () =>
     }),
   ));
 
-test("this Machine set to herdr is reported, with the setting that moves it", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* healthy();
-      yield* writeConfigValue(rig.userDir, "terminal_backend", "herdr");
-
-      const result = yield* report();
-
-      expect(result.ok).toBe(true);
-      expect(check(result, "herdr 1")).toEqual({
-        name: "herdr 1",
-        ok: true,
-        detail: "this Machine starts its agents on Herdr 1 (terminal_backend is herdr)",
-        fix: "collie settings set terminal_backend core",
-      });
-    }),
-  ));
-
 test(
-  "a live agent on Herdr 1 is reported; one on core, or whose pane is gone, is not",
+  "an agent registered on Herdr 1, or before incarnations, is reported; one on core is not",
   () =>
     runEffect(
       Effect.gen(function* () {
         yield* healthy();
-        yield* rig.addPane("1-7", "1:1", rig.root, "builder");
-        yield* rig.addPane("1-8", "1:1", rig.root, "reviewer");
         yield* registered("builder-a", "1-7");
-        yield* registered("reviewer-a", "1-8", "core");
-        yield* registered("builder-b", "1-9");
+        yield* registered("reviewer-a", "t1", "core");
+        yield* registered("builder-legacy", "1-4", "legacy");
 
         // Doctor reads the register through the host.
         yield* openHost(rig.stateDir);
@@ -437,74 +394,10 @@ test(
 
         expect(check(result, "herdr 1")).toMatchObject({
           ok: true,
-          detail: "live on Herdr 1: builder-a (run run-builder-a, pane 1-7)",
+          detail:
+            "registered on Herdr 1, which Collie no longer reaches: builder-a (run run-builder-a), builder-legacy (run run-builder-legacy)",
+          fix: "collie run resume <run> starts its agents again on core",
         });
-      }),
-    ),
-  30_000,
-);
-
-test(
-  "a live agent on Herdr 1 in another running session, or registered before incarnations, is reported",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* healthy();
-        const other = `${rig.root}/other.sock`;
-        yield* rig.addPane("2-3", "2:1", rig.root, "builder", null, null, null, other);
-        yield* rig.addPane("1-4", "1:1", rig.root, "builder");
-        yield* registered("builder-other", "2-3");
-        yield* registered("builder-legacy", "1-4", "legacy");
-
-        yield* openHost(rig.stateDir);
-        const result = yield* report({
-          FAKE_HERDR_SESSIONS: asSessions([
-            { name: "default", socket_path: rig.socketPath },
-            { name: "other", socket_path: other },
-          ]),
-        });
-
-        expect(check(result, "herdr 1").detail).toBe(
-          "live on Herdr 1: builder-other (run run-builder-other, pane 2-3), builder-legacy (run run-builder-legacy, pane 1-4)",
-        );
-      }),
-    ),
-  30_000,
-);
-
-test(
-  "a herdr whose panes cannot be read is a warning, never reported as nothing on Herdr 1",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* healthy();
-        yield* registered("builder-a", "1-7");
-
-        yield* openHost(rig.stateDir);
-        const result = yield* report({ FAKE_HERDR_FAIL: '{"pane list":"herdr is restarting"}' });
-
-        expect(check(result, "herdr 1")).toMatchObject({ ok: true, warn: true });
-        expect(check(result, "herdr 1").detail).toContain("could not read Herdr 1's open panes");
-      }),
-    ),
-  30_000,
-);
-
-test(
-  "a herdr that cannot list its sessions is a warning, though this session's panes read",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* healthy();
-        const other = `${rig.root}/other.sock`;
-        yield* rig.addPane("2-3", "2:1", rig.root, "builder", null, null, null, other);
-        yield* registered("builder-other", "2-3");
-
-        yield* openHost(rig.stateDir);
-        const result = yield* report({ FAKE_HERDR_FAIL: '{"session list":"herdr is restarting"}' });
-
-        expect(check(result, "herdr 1")).toMatchObject({ ok: true, warn: true });
-        expect(check(result, "herdr 1").detail).toContain("could not read Herdr 1's open panes");
       }),
     ),
   30_000,
@@ -516,7 +409,6 @@ test(
     runEffect(
       Effect.gen(function* () {
         yield* healthy();
-        yield* rig.addPane("1-7", "1:1", rig.root, "builder");
         yield* registered("builder-a", "1-7");
 
         const result = yield* report();
@@ -531,12 +423,12 @@ test(
 );
 
 test(
-  "with no Herdr 1 setting and no live agent on it, doctor reports none",
+  "with nothing registered on Herdr 1, doctor reports none",
   () =>
     runEffect(
       Effect.gen(function* () {
         yield* healthy();
-        yield* registered("reviewer-a", "1-8", "core");
+        yield* registered("reviewer-a", "t1", "core");
 
         yield* openHost(rig.stateDir);
         const result = yield* report();
@@ -544,7 +436,7 @@ test(
         expect(check(result, "herdr 1")).toEqual({
           name: "herdr 1",
           ok: true,
-          detail: "nothing on this Machine uses Herdr 1",
+          detail: "nothing on this Machine is registered on Herdr 1",
           fix: "",
         });
       }),
@@ -655,130 +547,6 @@ test("the Projects root is named with where it came from, and the home fallback 
     }),
   ));
 
-test("a herdr older than the manifest's minimum is the reported problem", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* healthy();
-      const result = yield* report({ FAKE_HERDR_VERSION: "herdr 0.7.4" });
-
-      expect(result.ok).toBe(false);
-      const herdr = check(result, "herdr");
-      expect(herdr.ok).toBe(false);
-      expect(herdr.detail).toContain("0.7.4");
-      expect(herdr.detail).toContain("0.7.5");
-      expect(herdr.fix).not.toBe("");
-    }),
-  ));
-
-test("the shipped manifest calls a herdr older than the pinned 0.9.5 stale, and 0.9.5 current", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* healthy();
-      const fs = yield* FileSystem.FileSystem;
-      const shipped = yield* fs.readFileString(`${import.meta.dir}/../herdr-plugin.toml`);
-      yield* fs.writeFileString(`${rig.baselineDir}/herdr-plugin.toml`, shipped);
-
-      const older = check(yield* report({ FAKE_HERDR_VERSION: "herdr 0.9.4" }), "herdr");
-      expect(older.ok).toBe(false);
-      expect(older.detail).toContain("0.9.5");
-
-      const pinned = check(yield* report({ FAKE_HERDR_VERSION: "herdr 0.9.5" }), "herdr");
-      expect(pinned).toMatchObject({ ok: true, detail: "0.9.5" });
-    }),
-  ));
-
-/** doctor's herdr lines, with the shipped manifest's 0.9.3 as the minimum. */
-const herdrLines = Effect.fn("doctorTest.herdrLines")(function* (
-  overrides: Record<string, string>,
-) {
-  yield* healthy();
-  const fs = yield* FileSystem.FileSystem;
-  yield* fs.writeFileString(
-    `${rig.baselineDir}/herdr-plugin.toml`,
-    'id = "cego.collie"\nmin_herdr_version = "0.9.3"\n',
-  );
-  const checks = reported(yield* report(overrides));
-  return {
-    client: Option.getOrUndefined(Arr.findFirst(checks, (c) => c.name === "herdr"))!,
-    server: Option.getOrUndefined(Arr.findFirst(checks, (c) => c.name === "herdr server")),
-  };
-});
-
-const BY_PACKAGE_MANAGER = "or upgrade herdr with the package manager that installed it";
-
-test("a herdr from before 0.9.0 is told that one server stop ends its panes, and how to avoid it", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const { client } = yield* herdrLines({ FAKE_HERDR_VERSION: "herdr 0.7.1" });
-
-      expect(client.ok).toBe(false);
-      expect(client.detail).toContain("0.7.1");
-      expect(client.fix).toContain("Moving from herdr 0.7.1 to 0.9.3");
-      expect(client.fix).toContain("stopped once, which ends every program in its panes");
-      expect(client.fix).toContain("`herdr update`, then `herdr server stop`, then start `herdr`");
-      expect(client.fix).toContain("`herdr update --handoff`");
-      expect(client.fix).toContain(BY_PACKAGE_MANAGER);
-    }),
-  ));
-
-test("a 0.9 herdr below the minimum is told that updating leaves its panes alone", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const { client } = yield* herdrLines({ FAKE_HERDR_VERSION: "herdr 0.9.2" });
-
-      expect(client.ok).toBe(false);
-      expect(client.fix).toContain(
-        "`herdr update` installs 0.9.3 and leaves your running server and its panes alone",
-      );
-      expect(client.fix).not.toContain("--handoff");
-      expect(client.fix).toContain(BY_PACKAGE_MANAGER);
-    }),
-  ));
-
-test("a current herdr whose running server is older fails a server line of its own", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const { client, server } = yield* herdrLines({
-        FAKE_HERDR_VERSION: "herdr 0.9.3",
-        FAKE_HERDR_SERVER_VERSION: "0.9.0",
-      });
-
-      expect(client.ok).toBe(true);
-      expect(server?.ok).toBe(false);
-      expect(server?.detail).toContain("0.9.0");
-      expect(server?.fix).toContain("`herdr server stop`, then `herdr`");
-      expect(server?.fix).toContain(BY_PACKAGE_MANAGER);
-    }),
-  ));
-
-test("a running server too old to say its version fails its line", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const { server } = yield* herdrLines({
-        FAKE_HERDR_VERSION: "herdr 0.9.3",
-        FAKE_HERDR_SERVER_VERSION: "none",
-      });
-
-      expect(server?.ok).toBe(false);
-      expect(server?.fix).toContain("`herdr server stop`, then `herdr`");
-      expect(server?.fix).toContain(BY_PACKAGE_MANAGER);
-    }),
-  ));
-
-test("no running herdr server is no server line, and a current one passes", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const stopped = yield* herdrLines({
-        FAKE_HERDR_VERSION: "herdr 0.9.3",
-        FAKE_HERDR_STATUS: "stopped",
-      });
-      expect(stopped.server).toBeUndefined();
-
-      const current = yield* herdrLines({ FAKE_HERDR_VERSION: "herdr 0.9.3" });
-      expect(current.server).toMatchObject({ ok: true, detail: "0.9.3" });
-    }),
-  ));
-
 test("a shim whose directory is not on PATH is its own state, not 'installed'", () =>
   runEffect(
     Effect.gen(function* () {
@@ -837,29 +605,13 @@ test("a glab that did not answer reads differently from one that said no", () =>
       // What a timed-out `glab auth status` comes back as, which is what `doctor`
       // turns into a state of its own rather than into "not logged in". The bound
       // itself is twenty seconds of real time and is not what this asserts.
-      const result = yield* doctor(
-        env({ FAKE_HERDR_PLUGINS: `cego.collie 0.1.0 [local:${rig.baselineDir}]` }),
-        (cmd, args, cwd) =>
-          cmd === "glab"
-            ? Effect.succeed({ code: 124, stdout: "", stderr: "timed out" })
-            : shell(cmd, args, cwd),
+      const result = yield* doctor(env(), (cmd, args, cwd) =>
+        cmd === "glab"
+          ? Effect.succeed({ code: 124, stdout: "", stderr: "timed out" })
+          : shell(cmd, args, cwd),
       );
 
       expect(check(result, "glab").detail).toContain("did not answer");
-    }),
-  ));
-
-test("a plugin linked from somewhere else is reported against this installation", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* healthy();
-      const result = yield* report({
-        FAKE_HERDR_PLUGINS: "cego.collie 0.1.0 [local:/somewhere/else]",
-      });
-
-      const plugin = check(result, "plugin");
-      expect(plugin.ok).toBe(false);
-      expect(plugin.fix).toContain(`herdr plugin link ${rig.baselineDir}`);
     }),
   ));
 
@@ -984,17 +736,14 @@ test("a release at the newest is up to date", () =>
 test("every failing check carries its fix, and the message lists them", () =>
   runEffect(
     Effect.gen(function* () {
-      // Nothing installed at all: the state a fresh machine is in, herdr included.
-      const result = yield* report({
-        HERDR_BIN_PATH: `${rig.root}/nowhere/herdr`,
-        FAKE_HERDR_PLUGINS: "",
-      });
+      // Nothing installed at all: the state a fresh machine is in, hc included.
+      const result = yield* report();
 
       expect(result.ok).toBe(false);
       const failed = Arr.filter(reported(result), (c) => !c.ok);
       expect(failed.length).toBeGreaterThan(0);
       expect(Arr.every(failed, (c) => c.fix !== "")).toBe(true);
-      expect(result.ok === false && result.error.message).toContain("herdr");
+      expect(result.ok === false && result.error.message).toContain("hc");
     }),
   ));
 
@@ -1364,11 +1113,11 @@ test("--gitlab-host names the host doctor checks, and a URL is refused", () =>
       yield* healthy();
       yield* writeConfigValue(rig.userDir, "gitlab_host", null);
       yield* twoHosts();
-      const pluginEnv = env({ FAKE_HERDR_PLUGINS: `cego.collie 0.1.0 [local:${rig.baselineDir}]` });
+      const pluginEnv = env();
 
       const named = withGitlabHost(pluginEnv, Option.some("gitlab.com"));
       if ("ok" in named) return yield* Effect.die(new Error(named.error.message));
-      const result = yield* doctor(named, undefined, new FakeHerdr(named));
+      const result = yield* doctor(named, undefined, new Herdr(named));
       expect(check(result, "git push").detail).toContain("gitlab.com");
       expect(check(result, "other gitlabs").detail).toContain("gitlab.cego.dk");
 
@@ -1457,17 +1206,14 @@ test("a gh that did not answer reads differently from one that said no", () =>
       yield* healthy();
       const root = yield* checkouts(["gh-app"]);
       yield* bin.add("gh", "exit 0");
-      const pluginEnv = env({
-        FAKE_HERDR_PLUGINS: `cego.collie 0.1.0 [local:${rig.baselineDir}]`,
-        ...root,
-      });
+      const pluginEnv = env(root);
       const result = yield* doctor(
         pluginEnv,
         (cmd, args, cwd) =>
           cmd === "gh"
             ? Effect.succeed({ code: 124, stdout: "", stderr: "timed out" })
             : shell(cmd, args, cwd),
-        new FakeHerdr(pluginEnv),
+        new Herdr(pluginEnv),
       );
       expect(ghCheck(result)).toMatchObject({
         ok: false,

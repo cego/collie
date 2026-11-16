@@ -12,7 +12,7 @@ import { COLLIE_TAB } from "../../src/naming";
 import { scopeFor } from "../../src/registry";
 import { focus } from "../support/focus";
 import { stopHost, until } from "../support/host";
-import { collie, proves } from "../support/world";
+import { blockedAtItsPrompt, collie, proves } from "../support/world";
 
 /** The text board, as a pane with no terminal prints it, from the host this world runs. */
 const printed = Effect.gen(function* () {
@@ -86,26 +86,21 @@ test(
   () =>
     proves(
       "collie-fallback-stalled-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
-          // The host inherits this from the client that starts it, and so does its herdr.
-          const blocked = { FAKE_HERDR_AGENT_STATUS: "blocked" };
-          const started = yield* collie(
-            world,
-            [
-              "run",
-              "start",
-              "agent",
-              "--input",
-              "target=worktree",
-              "--input",
-              `cwd=${world.project}`,
-              "--input",
-              "skip=false",
-            ],
-            blocked,
-          );
+          const started = yield* collie(world, [
+            "run",
+            "start",
+            "agent",
+            "--input",
+            "target=worktree",
+            "--input",
+            `cwd=${world.project}`,
+            "--input",
+            "skip=false",
+          ]);
           expect(started.envelope.ok).toBe(true);
+          yield* blockedAtItsPrompt(core);
           const shown = yield* until(
             () => printed.pipe(Effect.map(({ board }) => board)),
             (board) => pipe_(board, Str.includes("Waiting for you in")),
@@ -137,10 +132,9 @@ test(
               const app = appState(
                 {
                   herdr: new Herdr(env),
-                  ...scopeFor(env, env.cwd),
+                  ...scopeFor(env.cwd),
                   stateDir: env.stateDir,
                   userDir: env.userDir,
-                  paneId: env.paneId,
                   pluginRoot: env.pluginRoot,
                   tasksOf: yield* followBoard(env, () => {
                     notifications++;

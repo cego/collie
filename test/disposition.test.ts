@@ -44,7 +44,7 @@ const cli = Effect.fn("test.cli")(function* (args: string[], env: Record<string,
   const proc = Bun.spawn([...command, ...args], {
     cwd: root,
     env: {
-      HERDR_PLUGIN_ROOT: root,
+      COLLIE_ROOT: root,
       PWD: root,
       ...suite,
       ...env,
@@ -74,8 +74,8 @@ test(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const env = {
-          HERDR_PLUGIN_ROOT: world.install,
-          HERDR_PLUGIN_STATE_DIR: world.state,
+          COLLIE_ROOT: world.install,
+          COLLIE_STATE_DIR: world.state,
           COLLIE_USER_DIR: world.config,
           HOME: world.home,
         };
@@ -156,8 +156,8 @@ test(
     hosted("hw-disposition-self-", ({ world }) =>
       Effect.gen(function* () {
         const env = {
-          HERDR_PLUGIN_ROOT: world.install,
-          HERDR_PLUGIN_STATE_DIR: world.state,
+          COLLIE_ROOT: world.install,
+          COLLIE_STATE_DIR: world.state,
           COLLIE_USER_DIR: world.config,
           HOME: world.home,
         };

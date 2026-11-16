@@ -98,7 +98,7 @@ impl Core {
         };
         let mut child = command
             .env("COLLIE_RUNE_USER_DATA", data)
-            // Keep the old state root and herdr's environment; callers may override for tests.
+            // Inherits the launcher's environment; callers may override for tests.
             .envs(env.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

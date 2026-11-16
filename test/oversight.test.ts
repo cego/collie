@@ -11,7 +11,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Clock, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
-import { Rig, FakeHerdr } from "./support/recorder";
+import { Rig } from "./support/recorder";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { Agents, agentsLayer } from "../src/agents";
@@ -42,8 +42,8 @@ import {
 } from "../src/drift";
 import { read as readProposals } from "../src/proposals";
 import { recordsAt } from "../src/records";
-import { budgetPath, herdOf } from "../src/steering";
-import { serverSocket } from "../src/herdr";
+import { herdOf } from "../src/steering";
+import { Herdr } from "../src/herdr";
 import { readVerifications } from "../src/verify";
 import { VerifySpecSchema } from "../src/verify-spec";
 import {
@@ -102,7 +102,7 @@ const session = <A, E>(
       agentsLayer({
         dir,
         env: rig.pluginEnv(),
-        herdr: new FakeHerdr(rig.pluginEnv()),
+        herdr: new Herdr(rig.pluginEnv()),
         harness: "claude",
         model: "opus",
         permissions: "auto",
@@ -497,35 +497,6 @@ const boundaryThenCard = Effect.gen(function* () {
   yield* oversight.drift("r1", "boundary before build", "boundary");
   yield* oversight.card("r1", { kind: "slice", step: "build", claims: [] });
 });
-
-test("a host whose environment names no socket finds its Herd in herdr's status, and judges", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* repository();
-      yield* edited();
-      yield* intended("r1", [SMALL]);
-      yield* evaluatorOnPath;
-      const socketPath = `${rig.root}/herd.sock`;
-      const env = rig.pluginEnv({ HERDR_SOCKET_PATH: "", FAKE_HERDR_STATUS_SOCKET: socketPath });
-      expect(env.socketPath).toBeNull();
-
-      yield* session(boundaryThenCard, {
-        socketPath: env.socketPath,
-        pluginRoot: rig.root,
-        locate: serverSocket(new FakeHerdr(env)),
-      });
-
-      expect(yield* readDrift(runDir(dir, "r1"))).toEqual([]);
-      const log = yield* (yield* FileSystem.FileSystem).readFileString(
-        `${runDir(dir, "r1")}/log.txt`,
-      );
-      expect(log).toContain("judged 1 semantic constraint(s)");
-      const key = yield* herdOf(socketPath);
-      expect(yield* (yield* FileSystem.FileSystem).exists(yield* budgetPath(dir, key!))).toBe(true);
-      const [card] = yield* cardsOf("r1");
-      expect(card!.aligned).toBe("true");
-    }),
-  ));
 
 test("a judgement skipped at every boundary for one reason is one line on the card", () =>
   runEffect(

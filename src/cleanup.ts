@@ -31,13 +31,7 @@ import {
   type CleanupKept,
   CleanupReport,
 } from "./board-model";
-import {
-  herdrFailureReason,
-  type AgentInfo,
-  type AgentStatus,
-  type Herdr,
-  type PaneInfo,
-} from "./herdr";
+import { herdrFailureReason, type AgentInfo, type AgentStatus, type Herdr } from "./herdr";
 import { isOpen, readTask, removeTask, withTaskLock, writeTask, type TaskRecord } from "./task";
 import { appendJournal, readJournal } from "./journal";
 import { mrIdIn, shell } from "./mr";
@@ -66,17 +60,8 @@ import {
   readControl,
   type CompactionPorts,
 } from "./compaction";
-import {
-  AgentSession,
-  launchDir,
-  launchesOf,
-  readLaunches,
-  recordSession,
-  sameSession,
-  stemOf,
-  Launched,
-} from "./launches";
-import { endAgent, endedLine, runLog } from "./agent-end";
+import { launchDir, launchesOf, readLaunches, stemOf, Launched } from "./launches";
+import { endAgent, runLog } from "./agent-end";
 import { COMPACTION_PORTS, transcriptOf } from "./compactors";
 import { uploadsDir } from "./uploads";
 import { finishedOnRecord } from "./cards";
@@ -397,7 +382,6 @@ export const settlingOf = (opts: {
   /** The board's Tasks, which say what each still owes; null where it could not be built. */
   views: ReadonlyArray<TaskView> | null;
   tasks: ReadonlyArray<TaskRecord>;
-  sessions: ReadonlyArray<Herdr>;
   protect: ReadonlyArray<string>;
 }) =>
   Effect.gen(function* () {
@@ -407,7 +391,7 @@ export const settlingOf = (opts: {
       opts.views === null
         ? []
         : yield* (yield* Effect.promise(() => import("./board"))).buildBoard({
-            env: readEnv({ HERDR_PLUGIN_STATE_DIR: opts.stateDir }),
+            env: readEnv({ COLLIE_STATE_DIR: opts.stateDir }),
             runs: opts.runs,
             tasks: opts.tasks,
             includeHistory: true,
@@ -463,25 +447,13 @@ export const settlingOf = (opts: {
     }
     for (const path of owedAt) landedAt.delete(path);
     for (const key of owedOn) landedOn.delete(key);
-    const open = new Set<string>();
-    let unknown = false;
-    for (const session of opts.sessions) {
-      const listed = yield* session.workspaceList().pipe(Effect.option);
-      if (Option.isNone(listed)) unknown = true;
-      else for (const one of listed.value) open.add(one.workspaceId);
-    }
-    const workspaceHolds = new Map<string, string>();
-    for (const path of owedAt) workspaceHolds.set(path, "its Task still owes work");
+    const taskHolds = new Map<string, string>();
+    for (const path of owedAt) taskHolds.set(path, "its Task still owes work");
     for (const run of opts.runs) {
       if (run.worktree?.created_by_collie !== true || run.task === null) continue;
       const task = Option.getOrUndefined(Arr.findFirst(opts.tasks, (one) => one.id === run.task));
-      if (task === undefined) continue;
-      if (task.workspace === null) {
-        if (isOpen(task, open)) workspaceHolds.set(run.worktree.path, "its Task is still open");
-      } else if (unknown)
-        workspaceHolds.set(run.worktree.path, "could not ask herdr which workspaces are open");
-      else if (open.has(task.workspace))
-        workspaceHolds.set(run.worktree.path, "its Task's workspace is still open");
+      if (task !== undefined && isOpen(task))
+        taskHolds.set(run.worktree.path, "its Task is still open");
     }
     return {
       owedAt,
@@ -489,7 +461,7 @@ export const settlingOf = (opts: {
       landedAt,
       landedOn,
       openOn,
-      workspaceHolds,
+      taskHolds,
       protect: new Set(opts.protect),
     } satisfies Settling;
   });
@@ -497,12 +469,11 @@ export const settlingOf = (opts: {
 /** Worktrees Collie made, judged by the settled rule in `worktree.ts`. */
 export const worktreesSweeper = (opts: {
   herdr: Herdr;
-  sessions: ReadonlyArray<Herdr>;
   stateDir: string;
   runs: ReadonlyArray<RunFacts>;
   registered: ReadonlyArray<AgentEntry>;
   cwd: string;
-  /** Read when it judges, so a workspace closed earlier in the same sweep counts as closed. */
+  /** Read when it judges, so a Task closed earlier in the same sweep counts as closed. */
   settling?: Effect.Effect<Settling, never, PlatformServices | Records>;
 }): Sweeper => {
   const kind = "worktree";
@@ -729,9 +700,9 @@ const removeIf = (
   });
 
 /**
- * Compaction controls of agents no herdr session lists: their server stopped and their
+ * Compaction controls of agents core does not list: their server stopped and their
  * state removed, or kept with why while it is not Quiet, to be stopped again next sweep.
- * Nothing is judged where herdr will not list its agents.
+ * Nothing is judged where core will not list its agents.
  */
 export const compactionSweeper = (
   stateDir: string,
@@ -762,14 +733,14 @@ export const compactionSweeper = (
       const retry: CleanupItem[] = [];
       for (const name of names) {
         const target = `${root}/${name}`;
-        if (live === null) keep.push({ kind, target, reason: "could not ask herdr what is live" });
+        if (live === null) keep.push({ kind, target, reason: "could not ask core what is live" });
         else if (!live.has(name)) {
           const record = yield* readControl(stateDir, name).pipe(Effect.orElseSucceed(() => null));
           const kept = record === null ? null : yield* keptFor(record);
           if (kept !== null) {
             keep.push({ kind, target, reason: kept });
             retry.push({ kind, target, bytes: 0, reason: kept });
-          } else remove.push({ kind, target, bytes: 0, reason: "herdr no longer lists its agent" });
+          } else remove.push({ kind, target, bytes: 0, reason: "core no longer lists its agent" });
         }
       }
       const sizes = yield* sizesOf(Arr.map(remove, (item) => item.target));
@@ -783,8 +754,8 @@ export const compactionSweeper = (
       Effect.gen(function* () {
         const live = yield* listed;
         const name = pipe(item.target, Str.slice(root.length + 1));
-        if (live === null) return { kept: "could not ask herdr what is live" };
-        if (live.has(name)) return { kept: "herdr lists its agent again" };
+        if (live === null) return { kept: "could not ask core what is live" };
+        if (live.has(name)) return { kept: "core lists its agent again" };
         const bytes = yield* sizeOf(item.target);
         const kept = yield* putDownControl(
           { stateDir, ports, stopMs, log: () => Effect.void },
@@ -859,94 +830,17 @@ const SECTION_SAID: Record<Section, string> = {
   finished: "Finished",
 };
 
-/** What proves a pane is one of some Runs' agents, from their launch records. */
-export interface LaunchedPanes {
-  readonly terminals: ReadonlySet<string>;
-  readonly sessions: ReadonlyArray<AgentSession>;
-}
-
-/** The terminal and the harness session of every agent `runs` launched. */
-export const launchedPanes = (runs: ReadonlyArray<string>) =>
-  Effect.map(launchesOf(runs), (byRun): LaunchedPanes => {
-    const launched = [...byRun.values()].flat();
-    return {
-      terminals: new Set(Arr.flatMap(launched, (one) => Arr.ensure(one.terminalId ?? []))),
-      sessions: Arr.flatMap(launched, (one) => Arr.ensure(one.agentSession ?? [])),
-    };
-  });
-
-/** A pane is a launched agent by its terminal, or by the harness session herdr restored in it. */
-export const isLaunched = (
-  launched: LaunchedPanes,
-  pane: Pick<PaneInfo, "terminalId" | "agentSession">,
-) =>
-  (pane.terminalId !== null && launched.terminals.has(pane.terminalId)) ||
-  Arr.some(launched.sessions, (session) => sameSession(session, pane.agentSession));
-
-export const paneNotOwned = (
-  task: Pick<TaskRecord, "workspace" | "root_pane">,
-  panes: ReadonlyArray<PaneInfo>,
-  launched: LaunchedPanes,
-) =>
-  Option.getOrUndefined(
-    Arr.findFirst(
-      panes,
-      (pane) =>
-        pane.workspaceId === task.workspace &&
-        pane.paneId !== task.root_pane &&
-        !isLaunched(launched, pane),
-    ),
-  );
-
 /**
- * Task workspaces, each closed an hour after its Task became Finished, unless herdr has it in
- * focus or it holds a pane Collie did not open (ADR-0045 D3). `seen` is when each Task was
- * first seen Finished, kept by the host across sweeps; a host restart only delays a close.
+ * Tasks, each closed an hour after it became Finished: its record is all there is to close
+ * (ADR-0045 D3). `seen` is when each Task was first seen Finished, kept by the host across
+ * sweeps; a host restart only delays a close.
  */
-export const taskWorkspacesSweeper = (opts: {
-  stateDir: string;
-  sessions: ReadonlyArray<{ readonly herd: string | null; readonly herdr: Herdr }>;
+export const tasksSweeper = (opts: {
   tasks: ReadonlyArray<TaskRecord>;
   views: ReadonlyArray<TaskView>;
-  runs: ReadonlyArray<RunFacts>;
   seen: Map<string, number>;
-  ports?: CompactionPorts;
-  stopMs?: number;
 }): Sweeper => {
   const kind = "workspace";
-  /** A Task with no workspace is its own item. */
-  const targetOf = (task: TaskRecord) => task.workspace ?? task.id;
-  /** Each agent a Task's Runs launched, as its latest launch recorded it. */
-  const launchesOf = (task: TaskRecord) =>
-    Effect.forEach(
-      Arr.filter(opts.runs, (run) => run.task === task.id),
-      (run) => readLaunches(run.id),
-    ).pipe(
-      Effect.map((all) => [...new Map(Arr.map(all.flat(), (one) => [one.agent, one])).values()]),
-    );
-  const agentsOf = (task: TaskRecord) =>
-    Effect.map(launchesOf(task), (all) => Arr.map(all, (one) => one.agent));
-  /** Why one of them may still be writing after an earlier stop, or null. */
-  const stillWriting = (task: TaskRecord) =>
-    Effect.gen(function* () {
-      for (const agent of yield* agentsOf(task)) {
-        const record = yield* readControl(opts.stateDir, agent).pipe(
-          Effect.orElseSucceed(() => null),
-        );
-        const kept = record === null ? null : yield* keptFor(record);
-        if (kept !== null) return kept;
-      }
-      return null;
-    });
-  const named = new Map<string, number>();
-  for (const { workspace } of opts.tasks)
-    if (workspace !== null) named.set(workspace, (named.get(workspace) ?? 0) + 1);
-
-  /** The session a Task's workspace is in: its recorded Herd's, else this host's own. */
-  const sessionOf = (task: TaskRecord) =>
-    task.herd === undefined || task.herd === null
-      ? opts.sessions[0]
-      : Option.getOrUndefined(Arr.findFirst(opts.sessions, (one) => one.herd === task.herd));
 
   /** How long a Task has been Finished, or why it is not. */
   const finishedFor = (
@@ -966,180 +860,46 @@ export const taskWorkspacesSweeper = (opts: {
       return { ms: now - since, said: `Finished ${Math.floor((now - since) / 60_000)} min ago` };
     });
 
-  /** Whether a Task with no workspace closes now: its record is all there is to close. */
-  const closing = (
-    task: TaskRecord,
-  ): Effect.Effect<{ keep: string } | { remove: string; writing: null } | null> =>
+  /** Whether a Task closes now. */
+  const closing = (task: TaskRecord): Effect.Effect<{ keep: string } | { remove: string } | null> =>
     Effect.gen(function* () {
       if (task.closed_at !== undefined) return null;
       const finished = yield* finishedFor(task);
       if (finished === null || "keep" in finished) return finished;
       if (finished.ms < FINISHED_GRACE_MS) return { keep: finished.said };
-      return { remove: finished.said, writing: null };
+      return { remove: finished.said };
     });
-
-  /** What becomes of one Task's workspace now, or null where it has none open to close. */
-  const verdict = (
-    task: TaskRecord,
-  ): Effect.Effect<
-    | { keep: string }
-    | {
-        remove: string;
-        launched: LaunchedPanes;
-        panes: ReadonlyArray<PaneInfo>;
-        writing: string | null;
-      }
-    | null,
-    never,
-    PlatformServices | Records
-  > =>
-    Effect.gen(function* () {
-      const session = sessionOf(task);
-      if (session === undefined || task.workspace === null) return null;
-      const finished = yield* finishedFor(task);
-      if (finished === null || "keep" in finished) return finished;
-      const workspaces = yield* session.herdr.workspaceList().pipe(Effect.option);
-      const panes = yield* session.herdr.paneList().pipe(Effect.option);
-      if (Option.isNone(workspaces) || Option.isNone(panes))
-        return { keep: "could not ask herdr what is open" };
-      const open = Option.getOrUndefined(
-        Arr.findFirst(workspaces.value, (one) => one.workspaceId === task.workspace),
-      );
-      if (open === undefined) return null;
-      if ((named.get(task.workspace) ?? 0) > 1) return { keep: "another Task names it too" };
-      if ("collie_home" in open.tokens) return { keep: "it is the Home" };
-      if (finished.ms < FINISHED_GRACE_MS) return { keep: finished.said };
-      if (open.focused) return { keep: "in focus" };
-      const launched = yield* launchedPanes(
-        Arr.map(
-          Arr.filter(opts.runs, (run) => run.task === task.id),
-          (run) => run.id,
-        ),
-      );
-      const foreign = paneNotOwned(task, panes.value, launched);
-      if (foreign !== undefined)
-        return { keep: `holds a pane Collie did not open (${foreign.paneId})` };
-      // Kept in a listing, while a sweep stops it again.
-      const writing = yield* stillWriting(task);
-      return { remove: finished.said, launched, panes: panes.value, writing };
-    });
-
-  const taskAt = (target: string) =>
-    Option.getOrUndefined(Arr.findFirst(opts.tasks, (task) => targetOf(task) === target));
 
   return {
     kind,
     judge: Effect.gen(function* () {
       const remove: CleanupItem[] = [];
       const keep: CleanupKept[] = [];
-      const retry: CleanupItem[] = [];
       for (const task of opts.tasks) {
-        const judged = task.workspace === null ? yield* closing(task) : yield* verdict(task);
+        const judged = yield* closing(task);
         if (judged === null) continue;
-        const target = targetOf(task);
-        if ("keep" in judged) keep.push({ kind, target, reason: judged.keep });
-        else if (judged.writing !== null) {
-          keep.push({ kind, target, reason: judged.writing });
-          retry.push({ kind, target, bytes: 0, reason: judged.writing });
-        } else remove.push({ kind, target, bytes: 0, reason: judged.remove });
+        if ("keep" in judged) keep.push({ kind, target: task.id, reason: judged.keep });
+        else remove.push({ kind, target: task.id, bytes: 0, reason: judged.remove });
       }
-      return { remove, keep, retry };
+      return { remove, keep };
     }),
     remove: (item) =>
       Effect.gen(function* () {
-        const task = taskAt(item.target);
-        if (task?.workspace === null) {
-          const judged = yield* closing(task);
-          if (judged === null) return { kept: "already closed" };
-          if ("keep" in judged) return { kept: judged.keep };
-          const closed = yield* withTaskLock(
-            task.id,
-            Effect.gen(function* () {
-              const now = yield* readTask(task.id);
-              if (now !== null) yield* writeTask({ ...now, closed_at: yield* nowIso });
-            }),
-          ).pipe(Effect.result);
-          return closed._tag === "Failure" ? { kept: "its Task is busy" } : { freed: 0 };
-        }
-        const session = task === undefined ? undefined : sessionOf(task);
-        if (task === undefined || task.workspace === null || session === undefined)
-          return { kept: "no Task names it any more" };
-        const judged = yield* verdict(task);
+        const task = Option.getOrUndefined(
+          Arr.findFirst(opts.tasks, (one) => one.id === item.target),
+        );
+        if (task === undefined) return { kept: "no Task names it any more" };
+        const judged = yield* closing(task);
         if (judged === null) return { kept: "already closed" };
         if ("keep" in judged) return { kept: judged.keep };
-        // Every agent ends where its work runs before any pane of theirs closes.
-        const launches = yield* launchesOf(task);
-        const listed = yield* session.herdr.agentList().pipe(Effect.option);
-        if (Option.isNone(listed)) return { kept: "could not ask herdr what is open" };
-        const inside = new Set(
-          Arr.map(
-            Arr.filter(judged.panes, (pane) => pane.workspaceId === task.workspace),
-            (pane) => pane.paneId,
-          ),
-        );
-        const stranger = Option.getOrUndefined(
-          Arr.findFirst(
-            listed.value,
-            (agent) =>
-              inside.has(agent.paneId) &&
-              !Arr.some(
-                launches,
-                (one) =>
-                  (one.agent === agent.name && one.terminalId === agent.terminalId) ||
-                  sameSession(one.agentSession, agent.agentSession),
-              ),
-          ),
-        );
-        if (stranger !== undefined)
-          return { kept: `${stranger.name} runs in it, and is not this Task's` };
-        const why = "its Task's workspace closed";
-        const ended: Array<(typeof launches)[number]> = [];
-        for (const launched of launches) {
-          const end = yield* endAgent(
-            {
-              herdr: session.herdr,
-              ports: opts.ports ?? COMPACTION_PORTS,
-              stateDir: opts.stateDir,
-              cwd: task.cwd,
-              stopMs: opts.stopMs,
-              log: runLog(opts.stateDir, launched.runId),
-            },
-            launched,
-            why,
-            "caller",
-            listed.value,
-          ).pipe(Effect.orElseSucceed(() => null));
-          if (end === null) return { kept: "could not ask herdr what is open" };
-          if (end._tag === "Unprovable" || end._tag === "Replaced") return { kept: end.reason };
-          if (end._tag === "NotQuiet")
-            return {
-              kept:
-                end.locked === undefined
-                  ? `its Codex turn has not stopped: ${end.reason}`
-                  : "its agents' controls are in use",
-            };
-          if (end.ended) ended.push(launched);
-        }
-        const closed = yield* session.herdr.workspaceClose(task.workspace).pipe(Effect.result);
-        if (closed._tag === "Failure") return { kept: herdrFailureReason(closed.failure) };
-        // Its agents left in another workspace go with it, matched as a stop does.
-        const gone = new Set<string>();
-        for (const other of opts.sessions) {
-          const panes = yield* other.herdr.paneList().pipe(Effect.orElseSucceed(() => []));
-          for (const pane of panes)
-            if (pane.terminalId !== null && isLaunched(judged.launched, pane)) {
-              const shut = yield* other.herdr.paneClose(pane.paneId).pipe(Effect.result);
-              if (shut._tag === "Success") gone.add(pane.terminalId);
-            }
-        }
-        for (const { agent, runId, terminalId } of ended) {
-          const at = Option.getOrUndefined(
-            Arr.findFirst(listed.value, (one) => one.name === agent),
-          );
-          if (at === undefined || inside.has(at.paneId) || gone.has(terminalId ?? ""))
-            yield* runLog(opts.stateDir, runId)(endedLine(agent, why)).pipe(Effect.ignore);
-        }
-        return { freed: 0 };
+        const closed = yield* withTaskLock(
+          task.id,
+          Effect.gen(function* () {
+            const now = yield* readTask(task.id);
+            if (now !== null) yield* writeTask({ ...now, closed_at: yield* nowIso });
+          }),
+        ).pipe(Effect.result);
+        return closed._tag === "Failure" ? { kept: "its Task is busy" } : { freed: 0 };
       }),
   };
 };
@@ -1172,20 +932,10 @@ export const forgetGone = (idle: IdleSince, terminals: ReadonlySet<string>) => {
 
 const FINISHED: ReadonlySet<RunFacts["state"]> = new Set(["succeeded", "failed", "stopped"]);
 
-/** An agent herdr has now: a named one, or a pane it restored without the name. */
-interface Live {
-  readonly name: string | null;
-  readonly paneId: string;
-  readonly workspaceId: string | null;
-  readonly terminalId: string | null;
-  readonly agentSession: AgentSession | null;
-  readonly status: string | null;
-}
-
 const QUEUED: ReadonlySet<string> = new Set(["reserved", "deferred"]);
 
 /**
- * A finished Run's agents, each closed once herdr has reported it idle for `idleCloseMs`
+ * A finished Run's agents, each closed once core has reported it idle for `idleCloseMs`
  * since the Run finished, unless something still needs it
  * (ADR-draft-a-finished-runs-idle-agent-is-closed).
  */
@@ -1199,20 +949,21 @@ export const idleAgentsSweeper = (opts: {
   idleCloseMs: number;
   ports?: CompactionPorts;
   stopMs?: number;
+  /**
+   * Whether core proves no person is viewing or typing into the agent's terminal. Core
+   * cannot say yet, so by default every agent is kept.
+   */
+  unattended?: (at: AgentInfo) => Effect.Effect<boolean>;
 }): Sweeper => {
   const kind = "idle-agent";
+  const unattended = opts.unattended ?? (() => Effect.succeed(false));
   const targetOf = (agent: string, runId: string) => `${agent} of ${runId}`;
   const minutes = (ms: number) => Math.floor(ms / 60_000);
 
-  /**
-   * Each agent a finished Run launched that herdr has on its recorded terminal, or in a
-   * pane resuming its recorded harness session, and nothing a live Run names.
-   */
+  /** Each agent a finished Run launched that core has on its recorded terminal. */
   const candidates = Effect.gen(function* () {
-    const sessions: AgentSession[] = [];
-    const live = { terminals: new Set<string>(), sessions };
+    const live = new Set<string>();
     const named: Array<{ run: RunFacts; launched: Launched }> = [];
-    const going: Launched[] = [];
     const now = yield* Clock.currentTimeMillis;
     for (const run of opts.runs)
       if (!FINISHED.has(run.state)) opts.finishedSince.delete(run.id);
@@ -1220,93 +971,42 @@ export const idleAgentsSweeper = (opts: {
     for (const run of opts.runs)
       for (const launched of yield* readLaunches(run.id)) {
         if (FINISHED.has(run.state)) named.push({ run, launched });
-        else {
-          going.push(launched);
-          if (launched.terminalId !== undefined) live.terminals.add(launched.terminalId);
-          if (launched.agentSession !== undefined) sessions.push(launched.agentSession);
-        }
+        else if (launched.terminalId !== undefined) live.add(launched.terminalId);
       }
     const listings = yield* Effect.forEach(opts.sessions, (session) =>
-      Effect.all({
-        agents: Effect.option(session.herdr.agentList()),
-        panes: Effect.option(session.herdr.paneList()),
-      }).pipe(
-        Effect.map(({ agents, panes }) => {
-          const named = Option.getOrElse(agents, (): ReadonlyArray<AgentInfo> => []);
-          // A pane no named agent stands for: a restored one that lost its name.
-          const unnamed = Arr.filter(
-            Option.getOrElse(panes, (): ReadonlyArray<PaneInfo> => []),
-            (pane) => !Arr.some(named, (agent) => agent.paneId === pane.paneId),
-          );
-          return {
-            session,
-            live: [
-              ...Arr.map(named, (agent): Live => ({ ...agent, status: agent.status })),
-              ...Arr.map(unnamed, (pane): Live => ({
-                ...pane,
-                name: null,
-                status: pane.agentStatus ?? null,
-              })),
-            ],
-            listed: Option.isSome(agents) && Option.isSome(panes),
-          };
-        }),
+      Effect.option(session.herdr.agentList()).pipe(
+        Effect.map((agents) => ({
+          session,
+          live: Option.getOrElse(agents, (): ReadonlyArray<AgentInfo> => []),
+          listed: Option.isSome(agents),
+        })),
       ),
     );
     const seen = Arr.flatMap(listings, (one) => one.live);
-    /** The agent herdr has on `launched`'s own terminal, whose session is recorded. */
-    const onOwnTerminal = (launched: Launched, here: ReadonlyArray<Live>) =>
-      Effect.gen(function* () {
-        const own = Option.getOrUndefined(
-          Arr.findFirst(
-            here,
-            (one) =>
-              one.name === launched.agent &&
-              one.terminalId !== null &&
-              one.terminalId === launched.terminalId,
-          ),
-        );
-        if (own !== undefined && !sameSession(own.agentSession, launched.agentSession))
-          yield* recordSessionSeen(launched, own.agentSession);
-        return own;
-      });
-    for (const launched of going) {
-      const own = yield* onOwnTerminal(launched, seen);
-      if (own?.agentSession != null) sessions.push(own.agentSession);
-    }
     noteIdle(opts.idle, seen, now);
     if (Arr.every(listings, (one) => one.listed))
-      forgetGone(opts.idle, new Set(Arr.flatMap(seen, (one) => Arr.ensure(one.terminalId ?? []))));
+      forgetGone(opts.idle, new Set(Arr.map(seen, (one) => one.terminalId)));
 
     const found: Array<{
       run: RunFacts;
       launched: Launched;
-      at: Live & { terminalId: string };
+      at: AgentInfo;
       session: (typeof opts.sessions)[number];
     }> = [];
     for (const { run, launched } of named)
       for (const { session, live: here } of listings) {
-        const own = yield* onOwnTerminal(launched, here);
-        const at =
-          own ??
-          Option.getOrUndefined(
-            Arr.findFirst(here, (one) => sameSession(one.agentSession, launched.agentSession)),
-          );
-        if (at === undefined || at.terminalId === null) continue;
-        const terminalId = at.terminalId;
-        if (isLaunched(live, { terminalId, agentSession: launched.agentSession ?? null })) continue;
-        if (Arr.some(found, (one) => one.at.terminalId === terminalId)) continue;
-        found.push({ run, launched, at: { ...at, terminalId }, session });
+        const at = Option.getOrUndefined(
+          Arr.findFirst(
+            here,
+            (one) => one.name === launched.agent && one.terminalId === launched.terminalId,
+          ),
+        );
+        if (at === undefined || live.has(at.terminalId)) continue;
+        if (Arr.some(found, (one) => one.at.terminalId === at.terminalId)) continue;
+        found.push({ run, launched, at, session });
       }
     return found;
   });
-
-  /**
-   * Records the session herdr reports for an agent still on its launch's terminal, so a
-   * pane herdr restores later is proved by it.
-   */
-  const recordSessionSeen = (launched: Launched, agentSession: AgentSession | null) =>
-    agentSession === null ? Effect.void : recordSession(launched, agentSession);
 
   /**
    * The newest of the Run's final card, its stop, and when this host first saw it finished:
@@ -1363,16 +1063,6 @@ export const idleAgentsSweeper = (opts: {
         )
       )
         return { keep: "a question it asked is open" };
-      const workspaces = yield* one.session.herdr.workspaceList().pipe(Effect.option);
-      const panes = yield* one.session.herdr.paneList().pipe(Effect.option);
-      if (Option.isNone(workspaces) || Option.isNone(panes))
-        return { keep: "could not ask herdr what is open" };
-      const workspace =
-        one.at.workspaceId ??
-        Option.getOrUndefined(Arr.findFirst(panes.value, (pane) => pane.paneId === one.at.paneId))
-          ?.workspaceId;
-      if (Arr.some(workspaces.value, (at) => at.workspaceId === workspace && at.focused))
-        return { keep: "in focus" };
       if (
         Arr.some(
           ledger,
@@ -1380,13 +1070,14 @@ export const idleAgentsSweeper = (opts: {
         )
       )
         return { keep: "typed into since it went idle" };
+      if (!(yield* unattended(one.at)))
+        return { keep: "core cannot say whether a person is viewing or typing into it" };
       return { idleFor };
     });
 
   return {
     kind,
     judge: Effect.gen(function* () {
-      // Run even when closing is off: it records the sessions herdr reports.
       const found = yield* candidates;
       if (opts.idleCloseMs <= 0) return { remove: [], keep: [] };
       const remove: CleanupItem[] = [];
@@ -1429,7 +1120,6 @@ export const idleAgentsSweeper = (opts: {
             herdr: one.session.herdr,
             ports: opts.ports ?? COMPACTION_PORTS,
             stateDir: opts.stateDir,
-            cwd: one.run.cwd,
             stopMs: opts.stopMs,
             log: runLog(opts.stateDir, one.run.id),
           },
@@ -1438,7 +1128,7 @@ export const idleAgentsSweeper = (opts: {
           "close",
         ).pipe(
           Effect.catchTags({
-            AgentsUnlisted: () => Effect.succeed({ kept: "could not ask herdr what is open" }),
+            AgentsUnlisted: () => Effect.succeed({ kept: "could not ask core what is open" }),
             PaneOpen: (failure) => Effect.succeed({ kept: herdrFailureReason(failure.cause) }),
           }),
         );
@@ -1713,18 +1403,15 @@ export const retentionSweeper = (opts: {
       return newest === 0 ? yield* Clock.currentTimeMillis : newest;
     });
 
-  /** Every session's workspaces and panes, or null where one could not be asked. */
+  /** Every live agent's terminal, or null where core could not be asked. */
   const openNow = Effect.gen(function* () {
-    const workspaces: string[] = [];
-    const panes: PaneInfo[] = [];
+    const terminals = new Set<string>();
     for (const session of opts.sessions) {
-      const listed = yield* session.workspaceList().pipe(Effect.option);
-      const listedPanes = yield* session.paneList().pipe(Effect.option);
-      if (Option.isNone(listed) || Option.isNone(listedPanes)) return null;
-      workspaces.push(...Arr.map(listed.value, (one) => one.workspaceId));
-      panes.push(...listedPanes.value);
+      const listed = yield* session.agentList().pipe(Effect.option);
+      if (Option.isNone(listed)) return null;
+      for (const one of listed.value) terminals.add(one.terminalId);
     }
-    return { workspaces, panes };
+    return terminals;
   });
 
   const verdict = (
@@ -1743,13 +1430,11 @@ export const retentionSweeper = (opts: {
       const section = sectionOf(view);
       if (section !== "finished") return { keep: SECTION_SAID[section] };
       const seen = yield* open;
-      if (seen === null) return { keep: "could not ask herdr what is open" };
-      if (task.workspace !== null && seen.workspaces.includes(task.workspace))
-        return { keep: "its workspace is open" };
+      if (seen === null) return { keep: "could not ask core what is open" };
       const mine = Arr.filter(facts.runs, (run) => run.task === task.id);
       const ids = Arr.map(mine, (run) => run.id);
-      const launched = yield* launchedPanes(ids);
-      if (Arr.some(seen.panes, (pane) => isLaunched(launched, pane)))
+      const launched = [...(yield* launchesOf(ids)).values()].flat();
+      if (Arr.some(launched, (one) => one.terminalId !== undefined && seen.has(one.terminalId)))
         return { keep: "an agent of it is alive" };
       for (const run of mine)
         if (

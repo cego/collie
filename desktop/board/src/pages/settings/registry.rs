@@ -261,17 +261,6 @@ pub fn settings() -> Vec<Setting> {
             )
             .unit("tokens"),
         ),
-        choice(
-            "terminal_backend",
-            &["herdr", "core"],
-            "herdr",
-            words(
-                "Agents",
-                "Terminal backend",
-                "Where this Machine starts its next agents: herdr, or herdr-core. Agents already running finish where they started. This Machine only.",
-            )
-            .machine(),
-        ),
         of(
             "quiet_ms",
             Number,

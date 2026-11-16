@@ -1,10 +1,10 @@
-// A Task: the work a human is doing, and the herdr workspace it is done in. A Run is
+// A Task: the work a human is doing. A Run is
 // one execution of a Workflow; a Task is what several of them — a plan, the
 // implementation it chained into, the review of that — are all about.
 //
 // Membership is recorded here and carried on each Run's record, never inferred from a
-// label: two Tasks may share a project prefix, a workspace may be renamed by hand, and
-// neither says anything about whose work a Run is.
+// label: two Tasks may share a project prefix, and that says nothing about whose work a
+// Run is.
 
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -14,32 +14,26 @@ import { Context, Effect, Layer, Schema, Semaphore, flow, Result } from "effect"
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
-import type { KeptHere } from "./board-model";
 import { TaskWrites } from "./store-writes";
 import { nowIso } from "./time";
 
 export const TaskSchema = Schema.Struct({
   id: Schema.String,
-  /** The herdr workspace this Task's Runs and agents live in; null on core, which has none. */
+  /** The Herdr 1 workspace an older Task was kept in; null for every Task core has. */
   workspace: Schema.NullOr(Schema.String),
   /**
-   * What the workspace was called when it was made. A display label and nothing more:
-   * it is never read to decide which Task something belongs to, and a human who renames
-   * the workspace has not moved the Task.
+   * What the Task is called. A display label and nothing more: it is never read to
+   * decide which Task something belongs to.
    */
   label: Schema.String,
   /** Where the Task's first Run was rooted, which is what a picker shows beside it. */
   cwd: Schema.String,
-  /**
-   * The shell pane the workspace was made with, until the Task's first agent takes it
-   * over rather than leaving it an empty first tab. Null once taken, or where Collie did
-   * not make the workspace.
-   */
+  /** The shell pane an older Task's Herdr 1 workspace was made with; core never sets it. */
   root_pane: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  /** The Herd its workspace is in. Absent from a record older than the field. */
+  /** The Herd it is in. Absent from a record older than the field. */
   herd: Schema.optionalKey(Schema.NullOr(Schema.String)),
   created_at: Schema.String,
-  /** When Cleanup closed a Task with no workspace, as it closes a workspace. */
+  /** When Cleanup closed it. */
   closed_at: Schema.optionalKey(Schema.String),
 });
 export type TaskRecord = Schema.Schema.Type<typeof TaskSchema>;
@@ -48,15 +42,10 @@ const TaskJson = Schema.fromJsonString(TaskSchema);
 const encodeTask = flow(Schema.encodeResult(TaskJson), Result.getOrThrow);
 export const decodeTaskOption = Schema.decodeOption(TaskJson);
 
-/**
- * Which Task a start belongs to: a new one with a workspace of its own, one the caller
- * named, or the workspace the caller is in — its Task, or a new one kept there rather than
- * given a workspace of its own.
- */
+/** Which Task a start belongs to: a new one, or one the caller named. */
 export type TaskChoice =
   | { readonly mode: "new" }
-  | { readonly mode: "continue"; readonly task: TaskRecord }
-  | { readonly mode: "here" };
+  | { readonly mode: "continue"; readonly task: TaskRecord };
 
 /** The Tasks, in the host's database (ADR-draft-collies-own-records-live-in-the-hosts-database). */
 export interface TasksApi {
@@ -137,9 +126,8 @@ export const readTask = (id: string) => Tasks.use((tasks) => tasks.get(id));
 
 export const listTasks = Tasks.use((tasks) => tasks.list);
 
-/** Whether a Task is open: its workspace is, or, having none, Cleanup has not closed it. */
-export const isOpen = (task: TaskRecord, workspaces: ReadonlySet<string>) =>
-  task.workspace === null ? task.closed_at === undefined : workspaces.has(task.workspace);
+/** Whether a Task is open: Cleanup has not closed it. */
+export const isOpen = (task: TaskRecord) => task.closed_at === undefined;
 
 /** The Task whose workspace this is, which is what "the current Task" means. */
 export const taskOfWorkspace = (workspaceId: string | null) =>
@@ -173,21 +161,3 @@ export const newTask = Effect.fn("task.newTask")(function* (opts: {
     created_at: yield* nowIso,
   } satisfies TaskRecord;
 });
-
-/** The Task kept in that workspace, or a new one kept there. */
-export const taskKeptIn = (here: KeptHere) =>
-  withTaskLock(
-    `workspace:${here.workspace}`,
-    Effect.gen(function* () {
-      const kept = yield* taskOfWorkspace(here.workspace);
-      if (kept !== null) return kept;
-      return yield* writeTask(
-        yield* newTask({
-          workspace: here.workspace,
-          label: here.label,
-          cwd: here.cwd,
-          herd: here.herd,
-        }),
-      );
-    }),
-  );

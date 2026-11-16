@@ -19,7 +19,7 @@ const spansOfFlow = (over: Partial<RunFacts>) =>
       const dir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({
         prefix: "collie-record-flow-",
       });
-      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" });
+      const env = readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" });
       const run = yield* madeRun(dir, { id: "r-build", task: "task-1", ...over });
       const names = new Set<string>();
       const tracer = Tracer.make({
@@ -52,7 +52,7 @@ test("a lane reads stop attribution only while its Run is stopped", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-flow-audit-" });
-      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" });
+      const env = readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" });
       const run = yield* madeRun(dir);
       yield* fs.writeFileString(
         `${run.dir}/${STEPS_FILE}`,
@@ -102,7 +102,7 @@ test("two Tasks share one reading of the installation and step duration index", 
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-flow-inputs-" });
-      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" });
+      const env = readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" });
       const runs = [
         yield* madeRun(dir, { id: "first", task: "task-a", state: "running" }),
         yield* madeRun(dir, { id: "second", task: "task-b", state: "running" }),

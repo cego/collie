@@ -254,13 +254,10 @@ test(
   120_000,
 );
 
-test("a terminal is a human's only in a pane herdr does not report as an agent's", () => {
-  expect(cliOrigin({ terminal: false, pane: null, agentPanes: [] })).toBe("cli");
-  expect(cliOrigin({ terminal: true, pane: null, agentPanes: [] })).toBe("cli-tty");
-  expect(cliOrigin({ terminal: true, pane: "1-2", agentPanes: ["1-3"] })).toBe("cli-tty");
-  expect(cliOrigin({ terminal: true, pane: "1-2", agentPanes: ["1-2"] })).toBe("cli");
-  // herdr could not say, so nobody can show it is not an agent's.
-  expect(cliOrigin({ terminal: true, pane: "1-2", agentPanes: null })).toBe("cli");
+test("a terminal is a human's only where Collie did not launch it as an agent", () => {
+  expect(cliOrigin({ terminal: false, agent: false })).toBe("cli");
+  expect(cliOrigin({ terminal: true, agent: false })).toBe("cli-tty");
+  expect(cliOrigin({ terminal: true, agent: true })).toBe("cli");
 });
 
 test(
@@ -389,13 +386,13 @@ test(
           const fs = yield* FileSystem.FileSystem;
           const outputs = `${world.home}/outputs.json`;
           yield* fs.writeFileString(outputs, '[{"verdict":"done"}]');
-          const attended = yield* collie(
-            world,
-            ["run", "start", "attended", "--input", "work=seen"],
-            {
-              FAKE_HERDR_OUTPUTS: outputs,
-            },
-          );
+          const attended = yield* collie(world, [
+            "run",
+            "start",
+            "attended",
+            "--input",
+            "work=seen",
+          ]);
           const byAgent = (yield* Schema.decodeUnknownEffect(
             Schema.Struct({ runId: Schema.String }),
           )(attended.envelope.data).pipe(Effect.orDie)).runId;

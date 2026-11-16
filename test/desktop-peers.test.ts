@@ -12,7 +12,6 @@ import {
   linkRoute,
   openDoors,
   remoteRoute,
-  removeFromHerdr,
   type ShellRoute,
 } from "../desktop/src/bun/machine";
 import { giveHelle, giveToken } from "../desktop/src/bun/credentials";
@@ -134,40 +133,6 @@ test(
 );
 
 test(
-  "removing a Machine in Desktop forgets the live pairing without another action",
-  () =>
-    runEffect(
-      twoMachines(
-        "collie-desktop-remove-",
-        (first, second) =>
-          Effect.gen(function* () {
-            yield* first.lists([second]);
-            yield* first.cli(["--machine", "second", "board"]);
-            const fs = yield* FileSystem.FileSystem;
-            const remove = `${first.world.home}/herdr-remove`;
-            yield* fs.writeFileString(
-              remove,
-              `#!/bin/sh\nprintf '[]' > '${first.herdrLog}.machines.json'\n`,
-              { mode: 0o755 },
-            );
-            yield* removeFromHerdr(remove, "second", [
-              "env",
-              ...Arr.map(Rec.toEntries(first.env), ([key, value]) => `${key}=${value}`),
-              ...(yield* collieCommand),
-            ]);
-            expect(yield* peersOf(first.world.state)).toEqual([]);
-            yield* until(
-              () => peersOf(second.world.state),
-              (peers) => peers.length === 0,
-            );
-          }),
-        [],
-      ),
-    ),
-  180_000,
-);
-
-test(
   "Desktop pairs on the shared SSH connection its route opened after an older Collie gains invite, once",
   () =>
     runEffect(
@@ -260,10 +225,13 @@ test(
                 { verdict: "done" },
               ]).pipe(Effect.orDie),
             );
-            const started = yield* second.cli(
-              ["run", "start", "attended", "--input", "work=Desktop link"],
-              { FAKE_HERDR_OUTPUTS: outputs },
-            );
+            const started = yield* second.cli([
+              "run",
+              "start",
+              "attended",
+              "--input",
+              "work=Desktop link",
+            ]);
             const { runId } = yield* Schema.decodeUnknownEffect(
               Schema.Struct({ runId: Schema.String }),
             )(started.envelope.data).pipe(Effect.orDie);

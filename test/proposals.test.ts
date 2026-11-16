@@ -34,7 +34,7 @@ import type { Action } from "../src/actions";
 import { carryOutProposal } from "../src/operations";
 import type { PluginEnv } from "../src/env";
 import { readIntent, seedIntent, writeIntent } from "../src/intent";
-import { herdOf } from "../src/steering";
+import { machineHerd } from "../src/steering";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { hosted, hostedRun, settledRun } from "./support/hosted";
@@ -403,11 +403,9 @@ const inHerd = <A, E>(
 ) =>
   hosted("hw-proposals-", ({ world, env }) =>
     Effect.gen(function* () {
-      // A socket path is what names a Herd, so the proposal has to be filed under the one
+      // Core's socket is what names a Herd, so the proposal has to be filed under the one
       // this env resolves to rather than under a key the test picked.
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.writeFileString(env.socketPath!, "");
-      const herdFile = yield* herdOf(env.socketPath);
+      const herdFile = yield* machineHerd(env);
       return yield* body({ world, env, herdFile }).pipe(Effect.provide(recordsAt(world.state)));
     }),
   );

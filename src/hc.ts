@@ -29,6 +29,7 @@ export const HcTerminal = Schema.Struct({
   finished_ms: opt(NullOr(Schema.Finite)),
   status: opt(NullOr(HcStatus)),
   turn: opt(Schema.Finite),
+  foreground: opt(NullOr(Schema.Struct({ cwd: Schema.String }))),
 });
 export type HcTerminal = typeof HcTerminal.Type;
 

@@ -490,7 +490,10 @@ test(
 
 const Shown = Schema.Record(Schema.String, Schema.Json);
 const CallLine = Schema.fromJsonString(
-  Schema.Struct({ cmd: Schema.String, argv: Schema.Array(Schema.String) }),
+  Schema.Struct({
+    cmd: Schema.String,
+    params: Schema.optionalKey(Schema.Struct({ text: Schema.optionalKey(Schema.String) })),
+  }),
 );
 
 const read = (file: string) =>
@@ -500,22 +503,17 @@ const read = (file: string) =>
 const answering = (side: Side) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const outputs = `${side.world.home}/outputs.json`;
     yield* fs.writeFileString(
-      outputs,
+      `${side.world.home}/outputs.json`,
       encode(Array.from({ length: 4 }, () => ({ verdict: "done" }))),
     );
-    return { FAKE_HERDR_OUTPUTS: outputs };
   }).pipe(Effect.orDie);
 
 /** A Run of `attended` on `side`, waiting on its question with its agent alive. */
 const waitingRun = (side: Side) =>
   Effect.gen(function* () {
-    const extra = yield* answering(side);
-    const started = yield* side.cli(
-      ["run", "start", "attended", "--input", "work=the link"],
-      extra,
-    );
+    yield* answering(side);
+    const started = yield* side.cli(["run", "start", "attended", "--input", "work=the link"]);
     expect(started.envelope.error).toBeUndefined();
     const { runId } = yield* Schema.decodeUnknownEffect(Started)(started.envelope.data).pipe(
       Effect.orDie,
@@ -525,11 +523,11 @@ const waitingRun = (side: Side) =>
       () => client.run({ runId }).pipe(Effect.orDie),
       (view) => Arr.some(view?.waiting ?? [], (one) => one.answer === null),
     );
-    return { runId, extra };
+    return { runId };
   });
 
 const prompts = (side: Side) =>
-  read(side.herdrLog).pipe(
+  read(side.coreLog).pipe(
     Effect.map((text) =>
       Arr.map(
         Arr.filter(
@@ -537,9 +535,9 @@ const prompts = (side: Side) =>
             Arr.filter(Str.split(text, "\n"), (line) => line !== ""),
             (line) => flow(Schema.decodeResult(CallLine), Result.getOrThrow)(line),
           ),
-          (call) => call.cmd === "agent prompt",
+          (call) => call.cmd === "terminal.send",
         ),
-        (call) => Arr.join(call.argv, " "),
+        (call) => call.params?.text ?? "",
       ),
     ),
   );
@@ -980,7 +978,7 @@ test(
         "collie-reverse-",
         (first, second) =>
           Effect.gen(function* () {
-            const { runId, extra } = yield* waitingRun(first);
+            const { runId } = yield* waitingRun(first);
             yield* first.lists([second]);
             expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
             const [laptop] = yield* peersOf(second.world.state);
@@ -1021,10 +1019,15 @@ test(
               Option.getOrUndefined(Arr.findFirst(audit, (line) => line.operation === "deliver"))
                 ?.actor.from?.machine?.name,
             ).toBe("second");
-            const started = yield* second.cli(
-              ["--machine", laptop!.name, "run", "start", "attended", "--input", "work=reverse"],
-              extra,
-            );
+            const started = yield* second.cli([
+              "--machine",
+              laptop!.name,
+              "run",
+              "start",
+              "attended",
+              "--input",
+              "work=reverse",
+            ]);
             expect(started.envelope.error).toBeUndefined();
 
             const [dialled] = yield* peersOf(first.world.state);
@@ -1098,7 +1101,7 @@ test(
         "collie-peers-across-",
         (first, second) =>
           Effect.gen(function* () {
-            const { runId, extra } = yield* waitingRun(second);
+            const { runId } = yield* waitingRun(second);
             yield* first.lists([second]);
 
             const answered = yield* first.cli(["run", "answer", runId, "yes", "--decision", "go"]);
@@ -1120,10 +1123,15 @@ test(
               );
             expect(ids(board.envelope)).toEqual(ids(home.envelope));
 
-            const started = yield* first.cli(
-              ["--machine", "second", "run", "start", "attended", "--input", "work=from afar"],
-              extra,
-            );
+            const started = yield* first.cli([
+              "--machine",
+              "second",
+              "run",
+              "start",
+              "attended",
+              "--input",
+              "work=from afar",
+            ]);
             expect(started.envelope.error).toBeUndefined();
             expect(
               Rec.keys(

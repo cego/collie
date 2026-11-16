@@ -52,11 +52,10 @@ const entry: AgentEntry = {
 const alive: AgentInfo = {
   name: "impl-1",
   paneId: "1-9",
-  workspaceId: "w1",
   status: "idle",
-  title: null,
   terminalId: "term-1",
-  agentSession: null,
+  cwd: "/project",
+  foregroundCwd: null,
 };
 
 function fake() {

@@ -1,3 +1,4 @@
+import { Herdr } from "../src/herdr";
 import * as Order from "effect/Order";
 import { recordsAt } from "./support/records";
 import * as Option from "effect/Option";
@@ -23,7 +24,7 @@ import {
 import { foundationLayer, runDir } from "../src/engine";
 import { Agents, agentsLayer } from "../src/agents";
 import { recordLaunch } from "../src/launches";
-import { FakeHerdr, Rig } from "./support/recorder";
+import { Rig } from "./support/recorder";
 import type { RunFacts } from "../src/runs";
 import { sinceReview } from "../src/mr";
 import { appendVerification } from "../src/verify";
@@ -98,7 +99,7 @@ const MR = mrUrl("65");
 const seeded = Effect.fn("merges.seeded")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-merges-" });
-  const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
+  const env = readEnv({ COLLIE_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
   const run = yield* madeRun(stateDir, {
     state: "succeeded",
     mr: MR,
@@ -117,7 +118,7 @@ test("a closed forge refresh settles superseded work after its checkout disappea
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const { stateDir } = yield* seeded();
-      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: stateDir });
+      const env = readEnv({ COLLIE_STATE_DIR: stateDir, COLLIE_CWD: stateDir });
       const run = yield* madeRun(stateDir, {
         state: "succeeded",
         mr: MR,
@@ -393,7 +394,7 @@ test("each merge request of a Task is asked about, and the branches it is stacke
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-merges-" });
-      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
+      const env = readEnv({ COLLIE_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
       const runs = [
         yield* madeRun(stateDir, {
           id: "r-build",
@@ -643,7 +644,7 @@ const supersededChain = Effect.fn("merges.supersededChain")(function* () {
     prefix: "collie-merges-",
   });
   const env = readEnv({
-    HERDR_PLUGIN_STATE_DIR: stateDir,
+    COLLIE_STATE_DIR: stateDir,
     COLLIE_CWD: "/project",
   });
   const first = yield* madeRun(stateDir, {
@@ -907,7 +908,7 @@ const onBranch = Effect.fn("merges.onBranch")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-discover-" });
-  const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
+  const env = readEnv({ COLLIE_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
   const made = yield* madeRun(stateDir, {
     id: "r-implement",
     task: "task-1",
@@ -972,7 +973,7 @@ test("a merge request opened by hand from one Change run's branch is found when 
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-discover-" });
-      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
+      const env = readEnv({ COLLIE_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
       const of = (over: Partial<RunFacts>) =>
         madeRun(stateDir, { task: "task-1", created: "2026-10-15T08:00:00Z", ...over });
       const runs = [
@@ -1104,7 +1105,7 @@ const merging = Effect.fn("merges.merging")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-settle-" });
-  const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
+  const env = readEnv({ COLLIE_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
   const of = (over: Partial<RunFacts>) =>
     madeRun(stateDir, { task: "task-1", created: "2026-10-15T08:00:00Z", ...over });
   let runs = [
@@ -1196,11 +1197,7 @@ test("a merge's stop ends the Run's agents through the one end, and its log name
   runWithForge(
     Effect.gen(function* () {
       const rig = yield* Rig.make();
-      yield* rig.startSocket();
-      yield* rig.addWorkspace("w1", "Project | Task", "/project");
-      yield* rig.addPane("p0", "t0", "/project", null, "w1");
-      yield* rig.addPane("p1", "t1", "/project", "claude", "w1");
-      yield* rig.addAgent("impl", "p1");
+      const impl = yield* rig.addAgent("impl", rig.root, { run: "r-plan.implement" });
       const services = yield* Effect.context<PlatformServices>();
       const halting = (stateDir: string, run: string, reason: string) =>
         Agents.pipe(
@@ -1209,7 +1206,7 @@ test("a merge's stop ends the Run's agents through the one end, and its log name
             agentsLayer({
               dir: stateDir,
               env: rig.pluginEnv(),
-              herdr: new FakeHerdr(rig.pluginEnv()),
+              herdr: new Herdr(rig.pluginEnv()),
               harness: "claude",
               model: "opus",
               permissions: "auto",
@@ -1241,11 +1238,11 @@ test("a merge's stop ends the Run's agents through the one end, and its log name
         role: "implementer",
         workflow: "implement",
         harness: "claude",
-        terminalId: "term-impl",
+        terminalId: impl,
       }).pipe(Effect.provide(recordsAt(stateDir)));
       yield* round(TEN);
-      const closed = Arr.filter(yield* rig.calls(), (call) => call.cmd === "pane close");
-      expect(Arr.map(closed, (call) => call.argv?.at(2))).toEqual(["p1"]);
+      const closed = Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.kill");
+      expect(Arr.map(closed, (call) => call.params?.terminal)).toEqual([impl]);
       expect(yield* fs.readFileString(`${agents}/agents.log`)).toContain(
         "impl ended: mk/collie!65 merged",
       );
@@ -1369,7 +1366,7 @@ test("a merge an earlier host recorded under its hostless label is not recorded 
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-restart-" });
-      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
+      const env = readEnv({ COLLIE_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
       const of = (over: Partial<RunFacts>) =>
         madeRun(stateDir, { task: "task-1", created: "2026-10-15T08:00:00Z", ...over });
       const runs = [
@@ -1730,7 +1727,7 @@ const cardAfter = Effect.fn("merges.cardAfter")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-forge-" });
-  const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
+  const env = readEnv({ COLLIE_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
   const made = yield* madeRun(stateDir, {
     state: "succeeded",
     mr,
@@ -1891,7 +1888,7 @@ test("green forge checks never stand in for Collie's own, which count only at th
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-forge-older-" });
-      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
+      const env = readEnv({ COLLIE_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
       const made = yield* madeRun(stateDir, { state: "succeeded", mr: PR });
       // Red, but on a tree the pull request has moved past.
       yield* appendVerification(made.evidence, collieRan(made.id, "0ld0ld0", "fail"));
@@ -1967,7 +1964,7 @@ test("a merged pull request is followed to stage, then production, then asked no
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-pr-deploys-" });
-      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
+      const env = readEnv({ COLLIE_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
       const made = yield* madeRun(stateDir, {
         state: "succeeded",
         mr: PR,
@@ -2032,7 +2029,7 @@ const fannedOut = Effect.fn("merges.fannedOut")(function* (
     prefix: "collie-fan-merges-",
   });
   const env = readEnv({
-    HERDR_PLUGIN_STATE_DIR: stateDir,
+    COLLIE_STATE_DIR: stateDir,
     COLLIE_CWD: "/project",
   });
   const of = (over: Partial<RunFacts>) =>
@@ -2153,7 +2150,7 @@ const apiMerged = Effect.fn("merges.apiMerged")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-own-work-" });
-  const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
+  const env = readEnv({ COLLIE_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
   const of = (over: Partial<RunFacts>) =>
     madeRun(stateDir, { task: "task-1", created: "2026-10-15T08:00:00Z", ...over });
   const child = (repo: string, mr: string) =>
@@ -2418,7 +2415,7 @@ test("a Task's one merge request is watched as the Run that owns it, so its merg
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-owner-" });
-      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
+      const env = readEnv({ COLLIE_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
       const of = (over: Partial<RunFacts>) =>
         madeRun(stateDir, { task: "task-1", workflow: "implement", ...over });
       const runs = [

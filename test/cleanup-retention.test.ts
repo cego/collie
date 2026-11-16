@@ -200,12 +200,11 @@ test("a Task with a checkout of its own still on disk is kept", () =>
     }),
   ));
 
-test("a Task one of whose agents herdr still has is kept", () =>
+test("a Task one of whose agents core still has is kept", () =>
   runEffect(
     Effect.gen(function* () {
       const ended = yield* arranged(400);
-      yield* rig.addPane("p7", "t7", "/project", "impl", "wOther");
-      yield* recordLaunch(launchOn("r1", "t-p7"));
+      yield* recordLaunch(launchOn("r1", yield* rig.addAgent("impl")));
       const judged = yield* sweeper([ended]).judge;
       expect(judged.keep).toEqual([
         { kind: "task", target: "task-1", reason: "an agent of it is alive" },
@@ -213,14 +212,10 @@ test("a Task one of whose agents herdr still has is kept", () =>
     }),
   ));
 
-test("a Task whose workspace is still open, or that is not Finished, is kept", () =>
+test("a Task that is not Finished is kept", () =>
   runEffect(
     Effect.gen(function* () {
       const ended = yield* arranged(400);
-      yield* rig.addWorkspace("wGone", "Project | Picker", "/project");
-      expect((yield* sweeper([ended]).judge).keep).toEqual([
-        { kind: "task", target: "task-1", reason: "its workspace is open" },
-      ]);
       const waiting = { ...ended, landed: false };
       expect((yield* sweeper([waiting]).judge).keep).toEqual([
         { kind: "task", target: "task-1", reason: "waiting on you" },
@@ -228,17 +223,16 @@ test("a Task whose workspace is still open, or that is not Finished, is kept", (
     }),
   ));
 
-test("one judgement of three Finished Tasks asks herdr what is open once, and keeps each for its own reason", () =>
+test("one judgement of two Finished Tasks asks core what is live once, and keeps each for its own reason", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const now = yield* Clock.currentTimeMillis;
-      const ids = ["open", "alive", "recent"];
-      const records = Arr.map(ids, (id) => ({ ...record, id: `task-${id}`, workspace: `w-${id}` }));
-      yield* rig.addWorkspace("w-open", "Project | Open", "/project");
-      yield* rig.addPane("p7", "t7", "/project", "impl", "wOther");
+      const ids = ["alive", "recent"];
+      const records = Arr.map(ids, (id) => ({ ...record, id: `task-${id}` }));
+      const live = yield* rig.addAgent("impl");
       yield* fs.makeDirectory(`${rig.stateDir}/agents/r-alive`, { recursive: true });
-      yield* recordLaunch(launchOn("r-alive", "t-p7"));
+      yield* recordLaunch(launchOn("r-alive", live));
       const asked = (yield* rig.cmds()).length;
 
       const judged = yield* retentionSweeper({
@@ -257,12 +251,10 @@ test("one judgement of three Finished Tasks asks herdr what is open once, and ke
       }).judge;
 
       expect(judged.keep).toEqual([
-        { kind: "task", target: "task-open", reason: "its workspace is open" },
         { kind: "task", target: "task-alive", reason: "an agent of it is alive" },
         { kind: "task", target: "task-recent", reason: "its last Run ended 10 day(s) ago" },
       ]);
-      const herdrAsked = (yield* rig.cmds()).slice(asked);
-      expect(Arr.filter(herdrAsked, (cmd) => cmd === "workspace list")).toHaveLength(1);
-      expect(Arr.filter(herdrAsked, (cmd) => cmd === "pane list")).toHaveLength(1);
+      const coreAsked = (yield* rig.cmds()).slice(asked);
+      expect(Arr.filter(coreAsked, (cmd) => cmd === "terminal.list")).toHaveLength(1);
     }),
   ));

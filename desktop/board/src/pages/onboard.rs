@@ -1,11 +1,10 @@
-//! An onboarding as it stands: its steps, what each leaves the human to do, and herdr's own
-//! questions. A port of `OnboardSteps.vue`, `OnboardDialog.vue` and `useOnboarding`.
+//! An onboarding as it stands: its steps, and what each leaves the human to do. A port of `OnboardSteps.vue`, `OnboardDialog.vue` and `useOnboarding`.
 
 use super::common::{Tone, code, muted, toned};
 use super::flock::settled;
 use crate::App;
 use collie_desktop_protocol::generated::{
-    AnswerHerdrPayload, OnboardPayload, PasteCodePayload, RunStep, SkipItem, Status,
+    OnboardPayload, PasteCodePayload, RunStep, SkipItem, Status,
 };
 use rune::{El, TextEdit, col, el, row, text};
 use rune_kit::{Button, ButtonVariant, ControlSize, Dialog, Kit, Spinner, TextInput};
@@ -120,8 +119,8 @@ pub fn steps(
                     .key("login"),
             );
         }
-        // Saving in herdr is not onboarding: a Machine herdr would not save is added again.
-        if ended && left && one.step != "herdr" {
+        // Saving in core is not onboarding: a Machine core would not save is added again.
+        if ended && left && one.step != "core" {
             let profile = profile.to_string();
             any = true;
             actions = actions.child(
@@ -248,37 +247,13 @@ impl App {
         );
     }
 
-    /// The human's answer to the question herdr asks in `job`.
-    pub fn answer_herdr(&mut self, job: &str, yes: bool) {
-        let Some(core) = &self.core else { return };
-        core.request(
-            "answerHerdr",
-            AnswerHerdrPayload {
-                job: job.into(),
-                yes,
-            },
-            |_: &mut App, _: Result<serde_json::Value, _>| {},
-        );
-    }
-
-    /// Closes the onboarding dialog; a question nobody can see any more takes herdr's default.
+    /// Closes the onboarding dialog.
     pub fn close_onboarding(&mut self) {
-        let Some(job) = self.pages.machines.job.take() else {
-            return;
-        };
-        let asked = self
-            .pages
-            .machines
-            .flock
-            .job(&job)
-            .and_then(|one| one.run.asked.clone());
-        if let Some(asked) = asked {
-            self.answer_herdr(&job, asked.yes);
-        }
+        self.pages.machines.job = None;
     }
 }
 
-/// The onboarding the human started, while its dialog is open, and herdr's question over it.
+/// The onboarding the human started, while its dialog is open.
 pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
     let Some(job) = app.pages.machines.job.as_deref() else {
         return;
@@ -335,57 +310,5 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                 .child(body),
         )
         .on_close(|app: &mut App| app.close_onboarding())
-        .build(collie_desktop_theme::dialog(k.dark), layer);
-    let Some(asked) = current.and_then(|one| one.run.asked.as_ref()) else {
-        return;
-    };
-    let (no, yes, default) = (job.to_string(), job.to_string(), asked.yes);
-    let closed = job.to_string();
-    let answer = |label: &str, chosen: bool| {
-        Button::new(label).variant(if chosen == default {
-            ButtonVariant::Contrast
-        } else {
-            ButtonVariant::Outline
-        })
-    };
-    Dialog::new("herdr-question", "herdr asks")
-        .width(440.0)
-        .fit()
-        .open(true)
-        .child(
-            col()
-                .key("herdr-question")
-                .w_full()
-                .px(16.0)
-                .pb(16.0)
-                .gap(14.0)
-                .child(
-                    text(asked.text.clone())
-                        .key("question")
-                        .font(k.ty.body)
-                        .color(k.c.text_base)
-                        .wrap()
-                        .w_full(),
-                )
-                .child(
-                    row()
-                        .w_full()
-                        .gap(8.0)
-                        .child(el().grow(1.0))
-                        .child(
-                            answer("No", false)
-                                .on_press(move |app: &mut App| app.answer_herdr(&no, false))
-                                .build(k)
-                                .key("herdr-no"),
-                        )
-                        .child(
-                            answer("Yes", true)
-                                .on_press(move |app: &mut App| app.answer_herdr(&yes, true))
-                                .build(k)
-                                .key("herdr-yes"),
-                        ),
-                ),
-        )
-        .on_close(move |app: &mut App| app.answer_herdr(&closed, default))
         .build(collie_desktop_theme::dialog(k.dark), layer);
 }

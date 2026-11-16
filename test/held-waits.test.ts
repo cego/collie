@@ -1,5 +1,5 @@
 // A Hold or Stop an operator sets through `collie run` ends the wait a Run is in. The host
-// here is a real one over a fake herdr.
+// here is a real one over a fake core.
 
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
@@ -18,7 +18,7 @@ const hostWith = Effect.fn("test.hostWith")(function* (
   world: World,
   set: Readonly<Record<string, string>>,
 ) {
-  const all = { ...set, HERDR_PLUGIN_STATE_DIR: world.state, COLLIE_USER_DIR: world.config };
+  const all = { ...set, COLLIE_STATE_DIR: world.state, COLLIE_USER_DIR: world.config };
   yield* Effect.acquireRelease(
     Effect.sync(() => {
       const before = Rec.fromEntries(Arr.map(Rec.keys(all), (key) => [key, Bun.env[key]] as const));
@@ -46,22 +46,16 @@ test(
   () =>
     proves(
       "collie-stop-boundary-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          const status = `${world.home}/agent-status`;
           const outputs = `${world.home}/outputs.json`;
           // The first operation's Output, and the agent still working after it.
           yield* fs.writeFileString(
             outputs,
-            encode([
-              { writes: [{ path: status, text: "working\n" }], output: { verdict: "clean" } },
-            ]),
+            encode([{ writes: [], output: { verdict: "clean" }, then: "working" }]),
           );
-          const client = yield* hostWith(world, {
-            FAKE_HERDR_OUTPUTS: outputs,
-            FAKE_HERDR_AGENT_STATUS_FILE: status,
-          });
+          const client = yield* hostWith(world, {});
           const { runId } = yield* client
             .start({
               project: world.project,
@@ -80,7 +74,7 @@ test(
           expect(stopped.envelope.ok).toBe(true);
           yield* suspended(client, runId);
           const said = yield* fs.readFileString(log);
-          const calls = yield* fs.readFileString(Bun.env.FAKE_HERDR_LOG ?? "");
+          const calls = yield* fs.readFileString(core.logPath);
           yield* stopHost(world.state);
           expect(said).not.toContain("its turn ended");
           expect(calls).not.toContain("second-step");

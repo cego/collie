@@ -449,7 +449,7 @@ test(
         const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-parity-" });
         // An empty PATH: the installation checks would otherwise run the operator's own
         // claude, glab and gh, each allowed twenty seconds to answer, on every call below.
-        const env = readEnv({ ...process.env, HERDR_PLUGIN_STATE_DIR: stateDir, PATH: "" });
+        const env = readEnv({ ...process.env, COLLIE_STATE_DIR: stateDir, PATH: "" });
         // The registry is filled by the module that owns each operation, so it has to be
         // asked rather than listed: a kind with no executor is refused at confirmation as
         // `executor_missing`, and a route to one would be control reduced to advice.
@@ -697,7 +697,7 @@ test("collie_run and collie_herd say what a running check's card says", () =>
       );
       const now = epochMs("2026-09-14T10:12:00Z");
       const [card] = yield* buildBoard({
-        env: readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" }),
+        env: readEnv({ COLLIE_STATE_DIR: stateDir, COLLIE_CWD: "/project" }),
         runs: [run],
         tasks: [],
         registered: [],
@@ -798,7 +798,7 @@ test("the card, collie_run and collie_herd say the same of a Run waiting for mem
         `MemTotal: ${62 * 1048576} kB\nMemAvailable: ${2 * 1048576} kB\n`,
       );
       const env = readEnv({
-        HERDR_PLUGIN_STATE_DIR: stateDir,
+        COLLIE_STATE_DIR: stateDir,
         COLLIE_CWD: "/project",
         COLLIE_PROC: proc,
       });
@@ -873,7 +873,7 @@ test("collie_run answers from related Runs without polling unrelated live execut
         launches: () => Effect.succeed([]),
       };
       const answer = yield* answerRead(
-        readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project", PATH: "" }),
+        readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project", PATH: "" }),
         "collie_run",
         { run: run.id },
         reads,

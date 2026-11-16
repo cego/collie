@@ -13,6 +13,7 @@ import { Config, Effect, FileSystem, Option, Schema, type Scope, flow, Result } 
 import { act, bridgeCommand, openBridge } from "../desktop/src/bun/machine";
 import { questionnaire, questionnaireView, stepped } from "../desktop/src/shared/questionnaire";
 import { readEnv, type PluginEnv } from "../src/env";
+import { Herdr } from "../src/herdr";
 import { resetExecutors } from "../src/executors";
 import { connect } from "../src/host";
 import { carryOutAsked } from "../src/run-actions";
@@ -27,11 +28,9 @@ import { epochMs, nowIso } from "../src/time";
 import { suiteEnv } from "./support/effect";
 import { root, stopHost, until } from "./support/host";
 import { collie, proves, type World } from "./support/world";
+import type { FakeHc } from "./support/fake-hc";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
-const FakeState = Schema.fromJsonString(
-  Schema.Struct({ agents: Schema.Array(Schema.Struct({ name: Schema.String })) }),
-);
 const Board = Schema.Struct({ tasks: Schema.Array(TaskView) });
 
 /** An agent question's options, to standard so it is posted as asked. */
@@ -51,7 +50,7 @@ interface AtQuestion {
   readonly agent: string;
   /** Every agent the Run started before its question, oldest first. */
   readonly agents: ReadonlyArray<string>;
-  /** Sets what the fake herdr says of `agent`, or of every agent: `working` or `idle`. */
+  /** Sets what the fake core says of `agent`, or of every agent: `working` or `idle`. */
   readonly status: (status: string, agent?: string) => Effect.Effect<void>;
 }
 
@@ -65,6 +64,9 @@ interface Setup {
 const startHost = (world: World) => connect(world.state).pipe(Effect.orDie);
 
 /** A `stepped` Run started under `request`, once it waits on `go`, and its idle agents. */
+/** This world's core, which `atQuestion` starts. */
+let core: FakeHc;
+
 const waitingRun = Effect.fn("test.waitingRun")(function* (
   world: World,
   client: Client,
@@ -86,14 +88,13 @@ const waitingRun = Effect.fn("test.waitingRun")(function* (
       view?.status.status === "suspended" &&
       Arr.some(view.waiting, (one) => one.name === "go" && one.answer === null),
   );
-  const fs = yield* FileSystem.FileSystem;
-  const herdr = yield* Schema.decodeEffect(FakeState)(
-    yield* fs.readFileString(`${Bun.env.FAKE_HERDR_LOG}.state.json`).pipe(Effect.orDie),
-  ).pipe(Effect.orDie);
+  const live = yield* new Herdr(readEnv({ HC_SOCKET: core.socketPath }))
+    .agentList()
+    .pipe(Effect.orDie);
   const agents = Arr.map(setup.mode === "pair" ? ["build", "check"] : ["build"], (step) =>
     agentName(runId, step, null, 1),
   );
-  expect(Arr.map(herdr.agents, (one) => one.name)).toEqual(expect.arrayContaining(agents));
+  expect(Arr.map(live, (one) => one.name)).toEqual(expect.arrayContaining(agents));
   return { runId, agent: agents.at(-1)!, agents };
 });
 
@@ -105,24 +106,17 @@ const atQuestion = <A, E>(
 ) =>
   proves(
     prefix,
-    (world) =>
+    (world, worldCore) =>
       Effect.gen(function* () {
+        core = worldCore;
         resetExecutors();
         const fs = yield* FileSystem.FileSystem;
         const outputs = `${world.home}/outputs.json`;
-        const file = `${world.home}/agent-status`;
         yield* fs
           .writeFileString(outputs, encode(Arr.makeBy(6, () => ({ verdict: "done" }))))
           .pipe(Effect.orDie);
-        const status = (said: string, agent?: string) =>
-          fs
-            .writeFileString(agent === undefined ? file : `${file}.${agent}`, said)
-            .pipe(Effect.orDie);
-        yield* status("idle");
         const set = {
-          FAKE_HERDR_OUTPUTS: outputs,
-          FAKE_HERDR_AGENT_STATUS_FILE: file,
-          HERDR_PLUGIN_STATE_DIR: world.state,
+          COLLIE_STATE_DIR: world.state,
           COLLIE_USER_DIR: world.config,
           COLLIE_HOST_SUPERSEDE_GRACE_MS: String(GRACE_MS),
         };
@@ -142,14 +136,21 @@ const atQuestion = <A, E>(
             }),
         );
         const env = readEnv({
-          HERDR_PLUGIN_ROOT: world.install,
-          HERDR_PLUGIN_STATE_DIR: world.state,
+          HC_SOCKET: core.socketPath,
+          COLLIE_ROOT: world.install,
+          COLLIE_STATE_DIR: world.state,
           COLLIE_USER_DIR: world.config,
           HOME: world.home,
           COLLIE_CWD: world.project,
         });
         const client = yield* startHost(world);
         const { runId, agent, agents } = yield* waitingRun(world, client, "start", setup);
+        // A message starts no turn of the fake's own: each test reports what its agent does.
+        core.reportedOnly(agents);
+        const status = (said: string, one?: string) =>
+          Effect.forEach(one === undefined ? agents : [one], (name) => core.report(name, said), {
+            discard: true,
+          });
         return yield* body({ world, env, client, runId, agent, agents, status }).pipe(
           Effect.provide(recordsAt(world.state)),
           Effect.ensuring(stopHost(world.state)),
@@ -260,13 +261,12 @@ test(
         const bridge = yield* openBridge(bridgeCommand(command, "mk-pc"), {
           PATH: "/usr/bin:/bin",
           HOME: at.world.home,
-          HERDR_PLUGIN_ROOT: at.world.install,
-          HERDR_PLUGIN_STATE_DIR: at.world.state,
+          COLLIE_ROOT: at.world.install,
+          COLLIE_STATE_DIR: at.world.state,
           COLLIE_USER_DIR: at.world.config,
           COLLIE_HOST: encode(command),
           ...(yield* suiteEnv),
-          HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH ?? "",
-          FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG ?? "",
+          HC_SOCKET: Bun.env.HC_SOCKET ?? "",
         });
         const reached = { machine: { profile: "local", name: "mk-pc" }, desktop: bridge };
         // herdr's live agents are read again at the board's next tick.
@@ -327,13 +327,12 @@ test(
         const bridge = yield* openBridge(bridgeCommand(command, "mk-pc"), {
           PATH: "/usr/bin:/bin",
           HOME: at.world.home,
-          HERDR_PLUGIN_ROOT: at.world.install,
-          HERDR_PLUGIN_STATE_DIR: at.world.state,
+          COLLIE_ROOT: at.world.install,
+          COLLIE_STATE_DIR: at.world.state,
           COLLIE_USER_DIR: at.world.config,
           COLLIE_HOST: encode(command),
           ...(yield* suiteEnv),
-          HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH ?? "",
-          FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG ?? "",
+          HC_SOCKET: Bun.env.HC_SOCKET ?? "",
         });
         const reached = { machine: { profile: "local", name: "mk-pc" }, desktop: bridge };
         yield* act(reached, "desktop-message-1", {

@@ -10,16 +10,15 @@ import { StoreWrites } from "./store-writes";
 import { epochMs } from "./time";
 
 /**
- * herdr's own identity for one live agent process, recorded when it is registered and
+ * Core's own identity for one live agent process, recorded when it is registered and
  * checked again every time something is about to be sent to it. An agent name is reused
- * by whatever takes that role next and a pane outlives what ran in it, so neither names
- * a process; `terminal_id` does. Nothing here is invented — no pid, no start time.
+ * by whatever takes that role next, so it names no process; the terminal's address does.
  */
 export interface Incarnation {
   terminalId: string;
-  /** The harness session herdr says it is driving, where it knows one. */
+  /** Only Herdr 1 knew one; kept so its records still decode. */
   agentSession: { kind: string; value: string } | null;
-  /** Absent for an agent in herdr. */
+  /** Absent on a Herdr 1 incarnation, which is gone. */
   backend?: "core";
 }
 
@@ -90,11 +89,8 @@ export function scopeKey(scope: RegistryScope): string {
   return pipe_(Bun.hash(`${scope.session ?? ""} ${where}`).toString(16), Str.slice(0, 12));
 }
 
-export function scopeFor(
-  env: { socketPath: string | null; workspaceId: string | null },
-  cwd: string,
-): RegistryScope {
-  return { session: env.socketPath, workspaceId: env.workspaceId, cwd };
+export function scopeFor(cwd: string): RegistryScope {
+  return { session: null, workspaceId: null, cwd };
 }
 
 /** What a write to the register invalidates. */
@@ -165,7 +161,7 @@ export const everyRegistered = Registered.use((registered) => registered.all);
 
 /**
  * One entry per agent: every Run started from the same place shares a register, and a
- * panel's seats share a Run and a role. Given what herdr listed, an entry registered
+ * panel's seats share a Run and a role. Given what core listed, an entry registered
  * before that listing whose agent it did not have is dropped; one registered since may be
  * an agent that started after it, as another seat launched at once does.
  */
@@ -176,7 +172,7 @@ export const registerAgent = (
 ) => Registered.use((registered) => registered.register(scope, entry, alive));
 
 /**
- * Whether anything may be sent to this entry at all. A register is a cache of what herdr
+ * Whether anything may be sent to this entry at all. A register is a cache of what core
  * was last seen to have, and an entry with no incarnation names a role and a pane, both
  * of which the next agent inherits — so a delivery to it could reach a process nobody
  * addressed. Fail closed: the entry stays stoppable and prunable, and undeliverable.
@@ -188,7 +184,7 @@ export function deliverable(entry: AgentEntry): entry is AgentEntry & { incarnat
 /**
  * Whether this entry still names the process it was registered for. `liveEntries`
  * answers "is an agent by this name on this pane", which the next incarnation in the
- * same role also satisfies; this additionally requires herdr's own identity to match.
+ * same role also satisfies; this additionally requires core's own identity to match.
  * The reason is returned rather than logged here, so the caller records it where its
  * own refusal is recorded.
  */
@@ -197,29 +193,16 @@ export function verifyIncarnation(
   alive: ReadonlyArray<AgentInfo>,
 ): { ok: true; info: AgentInfo } | { ok: false; reason: string } {
   if (!deliverable(entry)) return { ok: false, reason: "no_incarnation" };
+  if (entry.incarnation.backend !== "core") return { ok: false, reason: "agent_gone" };
   const [live] = matching(entry, alive);
   if (!live) return { ok: false, reason: "agent_gone" };
   if (live.terminalId !== entry.incarnation.terminalId)
-    return { ok: false, reason: "incarnation_changed" };
-  const session = entry.incarnation.agentSession;
-  if (
-    session !== null &&
-    (live.agentSession === null ||
-      live.agentSession.kind !== session.kind ||
-      live.agentSession.value !== session.value)
-  )
     return { ok: false, reason: "incarnation_changed" };
   return { ok: true, info: live };
 }
 
 function matching(entry: AgentEntry, alive: ReadonlyArray<AgentInfo>): AgentInfo[] {
-  return Arr.filter(
-    alive,
-    (a) =>
-      a.name === entry.agent &&
-      a.paneId === entry.paneId &&
-      (a.workspaceId === null || entry.workspaceId === null || a.workspaceId === entry.workspaceId),
-  );
+  return Arr.filter(alive, (a) => a.name === entry.agent && a.paneId === entry.paneId);
 }
 
 export function liveEntries(

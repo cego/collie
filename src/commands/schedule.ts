@@ -10,12 +10,12 @@ import { Argument, Command, Flag } from "effect/cli";
 import { agentStartRefusal, asOptionText, insideCheckout } from "../agent-start";
 import { mutation } from "../envelope";
 import type { PluginEnv } from "../env";
-import { Herdr } from "../herdr";
+
 import { changeSchedule, flockSchedules, moduleFor, scheduleDoorOn } from "../lifecycle";
 import { machineName } from "../peers";
 import { moveSchedule } from "../schedule-move";
 import type { PlatformServices } from "../platform";
-import { err, type Failure, type OpResult } from "../operations";
+import { err, workspaceNamed, type Failure, type OpResult } from "../operations";
 import {
   SCHEDULE_PROJECTS_ROOT,
   type ScheduleChange,
@@ -44,31 +44,15 @@ const checkoutOf = Effect.fn("schedule.checkoutOf")(function* (
   const named = Str.trim(given);
   if (named === SCHEDULE_PROJECTS_ROOT || pipe_(named, Str.startsWith("/"))) return { path: named };
   if (named === "") return { path: (yield* insideCheckout(env.cwd)) ? env.cwd : null };
-  const all = yield* new Herdr(env).workspaceList().pipe(Effect.orElseSucceed(() => []));
-  const byId = Arr.filter(all, (one) => one.workspaceId === named);
-  const matched =
-    byId.length > 0
-      ? byId
-      : Arr.filter(all, (one) => Str.toLowerCase(one.label) === Str.toLowerCase(named));
-  const found = matched.length === 1 ? matched[0] : undefined;
-  if (found === undefined || found.cwd === "")
+  const where = yield* workspaceNamed(env, named);
+  if (where === null || "error" in where)
     return {
       error: err(
         "invalid_input",
-        matched.length > 1
-          ? `"${named}" names ${matched.length} workspaces (${Arr.join(
-              Arr.map(matched, (one) => one.workspaceId),
-              ", ",
-            )}); say which`
-          : `no workspace id or label is "${named}"; workspaces: ${
-              Arr.join(
-                Arr.map(all, (one) => one.label),
-                ", ",
-              ) || "none"
-            }. ${SCHEDULE_CHECKOUT_FIX}`,
+        `${where === null ? `nothing is named "${named}"` : where.error}. ${SCHEDULE_CHECKOUT_FIX}`,
       ),
     };
-  return { path: found.cwd };
+  return { path: where.found.cwd };
 });
 
 const nameArg = Argument.String("name").pipe(
