@@ -89,6 +89,7 @@ import {
   servedNow,
 } from "./foreground";
 import { tracingLayer } from "./tracing";
+import { Host } from "./sdk";
 import * as Scheduler from "effect/Scheduler";
 import {
   EntryError,
@@ -2388,6 +2389,7 @@ const frontDoorHandlers = (
                   : notifier.value.notify(runId, kind, body, { key }),
               ),
             ),
+          host: Context.get(hosted, Host),
         }).pipe(Effect.provideContext(hosted)),
       );
       return FrontDoorRpcs.of({
