@@ -116,8 +116,8 @@ export interface RunRecordsApi {
   ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<string>>>;
   /**
    * These Runs' lines of `journal` whose kind (its `kind`, else its `operation`) is one of
-   * `kinds`, newest first, or for null only the last line that has a kind, in one read; a
-   * Run with none is absent.
+   * `kinds`, newest first, or for null only its last line, in one read; a Run with none is
+   * absent.
    */
   readonly lastOf: (
     runs: ReadonlyArray<string>,
@@ -385,13 +385,19 @@ export const runRecordsLayer = Layer.effect(RunRecords)(
         runs.length === 0
           ? Effect.succeed(new Map())
           : (kinds === null
-              ? sql<{ readonly run: string; readonly line: string }>`
-                  SELECT l.run, l.line FROM collie_run_lines l JOIN (
-                    SELECT run, max(seq) AS seq FROM collie_run_lines
-                    WHERE journal = ${journal} AND kind IS NOT NULL AND run IN ${sql.in(runs)}
-                    GROUP BY run
-                  ) latest ON l.run = latest.run AND l.journal = ${journal} AND l.seq = latest.seq
-                `
+              ? sql.unsafe<{ readonly run: string; readonly line: string }>(
+                  `WITH asked(run) AS (VALUES ${Arr.join(
+                    Arr.map(runs, () => "(?)"),
+                    ",",
+                  )})
+                    SELECT run, line FROM (
+                      SELECT run, (
+                        SELECT line FROM collie_run_lines
+                        WHERE run = asked.run AND journal = ? ORDER BY seq DESC LIMIT 1
+                      ) AS line FROM asked
+                    ) WHERE line IS NOT NULL`,
+                  [...runs, journal],
+                )
               : sql<{ readonly run: string; readonly line: string }>`
                   SELECT run, line FROM collie_run_lines
                   WHERE journal = ${journal} AND kind IN ${sql.in(kinds)} AND run IN ${sql.in(runs)}
