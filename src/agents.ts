@@ -3777,6 +3777,18 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           ),
         });
         if ((yield* completed) !== null) return false;
+        if (
+          Arr.some(
+            yield* everyRegistered,
+            (one) =>
+              one.agent === agent &&
+              one.runId === ask.runId &&
+              one.incarnation?.backend !== "core",
+          )
+        ) {
+          yield* log(ask.runId, `${agent}: started before core, so not started again`);
+          return false;
+        }
         // The host starts an agent on core again, in the session it had.
         if (
           lost === null &&

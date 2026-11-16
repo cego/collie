@@ -36,6 +36,7 @@ import type { Store } from "../src/store";
 import { agentName } from "../src/naming";
 import { deliveredTo, recordsAt } from "./support/records";
 import { appendLine } from "../src/steering";
+import { registerAgent, scopeFor } from "../src/registry";
 import { COMPACT_AT_TOKENS } from "../src/settings";
 import { COMPACTION_PORTS, codexPort } from "../src/compactors";
 import { isString } from "../src/schema";
@@ -53,7 +54,7 @@ beforeEach(() =>
       yield* fs.makeDirectory(rig.userDir, { recursive: true });
       yield* fs.writeFileString(
         `${rig.userDir}/config.json`,
-        '{ "compact_at_tokens": 0, "trust": "never", "terminal_backend": "core" }',
+        '{ "compact_at_tokens": 0, "trust": "never" }',
       );
       yield* fs.writeFileString(
         standIn(),
@@ -1010,38 +1011,46 @@ test("core recovery resumes each agent only after its own quota wait clears", ()
   ));
 
 test(
-  "a host started on a Machine set to herdr starts again an agent core lost after the Machine switched to core",
+  "a host started over an agent recorded before core neither asks herdr about it nor starts it again",
   () =>
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const core = yield* rig.startCore();
         yield* rig.queueOutputs([null]);
-        const config = `${rig.userDir}/config.json`;
-        const backend = (name: string) =>
-          fs.writeFileString(
-            config,
-            `{ "compact_at_tokens": 0, "trust": "never", "terminal_backend": "${name}" }`,
-          );
-        yield* backend("herdr");
-        const again = yield* hosted(
+        const { runId, agent } = yield* hosted(
           Effect.gen(function* () {
-            // Long enough for the host to have read the setting it started on.
-            yield* TestClock.withLive(Effect.sleep("500 millis"));
-            yield* backend("core");
             const runId = yield* started("pi", "r1");
             const agent = agentName(runId, "pi", null, 1);
             yield* idleAfterItsStep(agent);
-            const before = coreCalls(yield* rig.calls()).length;
-            yield* core.lose;
-            const launches = yield* until(
-              () => Effect.flatMap(rig.calls(), (calls) => launchesSince(calls, before)),
-              (launches) => launches.length > 0,
-            );
-            return { agent, launches };
+            return { runId, agent };
           }),
         );
-        expect(Arr.map(again.launches, (launch) => launch.name)).toEqual([again.agent]);
+        // What a Herdr 1 start left: a register row with no backend, and no start record.
+        yield* registerAgent(scopeFor(rig.projectDir), {
+          role: "pi",
+          agent,
+          paneId: "1-9",
+          workspaceId: "w1",
+          runId,
+          workflow: "relaunched",
+          at: "2026-09-09T09:00:00Z",
+          incarnation: { terminalId: agent, agentSession: null },
+        }).pipe(Effect.provide(recordsAt(dir())));
+        yield* fs.remove(`${startedDir(dir(), runId)}/${agent}.json`);
+        yield* core.lose;
+        const before = coreCalls(yield* rig.calls()).length;
+
+        yield* hosted(
+          until(
+            () =>
+              fs
+                .readFileString(controlPath(dir(), PARK_CAUSE, runId))
+                .pipe(Effect.orElseSucceed(() => "")),
+            (cause) => cause !== "",
+          ),
+        );
+        expect(yield* launchesSince(yield* rig.calls(), before)).toEqual([]);
       }),
     ),
   120_000,
