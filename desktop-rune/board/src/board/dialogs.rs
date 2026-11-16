@@ -2,7 +2,7 @@
 //! questions, and a proposal to read before a yes.
 
 use super::questionnaire::{Event, Where};
-use super::{Dialog, Words, offer_key};
+use super::{Dialog, Words, offer_form, offer_key};
 use crate::App;
 use collie_desktop_protocol::generated::Question;
 use rune::{El, LiveRegion, TextEdit, col, el, row, text};
@@ -18,6 +18,13 @@ fn returns_to(app: &App, card: &str, body: El) -> El {
     match super::view::card_id(app, card) {
         Some(id) => body.focus_return(id),
         None => body,
+    }
+}
+
+fn offer_entries(app: &mut App) -> &mut Vec<offer_form::OfferEntry> {
+    match &mut app.board.dialog {
+        Some(Dialog::Offers { fields, .. }) => fields,
+        _ => unreachable!("an offers dialog is open"),
     }
 }
 
@@ -125,30 +132,21 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                 (Some(_), Some(offer)) => match app.refusal(offer.unavailable.as_deref(), *as_of) {
                     Some(why) => body = body.child(text(why).font(k.ty.ui).color(k.c.text_muted)),
                     None => {
-                        for (at, (name, required, edit)) in fields.iter().enumerate() {
-                            body = body.child(
-                                text(if *required {
-                                    format!("{name} *")
-                                } else {
-                                    name.clone()
-                                })
-                                .font(k.ty.small_medium)
-                                .color(k.c.text_muted)
-                                .a11y_hidden(),
-                            );
-                            body = body.child(
-                                TextInput::new(edit)
-                                    .width(None)
-                                    .label(name.clone())
-                                    .on_edit(move |app: &mut App| match &mut app.board.dialog {
-                                        Some(Dialog::Offers { fields, .. }) => &mut fields[at].2,
-                                        _ => unreachable!("an offers dialog is open"),
-                                    })
-                                    .on_submit(|app: &mut App, _: &mut rune::Tx| app.make_offer())
-                                    .build(k)
-                                    .key(format!("field-{name}")),
-                            );
-                        }
+                        body = body.children(offer.confirm.clone().map(|confirm| {
+                            text(confirm)
+                                .key("offer-confirm")
+                                .font(k.ty.ui)
+                                .color(k.c.text_base)
+                                .wrap()
+                                .w_full()
+                        }));
+                        body = body.children(offer_form::controls(
+                            fields,
+                            offer_entries,
+                            App::make_offer,
+                            "field-",
+                            k,
+                        ));
                         body = body.child(
                             row().w_full().justify_end().child(
                                 Button::new(offer.title.clone())

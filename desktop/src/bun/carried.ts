@@ -17,7 +17,7 @@ const tooLarge = (path: string) =>
 
 /** The whole file, part by part, or until `enough` says of the latest part. */
 export const readWhole = Effect.fn("Carried.readWhole")(function* (
-  machine: Reached,
+  machine: Pick<Reached, "name" | "door">,
   path: string,
   enough: (part: Uint8Array) => boolean = () => false,
   most = Number.POSITIVE_INFINITY,

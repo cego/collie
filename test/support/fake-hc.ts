@@ -467,7 +467,15 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           };
           link.viewers.set(viewer.channel, viewer);
           viewing.add(viewer);
-          return { result: { channel: viewer.channel, terminal: view(found) } };
+          // Both off: Collie sends keys as DATA and tracks size itself.
+          return {
+            result: {
+              channel: viewer.channel,
+              terminal: view(found),
+              resize_notifications: false,
+              automatic_input: false,
+            },
+          };
         }
         case "terminal.read": {
           const found = find(params);

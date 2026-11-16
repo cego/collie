@@ -1047,6 +1047,25 @@ row raise the same `recovery-failing:<machine>` News. The claim, start and judge
 `healed` recovery lines under one `recoveryId`, so a restarted host neither starts a second
 Heal for the park nor loses one.
 
+A judged Heal whose finding says `collie_defect` is reported on Collie's own repository,
+github.com/cego/collie, whatever project the parked Run is in, by the host with its
+GitHub login. The issue the healer named, else an open issue carrying the key's
+`<!-- collie-finding: <key> -->` marker, else the issue this Machine already reported the
+key to, is linked; a key new to that issue adds one comment with its marker. Otherwise a new
+issue is filed with the healer's observation apart from its diagnosis, proposed fix and
+regression, Collie's judgement, the build and the Run ids. Issue text is redacted and
+checked like any Run's. A `false-recovery` Heal's finding, or one without its key, root
+cause, fix or regression, is not filed. Each attempt is a `report` line in the parked Run's
+`collie run metrics`, with its `publication` and the `issue` URL: `filed`, `linked`,
+`not-filed` with why, `refused` (no login, an outage, a write the forge refused: nothing
+was applied) or `uncertain` (a write with no answer, or a forge error, within two minutes;
+a comment so sent is not sent again). `refused` and `uncertain` are tried again, from a
+minute apart up to an hour, and on a host's restart, and an attempt that ends as the last
+one did adds no line; every attempt lists the open issues first, so a filing that did land
+is linked rather than filed twice. Reporting runs beside recovery,
+three a round, and never holds it up. Findings kept from before a host could report them
+are reported the same way, and their Outputs are left as they were.
+
 A finished execution keeps its recorded result; `resume` does not reopen its steps. Use
 the Run's follow-up action to continue unfinished work on the same Task and branch.
 
@@ -1234,6 +1253,12 @@ what became of a finished run's work. It answers a line per action saying what e
 came to. A kind outside that set is refused with the name of the tool that does take it:
 amending an Intent, forking a definition, changing the defaults, keeping a run's checks for
 its repository, a cleanup and an upgrade are `collie_propose`'s.
+
+`collie_do` also accepts `request_id` for an explicit retry of the same action list, in both
+Native chat and Desktop's Flock chat. Each action retains its request within that batch.
+Flock chat reports a disconnected write as unconfirmed with an unknown outcome and returns
+`Request: <batch id>`; inspect the Run or its receipts before retrying with that batch id.
+It never automatically resubmits the write when the connection returns. A new id is new work.
 
 A `start` names its workspace by id, label, a checkout's path on this Machine, or a
 repository's directory name under the Projects root (or `projects-root`). A path that is no

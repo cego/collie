@@ -705,13 +705,14 @@ function Proposed(props: { proposal: Proposal; decide: Decide }) {
  */
 export function CardMenu(props: {
   items: ReadonlyArray<MenuItem>;
+  cursor: number | null;
   at: Where;
   pane: { width: number; height: number };
   onAct: (command: Command) => void;
   onClose: () => void;
 }) {
   const left = () => Math.max(0, Math.min(props.at.x, props.pane.width - MENU_WIDTH));
-  const top = () => Math.max(0, Math.min(props.at.y, props.pane.height - props.items.length - 2));
+  const top = () => Math.max(0, Math.min(props.at.y, props.pane.height - props.items.length - 3));
   return (
     <>
       <box
@@ -740,16 +741,18 @@ export function CardMenu(props: {
               style={{ flexDirection: "row" }}
               onMouseDown={(event: MouseEvent) => {
                 event.stopPropagation();
-                props.onAct(item.command);
+                if (item.disabled !== true) props.onAct(item.command);
               }}
             >
               <text fg={C.text} style={{ flexGrow: 1 }}>
+                {props.cursor !== null && props.items[props.cursor] === item ? "› " : "  "}
                 {item.label}
               </text>
               <text fg={C.dim}>{` ${item.key}`}</text>
             </box>
           )}
         </For>
+        <text fg={C.dim}>↑↓ choose · Enter select</text>
       </box>
     </>
   );

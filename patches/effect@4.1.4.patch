@@ -1,0 +1,72 @@
+diff --git a/dist/cluster/SqlMessageStorage.js b/dist/cluster/SqlMessageStorage.js
+index e93d0b9c97bbab14144ef7823ee8bbc7f98036a7..50c27b25cdcead7780af016808f61a314d14095d 100644
+--- a/dist/cluster/SqlMessageStorage.js
++++ b/dist/cluster/SqlMessageStorage.js
+@@ -584,20 +584,16 @@ export const makeEncodedStorage = /*#__PURE__*/Effect.fnUntraced(function* (opti
+     }).pipe(Effect.asVoid, PersistenceError.refail, withTracerDisabled),
+     clearReplies: Effect.fnUntraced(function* (requestId, options) {
+       const expectedReplyId = options?.expectedReplyId;
+-      yield* lockRequest(String(requestId));
+-      if (expectedReplyId === undefined) {
+-        yield* sql`DELETE FROM ${repliesTableSql} WHERE request_id = ${String(requestId)} AND kind = 0`;
+-        yield* sql`DELETE FROM ${messagesTableSql} WHERE request_id = ${String(requestId)} AND kind = ${messageKindInterrupt}`;
+-        yield* sql`UPDATE ${messagesTableSql} SET processed = ${sqlFalse}, last_reply_id = NULL, last_read = NULL WHERE request_id = ${String(requestId)}`;
+-        return;
+-      }
+       const id = String(requestId);
+-      const expected = String(expectedReplyId);
+-      // Check at the storage boundary, not at the earlier workflow read.
+-      yield* sql`DELETE FROM ${repliesTableSql} WHERE request_id = ${id} AND kind = 0
+-          AND EXISTS (SELECT 1 FROM ${messagesTableSql} WHERE id = ${id} AND last_reply_id = ${expected})`;
+-      yield* sql`UPDATE ${messagesTableSql} SET processed = ${sqlFalse}, last_reply_id = NULL, last_read = NULL
+-          WHERE request_id = ${id} AND last_reply_id = ${expected}`;
++      yield* lockRequest(id);
++      if (expectedReplyId !== undefined) {
++        const current = yield* sql`SELECT 1 FROM ${messagesTableSql}
++            WHERE id = ${id} AND last_reply_id = ${String(expectedReplyId)}`;
++        if (current.length === 0) return;
++      }
++      yield* sql`DELETE FROM ${repliesTableSql} WHERE request_id = ${id} AND kind = 0`;
++      yield* sql`DELETE FROM ${messagesTableSql} WHERE request_id = ${id} AND kind = ${messageKindInterrupt}`;
++      yield* sql`UPDATE ${messagesTableSql} SET processed = ${sqlFalse}, last_reply_id = NULL, last_read = NULL WHERE request_id = ${id}`;
+     }, sql.withTransaction, PersistenceError.refail, withTracerDisabled),
+     requestIdForPrimaryKey: primaryKey => messageIdForPrimaryKey(primaryKey).pipe(Effect.flatMap(messageId => sql`SELECT ${idColumn} FROM ${messagesTableSql} WHERE message_id = ${messageId}`), Effect.flatMap(rows => rows.length === 0 && mayHaveLegacyRow(primaryKey) ? sql`SELECT ${idColumn} FROM ${messagesTableSql} WHERE message_id = ${primaryKey}` : Effect.succeed(rows)), Effect.map(rows => Option.map(Option.fromNullishOr(rows[0]?.id), Snowflake.Snowflake)), Effect.provideService(SqlClient.SafeIntegers, true), PersistenceError.refail, withTracerDisabled),
+     repliesFor: requestIds =>
+diff --git a/src/cluster/SqlMessageStorage.ts b/src/cluster/SqlMessageStorage.ts
+index b9a8a57c4720b89557539fd6a14c61ba57dee128..366eeef97e5d989c2eca730001c64d4d5e49ce81 100644
+--- a/src/cluster/SqlMessageStorage.ts
++++ b/src/cluster/SqlMessageStorage.ts
+@@ -787,24 +787,16 @@ export const makeEncodedStorage: (options?: {
+     clearReplies: Effect.fnUntraced(
+       function*(requestId, options) {
+         const expectedReplyId = options?.expectedReplyId
+-        yield* lockRequest(String(requestId))
+-        if (expectedReplyId === undefined) {
+-          yield* sql`DELETE FROM ${repliesTableSql} WHERE request_id = ${String(requestId)} AND kind = 0`
+-          yield* sql`DELETE FROM ${messagesTableSql} WHERE request_id = ${
+-            String(requestId)
+-          } AND kind = ${messageKindInterrupt}`
+-          yield* sql`UPDATE ${messagesTableSql} SET processed = ${sqlFalse}, last_reply_id = NULL, last_read = NULL WHERE request_id = ${
+-            String(requestId)
+-          }`
+-          return
+-        }
+         const id = String(requestId)
+-        const expected = String(expectedReplyId)
+-        // Check at the storage boundary, not at the earlier workflow read.
+-        yield* sql`DELETE FROM ${repliesTableSql} WHERE request_id = ${id} AND kind = 0
+-          AND EXISTS (SELECT 1 FROM ${messagesTableSql} WHERE id = ${id} AND last_reply_id = ${expected})`
+-        yield* sql`UPDATE ${messagesTableSql} SET processed = ${sqlFalse}, last_reply_id = NULL, last_read = NULL
+-          WHERE request_id = ${id} AND last_reply_id = ${expected}`
++        yield* lockRequest(id)
++        if (expectedReplyId !== undefined) {
++          const current = yield* sql`SELECT 1 FROM ${messagesTableSql}
++            WHERE id = ${id} AND last_reply_id = ${String(expectedReplyId)}`
++          if (current.length === 0) return
++        }
++        yield* sql`DELETE FROM ${repliesTableSql} WHERE request_id = ${id} AND kind = 0`
++        yield* sql`DELETE FROM ${messagesTableSql} WHERE request_id = ${id} AND kind = ${messageKindInterrupt}`
++        yield* sql`UPDATE ${messagesTableSql} SET processed = ${sqlFalse}, last_reply_id = NULL, last_read = NULL WHERE request_id = ${id}`
+       },
+       sql.withTransaction,
+       PersistenceError.refail,

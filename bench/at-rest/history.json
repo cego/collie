@@ -1,0 +1,9 @@
+{
+  "base": "0abec91ba11987e78819847be58b332004e62bd3",
+  "live": "/tmp/car-6011865c",
+  "root": "/home/mk/.collie/worktrees/.collie/madskronborg/run-f2f5ee23/.scratch/at-rest/base/",
+  "sha256": "dbbb37924d0976dcf36000ec04a166787090818a81c4e261c466195c8397fa15",
+  "created": "2026-11-11T11:08:00Z",
+  "origin": "Measured: the pinned base's isolated host produced 748 settled Runs, 40 closed reports, 6 report-owing questions, 2 other questions and 4 durable sleepers, with 26284 cluster messages and 26280 replies. The host stopped before checkpointing and archiving. Runtime compilation caches are excluded.",
+  "rebuild": "Hypothesis: prepare.ts reproduces this fixture's shape with the pinned base host. After it finishes, checkpoint fixture/state/host.db, archive fixture and fixture.json from .scratch/at-rest excluding fixture/home/.bun, then update the source paths and archive SHA256 here. Rebuilding is outside measurement preparation because it takes close to ten minutes on this Machine."
+}

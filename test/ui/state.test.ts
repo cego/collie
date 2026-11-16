@@ -1709,6 +1709,17 @@ test("a ready plan's first action is the offer its module declares, under its ow
   expect(Arr.map(menuFor(undeclared), (item) => item.label)).not.toContain("Implement now");
 });
 
+test("a primary Release keeps its declared title and owning Run", () => {
+  const offer = { id: "release", title: "Release after review", run: "r-owner" };
+  const ready = task({ state: "done", landed: false, shipping: "merge", offer });
+  expect(primaryFor(ready)).toEqual({
+    key: "i",
+    label: "Release after review",
+    command: { _tag: "InvokeOffer", runId: "r-owner", offer: "release" },
+  });
+  expect(Arr.map(menuFor(ready), (item) => item.label)).toContain("Release after review");
+});
+
 test("the merge request is offered when there is one to open, named the way glab takes it", () => {
   const withMr = task({ mr: "https://gitlab.cego.dk/mk/collie/-/merge_requests/151" });
   const item = Option.getOrUndefined(

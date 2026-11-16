@@ -12,7 +12,17 @@ import { pipe as pipe_ } from "effect/Function";
 import * as Rec from "effect/Record";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
-import { Duration, Effect, FileSystem, Path, Schema, flow, Result, Struct } from "effect";
+import {
+  Duration,
+  Effect,
+  FileSystem,
+  PlatformError,
+  Path,
+  Schema,
+  flow,
+  Result,
+  Struct,
+} from "effect";
 import { TestClock } from "effect/testing";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig } from "./support/recorder";
@@ -371,6 +381,47 @@ test("a process left in the server's session gets one SIGTERM and ends", () =>
       )!.child!;
       expect(yield* halted()).toEqual({ stopped: [agent], left: [] });
       expect(alive(child)).toBe(false);
+    }),
+  ));
+
+test("an unreadable live server process is not treated as an exited server", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* working();
+      const control = (yield* readControl(`${rig.root}/state`, agent))!;
+      const fs = yield* FileSystem.FileSystem;
+      const unreadable = {
+        ...fs,
+        readFileString: (path: string) =>
+          pipe_(path, Str.startsWith(`/proc/${control.pid}/`))
+            ? Effect.fail(
+                PlatformError.systemError({
+                  _tag: "PermissionDenied",
+                  module: "FileSystem",
+                  method: "read",
+                  pathOrDescriptor: path,
+                }),
+              )
+            : fs.readFileString(path),
+      };
+      const stopped = yield* COMPACTION_PORTS.codex!.stop!(
+        {
+          agent,
+          cwd: control.cwd,
+          endpoint: control.endpoint!,
+          pid: control.pid!,
+          command: control.command!,
+          started: control.started,
+          signalled: [],
+          noted: [],
+        },
+        () => Effect.void,
+        100,
+      ).pipe(Effect.provideService(FileSystem.FileSystem, unreadable));
+      expect(alive(control.pid!)).toBe(true);
+      expect(stopped.state).toBe("failed");
+      expect(stopped.reason).toContain("process");
+      expect(stopped.signalled).toEqual([]);
     }),
   ));
 

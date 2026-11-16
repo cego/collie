@@ -471,7 +471,7 @@ impl Vt {
     /// Moves the viewport through the scrollback, negative being back in time.
     pub fn scroll_viewport(&mut self, delta: isize) {
         let mut scroll = GhosttyTerminalScrollViewport {
-            tag: GHOSTTY_SCROLL_VIEWPORT_DELTA,
+            tag: GHOSTTY_TERMINAL_SCROLL_VIEWPORT_DELTA,
             ..Default::default()
         };
         scroll.value.delta = delta;
@@ -480,7 +480,7 @@ impl Vt {
 
     pub fn scroll_to_bottom(&mut self) {
         let scroll = GhosttyTerminalScrollViewport {
-            tag: GHOSTTY_SCROLL_VIEWPORT_BOTTOM,
+            tag: GHOSTTY_TERMINAL_SCROLL_VIEWPORT_BOTTOM,
             ..Default::default()
         };
         unsafe { ghostty_terminal_scroll_viewport(self.term, scroll) };
@@ -595,13 +595,9 @@ impl Vt {
                     x,
                     y: cur.viewport_y,
                     style: match cur.visual_style {
-                        GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR => CursorStyle::Bar,
-                        GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE => {
-                            CursorStyle::Underline
-                        }
-                        GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW => {
-                            CursorStyle::BlockHollow
-                        }
+                        GHOSTTY_CURSOR_STYLE_BAR => CursorStyle::Bar,
+                        GHOSTTY_CURSOR_STYLE_UNDERLINE => CursorStyle::Underline,
+                        GHOSTTY_CURSOR_STYLE_BLOCK_HOLLOW => CursorStyle::BlockHollow,
                         _ => CursorStyle::Block,
                     },
                     blinking: cur.blinking,
@@ -645,10 +641,7 @@ impl Vt {
                 GHOSTTY_CELL_DATA_HAS_HYPERLINK,
                 &mut link as *mut _ as *mut c_void,
             );
-            let mut style = GhosttyStyle {
-                size: std::mem::size_of::<GhosttyStyle>(),
-                ..Default::default()
-            };
+            let mut style = GhosttyStyle::default();
             ghostty_render_state_row_cells_get(
                 c,
                 GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE,
@@ -672,12 +665,13 @@ impl Vt {
                 &mut bg as *mut _ as *mut c_void,
             ) == GHOSTTY_SUCCESS)
                 .then(|| Rgb::from(bg));
-            let (fg, bg) = if style.inverse {
+            let has = |flag: u32| u32::from(style.flags) & flag != 0;
+            let (fg, bg) = if has(GHOSTTY_STYLE_FLAG_INVERSE) {
                 (bg.unwrap_or(bg_default), Some(fg))
             } else {
                 (fg, bg)
             };
-            let underline_color = match style.underline_color.tag {
+            let underline_color = match GhosttyStyleColorTag::from(style.underline_color.tag) {
                 GHOSTTY_STYLE_COLOR_RGB => Some(Rgb::from(style.underline_color.value.rgb)),
                 GHOSTTY_STYLE_COLOR_PALETTE => Some(Rgb::from(
                     palette[style.underline_color.value.palette as usize],
@@ -687,7 +681,7 @@ impl Vt {
             let mut text = String::new();
             if wide != GHOSTTY_CELL_WIDE_SPACER_TAIL
                 && wide != GHOSTTY_CELL_WIDE_SPACER_HEAD
-                && !style.invisible
+                && !has(GHOSTTY_STYLE_FLAG_INVISIBLE)
             {
                 let mut len: u32 = 0;
                 ghostty_render_state_row_cells_get(
@@ -697,11 +691,17 @@ impl Vt {
                 );
                 if len > 0 {
                     let mut codepoints = vec![0u32; len as usize];
+                    let mut graphemes = GhosttyCodepointBuffer {
+                        ptr: codepoints.as_mut_ptr(),
+                        cap: codepoints.len(),
+                        len: 0,
+                    };
                     ghostty_render_state_row_cells_get(
                         c,
                         GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF,
-                        codepoints.as_mut_ptr() as *mut c_void,
+                        &mut graphemes as *mut _ as *mut c_void,
                     );
+                    codepoints.truncate(graphemes.len);
                     text = codepoints.into_iter().filter_map(char::from_u32).collect();
                 }
             }
@@ -709,13 +709,16 @@ impl Vt {
                 text,
                 fg,
                 bg,
-                bold: style.bold,
-                italic: style.italic,
-                faint: style.faint,
-                blink: style.blink,
-                strikethrough: style.strikethrough,
-                overline: style.overline,
-                underline: match style.underline as GhosttySgrUnderline {
+                bold: has(GHOSTTY_STYLE_FLAG_BOLD),
+                italic: has(GHOSTTY_STYLE_FLAG_ITALIC),
+                faint: has(GHOSTTY_STYLE_FLAG_FAINT),
+                blink: has(GHOSTTY_STYLE_FLAG_BLINK),
+                strikethrough: has(GHOSTTY_STYLE_FLAG_STRIKETHROUGH),
+                overline: has(GHOSTTY_STYLE_FLAG_OVERLINE),
+                underline: match GhosttySgrUnderline::from(
+                    (u32::from(style.flags) & GHOSTTY_STYLE_UNDERLINE_MASK)
+                        >> GHOSTTY_STYLE_UNDERLINE_SHIFT,
+                ) {
                     GHOSTTY_SGR_UNDERLINE_SINGLE => Underline::Single,
                     GHOSTTY_SGR_UNDERLINE_DOUBLE => Underline::Double,
                     GHOSTTY_SGR_UNDERLINE_CURLY => Underline::Curly,
@@ -740,12 +743,7 @@ impl Vt {
                 coordinate: GhosttyPointCoordinate { x, y },
             },
         };
-        let mut grid = GhosttyGridRef {
-            size: std::mem::size_of::<GhosttyGridRef>(),
-            node: std::ptr::null_mut(),
-            x: 0,
-            y: 0,
-        };
+        let mut grid = GhosttyGridRef::default();
         let r = unsafe { ghostty_terminal_grid_ref(self.term, point, &mut grid) };
         (r == GHOSTTY_SUCCESS && !grid.node.is_null()).then_some(grid)
     }
@@ -788,7 +786,6 @@ impl Vt {
     fn around(&self, at: ScreenPoint, unit: Unit) -> Option<(ScreenPoint, ScreenPoint)> {
         let grid = self.grid_ref(GHOSTTY_POINT_TAG_SCREEN, at.x, at.y)?;
         let mut sel = GhosttySelection {
-            size: std::mem::size_of::<GhosttySelection>(),
             start: grid,
             end: grid,
             rectangle: false,
@@ -841,7 +838,6 @@ impl Vt {
             return self.clear_selection();
         };
         let sel = GhosttySelection {
-            size: std::mem::size_of::<GhosttySelection>(),
             start,
             end,
             rectangle: false,
@@ -863,27 +859,46 @@ impl Vt {
 
     /// The selected text, soft wraps joined and trailing spaces trimmed, as Ghostty copies it.
     pub fn selection_text(&self) -> Option<String> {
-        let options = GhosttyTerminalSelectionFormatOptions {
-            size: std::mem::size_of::<GhosttyTerminalSelectionFormatOptions>(),
-            emit: GHOSTTY_FORMATTER_FORMAT_PLAIN,
-            unwrap: true,
-            trim: true,
-            selection: std::ptr::null(),
-        };
-        read_text(|buf, written| {
-            // SAFETY: the handle stays live and immutable through both reads. The C
-            // writer honors buf.len(), including the zero-capacity size query; Rust
-            // owns initialized storage and the out-length reference for the whole call.
-            unsafe {
-                ghostty_terminal_selection_format_buf(
-                    self.term,
-                    options,
-                    buf.as_mut_ptr(),
-                    buf.len(),
-                    written,
-                )
+        let mut selection = GhosttySelection::default();
+        let mut formatter: GhosttyFormatter = std::ptr::null_mut();
+        let unwrap = true;
+        // SAFETY: the handle stays live and immutable for this borrow, so the selection
+        // snapshot stays valid; the formatter copies each option and is freed below.
+        unsafe {
+            if ghostty_terminal_get(
+                self.term,
+                GHOSTTY_TERMINAL_DATA_SELECTION,
+                &mut selection as *mut _ as *mut c_void,
+            ) != GHOSTTY_SUCCESS
+                || ghostty_formatter_terminal_new(std::ptr::null(), &mut formatter, self.term)
+                    != GHOSTTY_SUCCESS
+            {
+                return None;
             }
-        })
+            let text = (ghostty_formatter_set(
+                formatter,
+                GHOSTTY_FORMATTER_OPT_UNWRAP,
+                &unwrap as *const _ as *const c_void,
+            ) == GHOSTTY_SUCCESS
+                && ghostty_formatter_set(
+                    formatter,
+                    GHOSTTY_FORMATTER_OPT_SELECTION,
+                    &selection as *const _ as *const c_void,
+                ) == GHOSTTY_SUCCESS)
+                .then(|| {
+                    read_text(|buf, written| {
+                        ghostty_formatter_format_buf(
+                            formatter,
+                            buf.as_mut_ptr(),
+                            buf.len(),
+                            written,
+                        )
+                    })
+                })
+                .flatten();
+            ghostty_formatter_free(formatter);
+            text
+        }
     }
 
     /// The OSC 8 hyperlink under column `x` of viewport row `y`.
@@ -918,11 +933,11 @@ impl Vt {
 
     /// The cursor a program gets when it resets it (`CSI 0 q`), and starts with.
     pub fn set_default_cursor(&mut self, style: CursorStyle, blink: bool) {
-        let style: GhosttyTerminalCursorStyle = match style {
-            CursorStyle::Bar => GHOSTTY_TERMINAL_CURSOR_STYLE_BAR,
-            CursorStyle::Underline => GHOSTTY_TERMINAL_CURSOR_STYLE_UNDERLINE,
-            CursorStyle::BlockHollow => GHOSTTY_TERMINAL_CURSOR_STYLE_BLOCK_HOLLOW,
-            CursorStyle::Block => GHOSTTY_TERMINAL_CURSOR_STYLE_BLOCK,
+        let style: GhosttyCursorStyle = match style {
+            CursorStyle::Bar => GHOSTTY_CURSOR_STYLE_BAR,
+            CursorStyle::Underline => GHOSTTY_CURSOR_STYLE_UNDERLINE,
+            CursorStyle::BlockHollow => GHOSTTY_CURSOR_STYLE_BLOCK_HOLLOW,
+            CursorStyle::Block => GHOSTTY_CURSOR_STYLE_BLOCK,
         };
         unsafe {
             ghostty_terminal_set(
@@ -948,7 +963,7 @@ impl Vt {
         text: Option<&str>,
     ) -> Vec<u8> {
         unsafe {
-            ghostty_key_encoder_setopt_from_terminal(self.keys, self.term);
+            ghostty_key_encoder_set_from_terminal(self.keys, self.term);
             let e = self.key_event;
             ghostty_key_event_set_action(e, GHOSTTY_KEY_ACTION_PRESS);
             ghostty_key_event_set_key(e, key);
@@ -956,11 +971,15 @@ impl Vt {
             let printable = text.is_some_and(|t| !t.is_empty() && !t.chars().any(char::is_control));
             ghostty_key_event_set_consumed_mods(e, if printable { consumed } else { 0 });
             match text {
-                Some(t) if printable => {
-                    ghostty_key_event_set_utf8(e, t.as_ptr() as *const _, t.len())
-                }
-                _ => ghostty_key_event_set_utf8(e, std::ptr::null(), 0),
-            }
+                Some(t) if printable => ghostty_key_event_set_utf8(
+                    e,
+                    GhosttyString {
+                        ptr: t.as_ptr(),
+                        len: t.len(),
+                    },
+                ),
+                _ => ghostty_key_event_set_utf8(e, GhosttyString::default()),
+            };
             let mut buf = [0u8; 128];
             let mut len = 0usize;
             let r = ghostty_key_encoder_encode(
@@ -1033,10 +1052,10 @@ impl Vt {
         let mut len = 0usize;
         // SAFETY: these handles are owned by Vt until Drop. The sized option is
         // initialized, its dimensions and event values were checked above, and it
-        // is copied by setopt. encode writes only within the live buffer's capacity.
+        // is copied by set. encode writes only within the live buffer's capacity.
         let r = unsafe {
-            ghostty_mouse_encoder_setopt_from_terminal(self.mouse, self.term);
-            ghostty_mouse_encoder_setopt(
+            ghostty_mouse_encoder_set_from_terminal(self.mouse, self.term);
+            ghostty_mouse_encoder_set(
                 self.mouse,
                 GHOSTTY_MOUSE_ENCODER_OPT_SIZE,
                 &size as *const _ as *const c_void,
@@ -1045,7 +1064,7 @@ impl Vt {
             match button {
                 Some(b) => ghostty_mouse_event_set_button(e, b),
                 None => ghostty_mouse_event_clear_button(e),
-            }
+            };
             ghostty_mouse_event_set_mods(e, mods);
             ghostty_mouse_event_set_position(e, GhosttyMousePosition { x, y });
             ghostty_mouse_encoder_encode(

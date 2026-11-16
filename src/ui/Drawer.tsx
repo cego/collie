@@ -323,7 +323,14 @@ export function Drawer(props: DrawerProps) {
           <Button label="Answer above" onPress={() => props.onClose()} />
         </Show>
         <For each={buttons()}>
-          {(item) => <Button label={item.label} onPress={() => props.onAct(item.command)} />}
+          {(item) => (
+            <Button
+              label={item.label}
+              onPress={() => {
+                if (item.disabled !== true) props.onAct(item.command);
+              }}
+            />
+          )}
         </For>
       </box>
 

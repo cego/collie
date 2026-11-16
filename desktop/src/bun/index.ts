@@ -297,6 +297,7 @@ const main = Effect.gen(function* () {
   }).pipe(Effect.ignore({ log: "Warn" }));
   const logged = yield* actionsLog(own);
   const doors = new DoorMap<Doors>();
+  const readDoors = new Map<string, Doors>();
   const records = yield* recordKeeper(doors);
   /** A harness's list from this computer's Machine; its own reader's where it has none or an older one. */
   const fromMachine = (harness: string, own: Effect.Effect<ReadonlyArray<ListedModel>, string>) =>
@@ -308,14 +309,7 @@ const main = Effect.gen(function* () {
       return local.desktop.models().pipe(
         Effect.map((catalogues) => listedIn(catalogues, harness)),
         Effect.catchCause(() => Effect.succeed(null)),
-        Effect.flatMap((read) =>
-          read === null
-            ? own
-            : Result.match(read, {
-                onSuccess: (models) => Effect.succeed(models),
-                onFailure: (why) => Effect.fail(why),
-              }),
-        ),
+        Effect.flatMap((read) => (read === null ? own : Effect.fromResult(read))),
       );
     });
   const lists = yield* harnessLists({
@@ -965,7 +959,8 @@ const main = Effect.gen(function* () {
       }),
     machines: () =>
       Arr.map(chatBoards(shown, routedAt), ({ name, profile, installation, board }) => {
-        const held = installation === null ? undefined : doors.get(installation);
+        let held = installation === null ? undefined : doors.get(installation);
+        if (held === undefined && board._tag !== "Live") held = readDoors.get(profile);
         const machine: ChatMachine = { name, board, local: profile === "local" };
         return held === undefined ? machine : { ...machine, door: chatDoor(held.chat) };
       }),
@@ -1091,6 +1086,7 @@ const main = Effect.gen(function* () {
                     manifest.version,
                     Stream.fromSubscription(changed),
                     Utils.showNotification,
+                    readDoors,
                   ).pipe(Stream.tap(doctorOnceLive), Stream.tap(syncOnceLive)),
                   Stream.fromSubscription(told),
                 ],

@@ -8,4 +8,5 @@ publish.workspace = true
 links = "ghostty-vt"
 
 [build-dependencies]
-bindgen = "0.72"
+# Formatting uses rustfmt; the unused prettyplease feature mixes syn 2 and 3.
+bindgen = { version = "0.73", default-features = false, features = ["logging", "runtime"] }

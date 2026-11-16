@@ -208,7 +208,7 @@ import {
   recommendedFirst,
 } from "./board-model";
 import { readMrStates } from "./merges";
-import { forgeOf } from "./forge/forge";
+import { COLLIE_REPOSITORY, FORGES, forgeOf } from "./forge/forge";
 import { links } from "./forge/review";
 import { integrateDefault, integratedLine } from "./integrate";
 import { planRunOf, strategyNamed, workSourceOf } from "./strategies";
@@ -263,7 +263,7 @@ import {
   type PrerequisiteStanding,
   type RunDetail,
 } from "./prerequisites";
-import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
+import { SELF, argumentsWithout, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
 import { isOutcome, REQUESTABLE } from "./outcome";
 import { Foreground } from "./foreground";
 import {
@@ -440,7 +440,7 @@ export const sdkModules = (): ReadonlyArray<readonly [string, object]> => {
 /** Kept in step with package.json, which `engine.test.ts` checks: the host and an
  *  author's declarations have to be the same Effect, or the types are about another one. */
 export const TOOLCHAIN = {
-  effect: "4.1.0",
+  effect: "4.1.4",
   typescript: "^7.0.2",
 } as const;
 
@@ -733,6 +733,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly _tag: "Unanswered"; readonly head: string; readonly comments: ReadonlyArray<OpenComment>; readonly approvers?: ReadonlyArray<string> }
     | { readonly _tag: "Moved"; readonly head: string }
     | { readonly _tag: "Conflicting"; readonly head: string }
+    | { readonly _tag: "FailedCi"; readonly head: string; readonly name: string; readonly url?: string }
     | { readonly _tag: "Merged"; readonly sha: string; readonly by: string; readonly at: string }
     | { readonly _tag: "Closed" }
     | { readonly _tag: "Held" }
@@ -932,9 +933,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly recordReview: (runId: string, scope: ReviewScope | null, base: string, review: SynthesisReport) => Effect.Effect<void>;
     readonly recovery: (runId: string, parent: string, source: string) => Effect.Effect<Recovery, WorkflowError>;
     readonly report: (since: string) => Effect.Effect<Report, WorkflowError>;
-    readonly issues: (runId: string, numbers?: ReadonlyArray<number>) => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
-    readonly fileIssue: (options: { readonly runId: string; readonly title: string; readonly body: string }) => Effect.Effect<IssueRef, WorkflowError>;
-    readonly commentIssue: (options: { readonly runId: string; readonly number: number; readonly body: string }) => Effect.Effect<void, WorkflowError>;
+    readonly issues: (runId: string, numbers?: ReadonlyArray<number>, on?: "collie") => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
+    readonly fileIssue: (options: { readonly runId: string; readonly title: string; readonly body: string; readonly on?: "collie" }) => Effect.Effect<IssueRef, WorkflowError>;
+    readonly commentIssue: (options: { readonly runId: string; readonly number: number; readonly body: string; readonly on?: "collie" }) => Effect.Effect<void, WorkflowError>;
     readonly dir: string;
     /** The Collie release this host runs, as its tag names it. */
     readonly build: string;
@@ -1163,6 +1164,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly whileConflicting?: boolean;
       /** Return a confirmed target conflict at its current head for repair. */
       readonly returnConflicts?: boolean;
+      /** Return terminal CI failure at the proved head, after fresh comments. */
+      readonly returnFailedCi?: boolean;
     }) => Effect.Effect<ReviewStanding, WorkflowError>;
     /**
      * One read of whether the Changes the ticket at \`ticket\` names on its **Needs merged:** line
@@ -1885,7 +1888,15 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly inputs?: Readonly<Record<string, Source>>;
     /** A further condition on the facts, where how it ended is not the whole of it. */
     readonly eligible?: (facts: ActionFacts) => boolean;
+    readonly given?: OfferGiven;
+    readonly ships?: Ships;
+    readonly confirm?: string;
   }
+
+  /** Inputs an offer always starts its workflow with; never asked for, and never the caller's. */
+  export type OfferGiven = Readonly<Record<string, Schema.Json>>;
+  /** What taking an offer ships: \`merge\` only merges, \`release\` also tags and deploys. */
+  export type Ships = "merge" | "release";
 
   /** What an action decides eligibility from: facts, never a workflow's name. */
   export interface ActionFacts {
@@ -1916,6 +1927,10 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly eligible: (facts: ActionFacts) => boolean;
     /** What Collie fills in from the Run itself; the rest is the caller's to give. */
     readonly inputs?: Readonly<Record<string, Source>>;
+    readonly given?: OfferGiven;
+    readonly ships?: Ships;
+    /** What taking it does, which a front door shows and asks about before taking it. */
+    readonly confirm?: string;
   }
 
   /** Names the host supplies at launch; an input of one of these is refused. */
@@ -2551,6 +2566,9 @@ export function declaredByModule(metadata: WorkflowMetadata | undefined): Declar
     arguments: jsonSchemaFor(Schema.Struct(action.arguments)).document,
     kind: "action" as const,
     inputs: action.inputs ?? {},
+    given: action.given,
+    ships: action.ships,
+    confirm: action.confirm,
     connections: action.connections,
     eligible: action.eligible,
   }));
@@ -2562,6 +2580,9 @@ export function declaredByModule(metadata: WorkflowMetadata | undefined): Declar
     kind: "follow-up" as const,
     entry: offer.entry,
     inputs: offer.inputs ?? {},
+    given: offer.given,
+    ships: offer.ships,
+    confirm: offer.confirm,
     connections: offer.connections,
     eligible: (facts: ActionFacts) =>
       (offer.when === "always" || (offer.when === "succeeded") === facts.succeeded) &&
@@ -4196,7 +4217,26 @@ export const hostLayer = (options: {
             ? Effect.fail(new WorkflowError({ reason: `${runId} is stopped, so it ${what}` }))
             : Effect.void,
         );
-      const issueCheckout = Effect.fn("Host.issueCheckout")(function* (runId: string) {
+      const issueCheckout = Effect.fn("Host.issueCheckout")(function* (
+        runId: string,
+        on?: "collie",
+      ) {
+        if (on === "collie") {
+          const { env } = yield* placing;
+          const reading = yield* connectionOnMachine({ ...env, cwd: env.home }, "github");
+          if (reading.state !== "ok")
+            return yield* new WorkflowError({
+              reason: `${reading.detail}. Fix: ${reading.fix}`,
+            });
+          return {
+            ok: true as const,
+            forge: FORGES.github,
+            project: COLLIE_REPOSITORY,
+            cwd: env.home,
+            env,
+            collie: true,
+          };
+        }
         const row = yield* store.run(runId);
         if (row === null) return yield* new WorkflowError({ reason: `there is no Run ${runId}` });
         const launch = yield* decodeStrings(row.options ?? "{}").pipe(
@@ -4222,7 +4262,7 @@ export const hostLayer = (options: {
           return yield* new WorkflowError({
             reason: `${reading.detail}. Fix: ${reading.fix}`,
           });
-        return { ...here, cwd, env };
+        return { ...here, cwd, env, collie: false };
       });
       const issuePrivacyBudget = Duration.fromInputUnsafe(options.issuePrivacyBudget ?? "1 minute");
       const walks = yield* Cache.makeWith(
@@ -4313,16 +4353,20 @@ export const hostLayer = (options: {
           });
           const inventory = yield* inventoryOf(root.path);
           const expanded = yield* Effect.try(() => throughAliases(text, inventory.aliases));
-          const common = yield* runShell(
-            "git",
-            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-            here.cwd,
-          );
-          if (common.code !== 0)
-            return yield* new WorkflowError({
-              reason: "issue checkout's Git identity could not be read",
-            });
-          const own = yield* fs.realPath(pipe(common.stdout, Str.replace(/\n$/, "")));
+          // Collie's repository has no checkout of the Run's to exempt.
+          let own: string | null = null;
+          if (!here.collie) {
+            const common = yield* runShell(
+              "git",
+              ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+              here.cwd,
+            );
+            if (common.code !== 0)
+              return yield* new WorkflowError({
+                reason: "issue checkout's Git identity could not be read",
+              });
+            own = yield* fs.realPath(pipe(common.stdout, Str.replace(/\n$/, "")));
+          }
           const ownRemote = Arr.join(Str.split(here.project, "/").slice(1), "/");
           for (const { checkout, canonical, repository, names } of inventory.checkouts) {
             if (
@@ -4412,6 +4456,7 @@ export const hostLayer = (options: {
         readonly proved: string;
         readonly seen: ReadonlyArray<string>;
         readonly returnConflicts?: boolean;
+        readonly returnFailedCi?: boolean;
       }) =>
         Effect.gen(function* () {
           const mr = yield* mergeRequestOf(fs, dir, asked.runId);
@@ -4519,10 +4564,10 @@ export const hostLayer = (options: {
           Effect.fail(
             new WorkflowError({ reason: "Run reporting requires the host's workflow registry" }),
           ),
-        issues: (runId, numbers) =>
+        issues: (runId, numbers, on) =>
           under(
             Effect.gen(function* () {
-              const here = yield* issueCheckout(runId);
+              const here = yield* issueCheckout(runId, on);
               const listed = yield* here.forge.issues(here.project, here.cwd, runShell, numbers);
               if (!listed.ok) return yield* new WorkflowError({ reason: listed.reason });
               return listed.issues;
@@ -4532,7 +4577,7 @@ export const hostLayer = (options: {
           under(
             Effect.gen(function* () {
               yield* unstopped(asked.runId, "files no issue");
-              const here = yield* issueCheckout(asked.runId);
+              const here = yield* issueCheckout(asked.runId, asked.on);
               yield* checkIssueText(here, `${asked.title}\n${asked.body}`);
               const filed = yield* here.forge.fileIssue(
                 here.project,
@@ -4549,7 +4594,7 @@ export const hostLayer = (options: {
           under(
             Effect.gen(function* () {
               yield* unstopped(asked.runId, "comments on no issue");
-              const here = yield* issueCheckout(asked.runId);
+              const here = yield* issueCheckout(asked.runId, asked.on);
               yield* checkIssueText(here, asked.body);
               const commented = yield* here.forge.commentIssue(
                 here.project,
@@ -4886,20 +4931,20 @@ export const hostLayer = (options: {
           under(
             Effect.gen(function* () {
               const own = yield* treeOf(yield* store.run(runId), runId, dir);
-              const parent = yield* fs
-                .readFileString(`${runDir(dir, runId)}/recovery-parent`)
-                .pipe(Effect.orElseSucceed(() => ""));
-              const prior =
-                parent === ""
-                  ? []
-                  : yield* readVerifications(evidenceDir(dir, parent)).pipe(
-                      Effect.orElseSucceed((): ReadonlyArray<Verification> => []),
-                    );
+              const lineage: string[] = [];
+              let from = runId;
+              while (from !== "" && !lineage.includes(from)) {
+                lineage.unshift(from);
+                from = yield* fs
+                  .readFileString(`${runDir(dir, from)}/recovery-parent`)
+                  .pipe(Effect.orElseSucceed(() => ""));
+              }
               return yield* Effect.all({
-                verifications: readVerifications(evidenceDir(dir, runId)).pipe(
-                  Effect.orElseSucceed((): ReadonlyArray<Verification> => []),
-                  Effect.map((own) => [...prior, ...own]),
-                ),
+                verifications: Effect.forEach(lineage, (from) =>
+                  readVerifications(evidenceDir(dir, from)).pipe(
+                    Effect.orElseSucceed((): ReadonlyArray<Verification> => []),
+                  ),
+                ).pipe(Effect.map(Arr.flatten)),
                 final: fingerprint(cwd),
                 commands: Effect.forEach(yield* approvedOf(dir, runId), (spec) =>
                   commandOf({ ...own, cwd }, spec),
@@ -5313,7 +5358,8 @@ export const hostLayer = (options: {
               for (;;) {
                 const { mr, read, standing } = yield* reviewRead(asked);
                 const wait = reviewWaitOf(mr, read);
-                if (standing._tag === "Conflicting") return standing;
+                if (standing._tag === "Conflicting" || standing._tag === "FailedCi")
+                  return standing;
                 if (asked.whileConflicting === true) {
                   const conflicting =
                     read.ok && read.state === "open" && conflictsWithTarget(read.mergeable);
@@ -6281,7 +6327,6 @@ const PlacingJson = Schema.fromJsonString(Placing);
 const decodePlacing = Schema.decodeUnknownOption(PlacingJson);
 const encodePlacing = flow(Schema.encodeResult(PlacingJson), Result.getOrThrow);
 
-/** The reports sweep asks of every row each second; a row read again unchanged is the same object. */
 const owing = new WeakMap<RunRow, boolean>();
 
 /** Whether a Run's report is owed: an agent started it, or its Task closes once it is reported. */
@@ -8198,11 +8243,7 @@ const makeRegistry: (
     const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
     const placing = Option.getOrUndefined(decodePlacing(row.placing ?? ""));
     const report = Option.getOrUndefined(
-      Schema.decodeOption(Schema.fromJsonString(RunReport))(
-        yield* fs
-          .readFileString(`${runDir(dir, row.run)}/report.json`)
-          .pipe(Effect.orElseSucceed(() => "")),
-      ),
+      Schema.decodeOption(Schema.fromJsonString(RunReport))(row.report ?? ""),
     );
     const linkNotices = yield* readLinkDeliveries(runDir(dir, row.run)).pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
@@ -9024,19 +9065,16 @@ const makeRegistry: (
     );
   });
 
-  /**
-   * A Run, the module it would be offered from now, and the facts those offers are
-   * decided on. The generation is resolved in the Run's own project rather than taken
-   * from the row: what is offered is the current code's to say, and a module that has
-   * been edited away leaves the Run readable and its offers refused with the reason.
-   */
   /** A follow-up takes what its workflow needs and the offer does not fill, so a front door asks for it. */
   const unfilled = (offer: Offer, project: string, filled: Readonly<Record<string, Schema.Json>>) =>
     resolve({ project, id: offer.workflow }).pipe(
       Effect.map((target) => {
         const field = fieldWith(target.hints, "work-source");
         if (field !== undefined) offer = { ...offer, textField: field };
-        const rest = Arr.filter(Rec.toEntries(target.fields), ([name]) => !(name in filled));
+        const rest = Arr.filter(
+          Rec.toEntries(target.fields),
+          ([name]) => !(name in filled) && target.hints[name] !== "internal",
+        );
         if (rest.length === 0) return offer;
         return {
           ...offer,
@@ -9046,6 +9084,21 @@ const makeRegistry: (
       Effect.orElseSucceed(() => offer),
     );
 
+  /** An action draws neither what its offer gives nor what its target only lets its orchestration set. */
+  const unbound = (offer: Offer, project: string) =>
+    resolve({ project, id: offer.workflow }).pipe(
+      Effect.map((target) => Rec.keys(Rec.filter(target.hints, (hint) => hint === "internal"))),
+      Effect.orElseSucceed((): ReadonlyArray<string> => []),
+      Effect.map((internal) => ({
+        ...offer,
+        arguments: argumentsWithout(
+          offer.arguments,
+          new Set([...Rec.keys(offer.given ?? {}), ...internal]),
+        ),
+      })),
+    );
+
+  /** Resolve offers from current project code; removed modules leave the Run readable but refuse its offers. */
   const offeredBy = Effect.fn("Engine.Registry.offeredBy")(function* (
     runId: string,
     request?: string,
@@ -9675,7 +9728,7 @@ const makeRegistry: (
             (offer) =>
               offer.kind === "follow-up"
                 ? unfilled(offer, row.project, inputsFor(offer, { runDir: where, facts, input }))
-                : Effect.succeed(offer),
+                : unbound(offer, row.project),
           ),
         ),
       ),
@@ -9711,6 +9764,14 @@ const makeRegistry: (
         });
       }
       const starting = yield* resolve({ project: row.project, id: offer.workflow });
+      const bound = Arr.findFirst(
+        Rec.keys(options.input),
+        (name) => name in (offer.given ?? {}) || starting.hints[name] === "internal",
+      );
+      if (Option.isSome(bound))
+        return yield* new HostRefused({
+          reason: `"${bound.value}" is Collie's to set when "${options.offer}" starts ${offer.workflow}, so it cannot be given`,
+        });
       // What the offer said Collie fills in, filled from the Run it is about. The
       // caller's own values win: an offer names where a value comes from, and a caller
       // that has a better one for the same field is not overruled by a default.

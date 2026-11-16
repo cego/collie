@@ -4,14 +4,16 @@
 // its own work look more important by describing it that way.
 
 import * as Arr from "effect/Array";
-import { Effect, FileSystem, Path } from "effect";
+import { Effect, FileSystem, Option, Path } from "effect";
 import { expect, test } from "bun:test";
 import {
   appendCard,
   buildCard,
+  finishedOnRecord,
   inspectFor,
   newest,
   readCards,
+  readFinalCard,
   readCheckpoints,
   readiness,
   significance,
@@ -263,6 +265,7 @@ test("the newest card per slice is what a reader sees, and the journal keeps the
         ...over,
       });
 
+      expect(yield* finishedOnRecord(dir)).toBeNull();
       yield* appendCard(dir, base({}));
       yield* appendCard(dir, base({ id: "c2", at: "t2", readiness: "verified" }));
       yield* appendCard(dir, base({ id: "c3", step: "review", kind: "review" }));
@@ -270,6 +273,19 @@ test("the newest card per slice is what a reader sees, and the journal keeps the
       expect(yield* readCards(dir)).toHaveLength(3);
       const shown = newest(yield* readCards(dir));
       expect(Arr.map(shown, (card) => card.id)).toEqual(["c2", "c3"]);
+      expect(yield* finishedOnRecord(dir)).toBeNull();
+      yield* appendCard(dir, base({ id: "old-final", kind: "final", at: "t9" }));
+      yield* appendCard(dir, base({ id: "new-final", kind: "final", at: "t4" }));
+      yield* appendCard(dir, base({ id: "followup", kind: "followup", at: "t5" }));
+      yield* fs.writeFileString(
+        `${dir}/steering/cards.jsonl`,
+        '\n{"kind":"final","at":"t6"}\n{incomplete',
+        { flag: "a" },
+      );
+      expect(yield* finishedOnRecord(dir)).toBe("t4");
+      expect(yield* readFinalCard(dir)).toEqual(
+        Option.some(base({ id: "new-final", kind: "final", at: "t4" })),
+      );
     }),
   ));
 
