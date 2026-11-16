@@ -1417,6 +1417,8 @@ cannot mistake an agent still starting for a stale one; a failed launch releases
 lock, and the existing PID-lock recovery handles a process that crashes. An endpoint is
 stopped only while its recorded pid still runs the recorded command, read from
 `/proc/<pid>/cmdline`, or from `ps -ww -o command=` where there is no `/proc`, as on macOS.
+Installation reads the process start time independently of its command line, which can
+briefly be empty during exec, so that a later server death still has a recorded identity.
 
 A Codex agent's work runs in its App Server, not its pane, so a Run's stop goes through
 `stopAgent` in `src/compaction.ts`, under the agent's control lock, before its pane is
@@ -1701,7 +1703,7 @@ number the default branch already has twice is reported and left as it is.
 `test/docs-links.test.ts` fails on a plain-text `ADR-NNNN` or `ADR-draft-<slug>` in the
 docs, `src`, `workflows`, `test` or `desktop` that names no ADR file.
 
-Collie's native desktop is built from the release tag by `desktop-native`, which calls
+Collie's native desktop is built from the release tag by `desktop-bundle`, which calls
 `.github/workflows/rune-bundle.yml` on Linux and macOS. The Rune shell and compiled
 TypeScript core share the existing stable identity, `dk.cego.collie.desktop`, and the
 existing installer and update artifact names. The installed product is named **Collie**.
@@ -1784,7 +1786,7 @@ Root tests import Desktop modules and libraries, so the root `bun install` insta
 Desktop's dependencies too, frozen to `desktop/bun.lock`. After changing Desktop's
 dependencies, run `bun install` in `desktop/` first: the root install refuses a stale
 Desktop lockfile. CI relies on that one install before its root gate.
-CI's `desktop` job checks the core's TypeScript (`cd desktop && bun run typecheck`) and
+CI's `desktop-checks` job checks the core's TypeScript (`cd desktop && bun run typecheck`) and
 the Rune workspace's format, clippy and tests; the required CI gate also includes both
 native platform bundles.
 
@@ -1895,13 +1897,25 @@ Missing or stale entries cannot skip a test; deleting the scratch file restores 
 
 CI runs `bun run check` in two halves. The `static` job runs `bun run check:static`
 (format check, lint, typecheck and the Rust-types check), then the build, smoke and contract check. The `suite`
-job is a matrix of three shards, each running `bun run test --shard=i/3` on a runner of its
+job is a matrix of six shards, each running `bun run test --shard=i/6` on a runner of its
 own. Bun splits the files by their recorded durations, and no shard restores a timings
-cache: each balances on the committed seed alone, so all three split a commit's files
-alike, and every file runs in exactly one. The required `test` job needs both, runs even
-when one of them failed, and fails unless each succeeded.
+cache: each balances on the committed seed alone, so all six split a commit's files
+alike, and every file runs in exactly one. The shard count comes from the matrix size.
+The required `test` job also needs the Mac runner, Desktop checks and both native bundles.
+It runs even when a dependency failed, and fails unless each succeeded.
 
-`bun run test --shard=2/3` reproduces shard 2 locally. It is a whole suite, so it takes the
+The native jobs cache Cargo dependencies, keyed by platform, compiler, manifests and lockfile.
+Each job keeps its own cache, shared with the same job in the release workflow where applicable.
+Workspace crates are rebuilt, and all checks, tests, bundle builds and signing checks still run on cache hits.
+Ghostty honors the `ZIG_LOCAL_CACHE_DIR` supplied by CI's Zig setup, so Zig can reuse its
+compiled inputs across Cargo profiles and CI runs while still checking them for changes.
+Zig uses the runner's tool cache for a stable compiler path; a random installation path
+would invalidate cached compilation inputs on the next runner.
+No test results or finished release archives are reused.
+Linux media bundling resolves package ownership in one `dpkg-query` call for the complete
+library closure. A missing owner still fails the bundle, including when the command returns partial results.
+
+`bun run test --shard=2/6` reproduces shard 2 locally. It is a whole suite, so it takes the
 suite's lock and share, and agents do not run it. To split as CI did, delete
 `.scratch/test-timings.json` first, so the runner starts from the seed, and again after,
 since the run leaves only its shard's files in it.
@@ -1917,7 +1931,8 @@ seed time, so no seed evens out runners that differ in speed on the day. Quiet-a
 use a controlled Effect clock so machine load cannot consume their nudge windows. A test
 whose work waits out timers runs under `fastForward` (`test/support/effect.ts`): a test
 clock a fiber of its own keeps moving many times faster than the wall's, from the wall's
-now.
+now. Follow-through tests advance it in 250 ms steps for the forge's five-minute polling
+intervals; intervening timers still fire in order and production intervals are unchanged.
 
 Workflow-authoring tests still install real packages and run the real compiler. Their
 isolated homes use [Bun's cache preference](https://bun.com/docs/runtime/bunfig#installprefer)

@@ -77,12 +77,12 @@ jobs:
           path: collie-darwin-arm64
           overwrite: true
 
-  desktop-native:
+  desktop-bundle:
     uses: ./.github/workflows/rune-bundle.yml
     secrets: inherit
 
   release:
-    needs: [build, macos-runner, desktop-native]
+    needs: [build, macos-runner, desktop-bundle]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8

@@ -101,8 +101,10 @@ point Vulkan at lavapipe: `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json
 Linux, building needs `libxkbcommon-dev` and `libwayland-dev`, and lavapipe is in
 `mesa-vulkan-drivers`. Terminal fallback tests also need `fontconfig` and `fonts-noto-cjk`;
 the bundled monospace font does not contain CJK glyphs. libghostty-vt needs Zig 0.17.1 (`zig` on `PATH`, or `ZIG` naming it)
-and bindgen needs libclang; its first build takes about four minutes. CI's `desktop` job runs the core's typecheck, `cargo fmt --check`, `cargo clippy -D
+and bindgen needs libclang; its first build takes about four minutes. CI's `desktop-checks` job runs the core's typecheck, `cargo fmt --check`, `cargo clippy -D
 warnings`, `cargo test`, and the contract, drift and shell tests.
+Ghostty honors `ZIG_LOCAL_CACHE_DIR`, which CI's Zig setup supplies and caches across runs.
+Without it, the Zig cache stays in Cargo's build output directory.
 
 ## Implementation and historical spike notes
 
