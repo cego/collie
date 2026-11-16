@@ -13,6 +13,7 @@ import * as Option from "effect/Option";
 import { Context, Data, Effect, FileSystem, Layer, Path, Schema, flow, Result } from "effect";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
+import { markWorked } from "./run-records";
 import { readJournal, type Journal } from "./journal";
 import { ensureLockDir, withLock } from "./lock";
 import { StoreWrites } from "./store-writes";
@@ -223,6 +224,8 @@ export const deliveriesLayer = Layer.effect(Deliveries)(
         Effect.gen(function* () {
           const ledger = incarnationKey(line.incarnation);
           yield* sql`INSERT INTO collie_deliveries (ledger, line) VALUES (${ledger}, ${encodeLedgerLine(line)})`;
+          if (isDelivery(line))
+            yield* markWorked(line.run).pipe(Effect.provideService(SqlClient.SqlClient, sql));
           const runs = isDelivery(line)
             ? [line.run]
             : Arr.map(

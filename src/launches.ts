@@ -22,6 +22,7 @@ import { RanOn, type RunAgent, type RunStep } from "./board-model";
 import { StepPlace } from "./steps";
 import { ClaudeSubagents } from "./subagents";
 import { StoreWrites } from "./store-writes";
+import { markWorked } from "./run-records";
 
 /** The Step run an agent's work was given in. */
 export const LaunchedIn = Schema.Struct({
@@ -217,7 +218,13 @@ export const launchesLayer = Layer.effect(Launches)(
         sql`
           INSERT INTO collie_launches (run, stem, record) VALUES (${launched.runId}, ${stemOf(launched)}, ${encodeLaunched(launched)})
           ON CONFLICT (run, stem) DO UPDATE SET record = excluded.record
-        `.pipe(Effect.andThen(moved(launched.runId)), Effect.orDie),
+        `.pipe(
+          Effect.andThen(markWorked(launched.runId)),
+          sql.withTransaction,
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.andThen(moved(launched.runId)),
+          Effect.orDie,
+        ),
       order: (launched) =>
         Effect.flatMap(
           Clock.currentTimeMillis,
@@ -227,7 +234,13 @@ export const launchesLayer = Layer.effect(Launches)(
               ordered_at = ${now}
             WHERE run = ${launched.runId} AND stem = ${stemOf(launched)}
           `,
-        ).pipe(Effect.andThen(moved(launched.runId)), Effect.orDie),
+        ).pipe(
+          Effect.andThen(markWorked(launched.runId)),
+          sql.withTransaction,
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.andThen(moved(launched.runId)),
+          Effect.orDie,
+        ),
       lastOrdered: (run) =>
         sql<{ readonly stem: string; readonly at: number | null }>`
           SELECT stem, ordered_at AS at FROM collie_launches

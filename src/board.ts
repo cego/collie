@@ -11,9 +11,9 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
 import { Clock, Effect, FileSystem, Option, Path, Result, Schema, flow } from "effect";
-import { AUDIT_FILE, readAudit } from "./audit";
-import { FINAL_DIFF, planDirOf } from "./run-detail";
-import { LOG_INDEX } from "./run-log";
+import { readAudit } from "./audit";
+import { planDirOf } from "./run-detail";
+import { RunRecords } from "./run-records";
 import { openReports, readDrift } from "./drift";
 import { describeAction } from "./lines";
 import type { PickItem } from "./inputs";
@@ -922,50 +922,6 @@ const dispositionOf = Effect.fn("Board.dispositionOf")(function* (runs: Readonly
     in the morning — midnight is not when a human stops calling it today. */
 const FINISHED_FOR_MS = 24 * 60 * 60 * 1000;
 
-/**
- * When anything in this directory was last written, as `touchedDirAt` measures it but
- * without the files Collie writes about a Run from outside: a disposition, who saw it, the
- * diff kept for its drawer, its log's index written by a read, and the trail of who asked for
- * what are bookkeeping, and must not make a dead Run look alive or ended just now.
- */
-const writtenIn = Effect.fn("Board.writtenIn")(function* (dir: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const at = (file: string) =>
-    fs.stat(file).pipe(
-      Effect.map((stat) => (Option.isSome(stat.mtime) ? stat.mtime.value.getTime() : 0)),
-      Effect.orElseSucceed(() => 0),
-    );
-  let newest = 0;
-  for (const name of yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []))) {
-    if (name === FINAL_DIFF || name === AUDIT_FILE || name === LOG_INDEX) continue;
-    if (name !== "steering") {
-      newest = Math.max(newest, yield* at(path.join(dir, name)));
-      continue;
-    }
-    const inside = yield* fs
-      .readDirectory(path.join(dir, name))
-      .pipe(Effect.orElseSucceed(() => []));
-    for (const entry of inside) {
-      if (entry === "disposition.jsonl" || entry === "seen.jsonl") continue;
-      newest = Math.max(newest, yield* at(path.join(dir, name, entry)));
-    }
-  }
-  return newest;
-});
-
-/** When the Run last did anything: its own directory, its agents' and its evidence. */
-const lastActivityAt = Effect.fn("Board.lastActivityAt")(function* (
-  stateDir: string,
-  run: RunFacts,
-) {
-  return Math.max(
-    yield* writtenIn(run.dir),
-    yield* writtenIn(`${stateDir}/agents/${run.id}`),
-    yield* writtenIn(run.evidence),
-  );
-});
-
 /** The MR id of `mrOf(run)`, a legacy bare or hostless one read in the Run's checkout. */
 const mrIdOf = (run: RunFacts) => {
   const mr = mrOf(run);
@@ -1346,8 +1302,9 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           return view;
         };
         yield* boundary;
-        const touched = new Map<string, number>();
-        for (const run of everyRun) touched.set(run.id, yield* lastActivityAt(stateDir, run));
+        const touched = yield* RunRecords.use((records) =>
+          records.activity(Arr.map(everyRun, (run) => run.id)),
+        );
         // A Run records no end of its own: its last activity is when it ended, and a Run
         // that wrote nothing ended no later than it began.
         const endedAt = (run: RunFacts) =>

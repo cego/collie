@@ -239,6 +239,17 @@ export const keepStepTimes = (run: string) =>
     `;
   });
 
+/** Records that `run` did work now, as part of the write it is in. */
+export const markWorked = (run: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const now = yield* Clock.currentTimeMillis;
+    yield* sql`
+      INSERT INTO collie_run_activity (run, at) VALUES (${run}, ${now})
+      ON CONFLICT (run) DO UPDATE SET at = max(at, excluded.at)
+    `;
+  });
+
 export const runRecordsLayer = Layer.effect(RunRecords)(
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -252,13 +263,7 @@ export const runRecordsLayer = Layer.effect(RunRecords)(
     const worked = (run: string, topic: string) =>
       BOOKKEEPING.has(topic)
         ? Effect.void
-        : Effect.flatMap(
-            Clock.currentTimeMillis,
-            (now) => sql`
-              INSERT INTO collie_run_activity (run, at) VALUES (${run}, ${now})
-              ON CONFLICT (run) DO UPDATE SET at = max(at, excluded.at)
-            `,
-          );
+        : markWorked(run).pipe(Effect.provideService(SqlClient.SqlClient, sql));
     const grouped = <R extends { readonly run: string }, A>(
       rows: ReadonlyArray<R>,
       value: (row: R) => A,

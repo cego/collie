@@ -618,7 +618,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     leftover: Leftover,
     outcome: LeftoverEnd,
     line: string,
-  ) => Effect.Effect<void, never, FileSystem.FileSystem>;
+  ) => Effect.Effect<void, never, FileSystem.FileSystem | RunRecords>;
   readonly kill?: Kill;
   readonly sweep: boolean;
   /** How to start `collie`, to run each check under its supervisor; absent, a check is this host's child. */
@@ -737,7 +737,8 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       if (outcome !== "still running") yield* removeRecord(fs, records, dir, leftover.id);
       const line = saidOf(leftover, outcome);
       yield* Effect.logInfo(line);
-      if (options.onRun !== undefined) yield* options.onRun(leftover, outcome, line);
+      if (options.onRun !== undefined)
+        yield* options.onRun(leftover, outcome, line).pipe(Effect.provideService(RunRecords, records));
       return outcome;
     }).pipe(Effect.provideContext(services));
 

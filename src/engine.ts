@@ -5155,6 +5155,7 @@ export const hostLayer = (options: {
           // the Run did each time it ran, not a deduplicated story.
           appendLog(runDir(dir, runId), event).pipe(
             Effect.provideService(FileSystem.FileSystem, fs),
+            Effect.provideService(RunRecords, runRecords),
             Effect.orDie,
           ),
         parked: (runId, why, cause = "unknown") => {

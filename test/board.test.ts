@@ -10,6 +10,7 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Clock, DateTime, Effect, Fiber, FileSystem, Path, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import {
   boardLines,
   buildBoard,
@@ -1110,6 +1111,21 @@ const launched = Effect.fn("board.launched")(function* (
 });
 
 /** A file last written at this moment, which is what silence is measured from. */
+/** `effect` with the clock at `iso`. */
+const atTime = <A, E, R>(iso: string, effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const clock = yield* TestClock.make();
+    yield* clock.setTime(epochMs(iso));
+    return yield* effect.pipe(Effect.provideService(Clock.Clock, clock));
+  });
+
+/** The Run did work at `iso`, as accepting its agent's output records. */
+const workedAt = (runId: string, iso: string) =>
+  atTime(
+    iso,
+    RunRecords.use((records) => records.touch(runId)),
+  );
+
 const writtenAt = Effect.fn("board.writtenAt")(function* (file: string, at: string) {
   const fs = yield* FileSystem.FileSystem;
   yield* fs.makeDirectory(
@@ -1164,12 +1180,10 @@ test("a Run is not quiet while its agent works, a check runs, or its agents writ
       const checking = yield* madeRun(dir, { id: "r-checking" });
       const writing = yield* madeRun(dir, { id: "r-writing" });
       const idle = yield* madeRun(dir, { id: "r-idle" });
-      for (const run of [working, checking, writing, idle]) {
-        yield* launched(dir, run.id, ["build"]);
-        yield* writtenAt(`${run.dir}/log`, old);
-      }
+      for (const run of [working, checking, writing, idle])
+        yield* atTime(old, launched(dir, run.id, ["build"]));
       yield* writtenAt(`${checking.dir}/verifying`, old);
-      yield* writtenAt(`${dir}/agents/${writing.id}/build.prompt.md`, "2026-09-14T10:04:00Z");
+      yield* workedAt(writing.id, "2026-09-14T10:04:00Z");
 
       const views = yield* board(env, [working, checking, writing, idle], {
         alive: [agent("impl-1", "working"), { ...agent("impl-2", "idle"), paneId: "p-2" }],
@@ -1275,7 +1289,7 @@ test("what the host writes about a finished Run does not move when it ended", ()
       const { dir, env } = yield* scratch();
       const old = "2026-09-13T09:00:00Z";
       const run = yield* madeRun(dir, { state: "failed", branch: "mk/old-work" });
-      yield* writtenAt(`${run.dir}/log`, old);
+      yield* workedAt(run.id, old);
       // The diff kept for its drawer and the trail of who disposed of it.
       yield* writtenAt(`${run.dir}/diff.json`, "2026-09-14T10:04:00Z");
       yield* recordAudit(run.dir, {
@@ -3500,10 +3514,7 @@ test("a fan-out is not quiet while one of its Repo runs works or writes", () =>
       });
       const then = DateTime.toDateUtc(DateTime.makeUnsafe(old));
       yield* fs.utimes(`${parent.dir}/plan`, then, then);
-      for (const run of [parent, web]) {
-        yield* launched(dir, run.id, ["build"]);
-        yield* writtenAt(`${run.dir}/log`, old);
-      }
+      for (const run of [parent, web]) yield* atTime(old, launched(dir, run.id, ["build"]));
       const stateOf = (over: Partial<Parameters<typeof buildBoard>[0]>) =>
         board(env, [web, parent], over).pipe(Effect.map((views) => views[0]!.state));
 
@@ -3514,7 +3525,7 @@ test("a fan-out is not quiet while one of its Repo runs works or writes", () =>
           registered: [registered("impl-web", web.id)],
         }),
       ).toBe("active");
-      yield* writtenAt(`${dir}/agents/${web.id}/build.prompt.md`, "2026-09-14T10:04:00Z");
+      yield* workedAt(web.id, "2026-09-14T10:04:00Z");
       expect(yield* stateOf({})).toBe("active");
     }),
   ));

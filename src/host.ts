@@ -3486,6 +3486,7 @@ const frontDoorHandlers = (
                             echo("stderr")(`${line}\n`).pipe(
                               Effect.andThen(appendLog(runDir(env.stateDir, runId), line)),
                               Effect.ignore({ log: "Warn" }),
+                              Effect.provideService(RunRecords, runRecords),
                               Effect.provideService(FileSystem.FileSystem, fs),
                             ),
                         },

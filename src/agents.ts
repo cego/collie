@@ -4513,7 +4513,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     say: (runId, line) => under(log(runId, line)),
     handOff,
     halt,
-    collect,
+    collect: (...args: Parameters<typeof collect>) =>
+      Effect.tap(collect(...args), (text) =>
+        text === null ? Effect.void : under(RunRecords.use((records) => records.touch(args[0].runId))),
+      ),
     peekOutput: (launched) =>
       under(
         FileSystem.FileSystem.pipe(
