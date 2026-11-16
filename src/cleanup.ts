@@ -395,6 +395,8 @@ export const settlingOf = (opts: {
             runs: opts.runs,
             tasks: opts.tasks,
             includeHistory: true,
+            // Settlement needs work facts, not interactive offers from this host's own socket.
+            offers: () => Effect.succeed([]),
           });
     const viewOf = new Map(Arr.map([...views, ...(opts.views ?? [])], (view) => [view.id, view]));
     const landedAt = new Map<string, Landed>();
