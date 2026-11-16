@@ -39,6 +39,11 @@ test("the same head with only Collie-signed notes added is no change", () => {
         id: "12",
         body: "Fixed in `1111111`.\n\nPosted by Collie's Run run-9 on vm-mk.",
       },
+      {
+        id: "14",
+        body: `Review at ${H1}\n\nAll fixed.\n\n<!-- collie:run-2 round 3 at ${H1} by mk -->`,
+      },
+      { id: "15", body: "Fixed in `2222222`.\n\n<!-- collie:run-2 -->" },
     ],
   });
   expect(judge({ cursor, observed: stood(H1, T0), reading: signed, now: T0 }).verdict).toEqual({
