@@ -2053,6 +2053,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   /** What an action decides eligibility from: facts, never a workflow's name. */
   export interface ActionFacts {
+    readonly review?: { readonly head: string; readonly reviewed: string; readonly owned: boolean };
     readonly recovery?: Recovery;
     readonly outcome: Outcome;
     readonly succeeded: boolean;
