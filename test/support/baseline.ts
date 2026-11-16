@@ -13249,7 +13249,7 @@ const targetTest = (at: string, state: "failed" | "passed", ...failed: ReadonlyA
 /** Where each forge says the target branch's `test` job ran. */
 const TARGET_JOB = {
   gitlab: "https://gitlab.example.com/group/app/-/jobs/2001",
-  github: "https://github.com/owner/repo/actions/runs/5030/job/2001",
+  github: "https://github.com/owner/repo/actions/runs/6030/job/2001",
 } as const;
 
 const recoveriesHealed = (runId: string) =>

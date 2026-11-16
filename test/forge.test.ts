@@ -1886,7 +1886,7 @@ for (const name of ["gitlab", "github"] as const) {
             ],
           },
         });
-        const id = name === "github" ? "5030/2002" : "2002";
+        const id = name === "github" ? "6030/2002" : "2002";
         expect(yield* read(red)).toEqual({
           ok: true,
           branch: "main",
@@ -1894,7 +1894,7 @@ for (const name of ["gitlab", "github"] as const) {
           state: "failed",
           url:
             name === "github"
-              ? "https://github.com/owner/repo/actions/runs/5030/job/2002"
+              ? "https://github.com/owner/repo/actions/runs/6030/job/2002"
               : "https://gitlab.example.com/group/app/-/jobs/2002",
           id,
         });
