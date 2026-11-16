@@ -90,8 +90,11 @@ D7 measured is a release that lands after a boundary has read its control but be
 run has suspended: the wake finds the run still running and resumes nothing. Now, whenever a
 boundary reads a hold or a stop as set, the host waits for that run to stop running, reads
 the control again, and wakes the run if it was cleared meanwhile. A read however fast cannot
-strand a run, so nothing depends on how long the boundary takes.
-`test/engine.test.ts` holds a release landing while a boundary is suspending for its hold.
+strand a run, so nothing depends on how long the boundary takes. One such wait is kept per
+run and control, and a read that finds the control clear ends it: the run went on past the
+read that saw it set, so a later suspension of that run is for something else and is not
+woken. `test/engine.test.ts` holds a release landing while a boundary is suspending for its
+hold, and a hold read without suspending that leaves a later question asleep.
 
 ## What this does not decide
 

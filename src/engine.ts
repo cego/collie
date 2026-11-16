@@ -9269,30 +9269,39 @@ const makeRegistry: (
    * A boundary's read of `control`. One that finds it set suspends the run, and a release that
    * lands before that suspend has completed finds the run still going and resumes nothing
    * (ADR-0021, D7): so once the run has suspended, the control is read again, and a run it
-   * no longer holds is woken.
+   * no longer holds is woken. A later read that finds it clear shows the run went on past
+   * that read without suspending, so nothing is woken for it.
    */
+  const armed = new Map<string, object>();
   const boundary = (read: Effect.Effect<boolean>, control: string, runId: string) =>
-    Effect.tap(read, (on) =>
-      on
-        ? Effect.gen(function* () {
-            const found = yield* routed(runId);
-            const workflow = found.generation.registration.workflow;
-            yield* engine.poll(workflow, found.execution).pipe(
-              Effect.map((result) => pollStatus(result, found.generation.entry).status),
-              Effect.repeat({
-                until: (status) => status !== "pending",
-                schedule: Schedule.spaced(WAKE_INTERVAL),
-              }),
-            );
-            if (!(yield* controlsOf(runId)).includes(control)) yield* wake(runId, found);
-          }).pipe(
-            Effect.ignore,
-            Effect.provideService(RunRecords, runRecords),
-            Effect.forkIn(hostScope),
-            Effect.asVoid,
-          )
-        : Effect.void,
-    );
+    Effect.tap(read, (on) => {
+      const key = `${control}\u0000${runId}`;
+      if (!on) armed.delete(key);
+      if (!on || armed.has(key)) return Effect.void;
+      const token = {};
+      armed.set(key, token);
+      const current = () => armed.get(key) === token;
+      return Effect.gen(function* () {
+        const found = yield* routed(runId);
+        const workflow = found.generation.registration.workflow;
+        yield* engine.poll(workflow, found.execution).pipe(
+          Effect.map((result) => pollStatus(result, found.generation.entry).status),
+          Effect.repeat({
+            until: (status) => status !== "pending" || !current(),
+            schedule: Schedule.spaced(WAKE_INTERVAL),
+          }),
+        );
+        if (!current()) return;
+        armed.delete(key);
+        if (!(yield* controlsOf(runId)).includes(control)) yield* wake(runId, found);
+      }).pipe(
+        Effect.ignore,
+        Effect.ensuring(Effect.sync(() => current() && armed.delete(key))),
+        Effect.provideService(RunRecords, runRecords),
+        Effect.forkIn(hostScope),
+        Effect.asVoid,
+      );
+    });
 
   const settle = (found: { readonly generation: Generation; readonly execution: string }) =>
     engine.poll(found.generation.registration.workflow, found.execution).pipe(
