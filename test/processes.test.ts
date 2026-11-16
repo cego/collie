@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
-import { Clock, Effect, Fiber, FileSystem, PlatformError, Stream } from "effect";
+import { Clock, Effect, Fiber, FileSystem, PlatformError, Schedule, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
@@ -24,6 +24,33 @@ test("a process's command and start time read alone are what reading it whole sa
       expect(yield* startedOf(process.pid)).toBe(whole.started);
     }),
   ));
+
+test.skipIf(process.platform !== "linux")(
+  "a zombie is not running, whether proc or ps is read",
+  () => {
+    // The shell execs a sleep that never reaps the background child, which stays a zombie.
+    const parent = Bun.spawn(["sh", "-c", "sleep 0 & echo $!; exec sleep 30 >/dev/null"], {
+      stdout: "pipe",
+    });
+    return runEffect(
+      Effect.gen(function* () {
+        const pid = Number(
+          Str.trim(yield* Effect.promise(() => new Response(parent.stdout).text())),
+        );
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.readFileString(`/proc/${pid}/stat`).pipe(
+          Effect.filterOrFail((stat) => Str.includes(") Z ")(stat)),
+          Effect.retry({ times: 100, schedule: Schedule.spaced("10 millis") }),
+        );
+        expect(yield* processOf(pid)).toBeNull();
+        const withoutProc = FileSystem.makeNoop({ exists: () => Effect.succeed(false) });
+        expect(
+          yield* processOf(pid).pipe(Effect.provideService(FileSystem.FileSystem, withoutProc)),
+        ).toBeNull();
+      }).pipe(Effect.ensuring(Effect.sync(() => parent.kill()))),
+    );
+  },
+);
 
 test("a process that is not running has no start time", () =>
   runEffect(Effect.map(startedOf(2 ** 22 + 1), (started) => expect(started).toBeNull())));
