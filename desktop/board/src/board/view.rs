@@ -817,6 +817,10 @@ fn card(
     } else {
         (c.surface_raised, c.border_weak)
     };
+    let latest_report = task.narratives.as_ref().and_then(|reports| reports.last());
+    let narrative = crate::record::reports::concise(
+        latest_report.map_or(task.sentence.as_str(), |report| report.summary.as_str()),
+    );
     let mut card = col()
         .w_full()
         .min_w(0.0)
@@ -836,7 +840,7 @@ fn card(
         .focus_ring(2.0, 2.0, c.border_focus)
         .child(head)
         .child(
-            text(task.sentence.clone())
+            text(narrative.clone())
                 .key("sentence")
                 .font(k.ty.ui)
                 .color(c.text_muted)
@@ -990,8 +994,60 @@ fn card(
                 .w_full(),
         );
     }
+    if let Some(report) = latest_report {
+        card = card.child(crate::record::reports::report(report, k));
+    }
     if !recovery.history.is_empty() {
-        card = card.child(recovery_list(k, format!("{id}-recovery"), recovery.history));
+        let count = task.recovery.as_ref().map_or(0, Vec::len);
+        card = card.child(
+            text(format!(
+                "{count} recent recovery outcomes; full chronology in the reports."
+            ))
+            .font(k.ty.small)
+            .color(c.text_muted)
+            .wrap()
+            .w_full(),
+        );
+    }
+    if (latest_report.is_some() || !recovery.history.is_empty())
+        && latest_report.is_none_or(|report| {
+            report.state != collie_desktop_protocol::generated::NarrativeState::Ready
+        })
+    {
+        let retry_installation = latest_report
+            .and_then(|report| report.origin.as_ref())
+            .map_or_else(
+                || p.installation.to_string(),
+                |origin| origin.installation.clone(),
+            );
+        let retry_run = latest_report
+            .and_then(|report| report.origin.as_ref())
+            .map_or_else(|| task.run.clone(), |origin| origin.run.clone());
+        let installation = retry_installation.clone();
+        let run = retry_run.clone();
+        card = card.child(
+            Button::new("Retry report preparation")
+                .on_press(move |app: &mut App| {
+                    app.retry_reports(retry_installation.clone(), retry_run.clone())
+                })
+                .build(k)
+                .key("retry-reports"),
+        );
+        card = card.child(
+            Button::new("Read recovery detail")
+                .on_press(move |app: &mut App| {
+                    let machine = app
+                        .machines
+                        .iter()
+                        .find(|one| one.machine.installation == installation)
+                        .map(|one| one.machine.name.clone())
+                        .unwrap_or_else(|| installation.clone());
+                    app.open_record(installation.clone(), run.clone(), machine, Some("summary"));
+                })
+                .build(k)
+                .label("Read complete legacy recovery detail; report preparing or unavailable")
+                .key("legacy-recovery"),
+        );
     }
 
     // What it asks: questions, or a proposal to review.
@@ -1122,7 +1178,7 @@ fn card(
         })
         .role("button")
         .label(task.name.clone())
-        .description(task.sentence.clone())
+        .description(narrative)
         .checked(selected);
     if live { card } else { card.opacity(0.6) }
 }

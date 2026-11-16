@@ -2,6 +2,7 @@
 //! `settings-agents.ts`, `connections.ts` and `slack.ts` with their tests' cases, and the
 //! page against a fake core.
 
+mod support;
 use collie_desktop_board::calls::CallError;
 use collie_desktop_board::calls::testing::Harness;
 use collie_desktop_board::pages::settings::agents::{self, AgentSettings, Fallback};
@@ -16,6 +17,7 @@ use collie_desktop_protocol::generated::{
 };
 use rune::{Env, Key, KeyEvent, Mods, Runtime};
 use serde_json::{Value, json};
+use support::clock::FrameAt;
 
 fn flock(settings: Value) -> FlockSettingsSuccess {
     serde_json::from_value(json!({ "settings": settings, "synced": [] })).unwrap()
@@ -808,17 +810,20 @@ fn opened() -> (Harness<App>, Runtime<App>) {
 fn settle(harness: &Harness<App>, runtime: &mut Runtime<App>, at: f64) {
     harness.settle(&mut runtime.state);
     runtime.invalidate();
-    runtime.frame(at);
+    runtime.frame_at(at);
 }
 
+/// Taps `key` where it rests, once what moves has landed.
 fn tap(runtime: &mut Runtime<App>, key: &str, at: f64) {
+    runtime.settle_all();
+    runtime.frame(0.0);
     let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
     runtime.pointer_move(x, y);
-    runtime.frame(at);
+    runtime.frame_at(at);
     runtime.pointer_down(x, y);
-    runtime.frame(at + 50.0);
+    runtime.frame_at(at + 50.0);
     runtime.pointer_up(x, y);
-    runtime.frame(at + 100.0);
+    runtime.frame_at(at + 100.0);
 }
 
 fn press(runtime: &mut Runtime<App>, key: Key, at: f64) {
@@ -826,7 +831,7 @@ fn press(runtime: &mut Runtime<App>, key: Key, at: f64) {
         key,
         mods: Mods::default(),
     });
-    runtime.frame(at);
+    runtime.frame_at(at);
 }
 
 fn type_text(runtime: &mut Runtime<App>, typed: &str, at: f64) {
@@ -968,11 +973,11 @@ fn a_switch_a_segment_and_reset_set_the_flocks_value_and_record_timing_is_saved_
     let [left, _, width, _] = element(&runtime, "desktop-record_timing").unwrap().rect;
     let _ = x;
     runtime.pointer_move(left + width * 0.75, y);
-    runtime.frame(1800.0);
+    runtime.frame_at(1800.0);
     runtime.pointer_down(left + width * 0.75, y);
-    runtime.frame(1850.0);
+    runtime.frame_at(1850.0);
     runtime.pointer_up(left + width * 0.75, y);
-    runtime.frame(1900.0);
+    runtime.frame_at(1900.0);
     assert_eq!(
         harness.fake.asked_of("setFlockSetting"),
         [
@@ -1102,7 +1107,7 @@ fn gitlab_paste_reads_the_clipboard_and_uses_the_typed_tokens_save() {
 
     tap(&mut runtime, "details-gitlab", 1000.0);
     tap(&mut runtime, "paste-gitlab", 1200.0);
-    runtime.frame(1400.0);
+    runtime.frame_at(1400.0);
 
     assert_eq!(
         harness.fake.asked_of("saveGitlab"),
@@ -1124,7 +1129,7 @@ fn gitlab_paste_reads_the_clipboard_and_uses_the_typed_tokens_save() {
     // preceding token, either, and it never asks the core to read the clipboard.
     clipboard.set_text(" \t\n ");
     tap(&mut runtime, "paste-gitlab", 1800.0);
-    runtime.frame(2000.0);
+    runtime.frame_at(2000.0);
     assert_eq!(harness.fake.asked_of("saveGitlab").len(), 1);
     assert!(harness.fake.asked_of("pasteGitlab").is_empty());
     assert!(!runtime.state.pages.settings.gitlab.saving);
@@ -1294,7 +1299,7 @@ fn rect_of(runtime: &Runtime<App>, key: &str) -> [f32; 4] {
 fn a_select_opens_its_list_at_its_field_not_the_windows_corner() {
     let (_harness, mut runtime) = opened();
     tap(&mut runtime, "flock-harness", 1000.0);
-    runtime.frame(1400.0);
+    runtime.frame_at(1400.0);
     let [fx, fy, fw, fh] = rect_of(&runtime, "flock-harness-trigger");
     let [lx, ly, lw, _] = rect_of(&runtime, "flock-harness-content");
     assert!(fy > 40.0, "the field is down the page, at {fy}");
@@ -1359,7 +1364,7 @@ fn connections_are_read_again_when_an_onboarding_such_as_linears_setup_ends() {
     .unwrap();
     runtime.state.apply(ended.clone());
     settle(&harness, &mut runtime, 1000.0);
-    runtime.frame(1100.0);
+    runtime.frame_at(1100.0);
     assert_eq!(
         harness.fake.asked_of("connectionReadings").len(),
         read + 1,
@@ -1367,7 +1372,7 @@ fn connections_are_read_again_when_an_onboarding_such_as_linears_setup_ends() {
     );
     runtime.state.apply(ended);
     settle(&harness, &mut runtime, 1200.0);
-    runtime.frame(1300.0);
+    runtime.frame_at(1300.0);
     assert_eq!(
         harness.fake.asked_of("connectionReadings").len(),
         read + 1,
@@ -1379,7 +1384,7 @@ fn connections_are_read_again_when_an_onboarding_such_as_linears_setup_ends() {
 fn the_harness_select_lists_a_harness_no_machine_reports_and_choosing_it_does_nothing() {
     let (harness, mut runtime) = opened();
     tap(&mut runtime, "flock-harness", 1000.0);
-    runtime.frame(1400.0);
+    runtime.frame_at(1400.0);
     let options: Vec<rune::ElementInfo> = runtime
         .elements()
         .into_iter()
@@ -1394,11 +1399,11 @@ fn the_harness_select_lists_a_harness_no_machine_reports_and_choosing_it_does_no
     let [x, y, w, h] = pi.rect;
     let (x, y) = (x + w / 2.0, y + h / 2.0);
     runtime.pointer_move(x, y);
-    runtime.frame(1500.0);
+    runtime.frame_at(1500.0);
     runtime.pointer_down(x, y);
-    runtime.frame(1550.0);
+    runtime.frame_at(1550.0);
     runtime.pointer_up(x, y);
-    runtime.frame(1600.0);
+    runtime.frame_at(1600.0);
     assert!(
         harness.fake.asked_of("setFlockSettings").is_empty(),
         "a harness no Machine has is not chosen"

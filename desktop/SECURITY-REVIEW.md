@@ -3,6 +3,8 @@
 Reviewed 2026-11-12 for PR #398, against `desktop/Cargo.lock` and Rune
 `781e2b6d87cd5f32d6f4365956fad4baaf24ee50`. This records evidence and limits;
 it does not suppress advisories or claim the dependencies have been upgraded.
+Moving Rune to `631e8a67cb3c40225efa3f6c4f57b80e7b18f190` on 2026-11-16 left
+moxcms 0.8.1, weezl 0.1.12, bincode 1.3.3 and image 0.25.10 as reviewed here.
 
 Recheck these constraints by 2026-11-26, or sooner when the owning libraries publish
 compatible fixes. Review reachability again before adding image color-profile processing

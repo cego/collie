@@ -83,6 +83,10 @@ fn typed<A: DeserializeOwned>(answer: Result<Value, Failure>) -> Result<A, Failu
 }
 
 impl<S: 'static> Core<S> {
+    pub fn post(&self, change: impl FnOnce(&mut S) + Send + 'static) {
+        (self.post)(Box::new(change));
+    }
+
     pub fn new(calls: Arc<dyn Calls>, post: Post<S>) -> Self {
         Core { calls, post }
     }

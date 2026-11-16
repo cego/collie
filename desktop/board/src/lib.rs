@@ -13,6 +13,7 @@ pub mod standing;
 pub mod timing;
 pub mod toasts;
 pub mod updates;
+pub mod video;
 
 pub use shell::view;
 

@@ -61,7 +61,7 @@ fn panel(k: &Kit) -> El {
         .border(1.0, k.c.border_weak)
 }
 
-fn quiet(said: impl Into<String>, k: &Kit) -> El {
+pub(super) fn quiet(said: impl Into<String>, k: &Kit) -> El {
     text(said.into())
         .font(k.ty.text_xsmall)
         .color(k.c.text_muted)
@@ -225,7 +225,7 @@ fn status_pill(status: &str, k: &Kit) -> El {
 }
 
 /// A record's prose, a step smaller than a chat's so it sits under its section's heading.
-fn markdown(source: &str, k: &Kit) -> El {
+pub(super) fn markdown(source: &str, k: &Kit) -> El {
     let body = rune::TextStyle {
         line_height: 20.0,
         ..k.ty.text_small
@@ -249,7 +249,7 @@ fn markdown(source: &str, k: &Kit) -> El {
         .w_full()
 }
 
-fn mono(said: &str, key: &str, k: &Kit) -> El {
+pub(super) fn mono(said: &str, key: &str, k: &Kit) -> El {
     text(said.to_string())
         .key(key.to_string())
         .font(k.ty.mono)
@@ -440,6 +440,7 @@ pub fn view(app: &App, k: &Kit) -> Option<El> {
         "review" => scrolled("review-scroll", review_tab(app, record, k)),
         "diff" => with_drafts(app, record, super::diff::view(app, k), k),
         "evidence" => scrolled("evidence-scroll", evidence_tab(record, k)),
+        "artefacts" => scrolled("artefacts-scroll", super::artefacts::view(record, k)),
         "log" => log_tab(record, k),
         "terminal" => terminal_tab(app, record, k),
         "facts" => scrolled("facts-scroll", facts_tab(app, record, k)),

@@ -2,6 +2,7 @@
 //! the human's sessions are, and the choice the Flock chat takes, through the fake core.
 
 mod support;
+use support::clock::FrameAt;
 
 use collie_desktop_board::App;
 use collie_desktop_board::calls::CallError;
@@ -111,7 +112,7 @@ fn the_dialog_says_where_each_computer_keeps_sessions_and_read_my_messages_holds
     runtime.state.open_standing_setup();
     let mut at = 100.0;
     runtime.invalidate();
-    runtime.frame(at);
+    runtime.frame_at(at);
     assert!(said(&runtime, "Looking for your sessions…"));
     assert_eq!(harness.fake.asked_of("setupInventory").len(), 1);
     harness.fake.answer(
@@ -125,7 +126,7 @@ fn the_dialog_says_where_each_computer_keeps_sessions_and_read_my_messages_holds
         ])),
     );
     support::settle(&harness, &mut runtime);
-    runtime.frame(at);
+    runtime.frame_at(at);
     assert!(said(
         &runtime,
         "Claude Code: 41 sessions in ~/.claude/projects"
@@ -166,6 +167,6 @@ fn ask_me_five_questions_holds_that_choice_and_not_now_or_never_declines_saying_
         Err(CallError("Settings could not be saved".into())),
     );
     support::settle(&harness, &mut runtime);
-    runtime.frame(at);
+    runtime.frame_at(at);
     assert!(said(&runtime, "Settings could not be saved"));
 }

@@ -5,6 +5,17 @@ import { measuredBy } from "./measuring.ts";
 
 const Findings = Schema.Struct({
   summary: Schema.String,
+  blocker: Schema.optionalKey(Schema.String),
+  next_action: Schema.optionalKey(Schema.String),
+  report: Schema.optionalKey(
+    Schema.Struct({
+      installation: Schema.String,
+      run: Schema.String,
+      id: Schema.String,
+      revision: Schema.Int,
+      step: Schema.String,
+    }),
+  ),
   findings: Schema.Array(Schema.Struct({ what: Schema.String, evidence: Schema.String })),
 });
 const content = contentOf(markdown);

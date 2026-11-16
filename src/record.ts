@@ -269,7 +269,7 @@ export const recordFrames = (
         if (!parted) {
           const compatible =
             key.parts === undefined && key.held === undefined
-              ? Struct.omit(detail, ["park", "recovery"])
+              ? Struct.omit(detail, ["park", "recovery", "narratives"])
               : detail;
           const now = yield* Clock.currentTimeMillis;
           return compatible.flow === undefined

@@ -1,5 +1,5 @@
-//! The plugged-in highlighter colours languages rune-kit's 13 scanners do and one they do
-//! not, and a block past rune-kit's 32 KiB to its end.
+//! The plugged-in highlighter colours languages rune-kit's built-in lexers do and one they do
+//! not, and a block past rune-kit's 128 KiB to its end.
 
 use collie_desktop_chat::highlight::syntect;
 use rune_kit::syntax::{Highlight, Highlighter, Paint, Syntax, builtin};
@@ -43,14 +43,17 @@ fn bash_is_coloured_by_its_grammar() {
 }
 
 #[test]
-fn nix_which_rune_kits_scanners_do_not_know_is_coloured_too() {
-    let code = "{ pkgs ? import <nixpkgs> {} }:\n# the shell\npkgs.mkShell { buildInputs = [ pkgs.hello ]; }\n";
+fn tcl_which_rune_kits_lexers_do_not_know_is_coloured_too() {
+    let code = "# the greeting\nset greeting \"hello\"\nputs $greeting\nproc twice {x} { return [expr {$x * 2}] }\n";
     assert!(
-        builtin(Some("nix"), code).is_empty(),
-        "Nix is outside rune-kit's 13"
+        builtin(Some("tcl"), code).is_empty(),
+        "Tcl is outside rune-kit's lexers"
     );
-    let found = syntect(Some("nix"), code);
-    assert_eq!(kind_of(&found, code, "# the shell"), Some(Syntax::Comment));
+    let found = syntect(Some("tcl"), code);
+    assert_eq!(
+        kind_of(&found, code, "# the greeting"),
+        Some(Syntax::Comment)
+    );
     assert!(found.len() > 3, "{found:?}");
 }
 
@@ -61,10 +64,10 @@ fn a_language_no_grammar_names_stays_plain() {
 }
 
 #[test]
-fn a_block_past_32_kib_is_coloured_to_its_end_but_rune_kit_colours_only_its_first_32_kib() {
+fn a_block_past_128_kib_is_coloured_to_its_end_but_rune_kit_colours_only_its_first_128_kib() {
     let line = "let value = \"some text\"; // a comment\n";
-    let code = line.repeat(64 * 1024 / line.len() + 1);
-    assert!(code.len() > 64 * 1024);
+    let code = line.repeat(160 * 1024 / line.len() + 1);
+    assert!(code.len() > 160 * 1024);
     let found = syntect(Some("rust"), &code);
     let last = found.iter().map(|(range, _)| range.end).max().unwrap();
     assert!(
@@ -78,5 +81,5 @@ fn a_block_past_32_kib_is_coloured_to_its_end_but_rune_kit_colours_only_its_firs
         .map(|(range, _)| range.end)
         .max()
         .unwrap();
-    assert!(last <= 32 * 1024, "rune-kit cut it at {last}");
+    assert!(last <= 128 * 1024, "rune-kit cut it at {last}");
 }

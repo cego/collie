@@ -204,7 +204,11 @@ export function settleAnswers(round: {
 /** A review not yet ready: `Awaiting` what ends by itself, `Blocked` what needs a repair. */
 export type ReviewWait =
   | { readonly _tag: "Awaiting"; readonly on: string; readonly who: string | null }
-  | { readonly _tag: "Blocked"; readonly why: ReadonlyArray<string> };
+  | {
+      readonly _tag: "Blocked";
+      readonly cause: "ci-failed" | "review-blocked";
+      readonly why: ReadonlyArray<string>;
+    };
 
 const TEAMMATE = "a teammate";
 const CI = "CI";
@@ -264,6 +268,7 @@ export function reviewWaitOf(mr: string, read: ReviewRead): ReviewWait {
   if (blocked.length > 0 || on.length === 0)
     return {
       _tag: "Blocked",
+      cause: read.pipeline.state === "failed" ? "ci-failed" : "review-blocked",
       why: blocked.length > 0 ? blocked : [`the forge will not merge it: ${mergeable?.said ?? ""}`],
     };
   return {

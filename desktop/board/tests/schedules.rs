@@ -2,6 +2,7 @@
 //! moving the chosen one, through the fake core.
 
 mod support;
+use support::clock::FrameAt;
 
 use collie_desktop_board::App;
 use collie_desktop_board::calls::CallError;
@@ -228,7 +229,7 @@ fn the_page_lists_each_machines_schedules_and_says_which_has_none() {
     let runtime = schedules_page(&harness);
     assert_eq!(harness.fake.asked_of("schedules").len(), 1);
     let mut runtime = runtime;
-    runtime.frame(100.0);
+    runtime.frame_at(100.0);
     assert!(said(
         &runtime,
         "No Schedules on mk-pc. Ask the Flock chat to add one."
@@ -271,7 +272,7 @@ fn pausing_the_chosen_schedule_asks_its_host_says_what_it_did_and_reads_again() 
         .fake
         .answer("changeSchedule", Err(CallError("vm's host refused".into())));
     settle(&harness, &mut runtime);
-    runtime.frame(at);
+    runtime.frame_at(at);
     assert!(said(&runtime, "vm's host refused"));
 }
 
@@ -323,7 +324,7 @@ fn a_move_keeps_its_dialog_until_it_is_done_and_says_why_one_was_refused() {
         Err(CallError("mk-pc has no checkout at /src/collie".into())),
     );
     settle(&harness, &mut runtime);
-    runtime.frame(at);
+    runtime.frame_at(at);
     assert!(
         runtime.state.pages.schedules.moving.is_some(),
         "a refused move keeps its dialog"
@@ -341,7 +342,7 @@ fn a_move_keeps_its_dialog_until_it_is_done_and_says_why_one_was_refused() {
         .fake
         .answer("moveSchedule", Ok(json!("Moved daily to mk-pc")));
     settle(&harness, &mut runtime);
-    runtime.frame(at);
+    runtime.frame_at(at);
     assert!(
         runtime.state.pages.schedules.moving.is_none(),
         "done, it closes"
@@ -363,7 +364,7 @@ fn the_move_dialogs_machine_select_opens_its_list_at_its_field() {
         &mut at,
     );
     tap(&mut runtime, "move-to/move-to-trigger", &mut at);
-    runtime.frame(at);
+    runtime.frame_at(at);
     let rect = |key: &str| {
         runtime
             .elements()
@@ -433,8 +434,8 @@ fn a_machine_that_connects_while_the_page_is_open_has_its_schedules_read() {
         )])),
     );
     settle(&harness, &mut runtime);
-    runtime.frame(100.0);
-    runtime.frame(200.0);
+    runtime.frame_at(100.0);
+    runtime.frame_at(200.0);
     assert_eq!(
         harness.fake.asked_of("schedules").len(),
         1,
@@ -446,8 +447,8 @@ fn a_machine_that_connects_while_the_page_is_open_has_its_schedules_read() {
             "protocol": 5, "herds": [], "tasks": [], "seq": 1 },
     })));
     runtime.invalidate();
-    runtime.frame(300.0);
-    runtime.frame(400.0);
+    runtime.frame_at(300.0);
+    runtime.frame_at(400.0);
     assert_eq!(
         harness.fake.asked_of("schedules").len(),
         2,
@@ -464,7 +465,7 @@ fn a_machine_that_connects_while_the_page_is_open_has_its_schedules_read() {
         ])),
     );
     settle(&harness, &mut runtime);
-    runtime.frame(500.0);
+    runtime.frame_at(500.0);
     assert!(
         said(&runtime, "self-improve in /src/collie"),
         "vm's Schedule is listed"

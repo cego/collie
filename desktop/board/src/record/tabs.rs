@@ -66,6 +66,7 @@ pub fn record_tabs(facts: &TabFacts) -> Vec<Tab> {
             Some(PendingItem::Diff),
         ),
         (loaded, Tab::new("Evidence", "evidence"), None),
+        (loaded, Tab::new("Artefacts", "artefacts"), None),
         (true, Tab::new("Log", "log"), Some(PendingItem::Tail)),
         (facts.terminal, Tab::new("Terminal", "terminal"), None),
     ];

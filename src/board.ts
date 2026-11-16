@@ -1975,6 +1975,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
               : ""
           }`;
         const bare: TaskView = {
+          narratives: Arr.flatMap([...runs].reverse(), (run) => run.narratives ?? []),
           id,
           name,
           project,

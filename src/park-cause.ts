@@ -10,6 +10,7 @@ export const ParkCause = Schema.Literals([
   "output-absent",
   "idle-budget",
   "ci-job-absent",
+  "ci-failed",
   "target-red",
   "forge-unavailable",
   "herdr-unavailable",
@@ -18,6 +19,7 @@ export const ParkCause = Schema.Literals([
   "login-missing",
   "branch-force-pushed",
   "release-failed",
+  "review-blocked",
   "gate-fix-unproved",
   "step-failed",
   "unknown",
@@ -41,7 +43,7 @@ export type Park = typeof Park.Type;
 
 type Entry =
   | { readonly kind: "asks-agent"; readonly message: string }
-  | { readonly kind: "rechecks" }
+  | { readonly kind: "rechecks"; readonly neverHeals?: true }
   | { readonly kind: "needs-you"; readonly reason: string; readonly neverHeals?: true };
 
 export const PARK_CAUSES: Readonly<Record<ParkCause, Entry>> = {
@@ -54,6 +56,7 @@ export const PARK_CAUSES: Readonly<Record<ParkCause, Entry>> = {
     reason: "its agent went quiet for longer than its idle budget, and nothing says why",
   },
   "ci-job-absent": { kind: "rechecks" },
+  "ci-failed": { kind: "rechecks", neverHeals: true },
   "target-red": { kind: "rechecks" },
   "forge-unavailable": { kind: "rechecks" },
   "herdr-unavailable": { kind: "rechecks" },
@@ -74,6 +77,12 @@ export const PARK_CAUSES: Readonly<Record<ParkCause, Entry>> = {
     neverHeals: true,
   },
   "release-failed": { kind: "needs-you", reason: "its release did not complete" },
+  "review-blocked": {
+    kind: "needs-you",
+    reason:
+      "its merge request is held back by a reviewer or the forge, and its Review wait goes on by itself once that is repaired",
+    neverHeals: true,
+  },
   "gate-fix-unproved": {
     kind: "needs-you",
     reason: "its gate fixes ran out without proving the outcome",

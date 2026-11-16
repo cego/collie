@@ -119,7 +119,10 @@ fn cards_in(runtime: &Runtime<App>, key: &str) -> Vec<String> {
         .collect()
 }
 
+/// Presses `key` where it rests, as a person waits for a panel to land before pressing in it.
 fn press(runtime: &mut Runtime<App>, key: &str) {
+    runtime.settle_all();
+    runtime.frame(0.0);
     let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
     runtime.pointer_move(x, y);
     runtime.frame(1.0);
@@ -130,6 +133,8 @@ fn press(runtime: &mut Runtime<App>, key: &str) {
 }
 
 fn double_press(runtime: &mut Runtime<App>, key: &str) {
+    runtime.settle_all();
+    runtime.frame(0.0);
     let (x, y) = runtime.find(key).unwrap_or_else(|| panic!("no {key}"));
     runtime.pointer_move(x, y);
     runtime.frame(1.0);
@@ -1676,7 +1681,7 @@ fn ready_to_ship_preserves_the_release_title_and_owning_run() {
 }
 
 #[test]
-fn a_parked_card_names_its_cause_and_its_latest_two_recovery_actions() {
+fn a_parked_card_keeps_its_cause_and_count_with_access_to_full_legacy_recovery() {
     let harness = Harness::new();
     let runtime = runtime(app(
         &harness,
@@ -1693,14 +1698,17 @@ fn a_parked_card_names_its_cause_and_its_latest_two_recovery_actions() {
     ));
     let park = node(&runtime, "card-t1-park").expect("its park");
     assert_eq!(park["name"], "Parked: ci-job-absent · Collie rechecks");
-    let history = node(&runtime, "card-t1-recovery").expect("its recovery");
-    assert_eq!(history["name"], "Recovery history");
-    let lines: Vec<&str> = within(&history)
-        .into_iter()
-        .filter(|n| n["role"] == "list-item")
-        .filter_map(|n| n["name"].as_str())
-        .collect();
-    assert_eq!(lines, ["second", "third"]);
+    assert!(node(&runtime, "card-t1-recovery").is_none());
+    let tree = runtime.accessibility_json().to_string();
+    assert!(tree.contains("3 recent recovery outcomes"));
+    assert!(!tree.contains("second"));
+    assert!(!tree.contains("third"));
+    let legacy = node(&runtime, "legacy-recovery").expect("full detail stays reachable");
+    assert_eq!(legacy["role"], "button");
+    assert_eq!(
+        legacy["name"],
+        "Read complete legacy recovery detail; report preparing or unavailable"
+    );
 }
 
 const PR400: &str = "https://github.com/cego/collie/pull/400";

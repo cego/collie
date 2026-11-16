@@ -7,7 +7,10 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { platformLayer } from "../src/platform";
-import { Effect, Fiber, FileSystem, Stream } from "effect";
+import { Effect, Fiber, FileSystem, Schema, Stream } from "effect";
+import type { ArtefactSearch } from "../src/artefact-model";
+import { FlockArtefacts, type FlockSearch } from "../src/artefact-search";
+import { searchMachines } from "../desktop/src/bun/machine";
 import { TestClock } from "effect/testing";
 import { RpcClientDefect, RpcClientError } from "effect/rpc/RpcClientError";
 import { ATTACHMENT_BYTES } from "../src/attachments";
@@ -54,6 +57,58 @@ const machine = (
   const door: ChatDoor & { readonly board: () => Stream.Stream<never> } = {
     // The chat reads the board Desktop follows, never one of its own.
     board: () => Stream.die("the chat subscribed to a host's board"),
+    artefactSeen: (payload) =>
+      Effect.sync(() => {
+        note("artefactSeen", payload);
+        return {
+          id: payload.id,
+          run: payload.runId,
+          kind: "file",
+          role: "handoff",
+          title: "note.txt",
+          ref: "handoff:note.txt",
+          source: "/note.txt",
+          mediaType: "text/plain",
+          size: 4,
+          revision: 3,
+          digest: "abc",
+          registeredAt: "2026-01-01",
+          observedAt: "2026-11-01",
+          detectedAt: "2026-11-01",
+          seen: payload.revision === null ? null : { revision: payload.revision, at: "2026-11-01" },
+          sourceAvailability: "available",
+          retainedAvailability: "available",
+          reason: null,
+        };
+      }),
+    artefactRegister: (payload) =>
+      Effect.sync(() => {
+        note("artefactRegister", payload);
+        return {
+          address: { installation: `inst-${name}`, run: payload.runId, id: "a9" },
+          item: {
+            id: "a9",
+            run: payload.runId,
+            kind: payload.kind ?? "file",
+            role: "deliverable",
+            title: "report.md",
+            ref: `registered:${payload.path ?? payload.url}`,
+            source: payload.path ?? payload.url ?? "",
+            mediaType: "text/markdown",
+            size: 5,
+            revision: 1,
+            digest: "abc",
+            registeredAt: "2026-11-01",
+            observedAt: "2026-11-01",
+            detectedAt: "2026-11-01",
+            seen: null,
+            sourceAvailability: "available",
+            retainedAvailability: "available",
+            reason: null,
+          },
+          retained: { revision: 1, digest: "abc", size: 5 },
+        };
+      }),
     declare: (payload: Declaration) =>
       Effect.sync(() => {
         note("declare", payload);
@@ -370,6 +425,210 @@ test("collie_herd is every Machine's board, each Run named by its Machine", () =
       expect(said).toContain("run mk-pc:r-1:");
       expect(said).toContain("run vm-mk:r-2: Fix board bugs");
       expect(said).toContain("run vm-mk:r-1:");
+    }),
+  ));
+
+test("Flock material reads and receipts keep the selected revision on the qualified Run", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const read = yield* call(asked, "collie_artefacts", {
+        run: "vm-mk:r-2",
+        id: "a1",
+        revision: 3,
+        offset: 9,
+      });
+      expect(read).toContain("vm-mk");
+      expect(asked).toContainEqual({
+        machine: "vm-mk",
+        op: "read",
+        payload: {
+          tool: "collie_artefacts",
+          input: { run: "r-2", id: "a1", revision: 3, offset: 9 },
+        },
+      });
+      const marked = yield* call(asked, "collie_do", {
+        actions: [{ kind: "artefact_seen", run: "vm-mk:r-2", id: "a1", revision: 3 }],
+      });
+      expect(marked).toContain("applied");
+      expect(asked).toContainEqual({
+        machine: "vm-mk",
+        op: "artefactSeen",
+        payload: { runId: "r-2", id: "a1", revision: 3, request: expect.any(String) },
+      });
+    }),
+  ));
+
+test("Flock chat searches every connected Machine once, by installation, and names one it is not connected to", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      const searched: Array<{ installation: string; query: string | undefined }> = [];
+      const item = (installation: string, id: string, detectedAt: string) => ({
+        installation,
+        id,
+        run: "r-1",
+        kind: "file",
+        role: "handoff",
+        title: `${id}.md`,
+        ref: `handoff:${id}.md`,
+        source: `/runs/r-1/handoffs/${id}.md`,
+        mediaType: "text/markdown",
+        size: 4,
+        revision: 1,
+        digest: id,
+        registeredAt: detectedAt,
+        observedAt: detectedAt,
+        detectedAt,
+        seen: null,
+        sourceAvailability: "available",
+        retainedAvailability: "available",
+        reason: null,
+      });
+      const machineOf = (
+        installation: string,
+        profile: string,
+        name: string,
+        id: string,
+        at: string,
+      ) =>
+        [
+          installation,
+          {
+            machine: { profile, name },
+            desktop: {
+              artefactSearch: (query: ArtefactSearch) =>
+                Effect.sync(() => {
+                  searched.push({ installation, query: query.query });
+                  return {
+                    items:
+                      query.run === undefined || query.run === "r-1"
+                        ? [item(installation, id, at)]
+                        : [],
+                    more: false,
+                    coverage: { runs: 1, indexed: 1 },
+                  };
+                }),
+            },
+          },
+        ] as const;
+      const doors = new Map([
+        machineOf("inst-pc", "local", "mk-pc", "notes-pc", "2026-11-01T00:00:01.000Z"),
+        machineOf("inst-vm", "vm", "vm-mk", "notes-vm", "2026-11-01T00:00:02.000Z"),
+      ]);
+      const known = [
+        { profile: "local", name: "mk-pc" },
+        { profile: "vm", name: "vm-mk" },
+        { profile: "laptop", name: "laptop" },
+      ];
+      const flock = {
+        ...flockOf(asked),
+        searchArtefacts: (query: FlockSearch) => searchMachines(doors, known, query),
+      };
+      const said = yield* callFlockTool(flock, "collie_artefacts", { query: "notes" }).pipe(
+        Effect.provide(platformLayer),
+      );
+      const page = yield* Schema.decodeEffect(Schema.fromJsonString(FlockArtefacts))(said);
+      expect(Arr.map(page.items, (one) => [one.installation, one.machine, one.item.id])).toEqual([
+        ["inst-vm", "vm-mk", "notes-vm"],
+        ["inst-pc", "mk-pc", "notes-pc"],
+      ]);
+      expect(page.complete).toBe(false);
+      expect(page.machines).toContainEqual({
+        installation: null,
+        machine: "laptop",
+        state: "unreachable",
+        reason: "Desktop is not connected to it",
+        runs: 0,
+        indexed: 0,
+      });
+      expect(searched).toEqual([
+        { installation: "inst-pc", query: "notes" },
+        { installation: "inst-vm", query: "notes" },
+      ]);
+      expect(asked).toEqual([]);
+      const read = yield* callFlockTool(flock, "collie_artefacts", {
+        run: "inst-vm:r-1",
+        id: "notes-vm",
+      }).pipe(Effect.provide(platformLayer));
+      expect(read).toContain("vm-mk");
+      expect(asked).toContainEqual({
+        machine: "vm-mk",
+        op: "read",
+        payload: { tool: "collie_artefacts", input: { run: "r-1", id: "notes-vm" } },
+      });
+      const ambiguous = yield* callFlockTool(flock, "collie_artefacts", {
+        run: "r-1",
+        kind: "file",
+      }).pipe(Effect.provide(platformLayer));
+      expect(ambiguous).toContain("Run r-1 is on mk-pc (inst-pc) and vm-mk (inst-vm)");
+    }),
+  ));
+
+test("chat registers a path on the Run's Machine as tracked, one from this computer as a sent snapshot, and a link as itself", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const here = `${yield* fs.makeTempDirectoryScoped()}/local.md`;
+      yield* fs.writeFileString(here, "# Here");
+      const asked: Asked[] = [];
+      const said = yield* call(asked, "collie_do", {
+        actions: [
+          { kind: "artefact_register", run: "vm-mk:r-2", path: "vm-mk:/srv/report.md" },
+          { kind: "artefact_register", run: "vm-mk:r-2", path: here, title: "Local" },
+          {
+            kind: "artefact_register",
+            run: "vm-mk:r-2",
+            url: "https://claude.ai/code/artifact/0b8c",
+            artefactKind: "claude-artefact",
+            provider: { name: "claude", namespace: "org-1", resource: "0b8c", version: "3" },
+            metadata: { pages: 2 },
+            created: "2026-11-01T00:00:00Z",
+          },
+        ],
+      });
+      expect(said).toContain("artefact_register: applied");
+      const registered = Arr.filter(asked, (one) => one.op === "artefactRegister");
+      expect(Arr.map(registered, (one) => one.payload)).toEqual([
+        expect.objectContaining({ runId: "r-2", path: "/srv/report.md", snapshot: false }),
+        expect.objectContaining({
+          runId: "r-2",
+          path: expect.stringMatching(/^\/state\/uploads\/[0-9a-f]{64}\/local\.md$/),
+          title: "Local",
+          snapshot: true,
+        }),
+        {
+          runId: "r-2",
+          request: expect.any(String),
+          url: "https://claude.ai/code/artifact/0b8c",
+          kind: "claude-artefact",
+          provider: { name: "claude", namespace: "org-1", resource: "0b8c", version: "3" },
+          metadata: { pages: 2 },
+          created: "2026-11-01T00:00:00Z",
+        },
+      ]);
+      expect(
+        Arr.map(
+          Arr.filter(asked, (one) => one.op === "upload"),
+          (one) => one.machine,
+        ),
+      ).toEqual(["vm-mk"]);
+    }).pipe(Effect.scoped, Effect.provide(platformLayer)),
+  ));
+
+test("chat metadata updates preserve an omitted snapshot choice and forward an explicit false", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const asked: Asked[] = [];
+      yield* call(asked, "collie_do", {
+        actions: [
+          { kind: "artefact_register", run: "vm-mk:r-2", id: "kept", title: "Renamed" },
+          { kind: "artefact_register", run: "vm-mk:r-2", id: "kept", snapshot: false },
+        ],
+      });
+      const registered = Arr.filter(asked, (one) => one.op === "artefactRegister");
+      expect(registered[0]?.payload).not.toHaveProperty("snapshot");
+      expect(registered[1]?.payload).toHaveProperty("snapshot", false);
     }),
   ));
 

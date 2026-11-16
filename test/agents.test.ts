@@ -655,6 +655,18 @@ test("a step's prompt opens with the three shell habits on its address line", ()
     }),
   ));
 
+test("every step's address line says how to register a result, with no word of its Output", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const [address] = Str.split(yield* read(promptPath("r1")), "\n");
+      expect(address).toContain(
+        "To hand a human a result they should find, collie_do artefact_register it on your Run: a path, or a url for a link, Claude artefact or Site with the provider, namespace, resource and version its tool returned. It changes neither your Output nor what proves it.",
+      );
+    }),
+  ));
+
 const typedSteps = (calls: ReadonlyArray<Call>) =>
   Arr.map(
     Arr.filter(

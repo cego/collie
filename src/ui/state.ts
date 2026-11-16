@@ -35,6 +35,7 @@ import { mrTarget } from "../mr";
 import { disposeLabel, mrUrlOf, openMrLabel, readMrRef } from "../board-model";
 import type { Live } from "../live";
 import type { Selection } from "../selection";
+import type { ArtefactCollection } from "../artefact-model";
 
 /** What the nav switches between. One at a time, each a projection of state. */
 export type ViewName = "runs" | "history" | "workflows" | "settings";
@@ -95,6 +96,7 @@ export interface Focus {
   selected: string | null;
   /** Whether the panel's log tail is showing, which is what makes the log worth reading. */
   tail: boolean;
+  artefacts?: boolean;
   /**
    * How many caps of the selected Run's review to read. A review is capped so that one
    * an agent wrote at 4 MB cannot stall a redraw, and this is how the rest of it is read
@@ -133,6 +135,8 @@ export interface AppState {
   settings: SettingsView | null;
   /** The selected Run, read from its directory. Null for any other Selection. */
   detail: RunDetail | null;
+  artefacts?: ArtefactCollection | null;
+  artefactsError?: string | null;
   /**
    * The Runs the board has marked to stop and not yet sent, so a card says it is going
    * and the toast can still take it back. The bridge's own, not something a load reads.
@@ -308,6 +312,8 @@ export type Command =
     }
   /** A finished Run's report acknowledged, for every board in the Flock. */
   | { _tag: "Acknowledge"; runId: string }
+  | { _tag: "SeeArtefact"; runId: string; id: string; revision: number | null }
+  | { _tag: "ToggleArtefacts" }
   /**
    * Go to the next unanswered question. The app answers this itself, like
    * `EditSetting`: it moves the Selection and clears a filter hiding the row, neither
@@ -349,6 +355,7 @@ const FOCUS_ONLY = [
   "ShowView",
   "ShowOlder",
   "ToggleTail",
+  "ToggleArtefacts",
   "MoreReview",
   "Select",
   "ToggleFilter",
@@ -379,6 +386,8 @@ export function retarget(at: Focus, command: FocusCommand): Focus {
       };
     case "ToggleTail":
       return { ...at, tail: !at.tail };
+    case "ToggleArtefacts":
+      return { ...at, artefacts: !at.artefacts };
     // A row of one filter is not a row of the other, so the Selection starts again:
     // `clampSelection` then lands it on the first row of the board that arrives.
     case "ToggleFilter":
@@ -438,6 +447,7 @@ export function rereads(last: Focus | null, next: Focus): Rereads {
     sameFilter(last.filter, next.filter) &&
     sameViews(last.shown, next.shown) &&
     last.tail === next.tail &&
+    last.artefacts === next.artefacts &&
     last.reviewPages === next.reviewPages &&
     // Previewing a proposal is the one focus change that reads nothing at all: the
     // proposal is already in `live`. It is not required to move the Selection, so it

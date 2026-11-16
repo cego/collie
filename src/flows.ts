@@ -2,6 +2,8 @@
 // through `InputPrompts`, so a flow knows nothing of what draws it.
 
 import * as Arr from "effect/Array";
+import { asksRun } from "./lifecycle";
+import { withArtefacts } from "./artefact-client";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Rec from "effect/Record";
@@ -970,6 +972,15 @@ export function appState(session: ControlSession, env: PluginEnv) {
     const defaults = yield* loadDefaults(env.userDir);
     const read = reuse ? null : yield* boardRead(session, env);
     const tasksBuilt = read === null ? reuse!.state.tasks : read.tasks;
+    const artefacts =
+      runId !== null && focus.artefacts === true
+        ? yield* asksRun(
+            env,
+            runId,
+            (client) => withArtefacts(client.board(), client.artefacts({ runId })),
+            "board",
+          )
+        : null;
     const state = {
       view: focus.view,
       filter: focus.filter,
@@ -998,6 +1009,8 @@ export function appState(session: ControlSession, env: PluginEnv) {
       // The bridge's own, and it overlays what it is holding onto every load.
       stopping: [],
       detail,
+      artefacts: artefacts?.ok === true ? artefacts.value : null,
+      artefactsError: artefacts?.ok === false ? artefacts.error.message : null,
     } satisfies AppState;
     last = { focus, state };
     return state;
@@ -1322,6 +1335,27 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       });
       return done.ok ? `${command.runId} seen` : done.error.message;
     }
+    case "SeeArtefact": {
+      const request = yield* newRequestId();
+      const done = yield* asksRun(
+        env,
+        command.runId,
+        (client) =>
+          withArtefacts(
+            client.board(),
+            client.artefactSeen({
+              runId: command.runId,
+              id: command.id,
+              revision: command.revision,
+              request,
+            }),
+          ),
+        "board",
+      );
+      return done.ok
+        ? `${command.id}: ${done.value.seen?.revision ?? "unseen"}`
+        : done.error.message;
+    }
 
     case "EditSetting":
     case "NextQuestion":
@@ -1335,6 +1369,7 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     case "SetFilter":
     case "Preview":
     case "ToggleTail":
+    case "ToggleArtefacts":
     case "MoreReview":
     case "Select":
     case "Refresh":

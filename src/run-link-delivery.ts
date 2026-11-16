@@ -83,6 +83,7 @@ export const notifyRunLink = Effect.fn("RunLinks.notify")(function* (
   const lane = yield* laneFor(env, run);
   const current = currentOf(lane);
   const notice: RunLinkNotice = {
+    narratives: view.narratives ?? [],
     requestedBy: who,
     run: view.runId,
     workflow: view.workflow,
