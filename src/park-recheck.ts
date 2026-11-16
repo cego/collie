@@ -22,6 +22,23 @@ export const rememberCiTarget = (dir: string, target: typeof CiTarget.Type) =>
 
 const reply = (cleared: boolean, note: string, error = false) => ({ cleared, note, error });
 
+/** The CI jobs the Run last recorded, by name, at the head it recorded last. */
+const lastCiTargets = (stateDir: string, runId: string) =>
+  Effect.map(
+    readJournal(`${stateDir}/runs/${runId}/ci-rechecks.jsonl`, CiTarget).pipe(
+      Effect.orElseSucceed(() => []),
+    ),
+    (targets) => {
+      const head = targets[targets.length - 1]?.head;
+      return new Map(
+        Arr.map(
+          Arr.filter(targets, (target) => target.head === head),
+          (target) => [target.job, target],
+        ),
+      );
+    },
+  );
+
 export const recheckPark = (
   view: Pick<RunView, "park" | "cwd" | "runId" | "mr" | "branch">,
   stateDir: string,
@@ -42,18 +59,23 @@ export const recheckPark = (
               Str.trim(read.stdout) === "" ? "checkout clean" : "checkout still dirty",
             );
       }
+      case "target-red": {
+        const latest = yield* lastCiTargets(stateDir, view.runId);
+        if (latest.size === 0) return reply(false, "no parked CI job recorded");
+        const passed: string[] = [];
+        for (const target of latest.values()) {
+          const ref = mrRefOf(target.mr);
+          if (ref === null) return reply(false, `job ${target.job} has no merge request`);
+          const read = yield* forgeOf(ref).targetJob(ref, target.job, target.cwd, shell);
+          if (!read.ok) return reply(false, read.reason, true);
+          if (read.state !== "passed")
+            return reply(false, `job ${target.job} is ${read.state} on ${read.branch}`);
+          passed.push(`${target.job} on ${read.branch} at ${read.at ?? ""}`);
+        }
+        return reply(true, `passed: ${Arr.join(passed, ", ")}`);
+      }
       case "ci-job-absent": {
-        const targets = yield* readJournal(
-          `${stateDir}/runs/${view.runId}/ci-rechecks.jsonl`,
-          CiTarget,
-        ).pipe(Effect.orElseSucceed(() => []));
-        const head = targets[targets.length - 1]?.head;
-        const latest = new Map(
-          Arr.map(
-            Arr.filter(targets, (target) => target.head === head),
-            (target) => [target.job, target],
-          ),
-        );
+        const latest = yield* lastCiTargets(stateDir, view.runId);
         if (latest.size === 0) return reply(false, "no parked CI job recorded");
         for (const target of latest.values()) {
           const ref = mrRefOf(target.mr);

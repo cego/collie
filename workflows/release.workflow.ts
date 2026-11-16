@@ -34,6 +34,7 @@ import {
   stackOrder,
   step,
   stepFailed,
+  type ParkCause,
   waitsOnApproval,
   type Finding,
   type JobLink,
@@ -232,12 +233,29 @@ export const Shared = Schema.Struct({
   }),
 });
 
+/** A CI job's failure at `head` that its target branch's newest commit, `at`, shares. */
+const TargetRed = Schema.TaggedStruct("TargetRed", {
+  head: Schema.String,
+  job: Schema.String,
+  branch: Schema.String,
+  at: Schema.String,
+  url: Schema.NullOr(Schema.String),
+});
+type TargetRed = typeof TargetRed.Type;
+
 export const Checked = Schema.Struct({
   head: Schema.String,
   failed: Schema.Array(Schema.String),
   // A Run journaled before 0.110.0 replays checks recorded without it.
   conflicting: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
+  target: Schema.optionalKey(TargetRed),
 });
+
+const TakeTarget = Schema.Union([
+  Schema.TaggedStruct("Moved", { head: Schema.String }),
+  Schema.TaggedStruct("Retried", {}),
+  Schema.TaggedStruct("Take", {}),
+]);
 
 /** One agent for the whole Run, which each step continues. */
 export const RELEASER = "release";
@@ -693,12 +711,13 @@ export default defineWorkflow({
       const host = yield* Host;
       const runId = (yield* Run).id;
       const fail = (reason: string) => new WorkflowError({ reason });
-      const park = (reason: string) =>
+      const park = (reason: string, cause: ParkCause = "release-failed") =>
         Effect.gen(function* () {
-          const why = `${reason}. Repair it, then resume ${runId}.`;
+          const why =
+            cause === "target-red" ? reason : `${reason}. Repair it, then resume ${runId}.`;
           yield* host.record(runId, why);
           yield* stepFailed(why);
-          yield* host.parked(runId, why, "release-failed");
+          yield* host.parked(runId, why, cause);
           return yield* Workflow.suspend(yield* WorkflowInstance);
         });
 
@@ -978,6 +997,7 @@ export default defineWorkflow({
               const checks = yield* host.approved(runId);
               const failed: string[] = [];
               let conflicting = false;
+              let target: TargetRed | undefined;
               for (const spec of Arr.filter(checks, (one) => one.ci === undefined)) {
                 const ran = yield* host
                   .verify({ runId, name: spec.name, cwd, ...pass })
@@ -1001,6 +1021,15 @@ export default defineWorkflow({
                     );
                   continue;
                 }
+                if (read.before?.branch !== undefined)
+                  target ??= {
+                    _tag: "TargetRed",
+                    head: "",
+                    job: spec.ci ?? "",
+                    branch: read.before.branch,
+                    at: read.before.at,
+                    url: read.before.url,
+                  };
                 if (read.before !== undefined) continue;
                 if (read.conflicts === true) conflicting = true;
                 else failed.push(read.unproved);
@@ -1010,7 +1039,12 @@ export default defineWorkflow({
                 return yield* park(
                   `The checks failed at ${short(head)} ${parkWith}: ${Arr.join(failed, "; ")}`,
                 );
-              return { head, failed, conflicting };
+              return {
+                head,
+                failed,
+                conflicting,
+                ...(target !== undefined && { target: { ...target, head } }),
+              };
             }),
           });
         const treeNow = Effect.map(host.evidence(runId, cwd), ({ final }) => ({
@@ -1166,6 +1200,41 @@ export default defineWorkflow({
               );
             }
           });
+        let targets = 0;
+        /**
+         * Parks while the target branch still shares the failure `red` saw, then takes the
+         * green target in a fix round outside the CI repair rounds: its number, or null where
+         * no round was needed.
+         */
+        const targetRound = (red: TargetRed) =>
+          Effect.gen(function* () {
+            const took = yield* Activity.make({
+              name: `target-${targets++}`,
+              success: TakeTarget,
+              error: WorkflowError,
+              execute: Effect.gen(function* () {
+                const still = yield* host.targetFailure({ runId, cwd });
+                if (still !== null)
+                  return yield* park(
+                    `${mr}'s CI job ${still.job} failed at ${short(red.head)}, and fails on its target branch ${still.branch} at ${short(still.at)} too (${still.url ?? "no job URL"}). The branch's fixer cannot repair its target, so Collie resumes ${runId} once ${still.job} passes on ${still.branch}`,
+                    "target-red",
+                  );
+                return yield* host.takeTarget({ runId, cwd, head: red.head });
+              }),
+            });
+            if (took._tag !== "Take") return null;
+            const { n } = yield* fixRound(
+              [
+                {
+                  severity: "blocker",
+                  title: `Take the green target branch ${red.branch}`,
+                  detail: `CI job ${red.job} failed at ${red.head} because ${red.branch} failed it too, and ${red.branch} passes it now. Its forge reruns this pipeline only on a new head. Fetch and merge the current ${red.branch} into this source branch, resolve nothing beyond that merge, and plain-push it. Change nothing else. Collie proves the pushed head.`,
+                },
+              ],
+              1,
+            );
+            return n;
+          });
         // Local success cannot restart the repair allowance on review reentry.
         let repairs = 0;
         let ciBefore: string | null = null;
@@ -1180,7 +1249,7 @@ export default defineWorkflow({
             if (failedCi !== null) {
               const standing = yield* Activity.make({
                 name: `${name}.ci`,
-                success: ReviewStandingSchema,
+                success: Schema.Union([ReviewStandingSchema, TargetRed]),
                 error: WorkflowError,
                 execute: Effect.gen(function* () {
                   const standing = yield* host.awaitReview({
@@ -1196,6 +1265,16 @@ export default defineWorkflow({
                     return yield* Workflow.suspend(yield* WorkflowInstance);
                   // An unfinished read lets resume observe external repair without repeating fixes.
                   if (standing._tag === "FailedCi") {
+                    const red = yield* host.targetFailure({ runId, cwd });
+                    if (red !== null)
+                      return {
+                        _tag: "TargetRed",
+                        head: standing.head,
+                        job: red.job,
+                        branch: red.branch,
+                        at: red.at,
+                        url: red.url,
+                      } satisfies TargetRed;
                     const why = notReady(standing);
                     if (standing.head === ciBefore)
                       return yield* park(
@@ -1207,7 +1286,13 @@ export default defineWorkflow({
                   return standing;
                 }),
               });
-              yield* gone(standing);
+              if (standing._tag === "TargetRed") {
+                const n = yield* targetRound(standing);
+                if (n !== null) {
+                  name = `fix-${n}.checks`;
+                  pass = { pass: "fix", round: n };
+                }
+              } else yield* gone(standing);
               if (standing._tag === "FailedCi") {
                 ciFailure = notReady(standing);
                 ciBefore = standing.head;
@@ -1226,20 +1311,40 @@ export default defineWorkflow({
               }
               yield* unconflicted();
             }
-            let at = yield* checksAt(
-              name,
-              pass,
-              repairs >= ROUNDS
-                ? `after ${ROUNDS} fix rounds${ciFailure === null ? "" : ` (${ciFailure})`}`
-                : null,
+            /** The checks again until no failure is left that the target shares. */
+            const takenTarget = (first: typeof Checked.Type) =>
+              Effect.gen(function* () {
+                let at = first;
+                while (at.failed.length === 0 && !at.conflicting && at.target !== undefined) {
+                  const k = targets;
+                  const n = yield* targetRound(at.target);
+                  yield* unconflicted();
+                  at = yield* checksAt(
+                    n === null ? `target-${k}.checks` : `fix-${n}.checks`,
+                    n === null ? null : { pass: "fix", round: n },
+                    repairs >= ROUNDS ? `after ${ROUNDS} fix rounds` : null,
+                  );
+                }
+                return at;
+              });
+            let at = yield* takenTarget(
+              yield* checksAt(
+                name,
+                pass,
+                repairs >= ROUNDS
+                  ? `after ${ROUNDS} fix rounds${ciFailure === null ? "" : ` (${ciFailure})`}`
+                  : null,
+              ),
             );
             while (at.failed.length > 0 || at.conflicting) {
               if (at.conflicting) {
                 const n = yield* unconflicted();
-                at = yield* checksAt(
-                  `conflict-${n}.checks`,
-                  null,
-                  repairs >= ROUNDS ? `after ${ROUNDS} fix rounds` : null,
+                at = yield* takenTarget(
+                  yield* checksAt(
+                    `conflict-${n}.checks`,
+                    null,
+                    repairs >= ROUNDS ? `after ${ROUNDS} fix rounds` : null,
+                  ),
                 );
                 continue;
               }
@@ -1251,13 +1356,15 @@ export default defineWorkflow({
               const round = ++repairs;
               const { n, stalled } = yield* fixRound(findings, round);
               yield* unconflicted();
-              at = yield* checksAt(
-                `fix-${n}.checks`,
-                { pass: "fix", round: n },
-                stalled ??
-                  (round >= ROUNDS
-                    ? `after ${ROUNDS} ${ciBefore !== null ? "CI repair" : "fix"} rounds`
-                    : null),
+              at = yield* takenTarget(
+                yield* checksAt(
+                  `fix-${n}.checks`,
+                  { pass: "fix", round: n },
+                  stalled ??
+                    (round >= ROUNDS
+                      ? `after ${ROUNDS} ${ciBefore !== null ? "CI repair" : "fix"} rounds`
+                      : null),
+                ),
               );
             }
             return at.head;
