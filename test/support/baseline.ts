@@ -1983,12 +1983,12 @@ scenario(
           ...BUILT,
           criteria: [{ criterion, met: "the scenario shows it" }],
         });
-        // The faster ticket's Output is written by hand, once its builder has measured.
+        // The faster ticket's builder works on while it measures; its Output is written by hand.
         yield* rig.queueOutputs([
           GRILLED,
           SPEC,
           TICKETS,
-          null,
+          { writes: [], output: null, then: "working" },
           builtFor("search reads its own index"),
           CLEAN_SYNTHESIS,
           OPENED,
@@ -2055,6 +2055,7 @@ scenario(
           `${agents}/01-faster.md.json`,
           asJson(builtFor("search answers in less time")),
         );
+        yield* (yield* rig.startCore()).report(`${build}-build-r1`, "idle");
         yield* Fiber.join(running);
         yield* bin.restore();
 
