@@ -39,7 +39,7 @@ test(
             yield* exec(["git", "remote", "add", "origin", "git@example.test:team/app.git"], {
               cwd: second.world.project,
             });
-            const outputs = `${second.world.home}/agent-outputs.json`;
+            const outputs = `${second.world.home}/outputs.json`;
             yield* fs.writeFileString(outputs, encode([{ verdict: "done" }]));
             const launch = yield* second.cli([
               "run",

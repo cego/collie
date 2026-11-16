@@ -985,9 +985,11 @@ test.each(["major", "minor"] as const)(
         yield* git(["remote", "set-url", "origin", `https://${PROJECT}.git`]);
         yield* git(["remote", "set-url", "--push", "origin", `${rig.root}/origin.git`]);
         const forge = yield* host.gitlab(model(first, { mrs: [mr(first, { author: "mk" })] }));
+        // The fixer works on until its Output is written by hand, so no reminder takes the
+        // second review's.
         yield* rig.queueOutputs([
           review([{ ...F1, severity }]),
-          null,
+          { writes: [], output: null, then: "working" },
           review([{ ...F1, severity, status: "fixed" }]),
         ]);
         yield* host.session(
@@ -1051,6 +1053,11 @@ test.each(["major", "minor"] as const)(
                 checks: [],
               }),
             );
+            const fixer = Arr.findLast(
+              yield* rig.calls(),
+              (one) => one.cmd === "terminal.run",
+            ).pipe(Option.getOrThrow);
+            yield* (yield* rig.startCore()).report(String(fixer.params?.name), "idle");
             const done = yield* until(
               () => host.status(improved.runId),
               (view) => view?.status.status === "complete" || view?.status.status === "failed",

@@ -144,7 +144,7 @@ test(
                 env,
               );
               const before = yield* app.load(focus());
-              expect(Arr.map(before.tasks, (task) => task.name)).toEqual(["Plain"]);
+              expect(Arr.map(before.tasks, (task) => task.name)).toEqual(["Hi"]);
               // Reading a subscription's latest value is not what drives it. Each next
               // read below happens only after the host follower says something changed.
               const changed = Effect.gen(function* () {
