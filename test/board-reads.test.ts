@@ -18,6 +18,7 @@ import {
   type RunRecordsApi,
 } from "../src/run-records";
 import { epochMs } from "../src/time";
+import { appendVerification, verificationsPath } from "../src/verify";
 import { madeRun } from "./support/records";
 import { runEffect } from "./support/effect";
 
@@ -156,5 +157,67 @@ test("a board build touches no file or directory an older build kept a Run's rec
           ),
         ),
       ).toEqual([]);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a board build reads what each verification says of its Step, never the verifications whole", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({
+        prefix: "collie-board-proofs-",
+      });
+      const records = yield* RunRecords;
+      const run = yield* madeRun(dir, {
+        id: "r1",
+        task: "t1",
+        state: "failed",
+        created: "2026-09-13T08:00:00Z",
+        finished: "2026-09-13T09:00:00Z",
+      });
+      yield* records.append(run.id, "steps.jsonl", [
+        '{"kind":"enter","key":"build","step":{"id":"build","title":"","description":"","kind":"agent","role":null,"produces":null},"place":null,"at":"2026-09-13T08:01:00Z"}',
+      ]);
+      yield* appendVerification(run.evidence, {
+        id: "v1",
+        run: run.id,
+        name: "test",
+        executable: "/usr/bin/false",
+        argv: [],
+        cwd: "/project",
+        start: { head_sha: "h", fingerprint: "f" },
+        end: { head_sha: "h", fingerprint: "f" },
+        exit: 1,
+        seconds: 1,
+        expect: "pass",
+        tail: { stdout: "", stderr: "it broke" },
+        result: "fail",
+        at: "2026-09-13T08:30:00Z",
+        by: "collie",
+        step: "build",
+      });
+      const whole: string[] = [];
+      yield* buildBoard({
+        env: readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" }),
+        runs: [run],
+        tasks: [],
+        registered: [],
+        proposals: [],
+        mrStates: new Map(),
+        offers: () => Effect.succeed([]),
+        now: epochMs("2026-09-13T10:00:00Z"),
+      }).pipe(
+        Effect.provideService(RunRecords, {
+          ...records,
+          lines: (one, journal) => {
+            whole.push(journal);
+            return records.lines(one, journal);
+          },
+          linesOf: (some, journal) => {
+            whole.push(journal);
+            return records.linesOf(some, journal);
+          },
+        }),
+      );
+      expect(whole).not.toContain(verificationsPath(run.evidence).name);
     }).pipe(Effect.scoped),
   ));
