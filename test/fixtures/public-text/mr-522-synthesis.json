@@ -1,0 +1,23 @@
+{
+  "verdict": "findings",
+  "summary": "No runtime regression was established by inspection of the connected profile, verification and authentication flows. Failing-first evidence is missing for the new regression cases, and several added comments do not meet the repository's comment-hygiene rule.",
+  "public_summary": "No runtime regression was found in the profile, verification or authentication changes. Several added comments repeat the code.",
+  "findings": [
+    {
+      "file": "packages/core/test/nuxt/components/EmailVerification/Status.test.ts",
+      "line": 56,
+      "severity": "major",
+      "internal": true,
+      "title": "Record failing-first evidence for the new regression cases",
+      "detail": "Correctness / verification: this Run records no failing execution of the newly added or extended cases; the successful GitLab pipelines do not establish that these assertions detect their intended regressions. The review-step rule requires seeing new tests fail: record targeted failing runs through collie verify --expect fail against the relevant pre-change or mutated behavior, followed by passing runs against the MR revision, for the cases listed below."
+    },
+    {
+      "file": "packages/core/jurisdiction/dk/app/pages/(konto)/konto/ret-profil.vue",
+      "line": 136,
+      "severity": "minor",
+      "internal": false,
+      "title": "Remove redundant comments",
+      "detail": "ret-profil.vue:136 and Status.vue:23 repeat the adjacent invalidation and visibility code, while Status.vue:125 only notes similarity to another badge. Remove these notes under ai-instructions/company-instructions/workflow/workflow.md's rule to comment only the non-obvious why."
+    }
+  ]
+}

@@ -670,3 +670,122 @@ test.skipIf(process.platform !== "linux")(
     ),
   60_000,
 );
+
+const runInCheckout = (
+  world: World,
+  args: ReadonlyArray<string>,
+  ready: (status: string | undefined) => boolean,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const git = (...more: ReadonlyArray<string>) =>
+      exec(["git", "-c", "user.name=t", "-c", "user.email=t@example.test", ...more], {
+        cwd: world.project,
+      });
+    yield* git("symbolic-ref", "HEAD", "refs/heads/master");
+    yield* fs.writeFileString(`${world.project}/.gitignore`, "target/\nnode_modules/\n");
+    yield* fs.writeFileString(`${world.project}/README.md`, "app\n");
+    yield* git("add", ".");
+    yield* git("commit", "-q", "-m", "init");
+    yield* git("update-ref", "refs/remotes/origin/master", "HEAD");
+    yield* git("remote", "add", "origin", "git@gitlab.example.com:group/app.git");
+    const started = yield* collie(world, ["run", "start", ...args], {
+      GITLAB_USER_LOGIN: "mk",
+      GIT_SSH_COMMAND: "false",
+    });
+    expect(started.envelope.error).toBeUndefined();
+    const runId = flow(
+      Schema.decodeUnknownResult(Schema.Struct({ runId: Schema.String })),
+      Result.getOrThrow,
+    )(started.envelope.data).runId;
+    const client = yield* connect(world.state);
+    const view = yield* until(
+      () => client.run({ runId }),
+      (one) => ready(one?.status.status),
+    );
+    const checkout = view?.worktree?.path ?? "";
+    expect(view?.worktree?.created_by_collie).toBe(true);
+    const cache = `${checkout}/target`;
+    yield* fs.makeDirectory(`${cache}/debug`, { recursive: true });
+    yield* fs.writeFileString(
+      `${cache}/CACHEDIR.TAG`,
+      "Signature: 8a477f597d28d172789f06886806bc55\n",
+    );
+    yield* fs.writeFileString(`${cache}/debug/out`, Str.repeat(8192)("x"));
+    yield* fs.makeDirectory(`${checkout}/node_modules`);
+    yield* fs.writeFileString(`${checkout}/node_modules/index.js`, "");
+    return { runId, checkout, cache };
+  }).pipe(Effect.orDie);
+
+const cacheItems = (listed: { readonly envelope: { readonly data?: unknown } }) => {
+  const report = Listed(listed.envelope.data);
+  return {
+    remove: Arr.filter(report.remove, (item) => item.kind === "build-cache"),
+    keep: Arr.filter(report.keep, (item) => item.kind === "build-cache"),
+  };
+};
+
+test(
+  "cleanup lists the build cache of a checkout whose only Run failed, and --apply removes it alone",
+  () =>
+    proves(
+      "collie-cleanup-build-cache-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const { checkout, cache } = yield* runInCheckout(
+            world,
+            ["placed", "--input", "work=one", "--input", "ending=fail"],
+            (status) => status === "failed",
+          );
+
+          const listed = cacheItems(yield* collie(world, ["cleanup"]));
+          expect(Arr.map(listed.remove, (item) => [item.target, item.reason])).toEqual([
+            [cache, "no live Run works in this checkout"],
+          ]);
+          expect(listed.remove[0]?.bytes).toBeGreaterThanOrEqual(8192);
+
+          yield* collie(world, ["cleanup", "--apply", "--request-id", "c-1"]);
+          expect(yield* fs.exists(cache)).toBe(false);
+          expect(yield* fs.exists(`${checkout}/README.md`)).toBe(true);
+          expect(yield* fs.exists(`${checkout}/node_modules/index.js`)).toBe(true);
+          const journal = Arr.map(
+            Arr.filter(Str.split(Str.trim(yield* journalOf(world)), "\n"), (line) => line !== ""),
+            (line) => parsed(line),
+          );
+          expect(journal).toContainEqual(
+            expect.objectContaining({ kind: "build-cache", target: cache }),
+          );
+        }),
+      ["placed.workflow.ts"],
+    ),
+  120_000,
+);
+
+test(
+  "cleanup keeps the build cache of a checkout a live Run works in, naming that Run",
+  () =>
+    proves(
+      "collie-cleanup-build-cache-live-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const { runId, cache } = yield* runInCheckout(
+            world,
+            ["waits", "--input", "work=one"],
+            (status) => status === "suspended",
+          );
+
+          const listed = cacheItems(yield* collie(world, ["cleanup"]));
+          expect(listed.remove).toEqual([]);
+          expect(listed.keep).toEqual([
+            { kind: "build-cache", target: cache, reason: `${runId} still works in this checkout` },
+          ]);
+
+          yield* collie(world, ["cleanup", "--apply", "--request-id", "c-1"]);
+          expect(yield* fs.exists(cache)).toBe(true);
+        }),
+      ["waits.workflow.ts"],
+    ),
+  120_000,
+);

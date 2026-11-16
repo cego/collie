@@ -10,19 +10,484 @@ import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
 import { createConnection, createServer, type Server } from "node:net";
-import { Clock, Deferred, Effect, Exit, Fiber, FileSystem, Schema, flow, Result } from "effect";
+import {
+  Clock,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Schema,
+  Stream,
+  flow,
+  Result,
+} from "effect";
 import { readAudit } from "../src/audit";
 import { runDir } from "../src/engine";
+import { readDispositions } from "../src/disposition";
+import { writeTask } from "../src/task";
+import { recordsAt } from "./support/records";
 import { readEnv } from "../src/env";
 import { findRun } from "../src/runs";
-import { connect, connectPeer, ownerOf } from "../src/host";
+import { connect, connectPeer, frontDoor, socketOf, ownerOf } from "../src/host";
+import { TaskView, sectionOf } from "../src/board-model";
+import { applyItem, EMPTY_FLOCK, flockCards } from "../desktop/src/shared/flock";
+import { toolNamed } from "../src/tools";
 import { certOf, certificateFor, keyOf, peersOf, relayOf } from "../src/peers";
 import { runEffect } from "./support/effect";
 import { stopHost, until } from "./support/host";
 import { listenerPort, twoMachines, type Side } from "./support/peers";
+import { exec } from "./support/command";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const Started = Schema.Struct({ runId: Schema.String });
+
+test(
+  "a remote branch owner can take the carrier before recording its MR only in the same repository",
+  () =>
+    runEffect(
+      twoMachines(
+        "collie-branch-handoff-",
+        (first, second) =>
+          Effect.gen(function* () {
+            for (const side of [first, second]) {
+              expect(
+                (yield* exec(
+                  [
+                    "git",
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "commit",
+                    "--allow-empty",
+                    "-qm",
+                    "seed",
+                  ],
+                  { cwd: side.world.project },
+                )).exitCode,
+              ).toBe(0);
+              expect(
+                (yield* exec(["git", "checkout", "-qb", "mk/carried"], {
+                  cwd: side.world.project,
+                })).exitCode,
+              ).toBe(0);
+              expect(
+                (yield* exec(
+                  [
+                    "git",
+                    "remote",
+                    "add",
+                    "origin",
+                    side === first
+                      ? "https://github.com/group/app.git"
+                      : "https://github.com/other/app.git",
+                  ],
+                  { cwd: side.world.project },
+                )).exitCode,
+              ).toBe(0);
+            }
+            const source = yield* first.cli([
+              "run",
+              "start",
+              "opens",
+              "--input",
+              "branch=mk/carried",
+              "--input",
+              "work=carry",
+              "--input",
+              "mr=https://github.com/group/app/pull/42",
+            ]);
+            expect(source.envelope.error).toBeUndefined();
+            const { runId } = yield* Schema.decodeUnknownEffect(Started)(source.envelope.data).pipe(
+              Effect.orDie,
+            );
+            const target = yield* second.cli([
+              "run",
+              "start",
+              "waits",
+              "--input",
+              "branch=mk/carried",
+              "--input",
+              "work=carry",
+            ]);
+            expect(target.envelope.error).toBeUndefined();
+            const { runId: successor } = yield* Schema.decodeUnknownEffect(Started)(
+              target.envelope.data,
+            ).pipe(Effect.orDie);
+            const host = yield* connect(second.world.state).pipe(Effect.orDie);
+            const view = yield* until(
+              () => host.run({ runId: successor }).pipe(Effect.orDie),
+              (one) => (one?.waiting.length ?? 0) > 0,
+            );
+            expect(view?.branch).toBe("mk/carried");
+            expect(view?.mr).toBeNull();
+            yield* first.lists([second]);
+            expect((yield* first.cli(["run", "show", successor])).envelope.ok).toBe(true);
+            const args = [
+              "run",
+              "disposition",
+              runId,
+              "--as",
+              "superseded",
+              "--ref",
+              `second:${successor}`,
+            ];
+            expect(
+              (yield* first.cli([...args, "--request-id", "wrong-repository"])).envelope.error
+                ?.message,
+            ).toContain("does not carry this Run's work");
+            expect(
+              (yield* exec(
+                ["git", "remote", "set-url", "origin", "https://github.com/group/app.git"],
+                { cwd: second.world.project },
+              )).exitCode,
+            ).toBe(0);
+            const accepted = yield* first.cli([...args, "--request-id", "same-repository"]);
+            expect(accepted.envelope.ok).toBe(true);
+            expect(accepted.envelope.data).toMatchObject({
+              disposition: {
+                successor: {
+                  work: {
+                    mr: "github.com/group/app#42",
+                    repository: "github.com/group/app",
+                    branch: "mk/carried",
+                  },
+                },
+              },
+            });
+          }),
+        ["opens.workflow.ts", "waits.workflow.ts"],
+      ),
+    ),
+  120_000,
+);
+
+test(
+  "a verified remote carrier handoff reaches the native board, CLI and chat while the successor stays live",
+  () =>
+    runEffect(
+      twoMachines(
+        "collie-handoff-",
+        (first, second) =>
+          Effect.gen(function* () {
+            const mr = "https://github.com/group/app/pull/42";
+            const source = yield* first.cli([
+              "run",
+              "start",
+              "targeted",
+              "--input",
+              `target=${mr}`,
+            ]);
+            const { runId } = yield* Schema.decodeUnknownEffect(Started)(source.envelope.data).pipe(
+              Effect.orDie,
+            );
+            const target = yield* second.cli([
+              "run",
+              "start",
+              "stops-on-mr",
+              "--input",
+              `mr=${mr}`,
+            ]);
+            const { runId: successor } = yield* Schema.decodeUnknownEffect(Started)(
+              target.envelope.data,
+            ).pipe(Effect.orDie);
+            const sourceHost = yield* connect(first.world.state).pipe(Effect.orDie);
+            const targetHost = yield* connect(second.world.state).pipe(Effect.orDie);
+            yield* until(
+              () => sourceHost.run({ runId }).pipe(Effect.orDie),
+              (view) => view?.status.status === "complete",
+            );
+            yield* until(
+              () => targetHost.run({ runId: successor }).pipe(Effect.orDie),
+              (view) => (view?.waiting.length ?? 0) > 0,
+            );
+            yield* first.lists([second]);
+            expect((yield* first.cli(["run", "show", successor])).envelope.ok).toBe(true);
+            const door = yield* frontDoor(socketOf(first.world.state)).pipe(Effect.orDie);
+            const initial = yield* Stream.runHead(door.board()).pipe(Effect.orDie);
+            if (Option.isNone(initial) || initial.value._tag !== "Snapshot")
+              return yield* Effect.die("no initial board");
+            const before = initial.value;
+            const card = Option.getOrThrow(
+              Arr.findFirst(before.tasks, (one) => one.runs.includes(runId)),
+            );
+            expect(card.landed).toBe(false);
+            const visible = yield* door.board().pipe(
+              Stream.filter(
+                (message) =>
+                  message._tag === "Upsert" &&
+                  message.task.runs.includes(runId) &&
+                  message.task.landed,
+              ),
+              Stream.runHead,
+              Effect.timeout("20 seconds"),
+              Effect.forkScoped,
+            );
+            const args = [
+              "run",
+              "disposition",
+              runId,
+              "--as",
+              "superseded",
+              "--ref",
+              `second:${successor}`,
+              "--request-id",
+              "handoff-1",
+            ];
+            const accepted = yield* first.cli(args);
+            expect(accepted.envelope.ok).toBe(true);
+            const installation = Str.trim(yield* read(`${second.world.state}/installation`));
+            expect(accepted.envelope.data).toMatchObject({
+              disposition: {
+                successor: {
+                  machine: { installation, name: "second" },
+                  run: successor,
+                  work: { mr: "github.com/group/app#42" },
+                },
+              },
+            });
+            const changed = yield* Fiber.join(visible).pipe(Effect.orDie);
+            if (Option.isNone(changed) || changed.value._tag !== "Upsert")
+              return yield* Effect.die("handoff never became visible");
+            expect(sectionOf(changed.value.task)).toBe("finished");
+            const machine = {
+              installation: before.installation,
+              profile: "local",
+              name: "first",
+            };
+            const flock = applyItem(applyItem(EMPTY_FLOCK, { machine, message: before }), {
+              machine,
+              message: changed.value,
+            });
+            expect(
+              Option.getOrUndefined(
+                Arr.findFirst(flockCards(flock).tasks, (one) => one.runs.includes(runId)),
+              )?.landed,
+            ).toBe(true);
+            const printed = yield* first.cli(["board"]);
+            const tasks = yield* Schema.decodeUnknownEffect(
+              Schema.Struct({ tasks: Schema.Array(TaskView) }),
+            )(printed.envelope.data).pipe(Effect.orDie);
+            expect(
+              Option.getOrUndefined(Arr.findFirst(tasks.tasks, (one) => one.runs.includes(runId)))
+                ?.landed,
+            ).toBe(true);
+            const said = yield* toolNamed("collie_herd")!.call(readEnv(first.env), {});
+            expect(said).toContain(`Superseded by second:${successor}`);
+            expect((yield* first.cli(args)).envelope.data).toEqual(accepted.envelope.data);
+            const alive = yield* targetHost.run({ runId: successor }).pipe(Effect.orDie);
+            expect(alive?.status.status).toBe("suspended");
+            expect(alive?.controls).toEqual([]);
+          }),
+        ["targeted.workflow.ts", "stops-on-mr.workflow.ts"],
+      ),
+    ),
+  120_000,
+);
+test(
+  "a handoff asked on a Task's helper settles the merge request's carrier, never on an unverified successor",
+  () =>
+    runEffect(
+      twoMachines(
+        "collie-helper-handoff-",
+        (first, second) =>
+          Effect.gen(function* () {
+            const mr = "https://github.com/group/app/pull/42";
+            const task = "task-carried";
+            yield* writeTask({
+              id: task,
+              workspace: "w1",
+              label: "project | Carry the change",
+              cwd: first.world.project,
+              created_at: "2026-10-01T09:00:00Z",
+            }).pipe(Effect.provide(recordsAt(first.world.state)), Effect.orDie);
+            const source = yield* first.cli([
+              "run",
+              "start",
+              "targeted",
+              "--task",
+              task,
+              "--input",
+              `target=${mr}`,
+            ]);
+            const { runId: carrier } = yield* Schema.decodeUnknownEffect(Started)(
+              source.envelope.data,
+            ).pipe(Effect.orDie);
+            const sourceHost = yield* connect(first.world.state).pipe(Effect.orDie);
+            yield* until(
+              () => sourceHost.run({ runId: carrier }).pipe(Effect.orDie),
+              (view) => view?.status.status === "complete",
+            );
+            const cards = () =>
+              Effect.gen(function* () {
+                const printed = yield* first.cli(["board"]);
+                const shown = yield* Schema.decodeUnknownEffect(
+                  Schema.Struct({ tasks: Schema.Array(TaskView) }),
+                )(printed.envelope.data).pipe(Effect.orDie);
+                return Option.getOrUndefined(
+                  Arr.findFirst(shown.tasks, (one) => one.runs.includes(carrier)),
+                );
+              });
+            const helped = yield* first.cli([
+              "run",
+              "start",
+              "hello",
+              "--task",
+              task,
+              "--input",
+              "name=heal",
+            ]);
+            expect(helped.envelope.error).toBeUndefined();
+            const { runId: helper } = yield* Schema.decodeUnknownEffect(Started)(
+              helped.envelope.data,
+            ).pipe(Effect.orDie);
+            const target = yield* second.cli([
+              "run",
+              "start",
+              "stops-on-mr",
+              "--input",
+              `mr=${mr}`,
+            ]);
+            const { runId: successor } = yield* Schema.decodeUnknownEffect(Started)(
+              target.envelope.data,
+            ).pipe(Effect.orDie);
+            yield* first.lists([second]);
+            expect((yield* first.cli(["run", "show", successor])).envelope.ok).toBe(true);
+            const dispose = (ref: string, request: string) =>
+              first.cli([
+                "run",
+                "disposition",
+                helper,
+                "--as",
+                "superseded",
+                "--ref",
+                ref,
+                "--request-id",
+                request,
+              ]);
+            expect(
+              (yield* dispose(`third:${successor}`, "unpaired")).envelope.error?.message,
+            ).toContain("no unambiguous paired Machine");
+            expect(
+              (yield* dispose("second:run-missing", "missing")).envelope.error?.message,
+            ).toContain("does not exist");
+            const landed = () => Effect.map(cards(), (card) => card?.landed);
+            expect(yield* landed()).toBe(false);
+            expect(
+              (yield* dispose(`second:${successor}`, "verified")).envelope.error,
+            ).toBeUndefined();
+            expect(
+              Arr.map(
+                yield* readDispositions(runDir(first.world.state, carrier)).pipe(Effect.orDie),
+                (line) => line.successor?.run,
+              ),
+            ).toEqual([successor]);
+            expect(
+              yield* readDispositions(runDir(first.world.state, helper)).pipe(Effect.orDie),
+            ).toEqual([]);
+            yield* until(landed, (shown) => shown === true);
+          }),
+        ["targeted.workflow.ts", "hello.workflow.ts", "stops-on-mr.workflow.ts"],
+      ),
+    ),
+  120_000,
+);
+
+test(
+  "each Run carrying one merge request hands off its own obligation to a verified remote successor",
+  () =>
+    runEffect(
+      twoMachines(
+        "collie-carriers-handoff-",
+        (first, second) =>
+          Effect.gen(function* () {
+            const mr = "https://github.com/group/app/pull/42";
+            const task = "task-carried";
+            yield* writeTask({
+              id: task,
+              workspace: "w1",
+              label: "project | Carry the change",
+              cwd: first.world.project,
+              created_at: "2026-10-01T09:00:00Z",
+            }).pipe(Effect.provide(recordsAt(first.world.state)), Effect.orDie);
+            const carry = Effect.gen(function* () {
+              const started = yield* first.cli([
+                "run",
+                "start",
+                "targeted",
+                "--task",
+                task,
+                "--input",
+                `target=${mr}`,
+              ]);
+              const { runId } = yield* Schema.decodeUnknownEffect(Started)(
+                started.envelope.data,
+              ).pipe(Effect.orDie);
+              const sourceHost = yield* connect(first.world.state).pipe(Effect.orDie);
+              yield* until(
+                () => sourceHost.run({ runId }).pipe(Effect.orDie),
+                (view) => view?.status.status === "complete",
+              );
+              return runId;
+            });
+            const older = yield* carry;
+            const newer = yield* carry;
+            const target = yield* second.cli([
+              "run",
+              "start",
+              "stops-on-mr",
+              "--input",
+              `mr=${mr}`,
+            ]);
+            const { runId: successor } = yield* Schema.decodeUnknownEffect(Started)(
+              target.envelope.data,
+            ).pipe(Effect.orDie);
+            yield* first.lists([second]);
+            expect((yield* first.cli(["run", "show", successor])).envelope.ok).toBe(true);
+            const card = () =>
+              Effect.gen(function* () {
+                const printed = yield* first.cli(["board"]);
+                const shown = yield* Schema.decodeUnknownEffect(
+                  Schema.Struct({ tasks: Schema.Array(TaskView) }),
+                )(printed.envelope.data).pipe(Effect.orDie);
+                return Option.getOrUndefined(
+                  Arr.findFirst(shown.tasks, (one) => one.runs.includes(older)),
+                );
+              });
+            const handOff = (runId: string, request: string) =>
+              first.cli([
+                "run",
+                "disposition",
+                runId,
+                "--as",
+                "superseded",
+                "--ref",
+                `second:${successor}`,
+                "--request-id",
+                request,
+              ]);
+            const successors = (runId: string) =>
+              Effect.map(
+                readDispositions(runDir(first.world.state, runId)).pipe(Effect.orDie),
+                Arr.map((line) => line.successor?.run),
+              );
+            expect((yield* handOff(older, "older")).envelope.error).toBeUndefined();
+            expect(yield* successors(older)).toEqual([successor]);
+            expect(yield* successors(newer)).toEqual([]);
+            // The card shows the older handoff once the board has read it.
+            const handedOff = yield* until(card, (shown) => shown?.disposition != null);
+            expect(handedOff?.landed).toBe(false);
+            expect((yield* handOff(newer, "newer")).envelope.error).toBeUndefined();
+            expect(yield* successors(newer)).toEqual([successor]);
+            yield* until(card, (shown) => shown?.landed === true);
+          }),
+        ["targeted.workflow.ts", "stops-on-mr.workflow.ts"],
+      ),
+    ),
+  120_000,
+);
+
 const Shown = Schema.Record(Schema.String, Schema.Json);
 const CallLine = Schema.fromJsonString(
   Schema.Struct({ cmd: Schema.String, argv: Schema.Array(Schema.String) }),

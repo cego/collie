@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "bun src/bun/index.ts",
-    "build": "bun ../desktop-rune/scripts/bundle.ts",
+    "build": "bun scripts/bundle.ts",
     "typecheck": "tsrs --noEmit --fast",
     "test": "bun test"
   },
