@@ -20,7 +20,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `definitions.ts`       | Layers, personas, and the `extends:` override a persona fork writes                                                         |
 | `yaml.ts`              | Frontmatter split and write-back over Effect's YAML parser                                                                  |
 | `schema.ts`            | Shared Schema predicates used across boundary decoders                                                                      |
-| `journal.ts`           | Append-only JSONL: the read that survives a torn line, and the append that makes its dir                                    |
+| `journal.ts`           | Append-only JSONL, in a file or a Run's rows: the read that survives a torn line, and the append                            |
 | `harness.ts`           | Per-harness start, model and effort flags, persona injection, and the Collie MCP tools it wires in                          |
 | `inputs.ts`            | Input inference from branch, cwd, earlier runs and glab                                                                     |
 | `strategies.ts`        | Which Input carries which strategy, and how a settled Run is read through one                                               |
@@ -91,10 +91,10 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `run-waits.ts`         | One Run's Waits: its questions, pending proposals, blocked agent, park, hold, memory wait and awaiting                      |
 | `steps.ts`             | What a Step is as data, and the records the host keeps of a Run's work entering and leaving one                             |
 | `run-log.ts`           | Serialized log writes and a rebuildable line count, so Step markers and capped tails share absolute line numbers            |
-| `step-durations.ts`    | This Machine's last ten completed calls per Workflow and Step, rebuilt once when absent and read without scanning past Runs |
+| `step-durations.ts`    | Each Workflow's usual Step times: the median of each Step's last ten completed calls, read from every Step row in one query |
 | `step-steering.ts`     | Pending Step pauses and notes, with authors, read times and prompt consumption                                              |
 | `flow.ts`              | A Run's Flow, built from its Step records, launches, questions and children (pure)                                          |
-| `flow-read.ts`         | A Run's Flow as the host reads it: those records gathered from its directory and the engine                                 |
+| `flow-read.ts`         | A Run's Flow as the host reads it: those records gathered from `host.db` and the engine                                     |
 | `run-links.ts`         | Notices of agent-requested Runs and the recorded delivery of each notice                                                    |
 | `run-link-delivery.ts` | Admission and settlement notices sent to a requesting Run's paired host                                                     |
 | `side-jobs.ts`         | What the host does with no pane open: the merge watch, each Herd's News, cleanup, and the Home's terminals                  |
@@ -106,7 +106,8 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `store.ts`             | Rows beside Effect's: request claims, run identity, generations, questions                                                  |
 | `store-writes.ts`      | Told the Runs each write to `host.db` names, for the Run model                                                              |
 | `records.ts`           | Collie's own records in `host.db`: the host's layer, a read-only one, one at a directory                                    |
-| `records-import.ts`    | The record files a host's first migration imports once                                                                      |
+| `run-records.ts`       | A Run's own journals, facts and last activity as rows in `host.db`, by the name an older build's file had                   |
+| `records-import.ts`    | The record files a host's first migrations import once, and `collie host rollback` writing a Run's records back             |
 | `release.ts`           | Whether an installation is a release or a development checkout, and placing the release a runner carries                    |
 | `releases.ts`          | The newest published release, and a release's runner downloaded and verified against the release key                        |
 | `onboard.ts`           | A Machine from bare to a working host, one streamed step at a time, never with sudo                                         |

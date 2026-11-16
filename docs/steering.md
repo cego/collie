@@ -296,9 +296,9 @@ outside any agent's permission rules. The wrapper is part of the check — `bun 
 `command_exit` rule names it and nothing has verified that name yet.
 
 The baseline workflows and personas route their test, lint and typecheck runs through the
-collector, so a card can say `verified` rather than `claimed`. The implementer also writes
-a progress checkpoint per ticket under `steering/progress/`; those are claims too, and
-labelled as such.
+collector, so a card can say `verified` rather than `claimed`. `implement` also records
+a progress checkpoint per ticket through `host.checkpoint`, which the host keeps among the
+Run's records; those are claims too, and labelled as such.
 
 ## Talking to Collie
 
@@ -426,11 +426,11 @@ The narrative is an input the rule ignores. There is no path by which a model ma
 own work look more important by describing it that way, and nothing that writes a card
 takes focus — a card arriving must never move a human off what they are doing.
 
-The implementer writes a **progress checkpoint** per ticket, and the host cards each one
-while the agent is still working — a human sees a slice land without waiting an hour for
-the whole build. Every piece of agent work also leaves a card when its Output is accepted,
-so a ticket's build has one whether or not the agent remembered its checkpoint, and a Run
-ends with a `final` card.
+`implement` records a **progress checkpoint** per ticket through `host.checkpoint`, and
+the host cards each one while the agent is still working — a human sees a slice land
+without waiting an hour for the whole build. Every piece of agent work also leaves a card
+when its Output is accepted, so a ticket's build has one whether or not it has a
+checkpoint, and a Run ends with a `final` card.
 
 The Home board draws them under a task's record, in
 [Cards](using.md#what-a-card-says), where the same discipline is on screen: a claim is

@@ -182,6 +182,25 @@ Reactivity key, which the board follows. The first host on a state directory imp
 A starting host registers every saved generation before a Run it recovers looks one up, so a
 parent resumed in the swap reads a child of any generation.
 
+A Run's own records are rows of the same file, kept by `src/run-records.ts`
+([ADR-draft-a-runs-own-records-are-rows-in-the-hosts-database](adr/draft-a-runs-own-records-are-rows-in-the-hosts-database.md)).
+A journal, such as `steps.jsonl`, `operations.jsonl` or `steering/cards.jsonl`, is lines of
+`collie_run_lines` in the order they were written. A fact, such as `intent.json`,
+`landing.json` or a progress checkpoint, is one row of `collie_run_facts`, and a change to
+one reads and writes it in one transaction. Each keeps the name of the file an older build
+kept it in, relative to the Run's directory, with `evidence/` first for the evidence
+directory's. `collie_run_activity` holds when each Run last did work: every write moves it
+except the host's own bookkeeping, which is the audit trail, dispositions and what was seen.
+A Step's usual time is one query over the Step rows. Only the host writes them
+([ADR-0040](adr/0040-the-host-is-the-only-writer.md)); the CLI, the MCP tools and the door's
+thread read them over a read-only connection (`recordsReadLayer`). The migration that made
+the tables, 25, imported every Run's journal and fact files under `runs/` and `evidence/`
+once, and each Run's last activity from those files' modification times, and left the files
+in place. A torn last line was dropped and a corrupt one kept, so a reader that fails closed
+still does. `collie host rollback` undoes it for an older build: with no host running, it
+writes every row back to its file, then drops the tables and the records of this migration and any later one, so the
+next upgrade imports the files again ([CLI](cli.md#the-local-workflow-host)).
+
 `patches/effect@4.1.4.patch` prevents a conditional SQL activity reset from replaying the
 interrupt that suspended it. The existing transaction protects the reply check and cleanup;
 a stale reset leaves newer replies and interrupts intact. Remove the patch only when an
@@ -239,9 +258,9 @@ so a resume reattaches to the launch already recorded. A Run that cannot go on b
 pane that will not take a prompt, a check that still fails, or none named, after its gate fixes, a workspace closed with its
 checkout gone — parks with the reason and the repair, and `run resume` picks it up.
 
-Beside the database, a Run's files are its audit trail: `agents/<run>/<operation>.prompt.md`
-with the Output it came back with, `evidence/<run>/` with its checks
-and the ones collected, and `runs/<run>/` with its cards, its `plan/`, the review it left and the notes its agents
+Beside the database, a Run's files are the rest of its trail: `agents/<run>/<operation>.prompt.md`
+with the Output it came back with, `evidence/<run>/` with its checks' logs,
+and `runs/<run>/` with its `plan/`, the review it left and the notes its agents
 handed on in `handoffs/`, which the shipped workflows tell them to write there rather than in
 `/tmp` and which `run show` and the Run's record list. `handoffs/` is made when the Run is
 placed, before any agent of it starts, and a Claude Code agent is started with
@@ -256,8 +275,8 @@ workspace of it is open, no agent it launched is alive, no checkout it made is o
 Run outside it names one of its Runs as parent or points an input into one of its run
 directories, and its last Run ended more than 30 days ago — the board's finish time, else the
 newest of its files. The rows go first, in one transaction under the Task's lock: each
-execution's messages and replies, through `MessageStorage.clearAddress`, then its decisions
-and its `collie_runs` row; a row the engine never accepted is left for recovery. Then its
+execution's messages and replies, through `MessageStorage.clearAddress`, then its decisions,
+its own records and its `collie_runs` row; a row the engine never accepted is left for recovery. Then its
 `runs/`, `agents/` and `evidence/` directories, its markers, the steering ledgers that name
 only its Runs, and the Task's record. A file a failure leaves behind has no row any more,
 and the next sweep's no-row rule removes it.
@@ -474,7 +493,7 @@ Machine and the requesting Run's agent, and records each request once on that Ru
 Flow hangs the link under the Step whose launch made the start and keeps that placement
 when settlement arrives. Settlement takes precedence over an admission delivered late.
 The started Run records each try's result in `linkNotices`, shown by `collie run show`,
-and keeps each notice as first sent in `link-notices.jsonl`. Each time a paired Machine's
+and keeps each notice as first sent among its records in `host.db`. Each time a paired Machine's
 link comes up, `onLink` tells the reports layer. While that link stays up and anything is
 still owed to the Machine, every five seconds it asks the Machine's host for its identity
 and, once that answers, sends again every undelivered notice to it, unchanged and under
@@ -1252,8 +1271,8 @@ what the review read says, never on an agent's Output
   `host.readTag` counts it as not finished.
 
 A Run merges through `host.merge`, never through `merge` itself, so that it lands with a
-**landing record** (`src/landing.ts`), kept as `landing.json` and log lines in the Run's
-own directory. The attempt, naming the merge request, the head and when, is written before
+**landing record** (`src/landing.ts`), kept as one of the Run's records in `host.db` and as
+lines in its log. The attempt, naming the merge request, the head and when, is written before
 the forge is asked; it becomes landed with the merged commit when the forge answers that
 this call merged it, and withdrawn on a refusal, a moved head, or a merge someone else made
 first.
