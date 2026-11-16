@@ -8438,7 +8438,15 @@ scenario(
       Effect.gen(function* () {
         const { bin } = yield* deliveringOn("gitlab");
         const head = yield* headOf();
-        const forge = yield* forgeOnPath(bin, "gitlab", ciOn(head, ciFailing, "failed"));
+        const trace = failedTrace("test/old-thing.test.ts", "an old thing works");
+        const red = ciOn(head, { ...ciFailing, trace });
+        const forge = yield* forgeOnPath(bin, "gitlab", {
+          ...red,
+          mrs: Arr.map(red.mrs, (mr) => ({
+            ...mr,
+            base: { at: CI_BASE, jobs: [{ name: "nuxi-job", state: "failed" as const, trace }] },
+          })),
+        });
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const runId = "r-ci-red-base";
         yield* leftToCi(runId, ["nuxi"]);
@@ -8451,7 +8459,7 @@ scenario(
         });
         yield* bin.restore();
         expect(said(result)).toBe(CI_MR);
-        const line = `nuxi: job nuxi-job also fails at ${pipe(CI_BASE, Str.slice(0, 12))}, where this branch leaves its target branch, so it failed before this branch's changes`;
+        const line = `nuxi: job nuxi-job also fails at ${pipe(CI_BASE, Str.slice(0, 12))}, where this branch leaves its target branch, so it failed before this branch's changes (failed there too: nuxi-job).`;
         expect(Arr.join(yield* ciNotes(forge), "\n")).toContain(line);
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).toContain(line);
@@ -8463,6 +8471,100 @@ scenario(
           ),
         ).toBe(false);
         expect(yield* ciRecords(runId)).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+const CI_PULL = `https://${PROJECT.github}/pull/31`;
+
+const ciOnGithub = (
+  head: string,
+  jobs: ReadonlyArray<FakeJob>,
+  base: ReadonlyArray<FakeJob> = [],
+): ForgeModel => ({
+  installed: true,
+  loggedIn: [FORGE_HOST.github],
+  login: "tester",
+  mrs: [
+    {
+      project: PROJECT.github,
+      iid: "31",
+      state: "open",
+      head,
+      targetBranch: "main",
+      jobs,
+      base: { at: CI_BASE, jobs: base },
+    },
+  ],
+});
+
+scenario(
+  "a GitHub job red where the branch leaves its target, whose run fails a job there green, is retried, then fixed in a CI fix round",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin } = yield* deliveringOn("github");
+        const head = yield* headOf();
+        const aggregate = {
+          name: "nuxi-job",
+          state: "failed",
+          trace: "bun test v1.4.4\n",
+        } as const;
+        const suite = {
+          name: "suite (1)",
+          state: "failed",
+          trace: "test/old-thing.test.ts:\n(fail) an old thing works\n",
+        } as const;
+        const desktop = {
+          name: "desktop",
+          state: "failed",
+          trace: "test/desktop-thing.test.ts:\n(fail) the desktop thing draws\n",
+        } as const;
+        const forge = yield* forgeOnPath(
+          bin,
+          "github",
+          ciOnGithub(
+            head,
+            Arr.map([aggregate, suite, desktop], (job) => ({ ...job, retried: "failed" as const })),
+            [aggregate, suite, { name: "desktop", state: "passed" }],
+          ),
+        );
+        const fix = yield* ciFixCommit();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-ci-github-red-base";
+        yield* leftToCi(runId, ["nuxi"]);
+        yield* rig.queueOutputs([
+          BUILT,
+          CLEAN_SYNTHESIS,
+          { ...OPENED, mr_url: CI_PULL },
+          {
+            writes: [
+              fix.write,
+              forge.holding(ciOnGithub(fix.sha, [{ name: "nuxi-job", state: "passed" }])),
+            ],
+            output: GATE_FIX,
+          },
+        ]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+          options: { outcome: "feature" },
+        });
+        yield* bin.restore();
+        expect(said(result)).toBe(CI_PULL);
+        expect(yield* asked(runId, "ci-fix-1")).toContain("nuxi: its CI job nuxi-job failed");
+        const excuse = "so it failed before this";
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.readFileString(`${runDir(dir, runId)}/log.txt`)).not.toContain(excuse);
+        const notes = (yield* forge.model()).notes?.[`${PROJECT.github}#31`] ?? [];
+        expect(Arr.join(notes, "\n")).not.toContain(excuse);
+        expect(
+          Arr.filter(forge.requests(), (call) =>
+            pipe(call.url, Str.endsWith("/rerun-failed-jobs")),
+          ),
+        ).toHaveLength(1);
       }),
     ),
   120_000,

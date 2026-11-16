@@ -1858,7 +1858,7 @@ for (const name of ["gitlab", "github"] as const) {
             base: { at: BASE, jobs: [{ name: "lint", state: "passed" }] },
             target: { at: TIP, jobs: failed },
           }),
-        ).toEqual({ ok: true, at: BASE, state: "missing", url: null });
+        ).toEqual({ ok: true, at: BASE, state: "missing", url: null, id: null });
       }),
     ));
 

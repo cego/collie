@@ -327,8 +327,12 @@ the merge watch, and records nothing for the job.
 
 A failed job is settled before anyone fixes it. The run reads the same job where the branch
 leaves its target branch, or on the target branch's latest pipeline where that commit has
-none: failed there too, it failed before the run's changes, and the merge request and the
-run's log say so, with the commit, and the job gets no fix (ADR-0034). Anything else there —
+none, and the failed jobs of each one's pipeline with the failed tests each job's log names.
+Only where the job failed there too, every other job that failed on the head failed there
+too, each of them names a failed test, and every failed test on the head failed there, did
+it fail before the run's changes: the merge request and the run's log say so, with the
+commit and the jobs, and the job gets no fix (ADR-0034). A job that names no failed test is
+never excused, and neither is an aggregate job that failed alone. Anything else there —
 no merge-base, no pipeline, no such job, any other result — makes the failure the run's own.
 That job is then retried once through the forge; a pass on the retry is a Flake, named on
 the merge request and the log, and recorded as the check's proof. Not where the failed
