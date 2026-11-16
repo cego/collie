@@ -5,7 +5,13 @@ import { Effect, FileSystem, Layer } from "effect";
 import * as Rec from "effect/Record";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import * as Reactivity from "effect/reactivity/Reactivity";
-import { parentOf, RunRecords, runRecordsLayer } from "../src/run-records";
+import * as SqlClient from "effect/sql/SqlClient";
+import {
+  parentOf,
+  RUN_RECORDS_MIGRATION_ID,
+  RunRecords,
+  runRecordsLayer,
+} from "../src/run-records";
 import { StoreWrites } from "../src/store-writes";
 import { runEffect } from "./support/effect";
 import { recordsAt } from "./support/records";
@@ -291,5 +297,41 @@ test("migrate down: a rollback writes every record back where an older build rea
         null,
         '{"version":1}\n',
       ]);
+    }),
+  ));
+
+test("a rollback dates each Run's files by when it last did work, not by the rollback", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* legacy({ "runs/run-c/steps.jsonl": '{"kind":"enter"}\n' });
+      const worked = Date.UTC(2020, 0, 2) / 1000;
+      yield* fs.utimes(`${stateDir}/runs/run-c/steps.jsonl`, worked, worked);
+      const activity = yield* records(RunRecords.use((one) => one.activity(["run-c"])));
+      expect(activity.get("run-c")).toBe(worked * 1000);
+
+      expect(yield* rollbackAt(stateDir)).toBe("rolled-back");
+      const info = yield* fs.stat(`${stateDir}/runs/run-c/steps.jsonl`);
+      expect(info.mtime._tag === "Some" ? info.mtime.value.getTime() : null).toBe(worked * 1000);
+    }),
+  ));
+
+test("a rollback is refused while a later build's migration is recorded, and changes nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* records(RunRecords.use((one) => one.append("run-a", "steps.jsonl", ["{}"])));
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`INSERT INTO collie_migrations (migration_id, name) VALUES (${RUN_RECORDS_MIGRATION_ID + 1}, 'later')`;
+      }).pipe(Effect.provide(SqliteClient.layer({ filename: `${stateDir}/host.db` })));
+
+      expect(yield* rollbackAt(stateDir)).toEqual({
+        later: `${RUN_RECORDS_MIGRATION_ID + 1}_later`,
+      });
+      expect(yield* fs.exists(`${stateDir}/runs/run-a/steps.jsonl`)).toBe(false);
+      expect(
+        yield* records(RunRecords.use((one) => one.lines("run-a", "steps.jsonl"))),
+      ).toEqual(["{}"]);
     }),
   ));

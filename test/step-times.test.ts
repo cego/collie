@@ -101,8 +101,10 @@ test(
             yield* until(() => made.workflow.poll(execution), Option.isSome);
             yield* start("four");
             expect((yield* read("four")).nodes[0]!.usual).toBe(12 * 60_000);
-            for (const id of ["one", "two", "three"])
-              yield* fs.remove(`${dir}/runs/${id}`, { recursive: true });
+            for (const id of ["one", "two", "three"]) yield* store.accepted(id);
+            expect(
+              yield* store.retire(["one", "two", "three"], () => Effect.void),
+            ).toEqual(["one", "two", "three"]);
             expect((yield* read("four")).nodes[0]!.usual).toBe(12 * 60_000);
             const board = () =>
               Effect.gen(function* () {
