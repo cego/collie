@@ -5,7 +5,7 @@
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
-import { Effect, FileSystem, Path } from "effect";
+import { Effect, FileSystem } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
@@ -20,8 +20,11 @@ import {
   propagate,
   readIntent,
   seedIntent,
+  updateIntent,
   writeIntent,
+  INTENT_FILE,
 } from "../src/intent";
+import { RunRecords, runOfDir } from "../src/run-records";
 import { runEffect } from "./support/effect";
 import { connect } from "../src/host";
 import { runDir } from "../src/engine";
@@ -77,11 +80,47 @@ test("a Run with no Intent reads as none, and a written one round trips", () =>
 test("an Intent that cannot be decoded is an error, never a default", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      yield* fs.writeFileString(path.join(dir, "intent.json"), `{"version":"one"}`);
+      yield* RunRecords.use((records) =>
+        records.put(runOfDir(dir), INTENT_FILE, `{"version":"one"}`),
+      );
       const failure = yield* readIntent(dir).pipe(Effect.flip);
       expect(failure).toBeInstanceOf(IntentUnreadable);
+    }),
+  ));
+
+test("two amendments at once each take a version of their own", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* writeIntent(dir, seedIntent("r1", {}));
+      const add = (text: string) =>
+        updateIntent(dir, (intent) =>
+          Effect.succeed(
+            intent === null
+              ? null
+              : amend(
+                  intent,
+                  {
+                    kind: "add-constraint",
+                    constraint: {
+                      id: text,
+                      kind: "semantic",
+                      text,
+                      severity: "warn",
+                      source: "human",
+                    },
+                  },
+                  "human:x",
+                  "2026-11-16T00:00:00Z",
+                ),
+          ).pipe(Effect.delay("5 millis")),
+        );
+      yield* Effect.all([add("one"), add("two")], { concurrency: "unbounded" });
+      const after = yield* readIntent(dir);
+      expect(after?.version).toBe(3);
+      expect(Arr.map(after?.constraints ?? [], (constraint) => constraint.text).sort()).toEqual([
+        "one",
+        "two",
+      ]);
     }),
   ));
 
