@@ -562,11 +562,15 @@ command's, and it answers once `-O check` does, within two minutes. Openers that
 together, in any process, take turns on `<path>.lock` and check again once they hold it,
 so one master and one SSO approval serve them all; the two minutes count the wait and
 every check too. The host is given only
-`sshConnection`'s handle, whose `check` and scoped `forward` are `ssh -S <path> -O
-check|forward|cancel <target>`, and whose `exit` is `ssh -S <path> -O exit <label>`,
+`sshConnection`'s handle, whose `check` and scoped `forward` are `ssh -F /dev/null -S <path> -O
+check|forward|cancel <target>`, and whose `exit` is `ssh -F /dev/null -S <path> -O exit <label>`,
 removing a path a master left behind: each talks to an open master or fails, so the host
 never logs in, and a master that has not answered one within five seconds (`MUX_BOUND`,
-Desktop's too) counts as gone. `-G` and the invite's session are the module's too (`resolvedHost`,
+Desktop's too) counts as gone. These control commands skip SSH configuration because the
+control path already identifies the connection. Otherwise OpenSSH also forwards or cancels
+the configuration's `LocalForward` and `RemoteForward` entries; an occupied unrelated port
+can prevent a peer's control link or dial-back from opening. The master still reads the
+configuration when it logs in. `-G` and the invite's session are the module's too (`resolvedHost`,
 `ride`); `src/peers.ts` builds no ssh argv. A session that rides the connection is built by `riderArgv`, `ssh -S <path> -o
 ControlMaster=no -o ProxyCommand=false -T <target> <remote>`: where the socket has gone,
 ssh would otherwise fall back to a login of its own, and `ProxyCommand=false` fails that
