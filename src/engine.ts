@@ -4121,7 +4121,10 @@ export const hostLayer = (options: {
           const leaks = leaksIn(text);
           if (leaks.length === 0) return null;
           const { env } = yield* placing;
-          return (yield* project) === ownRepository(releasesOf(env.raw)) ? null : refusal(leaks);
+          const bound = yield* project;
+          return bound === COLLIE_REPOSITORY || bound === ownRepository(releasesOf(env.raw))
+            ? null
+            : refusal(leaks);
         });
       /** What resolving a Run's reviewed branch needs, as a build of the review's findings is placed (ADR-0054). */
       const reviewing = (runId: string) =>
