@@ -95,6 +95,7 @@ import {
   NEEDS_INPUT,
   REFUSED_INPUT,
   runDir,
+  terminalStatus,
   type Given,
   type OpenDecision,
   type RunView,
@@ -1215,6 +1216,45 @@ export const controlled = (
   };
 };
 
+export const publishRun = (
+  env: PluginEnv,
+  options: {
+    readonly door: Door;
+    readonly runId: string;
+    readonly title: string;
+    readonly file: string;
+    readonly onto?: string | undefined;
+    readonly pushOnly?: boolean | undefined;
+    readonly skipCi?: boolean | undefined;
+    readonly request: string;
+  },
+) =>
+  asksRun(
+    env,
+    options.runId,
+    (client) =>
+      client.publish({
+        runId: options.runId,
+        title: options.title,
+        file: options.file,
+        onto: options.onto,
+        pushOnly: options.pushOnly,
+        skipCi: options.skipCi,
+        request: options.request,
+      }),
+    options.door,
+  ).pipe(
+    Effect.map((answer): OpResult =>
+      answer.ok
+        ? {
+            ok: true,
+            data: options.pushOnly ? { pushed: true } : { mr_url: answer.value.url, pushed: true },
+            human: options.pushOnly ? "Branch pushed." : answer.value.url,
+          }
+        : answer,
+    ),
+  );
+
 /** Picks a Run up again from any door: recovered first, then its stop cleared, so what wakes can run. */
 export const resumeRun = (
   env: PluginEnv,
@@ -1547,6 +1587,8 @@ export const nextAction = (view: RunView): string | null =>
 /** The one word a listing gives a Run, and the sentence behind it where there is one. */
 export const statusOf = (view: RunView): string => {
   switch (view.status.status) {
+    case "ended":
+      return `ended at ${view.status.at}; outcome unavailable`;
     case "complete":
       return `complete: ${resultText(view.status.value)}`;
     case "failed":
@@ -1559,8 +1601,7 @@ export const statusOf = (view: RunView): string => {
 export { resultText } from "./report";
 
 /** Whether the engine can still change this Run's state. */
-export const isSettled = (view: RunView): boolean =>
-  view.status.status === "complete" || view.status.status === "failed";
+export const isSettled = (view: RunView): boolean => terminalStatus(view.status);
 
 /**
  * What a Run offers to do next. The host answers, because only it holds the module

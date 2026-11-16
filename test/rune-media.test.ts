@@ -4,7 +4,7 @@ import {
   bundleLinuxMedia,
   MEDIA_PLUGINS,
   mediaDependencies,
-} from "../desktop-rune/scripts/linux-media";
+} from "../desktop/scripts/linux-media";
 import { shell } from "../src/mr";
 import { runEffect } from "./support/effect";
 import * as Arr from "effect/Array";

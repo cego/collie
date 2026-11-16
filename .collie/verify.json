@@ -5,5 +5,11 @@
     "argv": ["run", "check"],
     "cwd": "worktree",
     "ci": "test"
+  },
+  {
+    "name": "static",
+    "executable": "bun",
+    "argv": ["run", "check:static"],
+    "cwd": "worktree"
   }
 ]

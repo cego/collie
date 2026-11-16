@@ -22,7 +22,12 @@ export type Pass = typeof Pass.Type;
 /** One test of a check, as its runner named it: the file, and the name with ` > ` between describes. */
 export const FailedTestSchema = Schema.Struct({ file: Schema.String, name: Schema.String });
 export type FailedTest = typeof FailedTestSchema.Type;
-const SnapshotSchema = Schema.Struct({ head_sha: Schema.String, fingerprint: Schema.String });
+const SnapshotSchema = Schema.Struct({
+  head_sha: Schema.String,
+  fingerprint: Schema.String,
+  /** Why git could not measure the tree, where the fingerprint is `unstable:unmeasured`. */
+  unmeasured: Schema.optionalKey(Schema.String),
+});
 export type Snapshot = typeof SnapshotSchema.Type;
 
 export const VerificationSchema = Schema.Struct({

@@ -60,7 +60,7 @@ import type {
 import { laneWaitOf, stripOf } from "./flow";
 import { Foreground } from "./foreground";
 import { flowInputsFor, taskFlowFor } from "./flow-read";
-import { machineName } from "./peers";
+import { machineName, peersOf } from "./peers";
 import { deliveriesOf, SENT_STATES, toldIn } from "./steering";
 import { finishedOnRecord } from "./cards";
 import { branchMovement } from "./recovery";
@@ -333,7 +333,7 @@ export interface SaidMr {
 }
 
 /** `1 of 3 merged; app!12 ready to release; api!7 waits on app!12.` */
-function severalSentence(mrs: ReadonlyArray<SaidMr>): string {
+function severalSentence(mrs: ReadonlyArray<SaidMr>, historical = false): string {
   const each = Arr.flatMap(mrs, (one) =>
     one.merged
       ? []
@@ -343,7 +343,9 @@ function severalSentence(mrs: ReadonlyArray<SaidMr>): string {
           ? [`${one.short} closed without merging`]
           : one.waitsOn.length > 0
             ? [`${one.short} waits on ${Arr.join(one.waitsOn, ", ")}`]
-            : [`${one.short} ${one.ready ? "ready to release" : "is open"}`],
+            : [
+                `${one.short} ${historical ? (one.state === null ? "has not been read" : "was last read as open") : one.ready ? "ready to release" : "is open"}`,
+              ],
   );
   const merged = `${Arr.filter(mrs, (one) => one.merged).length} of ${mrs.length} merged`;
   return `${Arr.join([merged, ...each], "; ")}.`;
@@ -461,6 +463,7 @@ function doneSentence(
   agent: string | null = null,
   summary: string | null = null,
   readiness: ReadyToRelease | null = null,
+  answered: Sentence["answered"] = null,
 ): string {
   if (disposition === null) {
     if (planReady) return "Plan ready to implement.";
@@ -468,12 +471,17 @@ function doneSentence(
       return summary === null || Str.trim(summary) === ""
         ? "Finished; nothing merged yet."
         : `Completed. It reported: “${pipe(Str.trim(summary), Str.replace(/\s+/g, " "))}”`;
+    if (mrState !== null && LANDED_STATES.has(mrState))
+      return `Merged as ${mrLabel(mr)}.${mrState === "on-stage" || mrState === "in-prod" ? DEPLOYED[mrState] : ""}`;
     if (mrState === "closed") {
       const ref = readMrRef(mr);
       const noun = ref === null ? "merge request" : mrWords(ref).noun;
       return `${Str.toUpperCase(noun[0]!)}${pipe(noun, Str.slice(1))} ${mrLabel(mr)} closed without merging.`;
     }
-    return openSentence(mr, checks, agent, readiness);
+    if (answered == null) return openSentence(mr, checks, agent, readiness);
+    if (answered.ago === null) return `${mrLabel(mr)} has not been read.`;
+    const lacking = readiness?.missing[0];
+    return `${mrLabel(mr)} was last read as open${lacking === undefined ? "" : `, but ${lacking.said}`}.`;
   }
   switch (disposition.kind) {
     case "merged": {
@@ -535,14 +543,14 @@ export function sentenceFor(facts: Sentence): string {
     facts.disposition === null &&
     facts.mr !== null
   )
-    return `${facts.state === "failed" ? failedSentence(facts) : facts.state === "stopped" ? "Stopped by you." : "Its Driver died."} ${doneSentence(null, facts.mr, facts.mrState, false, facts.checks, facts.agent, facts.summary, facts.readiness ?? null)}${answeredLine(facts.answered)}`;
+    return `${facts.state === "failed" ? failedSentence(facts) : facts.state === "stopped" ? "Stopped by you." : "Its Driver died."} ${doneSentence(null, facts.mr, facts.mrState, false, facts.checks, facts.agent, facts.summary, facts.readiness ?? null, facts.answered)}${answeredLine(facts.answered)}`;
   if (facts.decision !== null) return decisionSentence(facts.decision);
   if (facts.memory != null) return facts.memory;
   switch (facts.state) {
     case "done":
       return `${
         facts.mrs !== undefined && facts.mrs.length > 1
-          ? severalSentence(facts.mrs)
+          ? severalSentence(facts.mrs, facts.answered != null)
           : doneSentence(
               facts.disposition,
               facts.mr,
@@ -552,6 +560,7 @@ export function sentenceFor(facts: Sentence): string {
               facts.agent,
               facts.summary,
               facts.readiness ?? null,
+              facts.answered,
             )
       }${answeredLine(facts.answered)}`;
     case "failed":
@@ -598,6 +607,7 @@ const STEP_STATE: Readonly<Record<RunState, StepState>> = {
   running: "active",
   waiting: "blocked",
   succeeded: "done",
+  ended: "done",
   failed: "failed",
   stopped: "failed",
 };
@@ -624,7 +634,7 @@ function stateOf(
   if (checking) return "active";
   if (status === "stopped") return "stopped";
   if (status === "failed") return "failed";
-  if (status === "succeeded") return "done";
+  if (status === "succeeded" || status === "ended") return "done";
   // Under the endings, because only a Run still going can be waiting for anyone: a Run
   // someone stopped while its agent sat at a prompt was stopped, and says so.
   if (stalled) return "blocked";
@@ -1029,21 +1039,50 @@ const ledgerOf = Effect.fn("Board.ledgerOf")(function* (
   card: string,
   cardOf: ReadonlyMap<string, string>,
   machine: string,
+  paired: ReadonlySet<string>,
+  runs: ReadonlyMap<string, RunFacts>,
 ) {
   const lines = yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => []));
-  return yield* Effect.forEach(lines, (line) =>
-    Effect.map(
-      line.ref === "" ? Effect.succeed(null) : mrIdIn(line.ref, run.cwd, shell),
-      (mr): Recorded => ({
+  const carried = yield* mrIdOf(run);
+  return yield* Effect.forEach(
+    lines,
+    Effect.fnUntraced(function* (line) {
+      const mr =
+        line.successor?.work.mr !== undefined
+          ? line.successor.work.mr
+          : line.ref === ""
+            ? null
+            : yield* mrIdIn(line.ref, run.cwd, shell);
+      const local = yield* Effect.forEach(
+        refRuns(line.ref, machine),
+        Effect.fnUntraced(function* (word) {
+          const target = runs.get(word);
+          if (target === undefined || cardOf.get(word) === card) return false;
+          const other = yield* mrIdOf(target);
+          return carried !== null && other !== null
+            ? carried === other
+            : other === null &&
+                run.branch !== null &&
+                run.branch === target.branch &&
+                run.project === target.project;
+        }),
+      );
+      return {
         run: run.id,
         line,
         mr,
-        elsewhere: Arr.some(refRuns(line.ref, machine), (word) => {
-          const named = cardOf.get(word);
-          return named !== undefined && named !== card;
-        }),
-      }),
-    ),
+        elsewhere:
+          (line.kind === "superseded" &&
+            line.successor !== undefined &&
+            paired.has(line.successor.machine.installation) &&
+            (line.successor.work.mr !== null
+              ? line.successor.work.mr === carried
+              : carried === null &&
+                run.branch !== null &&
+                line.successor.work.branch === run.branch)) ||
+          Arr.some(local, Boolean),
+      };
+    }),
   );
 });
 
@@ -1198,6 +1237,12 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   const registered = opts.registered ?? (yield* everyRegistered);
   const proposals = opts.proposals ?? (yield* everyProposal);
   const mrStates = opts.mrStates ?? (yield* readMrStates(stateDir));
+  const paired = new Set(
+    Arr.map(
+      yield* peersOf(stateDir).pipe(Effect.orElseSucceed(() => [])),
+      (peer) => peer.installation,
+    ),
+  );
   const forge = opts.forge ?? (yield* readForge(stateDir));
   const since = yield* seenSince(stateDir);
   const live = new Map(Arr.map(opts.alive ?? [], (agent) => [agent.name, agent]));
@@ -1219,6 +1264,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
 
   // A Repo run is its fan-out's card's child rather than a card of its own.
   const present = new Map(Arr.map(all, (run) => [run.id, run.task]));
+  const runsById = new Map(Arr.map(all, (run) => [run.id, run]));
   const repoRunsOf = new Map<string, RunFacts[]>();
   for (const run of all)
     if (run.repo !== null && run.parent !== null && present.get(run.parent) === run.task)
@@ -1282,6 +1328,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
                   id === null ? [] : [[mrStates.get(id) ?? null, forge.get(id) ?? null]],
                 ),
                 since,
+                [...paired],
                 quietMs,
                 [...missingCheckouts],
               ]);
@@ -1342,7 +1389,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         const ledgers = new Map(
           yield* Effect.forEach(everyRun, (run) =>
             Effect.map(
-              ledgerOf(run, id, cardOf, opts.env.machine ?? machineName()),
+              ledgerOf(run, id, cardOf, opts.env.machine ?? machineName(), paired, runsById),
               (lines) => [run.id, lines] as const,
             ),
           ),
@@ -1365,12 +1412,17 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           );
           return {
             ...entry,
-            state,
+            state:
+              settlement.by === "merged" && (state === null || !LANDED_STATES.has(state))
+                ? ("merged" as const)
+                : state,
             settlement,
             disposed: dispositionFor(entry, ledgers),
             merged: settlement.by === "merged",
           };
         });
+        const effectiveStates = new Map(mrStates);
+        for (const one of fates) if (one.state !== null) effectiveStates.set(one.id, one.state);
         const branchKey = (run: RunFacts) => `${run.project}\n${run.branch}`;
         const withMr = new Set(
           Arr.map(
@@ -1537,7 +1589,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         const mr = lead?.mr ?? null;
         const merging = repoRun ?? leader;
         const mrIdent = lead?.id ?? null;
-        const mrState = mrIdent === null ? null : (mrStates.get(mrIdent) ?? null);
+        const mrState = mrIdent === null ? null : (effectiveStates.get(mrIdent) ?? null);
         const branch =
           Option.getOrUndefined(
             Arr.findFirst(
@@ -1592,7 +1644,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
             verified === null
               ? null
               : withForge(checksAt(verified.records, verified.head, verified.approved), forged);
-          const mrState = id === null ? null : (mrStates.get(id) ?? null);
+          const mrState = id === null ? null : (effectiveStates.get(id) ?? null);
           const readiness = readyToRelease({
             now,
             read: forged?.read === undefined ? null : epochMs(forged.read),
@@ -1796,7 +1848,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
             mr,
             merging: merging.id,
             mrState,
-            mrStates,
+            mrStates: effectiveStates,
             ci: forged?.checks ?? null,
             releases: several
               ? Arr.map(each, (one, at) => ({

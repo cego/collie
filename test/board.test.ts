@@ -1622,6 +1622,76 @@ const M = "https://gitlab.cego.dk/mk/support/-/merge_requests/279";
 const M_ID = "gitlab.cego.dk/mk/support!279";
 const M_HEAD = "77215b10aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
+test("an old open forge answer is historical, and a fresh answer removes that qualification", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, {
+        state: "succeeded",
+        mr: M,
+        finished: "2026-09-14T09:00:00Z",
+      });
+      const read = (at: string) =>
+        board(env, [run], {
+          mrStates: new Map([[M_ID, "open"]]),
+          forge: new Map([[M_ID, { checks: { state: "unknown" }, head: M_HEAD, read: at }]]),
+        });
+      const [old] = yield* read("2026-09-14T08:00:00Z");
+      expect(old?.sentence).toContain("last read as open");
+      expect(old?.sentence).not.toContain("is open");
+      expect(old?.landed).toBe(false);
+      const [fresh] = yield* read("2026-09-14T10:04:00Z");
+      expect(fresh?.sentence).toContain("is open");
+      expect(fresh?.sentence).not.toContain("last read");
+    }),
+  ));
+
+test("a recorded merge overrides an older open answer in every card field until a fresh reopen", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, {
+        task: TASK.id,
+        state: "succeeded",
+        mr: M,
+        branch: "mk/landed",
+        created: "2026-09-14T08:00:00Z",
+        finished: "2026-09-14T09:00:00Z",
+      });
+      yield* recordDisposition(run.dir, {
+        at: "2026-09-14T09:30:00Z",
+        by: "mk",
+        kind: "merged",
+        ref: M,
+        note: null,
+      });
+      const read = (at: string, runs: ReadonlyArray<RunFacts> = [run]) =>
+        board(env, runs, {
+          mrStates: new Map([[M_ID, "open"]]),
+          forge: new Map([[M_ID, { checks: { state: "unknown" }, head: M_HEAD, read: at }]]),
+        });
+      const [settled] = yield* read("2026-09-14T09:00:00Z");
+      expect(settled?.landed).toBe(true);
+      expect(settled?.mrState).toBe("merged");
+      expect(settled?.mrs?.[0]?.state).toBe("merged");
+      expect(settled?.sentence).toContain("Merged as");
+      const unique = yield* madeRun(dir, {
+        id: "r-card-offers",
+        task: TASK.id,
+        state: "succeeded",
+        branch: "mk/unpublished-card-offers",
+        created: "2026-09-14T09:40:00Z",
+        finished: "2026-09-14T09:50:00Z",
+      });
+      expect((yield* read("2026-09-14T09:00:00Z", [run, unique]))[0]?.landed).toBe(false);
+      const [reopened] = yield* read("2026-09-14T10:00:00Z");
+      expect(reopened?.landed).toBe(false);
+      expect(reopened?.mrState).toBe("open");
+      expect(reopened?.mrs?.[0]?.settled).toBeNull();
+      expect(reopened?.sentence).not.toContain("Merged as");
+    }),
+  ));
+
 test("a Repo run's branch without an MR keeps its Task out of Finished and History", () =>
   runEffect(
     Effect.gen(function* () {
@@ -2287,12 +2357,55 @@ test("a line handing the work to a Run of another Task lands its own Task, and t
     }),
   ));
 
+test("a different local Task cannot take an unrelated carrier's obligation", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const source = yield* madeRun(dir, {
+        id: "r-source",
+        task: "task-1",
+        state: "failed",
+        mr: M,
+        branch: "mk/support",
+        finished: "2026-09-14T09:00:00Z",
+      });
+      const unrelated = yield* madeRun(dir, {
+        id: "r-unrelated",
+        task: "task-other",
+        state: "running",
+        mr: "https://gitlab.cego.dk/mk/other/-/merge_requests/279",
+        branch: "mk/other",
+      });
+      yield* recordDisposition(source.dir, {
+        at: "2026-09-14T09:30:00Z",
+        by: "mk",
+        kind: "superseded",
+        ref: unrelated.id,
+        note: null,
+      });
+      const views = yield* board(env, [source, unrelated], {
+        tasks: [TASK, { ...TASK, id: "task-other" }],
+      });
+      expect(
+        Option.getOrUndefined(Arr.findFirst(views, (one) => one.id === "task-1"))?.landed,
+      ).toBe(false);
+      expect(
+        Option.getOrUndefined(Arr.findFirst(views, (one) => one.id === "task-other"))?.state,
+      ).toBe("active");
+    }),
+  ));
+
 test("a superseded ref naming its successor as <machine>:<run> hands the work on only where the machine is this host", () =>
   runEffect(
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
       const here = { ...env, machine: "vm-mk.cegohost.dk" };
-      const next = yield* madeRun(dir, { id: "r-next", task: "task-next", state: "running" });
+      const next = yield* madeRun(dir, {
+        id: "r-next",
+        task: "task-next",
+        state: "running",
+        branch: "mk/carried",
+      });
       const refs = [
         ["task-full", "vm-mk.cegohost.dk:r-next"],
         ["task-short", "vm-mk:r-next"],
@@ -2306,7 +2419,7 @@ test("a superseded ref naming its successor as <machine>:<run> hands the work on
           id: `r-${task}`,
           task,
           state: "failed",
-          branch: `mk/${task}`,
+          branch: "mk/carried",
           created: "2026-09-14T08:00:00Z",
           finished: "2026-09-14T08:30:00Z",
         });

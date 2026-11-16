@@ -28,7 +28,7 @@ test(
             const checkout = `${first.world.project}/delivery-checkout`;
             yield* fs.makeDirectory(checkout);
             const clip = yield* fs.readFile(
-              new URL("../desktop-rune/fixtures/artefact-video.mp4", import.meta.url).pathname,
+              new URL("../desktop/fixtures/artefact-video.mp4", import.meta.url).pathname,
             );
             const fixtures = [
               [

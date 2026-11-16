@@ -2,7 +2,7 @@
 
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { type BrowserWindow, Screen } from "../../../desktop-rune/core/platform";
+import { type BrowserWindow, Screen } from "../../core/platform";
 import { Effect, Queue, Stream } from "effect";
 import { type Drawn, type MonitorScale, monitorOf, zoomFor } from "../shared/scale";
 import { output } from "./machine";

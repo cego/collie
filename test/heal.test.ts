@@ -200,7 +200,7 @@ test(
             const native = yield* exec(
               [reader, "accepted_producer_fixture", "--ignored", "--exact"],
               {
-                cwd: new URL("../desktop-rune/", import.meta.url).pathname,
+                cwd: new URL("../desktop/", import.meta.url).pathname,
                 env: { ...process.env, COLLIE_REPORT_FIXTURE: fixture },
               },
             );
