@@ -3654,11 +3654,11 @@ scenario(
         expect(of("merge").ships).toBe("merge");
         expect(of("release").confirm).toContain("tags");
         expect(of("merge").confirm).toContain("nothing is tagged or deployed");
-        expect(inputsFor(of("release"), { runDir: "/r", facts, input: {} })).toEqual({
+        expect(inputsFor(of("release"), { runId: "r", runDir: "/r", facts, input: {} })).toEqual({
           mr: OPENED.mr_url,
           ship: "release",
         });
-        expect(inputsFor(of("merge"), { runDir: "/r", facts, input: {} })).toEqual({
+        expect(inputsFor(of("merge"), { runId: "r", runDir: "/r", facts, input: {} })).toEqual({
           mr: OPENED.mr_url,
           ship: "merge",
         });
