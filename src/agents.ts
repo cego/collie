@@ -183,6 +183,7 @@ import {
 } from "./usage-model";
 import { ownCodexReading, USAGE_INTERVAL_MS } from "./usage";
 import {
+  everyRegistered,
   lineageAgent,
   registerAgent,
   scopeFor,
@@ -2037,13 +2038,29 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     } | null,
     through = deps,
   ) =>
-    dispatch.entryFromLive(through, {
-      role: about.role,
-      agent,
-      paneId: place?.paneId ?? null,
-      workspaceId: place?.workspaceId ?? null,
-      runId: about.runId,
-      workflow: about.workflow,
+    Effect.gen(function* () {
+      const found = yield* dispatch.entryFromLive(through, {
+        role: about.role,
+        agent,
+        paneId: place?.paneId ?? null,
+        workspaceId: place?.workspaceId ?? null,
+        runId: about.runId,
+        workflow: about.workflow,
+      });
+      if (found.entry === null || place !== null) return found;
+      // Herdr 1 named its agents as core does: only a start on core registers this terminal.
+      const terminalId = found.entry.incarnation?.terminalId;
+      const startedOnCore = Arr.some(
+        yield* everyRegistered,
+        (one) =>
+          one.agent === agent &&
+          one.runId === about.runId &&
+          one.incarnation?.backend === "core" &&
+          one.incarnation.terminalId === terminalId,
+      );
+      return startedOnCore
+        ? found
+        : { entry: null, reason: `${agent} was never started on core`, gone: true };
     });
 
   /**
@@ -2800,7 +2817,16 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         const chosen = session === null ? null : { kind: adapter.kind, value: session.id };
         // Started and recorded as one step, so a stop never misses an agent this started.
         const launched = alive
-          ? yield* recorded({ terminalId: live.terminalId, agentSession: null })
+          ? yield* Effect.gen(function* () {
+              const found = yield* entryFor(ask, agent, { paneId: live.paneId, workspaceId: null });
+              // Registered as a start is, so a later delivery finds it was launched on core.
+              if (found.entry !== null)
+                yield* registerAgent(scopeFor(ask.cwd), found.entry, {
+                  agents: listing.success,
+                  listedAt,
+                });
+              return yield* recorded({ terminalId: live.terminalId, agentSession: null });
+            })
           : yield* Effect.uninterruptible(
               start(
                 ask,
