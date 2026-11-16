@@ -272,35 +272,6 @@ const opened = Effect.fnUntraced(function* (
   });
 });
 
-/**
- * Ends every connection held under `stateDir` but those of `kept`, answering the paths it
- * ended. A path no longer names its Machine, so each is told by a fixed destination.
- */
-export const closeConnections = Effect.fn("SshConnection.closeOthers")(function* (
-  stateDir: string,
-  kept: ReadonlyArray<SshMachine>,
-  ssh = "ssh",
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const keep = new Set(Arr.map(kept, (machine) => controlPathOf(stateDir, machine)));
-  const held = Arr.filter(
-    Arr.map(
-      Arr.filter(
-        yield* fs
-          .readDirectory(`${stateDir}/ssh`)
-          .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => [])),
-        (name) => /^[0-9a-f]{16}$/.test(name),
-      ),
-      (name) => `${stateDir}/ssh/${name}`,
-    ),
-    (path) => !keep.has(path),
-  );
-  yield* Effect.forEach(held, (path) => exitAt(ssh, path, MUX_BOUND, "collie"), {
-    discard: true,
-  });
-  return held;
-});
-
 /** The host name ssh's own configuration resolves `target` to, or null where it says none. */
 export const resolvedHost = (target: string, ssh = "ssh") =>
   Effect.gen(function* () {

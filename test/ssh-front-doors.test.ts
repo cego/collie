@@ -10,7 +10,6 @@ import { readEnv } from "../src/env";
 import { machineList } from "../src/lifecycle";
 import { peersOf } from "../src/peers";
 import { PeerView } from "../src/peers-model";
-import { controlPathOf } from "../src/ssh-connection";
 import { runEffect } from "./support/effect";
 import { blackhole, freePort, resetter } from "./support/fake-ssh";
 import { stopHost, until } from "./support/host";
@@ -70,10 +69,6 @@ const logged = (side: Side, from: number, ...kinds: ReadonlyArray<string>) =>
       ),
     ),
   );
-
-/** Core's machines on `side`, with `second` at `target`. */
-const listsSecondAt = (side: Side, target: string | null) =>
-  Effect.sync(() => side.core.roster(target === null ? [] : [{ name: "second", target }]));
 
 /** Every line of the log is the host's `-O` call or a front door's master or ride. */
 const onlyMuxFromTheHost = (side: Side) =>
@@ -202,51 +197,6 @@ test(
             expect(board.envelope.error).toBeUndefined();
             expect(yield* logged(first, dropped, "master", "login")).toEqual(["master mk@second"]);
             yield* Scope.close(muting, Exit.void);
-          }),
-        [],
-      ),
-    ),
-  180_000,
-);
-
-test(
-  "the host closes the connection of a Machine core lists at another target, and of one it forgot",
-  () =>
-    runEffect(
-      twoMachines(
-        "collie-close-",
-        (first, second) =>
-          Effect.gen(function* () {
-            const fs = yield* FileSystem.FileSystem;
-            yield* first.lists([second]);
-            expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
-            const before = controlPathOf(first.world.state, {
-              label: "second",
-              target: "mk@second",
-            });
-            expect(yield* fs.exists(before)).toBe(true);
-
-            const paired = (yield* first.ssh.calls).length;
-            yield* listsSecondAt(first, "mk@second-moved");
-            yield* first.cli(["machine", "list"]);
-            expect(yield* logged(first, paired, "mux exit")).toHaveLength(1);
-            expect(yield* fs.exists(before)).toBe(false);
-            const after = controlPathOf(first.world.state, {
-              label: "second",
-              target: "mk@second-moved",
-            });
-            expect(yield* fs.exists(after)).toBe(false);
-            expect(yield* logged(first, paired, "master", "login")).toEqual([]);
-
-            expect((yield* first.cli(["machine", "connect", "second"])).envelope.ok).toBe(true);
-            expect(yield* fs.exists(after)).toBe(true);
-            const connected = (yield* first.ssh.calls).length;
-            yield* listsSecondAt(first, null);
-            yield* first.cli(["machine", "list"]);
-            expect(yield* logged(first, connected, "mux exit")).toHaveLength(1);
-            expect(yield* fs.exists(after)).toBe(false);
-            expect(yield* peersOf(first.world.state)).toEqual([]);
-            expect(yield* onlyMuxFromTheHost(first)).toEqual([]);
           }),
         [],
       ),

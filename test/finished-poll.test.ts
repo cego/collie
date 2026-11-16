@@ -449,33 +449,3 @@ test(
     ),
   120_000,
 );
-
-test(
-  "the reports sweep closing a Task lists that Task's Runs only",
-  () =>
-    runEffect(
-      hosted(
-        Effect.gen(function* () {
-          yield* writeTask({
-            id: "task-1",
-            workspace: null,
-            label: "Project | Picker",
-            cwd: rig.projectDir,
-            created_at: "2026-10-15T00:00:00.000Z",
-          });
-          const run = yield* started(yield* loaded("reported"), "r1", {}, "task-1");
-          yield* settled(run.runId, "complete");
-          yield* (yield* Store).reported(run.runId, { ...REPORT, closed: false });
-
-          yield* sweeping;
-          yield* until(
-            () => Effect.succeed(built),
-            (views) => views.includes("task-1"),
-          );
-
-          expect(Arr.filter(built, (one) => one !== run.runId)).toEqual(["task-1"]);
-        }),
-      ),
-    ),
-  120_000,
-);

@@ -731,9 +731,7 @@ test(
             const port = yield* listenerPort(first, second);
             expect(yield* listening(port)).toBe(true);
 
-            yield* first.lists([]);
-            yield* stopHost(first.world.state);
-            yield* first.cli(["machine", "list"]);
+            expect((yield* first.cli(["machine", "forget", "second"])).envelope.ok).toBe(true);
             yield* until(
               () => listening(port),
               (open) => !open,
@@ -1284,39 +1282,6 @@ test(
             ).pipe(Effect.orDie)).machines;
             expect(asked).toHaveLength(2);
             expect(asked).toContain("second");
-          }),
-        ["attended.workflow.ts"],
-      ),
-    ),
-  180_000,
-);
-
-test(
-  "a Machine herdr no longer lists is forgotten on both sides when the host that dials it starts, and the other stops listening",
-  () =>
-    runEffect(
-      twoMachines(
-        "collie-peers-forget-",
-        (first, second) =>
-          Effect.gen(function* () {
-            const { runId } = yield* waitingRun(second);
-            yield* first.lists([second]);
-            expect((yield* first.cli(["run", "show", runId])).envelope.ok).toBe(true);
-            expect(yield* peersOf(second.world.state)).toHaveLength(1);
-            const port = yield* listenerPort(first, second);
-
-            yield* first.lists([]);
-            const { stopHost } = yield* Effect.promise(() => import("./support/host"));
-            yield* stopHost(first.world.state);
-            yield* first.cli(["machine", "list"]);
-            yield* until(
-              () => Effect.all([peersOf(first.world.state), peersOf(second.world.state)]),
-              ([mine, theirs]) => mine.length === 0 && theirs.length === 0,
-            );
-            yield* until(
-              () => listening(port),
-              (open) => !open,
-            );
           }),
         ["attended.workflow.ts"],
       ),
