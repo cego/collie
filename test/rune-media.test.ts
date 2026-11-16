@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { Effect, FileSystem } from "effect";
+import { Cause, Effect, Exit, FileSystem } from "effect";
 import { bundleLinuxMedia, MEDIA_PLUGINS, mediaDependencies } from "../desktop/scripts/linux-media";
 import { shell } from "../src/mr";
 import { runEffect } from "./support/effect";
@@ -22,11 +22,19 @@ test.skipIf(process.platform !== "linux")(
           dir,
         );
         expect(libdir.code).toBe(0);
+        const searches: string[][] = [];
+        const run: typeof shell = (command, args, cwd, env) => {
+          if (command === "dpkg-query") searches.push(args);
+          return shell(command, args, cwd, env);
+        };
         yield* bundleLinuxMedia(
           dir,
           Str.trim(libdir.stdout),
           `${Str.trim(scanner.stdout)}/gst-plugin-scanner`,
+          run,
         );
+        expect(searches).toHaveLength(1);
+        expect(searches[0]!.length).toBeGreaterThan(MEDIA_PLUGINS.length);
         expect((yield* fs.readDirectory(`${dir}/lib/gstreamer-1.0`)).sort()).toEqual(
           Arr.map(MEDIA_PLUGINS, (name) => `libgst${name}.so`).sort(),
         );
@@ -39,6 +47,20 @@ test.skipIf(process.platform !== "linux")(
         expect((yield* fs.readDirectory(`${dir}/Resources/media-licenses`)).length).toBeGreaterThan(
           3,
         );
+
+        // dpkg-query returns partial stdout when just one path has no owner: refuse it all.
+        const unowned = `${dir}/unowned-library.so`;
+        yield* fs.writeFileString(unowned, "unowned");
+        const missing: typeof shell = (command, args, cwd, env) =>
+          shell(command, command === "dpkg-query" ? [...args, unowned] : args, cwd, env);
+        const refused = yield* bundleLinuxMedia(
+          dir,
+          Str.trim(libdir.stdout),
+          `${Str.trim(scanner.stdout)}/gst-plugin-scanner`,
+          missing,
+        ).pipe(Effect.exit);
+        expect(Exit.isFailure(refused)).toBe(true);
+        if (Exit.isFailure(refused)) expect(Cause.pretty(refused.cause)).toContain(unowned);
       }),
     ),
   120_000,

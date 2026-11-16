@@ -1906,6 +1906,8 @@ The native jobs cache Cargo dependencies, keyed by platform, compiler, manifests
 Each job keeps its own cache, shared with the same job in the release workflow where applicable.
 Workspace crates are rebuilt, and all checks, tests, bundle builds and signing checks still run on cache hits.
 No test results or finished release archives are reused.
+Linux media bundling resolves package ownership in one `dpkg-query` call for the complete
+library closure. A missing owner still fails the bundle, including when the command returns partial results.
 
 `bun run test --shard=2/6` reproduces shard 2 locally. It is a whole suite, so it takes the
 suite's lock and share, and agents do not run it. To split as CI did, delete
