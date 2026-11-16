@@ -1,4 +1,5 @@
 import { Herdr } from "../../src/herdr";
+import { isString } from "../../src/schema";
 import { launchesAt } from "./records";
 // The shipped workflows as modules, run the way a user's own module is run.
 //
@@ -762,15 +763,11 @@ const recommendedOf = (
 const said = (result: { readonly _tag: string; readonly success?: unknown }) =>
   result._tag === "Success" ? String(result.success) : "";
 
-/** Every message herdr was asked to deliver, in order; each names the work it is about. */
+/** Every message core was asked to type into an agent, in order; each names its work. */
 const prompts = () =>
-  rig.calls().pipe(
-    Effect.map((calls) =>
-      Arr.map(
-        Arr.filter(calls, (call) => call.cmd === "agent prompt"),
-        (call) => call.argv?.[3] ?? "",
-      ),
-    ),
+  Effect.map(
+    agentPrompts(),
+    Arr.map((call) => String(call.params?.text)),
   );
 
 /** The Clearance line typed with an operation's step message, or "" for none. */
@@ -1048,7 +1045,6 @@ scenario(
           Agents.pipe(Effect.flatMap((agents) => agents.askRoute("planner", ["r-impl", "r-plan"]))),
         );
         expect(route).toContain(`collie_do deliver to r-plan, agent ${planner.agent}`);
-        expect(route).not.toContain("herdr agent prompt");
         const sent = yield* session(
           Agents.pipe(
             Effect.flatMap((agents) =>
@@ -1101,7 +1097,7 @@ scenario(
         // the spec, which is why the spec needs no second telling of what was decided.
         const starts = yield* rig
           .cmds()
-          .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "agent start")));
+          .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run")));
         expect(starts).toHaveLength(1);
 
         const sent = yield* prompts();
@@ -2147,7 +2143,7 @@ scenario(
         // and then the planner, told what was found rather than sent to read it.
         const starts = yield* rig
           .cmds()
-          .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "agent start")));
+          .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run")));
         expect(starts).toHaveLength(2);
         expect(yield* prompts()).toHaveLength(5);
         expect(yield* asked("r-plan-two", "second-opinion-1")).toContain(
@@ -2187,14 +2183,14 @@ const launched = () =>
   rig.calls().pipe(
     Effect.map((calls) =>
       Arr.map(
-        Arr.filter(
-          Arr.map(calls, (call) => call.argv ?? []),
-          (argv) => argv[1] === "start",
-        ),
-        (argv) => ({
-          kind: argv[argv.indexOf("--kind") + 1],
-          args: Arr.join(argv.slice(argv.indexOf("--") + 1), " "),
-        }),
+        Arr.filter(calls, (call) => call.cmd === "terminal.run"),
+        (call) => {
+          const argv = Schema.decodeUnknownSync(Schema.Array(Schema.String))(call.params?.argv);
+          return {
+            kind: Option.getOrElse(Arr.last(Str.split(argv[0] ?? "", "/")), () => ""),
+            args: Arr.join(argv, " "),
+          };
+        },
       ),
     ),
   );
@@ -3509,7 +3505,7 @@ scenario(
         expect(
           Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === "post-1"))?.prompt,
         ).toContain("HEAD is not a branch, so there is nothing to fix on it");
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
       }),
     ),
   120_000,
@@ -3592,7 +3588,7 @@ scenario(
         expect(
           Option.getOrUndefined(Arr.findFirst(rows, (row) => row.decision === "post-2"))?.prompt,
         ).toContain("HEAD is not a branch, so there is nothing to fix on it");
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
 
         yield* answered({ ...review, decision: "post-2", value: "Don't post" });
         const fs = yield* FileSystem.FileSystem;
@@ -3692,7 +3688,7 @@ scenario(
           runId: "r-building",
           workflow: "implement",
           at: "2026-09-23T10:00:00Z",
-          incarnation: { terminalId: paneId, agentSession: null },
+          incarnation: { terminalId: paneId, agentSession: null, backend: "core" },
         }).pipe(Effect.provide(recordsAt(dir)), Effect.orDie);
         const target = "branch:main...HEAD";
         yield* parked({
@@ -3717,7 +3713,7 @@ scenario(
         expect(handed).toHaveLength(1);
         expect(handed[0]).toContain(`${runDir(dir, "r-review-live")}/review.md`);
         // One agent, the lone reviewer; the fix went to the one already here.
-        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+        expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
 
         // Collie cannot see that agent finish, so the human says when to look again, and
         // the next review is a follow-up of this one rather than a fresh start.
@@ -5067,18 +5063,8 @@ scenario(
         // its own, because it may not vouch for the change.
         const starts = yield* rig
           .cmds()
-          .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "agent start")));
+          .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run")));
         expect(starts).toHaveLength(2);
-        // Tabs open in the order their agents started, whatever the workflow is called.
-        const tabs = yield* rig.calls().pipe(
-          Effect.map((calls) =>
-            Arr.map(
-              Arr.filter(calls, (call) => call.cmd === "tab create"),
-              (call) => call.argv?.[(call.argv?.indexOf("--label") ?? -2) + 1],
-            ),
-          ),
-        );
-        expect(tabs).toEqual(["Implementer", "Reviewer · review-1"]);
         // The second ticket is handed what the first left, not the whole transcript.
         const second = yield* asked("r-impl", "02-second.md");
         expect(second).toContain("Ticket: 02-second.md — the second one");
@@ -6590,7 +6576,7 @@ scenario(
           runId: "r-planner",
           workflow: "plan",
           at: "2026-09-23T10:00:00Z",
-          incarnation: { terminalId: paneId, agentSession: null },
+          incarnation: { terminalId: paneId, agentSession: null, backend: "core" },
         }).pipe(Effect.provide(recordsAt(dir)), Effect.orDie);
         yield* approve("r-planned", ["unit"]);
         yield* rig.queueOutputs([null, BUILT, CLEAN_SYNTHESIS, OPENED]);
@@ -8147,7 +8133,7 @@ scenario(
         expect(
           yield* rig
             .cmds()
-            .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "agent start"))),
+            .pipe(Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run"))),
         ).toHaveLength(3);
         const fixing = yield* asked("r-impl-fix", "fix-1");
         expect(fixing).toContain("the guard is on the wrong side");
@@ -12323,7 +12309,7 @@ scenario(
           });
           expect(why).toContain("has written nothing to");
           expect(why).not.toContain("approved");
-          expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "agent start")).toHaveLength(1);
+          expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
         }),
       ),
     ),
@@ -18130,9 +18116,9 @@ for (const name of ["gitlab", "github"] as const) {
           yield* bin.restore();
           expect(outcomeText(status)).toBe(`${mr} was left open`);
           expect(yield* runLog(runId)).toContain(`shared by the operator: ${mr} in #frontend`);
-          expect(Arr.filter(yield* rig.calls(), (call) => call.cmd === "agent start")).toHaveLength(
-            1,
-          );
+          expect(
+            Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.run"),
+          ).toHaveLength(1);
           expect(slack.calls).toEqual([]);
         }),
       ),
@@ -21751,8 +21737,15 @@ const DefaultOf = Schema.Struct({ default: Schema.Json });
 const schemaDefault = (drawn: Schema.Json | null) =>
   Option.getOrNull(Schema.decodeUnknownOption(DefaultOf)(drawn))?.default ?? null;
 
-const agentPrompts = () =>
-  rig.calls().pipe(Effect.map((calls) => Arr.filter(calls, (call) => call.cmd === "agent prompt")));
+function agentPrompts() {
+  return rig
+    .calls()
+    .pipe(
+      Effect.map((calls) =>
+        Arr.filter(calls, (call) => call.cmd === "terminal.send" && isString(call.params?.text)),
+      ),
+    );
+}
 
 once("self-improve takes improvements as a whole number and runs as checkout or machine", () => {
   const decode = flow(
@@ -25249,6 +25242,7 @@ export const register = (pass: "shipped" | "unrelated", share: number) => {
     runEffect(
       Effect.gen(function* () {
         rig = yield* Rig.make();
+        yield* rig.startCore();
         slack = fakeSlack();
         const fs = yield* FileSystem.FileSystem;
         dir = `${rig.root}/host`;
