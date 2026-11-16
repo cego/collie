@@ -3781,9 +3781,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           Arr.some(
             yield* everyRegistered,
             (one) =>
-              one.agent === agent &&
-              one.runId === ask.runId &&
-              one.incarnation?.backend !== "core",
+              one.agent === agent && one.runId === ask.runId && one.incarnation?.backend !== "core",
           )
         ) {
           yield* log(ask.runId, `${agent}: started before core, so not started again`);
