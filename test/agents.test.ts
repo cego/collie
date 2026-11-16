@@ -264,8 +264,7 @@ test(
   30_000,
 );
 
-/** Every wait in here is on a clock that moves many times faster than the wall's. */
-/** Each test's core runs on its test's clock, so a turn takes no real time. */
+/** Each test's core runs on its test's clock, which moves many times faster than the wall's. */
 const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
   runLive(
     fastForward(
@@ -7454,12 +7453,15 @@ const tasksOf = (calls: ReadonlyArray<Call>) =>
     },
   );
 
-const firstDone = FileSystem.FileSystem.pipe(
-  Effect.flatMap((fs) =>
-    fs.writeFileString(`${dir}/agents/r1/01-api.json`, `{"verdict":"clean","note":"first"}`),
-  ),
-  Effect.orDie,
-);
+/** The first item's Output, written by hand, and its agent's turn ended after it. */
+const firstDone = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs
+    .writeFileString(`${dir}/agents/r1/01-api.json`, `{"verdict":"clean","note":"first"}`)
+    .pipe(Effect.orDie);
+  const [started] = Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.run");
+  yield* core.report(String(started?.params?.name), "idle");
+});
 
 test(
   "a Run's own stop leaves its agent as it was, and the resume goes on to the next item with it",
@@ -7467,7 +7469,11 @@ test(
     runEffect(
       Effect.gen(function* () {
         yield* inTask("r1");
-        yield* rig.queueOutputs([null, { verdict: "clean", note: "second" }]);
+        // The first item's agent works on, so no reminder takes the second item's Output.
+        yield* rig.queueOutputs([
+          { writes: [], output: null, then: "working" },
+          { verdict: "clean", note: "second" },
+        ]);
         yield* stoppedAtFirst("r1");
 
         // The agent is the Task's, and the workflow's half of a stop parks the Run without
