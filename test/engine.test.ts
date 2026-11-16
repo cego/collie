@@ -128,6 +128,44 @@ test(
 );
 
 test(
+  "a release that lands while a boundary is still suspending for its hold takes the Run up once it has",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { wf, state } = yield* workspace("collie-engine-release-race-");
+        // The boundary has read its hold and not yet suspended when the release lands.
+        const entry = `${wf}/proof.workflow.ts`;
+        yield* fs.writeFileString(
+          entry,
+          pipe_(
+            yield* fs.readFileString(entry),
+            Str.replace(
+              'yield* host.record(runId, "held");',
+              'yield* host.record(runId, "held");\n        yield* Effect.sleep("3 seconds");',
+            ),
+          ),
+        );
+        const host = yield* openHost(state);
+        yield* host.ask({ op: "load", entry });
+        yield* host.ask({ op: "start", id: "proof", runId: "r1", input: { note: "raced" } });
+        yield* host.until({ op: "waiting", runId: "r1" }, asking);
+        yield* host.ask({ op: "hold", runId: "r1" });
+        yield* host.ask({ op: "answer", id: "proof", runId: "r1", decision: "decision", value: "go" });
+        yield* until(
+          () => events(state, "r1"),
+          (log) => log.includes("held"),
+        );
+        yield* host.ask({ op: "release", id: "proof", runId: "r1" });
+        const done = yield* host.until({ op: "poll", id: "proof", runId: "r1" }, complete);
+        expect(done.value).toBe("note:raced=go");
+        yield* host.stop;
+      }).pipe(Effect.scoped),
+    ),
+  120_000,
+);
+
+test(
   "two stop and resume cycles keep the run's work and it still completes",
   () =>
     runEffect(
