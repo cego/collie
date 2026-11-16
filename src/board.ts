@@ -62,7 +62,7 @@ import { laneWaitOf, stripOf } from "./flow";
 import { Foreground } from "./foreground";
 import { flowInputsFor, taskFlowFor } from "./flow-read";
 import { machineName, peersOf } from "./peers";
-import { deliveriesOf, SENT_STATES, toldIn } from "./steering";
+import { Deliveries, deliveriesAhead, deliveriesOf, SENT_STATES, toldIn } from "./steering";
 import { finishedOnRecord } from "./cards";
 import { branchMovement } from "./recovery";
 import { owedLocally } from "./check-proof";
@@ -1152,19 +1152,11 @@ const nextChange = (then: number, now: number) => {
 export const buildBoard = Effect.fn("Board.build")(function* (opts: BoardOptions) {
   const runs = newestFirst(opts.runs ?? (yield* listRuns(opts.env)));
   const records = yield* RunRecords;
-  const ahead = yield* launchesAhead(
-    yield* Launches,
-    Arr.map(runs, (run) => run.id),
-  );
+  const ids = Arr.map(runs, (run) => run.id);
   return yield* drawBoard({ ...opts, runs }, records).pipe(
-    Effect.provideService(Launches, ahead),
-    Effect.provideService(
-      RunRecords,
-      readAhead(
-        records,
-        Arr.map(runs, (run) => run.id),
-      ),
-    ),
+    Effect.provideService(Launches, yield* launchesAhead(yield* Launches, ids)),
+    Effect.provideService(Deliveries, yield* deliveriesAhead(yield* Deliveries, ids)),
+    Effect.provideService(RunRecords, readAhead(records, ids)),
   );
 });
 

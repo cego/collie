@@ -346,6 +346,20 @@ export function newestById(lines: ReadonlyArray<LedgerLine>): Map<string, Delive
   return newest;
 }
 
+/** `deliveries` for one pass over these Runs, as `readAhead` reads their records. */
+export const deliveriesAhead = Effect.fn("Steering.deliveriesAhead")(function* (
+  deliveries: DeliveriesApi,
+  runs: ReadonlyArray<string>,
+) {
+  const ids = new Set(runs);
+  const all = yield* Effect.cached(deliveries.ofRuns(runs));
+  return {
+    ...deliveries,
+    ofRun: (run) =>
+      ids.has(run) ? Effect.map(all, (got) => got.get(run) ?? []) : deliveries.ofRun(run),
+  } satisfies DeliveriesApi;
+});
+
 export const deliveriesOf = Effect.fn("Steering.deliveriesOf")(function* (run: string) {
   return yield* Deliveries.use((ledgers) => ledgers.ofRun(run));
 });
